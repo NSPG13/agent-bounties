@@ -30,8 +30,10 @@ The gate checks:
 - API and MCP health endpoints.
 - `/.well-known/agent-bounties.json` and `/llms.txt` on both services.
 - OpenAPI paths for routing, public feeds, risk review and approval, Base, and Stripe
-  live-execution boundaries.
-- MCP tool descriptors and JSON input schemas.
+  live-execution boundaries, including operator security schemes and protected
+  operation metadata.
+- MCP tool descriptors, JSON input schemas, and operator auth metadata for
+  protected tools.
 - Public bounty, capability, template, and verifier pages.
 - Public bounty and capability feeds as machine-readable arrays.
 - Risk policy settlement invariants, including the low-value Base USDC cap and

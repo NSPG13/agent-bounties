@@ -1503,17 +1503,115 @@ async fn production_smoke_check(
         "/v1/risk/policy",
         "/v1/risk/events",
         "/v1/risk/reviews",
+        "/v1/risk/bounty-approvals",
         "/v1/risk/payout-approvals",
+        "/v1/risk/events/{id}/reject",
+        "/v1/base/escrow-events",
+        "/v1/base/evm-logs",
+        "/v1/base/rpc-logs",
+        "/v1/base/fetch-rpc-logs",
         "/v1/base/broadcast-signed-transaction",
         "/v1/base/transaction-receipt",
         "/v1/stripe/live/checkout-top-ups",
         "/v1/stripe/live/connect-accounts",
+        "/v1/stripe/connect-snapshots",
+        "/v1/stripe/checkout-webhooks",
     ] {
         require(
             paths.contains_key(path),
             &format!("OpenAPI missing production path {path}"),
         )?;
     }
+    let security_schemes = openapi
+        .pointer("/components/securitySchemes")
+        .and_then(|value| value.as_object())
+        .context("OpenAPI must include operator security schemes")?;
+    require(
+        security_schemes
+            .get("operator_api_token")
+            .and_then(|scheme| value_str(scheme, "/name"))
+            == Some("x-operator-token"),
+        "OpenAPI operator_api_token scheme must use x-operator-token header",
+    )?;
+    require(
+        security_schemes
+            .get("operator_bearer")
+            .and_then(|scheme| value_str(scheme, "/scheme"))
+            == Some("bearer"),
+        "OpenAPI operator_bearer scheme must use bearer auth",
+    )?;
+    for path in [
+        "/v1/risk/bounty-approvals",
+        "/v1/risk/payout-approvals",
+        "/v1/risk/events/{id}/reject",
+        "/v1/base/escrow-events",
+        "/v1/base/evm-logs",
+        "/v1/base/rpc-logs",
+        "/v1/base/fetch-rpc-logs",
+        "/v1/base/broadcast-signed-transaction",
+        "/v1/stripe/live/checkout-top-ups",
+        "/v1/stripe/live/connect-accounts",
+        "/v1/stripe/connect-snapshots",
+    ] {
+        let operation = paths
+            .get(path)
+            .and_then(|path_item| path_item.get("post"))
+            .with_context(|| format!("OpenAPI missing POST operation for {path}"))?;
+        let security = operation
+            .get("security")
+            .and_then(|value| value.as_array())
+            .with_context(|| format!("OpenAPI {path} must advertise operator security"))?;
+        require(
+            security
+                .iter()
+                .any(|requirement| requirement.get("operator_api_token").is_some()),
+            &format!("OpenAPI {path} missing operator_api_token security"),
+        )?;
+        require(
+            security
+                .iter()
+                .any(|requirement| requirement.get("operator_bearer").is_some()),
+            &format!("OpenAPI {path} missing operator_bearer security"),
+        )?;
+        require(
+            operation.pointer("/responses/401").is_some(),
+            &format!("OpenAPI {path} must document 401 operator auth responses"),
+        )?;
+    }
+    let receipt_operation = paths
+        .get("/v1/base/transaction-receipt")
+        .and_then(|path_item| path_item.get("post"))
+        .context("OpenAPI missing POST operation for transaction receipt")?;
+    let receipt_security = receipt_operation
+        .get("security")
+        .and_then(|value| value.as_array())
+        .context("OpenAPI transaction receipt must advertise optional operator security")?;
+    require(
+        receipt_security.iter().any(|requirement| {
+            requirement
+                .as_object()
+                .is_some_and(|object| object.is_empty())
+        }),
+        "OpenAPI transaction receipt must allow unauthenticated receipt reads",
+    )?;
+    require(
+        receipt_security
+            .iter()
+            .any(|requirement| requirement.get("operator_api_token").is_some()),
+        "OpenAPI transaction receipt must advertise operator auth for log reconciliation",
+    )?;
+    require(
+        receipt_operation.pointer("/responses/401").is_some(),
+        "OpenAPI transaction receipt must document conditional 401 responses",
+    )?;
+    require(
+        paths
+            .get("/v1/stripe/checkout-webhooks")
+            .and_then(|path_item| path_item.get("post"))
+            .and_then(|operation| operation.get("security"))
+            .is_none(),
+        "OpenAPI Stripe checkout webhook must remain unauthenticated for Stripe delivery",
+    )?;
 
     let risk_policy_url =
         value_str(&discovery, "/endpoints/risk_policy").context("risk policy url missing")?;
@@ -1660,6 +1758,39 @@ async fn production_smoke_check(
                 .iter()
                 .any(|tool| value_str(tool, "/name") == Some(expected)),
             &format!("MCP tool list missing {expected}"),
+        )?;
+    }
+    for expected in [
+        "execute_stripe_checkout_top_up",
+        "execute_stripe_connect_account",
+        "reconcile_stripe_connect_snapshot",
+        "reconcile_stripe_checkout_webhook",
+        "reconcile_base_evm_logs",
+        "reconcile_base_rpc_logs",
+        "fetch_base_rpc_logs",
+        "broadcast_base_signed_transaction",
+        "get_base_transaction_receipt",
+        "approve_risk_bounty",
+        "approve_risk_payout",
+        "reject_risk_event",
+    ] {
+        let tool = tool_list
+            .iter()
+            .find(|tool| value_str(tool, "/name") == Some(expected))
+            .with_context(|| format!("MCP tool list missing {expected}"))?;
+        require(
+            value_str(tool, "/authorization/kind") == Some("operator_api_token"),
+            &format!("MCP tool {expected} missing operator auth kind"),
+        )?;
+        require(
+            value_str(tool, "/authorization/header") == Some("x-operator-token"),
+            &format!("MCP tool {expected} missing x-operator-token auth header"),
+        )?;
+        require(
+            tool.pointer("/authorization/bearer")
+                .and_then(|value| value.as_bool())
+                == Some(true),
+            &format!("MCP tool {expected} must advertise Bearer token support"),
         )?;
     }
 

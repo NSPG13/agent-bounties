@@ -48,7 +48,9 @@ use std::collections::HashSet;
 use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
-use utoipa::{OpenApi, ToSchema};
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
+use utoipa::openapi::Components;
+use utoipa::{Modify, OpenApi, ToSchema};
 use uuid::Uuid;
 use worker::BaseEscrowLogWorker;
 
@@ -80,6 +82,8 @@ use worker::BaseEscrowLogWorker;
         list_claimable_bounties,
         public_bounty_feed,
         public_capability_feed,
+        reconcile_base_escrow_event,
+        reconcile_base_evm_logs,
         plan_base_log_query,
         fetch_base_rpc_logs,
         reconcile_base_rpc_logs,
@@ -92,6 +96,8 @@ use worker::BaseEscrowLogWorker;
         plan_base_dispute,
         execute_stripe_checkout_top_up,
         execute_stripe_connect_account,
+        reconcile_stripe_connect_snapshot,
+        reconcile_stripe_checkout_webhook,
         plan_github_issue_bounty,
         plan_github_proof_comment,
         post_bounty,
@@ -118,9 +124,30 @@ use worker::BaseEscrowLogWorker;
         BroadcastBaseSignedTransactionRequest,
         GetBaseTransactionReceiptRequest,
         SearchCapabilitiesRequest
-    ))
+    )),
+    modifiers(&SecurityAddon)
 )]
 struct ApiDoc;
+
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.get_or_insert_with(Components::new);
+        components.add_security_scheme(
+            "operator_api_token",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+                OPERATOR_TOKEN_HEADER,
+                "Operator API token required for hosted mutation surfaces when OPERATOR_API_TOKEN is configured.",
+            ))),
+        );
+        let mut bearer = Http::new(HttpAuthScheme::Bearer);
+        bearer.bearer_format = Some("operator-api-token".to_string());
+        bearer.description =
+            Some("Bearer form of the operator API token for hosted mutation surfaces.".to_string());
+        components.add_security_scheme("operator_bearer", SecurityScheme::Http(bearer));
+    }
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -544,7 +571,15 @@ async fn list_risk_reviews(State(state): State<SharedState>) -> Json<Vec<RiskRev
     Json(network.list_risk_reviews())
 }
 
-#[utoipa::path(post, path = "/v1/risk/bounty-approvals", responses((status = 200, description = "Reviewed bounty approved into claimable state")))]
+#[utoipa::path(
+    post,
+    path = "/v1/risk/bounty-approvals",
+    responses(
+        (status = 200, description = "Reviewed bounty approved into claimable state"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn approve_risk_bounty(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -563,7 +598,15 @@ async fn approve_risk_bounty(
     Ok(Json(approval))
 }
 
-#[utoipa::path(post, path = "/v1/risk/payout-approvals", responses((status = 200, body = RiskReviewRecord)))]
+#[utoipa::path(
+    post,
+    path = "/v1/risk/payout-approvals",
+    responses(
+        (status = 200, body = RiskReviewRecord),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn approve_risk_payout(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -580,7 +623,15 @@ async fn approve_risk_payout(
     Ok(Json(review))
 }
 
-#[utoipa::path(post, path = "/v1/risk/events/{id}/reject", responses((status = 200, body = RiskReviewRecord)))]
+#[utoipa::path(
+    post,
+    path = "/v1/risk/events/{id}/reject",
+    responses(
+        (status = 200, body = RiskReviewRecord),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn reject_risk_event(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1101,6 +1152,16 @@ async fn verify_submission(
     Ok(Json(proof))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/base/escrow-events",
+    responses(
+        (status = 200, description = "Reconciled normalized Base escrow event"),
+        (status = 400, description = "Invalid escrow event or state transition"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn reconcile_base_escrow_event(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1145,6 +1206,16 @@ async fn reconcile_base_escrow_event(
     Ok(Json(reconciliation))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/base/evm-logs",
+    responses(
+        (status = 200, description = "Decoded and reconciled raw Base escrow EVM logs"),
+        (status = 400, description = "Invalid log payload or escrow event order"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn reconcile_base_evm_logs(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1154,7 +1225,16 @@ async fn reconcile_base_evm_logs(
     process_base_evm_logs(&state, logs).await.map(Json)
 }
 
-#[utoipa::path(post, path = "/v1/base/rpc-logs", responses((status = 200, description = "Reconcile provider-shaped Base eth_getLogs results")))]
+#[utoipa::path(
+    post,
+    path = "/v1/base/rpc-logs",
+    responses(
+        (status = 200, description = "Reconcile provider-shaped Base eth_getLogs results"),
+        (status = 400, description = "Invalid provider log payload"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn reconcile_base_rpc_logs(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1165,7 +1245,18 @@ async fn reconcile_base_rpc_logs(
     process_base_evm_logs(&state, logs).await.map(Json)
 }
 
-#[utoipa::path(post, path = "/v1/base/fetch-rpc-logs", request_body = FetchBaseRpcLogsRequest, responses((status = 200, description = "Fetch Base escrow logs from configured RPC and reconcile them")))]
+#[utoipa::path(
+    post,
+    path = "/v1/base/fetch-rpc-logs",
+    request_body = FetchBaseRpcLogsRequest,
+    responses(
+        (status = 200, description = "Fetch Base escrow logs from configured RPC and reconcile them"),
+        (status = 400, description = "Invalid fetch request"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured"),
+        (status = 503, description = "Requested Base RPC URL is not configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn fetch_base_rpc_logs(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1200,7 +1291,18 @@ async fn fetch_base_rpc_logs(
     }))
 }
 
-#[utoipa::path(post, path = "/v1/base/broadcast-signed-transaction", request_body = BroadcastBaseSignedTransactionRequest, responses((status = 200, description = "Broadcast a signed Base transaction through configured RPC")))]
+#[utoipa::path(
+    post,
+    path = "/v1/base/broadcast-signed-transaction",
+    request_body = BroadcastBaseSignedTransactionRequest,
+    responses(
+        (status = 200, description = "Broadcast a signed Base transaction through configured RPC"),
+        (status = 400, description = "Invalid signed transaction request"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured"),
+        (status = 503, description = "Base transaction broadcast or RPC URL is not configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn broadcast_base_signed_transaction(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1232,7 +1334,18 @@ async fn broadcast_base_signed_transaction(
     }))
 }
 
-#[utoipa::path(post, path = "/v1/base/transaction-receipt", request_body = GetBaseTransactionReceiptRequest, responses((status = 200, description = "Fetch Base transaction receipt and optionally reconcile escrow logs")))]
+#[utoipa::path(
+    post,
+    path = "/v1/base/transaction-receipt",
+    request_body = GetBaseTransactionReceiptRequest,
+    responses(
+        (status = 200, description = "Fetch Base transaction receipt and optionally reconcile escrow logs"),
+        (status = 400, description = "Invalid receipt request"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured and reconcile_logs=true"),
+        (status = 503, description = "Requested Base RPC URL is not configured")
+    ),
+    security((), ("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn get_base_transaction_receipt(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1512,9 +1625,11 @@ fn stripe_connect_account_intent(
     responses(
         (status = 200, description = "Live Stripe Checkout Session execution report"),
         (status = 400, description = "Invalid top-up request"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured"),
         (status = 502, description = "Stripe API execution failed"),
         (status = 503, description = "Live Stripe execution is disabled or not configured")
-    )
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
 )]
 async fn execute_stripe_checkout_top_up(
     State(state): State<SharedState>,
@@ -1533,9 +1648,11 @@ async fn execute_stripe_checkout_top_up(
     responses(
         (status = 200, description = "Live Stripe Accounts v2 execution report"),
         (status = 400, description = "Invalid Connect request"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured"),
         (status = 502, description = "Stripe API execution failed"),
         (status = 503, description = "Live Stripe execution is disabled or not configured")
-    )
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
 )]
 async fn execute_stripe_connect_account(
     State(state): State<SharedState>,
@@ -1574,6 +1691,16 @@ fn stripe_execution_status(error: payments_stripe::StripeIntegrationError) -> St
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/stripe/connect-snapshots",
+    responses(
+        (status = 200, description = "Reconciled Stripe Connect payout eligibility snapshot"),
+        (status = 400, description = "Invalid Connect snapshot"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn reconcile_stripe_connect_snapshot(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1604,6 +1731,14 @@ async fn reconcile_stripe_connect_snapshot(
     Ok(Json(reconciliation))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/stripe/checkout-webhooks",
+    responses(
+        (status = 200, description = "Reconciled paid Stripe Checkout top-up webhook"),
+        (status = 400, description = "Invalid webhook payload or signature")
+    )
+)]
 async fn reconcile_stripe_checkout_webhook(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -2672,6 +2807,8 @@ mod tests {
         assert!(paths.contains_key("/v1/risk/events/{id}/reject"));
         assert!(paths.contains_key("/v1/agents/{id}/paid-status"));
         assert!(paths.contains_key("/v1/capabilities/search"));
+        assert!(paths.contains_key("/v1/base/escrow-events"));
+        assert!(paths.contains_key("/v1/base/evm-logs"));
         assert!(paths.contains_key("/v1/base/log-query"));
         assert!(paths.contains_key("/v1/base/rpc-logs"));
         assert!(paths.contains_key("/v1/base/fetch-rpc-logs"));
@@ -2681,10 +2818,69 @@ mod tests {
         assert!(paths.contains_key("/v1/base/dispute-plan"));
         assert!(paths.contains_key("/v1/stripe/live/checkout-top-ups"));
         assert!(paths.contains_key("/v1/stripe/live/connect-accounts"));
+        assert!(paths.contains_key("/v1/stripe/connect-snapshots"));
+        assert!(paths.contains_key("/v1/stripe/checkout-webhooks"));
         assert!(paths.contains_key("/v1/github/issue-bounty-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan"));
         assert!(paths.contains_key("/v1/evals/loops"));
         assert!(paths.contains_key("/v1/evals/runs"));
+
+        let security_schemes = value["components"]["securitySchemes"]
+            .as_object()
+            .expect("security schemes");
+        assert_eq!(
+            security_schemes["operator_api_token"]["name"],
+            OPERATOR_TOKEN_HEADER
+        );
+        assert_eq!(security_schemes["operator_api_token"]["in"], "header");
+        assert_eq!(security_schemes["operator_bearer"]["scheme"], "bearer");
+
+        for path in [
+            "/v1/risk/bounty-approvals",
+            "/v1/risk/payout-approvals",
+            "/v1/risk/events/{id}/reject",
+            "/v1/base/escrow-events",
+            "/v1/base/evm-logs",
+            "/v1/base/rpc-logs",
+            "/v1/base/fetch-rpc-logs",
+            "/v1/base/broadcast-signed-transaction",
+            "/v1/stripe/live/checkout-top-ups",
+            "/v1/stripe/live/connect-accounts",
+            "/v1/stripe/connect-snapshots",
+        ] {
+            let security = paths[path]["post"]["security"].as_array().unwrap();
+            assert!(
+                security
+                    .iter()
+                    .any(|requirement| requirement.get("operator_api_token").is_some()),
+                "{path} missing operator_api_token security"
+            );
+            assert!(
+                security
+                    .iter()
+                    .any(|requirement| requirement.get("operator_bearer").is_some()),
+                "{path} missing operator_bearer security"
+            );
+            assert!(paths[path]["post"]["responses"]["401"].is_object());
+        }
+
+        let receipt_security = paths["/v1/base/transaction-receipt"]["post"]["security"]
+            .as_array()
+            .unwrap();
+        assert!(receipt_security
+            .iter()
+            .any(|requirement| requirement.as_object().unwrap().is_empty()));
+        assert!(receipt_security
+            .iter()
+            .any(|requirement| requirement.get("operator_api_token").is_some()));
+        assert!(paths["/v1/base/transaction-receipt"]["post"]["responses"]["401"].is_object());
+
+        assert!(
+            paths["/v1/stripe/checkout-webhooks"]["post"]
+                .get("security")
+                .is_none(),
+            "Stripe checkout webhook must remain callable by Stripe without operator auth"
+        );
     }
 
     #[tokio::test]
