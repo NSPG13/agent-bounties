@@ -319,6 +319,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "Non-claim-owner submissions are blocked deterministically.".to_string(),
             "Open Base USDC automatic release is capped at low value.".to_string(),
             "Private or unsafe work requires review before automatic flows.".to_string(),
+            "Hosted operator mutation surfaces can require OPERATOR_API_TOKEN.".to_string(),
         ],
         risk_policy,
     }
@@ -364,6 +365,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Release, refund, and dispute plans are unsigned operator transactions.
 - Paid/refunded/disputed state changes only after indexed escrow logs are reconciled.
 - Stripe live execution is gated by operator secrets and compliance state.
+- Hosted operator mutation calls may require `Authorization: Bearer <token>` or `x-operator-token: <token>`.
 - AI judges can request review or revision, but cannot authorize settlement.
 
 ## Useful Payment Endpoints

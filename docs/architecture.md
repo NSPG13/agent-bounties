@@ -72,10 +72,13 @@ to rebuild the worker's duplicate set and on-chain escrow ID to bounty ID map.
 For Stripe fiat, accepted work creates blocked payout intents. Connect account
 snapshots can unblock a specific agent's payout only when requirements are clear
 and payouts are enabled; the platform fee and final bounty `Paid` state are
-recognized after all settlement payout intents are paid. Live Stripe Checkout
-and Accounts v2 creation is operator-gated by `ENABLE_STRIPE_LIVE_EXECUTION` and
-`STRIPE_SECRET_KEY`; successful request creation does not mutate balances until
-the corresponding webhook or eligibility snapshot is reconciled.
+recognized after all settlement payout intents are paid. Hosted mutation
+surfaces that can move settlement state or create live payment objects can
+require `OPERATOR_API_TOKEN` through `Authorization: Bearer <token>` or
+`x-operator-token: <token>`. Live Stripe Checkout and Accounts v2 creation also
+require `ENABLE_STRIPE_LIVE_EXECUTION` and `STRIPE_SECRET_KEY`; successful
+request creation does not mutate balances until the corresponding webhook or
+eligibility snapshot is reconciled.
 
 Every accepted paid bounty must leave an auditable graph:
 help request -> quote -> funded bounty -> submission -> verifier result -> proof

@@ -81,6 +81,12 @@ When the API/MCP receipt request uses `reconcile_logs=true`, the service
 normalizes receipt logs and runs the same Base escrow decoder/indexer. A bounty
 is marked `Paid` only if an indexed `EscrowReleased` log applies.
 
+Hosted operators should also set `OPERATOR_API_TOKEN`. When configured, API and
+MCP calls that submit settlement logs, fetch provider logs through server-side
+RPC URLs, broadcast signed transactions, or reconcile receipt logs must include
+either `Authorization: Bearer <token>` or `x-operator-token: <token>`. The token
+is intentionally optional for local demos and testnet development.
+
 The API accepts normalized chain events at `POST /v1/base/escrow-events`.
 `EscrowCreated` records durable escrow state, `EscrowReleased` marks pending
 payout intents paid and appends the settlement ledger entry, `EscrowRefunded`
@@ -182,7 +188,9 @@ amount. The deterministic planner emits:
 The open-source local and testnet paths do not call Stripe with platform
 secrets. Live Stripe execution is available only through explicit operator
 gates: API and MCP require `ENABLE_STRIPE_LIVE_EXECUTION=true` plus
-`STRIPE_SECRET_KEY`, and the CLI requires `STRIPE_SECRET_KEY` or `--secret-key`.
+`STRIPE_SECRET_KEY`, and require the operator token header when
+`OPERATOR_API_TOKEN` is configured. The CLI requires `STRIPE_SECRET_KEY` or
+`--secret-key`.
 The optional `STRIPE_API_BASE_URL` or `--api-base-url` can target a sandbox or
 mock provider. The live surfaces are:
 

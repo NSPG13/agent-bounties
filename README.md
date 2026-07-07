@@ -80,6 +80,13 @@ explicit `--rpc-url`. Hosted API/MCP transaction broadcast is disabled unless
 `ENABLE_BASE_TX_BROADCAST=true`; receipt polling and log reconciliation remain
 available when the Base RPC URL is configured.
 
+Hosted API and MCP operator mutation surfaces can require
+`OPERATOR_API_TOKEN`. When set, risk approvals/rejections, Base settlement log
+ingestion, server-side Base RPC fetches, signed transaction broadcast, receipt
+reconciliation, and live Stripe execution require either
+`Authorization: Bearer <token>` or `x-operator-token: <token>`. Leave it unset
+for local open-source demos.
+
 `stripe-plan` is the safe local Stripe dry run. Operator-only live CLI commands
 are `stripe-execute-checkout-top-up` and `stripe-execute-connect-account`; they
 require `STRIPE_SECRET_KEY` or `--secret-key`, and optionally
@@ -297,7 +304,9 @@ eval run. See [docs/production-smoke.md](docs/production-smoke.md).
 
 Live Stripe execution is disabled by default. To let the API or MCP server
 create real Checkout Sessions or Accounts v2 records, set
-`ENABLE_STRIPE_LIVE_EXECUTION=true` and `STRIPE_SECRET_KEY`. `STRIPE_API_BASE_URL`
+`ENABLE_STRIPE_LIVE_EXECUTION=true` and `STRIPE_SECRET_KEY`. Set
+`OPERATOR_API_TOKEN` in hosted environments to require operator authorization on
+those mutation calls. `STRIPE_API_BASE_URL`
 can point at a sandbox or mock provider; otherwise it defaults to
 `https://api.stripe.com`. These endpoints do not credit balances directly:
 Checkout ledger credit still requires a verified `checkout.session.completed`

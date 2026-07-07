@@ -7,6 +7,7 @@ use app::{
 };
 use axum::{
     extract::State,
+    http::HeaderMap,
     routing::{get, post},
     Json, Router,
 };
@@ -49,10 +50,72 @@ struct AppState {
     stripe_secret_key: Option<String>,
     stripe_live_execution_enabled: bool,
     stripe_api_base_url: String,
+    operator_api_token: Option<String>,
     store: Option<PostgresStore>,
 }
 
 type SharedState = Arc<AppState>;
+const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
+
+fn non_empty_secret(secret: String) -> Option<String> {
+    let trimmed = secret.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn require_operator(
+    state: &SharedState,
+    headers: &HeaderMap,
+) -> Result<(), Json<serde_json::Value>> {
+    let Some(expected) = state.operator_api_token.as_deref() else {
+        return Ok(());
+    };
+    let Some(provided) = operator_token_from_headers(headers) else {
+        return Err(mcp_error("operator authorization required"));
+    };
+    if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+        Ok(())
+    } else {
+        Err(mcp_error("operator authorization required"))
+    }
+}
+
+fn operator_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    if let Some(value) = headers
+        .get(OPERATOR_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(non_empty_borrowed)
+    {
+        return Some(value.to_string());
+    }
+
+    let authorization = headers.get("authorization")?.to_str().ok()?.trim();
+    let token = authorization.strip_prefix("Bearer ")?;
+    non_empty_borrowed(token).map(ToOwned::to_owned)
+}
+
+fn non_empty_borrowed(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left, right) in left.iter().zip(right.iter()) {
+        diff |= left ^ right;
+    }
+    diff == 0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ToolDescriptor {
@@ -177,6 +240,9 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or(false),
         stripe_api_base_url: env::var("STRIPE_API_BASE_URL")
             .unwrap_or_else(|_| STRIPE_API_BASE_URL.to_string()),
+        operator_api_token: env::var("OPERATOR_API_TOKEN")
+            .ok()
+            .and_then(non_empty_secret),
         store,
     });
     let app = Router::new()
@@ -1434,8 +1500,12 @@ fn stripe_connect_account_intent(
 
 async fn execute_stripe_checkout_top_up(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<PlanStripeCheckoutTopUpArgs>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let intent = match stripe_checkout_top_up_intent(args) {
         Ok(intent) => intent,
         Err(error) => return mcp_error(error),
@@ -1445,8 +1515,12 @@ async fn execute_stripe_checkout_top_up(
 
 async fn execute_stripe_connect_account(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<PlanStripeConnectAccountArgs>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let intent = match stripe_connect_account_intent(args) {
         Ok(intent) => intent.request,
         Err(error) => return mcp_error(error),
@@ -1477,8 +1551,12 @@ async fn execute_stripe_intent(
 
 async fn reconcile_stripe_connect_snapshot(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<ConnectAccountSnapshot>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let reconciliation = {
         let mut network = state.network.lock().expect("state poisoned");
         match network.apply_stripe_connect_snapshot(args) {
@@ -1506,8 +1584,12 @@ async fn reconcile_stripe_connect_snapshot(
 
 async fn reconcile_stripe_checkout_webhook(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<StripeWebhookEvent>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let funding_credit = match StripeEventDeduper::default().apply_checkout_top_up(&args) {
         Ok(funding_credit) => funding_credit,
         Err(error) => return mcp_error(error),
@@ -1582,15 +1664,23 @@ async fn plan_github_proof_comment(
 
 async fn reconcile_base_evm_logs(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(logs): Json<Vec<EvmLog>>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     process_base_evm_logs(&state, logs).await
 }
 
 async fn reconcile_base_rpc_logs(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(submission): Json<RpcLogSubmission>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let logs = match rpc_logs_to_evm_logs(submission.into_logs()) {
         Ok(logs) => logs,
         Err(error) => return mcp_error(error),
@@ -1600,8 +1690,12 @@ async fn reconcile_base_rpc_logs(
 
 async fn fetch_base_rpc_logs(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<FetchBaseRpcLogsArgs>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let query = match BaseEscrowLogQuery::new(args.escrow_contract, args.from_block, args.to_block)
     {
         Ok(query) => query,
@@ -1638,8 +1732,12 @@ async fn fetch_base_rpc_logs(
 
 async fn broadcast_base_signed_transaction(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<BroadcastBaseSignedTransactionArgs>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     if !state.base_broadcast_enabled {
         return mcp_error(
             "Base transaction broadcast is disabled; set ENABLE_BASE_TX_BROADCAST=true",
@@ -1671,8 +1769,14 @@ async fn broadcast_base_signed_transaction(
 
 async fn get_base_transaction_receipt(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<GetBaseTransactionReceiptArgs>,
 ) -> Json<serde_json::Value> {
+    if args.reconcile_logs.unwrap_or(false) {
+        if let Err(error) = require_operator(&state, &headers) {
+            return error;
+        }
+    }
     let request_id = args.request_id.unwrap_or(1);
     let network_name = args.network.as_deref().unwrap_or("base-sepolia");
     let (network, rpc_url) = match state.base_rpc_urls.resolve(network_name) {
@@ -1916,8 +2020,12 @@ async fn list_risk_reviews(State(state): State<SharedState>) -> Json<serde_json:
 
 async fn approve_risk_bounty(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<ApproveRiskBountyRequest>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let result = {
         let mut network = state.network.lock().expect("state poisoned");
         network
@@ -1936,8 +2044,12 @@ async fn approve_risk_bounty(
 
 async fn approve_risk_payout(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<ApproveRiskPayoutRequest>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let review = {
         let mut network = state.network.lock().expect("state poisoned");
         match network.approve_risk_payout(args) {
@@ -1953,8 +2065,12 @@ async fn approve_risk_payout(
 
 async fn reject_risk_event(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<RejectRiskEventRequest>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let review = {
         let mut network = state.network.lock().expect("state poisoned");
         match network.reject_risk_event(args) {
@@ -2361,6 +2477,7 @@ mod tests {
 
         let approval = approve_risk_bounty(
             State(state.clone()),
+            HeaderMap::new(),
             Json(ApproveRiskBountyRequest {
                 risk_event_id,
                 title: "Fix deterministic payout reconciliation failure".to_string(),
@@ -2465,6 +2582,7 @@ mod tests {
 
         let review = approve_risk_payout(
             State(state.clone()),
+            HeaderMap::new(),
             Json(ApproveRiskPayoutRequest {
                 risk_event_id: payout_event_id,
                 operator_id: "operator-1".to_string(),
@@ -2500,6 +2618,7 @@ mod tests {
 
         let response = reject_risk_event(
             State(state.clone()),
+            HeaderMap::new(),
             Json(RejectRiskEventRequest {
                 risk_event_id,
                 operator_id: "operator-1".to_string(),
@@ -2532,6 +2651,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn operator_token_blocks_protected_mcp_tools_when_configured() {
+        let state = test_state_with_operator_token("secret-token");
+
+        let response = broadcast_base_signed_transaction(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(BroadcastBaseSignedTransactionArgs {
+                signed_transaction: "0x010203".to_string(),
+                request_id: Some(13),
+                network: Some("base-sepolia".to_string()),
+            }),
+        )
+        .await
+        .0;
+        assert_eq!(response["error"], "operator authorization required");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
+        let response = broadcast_base_signed_transaction(
+            State(state),
+            headers,
+            Json(BroadcastBaseSignedTransactionArgs {
+                signed_transaction: "0x010203".to_string(),
+                request_id: Some(13),
+                network: Some("base-sepolia".to_string()),
+            }),
+        )
+        .await
+        .0;
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("Base transaction broadcast is disabled"));
+    }
+
+    #[tokio::test]
     async fn llms_txt_exposes_agent_orientation() {
         let text = llms_txt().await;
 
@@ -2554,6 +2709,22 @@ mod tests {
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            operator_api_token: None,
+            store: None,
+        })
+    }
+
+    fn test_state_with_operator_token(token: &str) -> SharedState {
+        Arc::new(AppState {
+            network: Mutex::new(BountyNetwork::default()),
+            base_log_worker: Mutex::new(BaseEscrowLogWorker::default()),
+            eval_runs: Mutex::new(Vec::new()),
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            stripe_secret_key: None,
+            stripe_live_execution_enabled: false,
+            stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            operator_api_token: Some(token.to_string()),
             store: None,
         })
     }

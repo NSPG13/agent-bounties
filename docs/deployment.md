@@ -63,6 +63,7 @@ The compose file sets:
 - `DATABASE_URL` for shared Postgres-backed state
 - `PUBLIC_BASE_URL` and `MCP_BASE_URL` for discovery and `/llms.txt`
 - optional Base RPC, Stripe live execution, and Stripe webhook variables
+- optional `OPERATOR_API_TOKEN` for hosted operator-only mutation surfaces
 
 `DATABASE_URL` should point at the compose service hostname, for example
 `postgres://agent_bounties:change-me@postgres:5432/agent_bounties`. If
@@ -96,6 +97,10 @@ ready:
 - `ENABLE_BASE_TX_BROADCAST=false` keeps Base transaction broadcasting disabled.
 - `ENABLE_STRIPE_LIVE_EXECUTION=false` keeps Stripe Checkout and Connect live
   creation disabled.
+- `OPERATOR_API_TOKEN` can require `Authorization: Bearer <token>` or
+  `x-operator-token: <token>` on hosted risk review, settlement reconciliation,
+  Base broadcast, receipt reconciliation, and live Stripe execution calls. Leave
+  it unset for local open-source demos.
 - Base receipt polling and log reconciliation still require configured RPC URLs
   and do not mark funds paid without indexed escrow logs.
 - Stripe ledger credits still require verified checkout webhooks.

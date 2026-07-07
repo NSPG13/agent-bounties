@@ -134,11 +134,70 @@ struct AppState {
     store: Option<PostgresStore>,
     base_rpc_urls: BaseRpcUrlConfig,
     base_broadcast_enabled: bool,
+    operator_api_token: Option<String>,
     public_base_url: String,
     mcp_base_url: String,
 }
 
 type SharedState = Arc<AppState>;
+const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
+
+fn non_empty_secret(secret: String) -> Option<String> {
+    let trimmed = secret.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn require_operator(state: &SharedState, headers: &HeaderMap) -> Result<(), StatusCode> {
+    let Some(expected) = state.operator_api_token.as_deref() else {
+        return Ok(());
+    };
+    let Some(provided) = operator_token_from_headers(headers) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+        Ok(())
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+fn operator_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    if let Some(value) = headers
+        .get(OPERATOR_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(non_empty_borrowed)
+    {
+        return Some(value.to_string());
+    }
+
+    let authorization = headers.get("authorization")?.to_str().ok()?.trim();
+    let token = authorization.strip_prefix("Bearer ")?;
+    non_empty_borrowed(token).map(ToOwned::to_owned)
+}
+
+fn non_empty_borrowed(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left, right) in left.iter().zip(right.iter()) {
+        diff |= left ^ right;
+    }
+    diff == 0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct RouteRequest {
@@ -305,6 +364,9 @@ async fn main() -> anyhow::Result<()> {
         base_broadcast_enabled: env::var("ENABLE_BASE_TX_BROADCAST")
             .map(|value| value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
+        operator_api_token: env::var("OPERATOR_API_TOKEN")
+            .ok()
+            .and_then(non_empty_secret),
         public_base_url: env::var("PUBLIC_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
         mcp_base_url: env::var("MCP_BASE_URL")
@@ -485,8 +547,10 @@ async fn list_risk_reviews(State(state): State<SharedState>) -> Json<Vec<RiskRev
 #[utoipa::path(post, path = "/v1/risk/bounty-approvals", responses((status = 200, description = "Reviewed bounty approved into claimable state")))]
 async fn approve_risk_bounty(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(request): Json<ApproveRiskBountyRequest>,
 ) -> Result<Json<ReviewedBountyApproval>, StatusCode> {
+    require_operator(&state, &headers)?;
     let result = {
         let mut network = state.network.lock().expect("state poisoned");
         network
@@ -502,8 +566,10 @@ async fn approve_risk_bounty(
 #[utoipa::path(post, path = "/v1/risk/payout-approvals", responses((status = 200, body = RiskReviewRecord)))]
 async fn approve_risk_payout(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(request): Json<ApproveRiskPayoutRequest>,
 ) -> Result<Json<RiskReviewRecord>, StatusCode> {
+    require_operator(&state, &headers)?;
     let review = {
         let mut network = state.network.lock().expect("state poisoned");
         network
@@ -517,9 +583,11 @@ async fn approve_risk_payout(
 #[utoipa::path(post, path = "/v1/risk/events/{id}/reject", responses((status = 200, body = RiskReviewRecord)))]
 async fn reject_risk_event(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(mut request): Json<RejectRiskEventRequest>,
 ) -> Result<Json<RiskReviewRecord>, StatusCode> {
+    require_operator(&state, &headers)?;
     request.risk_event_id = id;
     let review = {
         let mut network = state.network.lock().expect("state poisoned");
@@ -1035,8 +1103,10 @@ async fn verify_submission(
 
 async fn reconcile_base_escrow_event(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(event): Json<BaseEscrowEvent>,
 ) -> Result<Json<BaseEscrowReconciliation>, StatusCode> {
+    require_operator(&state, &headers)?;
     let indexed_event = event.clone();
     let reconciliation = {
         let mut network = state.network.lock().expect("state poisoned");
@@ -1077,16 +1147,20 @@ async fn reconcile_base_escrow_event(
 
 async fn reconcile_base_evm_logs(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(logs): Json<Vec<chain_base::EvmLog>>,
 ) -> Result<Json<worker::BaseLogPipelineReport>, StatusCode> {
+    require_operator(&state, &headers)?;
     process_base_evm_logs(&state, logs).await.map(Json)
 }
 
 #[utoipa::path(post, path = "/v1/base/rpc-logs", responses((status = 200, description = "Reconcile provider-shaped Base eth_getLogs results")))]
 async fn reconcile_base_rpc_logs(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(submission): Json<RpcLogSubmission>,
 ) -> Result<Json<worker::BaseLogPipelineReport>, StatusCode> {
+    require_operator(&state, &headers)?;
     let logs = rpc_logs_to_evm_logs(submission.into_logs()).map_err(|_| StatusCode::BAD_REQUEST)?;
     process_base_evm_logs(&state, logs).await.map(Json)
 }
@@ -1094,8 +1168,10 @@ async fn reconcile_base_rpc_logs(
 #[utoipa::path(post, path = "/v1/base/fetch-rpc-logs", request_body = FetchBaseRpcLogsRequest, responses((status = 200, description = "Fetch Base escrow logs from configured RPC and reconcile them")))]
 async fn fetch_base_rpc_logs(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(request): Json<FetchBaseRpcLogsRequest>,
 ) -> Result<Json<BaseRpcLogFetchReport>, StatusCode> {
+    require_operator(&state, &headers)?;
     let query = BaseEscrowLogQuery::new(
         request.escrow_contract,
         request.from_block,
@@ -1127,8 +1203,10 @@ async fn fetch_base_rpc_logs(
 #[utoipa::path(post, path = "/v1/base/broadcast-signed-transaction", request_body = BroadcastBaseSignedTransactionRequest, responses((status = 200, description = "Broadcast a signed Base transaction through configured RPC")))]
 async fn broadcast_base_signed_transaction(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(request): Json<BroadcastBaseSignedTransactionRequest>,
 ) -> Result<Json<BaseSignedTransactionBroadcastReport>, StatusCode> {
+    require_operator(&state, &headers)?;
     if !state.base_broadcast_enabled {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -1157,8 +1235,12 @@ async fn broadcast_base_signed_transaction(
 #[utoipa::path(post, path = "/v1/base/transaction-receipt", request_body = GetBaseTransactionReceiptRequest, responses((status = 200, description = "Fetch Base transaction receipt and optionally reconcile escrow logs")))]
 async fn get_base_transaction_receipt(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(request): Json<GetBaseTransactionReceiptRequest>,
 ) -> Result<Json<BaseTransactionReceiptReport>, StatusCode> {
+    if request.reconcile_logs.unwrap_or(false) {
+        require_operator(&state, &headers)?;
+    }
     let request_id = request.request_id.unwrap_or(1);
     let network_name = request.network.as_deref().unwrap_or("base-sepolia");
     let (network, rpc_url) = state
@@ -1436,8 +1518,10 @@ fn stripe_connect_account_intent(
 )]
 async fn execute_stripe_checkout_top_up(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(request): Json<PlanStripeCheckoutTopUpRequest>,
 ) -> Result<Json<StripeExecutionReport>, StatusCode> {
+    require_operator(&state, &headers)?;
     let intent = stripe_checkout_top_up_intent(&state, request)?;
     execute_stripe_intent(&state, intent).await.map(Json)
 }
@@ -1455,8 +1539,10 @@ async fn execute_stripe_checkout_top_up(
 )]
 async fn execute_stripe_connect_account(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(request): Json<PlanStripeConnectAccountRequest>,
 ) -> Result<Json<StripeExecutionReport>, StatusCode> {
+    require_operator(&state, &headers)?;
     let intent = stripe_connect_account_intent(request)
         .map_err(|_| StatusCode::BAD_REQUEST)?
         .request;
@@ -1490,8 +1576,10 @@ fn stripe_execution_status(error: payments_stripe::StripeIntegrationError) -> St
 
 async fn reconcile_stripe_connect_snapshot(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(snapshot): Json<ConnectAccountSnapshot>,
 ) -> Result<Json<app::StripeConnectPayoutReconciliation>, StatusCode> {
+    require_operator(&state, &headers)?;
     let reconciliation = {
         let mut network = state.network.lock().expect("state poisoned");
         network
@@ -2092,7 +2180,7 @@ mod tests {
         let state = test_state(network);
         let logs = raw_created_and_released_logs(&bounty, &proof);
 
-        let report = reconcile_base_evm_logs(State(state.clone()), Json(logs))
+        let report = reconcile_base_evm_logs(State(state.clone()), HeaderMap::new(), Json(logs))
             .await
             .unwrap()
             .0;
@@ -2121,7 +2209,7 @@ mod tests {
             bounty.terms_hash.clone().unwrap(),
         );
 
-        let _ = reconcile_base_escrow_event(State(state.clone()), Json(created))
+        let _ = reconcile_base_escrow_event(State(state.clone()), HeaderMap::new(), Json(created))
             .await
             .unwrap();
         let release_plan = plan_base_release(
@@ -2138,10 +2226,14 @@ mod tests {
         assert_eq!(release_plan.release_call.onchain_escrow_id, 7);
         assert_eq!(release_plan.release_call.recipients.len(), 2);
         let release_log = raw_released_log(7, &format!("0x{}", proof.proof_hash), 11, 0);
-        let report = reconcile_base_evm_logs(State(state.clone()), Json(vec![release_log]))
-            .await
-            .unwrap()
-            .0;
+        let report = reconcile_base_evm_logs(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(vec![release_log]),
+        )
+        .await
+        .unwrap()
+        .0;
 
         assert!(report.failures.is_empty());
         assert_eq!(report.applied_events.len(), 1);
@@ -2161,7 +2253,7 @@ mod tests {
             bounty.amount.clone(),
             bounty.terms_hash.clone().unwrap(),
         );
-        let _ = reconcile_base_escrow_event(State(state.clone()), Json(created))
+        let _ = reconcile_base_escrow_event(State(state.clone()), HeaderMap::new(), Json(created))
             .await
             .unwrap();
 
@@ -2408,6 +2500,7 @@ mod tests {
 
         let report = execute_stripe_checkout_top_up(
             State(state),
+            HeaderMap::new(),
             Json(PlanStripeCheckoutTopUpRequest {
                 organization_id,
                 amount_minor: 5_000,
@@ -2435,6 +2528,7 @@ mod tests {
 
         let error = execute_stripe_connect_account(
             State(state),
+            HeaderMap::new(),
             Json(PlanStripeConnectAccountRequest {
                 agent_id: Uuid::new_v4(),
             }),
@@ -2676,6 +2770,7 @@ mod tests {
 
         let approval = approve_risk_bounty(
             State(state.clone()),
+            HeaderMap::new(),
             Json(ApproveRiskBountyRequest {
                 risk_event_id,
                 title: "Fix deterministic payout reconciliation failure".to_string(),
@@ -2781,6 +2876,7 @@ mod tests {
 
         let review = approve_risk_payout(
             State(state.clone()),
+            HeaderMap::new(),
             Json(ApproveRiskPayoutRequest {
                 risk_event_id: payout_event_id,
                 operator_id: "operator-1".to_string(),
@@ -2824,6 +2920,7 @@ mod tests {
 
         let review = reject_risk_event(
             State(state.clone()),
+            HeaderMap::new(),
             Path(risk_event_id),
             Json(RejectRiskEventRequest {
                 risk_event_id: Uuid::nil(),
@@ -2918,6 +3015,7 @@ mod tests {
 
         let report = reconcile_base_rpc_logs(
             State(state.clone()),
+            HeaderMap::new(),
             Json(chain_base::RpcLogSubmission::Response(
                 chain_base::EthGetLogsResponse {
                     jsonrpc: "2.0".to_string(),
@@ -2958,6 +3056,7 @@ mod tests {
 
         let report = fetch_base_rpc_logs(
             State(state.clone()),
+            HeaderMap::new(),
             Json(FetchBaseRpcLogsRequest {
                 escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                 from_block: 10,
@@ -2997,6 +3096,7 @@ mod tests {
 
         let report = broadcast_base_signed_transaction(
             State(state),
+            HeaderMap::new(),
             Json(BroadcastBaseSignedTransactionRequest {
                 signed_transaction: "0x010203".to_string(),
                 request_id: Some(13),
@@ -3012,6 +3112,39 @@ mod tests {
         assert_eq!(report.request.params[0], "0x010203");
         assert_eq!(report.tx_hash, format!("0x{}", "cc".repeat(32)));
         assert!(report.next_step.contains("transaction-receipt"));
+    }
+
+    #[tokio::test]
+    async fn operator_token_blocks_protected_api_calls_when_configured() {
+        let state = test_state_with_operator_token(BountyNetwork::default(), "secret-token");
+
+        let error = broadcast_base_signed_transaction(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(BroadcastBaseSignedTransactionRequest {
+                signed_transaction: "0x010203".to_string(),
+                request_id: Some(13),
+                network: Some("base-sepolia".to_string()),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer secret-token".parse().unwrap());
+        let error = broadcast_base_signed_transaction(
+            State(state),
+            headers,
+            Json(BroadcastBaseSignedTransactionRequest {
+                signed_transaction: "0x010203".to_string(),
+                request_id: Some(13),
+                network: Some("base-sepolia".to_string()),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
@@ -3037,12 +3170,13 @@ mod tests {
             bounty.amount.clone(),
             bounty.terms_hash.clone().unwrap(),
         );
-        let _ = reconcile_base_escrow_event(State(state.clone()), Json(created))
+        let _ = reconcile_base_escrow_event(State(state.clone()), HeaderMap::new(), Json(created))
             .await
             .unwrap();
 
         let report = get_base_transaction_receipt(
             State(state.clone()),
+            HeaderMap::new(),
             Json(GetBaseTransactionReceiptRequest {
                 tx_hash: receipt_tx_hash,
                 request_id: Some(14),
@@ -3150,6 +3284,25 @@ mod tests {
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
+            operator_api_token: None,
+            public_base_url: "http://127.0.0.1:8080".to_string(),
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+        })
+    }
+
+    fn test_state_with_operator_token(network: BountyNetwork, token: &str) -> SharedState {
+        Arc::new(AppState {
+            network: Arc::new(Mutex::new(network)),
+            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
+            eval_runs: Arc::new(Mutex::new(Vec::new())),
+            stripe_webhook_secret: None,
+            stripe_secret_key: None,
+            stripe_live_execution_enabled: false,
+            stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            store: None,
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            operator_api_token: Some(token.to_string()),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
         })
@@ -3173,6 +3326,7 @@ mod tests {
                 base_mainnet: None,
             },
             base_broadcast_enabled: true,
+            operator_api_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
         })
@@ -3193,6 +3347,7 @@ mod tests {
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
+            operator_api_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
         })
