@@ -30,9 +30,10 @@ OpenAPI, MCP tools, public bounty and capability feeds, eval history, payment
 controls, and the first workflow calls.
 
 The MCP `/tools` list is schema-bearing: every tool descriptor includes a JSON
-`input_schema` for the exact payload expected by the handler. Agents should use
-that schema first, then fall back to OpenAPI or SDKs only when they need richer
-workflow examples.
+`input_schema` for the exact payload expected by the handler. Operator-gated
+tools also include an `authorization` block naming `x-operator-token` and
+Bearer-token support. Agents should use that schema and auth metadata first,
+then fall back to OpenAPI or SDKs only when they need richer workflow examples.
 
 The intended loop is:
 

@@ -122,6 +122,16 @@ struct ToolDescriptor {
     name: &'static str,
     description: &'static str,
     input_schema: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authorization: Option<ToolAuthorization>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ToolAuthorization {
+    kind: &'static str,
+    header: &'static str,
+    bearer: bool,
+    required_when: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -590,7 +600,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 &["agent_id"],
             ),
         ),
-        tool(
+        operator_tool(
             "execute_stripe_checkout_top_up",
             "Create a live Stripe Checkout Session for funding a fiat platform balance when operator-enabled.",
             object_tool_schema(
@@ -603,16 +613,18 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["organization_id", "amount_minor", "currency"],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "execute_stripe_connect_account",
             "Create a live Stripe Accounts v2 connected account when operator-enabled.",
             object_tool_schema(
                 json!({ "agent_id": uuid_property("Agent UUID.") }),
                 &["agent_id"],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "reconcile_stripe_connect_snapshot",
             "Apply Stripe Connect payout eligibility to blocked fiat payout intents.",
             object_tool_schema(
@@ -631,8 +643,9 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "currently_due",
                 ],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "reconcile_stripe_checkout_webhook",
             "Apply a paid Stripe Checkout top-up webhook to the platform ledger.",
             object_tool_schema(
@@ -643,6 +656,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["id", "type", "payload"],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
         tool(
             "plan_github_issue_bounty",
@@ -670,7 +684,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 &["bounty_id", "proof_url", "verifier_summary", "settlement_url"],
             ),
         ),
-        tool(
+        operator_tool(
             "reconcile_base_evm_logs",
             "Decode and apply raw Base escrow EVM logs with duplicate protection.",
             json!({
@@ -678,8 +692,9 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 "items": object_property("chain_base::EvmLog payload."),
                 "description": "Array of raw EVM logs from the Base escrow contract."
             }),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "reconcile_base_rpc_logs",
             "Normalize provider-shaped eth_getLogs results or a full JSON-RPC response and reconcile Base escrow events.",
             json!({
@@ -687,8 +702,9 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 "items": object_property("chain_base::RpcEvmLog payload with address, topics, data, transactionHash, blockNumber, and logIndex."),
                 "description": "Either an array of raw eth_getLogs result objects or the full JSON-RPC response with a result array."
             }),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "fetch_base_rpc_logs",
             "Fetch Base escrow logs from the configured RPC URL and reconcile the resulting escrow events.",
             object_tool_schema(
@@ -701,8 +717,9 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["escrow_contract", "from_block"],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "broadcast_base_signed_transaction",
             "Broadcast a signed Base transaction through the configured RPC URL when operator-enabled.",
             object_tool_schema(
@@ -713,8 +730,9 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["signed_transaction"],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "get_base_transaction_receipt",
             "Fetch a Base transaction receipt and optionally reconcile escrow logs from that receipt.",
             object_tool_schema(
@@ -726,6 +744,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["tx_hash"],
             ),
+            "OPERATOR_API_TOKEN is configured and reconcile_logs=true.",
         ),
         tool(
             "plan_base_log_query",
@@ -836,7 +855,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "List operator review decisions recorded against deterministic risk events.",
             empty_tool_schema(),
         ),
-        tool(
+        operator_tool(
             "approve_risk_bounty",
             "Approve a NeedsReview bounty risk event into a funded claimable bounty after operator review.",
             object_tool_schema(
@@ -863,8 +882,9 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "note",
                 ],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "approve_risk_payout",
             "Approve a NeedsReview payout risk event so the matching verification request can continue after operator review.",
             object_tool_schema(
@@ -875,8 +895,9 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["risk_event_id", "operator_id", "note"],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "reject_risk_event",
             "Reject a NeedsReview risk event and record an operator audit note without mutating bounty or payment state.",
             object_tool_schema(
@@ -887,15 +908,38 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["risk_event_id", "operator_id", "note"],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
     ])
 }
+
+const OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED: &str = "OPERATOR_API_TOKEN is configured.";
 
 fn tool(name: &'static str, description: &'static str, input_schema: Value) -> ToolDescriptor {
     ToolDescriptor {
         name,
         description,
         input_schema,
+        authorization: None,
+    }
+}
+
+fn operator_tool(
+    name: &'static str,
+    description: &'static str,
+    input_schema: Value,
+    required_when: &'static str,
+) -> ToolDescriptor {
+    ToolDescriptor {
+        name,
+        description,
+        input_schema,
+        authorization: Some(ToolAuthorization {
+            kind: "operator_api_token",
+            header: OPERATOR_TOKEN_HEADER,
+            bearer: true,
+            required_when,
+        }),
     }
 }
 
@@ -2160,11 +2204,40 @@ mod tests {
             .find(|descriptor| descriptor.name == "route_blocked_goal")
             .expect("route_blocked_goal descriptor exists");
         assert_eq!(route.input_schema["type"], "object");
+        assert!(route.authorization.is_none());
         assert!(route.input_schema["properties"]["privacy"]["enum"]
             .as_array()
             .unwrap()
             .iter()
             .any(|value| value == "Private"));
+
+        let operator_tools = [
+            "execute_stripe_checkout_top_up",
+            "execute_stripe_connect_account",
+            "reconcile_stripe_connect_snapshot",
+            "reconcile_stripe_checkout_webhook",
+            "reconcile_base_evm_logs",
+            "reconcile_base_rpc_logs",
+            "fetch_base_rpc_logs",
+            "broadcast_base_signed_transaction",
+            "get_base_transaction_receipt",
+            "approve_risk_bounty",
+            "approve_risk_payout",
+            "reject_risk_event",
+        ];
+        for tool_name in operator_tools {
+            let descriptor = descriptors
+                .iter()
+                .find(|descriptor| descriptor.name == tool_name)
+                .unwrap_or_else(|| panic!("{tool_name} descriptor exists"));
+            let authorization = descriptor
+                .authorization
+                .as_ref()
+                .unwrap_or_else(|| panic!("{tool_name} missing operator authorization metadata"));
+            assert_eq!(authorization.kind, "operator_api_token");
+            assert_eq!(authorization.header, OPERATOR_TOKEN_HEADER);
+            assert!(authorization.bearer);
+        }
 
         let stripe_checkout = descriptors
             .iter()
@@ -2320,6 +2393,12 @@ mod tests {
             get_base_transaction_receipt.input_schema["properties"]["reconcile_logs"]["type"][0],
             "boolean"
         );
+        assert!(get_base_transaction_receipt
+            .authorization
+            .as_ref()
+            .unwrap()
+            .required_when
+            .contains("reconcile_logs=true"));
 
         let plan_base_refund = descriptors
             .iter()
