@@ -103,6 +103,8 @@ ready:
   it unset for local open-source demos.
 - Base receipt polling and log reconciliation still require configured RPC URLs
   and do not mark funds paid without indexed escrow logs.
-- Stripe ledger credits still require verified checkout webhooks.
+- Stripe ledger credits require `STRIPE_WEBHOOK_SECRET` and verified Checkout
+  webhooks. Keep `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false` outside local
+  mock-provider simulations.
 
 Do not put live private keys in compose files or committed env templates.

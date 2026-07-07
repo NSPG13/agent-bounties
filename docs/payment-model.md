@@ -222,10 +222,12 @@ The API accepts Checkout top-up webhooks at
 `STRIPE_WEBHOOK_SECRET`; then the endpoint requires a `stripe-signature` header
 before parsing the event. The signature check uses Stripe's signed
 `timestamp.payload` format, accepts only `v1` signatures, and rejects deliveries
-outside a five-minute replay window. Paid `checkout.session.completed` events
-create a durable `PaymentEvent` and an idempotent ledger credit from Stripe cash
-to the organization's platform balance. Replayed event IDs return a duplicate
-result and do not create another ledger entry.
+outside a five-minute replay window. Without `STRIPE_WEBHOOK_SECRET`, the API
+rejects Checkout webhook credits unless `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=true`
+is set for local or mock-provider simulation. Paid `checkout.session.completed`
+events create a durable `PaymentEvent` and an idempotent ledger credit from
+Stripe cash to the organization's platform balance. Replayed event IDs return a
+duplicate result and do not create another ledger entry.
 
 Generate a local Stripe request plan without secrets:
 

@@ -1655,13 +1655,17 @@ async fn production_smoke_check(
         receipt_operation.pointer("/responses/401").is_some(),
         "OpenAPI transaction receipt must document conditional 401 responses",
     )?;
+    let stripe_webhook_operation = paths
+        .get("/v1/stripe/checkout-webhooks")
+        .and_then(|path_item| path_item.get("post"))
+        .context("OpenAPI missing POST operation for Stripe checkout webhook")?;
     require(
-        paths
-            .get("/v1/stripe/checkout-webhooks")
-            .and_then(|path_item| path_item.get("post"))
-            .and_then(|operation| operation.get("security"))
-            .is_none(),
+        stripe_webhook_operation.get("security").is_none(),
         "OpenAPI Stripe checkout webhook must remain unauthenticated for Stripe delivery",
+    )?;
+    require(
+        stripe_webhook_operation.pointer("/responses/503").is_some(),
+        "OpenAPI Stripe checkout webhook must document missing verification config",
     )?;
 
     let risk_policy_url =

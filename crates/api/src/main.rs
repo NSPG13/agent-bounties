@@ -156,6 +156,7 @@ struct AppState {
     base_log_worker: Arc<Mutex<BaseEscrowLogWorker>>,
     eval_runs: Arc<Mutex<Vec<EvalRun>>>,
     stripe_webhook_secret: Option<Vec<u8>>,
+    allow_unsigned_stripe_webhooks: bool,
     stripe_secret_key: Option<String>,
     stripe_live_execution_enabled: bool,
     stripe_api_base_url: String,
@@ -381,6 +382,9 @@ async fn main() -> anyhow::Result<()> {
         stripe_webhook_secret: env::var("STRIPE_WEBHOOK_SECRET")
             .ok()
             .map(|secret| secret.into_bytes()),
+        allow_unsigned_stripe_webhooks: env::var("ALLOW_UNSIGNED_STRIPE_WEBHOOKS")
+            .map(|value| value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false),
         stripe_secret_key: env::var("STRIPE_SECRET_KEY").ok(),
         stripe_live_execution_enabled: env::var("ENABLE_STRIPE_LIVE_EXECUTION")
             .map(|value| value.eq_ignore_ascii_case("true"))
@@ -1750,7 +1754,8 @@ async fn reconcile_stripe_connect_snapshot(
     path = "/v1/stripe/checkout-webhooks",
     responses(
         (status = 200, description = "Reconciled paid Stripe Checkout top-up webhook"),
-        (status = 400, description = "Invalid webhook payload or signature")
+        (status = 400, description = "Invalid webhook payload or signature"),
+        (status = 503, description = "Webhook signature verification is not configured")
     )
 )]
 async fn reconcile_stripe_checkout_webhook(
@@ -1758,12 +1763,17 @@ async fn reconcile_stripe_checkout_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<app::StripeFundingReconciliation>, StatusCode> {
-    if let Some(secret) = &state.stripe_webhook_secret {
-        let signature = headers
-            .get("stripe-signature")
-            .and_then(|value| value.to_str().ok())
-            .ok_or(StatusCode::BAD_REQUEST)?;
-        verify_webhook_signature(&body, signature, secret).map_err(|_| StatusCode::BAD_REQUEST)?;
+    match &state.stripe_webhook_secret {
+        Some(secret) => {
+            let signature = headers
+                .get("stripe-signature")
+                .and_then(|value| value.to_str().ok())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            verify_webhook_signature(&body, signature, secret)
+                .map_err(|_| StatusCode::BAD_REQUEST)?;
+        }
+        None if state.allow_unsigned_stripe_webhooks => {}
+        None => return Err(StatusCode::SERVICE_UNAVAILABLE),
     }
     let event: StripeWebhookEvent =
         serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -2528,7 +2538,7 @@ mod tests {
     #[tokio::test]
     async fn stripe_checkout_webhook_credits_platform_balance_once() {
         let organization_id = Uuid::new_v4();
-        let state = test_state(BountyNetwork::default());
+        let state = test_state_with_unsigned_stripe_webhooks(BountyNetwork::default());
         let body = stripe_checkout_event_body("evt_paid", "cs_paid", organization_id);
 
         let first = reconcile_stripe_checkout_webhook(
@@ -2565,6 +2575,21 @@ mod tests {
         let network = state.network.lock().expect("state poisoned");
         assert_eq!(network.payment_events.len(), 1);
         assert_eq!(network.ledger.entries().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stripe_checkout_webhook_rejects_unsigned_when_not_explicitly_allowed() {
+        let organization_id = Uuid::new_v4();
+        let state = test_state(BountyNetwork::default());
+        let body =
+            stripe_checkout_event_body("evt_unsigned_paid", "cs_unsigned_paid", organization_id);
+
+        assert_eq!(
+            reconcile_stripe_checkout_webhook(State(state), HeaderMap::new(), Bytes::from(body),)
+                .await
+                .unwrap_err(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     #[tokio::test]
@@ -2954,6 +2979,7 @@ mod tests {
                 .is_none(),
             "Stripe checkout webhook must remain callable by Stripe without operator auth"
         );
+        assert!(paths["/v1/stripe/checkout-webhooks"]["post"]["responses"]["503"].is_object());
     }
 
     #[tokio::test]
@@ -3547,6 +3573,26 @@ mod tests {
             base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
+            allow_unsigned_stripe_webhooks: false,
+            stripe_secret_key: None,
+            stripe_live_execution_enabled: false,
+            stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            store: None,
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            operator_api_token: None,
+            public_base_url: "http://127.0.0.1:8080".to_string(),
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+        })
+    }
+
+    fn test_state_with_unsigned_stripe_webhooks(network: BountyNetwork) -> SharedState {
+        Arc::new(AppState {
+            network: Arc::new(Mutex::new(network)),
+            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
+            eval_runs: Arc::new(Mutex::new(Vec::new())),
+            stripe_webhook_secret: None,
+            allow_unsigned_stripe_webhooks: true,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
@@ -3565,6 +3611,7 @@ mod tests {
             base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: Some(secret.to_vec()),
+            allow_unsigned_stripe_webhooks: false,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
@@ -3583,6 +3630,7 @@ mod tests {
             base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
+            allow_unsigned_stripe_webhooks: false,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
@@ -3604,6 +3652,7 @@ mod tests {
             base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
+            allow_unsigned_stripe_webhooks: false,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
@@ -3628,6 +3677,7 @@ mod tests {
             base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
+            allow_unsigned_stripe_webhooks: false,
             stripe_secret_key: Some("sk_test_mock".to_string()),
             stripe_live_execution_enabled: true,
             stripe_api_base_url,

@@ -319,7 +319,9 @@ can point at a sandbox or mock provider; otherwise it defaults to
 Checkout ledger credit still requires a verified `checkout.session.completed`
 webhook using Stripe's signed `timestamp.payload` format within a five-minute
 replay window, and fiat payout state still requires Connect eligibility
-reconciliation.
+reconciliation. Unsigned Checkout webhook replay is rejected by default; set
+`ALLOW_UNSIGNED_STRIPE_WEBHOOKS=true` only for local or mock-provider
+simulation, never for hosted real-money environments.
 
 `service-smoke-spawn` starts the compiled API and MCP binaries on local
 high-numbered ports, checks health/discovery/tool listing, posts a funded public
