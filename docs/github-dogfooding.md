@@ -46,7 +46,15 @@ The same deterministic planner is exposed over HTTP and MCP:
 
 These surfaces do not call the GitHub API. They produce the parsed issue,
 check-run output, proof-comment markdown, and stable fingerprint that an
-operator or future GitHub App execution worker can post.
+operator or GitHub automation can post.
+
+The repository includes `.github/workflows/paid-bounty-issues.yml` as the first
+dogfooding bridge. On opened, edited, reopened, or labeled issues that look like
+paid bounties, it runs `scripts/github-issue-plan-comment.sh`, executes the
+deterministic `github-plan` command against the rendered issue body, writes the
+planner result to the workflow summary, and creates or updates a sticky issue
+comment marked with `<!-- agent-bounties-plan -->`. This keeps the public issue
+loop open-source and low-friction before a hosted GitHub App worker exists.
 
 Plan a proof comment locally:
 

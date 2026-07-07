@@ -334,6 +334,9 @@ amounts, carries optional funding/privacy terms, emits check-run output, and ren
 fingerprints. API and MCP planner surfaces expose the same behavior at
 `/v1/github/issue-bounty-plan`, `/v1/github/proof-comment-plan`,
 `plan_github_issue_bounty`, and `plan_github_proof_comment`.
+The `Paid Bounty Issues` workflow runs the planner on bounty-looking issue
+events and updates a sticky validation comment so contributors get immediate
+feedback before the issue is funded.
 
 Run all local checks:
 

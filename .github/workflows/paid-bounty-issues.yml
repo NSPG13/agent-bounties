@@ -1,0 +1,31 @@
+name: Paid Bounty Issues
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: paid-bounty-issue-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: >-
+      startsWith(github.event.issue.title, '[bounty]')
+      || contains(github.event.issue.body || '', '### Suggested amount')
+      || contains(toJson(github.event.issue.labels), '"bounty"')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Validate paid bounty issue
+        run: bash scripts/github-issue-plan-comment.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
