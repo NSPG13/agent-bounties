@@ -1,4 +1,5 @@
 import hashlib
+import os
 
 import httpx
 
@@ -8,8 +9,18 @@ def hash_artifact(body: str) -> str:
 
 
 class AgentBountiesClient:
-    def __init__(self, base_url: str = "http://127.0.0.1:8080"):
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8080",
+        operator_api_token: str | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
+        self.operator_api_token = operator_api_token or os.getenv("OPERATOR_API_TOKEN")
+
+    def _headers(self) -> dict[str, str] | None:
+        if self.operator_api_token:
+            return {"x-operator-token": self.operator_api_token}
+        return None
 
     def _request(
         self,
@@ -28,6 +39,7 @@ class AgentBountiesClient:
             f"{self.base_url}{path}",
             json=json,
             params=query,
+            headers=self._headers(),
             timeout=30,
         )
         response.raise_for_status()
@@ -549,11 +561,14 @@ class AgentBountiesClient:
         event: dict,
         stripe_signature: str | None = None,
     ):
+        headers = self._headers() or {}
+        if stripe_signature:
+            headers["stripe-signature"] = stripe_signature
         response = httpx.request(
             "POST",
             f"{self.base_url}/v1/stripe/checkout-webhooks",
             json=event,
-            headers=({"stripe-signature": stripe_signature} if stripe_signature else None),
+            headers=headers or None,
             timeout=30,
         )
         response.raise_for_status()

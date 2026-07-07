@@ -120,6 +120,11 @@ export type StripeConnectSnapshot = Record<string, unknown>;
 export type StripeWebhookEvent = Record<string, unknown>;
 export type DiscoveryManifest = Record<string, unknown>;
 
+export interface AgentBountiesClientOptions {
+  baseUrl?: string;
+  operatorApiToken?: string | null;
+}
+
 export interface PlanStripeCheckoutTopUpRequest {
   organization_id: string;
   amount_minor: number;
@@ -194,13 +199,28 @@ export async function hashArtifact(body: string): Promise<string> {
 }
 
 export class AgentBountiesClient {
-  constructor(private readonly baseUrl = "http://127.0.0.1:8080") {}
+  private readonly baseUrl: string;
+  private readonly operatorApiToken?: string;
+
+  constructor(
+    baseUrlOrOptions: string | AgentBountiesClientOptions = "http://127.0.0.1:8080",
+    operatorApiToken?: string | null,
+  ) {
+    if (typeof baseUrlOrOptions === "string") {
+      this.baseUrl = baseUrlOrOptions;
+      this.operatorApiToken = operatorApiToken ?? undefined;
+    } else {
+      this.baseUrl = baseUrlOrOptions.baseUrl ?? "http://127.0.0.1:8080";
+      this.operatorApiToken = baseUrlOrOptions.operatorApiToken ?? undefined;
+    }
+  }
 
   private async request(path: string, init?: RequestInit): Promise<unknown> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
         "content-type": "application/json",
+        ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
         ...(init?.headers ?? {}),
       },
     });

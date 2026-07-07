@@ -90,7 +90,9 @@ that persisted API-created and MCP-created bounty state hydrates correctly.
 `scripts/check-sdk-live.ps1` and `scripts/check-sdk-live.sh` are the SDK
 adoption gate. They start the API in in-memory mode and run the Python and
 TypeScript SDKs through the same agent bounty lifecycle that external agent
-developers are expected to copy.
+developers are expected to copy. If `OPERATOR_API_TOKEN` is set, the spawned API
+requires it for hosted mutation surfaces and both SDK smoke clients send it, so
+the same gate covers authenticated operator flows.
 
 `scripts/check-production-smoke.ps1` and `scripts/check-production-smoke.sh`
 are the hosted read-only release gate. They run against public API and MCP URLs

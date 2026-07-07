@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import time
 import uuid
 
@@ -385,9 +386,12 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a live Agent Bounties Python SDK smoke.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
+    parser.add_argument("--operator-api-token", default=os.getenv("OPERATOR_API_TOKEN"))
     args = parser.parse_args()
 
-    result = exercise_surface(AgentBountiesClient(args.base_url))
+    result = exercise_surface(
+        AgentBountiesClient(args.base_url, operator_api_token=args.operator_api_token)
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

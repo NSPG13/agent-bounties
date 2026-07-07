@@ -2,6 +2,7 @@ import { AgentBountiesClient, hashArtifact } from "./index.js";
 
 declare const process: {
   argv: string[];
+  env?: Record<string, string | undefined>;
 };
 
 type JsonObject = Record<string, unknown>;
@@ -42,8 +43,20 @@ function baseUrlFromArgs(): string {
   return "http://127.0.0.1:8080";
 }
 
+function operatorApiTokenFromArgs(): string | undefined {
+  const index = process.argv.indexOf("--operator-api-token");
+  if (index >= 0 && process.argv[index + 1]) {
+    return process.argv[index + 1];
+  }
+  const token = process.env?.OPERATOR_API_TOKEN;
+  return token && token.trim() ? token : undefined;
+}
+
 async function main(): Promise<void> {
-  const client = new AgentBountiesClient(baseUrlFromArgs());
+  const client = new AgentBountiesClient({
+    baseUrl: baseUrlFromArgs(),
+    operatorApiToken: operatorApiTokenFromArgs(),
+  });
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   const discovery = asObject(await client.getDiscoveryManifest(), "discovery");

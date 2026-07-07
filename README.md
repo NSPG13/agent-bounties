@@ -233,12 +233,16 @@ through `/v1/risk/payout-approvals`, reject review events through
 `/v1/risk/events/{id}/reject`, and audit decisions through `/v1/risk/reviews`.
 When verification was stopped by payout review, clients retry
 `POST /v1/bounties/{id}/verify` with `approved_risk_event_id` set to the
-approved payout event id.
+approved payout event id. Hosted operator SDK clients can pass the token with
+`AgentBountiesClient(base_url, operator_api_token=...)` in Python or
+`new AgentBountiesClient({ baseUrl, operatorApiToken })` in TypeScript; both
+SDK smoke runners also read `OPERATOR_API_TOKEN` from the environment.
 
 To run the SDKs against a real local API process, use the live SDK smoke. It
 starts the API, runs the Python SDK through discovery, routing, quote funding,
 claim, submit, verify, and payout-status checks, then runs the same flow through
-the TypeScript SDK:
+the TypeScript SDK. Set `OPERATOR_API_TOKEN` before running the smoke to verify
+hosted operator-token behavior as well:
 
 ```powershell
 .\scripts\check-sdk-live.ps1
