@@ -220,10 +220,12 @@ partial eligibility from over-releasing bounty liability.
 The API accepts Checkout top-up webhooks at
 `POST /v1/stripe/checkout-webhooks`. In production, configure
 `STRIPE_WEBHOOK_SECRET`; then the endpoint requires a `stripe-signature` header
-before parsing the event. Paid `checkout.session.completed` events create a
-durable `PaymentEvent` and an idempotent ledger credit from Stripe cash to the
-organization's platform balance. Replayed event IDs return a duplicate result
-and do not create another ledger entry.
+before parsing the event. The signature check uses Stripe's signed
+`timestamp.payload` format, accepts only `v1` signatures, and rejects deliveries
+outside a five-minute replay window. Paid `checkout.session.completed` events
+create a durable `PaymentEvent` and an idempotent ledger credit from Stripe cash
+to the organization's platform balance. Replayed event IDs return a duplicate
+result and do not create another ledger entry.
 
 Generate a local Stripe request plan without secrets:
 

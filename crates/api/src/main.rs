@@ -2317,11 +2317,15 @@ mod tests {
         PayoutStatus, ProofRecord, VerifierKind,
     };
     use github_app::GitHubCheckConclusion;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
     use std::{
         io::{Read, Write},
         net::TcpListener,
         thread,
     };
+
+    type TestHmacSha256 = Hmac<Sha256>;
 
     #[tokio::test]
     async fn raw_base_evm_log_endpoint_marks_bounty_paid() {
@@ -2561,6 +2565,59 @@ mod tests {
         let network = state.network.lock().expect("state poisoned");
         assert_eq!(network.payment_events.len(), 1);
         assert_eq!(network.ledger.entries().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stripe_checkout_webhook_requires_valid_signature_when_secret_configured() {
+        let organization_id = Uuid::new_v4();
+        let secret = b"whsec_test";
+        let state = test_state_with_stripe_webhook_secret(BountyNetwork::default(), secret);
+        let body = stripe_checkout_event_body("evt_signed_paid", "cs_signed_paid", organization_id);
+
+        assert_eq!(
+            reconcile_stripe_checkout_webhook(
+                State(state.clone()),
+                HeaderMap::new(),
+                Bytes::from(body.clone()),
+            )
+            .await
+            .unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let mut bad_headers = HeaderMap::new();
+        bad_headers.insert("stripe-signature", "t=1700000000,v1=00".parse().unwrap());
+        assert_eq!(
+            reconcile_stripe_checkout_webhook(
+                State(state.clone()),
+                bad_headers,
+                Bytes::from(body.clone()),
+            )
+            .await
+            .unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let mut signed_headers = HeaderMap::new();
+        signed_headers.insert(
+            "stripe-signature",
+            stripe_signature_header(&body, secret).parse().unwrap(),
+        );
+        let signed = reconcile_stripe_checkout_webhook(
+            State(state.clone()),
+            signed_headers,
+            Bytes::from(body),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert!(!signed.duplicate);
+        assert_eq!(signed.ledger_entries.len(), 1);
+        assert_eq!(
+            signed.funding_credit.payment_event.status,
+            PaymentEventStatus::Applied
+        );
     }
 
     #[tokio::test]
@@ -3502,6 +3559,24 @@ mod tests {
         })
     }
 
+    fn test_state_with_stripe_webhook_secret(network: BountyNetwork, secret: &[u8]) -> SharedState {
+        Arc::new(AppState {
+            network: Arc::new(Mutex::new(network)),
+            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
+            eval_runs: Arc::new(Mutex::new(Vec::new())),
+            stripe_webhook_secret: Some(secret.to_vec()),
+            stripe_secret_key: None,
+            stripe_live_execution_enabled: false,
+            stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            store: None,
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            operator_api_token: None,
+            public_base_url: "http://127.0.0.1:8080".to_string(),
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+        })
+    }
+
     fn test_state_with_operator_token(network: BountyNetwork, token: &str) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
@@ -3734,6 +3809,20 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    fn stripe_signature_header(payload: &[u8], secret: &[u8]) -> String {
+        let timestamp = Utc::now().timestamp();
+        let mut signed_payload = timestamp.to_string().into_bytes();
+        signed_payload.push(b'.');
+        signed_payload.extend_from_slice(payload);
+        let mut mac = TestHmacSha256::new_from_slice(secret).unwrap();
+        mac.update(&signed_payload);
+        format!(
+            "t={},v1={}",
+            timestamp,
+            hex::encode(mac.finalize().into_bytes())
+        )
     }
 
     fn valid_github_issue_body() -> String {

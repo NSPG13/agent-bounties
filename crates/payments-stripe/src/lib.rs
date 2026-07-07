@@ -9,6 +9,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
+const WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: u64 = 5 * 60;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum StripeIntegrationError {
@@ -531,19 +532,36 @@ pub fn verify_webhook_signature(
     signature_header: &str,
     secret: &[u8],
 ) -> Result<(), StripeIntegrationError> {
-    let mut mac =
-        HmacSha256::new_from_slice(secret).map_err(|_| StripeIntegrationError::InvalidSignature)?;
-    mac.update(payload);
-    let expected = mac.finalize().into_bytes();
+    verify_webhook_signature_at(payload, signature_header, secret, Utc::now().timestamp())
+}
+
+fn verify_webhook_signature_at(
+    payload: &[u8],
+    signature_header: &str,
+    secret: &[u8],
+    now_timestamp: i64,
+) -> Result<(), StripeIntegrationError> {
+    let timestamp = signature_timestamp(signature_header)?;
+    if timestamp.abs_diff(now_timestamp) > WEBHOOK_SIGNATURE_TOLERANCE_SECONDS {
+        return Err(StripeIntegrationError::InvalidSignature);
+    }
+
+    let signed_payload = stripe_signed_payload(timestamp, payload);
     signature_candidates(signature_header)
         .into_iter()
-        .any(|candidate| {
-            hex::decode(candidate)
-                .map(|signature| signature.as_slice() == expected.as_slice())
-                .unwrap_or(false)
-        })
+        .any(|candidate| verify_signature_candidate(&signed_payload, candidate, secret))
         .then_some(())
         .ok_or(StripeIntegrationError::InvalidSignature)
+}
+
+fn verify_signature_candidate(signed_payload: &[u8], candidate: &str, secret: &[u8]) -> bool {
+    let signature = match hex::decode(candidate) {
+        Ok(signature) => signature,
+        Err(_) => return false,
+    };
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts secrets of any size");
+    mac.update(signed_payload);
+    mac.verify_slice(&signature).is_ok()
 }
 
 pub fn hash_payload(payload: &serde_json::Value) -> String {
@@ -614,15 +632,28 @@ fn get_i64(payload: &serde_json::Value, key: &str) -> Result<i64, StripeIntegrat
         .ok_or_else(|| StripeIntegrationError::MissingField(key.to_string()))
 }
 
+fn signature_timestamp(header: &str) -> Result<i64, StripeIntegrationError> {
+    header
+        .split(',')
+        .filter_map(|part| part.trim().strip_prefix("t="))
+        .find_map(|timestamp| timestamp.parse::<i64>().ok())
+        .ok_or(StripeIntegrationError::InvalidSignature)
+}
+
 fn signature_candidates(header: &str) -> Vec<&str> {
     header
         .split(',')
-        .filter_map(|part| {
-            let part = part.trim();
-            part.strip_prefix("v1=")
-                .or_else(|| if part.contains('=') { None } else { Some(part) })
-        })
+        .filter_map(|part| part.trim().strip_prefix("v1="))
         .collect()
+}
+
+fn stripe_signed_payload(timestamp: i64, payload: &[u8]) -> Vec<u8> {
+    let timestamp = timestamp.to_string();
+    let mut signed = Vec::with_capacity(timestamp.len() + 1 + payload.len());
+    signed.extend_from_slice(timestamp.as_bytes());
+    signed.push(b'.');
+    signed.extend_from_slice(payload);
+    signed
 }
 
 pub trait StripeClient {
@@ -687,14 +718,27 @@ mod tests {
     fn webhook_signature_is_checked() {
         let payload = br#"{"id":"evt_1"}"#;
         let secret = b"whsec_test";
-        let mut mac = HmacSha256::new_from_slice(secret).unwrap();
-        mac.update(payload);
-        let signature = hex::encode(mac.finalize().into_bytes());
+        let now_timestamp = 1_700_000_000;
+        let signature = stripe_signature_header(payload, secret, now_timestamp);
 
-        verify_webhook_signature(payload, &signature, secret).unwrap();
-        verify_webhook_signature(payload, &format!("t=123,v1={signature}"), secret).unwrap();
+        verify_webhook_signature_at(payload, &signature, secret, now_timestamp).unwrap();
         assert_eq!(
-            verify_webhook_signature(payload, "00", secret).unwrap_err(),
+            verify_webhook_signature_at(payload, "00", secret, now_timestamp).unwrap_err(),
+            StripeIntegrationError::InvalidSignature
+        );
+        assert_eq!(
+            verify_webhook_signature_at(
+                payload,
+                &raw_payload_signature_header(payload, secret, now_timestamp),
+                secret,
+                now_timestamp
+            )
+            .unwrap_err(),
+            StripeIntegrationError::InvalidSignature
+        );
+        assert_eq!(
+            verify_webhook_signature_at(payload, &signature, secret, now_timestamp + 301)
+                .unwrap_err(),
             StripeIntegrationError::InvalidSignature
         );
     }
@@ -797,6 +841,26 @@ mod tests {
             deduper.apply_checkout_top_up(&event).unwrap_err(),
             StripeIntegrationError::CheckoutSessionNotPaid
         );
+    }
+
+    fn stripe_signature_header(payload: &[u8], secret: &[u8], timestamp: i64) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+        mac.update(&stripe_signed_payload(timestamp, payload));
+        format!(
+            "t={},v1={}",
+            timestamp,
+            hex::encode(mac.finalize().into_bytes())
+        )
+    }
+
+    fn raw_payload_signature_header(payload: &[u8], secret: &[u8], timestamp: i64) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+        mac.update(payload);
+        format!(
+            "t={},v1={}",
+            timestamp,
+            hex::encode(mac.finalize().into_bytes())
+        )
     }
 
     #[test]

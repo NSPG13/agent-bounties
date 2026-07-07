@@ -28,3 +28,8 @@ utoipa.workspace = true
 uuid.workspace = true
 web-public = { path = "../web-public" }
 worker = { path = "../worker" }
+
+[dev-dependencies]
+hex.workspace = true
+hmac.workspace = true
+sha2.workspace = true
