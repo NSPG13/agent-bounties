@@ -9,6 +9,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $env:Path = "$env:USERPROFILE\.cargo\bin;$repoRoot\.tools\foundry;$env:Path"
 $failures = New-Object System.Collections.Generic.List[string]
 $warnings = New-Object System.Collections.Generic.List[string]
+$minimumRustMajor = 1
+$minimumRustMinor = 88
 
 function Test-RequiredCommand {
     param(
@@ -36,8 +38,40 @@ function Test-OptionalCommand {
     }
 }
 
+function Test-MinimumVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Name,
+        [Parameter(Mandatory = $true)]
+        [int] $MinimumMajor,
+        [Parameter(Mandatory = $true)]
+        [int] $MinimumMinor,
+        [Parameter(Mandatory = $true)]
+        [string] $Purpose
+    )
+
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        return
+    }
+
+    $versionOutput = & $Name --version 2>$null
+    if ($versionOutput -notmatch '^\S+\s+(\d+)\.(\d+)\.') {
+        $failures.Add("could not parse $Name version for $Purpose")
+        return
+    }
+
+    $major = [int] $Matches[1]
+    $minor = [int] $Matches[2]
+    if ($major -lt $MinimumMajor -or ($major -eq $MinimumMajor -and $minor -lt $MinimumMinor)) {
+        $failures.Add("$Name $MinimumMajor.$MinimumMinor or newer is required for $Purpose; found $versionOutput")
+    }
+}
+
+Test-RequiredCommand rustc "Rust compiler commands"
 Test-RequiredCommand cargo "Rust workspace commands"
 Test-RequiredCommand npm "TypeScript SDK checks"
+Test-MinimumVersion rustc $minimumRustMajor $minimumRustMinor "the locked dependency graph"
+Test-MinimumVersion cargo $minimumRustMajor $minimumRustMinor "the locked dependency graph"
 
 $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
 if (-not $pythonCommand) {

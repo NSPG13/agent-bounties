@@ -1221,7 +1221,7 @@ fn normalize_signed_transaction(transaction: &str) -> Result<String, ChainBaseEr
         ChainBaseError::InvalidSignedTransaction("transaction must have 0x prefix".to_string())
     })?;
     if trimmed.is_empty()
-        || trimmed.len() % 2 != 0
+        || !trimmed.len().is_multiple_of(2)
         || !trimmed
             .chars()
             .all(|character| character.is_ascii_hexdigit())
@@ -1235,7 +1235,7 @@ fn normalize_signed_transaction(transaction: &str) -> Result<String, ChainBaseEr
 
 fn normalize_data(data: &str) -> Result<String, ChainBaseError> {
     let trimmed = data.strip_prefix("0x").unwrap_or(data);
-    if trimmed.len() % 2 != 0
+    if !trimmed.len().is_multiple_of(2)
         || !trimmed
             .chars()
             .all(|character| character.is_ascii_hexdigit())

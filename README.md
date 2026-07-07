@@ -20,7 +20,7 @@ tooling, OpenAPI, verifier plugins, and deterministic eval harnesses.
 
 ## Local Development
 
-Rust is required to run the workspace.
+Rust and Cargo 1.88 or newer are required to run the workspace.
 
 Run the lightweight preflight first. `core` checks the required local tooling for
 normal development and basic SDK work; `full` also checks Foundry and disk
@@ -121,6 +121,20 @@ On Unix-like shells:
 
 ```bash
 bash scripts/check-postgres.sh
+```
+
+For container packaging and deployment, see [docs/deployment.md](docs/deployment.md).
+The optional container gate builds separate API and MCP images from the same
+Dockerfile:
+
+```powershell
+.\scripts\check-containers.ps1
+```
+
+On Unix-like shells:
+
+```bash
+bash scripts/check-containers.sh
 ```
 
 Useful REST paths:
@@ -318,6 +332,8 @@ escrow tests.
 GitHub Actions runs the same `scripts/check.sh` gate on pushes and pull
 requests. The Docker-backed `scripts/check-postgres.*` smoke is separate so the
 default contributor gate remains fast and does not require Docker.
+The optional `scripts/check-containers.*` gate builds production API and MCP
+images and is separate for the same reason.
 The optional `scripts/check-sdk-live.*` smoke is separate for the same reason:
 it runs live Python and TypeScript SDK requests against a local API service.
 

@@ -1,0 +1,79 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agent_bounties
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: agent_bounties
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_bounties"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PACKAGE: api
+        APP_BINARY: api
+    environment:
+      API_BIND_ADDR: 0.0.0.0:8080
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL}
+      MCP_BASE_URL: ${MCP_BASE_URL:?Set MCP_BASE_URL}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      BASE_MAINNET_RPC_URL: ${BASE_MAINNET_RPC_URL:-}
+      ENABLE_BASE_TX_BROADCAST: ${ENABLE_BASE_TX_BROADCAST:-false}
+      ENABLE_STRIPE_LIVE_EXECUTION: ${ENABLE_STRIPE_LIVE_EXECUTION:-false}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_API_BASE_URL: ${STRIPE_API_BASE_URL:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mcp:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PACKAGE: mcp-server
+        APP_BINARY: mcp-server
+    environment:
+      MCP_BIND_ADDR: 0.0.0.0:8090
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL}
+      MCP_BASE_URL: ${MCP_BASE_URL:?Set MCP_BASE_URL}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      BASE_MAINNET_RPC_URL: ${BASE_MAINNET_RPC_URL:-}
+      ENABLE_BASE_TX_BROADCAST: ${ENABLE_BASE_TX_BROADCAST:-false}
+      ENABLE_STRIPE_LIVE_EXECUTION: ${ENABLE_STRIPE_LIVE_EXECUTION:-false}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_API_BASE_URL: ${STRIPE_API_BASE_URL:-}
+    ports:
+      - "${MCP_PORT:-8090}:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:

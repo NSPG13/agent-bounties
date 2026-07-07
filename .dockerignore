@@ -1,0 +1,15 @@
+target/
+.git/
+.tools/
+node_modules/
+dist/
+coverage/
+__pycache__/
+*.pyc
+*.log
+.env
+.env.*
+!.env.example
+contracts/**/out/
+contracts/**/cache/
+broadcast/

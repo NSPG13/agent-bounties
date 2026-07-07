@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
+const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -61,14 +62,34 @@ impl PostgresStore {
     }
 
     pub async fn migrate(&self) -> DbResult<()> {
-        for statement in CORE_MIGRATION
-            .split(';')
-            .map(str::trim)
-            .filter(|statement| !statement.is_empty())
-        {
-            sqlx::query(statement).execute(&self.pool).await?;
+        let mut connection = self.pool.acquire().await?;
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(MIGRATION_ADVISORY_LOCK_ID)
+            .execute(&mut *connection)
+            .await?;
+
+        let migration_result = async {
+            for statement in CORE_MIGRATION
+                .split(';')
+                .map(str::trim)
+                .filter(|statement| !statement.is_empty())
+            {
+                sqlx::query(statement).execute(&mut *connection).await?;
+            }
+            Ok::<(), sqlx::Error>(())
         }
-        Ok(())
+        .await;
+
+        let unlock_result = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(MIGRATION_ADVISORY_LOCK_ID)
+            .execute(&mut *connection)
+            .await;
+
+        match (migration_result, unlock_result) {
+            (Ok(()), Ok(_)) => Ok(()),
+            (Err(error), Ok(_)) => Err(error.into()),
+            (Ok(()), Err(error)) | (Err(_), Err(error)) => Err(error.into()),
+        }
     }
 
     pub async fn upsert_agent(&self, agent: &Agent) -> DbResult<()> {
@@ -1324,5 +1345,10 @@ mod tests {
         ] {
             assert!(CORE_MIGRATION.contains(table), "missing {table}");
         }
+    }
+
+    #[test]
+    fn migration_lock_id_is_stable() {
+        assert_eq!(MIGRATION_ADVISORY_LOCK_ID, 4_270_265_017);
     }
 }
