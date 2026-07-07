@@ -75,6 +75,7 @@ cargo run -p cli -- github-plan \
   --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 \
   --title "[bounty]: Fix CI" \
   --body-file examples/github-paid-bounty-issue.md
+"${python_cmd[@]}" scripts/github_issue_plan_comment.py --self-test
 cargo run -p cli -- github-proof-comment-plan \
   --bounty-id 00000000-0000-0000-0000-000000000001 \
   --proof-url https://agentbounties.local/public/proofs/example \

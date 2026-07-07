@@ -357,6 +357,7 @@ fixtures, `JudgeBench` for product-quality AI-judge filter regressions,
 `EvalLoops/all-v0` for router/template/verifier/proof/abuse loop regressions, CLI
 operator planners including the risk-policy descriptor and Base
 release/refund/dispute transaction plans,
+the GitHub paid-bounty issue workflow dry-run,
 Python/TypeScript SDK compilation, SDK eval-run history checks, and Foundry
 escrow tests.
 GitHub Actions runs the same `scripts/check.sh` gate on pushes and pull
