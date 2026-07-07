@@ -28,7 +28,8 @@ run at least one eval suite and persisted the run history.
 The gate checks:
 
 - API and MCP health endpoints.
-- `/.well-known/agent-bounties.json` and `/llms.txt` on both services.
+- `/.well-known/agent-bounties.json`, the discovery manifest JSON Schema, and
+  `/llms.txt` on both services.
 - OpenAPI paths for routing, public feeds, risk review and approval, Base, and Stripe
   live-execution boundaries, including operator security schemes and protected
   operation metadata.

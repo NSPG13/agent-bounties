@@ -9,6 +9,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY contracts ./contracts
 COPY migrations ./migrations
+COPY schemas ./schemas
 
 ARG APP_PACKAGE=api
 ARG APP_BINARY=api

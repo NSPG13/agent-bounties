@@ -58,6 +58,7 @@ pub struct DiscoveryEndpoints {
     pub swagger_ui: String,
     pub mcp_tools: String,
     pub discovery: String,
+    pub discovery_schema: String,
     pub llms_txt: String,
     pub templates: String,
     pub bounty_feed: String,
@@ -175,6 +176,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             swagger_ui: format!("{api}/docs"),
             mcp_tools: format!("{mcp}/tools"),
             discovery: format!("{api}/.well-known/agent-bounties.json"),
+            discovery_schema: format!("{api}/schemas/discovery-manifest.v1.json"),
             llms_txt: format!("{api}/llms.txt"),
             templates: format!("{api}/public/templates"),
             bounty_feed: format!("{api}/v1/bounties/feed"),
@@ -336,6 +338,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 ## Start Here
 
 - Discovery manifest: {discovery}
+- Discovery schema: {discovery_schema}
 - OpenAPI JSON: {openapi_json}
 - MCP tools: {mcp_tools}
 - Public bounty feed: {bounty_feed}
@@ -393,6 +396,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 The repository is designed for agent contributors. Start with `AGENTS.md`, `README.md`, and `docs/open-source-launch.md`.
 "#,
         discovery = &endpoints.discovery,
+        discovery_schema = &endpoints.discovery_schema,
         openapi_json = &endpoints.openapi_json,
         mcp_tools = &endpoints.mcp_tools,
         bounty_feed = &endpoints.bounty_feed,
@@ -416,6 +420,10 @@ The repository is designed for agent contributors. Start with `AGENTS.md`, `READ
         github_issue_bounty_plan = &endpoints.github_issue_bounty_plan,
         github_proof_comment_plan = &endpoints.github_proof_comment_plan,
     )
+}
+
+pub fn discovery_manifest_schema_json() -> &'static str {
+    include_str!("../../../schemas/discovery-manifest.v1.json")
 }
 
 pub fn public_bounty_feed(bounties: &[Bounty], api_base_url: &str) -> Vec<PublicBountyFeedItem> {
@@ -954,6 +962,10 @@ mod tests {
             "https://network.example/.well-known/agent-bounties.json"
         );
         assert_eq!(
+            manifest.endpoints.discovery_schema,
+            "https://network.example/schemas/discovery-manifest.v1.json"
+        );
+        assert_eq!(
             manifest.endpoints.llms_txt,
             "https://network.example/llms.txt"
         );
@@ -1107,6 +1119,7 @@ mod tests {
 
         assert!(text.contains("# Agent Bounties"));
         assert!(text.contains("https://network.example/.well-known/agent-bounties.json"));
+        assert!(text.contains("https://network.example/schemas/discovery-manifest.v1.json"));
         assert!(text.contains("https://mcp.example/tools"));
         assert!(text.contains("route_blocked_goal"));
         assert!(text.contains(GITHUB_ISSUE_TEMPLATE_URL));
@@ -1122,6 +1135,8 @@ mod tests {
         assert!(text.contains("Agent payout status"));
         assert!(text.contains("https://network.example/v1/agents/{agent_id}/paid-status"));
         assert!(text.contains("Base refund plan"));
+        assert!(discovery_manifest_schema_json().contains("\"$id\""));
+        assert!(discovery_manifest_schema_json().contains("\"agent_entrypoints\""));
     }
 
     #[test]

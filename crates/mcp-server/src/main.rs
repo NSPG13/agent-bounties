@@ -7,7 +7,8 @@ use app::{
 };
 use axum::{
     extract::State,
-    http::HeaderMap,
+    http::{header, HeaderMap},
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
@@ -259,6 +260,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(|| async { "ok" }))
         .route("/llms.txt", get(llms_txt))
         .route(
+            "/schemas/discovery-manifest.v1.json",
+            get(discovery_manifest_schema),
+        )
+        .route(
             "/.well-known/agent-bounties.json",
             get(agent_bounties_discovery),
         )
@@ -370,6 +375,13 @@ async fn llms_txt() -> String {
     let mcp_base_url =
         env::var("MCP_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string());
     web_public::render_llms_txt(&api_base_url, &mcp_base_url)
+}
+
+async fn discovery_manifest_schema() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/schema+json")],
+        web_public::discovery_manifest_schema_json(),
+    )
 }
 
 async fn tools() -> Json<Vec<ToolDescriptor>> {

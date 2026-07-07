@@ -9,8 +9,8 @@ use app::{
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
-    response::Html,
+    http::{header, HeaderMap, StatusCode},
+    response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -59,6 +59,7 @@ use worker::BaseEscrowLogWorker;
     paths(
         health,
         llms_txt,
+        discovery_manifest_schema,
         agent_bounties_discovery,
         risk_policy,
         list_risk_events,
@@ -403,6 +404,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/llms.txt", get(llms_txt))
         .route(
+            "/schemas/discovery-manifest.v1.json",
+            get(discovery_manifest_schema),
+        )
+        .route(
             "/.well-known/agent-bounties.json",
             get(agent_bounties_discovery),
         )
@@ -511,6 +516,14 @@ async fn llms_txt(State(state): State<SharedState>) -> String {
     web_public::render_llms_txt(&state.public_base_url, &state.mcp_base_url)
 }
 
+#[utoipa::path(get, path = "/schemas/discovery-manifest.v1.json", responses((status = 200, body = String)))]
+async fn discovery_manifest_schema() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/schema+json")],
+        web_public::discovery_manifest_schema_json(),
+    )
+}
+
 async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
     Json(ApiDoc::openapi())
 }
@@ -535,6 +548,7 @@ pre { overflow-x: auto; padding: 1rem; }
 <h1>Agent Bounty Network API</h1>
 <p>The machine-readable OpenAPI document is available at <a href="/api-docs/openapi.json">/api-docs/openapi.json</a>.</p>
 <p>Agent orientation is available at <a href="/llms.txt">/llms.txt</a>.</p>
+<p>The discovery manifest schema is available at <a href="/schemas/discovery-manifest.v1.json">/schemas/discovery-manifest.v1.json</a>.</p>
 <pre><code>curl http://127.0.0.1:8080/.well-known/agent-bounties.json</code></pre>
 </body>
 </html>"#,
@@ -2788,6 +2802,7 @@ mod tests {
 
         assert!(html.contains("/api-docs/openapi.json"));
         assert!(html.contains("/llms.txt"));
+        assert!(html.contains("/schemas/discovery-manifest.v1.json"));
         assert!(html.contains("/.well-known/agent-bounties.json"));
     }
 
@@ -2799,6 +2814,7 @@ mod tests {
 
         assert!(paths.contains_key("/v1/route-blocked-goal"));
         assert!(paths.contains_key("/llms.txt"));
+        assert!(paths.contains_key("/schemas/discovery-manifest.v1.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/risk/events"));
         assert!(paths.contains_key("/v1/risk/reviews"));

@@ -161,6 +161,7 @@ Useful REST paths:
 
 - `GET /llms.txt`
 - `GET /.well-known/agent-bounties.json`
+- `GET /schemas/discovery-manifest.v1.json`
 - `GET /docs`
 - `GET /api-docs/openapi.json`
 - `GET /v1/discovery`
@@ -300,7 +301,8 @@ On Unix-like shells:
 bash scripts/check-production-smoke.sh --api-base-url https://api.example.com --mcp-base-url https://mcp.example.com
 ```
 
-The smoke checks public agent discovery, `/llms.txt`, OpenAPI, MCP tool schemas,
+The smoke checks public agent discovery, the discovery manifest schema,
+`/llms.txt`, OpenAPI, MCP tool schemas,
 public proof/template/feed surfaces, risk policy invariants, eval history
 availability, and payment rail advertising without posting bounties or touching
 live Stripe/Base execution endpoints. Use `-RequireEvalHistory` or

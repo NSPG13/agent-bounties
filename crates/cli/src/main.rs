@@ -1369,6 +1369,7 @@ async fn production_smoke_check(
         "/endpoints/openapi_json",
         "/endpoints/swagger_ui",
         "/endpoints/discovery",
+        "/endpoints/discovery_schema",
         "/endpoints/llms_txt",
         "/endpoints/templates",
         "/endpoints/bounty_feed",
@@ -1391,6 +1392,47 @@ async fn production_smoke_check(
             &format!("discovery manifest missing {endpoint}"),
         )?;
     }
+    let discovery_schema_url = value_str(&discovery, "/endpoints/discovery_schema")
+        .context("discovery schema url missing")?;
+    require(
+        discovery_schema_url.starts_with(api),
+        "discovery schema endpoint must be hosted by the checked API URL",
+    )?;
+    let discovery_schema = production_get_json(&client, discovery_schema_url).await?;
+    require(
+        value_str(&discovery_schema, "/$id") == value_str(&discovery, "/schema"),
+        "discovery schema $id must match manifest schema id",
+    )?;
+    require(
+        discovery_schema
+            .pointer("/required")
+            .and_then(|value| value.as_array())
+            .map(|required| {
+                required
+                    .iter()
+                    .any(|value| value.as_str() == Some("agent_entrypoints"))
+                    && required
+                        .iter()
+                        .any(|value| value.as_str() == Some("payment_rails"))
+            })
+            .unwrap_or(false),
+        "discovery schema must require agent entrypoints and payment rails",
+    )?;
+    require(
+        discovery_schema
+            .pointer("/properties/endpoints/required")
+            .and_then(|value| value.as_array())
+            .map(|required| {
+                required
+                    .iter()
+                    .any(|value| value.as_str() == Some("github_issue_template"))
+                    && required
+                        .iter()
+                        .any(|value| value.as_str() == Some("discovery_schema"))
+            })
+            .unwrap_or(false),
+        "discovery schema must require distribution endpoints",
+    )?;
 
     for entrypoint in [
         "route_blocked_goal",
@@ -1486,6 +1528,15 @@ async fn production_smoke_check(
     require(
         mcp_llms.contains("MCP tools") && mcp_llms.contains("route_blocked_goal"),
         "MCP llms.txt must orient agents to MCP tools",
+    )?;
+    let mcp_schema = production_get_json(
+        &client,
+        &format!("{mcp}/schemas/discovery-manifest.v1.json"),
+    )
+    .await?;
+    require(
+        value_str(&mcp_schema, "/$id") == value_str(&discovery_schema, "/$id"),
+        "MCP discovery schema endpoint must serve the same manifest schema",
     )?;
 
     let openapi_url =
