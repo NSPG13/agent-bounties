@@ -6,6 +6,8 @@ use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
 
 const DISCOVERY_SCHEMA: &str = "https://agentbounties.org/schemas/discovery-manifest.v1.json";
+const GITHUB_ISSUE_TEMPLATE_URL: &str =
+    "https://github.com/agent-bounties/agent-bounties/issues/new?template=paid-bounty.yml";
 
 #[derive(Debug, Clone)]
 pub struct BountyTemplate {
@@ -201,9 +203,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             stripe_live_connect_accounts: format!("{api}/v1/stripe/live/connect-accounts"),
             github_issue_bounty_plan: format!("{api}/v1/github/issue-bounty-plan"),
             github_proof_comment_plan: format!("{api}/v1/github/proof-comment-plan"),
-            github_issue_template:
-                "https://github.com/agent-bounties/agent-bounties/issues/new?template=paid-bounty.yml"
-                    .to_string(),
+            github_issue_template: GITHUB_ISSUE_TEMPLATE_URL.to_string(),
         },
         agent_entrypoints: vec![
             AgentEntrypoint {
@@ -341,6 +341,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Public bounty feed: {bounty_feed}
 - Public capability feed: {capability_feed}
 - Templates: {templates}
+- GitHub paid-bounty issue template: {github_issue_template}
 - Eval run history: {eval_runs}
 - Risk policy: {risk_policy}
 - Risk review events: {risk_events}
@@ -383,6 +384,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 
 ## GitHub Dogfooding
 
+- Issue template: {github_issue_template}
 - Issue bounty planner: {github_issue_bounty_plan}
 - Proof comment planner: {github_proof_comment_plan}
 
@@ -396,6 +398,7 @@ The repository is designed for agent contributors. Start with `AGENTS.md`, `READ
         bounty_feed = &endpoints.bounty_feed,
         capability_feed = &endpoints.capability_feed,
         templates = &endpoints.templates,
+        github_issue_template = &endpoints.github_issue_template,
         eval_runs = &endpoints.eval_runs,
         risk_policy = &endpoints.risk_policy,
         risk_events = &endpoints.risk_events,
@@ -737,7 +740,7 @@ pub fn render_template_page(template: &BountyTemplate, stats: Option<&TemplateSt
       <dt>Output</dt><dd>{}</dd>
     </dl>
     {}
-    <a href="/.github/ISSUE_TEMPLATE/paid-bounty.yml">Post GitHub bounty</a>
+    <a href="{}">Post GitHub bounty</a>
   </main>
 </body>
 </html>"#,
@@ -747,7 +750,8 @@ pub fn render_template_page(template: &BountyTemplate, stats: Option<&TemplateSt
         escape_html(template.verifier),
         escape_html(template.input),
         escape_html(template.output),
-        signal_stats
+        signal_stats,
+        GITHUB_ISSUE_TEMPLATE_URL
     )
 }
 
@@ -905,6 +909,8 @@ mod tests {
 
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+        assert!(html.contains(GITHUB_ISSUE_TEMPLATE_URL));
+        assert!(!html.contains("/.github/ISSUE_TEMPLATE/paid-bounty.yml"));
     }
 
     #[test]
@@ -1047,6 +1053,10 @@ mod tests {
             manifest.endpoints.github_proof_comment_plan,
             "https://network.example/v1/github/proof-comment-plan"
         );
+        assert_eq!(
+            manifest.endpoints.github_issue_template,
+            GITHUB_ISSUE_TEMPLATE_URL
+        );
         assert!(manifest
             .agent_entrypoints
             .iter()
@@ -1099,6 +1109,7 @@ mod tests {
         assert!(text.contains("https://network.example/.well-known/agent-bounties.json"));
         assert!(text.contains("https://mcp.example/tools"));
         assert!(text.contains("route_blocked_goal"));
+        assert!(text.contains(GITHUB_ISSUE_TEMPLATE_URL));
         assert!(text.contains("AI judges"));
         assert!(text.contains("Risk policy"));
         assert!(text.contains("https://network.example/v1/risk/policy"));

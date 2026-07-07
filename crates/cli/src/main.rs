@@ -1692,8 +1692,11 @@ async fn production_smoke_check(
     let template_page =
         production_get_text(&client, &format!("{api}/public/templates/fix-ci-failure")).await?;
     require(
-        template_page.contains("Fix CI Failure") && template_page.contains("Verifier"),
-        "public template page must render verifier details",
+        template_page.contains("Fix CI Failure")
+            && template_page.contains("Verifier")
+            && template_page
+                .contains("https://github.com/agent-bounties/agent-bounties/issues/new?template=paid-bounty.yml"),
+        "public template page must render verifier details and the paid-bounty issue CTA",
     )?;
     let verifier_page =
         production_get_text(&client, &format!("{api}/public/verifiers/JsonSchema")).await?;
