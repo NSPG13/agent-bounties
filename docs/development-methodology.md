@@ -97,3 +97,10 @@ are the hosted read-only release gate. They run against public API and MCP URLs
 and avoid mutating bounties, ledgers, Stripe state, Base broadcasts, or chain-log
 reconciliation. Use the optional eval-history requirement after the environment
 has persisted at least one eval run.
+
+`scripts/check-production-compose.ps1` and
+`scripts/check-production-compose.sh` are the local production-container gate.
+They build the production API/MCP/Postgres compose topology, run the read-only
+production smoke against high local ports, and tear the stack down. The separate
+GitHub Actions `Containers` workflow runs this gate for production packaging
+changes and on manual dispatch.

@@ -345,6 +345,8 @@ escrow tests.
 GitHub Actions runs the same `scripts/check.sh` gate on pushes and pull
 requests. The Docker-backed `scripts/check-postgres.*` smoke is separate so the
 default contributor gate remains fast and does not require Docker.
+The separate `Containers` workflow runs `scripts/check-production-compose.sh`
+when production packaging files change or when manually dispatched.
 The optional `scripts/check-containers.*` gate builds production API and MCP
 images and is separate for the same reason.
 The optional `scripts/check-production-compose.*` gate runs the production

@@ -1,0 +1,49 @@
+name: Containers
+
+on:
+  pull_request:
+    paths:
+      - ".dockerignore"
+      - ".env.example"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "Dockerfile"
+      - "docker-compose.production.yml"
+      - "docs/deployment.md"
+      - "migrations/**"
+      - "scripts/check-containers.sh"
+      - "scripts/check-production-compose.sh"
+      - "scripts/check-production-smoke.sh"
+  push:
+    branches: [main]
+    paths:
+      - ".dockerignore"
+      - ".env.example"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "Dockerfile"
+      - "docker-compose.production.yml"
+      - "docs/deployment.md"
+      - "migrations/**"
+      - "scripts/check-containers.sh"
+      - "scripts/check-production-compose.sh"
+      - "scripts/check-production-smoke.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: containers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - run: bash scripts/check-production-compose.sh
