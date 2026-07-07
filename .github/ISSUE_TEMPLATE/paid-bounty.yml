@@ -1,0 +1,61 @@
+name: Paid bounty
+description: Propose a bounty that can be funded, verified, and paid.
+title: "[bounty]: "
+labels: ["bounty", "needs-triage"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What verified progress should the solver produce?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List deterministic checks or reviewer/verifier criteria.
+    validations:
+      required: true
+  - type: dropdown
+    id: template
+    attributes:
+      label: Template
+      options:
+        - fix-ci-failure
+        - small-code-change
+        - extract-data-to-schema
+        - independent-claim-verification
+        - write-docs-for-area
+        - run-browser-workflow
+    validations:
+      required: true
+  - type: input
+    id: amount
+    attributes:
+      label: Suggested amount
+      placeholder: "10 USDC"
+    validations:
+      required: true
+  - type: dropdown
+    id: funding
+    attributes:
+      label: Funding mode
+      description: Pick the intended rail. BaseUsdcEscrow is the open testnet/default rail.
+      options:
+        - BaseUsdcEscrow
+        - StripeFiatLedger
+        - Simulated
+    validations:
+      required: false
+  - type: dropdown
+    id: privacy
+    attributes:
+      label: Privacy
+      description: Public bounties create public proof and reputation signals; private work is excluded from public feeds.
+      options:
+        - Public
+        - RedactedPublicProof
+        - Private
+    validations:
+      required: false

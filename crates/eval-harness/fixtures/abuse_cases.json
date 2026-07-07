@@ -1,0 +1,26 @@
+[
+  {
+    "name": "non_claim_owner_submission",
+    "surface": "Submission",
+    "expected_action": "Block",
+    "expected_reason": "claim"
+  },
+  {
+    "name": "high_value_base_bounty",
+    "surface": "Bounty",
+    "expected_action": "NeedsReview",
+    "expected_reason": "low-value cap"
+  },
+  {
+    "name": "unsafe_credential_request",
+    "surface": "HelpRequest",
+    "expected_action": "Block",
+    "expected_reason": "credential"
+  },
+  {
+    "name": "normal_extraction_bounty",
+    "surface": "Bounty",
+    "expected_action": "Allow",
+    "expected_reason": ""
+  }
+]

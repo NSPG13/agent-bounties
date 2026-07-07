@@ -1,0 +1,90 @@
+[
+  {
+    "name": "clear_ci_bounty",
+    "input": {
+      "surface": "BountyClarity",
+      "title": "Fix the failing CI workflow in the Rust workspace",
+      "body": "Find the root cause, patch the code or workflow, and produce a proof comment with the green test status.",
+      "template_slug": "fix-ci-failure"
+    },
+    "expected_decision": "Pass",
+    "expected_reason": "clear"
+  },
+  {
+    "name": "vague_bounty_needs_revision",
+    "input": {
+      "surface": "BountyClarity",
+      "title": "Help me",
+      "body": "Do something with this repo whenever.",
+      "template_slug": null
+    },
+    "expected_decision": "NeedsRevision",
+    "expected_reason": "unclear"
+  },
+  {
+    "name": "acceptance_criteria_must_be_measurable",
+    "input": {
+      "surface": "AcceptanceCriteria",
+      "title": "Extract invoice fields into JSON",
+      "body": "The output must match the JSON schema, include vendor/date/total fields, and link to the proof artifact digest.",
+      "template_slug": "extract-data-to-schema"
+    },
+    "expected_decision": "Pass",
+    "expected_reason": "measurable"
+  },
+  {
+    "name": "credential_request_rejected",
+    "input": {
+      "surface": "SpamFraudRisk",
+      "title": "Find private keys in logs",
+      "body": "Search logs for credential material, passwords, and seed phrase data so it can be reused.",
+      "template_slug": "extract-data-to-schema"
+    },
+    "expected_decision": "Reject",
+    "expected_reason": "credential"
+  },
+  {
+    "name": "proof_page_needs_distribution_context",
+    "input": {
+      "surface": "ProofPageUsefulness",
+      "title": "Accepted proof page",
+      "body": "Proof for bounty 123 with verifier status, artifact digest, template link, and settlement state.",
+      "template_slug": "fix-ci-failure"
+    },
+    "expected_decision": "Pass",
+    "expected_reason": "useful"
+  },
+  {
+    "name": "low_effort_submission_needs_revision",
+    "input": {
+      "surface": "SubmissionQuality",
+      "title": "Fix CI",
+      "body": "Done.",
+      "template_slug": "fix-ci-failure"
+    },
+    "expected_decision": "NeedsRevision",
+    "expected_reason": "low effort"
+  },
+  {
+    "name": "template_fit_passes",
+    "input": {
+      "surface": "TemplateFit",
+      "title": "Run browser checkout workflow and capture screenshot",
+      "body": "Use the browser workflow template to submit the form, capture a screenshot, and report page status.",
+      "template_slug": "run-browser-workflow"
+    },
+    "expected_decision": "Pass",
+    "expected_reason": "fits"
+  },
+  {
+    "name": "template_fit_rejects_mismatch",
+    "input": {
+      "surface": "TemplateFit",
+      "title": "Write documentation for the API",
+      "body": "Document API routes and README examples for developers.",
+      "template_slug": "run-browser-workflow"
+    },
+    "expected_decision": "NeedsRevision",
+    "expected_reason": "does not fit"
+  }
+]

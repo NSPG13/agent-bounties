@@ -1,0 +1,63 @@
+[
+  {
+    "name": "ci_failure",
+    "goal": "Diagnose and fix the CI failure after the dependency update",
+    "context": "GitHub check failed on the test job",
+    "budget_minor": 2500000,
+    "currency": "usdc",
+    "privacy": "Public",
+    "expected_template": "fix-ci-failure",
+    "expected_capability_class": "Ci",
+    "expected_verifier": "GitHubCi",
+    "expected_funding_mode": "BaseUsdcEscrow"
+  },
+  {
+    "name": "extract_pdf",
+    "goal": "Extract invoice fields from this PDF into a JSON schema",
+    "context": "Need vendor, invoice number, date, subtotal, tax, total",
+    "budget_minor": 1000000,
+    "currency": "usdc",
+    "privacy": "RedactedPublicProof",
+    "expected_template": "extract-data-to-schema",
+    "expected_capability_class": "Extraction",
+    "expected_verifier": "JsonSchema",
+    "expected_funding_mode": "BaseUsdcEscrow"
+  },
+  {
+    "name": "private_docs",
+    "goal": "Write docs for the private auth module",
+    "context": "The repo is private and the proof page must redact inputs",
+    "budget_minor": 500000,
+    "currency": "usd",
+    "privacy": "Private",
+    "expected_template": "write-docs-for-area",
+    "expected_capability_class": "Documentation",
+    "expected_verifier": "AiJudgeFilter",
+    "expected_funding_mode": "StripeFiatLedger"
+  },
+  {
+    "name": "claim_verification",
+    "goal": "Verify this claim using primary sources",
+    "context": "Need evidence and citations before the agent can answer",
+    "budget_minor": 750000,
+    "currency": "usdc",
+    "privacy": "Public",
+    "expected_template": "independent-claim-verification",
+    "expected_capability_class": "Verification",
+    "expected_verifier": "Manual",
+    "expected_funding_mode": "BaseUsdcEscrow"
+  },
+  {
+    "name": "browser_workflow",
+    "goal": "Run this browser workflow and return the result",
+    "context": "Open the website, submit the form, and capture confirmation",
+    "budget_minor": 1200000,
+    "currency": "usdc",
+    "privacy": "Public",
+    "expected_template": "run-browser-workflow",
+    "expected_capability_class": "BrowserWorkflow",
+    "expected_verifier": "DockerCommand",
+    "expected_funding_mode": "BaseUsdcEscrow"
+  }
+]
+

@@ -1,0 +1,14 @@
+/target/
+/.env
+/.env.local
+*.log
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+__pycache__/
+*.pyc
+.tools/
+contracts/**/out/
+contracts/**/cache/
+broadcast/

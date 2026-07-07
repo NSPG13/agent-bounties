@@ -1,0 +1,419 @@
+import { AgentBountiesClient, hashArtifact } from "./index.js";
+
+declare const process: {
+  argv: string[];
+};
+
+type JsonObject = Record<string, unknown>;
+
+function requireCondition(condition: boolean, message: string): void {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function asObject(value: unknown, label: string): JsonObject {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as JsonObject;
+}
+
+function asArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  return value;
+}
+
+function stringField(value: JsonObject, field: string): string {
+  const result = value[field];
+  if (typeof result !== "string") {
+    throw new Error(`${field} must be a string`);
+  }
+  return result;
+}
+
+function baseUrlFromArgs(): string {
+  const index = process.argv.indexOf("--base-url");
+  if (index >= 0 && process.argv[index + 1]) {
+    return process.argv[index + 1];
+  }
+  return "http://127.0.0.1:8080";
+}
+
+async function main(): Promise<void> {
+  const client = new AgentBountiesClient(baseUrlFromArgs());
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const discovery = asObject(await client.getDiscoveryManifest(), "discovery");
+  requireCondition("agent_entrypoints" in discovery, "discovery manifest missing agent entrypoints");
+  const endpoints = asObject(discovery.endpoints, "discovery.endpoints");
+  requireCondition(
+    typeof endpoints.llms_txt === "string",
+    "discovery manifest missing llms.txt endpoint",
+  );
+  requireCondition(
+    typeof endpoints.base_fetch_rpc_logs === "string",
+    "discovery manifest missing Base RPC fetch endpoint",
+  );
+  requireCondition(
+    typeof endpoints.base_broadcast_signed_transaction === "string",
+    "discovery manifest missing Base signed transaction broadcast endpoint",
+  );
+  requireCondition(
+    typeof endpoints.base_transaction_receipt === "string",
+    "discovery manifest missing Base transaction receipt endpoint",
+  );
+  requireCondition(
+    typeof endpoints.base_refund_plan === "string",
+    "discovery manifest missing Base refund planning endpoint",
+  );
+  requireCondition(
+    typeof endpoints.base_dispute_plan === "string",
+    "discovery manifest missing Base dispute planning endpoint",
+  );
+  requireCondition(
+    typeof endpoints.stripe_live_checkout_top_ups === "string",
+    "discovery manifest missing live Stripe Checkout execution endpoint",
+  );
+  requireCondition(
+    typeof endpoints.stripe_live_connect_accounts === "string",
+    "discovery manifest missing live Stripe Connect execution endpoint",
+  );
+  requireCondition(
+    typeof endpoints.github_issue_bounty_plan === "string",
+    "discovery manifest missing GitHub issue bounty planner endpoint",
+  );
+  requireCondition(
+    typeof endpoints.github_proof_comment_plan === "string",
+    "discovery manifest missing GitHub proof comment planner endpoint",
+  );
+  requireCondition(
+    typeof endpoints.eval_runs === "string",
+    "discovery manifest missing eval run history endpoint",
+  );
+  requireCondition(
+    typeof endpoints.risk_policy === "string",
+    "discovery manifest missing risk policy endpoint",
+  );
+  requireCondition(
+    typeof endpoints.risk_events === "string",
+    "discovery manifest missing risk review events endpoint",
+  );
+  requireCondition(
+    typeof endpoints.risk_reviews === "string",
+    "discovery manifest missing risk review records endpoint",
+  );
+  requireCondition(
+    typeof endpoints.risk_bounty_approvals === "string",
+    "discovery manifest missing risk bounty approval endpoint",
+  );
+  requireCondition(
+    typeof endpoints.agent_paid_status === "string",
+    "discovery manifest missing agent payout status endpoint",
+  );
+
+  const riskPolicy = asObject(await client.getRiskPolicy(), "riskPolicy");
+  requireCondition(
+    riskPolicy.low_value_usdc_cap_minor === 10_000_000,
+    "risk policy did not expose the low-value Base USDC cap",
+  );
+  requireCondition(
+    riskPolicy.ai_judges_can_authorize_payment === false,
+    "risk policy must state that AI judges cannot authorize payment",
+  );
+  let reviewRequired = false;
+  try {
+    await client.postBounty({
+      title: `TypeScript SDK review-required bounty ${suffix}`,
+      template_slug: "fix-ci-failure",
+      amount_minor: 25_000_000,
+      currency: "usdc",
+      funding_mode: "BaseUsdcEscrow",
+      privacy: "Public",
+    });
+  } catch (error) {
+    reviewRequired = error instanceof Error && error.message.includes("400");
+  }
+  requireCondition(reviewRequired, "over-cap Base USDC bounty should require review");
+  const riskEvents = asArray(
+    await client.getRiskEvents({ action: "NeedsReview", surface: "Bounty", limit: 10 }),
+    "riskEvents",
+  ).map((event) => asObject(event, "risk event"));
+  const reviewEvent = riskEvents.find((event) => {
+    const reasons = asArray(event.reasons, "risk event reasons");
+    return (
+      event.action === "NeedsReview" &&
+      reasons.some((reason) => typeof reason === "string" && reason.includes("low-value cap"))
+    );
+  });
+  if (reviewEvent === undefined) {
+    throw new Error("risk events did not include the review-required bounty");
+  }
+  const reviewedApproval = asObject(
+    await client.approveRiskBounty({
+      risk_event_id: stringField(reviewEvent, "id"),
+      title: `TypeScript SDK review-required bounty ${suffix}`,
+      template_slug: "fix-ci-failure",
+      amount_minor: 25_000_000,
+      currency: "usdc",
+      funding_mode: "BaseUsdcEscrow",
+      privacy: "Public",
+      operator_id: "typescript-sdk-smoke",
+      note: "Approved review-required bounty during TypeScript SDK smoke.",
+    }),
+    "reviewedApproval",
+  );
+  const reviewedBounty = asObject(reviewedApproval.bounty, "reviewedApproval.bounty");
+  requireCondition(
+    reviewedBounty.status === "Claimable",
+    "risk approval did not create a claimable bounty",
+  );
+  const reviewedReview = asObject(reviewedApproval.review, "reviewedApproval.review");
+  requireCondition(reviewedReview.outcome === "Approved", "risk approval did not record review");
+  const riskReviews = asArray(await client.listRiskReviews(), "riskReviews").map((review) =>
+    asObject(review, "risk review"),
+  );
+  requireCondition(
+    riskReviews.some(
+      (review) => review.outcome === "Approved" && review.bounty_id === reviewedBounty.id,
+    ),
+    "risk review list did not include approval",
+  );
+
+  const route = asObject(
+    await client.routeBlockedGoal({
+      goal: "Patch the TypeScript SDK live smoke bounty flow",
+      context: "The agent needs a small coding task with deterministic verification.",
+      budget_minor: 1_000_000,
+      currency: "usdc",
+      privacy: "Public",
+    }),
+    "route",
+  );
+  requireCondition("capability_class" in route, "route response missing capability_class");
+  const capabilityClass = stringField(route, "capability_class");
+  const templateSlug =
+    typeof route.template_slug === "string" ? route.template_slug : "small-code-change";
+
+  const requester = asObject(
+    await client.registerAgent(`typescript-sdk-requester-${suffix}`),
+    "requester",
+  );
+  const solver = asObject(
+    await client.registerAgent(
+      `typescript-sdk-solver-${suffix}`,
+      "0x2222222222222222222222222222222222222222",
+    ),
+    "solver",
+  );
+  const stripeCheckout = asObject(
+    await client.planStripeCheckoutTopUp({
+      organization_id: stringField(requester, "id"),
+      amount_minor: 5_000,
+    }),
+    "stripeCheckout",
+  );
+  requireCondition(
+    stripeCheckout.endpoint === "/v1/checkout/sessions",
+    "Stripe Checkout top-up planner used the wrong endpoint",
+  );
+  const stripeConnect = asObject(
+    await client.planStripeConnectAccount({ agent_id: stringField(solver, "id") }),
+    "stripeConnect",
+  );
+  const stripeConnectRequest = asObject(stripeConnect.request, "stripeConnect.request");
+  requireCondition(
+    stripeConnectRequest.endpoint === "/v2/core/accounts",
+    "Stripe Connect account planner used the wrong endpoint",
+  );
+  const githubIssuePlan = asObject(
+    await client.planGitHubIssueBounty({
+      repository: "agent-bounties/agent-bounties",
+      issue_url: "https://github.com/agent-bounties/agent-bounties/issues/1",
+      title: "[bounty]: Fix CI",
+      body:
+        "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n",
+    }),
+    "githubIssuePlan",
+  );
+  requireCondition(githubIssuePlan.ready === true, "GitHub issue planner rejected valid issue");
+  const githubIssueCheck = asObject(githubIssuePlan.check, "githubIssuePlan.check");
+  requireCondition(
+    githubIssueCheck.conclusion === "Success",
+    "GitHub issue planner did not produce a success check",
+  );
+  const githubProofPlan = asObject(
+    await client.planGitHubProofComment({
+      bounty_id: stringField(solver, "id"),
+      proof_url: "https://agentbounties.local/public/proofs/sdk-smoke",
+      verifier_summary: "GitHub CI passed",
+    }),
+    "githubProofPlan",
+  );
+  requireCondition(
+    stringField(githubProofPlan, "fingerprint").length === 64,
+    "GitHub proof comment planner did not produce a stable fingerprint",
+  );
+  const baseLogQuery = asObject(
+    await client.planBaseLogQuery({
+      escrow_contract: "0x1111111111111111111111111111111111111111",
+      from_block: 123,
+      request_id: 11,
+    }),
+    "baseLogQuery",
+  );
+  requireCondition(baseLogQuery.method === "eth_getLogs", "Base log query used the wrong method");
+  const baseLogQueryParams = asArray(baseLogQuery.params, "baseLogQuery.params").map((param) =>
+    asObject(param, "baseLogQuery param"),
+  );
+  requireCondition(
+    baseLogQueryParams[0].fromBlock === "0x7b",
+    "Base log query did not encode fromBlock",
+  );
+  const baseRpcLogReport = asObject(
+    await client.reconcileBaseRpcLogs({
+      jsonrpc: "2.0",
+      id: 11,
+      result: [],
+    }),
+    "baseRpcLogReport",
+  );
+  requireCondition(
+    baseRpcLogReport.decoded_events === 0,
+    "Base RPC log reconciliation did not accept an empty provider response",
+  );
+
+  await client.registerCapability({
+    agent_id: stringField(solver, "id"),
+    class: capabilityClass,
+    template_slugs: [templateSlug],
+    min_price_minor: 500_000,
+    max_price_minor: 1_000_000,
+    currency: "usdc",
+    latency_seconds: 600,
+    supported_verifiers: ["JsonSchema"],
+  });
+  const capabilityFeed = asArray(await client.listCapabilityFeed(), "capabilityFeed").map((item) =>
+    asObject(item, "capability feed item"),
+  );
+  requireCondition(
+    capabilityFeed.some((item) => item.agent_id === stringField(solver, "id")),
+    "registered solver missing from public capability feed",
+  );
+  const capabilitySearch = asArray(
+    await client.searchCapabilities({
+      class: capabilityClass,
+      template_slug: templateSlug,
+      currency: "usdc",
+      max_price_minor: 1_000_000,
+    }),
+    "capabilitySearch",
+  ).map((item) => asObject(item, "capability search item"));
+  requireCondition(
+    capabilitySearch.some((item) => item.agent_id === stringField(solver, "id")),
+    "registered solver missing from filtered capability search",
+  );
+
+  const helpRequest = asObject(
+    await client.createHelpRequest({
+      requester_agent_id: stringField(requester, "id"),
+      goal: "Patch the TypeScript SDK live smoke bounty flow",
+      context: "Return a JSON artifact that proves the client can complete work.",
+      budget_minor: 1_000_000,
+      currency: "usdc",
+      privacy: "Public",
+    }),
+    "helpRequest",
+  );
+  const quoteSet = asObject(await client.requestQuotes(stringField(helpRequest, "id")), "quoteSet");
+  const quotes = asArray(quoteSet.quotes, "quotes").map((quote) => asObject(quote, "quote"));
+  requireCondition(quotes.length >= 1, "quote flow did not return a solver quote");
+
+  const bounty = asObject(
+    await client.fundQuoteAsBounty(stringField(quotes[0], "id"), {
+      title: "TypeScript SDK live smoke bounty",
+      funding_mode: "BaseUsdcEscrow",
+    }),
+    "bounty",
+  );
+  const bountyId = stringField(bounty, "id");
+
+  const feed = asArray(await client.listPublicBountyFeed(), "feed").map((item) =>
+    asObject(item, "feed item"),
+  );
+  requireCondition(
+    feed.some((item) => item.bounty_id === bountyId),
+    "funded SDK bounty missing from public feed",
+  );
+
+  const claimed = asObject(
+    await client.claimBounty(bountyId, { solver_agent_id: stringField(solver, "id") }),
+    "claimed",
+  );
+  requireCondition(claimed.status === "Claimed", "claim did not move bounty to Claimed");
+
+  const artifactBody = JSON.stringify({ sdk: "typescript", ok: true });
+  const submission = asObject(
+    await client.submitResult(bountyId, {
+      solver_agent_id: stringField(solver, "id"),
+      artifact_uri: "s3://agent-bounties/typescript-sdk-smoke/artifact.json",
+      artifact_body: artifactBody,
+    }),
+    "submission",
+  );
+  const proof = asObject(
+    await client.requestVerification(bountyId, {
+      submission_id: stringField(submission, "id"),
+      expected_artifact_digest: await hashArtifact(artifactBody),
+      verifier_kind: "JsonSchema",
+    }),
+    "proof",
+  );
+  requireCondition("proof_hash" in proof, "verification did not return proof_hash");
+
+  const status = asObject(await client.getBountyStatus(bountyId), "status");
+  const statusBounty = asObject(status.bounty, "status.bounty");
+  requireCondition(statusBounty.status === "Payable", "verified bounty is not Payable");
+  const paid = asObject(await client.getPaidStatus(bountyId), "paid");
+  const settlements = asArray(paid.settlements, "paid.settlements");
+  requireCondition(settlements.length >= 1, "paid status missing settlement records");
+  const agentPaid = asObject(
+    await client.getAgentPaidStatus(stringField(solver, "id")),
+    "agentPaid",
+  );
+  const agentPayouts = asArray(agentPaid.payouts, "agentPaid.payouts");
+  requireCondition(agentPayouts.length >= 1, "agent paid status missing payout lines");
+  const agentTotals = asArray(agentPaid.totals, "agentPaid.totals").map((item) =>
+    asObject(item, "agent paid total"),
+  );
+  requireCondition(
+    agentTotals.some((total) => total.currency === "usdc" && total.pending_minor === 900_000),
+    "agent paid status missing pending USDC total",
+  );
+  const evalLoops = asObject(await client.runEvalLoops(), "evalLoops");
+  requireCondition(evalLoops.passed === true, "eval loop suite did not pass");
+  requireCondition(asArray(evalLoops.loops, "evalLoops.loops").length === 5, "eval loop count changed");
+  const evalRuns = asArray(await client.getEvalRuns(), "evalRuns");
+  requireCondition(
+    evalRuns.some((run) => asObject(run, "evalRun").suite === "EvalLoops/all-v0"),
+    "eval run history did not record EvalLoops/all-v0",
+  );
+
+  console.log(
+    JSON.stringify(
+      {
+        sdk_smoke: "ok",
+        language: "typescript",
+        bounty_id: bountyId,
+        status: statusBounty.status,
+        settlements: settlements.length,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+await main();
