@@ -5,6 +5,10 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 api_image="${API_IMAGE:-agent-bounties-api:local}"
 mcp_image="${MCP_IMAGE:-agent-bounties-mcp:local}"
 
+if ! docker version >/dev/null 2>&1 && command -v docker.exe >/dev/null 2>&1; then
+  docker() { docker.exe "$@"; }
+fi
+
 cd "$repo_root"
 docker build \
   --build-arg APP_PACKAGE=api \

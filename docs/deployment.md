@@ -42,6 +42,20 @@ On Unix-like shells:
 docker compose --env-file .env -f docker-compose.production.yml up -d --build
 ```
 
+To rehearse the production compose topology locally without leaving containers
+running, use the compose smoke. It binds API/MCP to high local ports, runs the
+read-only production smoke, and tears the stack down:
+
+```powershell
+.\scripts\check-production-compose.ps1
+```
+
+On Unix-like shells:
+
+```bash
+bash scripts/check-production-compose.sh
+```
+
 The compose file sets:
 
 - `API_BIND_ADDR=0.0.0.0:8080`

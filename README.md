@@ -137,6 +137,19 @@ On Unix-like shells:
 bash scripts/check-containers.sh
 ```
 
+To build and run the full production compose topology locally, then execute the
+read-only production smoke against it:
+
+```powershell
+.\scripts\check-production-compose.ps1
+```
+
+On Unix-like shells:
+
+```bash
+bash scripts/check-production-compose.sh
+```
+
 Useful REST paths:
 
 - `GET /llms.txt`
@@ -334,6 +347,9 @@ requests. The Docker-backed `scripts/check-postgres.*` smoke is separate so the
 default contributor gate remains fast and does not require Docker.
 The optional `scripts/check-containers.*` gate builds production API and MCP
 images and is separate for the same reason.
+The optional `scripts/check-production-compose.*` gate runs the production
+API/MCP/Postgres topology locally and executes the read-only production smoke
+against the temporary stack.
 The optional `scripts/check-sdk-live.*` smoke is separate for the same reason:
 it runs live Python and TypeScript SDK requests against a local API service.
 
