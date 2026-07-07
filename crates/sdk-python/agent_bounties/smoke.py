@@ -20,8 +20,42 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     discovery = client.get_discovery_manifest()
     _require("agent_entrypoints" in discovery, "discovery manifest missing agent entrypoints")
     _require(
+        discovery.get("schema") == "https://agentbounties.org/schemas/discovery-manifest.v1.json",
+        "discovery manifest missing expected schema id",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("llms_txt"), str),
         "discovery manifest missing llms.txt endpoint",
+    )
+    _require(
+        isinstance(discovery.get("endpoints", {}).get("discovery_schema"), str),
+        "discovery manifest missing schema endpoint",
+    )
+    discovery_schema = client.get_discovery_manifest_schema()
+    _require(
+        discovery_schema.get("$id") == discovery.get("schema"),
+        "discovery schema id did not match manifest schema id",
+    )
+    _require(
+        "agent_entrypoints" in discovery_schema.get("required", []),
+        "discovery schema must require agent entrypoints",
+    )
+    _require(
+        "payment_rails" in discovery_schema.get("required", []),
+        "discovery schema must require payment rails",
+    )
+    endpoint_required = (
+        discovery_schema.get("properties", {})
+        .get("endpoints", {})
+        .get("required", [])
+    )
+    _require(
+        "discovery_schema" in endpoint_required,
+        "discovery schema must require its own endpoint",
+    )
+    _require(
+        "github_issue_template" in endpoint_required,
+        "discovery schema must require the GitHub bounty issue template endpoint",
     )
     _require(
         isinstance(discovery.get("endpoints", {}).get("base_fetch_rpc_logs"), str),

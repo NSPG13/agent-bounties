@@ -61,10 +61,55 @@ async function main(): Promise<void> {
 
   const discovery = asObject(await client.getDiscoveryManifest(), "discovery");
   requireCondition("agent_entrypoints" in discovery, "discovery manifest missing agent entrypoints");
+  requireCondition(
+    discovery.schema === "https://agentbounties.org/schemas/discovery-manifest.v1.json",
+    "discovery manifest missing expected schema id",
+  );
   const endpoints = asObject(discovery.endpoints, "discovery.endpoints");
   requireCondition(
     typeof endpoints.llms_txt === "string",
     "discovery manifest missing llms.txt endpoint",
+  );
+  requireCondition(
+    typeof endpoints.discovery_schema === "string",
+    "discovery manifest missing schema endpoint",
+  );
+  const discoverySchema = asObject(
+    await client.getDiscoveryManifestSchema(),
+    "discoverySchema",
+  );
+  requireCondition(
+    discoverySchema.$id === discovery.schema,
+    "discovery schema id did not match manifest schema id",
+  );
+  const discoverySchemaRequired = asArray(discoverySchema.required, "discoverySchema.required");
+  requireCondition(
+    discoverySchemaRequired.includes("agent_entrypoints"),
+    "discovery schema must require agent entrypoints",
+  );
+  requireCondition(
+    discoverySchemaRequired.includes("payment_rails"),
+    "discovery schema must require payment rails",
+  );
+  const discoverySchemaProperties = asObject(
+    discoverySchema.properties,
+    "discoverySchema.properties",
+  );
+  const endpointSchema = asObject(
+    discoverySchemaProperties.endpoints,
+    "discoverySchema.properties.endpoints",
+  );
+  const endpointRequired = asArray(
+    endpointSchema.required,
+    "discoverySchema.properties.endpoints.required",
+  );
+  requireCondition(
+    endpointRequired.includes("discovery_schema"),
+    "discovery schema must require its own endpoint",
+  );
+  requireCondition(
+    endpointRequired.includes("github_issue_template"),
+    "discovery schema must require the GitHub bounty issue template endpoint",
   );
   requireCondition(
     typeof endpoints.base_fetch_rpc_logs === "string",

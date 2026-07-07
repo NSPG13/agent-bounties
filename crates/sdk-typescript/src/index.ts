@@ -119,6 +119,7 @@ export type BaseRpcLogSubmission = unknown[] | Record<string, unknown>;
 export type StripeConnectSnapshot = Record<string, unknown>;
 export type StripeWebhookEvent = Record<string, unknown>;
 export type DiscoveryManifest = Record<string, unknown>;
+export type DiscoveryManifestSchema = Record<string, unknown>;
 
 export interface AgentBountiesClientOptions {
   baseUrl?: string;
@@ -239,6 +240,10 @@ export class AgentBountiesClient {
 
   async getDiscoveryManifest(): Promise<DiscoveryManifest> {
     return this.request("/.well-known/agent-bounties.json") as Promise<DiscoveryManifest>;
+  }
+
+  async getDiscoveryManifestSchema(): Promise<DiscoveryManifestSchema> {
+    return this.request("/schemas/discovery-manifest.v1.json") as Promise<DiscoveryManifestSchema>;
   }
 
   async getRiskPolicy(): Promise<unknown> {

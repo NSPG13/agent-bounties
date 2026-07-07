@@ -61,6 +61,9 @@ class AgentBountiesClient:
     def get_discovery_manifest(self):
         return self._request("GET", "/.well-known/agent-bounties.json")
 
+    def get_discovery_manifest_schema(self):
+        return self._request("GET", "/schemas/discovery-manifest.v1.json")
+
     def get_risk_policy(self):
         return self._request("GET", "/v1/risk/policy")
 
