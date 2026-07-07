@@ -362,6 +362,7 @@ mod tests {
                 verifier_kind: Some(VerifierKind::JsonSchema),
                 rubric: None,
                 evidence: None,
+                approved_risk_event_id: None,
             })
             .await
             .unwrap();

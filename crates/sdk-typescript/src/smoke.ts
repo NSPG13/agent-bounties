@@ -110,6 +110,10 @@ async function main(): Promise<void> {
     "discovery manifest missing risk bounty approval endpoint",
   );
   requireCondition(
+    typeof endpoints.risk_payout_approvals === "string",
+    "discovery manifest missing risk payout approval endpoint",
+  );
+  requireCondition(
     typeof endpoints.agent_paid_status === "string",
     "discovery manifest missing agent payout status endpoint",
   );
@@ -180,6 +184,92 @@ async function main(): Promise<void> {
       (review) => review.outcome === "Approved" && review.bounty_id === reviewedBounty.id,
     ),
     "risk review list did not include approval",
+  );
+
+  const reviewSolver = asObject(
+    await client.registerAgent(
+      `typescript-sdk-review-solver-${suffix}`,
+      "0x2222222222222222222222222222222222222222",
+    ),
+    "reviewSolver",
+  );
+  const reviewedBountyId = stringField(reviewedBounty, "id");
+  const reviewedClaim = asObject(
+    await client.claimBounty(reviewedBountyId, {
+      solver_agent_id: stringField(reviewSolver, "id"),
+    }),
+    "reviewedClaim",
+  );
+  requireCondition(
+    reviewedClaim.status === "Claimed",
+    "reviewed bounty claim did not move to Claimed",
+  );
+  const reviewedSubmission = asObject(
+    await client.submitResult(reviewedBountyId, {
+      solver_agent_id: stringField(reviewSolver, "id"),
+      artifact_uri: "https://github.com/example/repo/actions/runs/1",
+      artifact_body: JSON.stringify({ check: "green" }),
+    }),
+    "reviewedSubmission",
+  );
+  const reviewedEvidence = { check_conclusion: "success", check_name: "test" };
+  try {
+    await client.requestVerification(reviewedBountyId, {
+      submission_id: stringField(reviewedSubmission, "id"),
+      expected_artifact_digest: "not-used-by-github-ci",
+      evidence: reviewedEvidence,
+    });
+    throw new Error("high-value payout should require review before verification");
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("400")) {
+      throw error;
+    }
+  }
+  const payoutEvents = asArray(
+    await client.getRiskEvents({
+      action: "NeedsReview",
+      surface: "Payout",
+      bounty_id: reviewedBountyId,
+      limit: 10,
+    }),
+    "payoutEvents",
+  ).map((event) => asObject(event, "payout event"));
+  const payoutEvent = payoutEvents.find((event) => {
+    const reasons = asArray(event.reasons, "payout event reasons");
+    return (
+      event.action === "NeedsReview" &&
+      reasons.some(
+        (reason) => typeof reason === "string" && reason.includes("automatic release cap"),
+      )
+    );
+  });
+  if (payoutEvent === undefined) {
+    throw new Error("payout risk event was not recorded");
+  }
+  const payoutReview = asObject(
+    await client.approveRiskPayout({
+      risk_event_id: stringField(payoutEvent, "id"),
+      operator_id: "typescript-sdk-smoke",
+      note: "Approved payout review during TypeScript SDK smoke.",
+    }),
+    "payoutReview",
+  );
+  requireCondition(payoutReview.surface === "Payout", "payout approval used wrong surface");
+  const reviewedProof = asObject(
+    await client.requestVerification(reviewedBountyId, {
+      submission_id: stringField(reviewedSubmission, "id"),
+      expected_artifact_digest: "not-used-by-github-ci",
+      evidence: reviewedEvidence,
+      approved_risk_event_id: stringField(payoutEvent, "id"),
+    }),
+    "reviewedProof",
+  );
+  requireCondition("proof_hash" in reviewedProof, "reviewed payout verification missing proof");
+  const reviewedStatus = asObject(await client.getBountyStatus(reviewedBountyId), "reviewedStatus");
+  const reviewedStatusBounty = asObject(reviewedStatus.bounty, "reviewedStatus.bounty");
+  requireCondition(
+    reviewedStatusBounty.status === "Payable",
+    "reviewed payout bounty is not Payable",
   );
 
   const route = asObject(

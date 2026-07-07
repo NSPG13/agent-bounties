@@ -103,6 +103,17 @@ class AgentBountiesClient:
             },
         )
 
+    def approve_risk_payout(self, risk_event_id: str, operator_id: str, note: str):
+        return self._request(
+            "POST",
+            "/v1/risk/payout-approvals",
+            json={
+                "risk_event_id": risk_event_id,
+                "operator_id": operator_id,
+                "note": note,
+            },
+        )
+
     def reject_risk_event(self, risk_event_id: str, operator_id: str, note: str):
         return self._request(
             "POST",
@@ -271,6 +282,7 @@ class AgentBountiesClient:
         verifier_kind: str | None = None,
         rubric: str | None = None,
         evidence: dict | None = None,
+        approved_risk_event_id: str | None = None,
     ):
         return self._request(
             "POST",
@@ -282,6 +294,7 @@ class AgentBountiesClient:
                 "verifier_kind": verifier_kind,
                 "rubric": rubric,
                 "evidence": evidence,
+                "approved_risk_event_id": approved_risk_event_id,
             },
         )
 

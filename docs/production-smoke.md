@@ -29,14 +29,14 @@ The gate checks:
 
 - API and MCP health endpoints.
 - `/.well-known/agent-bounties.json` and `/llms.txt` on both services.
-- OpenAPI paths for routing, public feeds, risk review, Base, and Stripe
+- OpenAPI paths for routing, public feeds, risk review and approval, Base, and Stripe
   live-execution boundaries.
 - MCP tool descriptors and JSON input schemas.
 - Public bounty, capability, template, and verifier pages.
 - Public bounty and capability feeds as machine-readable arrays.
 - Risk policy settlement invariants, including the low-value Base USDC cap and
   the rule that AI judges cannot authorize payment.
-- Eval run, risk event, and risk review history endpoints.
+- Eval run, risk event, risk review history, and risk payout approval endpoints.
 - Payment rail discovery for Base Sepolia USDC escrow, hosted low-value Base
   USDC, and Stripe fiat ledger.
 

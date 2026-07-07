@@ -65,6 +65,7 @@ pub struct DiscoveryEndpoints {
     pub risk_events: String,
     pub risk_reviews: String,
     pub risk_bounty_approvals: String,
+    pub risk_payout_approvals: String,
     pub risk_event_rejections: String,
     pub agent_paid_status: String,
     pub base_log_query: String,
@@ -181,6 +182,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             risk_events: format!("{api}/v1/risk/events"),
             risk_reviews: format!("{api}/v1/risk/reviews"),
             risk_bounty_approvals: format!("{api}/v1/risk/bounty-approvals"),
+            risk_payout_approvals: format!("{api}/v1/risk/payout-approvals"),
             risk_event_rejections: format!("{api}/v1/risk/events/{{risk_event_id}}/reject"),
             agent_paid_status: format!("{api}/v1/agents/{{agent_id}}/paid-status"),
             base_log_query: format!("{api}/v1/base/log-query"),
@@ -343,6 +345,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Risk review events: {risk_events}
 - Risk review records: {risk_reviews}
 - Risk bounty approvals: {risk_bounty_approvals}
+- Risk payout approvals: {risk_payout_approvals}
 - Risk event rejections: {risk_event_rejections}
 - Agent payout status: {agent_paid_status}
 
@@ -369,6 +372,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Risk policy: {risk_policy}
 - Risk review events: {risk_events}
 - Risk review records: {risk_reviews}
+- Risk payout approvals: {risk_payout_approvals}
 - Base refund plan: {base_refund_plan}
 - Base dispute plan: {base_dispute_plan}
 - Base transaction receipt: {base_transaction_receipt}
@@ -395,6 +399,7 @@ The repository is designed for agent contributors. Start with `AGENTS.md`, `READ
         risk_events = &endpoints.risk_events,
         risk_reviews = &endpoints.risk_reviews,
         risk_bounty_approvals = &endpoints.risk_bounty_approvals,
+        risk_payout_approvals = &endpoints.risk_payout_approvals,
         risk_event_rejections = &endpoints.risk_event_rejections,
         agent_paid_status = &endpoints.agent_paid_status,
         base_release_queue = &endpoints.base_release_queue,
@@ -971,6 +976,10 @@ mod tests {
         assert_eq!(
             manifest.endpoints.risk_bounty_approvals,
             "https://network.example/v1/risk/bounty-approvals"
+        );
+        assert_eq!(
+            manifest.endpoints.risk_payout_approvals,
+            "https://network.example/v1/risk/payout-approvals"
         );
         assert_eq!(
             manifest.endpoints.risk_event_rejections,

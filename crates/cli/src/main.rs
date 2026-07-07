@@ -88,6 +88,16 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:8080")]
         api_base_url: String,
     },
+    RiskApprovePayout {
+        #[arg(long)]
+        risk_event_id: Uuid,
+        #[arg(long)]
+        operator_id: String,
+        #[arg(long)]
+        note: String,
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        api_base_url: String,
+    },
     RiskRejectEvent {
         #[arg(long)]
         risk_event_id: Uuid,
@@ -322,6 +332,12 @@ async fn main() -> Result<()> {
             operator_id,
             note,
         ),
+        Command::RiskApprovePayout {
+            risk_event_id,
+            operator_id,
+            note,
+            api_base_url,
+        } => risk_approve_payout(api_base_url, risk_event_id, operator_id, note),
         Command::RiskRejectEvent {
             risk_event_id,
             operator_id,
@@ -541,6 +557,7 @@ async fn demo() -> Result<()> {
             verifier_kind: Some(VerifierKind::JsonSchema),
             rubric: None,
             evidence: None,
+            approved_risk_event_id: None,
         })
         .await?;
     let mut indexer = ChainEventIndexer::default();
@@ -662,6 +679,25 @@ fn risk_approve_bounty(
         }),
     )?;
     println!("{}", serde_json::to_string_pretty(&approval)?);
+    Ok(())
+}
+
+fn risk_approve_payout(
+    api_base_url: String,
+    risk_event_id: Uuid,
+    operator_id: String,
+    note: String,
+) -> Result<()> {
+    let api = normalize_base_url(&api_base_url);
+    let review = post_json(
+        &format!("{api}/v1/risk/payout-approvals"),
+        serde_json::json!({
+            "risk_event_id": risk_event_id,
+            "operator_id": operator_id,
+            "note": note
+        }),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&review)?);
     Ok(())
 }
 
@@ -1061,6 +1097,7 @@ async fn base_release_queue_demo(
             verifier_kind: Some(VerifierKind::JsonSchema),
             rubric: None,
             evidence: None,
+            approved_risk_event_id: None,
         })
         .await?;
     let created = simulated_created_event(
@@ -1341,6 +1378,7 @@ async fn production_smoke_check(
         "/endpoints/risk_events",
         "/endpoints/risk_reviews",
         "/endpoints/base_release_queue",
+        "/endpoints/risk_payout_approvals",
         "/endpoints/base_broadcast_signed_transaction",
         "/endpoints/base_transaction_receipt",
         "/endpoints/stripe_live_checkout_top_ups",
@@ -1465,6 +1503,7 @@ async fn production_smoke_check(
         "/v1/risk/policy",
         "/v1/risk/events",
         "/v1/risk/reviews",
+        "/v1/risk/payout-approvals",
         "/v1/base/broadcast-signed-transaction",
         "/v1/base/transaction-receipt",
         "/v1/stripe/live/checkout-top-ups",
@@ -1613,6 +1652,7 @@ async fn production_smoke_check(
         "list_risk_events",
         "list_risk_reviews",
         "approve_risk_bounty",
+        "approve_risk_payout",
         "reject_risk_event",
     ] {
         require(
@@ -1714,6 +1754,12 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .pointer("/endpoints/risk_bounty_approvals")
             .is_some(),
         "discovery manifest must include risk bounty approval endpoint",
+    )?;
+    require(
+        discovery
+            .pointer("/endpoints/risk_payout_approvals")
+            .is_some(),
+        "discovery manifest must include risk payout approval endpoint",
     )?;
     require(
         discovery
@@ -1995,6 +2041,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "list_risk_events",
         "list_risk_reviews",
         "approve_risk_bounty",
+        "approve_risk_payout",
         "reject_risk_event",
     ] {
         require(
@@ -2145,6 +2192,138 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             })
             .unwrap_or(false),
         "MCP list_risk_reviews must include the approval record",
+    )?;
+    let mcp_review_solver = mcp_tool_post(
+        mcp,
+        "register_agent",
+        serde_json::json!({
+            "handle": format!("mcp-service-smoke-review-solver-{smoke_id}"),
+            "payout_wallet": "0x2222222222222222222222222222222222222222"
+        }),
+    )?;
+    let mcp_review_solver_id =
+        value_str(&mcp_review_solver, "/id").context("MCP review solver id missing")?;
+    let mcp_review_claim = mcp_tool_post(
+        mcp,
+        "claim_bounty",
+        serde_json::json!({
+            "bounty_id": mcp_reviewed_bounty_id,
+            "solver_agent_id": mcp_review_solver_id
+        }),
+    )?;
+    require(
+        value_str(&mcp_review_claim, "/status") == Some("Claimed"),
+        "MCP claim_bounty must claim reviewed high-value bounty",
+    )?;
+    let reviewed_artifact_body = "{\"mcp_reviewed\":true}";
+    let mcp_review_submission = mcp_tool_post(
+        mcp,
+        "submit_result",
+        serde_json::json!({
+            "bounty_id": mcp_reviewed_bounty_id,
+            "solver_agent_id": mcp_review_solver_id,
+            "artifact_uri": "https://github.com/example/repo/actions/runs/1",
+            "artifact_body": reviewed_artifact_body
+        }),
+    )?;
+    let mcp_review_submission_id = value_str(&mcp_review_submission, "/id")
+        .context("MCP reviewed bounty submission id missing")?;
+    let mcp_review_verification_block = post_json(
+        &format!("{mcp}/tools/request_verification"),
+        serde_json::json!({
+            "bounty_id": mcp_reviewed_bounty_id,
+            "submission_id": mcp_review_submission_id,
+            "expected_artifact_digest": "not-used-by-github-ci",
+            "verifier_kind": null,
+            "rubric": null,
+            "evidence": {
+                "check_conclusion": "success",
+                "check_name": "test"
+            },
+            "approved_risk_event_id": null
+        }),
+    )?;
+    require(
+        value_str(&mcp_review_verification_block, "/error")
+            .map(|error| error.contains("automatic release cap"))
+            .unwrap_or(false),
+        "MCP request_verification must require payout review for high-value Base USDC",
+    )?;
+    let mcp_payout_risk_events = mcp_tool_post(
+        mcp,
+        "list_risk_events",
+        serde_json::json!({
+            "action": "NeedsReview",
+            "surface": "Payout",
+            "bounty_id": mcp_reviewed_bounty_id,
+            "agent_id": null,
+            "limit": 10
+        }),
+    )?;
+    let mcp_payout_risk_event_id = mcp_payout_risk_events
+        .as_array()
+        .and_then(|events| {
+            events.iter().find(|event| {
+                value_str(event, "/action") == Some("NeedsReview")
+                    && event
+                        .pointer("/reasons")
+                        .and_then(|reasons| reasons.as_array())
+                        .map(|reasons| {
+                            reasons.iter().any(|reason| {
+                                reason
+                                    .as_str()
+                                    .map(|text| text.contains("automatic release cap"))
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false)
+            })
+        })
+        .and_then(|event| value_str(event, "/id"))
+        .context("MCP payout risk event id missing")?
+        .to_string();
+    let mcp_payout_review = mcp_tool_post(
+        mcp,
+        "approve_risk_payout",
+        serde_json::json!({
+            "risk_event_id": mcp_payout_risk_event_id.as_str(),
+            "operator_id": "service-smoke-operator",
+            "note": "Approved high-value payout during service smoke."
+        }),
+    )?;
+    require(
+        value_str(&mcp_payout_review, "/surface") == Some("Payout")
+            && value_str(&mcp_payout_review, "/outcome") == Some("Approved"),
+        "MCP approve_risk_payout must record an Approved payout review",
+    )?;
+    let mcp_reviewed_proof = mcp_tool_post(
+        mcp,
+        "request_verification",
+        serde_json::json!({
+            "bounty_id": mcp_reviewed_bounty_id,
+            "submission_id": mcp_review_submission_id,
+            "expected_artifact_digest": "not-used-by-github-ci",
+            "verifier_kind": null,
+            "rubric": null,
+            "evidence": {
+                "check_conclusion": "success",
+                "check_name": "test"
+            },
+            "approved_risk_event_id": mcp_payout_risk_event_id.as_str()
+        }),
+    )?;
+    require(
+        value_str(&mcp_reviewed_proof, "/proof_hash").is_some(),
+        "MCP reviewed payout verification must return a proof hash",
+    )?;
+    let mcp_reviewed_status = mcp_tool_post(
+        mcp,
+        "get_bounty_status",
+        serde_json::json!({ "bounty_id": mcp_reviewed_bounty_id }),
+    )?;
+    require(
+        value_str(&mcp_reviewed_status, "/bounty/status") == Some("Payable"),
+        "MCP reviewed high-value bounty must become Payable after payout approval",
     )?;
 
     let mcp_eval_loops = mcp_tool_get(mcp, "run_eval_loops")?;
@@ -2623,8 +2802,16 @@ fn verify_service_smoke_restart_persistence(
             report.mcp_reviewed_bounty_id
         ))?;
         require(
-            value_str(&reviewed_bounty_status, "/bounty/status") == Some("Claimable"),
-            "restarted API must hydrate MCP-approved reviewed bounty from Postgres",
+            value_str(&reviewed_bounty_status, "/bounty/status") == Some("Payable"),
+            "restarted API must hydrate MCP-approved reviewed payout bounty from Postgres",
+        )?;
+        require(
+            reviewed_bounty_status
+                .pointer("/settlements")
+                .and_then(|settlements| settlements.as_array())
+                .map(|settlements| !settlements.is_empty())
+                .unwrap_or(false),
+            "restarted API must hydrate reviewed payout settlement records",
         )?;
         let risk_reviews = get_json(&format!("{api}/v1/risk/reviews"))?;
         require(

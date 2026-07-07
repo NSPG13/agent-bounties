@@ -29,6 +29,13 @@ entry, and moves the bounty only to `Claimable`. Operators can also reject a
 review item through `POST /v1/risk/events/{id}/reject`, MCP
 `reject_risk_event`, or CLI `risk-reject-event`. Neither path marks work
 accepted, payable, or paid.
+For payout review, the first verification request records a `Payout`
+`NeedsReview` event and leaves the bounty in `Submitted`. An operator approves
+that event through `POST /v1/risk/payout-approvals`, MCP
+`approve_risk_payout`, or CLI `risk-approve-payout`; the client then retries
+verification with `approved_risk_event_id` set to the approved event id. The
+approval is scoped to the matching bounty, risk surface, and subject, so it
+cannot be reused to bypass another payout or a blocked policy decision.
 Solvers can track receivables with `GET /v1/agents/{agent_id}/paid-status` or
 MCP `get_paid_status` with `agent_id`; those views aggregate pending, blocked,
 paying, paid, and failed payout intents without changing settlement state.

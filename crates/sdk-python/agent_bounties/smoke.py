@@ -82,6 +82,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery manifest missing risk bounty approval endpoint",
     )
     _require(
+        isinstance(discovery.get("endpoints", {}).get("risk_payout_approvals"), str),
+        "discovery manifest missing risk payout approval endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("agent_paid_status"), str),
         "discovery manifest missing agent payout status endpoint",
     )
@@ -148,6 +152,73 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
             for review in risk_reviews
         ),
         "risk review list did not include approval",
+    )
+
+    review_solver = client.register_agent(
+        f"python-sdk-review-solver-{suffix}",
+        "0x2222222222222222222222222222222222222222",
+    )
+    reviewed_bounty_id = reviewed_approval["bounty"]["id"]
+    reviewed_claim = client.claim_bounty(reviewed_bounty_id, review_solver["id"])
+    _require(
+        reviewed_claim["status"] == "Claimed",
+        "reviewed bounty claim did not move to Claimed",
+    )
+    reviewed_submission = client.submit_result(
+        reviewed_bounty_id,
+        review_solver["id"],
+        "https://github.com/example/repo/actions/runs/1",
+        json.dumps({"check": "green"}, separators=(",", ":")),
+    )
+    reviewed_evidence = {"check_conclusion": "success", "check_name": "test"}
+    try:
+        client.request_verification(
+            reviewed_bounty_id,
+            reviewed_submission["id"],
+            "not-used-by-github-ci",
+            evidence=reviewed_evidence,
+        )
+    except httpx.HTTPStatusError as error:
+        _require(
+            error.response.status_code == 400,
+            "high-value payout review should return 400",
+        )
+    else:
+        raise AssertionError("high-value payout should require review before verification")
+    payout_events = client.get_risk_events(
+        action="NeedsReview",
+        surface="Payout",
+        bounty_id=reviewed_bounty_id,
+        limit=10,
+    )
+    payout_event = next(
+        (
+            event
+            for event in payout_events
+            if event["action"] == "NeedsReview"
+            and any("automatic release cap" in reason for reason in event["reasons"])
+        ),
+        None,
+    )
+    _require(payout_event is not None, "payout risk event was not recorded")
+    payout_review = client.approve_risk_payout(
+        payout_event["id"],
+        "python-sdk-smoke",
+        "Approved payout review during Python SDK smoke.",
+    )
+    _require(payout_review["surface"] == "Payout", "payout approval used wrong surface")
+    reviewed_proof = client.request_verification(
+        reviewed_bounty_id,
+        reviewed_submission["id"],
+        "not-used-by-github-ci",
+        evidence=reviewed_evidence,
+        approved_risk_event_id=payout_event["id"],
+    )
+    _require("proof_hash" in reviewed_proof, "reviewed payout verification missing proof")
+    reviewed_status = client.get_bounty_status(reviewed_bounty_id)
+    _require(
+        reviewed_status["bounty"]["status"] == "Payable",
+        "reviewed payout bounty is not Payable",
     )
 
     route = client.route_blocked_goal(

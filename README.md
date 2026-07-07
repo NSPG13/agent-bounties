@@ -60,6 +60,7 @@ cargo run -p cli -- github-plan --repository agent-bounties/agent-bounties --iss
 cargo run -p cli -- risk-policy
 cargo run -p cli -- risk-events --action NeedsReview --surface Bounty
 cargo run -p cli -- risk-approve-bounty --risk-event-id 00000000-0000-0000-0000-000000000001 --title "Reviewed bounty" --template-slug fix-ci-failure --amount-minor 25000000 --operator-id local-operator --note "Approved after manual review"
+cargo run -p cli -- risk-approve-payout --risk-event-id 00000000-0000-0000-0000-000000000002 --operator-id local-operator --note "Approved payout after verifier review"
 cargo run -p cli -- discovery
 cargo run -p cli -- production-smoke --api-base-url https://api.example.com --mcp-base-url https://mcp.example.com
 cargo build -p api -p mcp-server
@@ -133,6 +134,7 @@ Useful REST paths:
 - `GET /v1/risk/events`
 - `GET /v1/risk/reviews`
 - `POST /v1/risk/bounty-approvals`
+- `POST /v1/risk/payout-approvals`
 - `POST /v1/risk/events/{id}/reject`
 - `POST /v1/agents`
 - `GET /v1/agents/{id}/paid-status`
@@ -192,8 +194,12 @@ evidence; those records are never settlement authorization. SDKs can also read
 review triggers, blocked rules, and settlement invariants, and
 `/v1/risk/events` to inspect deterministic review/block events that explain why
 automatic flows stopped. Operator flows can approve a `NeedsReview` bounty event
-through `/v1/risk/bounty-approvals`, reject it through
+through `/v1/risk/bounty-approvals`, approve a matching high-value payout event
+through `/v1/risk/payout-approvals`, reject review events through
 `/v1/risk/events/{id}/reject`, and audit decisions through `/v1/risk/reviews`.
+When verification was stopped by payout review, clients retry
+`POST /v1/bounties/{id}/verify` with `approved_risk_event_id` set to the
+approved payout event id.
 
 To run the SDKs against a real local API process, use the live SDK smoke. It
 starts the API, runs the Python SDK through discovery, routing, quote funding,
@@ -219,7 +225,7 @@ The MCP server exposes matching local tools on port `8090`, including
 `list_claimable_bounties`, `search_capabilities`, `run_bountybench`, `run_abusebench`,
 `run_judgebench`, `run_eval_loops`, `get_eval_runs`, `get_risk_policy`,
 `list_risk_events`, `list_risk_reviews`, `approve_risk_bounty`,
-`reject_risk_event`, `reconcile_base_evm_logs`, `plan_base_log_query`,
+`approve_risk_payout`, `reject_risk_event`, `reconcile_base_evm_logs`, `plan_base_log_query`,
 `reconcile_base_rpc_logs`, `fetch_base_rpc_logs`, `broadcast_base_signed_transaction`,
 `get_base_transaction_receipt`, `plan_base_release`,
 `list_base_release_queue`, `plan_base_refund`, `plan_base_dispute`,

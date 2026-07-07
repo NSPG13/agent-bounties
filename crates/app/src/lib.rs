@@ -153,6 +153,7 @@ pub struct VerifySubmissionRequest {
     pub verifier_kind: Option<VerifierKind>,
     pub rubric: Option<String>,
     pub evidence: Option<Value>,
+    pub approved_risk_event_id: Option<Id>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -286,6 +287,13 @@ pub struct ApproveRiskBountyRequest {
     pub currency: String,
     pub funding_mode: FundingMode,
     pub privacy: PrivacyLevel,
+    pub operator_id: String,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApproveRiskPayoutRequest {
+    pub risk_event_id: Id,
     pub operator_id: String,
     pub note: String,
 }
@@ -637,11 +645,12 @@ impl BountyNetwork {
             rail: payment_rail_for_funding_mode(&bounty_snapshot.funding_mode),
             amount: bounty_snapshot.amount.clone(),
         });
-        self.enforce_risk(
+        self.enforce_risk_with_optional_approval(
             payout_risk,
             request.bounty_id,
             None,
             Some(request.bounty_id),
+            request.approved_risk_event_id,
         )?;
 
         {
@@ -1233,6 +1242,52 @@ impl BountyNetwork {
         self.risk_reviews.insert(review.id, review.clone());
 
         Ok(ReviewedBountyApproval { bounty, review })
+    }
+
+    pub fn approve_risk_payout(
+        &mut self,
+        request: ApproveRiskPayoutRequest,
+    ) -> AppResult<RiskReviewRecord> {
+        validate_operator_review(&request.operator_id, &request.note)?;
+        let event = self
+            .risk_events
+            .get(&request.risk_event_id)
+            .ok_or(AppError::RiskEventNotFound)?
+            .clone();
+        if self
+            .risk_reviews
+            .values()
+            .any(|review| review.risk_event_id == request.risk_event_id)
+        {
+            return Err(AppError::RiskAlreadyReviewed);
+        }
+        if event.action != RiskAction::NeedsReview || event.surface != RiskSurface::Payout {
+            return Err(AppError::InvalidRiskReview(
+                "only NeedsReview payout events can approve verification payout risk".to_string(),
+            ));
+        }
+        let bounty_id = event.bounty_id.ok_or_else(|| {
+            AppError::InvalidRiskReview("payout review event must reference a bounty".to_string())
+        })?;
+        if !self.bounties.contains_key(&bounty_id) {
+            return Err(AppError::InvalidRiskReview(
+                "payout review bounty does not exist".to_string(),
+            ));
+        }
+
+        let review = RiskReviewRecord {
+            id: Uuid::new_v4(),
+            risk_event_id: event.id,
+            subject_id: event.subject_id,
+            bounty_id: Some(bounty_id),
+            surface: event.surface,
+            outcome: RiskReviewOutcome::Approved,
+            operator_id: request.operator_id,
+            note: request.note,
+            created_at: Utc::now(),
+        };
+        self.risk_reviews.insert(review.id, review.clone());
+        Ok(review)
     }
 
     pub fn reject_risk_event(
@@ -1990,6 +2045,75 @@ impl BountyNetwork {
             RiskAction::Block => Err(AppError::RiskBlocked(reasons)),
         }
     }
+
+    fn enforce_risk_with_optional_approval(
+        &mut self,
+        assessment: RiskAssessment,
+        subject_id: Id,
+        agent_id: Option<Id>,
+        bounty_id: Option<Id>,
+        approved_risk_event_id: Option<Id>,
+    ) -> AppResult<()> {
+        if assessment.is_allowed() {
+            return Ok(());
+        }
+        if let Some(risk_event_id) = approved_risk_event_id {
+            return self.accept_approved_risk_event(
+                &assessment,
+                subject_id,
+                agent_id,
+                bounty_id,
+                risk_event_id,
+            );
+        }
+        self.enforce_risk(assessment, subject_id, agent_id, bounty_id)
+    }
+
+    fn accept_approved_risk_event(
+        &self,
+        assessment: &RiskAssessment,
+        subject_id: Id,
+        agent_id: Option<Id>,
+        bounty_id: Option<Id>,
+        risk_event_id: Id,
+    ) -> AppResult<()> {
+        if assessment.action == RiskAction::Block {
+            return Err(AppError::InvalidRiskReview(
+                "operator approval cannot bypass blocked risk policy".to_string(),
+            ));
+        }
+        let event = self
+            .risk_events
+            .get(&risk_event_id)
+            .ok_or(AppError::RiskEventNotFound)?;
+        if event.action != RiskAction::NeedsReview
+            || event.surface != assessment.surface
+            || event.subject_id != subject_id
+            || event.agent_id != agent_id
+            || event.bounty_id != bounty_id
+        {
+            return Err(AppError::InvalidRiskReview(
+                "approved risk event does not match the current risk assessment".to_string(),
+            ));
+        }
+        let review = self
+            .risk_reviews
+            .values()
+            .find(|review| review.risk_event_id == risk_event_id)
+            .ok_or_else(|| {
+                AppError::InvalidRiskReview("risk event has not been reviewed".to_string())
+            })?;
+        if review.outcome != RiskReviewOutcome::Approved
+            || review.surface != event.surface
+            || review.subject_id != event.subject_id
+            || review.bounty_id != event.bounty_id
+        {
+            return Err(AppError::InvalidRiskReview(
+                "risk event review is not an approval for this subject".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn validate_operator_review(operator_id: &str, note: &str) -> AppResult<()> {
@@ -2196,6 +2320,7 @@ mod tests {
                 verifier_kind: Some(VerifierKind::JsonSchema),
                 rubric: None,
                 evidence: None,
+                approved_risk_event_id: None,
             })
             .await
             .unwrap();
@@ -2349,6 +2474,7 @@ mod tests {
                 verifier_kind: Some(VerifierKind::JsonSchema),
                 rubric: None,
                 evidence: None,
+                approved_risk_event_id: None,
             })
             .await
             .unwrap();
@@ -2477,6 +2603,7 @@ mod tests {
                     "check_conclusion": "success",
                     "check_name": "test"
                 })),
+                approved_risk_event_id: None,
             })
             .await
             .unwrap();
@@ -2541,6 +2668,7 @@ mod tests {
                 verifier_kind: Some(VerifierKind::JsonSchema),
                 rubric: None,
                 evidence: None,
+                approved_risk_event_id: None,
             })
             .await
             .unwrap_err();
@@ -2593,6 +2721,7 @@ mod tests {
                 verifier_kind: Some(VerifierKind::JsonSchema),
                 rubric: None,
                 evidence: None,
+                approved_risk_event_id: None,
             })
             .await
             .unwrap();
@@ -2772,6 +2901,131 @@ mod tests {
         assert!(network
             .ledger
             .has_external_event(&format!("fund:{}", approval.bounty.id)));
+    }
+
+    #[tokio::test]
+    async fn operator_can_approve_high_value_payout_risk_before_verification() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "solver".to_string(),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+        });
+        let err = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Fix deterministic payout reconciliation failure".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 25_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap_err();
+        assert!(matches!(err, AppError::RiskNeedsReview(_)));
+        let bounty_event = network
+            .list_risk_events(RiskEventFilter {
+                action: Some(RiskAction::NeedsReview),
+                surface: Some(RiskSurface::Bounty),
+                limit: Some(1),
+                ..RiskEventFilter::default()
+            })
+            .pop()
+            .unwrap();
+        let approval = network
+            .approve_risk_bounty(ApproveRiskBountyRequest {
+                risk_event_id: bounty_event.id,
+                title: "Fix deterministic payout reconciliation failure".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 25_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+                operator_id: "operator-1".to_string(),
+                note: "Approved high-value bounty scope".to_string(),
+            })
+            .unwrap();
+
+        network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: approval.bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        let submission = network
+            .submit_result(SubmitResultRequest {
+                bounty_id: approval.bounty.id,
+                solver_agent_id: solver.id,
+                artifact_uri: "https://github.com/example/repo/actions/runs/1".to_string(),
+                artifact_body: "{\"check\":\"green\"}".to_string(),
+            })
+            .unwrap();
+
+        let err = network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: approval.bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: "not-used-by-github-ci".to_string(),
+                verifier_kind: None,
+                rubric: None,
+                evidence: Some(serde_json::json!({
+                    "check_conclusion": "success",
+                    "check_name": "test"
+                })),
+                approved_risk_event_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::RiskNeedsReview(_)));
+        assert_eq!(
+            network.status(approval.bounty.id).unwrap().bounty.status,
+            BountyStatus::Submitted
+        );
+
+        let payout_event = network
+            .list_risk_events(RiskEventFilter {
+                action: Some(RiskAction::NeedsReview),
+                surface: Some(RiskSurface::Payout),
+                bounty_id: Some(approval.bounty.id),
+                limit: Some(1),
+                ..RiskEventFilter::default()
+            })
+            .pop()
+            .unwrap();
+        let payout_review = network
+            .approve_risk_payout(ApproveRiskPayoutRequest {
+                risk_event_id: payout_event.id,
+                operator_id: "operator-1".to_string(),
+                note: "Approved high-value payout after verifier scope review".to_string(),
+            })
+            .unwrap();
+        assert_eq!(payout_review.outcome, RiskReviewOutcome::Approved);
+        assert_eq!(payout_review.surface, RiskSurface::Payout);
+        assert_eq!(payout_review.bounty_id, Some(approval.bounty.id));
+
+        let proof = network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: approval.bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: "not-used-by-github-ci".to_string(),
+                verifier_kind: None,
+                rubric: None,
+                evidence: Some(serde_json::json!({
+                    "check_conclusion": "success",
+                    "check_name": "test"
+                })),
+                approved_risk_event_id: Some(payout_event.id),
+            })
+            .await
+            .unwrap();
+
+        let status = network.status(approval.bounty.id).unwrap();
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
+        assert_eq!(proof.bounty_id, approval.bounty.id);
+        assert!(status
+            .risk_events
+            .iter()
+            .any(|event| event.surface == RiskSurface::Payout));
+        assert_eq!(network.risk_reviews.len(), 2);
+        assert_eq!(status.settlements.len(), 1);
     }
 
     #[test]

@@ -59,6 +59,7 @@ export interface VerifySubmissionRequest {
   verifier_kind?: string | null;
   rubric?: string | null;
   evidence?: Record<string, unknown> | null;
+  approved_risk_event_id?: string | null;
 }
 
 export interface PlanBaseReleaseRequest {
@@ -172,6 +173,12 @@ export interface ApproveRiskBountyRequest {
   note: string;
 }
 
+export interface ApproveRiskPayoutRequest {
+  risk_event_id: string;
+  operator_id: string;
+  note: string;
+}
+
 export interface RejectRiskEventRequest {
   risk_event_id: string;
   operator_id: string;
@@ -235,6 +242,13 @@ export class AgentBountiesClient {
 
   async approveRiskBounty(request: ApproveRiskBountyRequest): Promise<unknown> {
     return this.request("/v1/risk/bounty-approvals", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async approveRiskPayout(request: ApproveRiskPayoutRequest): Promise<unknown> {
+    return this.request("/v1/risk/payout-approvals", {
       method: "POST",
       body: JSON.stringify(request),
     });
@@ -340,6 +354,7 @@ export class AgentBountiesClient {
         verifier_kind: request.verifier_kind ?? null,
         rubric: request.rubric ?? null,
         evidence: request.evidence ?? null,
+        approved_risk_event_id: request.approved_risk_event_id ?? null,
       }),
     });
   }

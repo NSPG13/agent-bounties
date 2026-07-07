@@ -1,10 +1,10 @@
 use app::{
-    hash_artifact, ApproveRiskBountyRequest, BaseEscrowReconciliation, BaseReleaseQueueRequest,
-    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateHelpRequestRequest,
-    FundQuoteRequest, PlanBaseDisputeRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
-    PostBountyRequest, QuoteSet, RegisterAgentRequest, RegisterCapabilityRequest,
-    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
-    SubmitResultRequest, VerifySubmissionRequest,
+    hash_artifact, ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseEscrowReconciliation,
+    BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, PlanBaseDisputeRequest, PlanBaseRefundRequest,
+    PlanBaseReleaseRequest, PostBountyRequest, QuoteSet, RegisterAgentRequest,
+    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
     body::Bytes,
@@ -62,6 +62,7 @@ use worker::BaseEscrowLogWorker;
         list_risk_events,
         list_risk_reviews,
         approve_risk_bounty,
+        approve_risk_payout,
         reject_risk_event,
         route_blocked_goal,
         run_bountybench,
@@ -321,6 +322,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/risk/events", get(list_risk_events))
         .route("/v1/risk/reviews", get(list_risk_reviews))
         .route("/v1/risk/bounty-approvals", post(approve_risk_bounty))
+        .route("/v1/risk/payout-approvals", post(approve_risk_payout))
         .route("/v1/risk/events/:id/reject", post(reject_risk_event))
         .route("/v1/route-blocked-goal", post(route_blocked_goal))
         .route("/v1/evals/bountybench", get(run_bountybench))
@@ -495,6 +497,21 @@ async fn approve_risk_bounty(
     let (approval, ledger_entries) = result?;
     persist_reviewed_bounty_approval(&state, &approval, &ledger_entries).await?;
     Ok(Json(approval))
+}
+
+#[utoipa::path(post, path = "/v1/risk/payout-approvals", responses((status = 200, body = RiskReviewRecord)))]
+async fn approve_risk_payout(
+    State(state): State<SharedState>,
+    Json(request): Json<ApproveRiskPayoutRequest>,
+) -> Result<Json<RiskReviewRecord>, StatusCode> {
+    let review = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network
+            .approve_risk_payout(request)
+            .map_err(|_| StatusCode::BAD_REQUEST)?
+    };
+    persist_risk_review(&state, &review).await?;
+    Ok(Json(review))
 }
 
 #[utoipa::path(post, path = "/v1/risk/events/{id}/reject", responses((status = 200, body = RiskReviewRecord)))]
@@ -2514,6 +2531,10 @@ mod tests {
             "http://127.0.0.1:8080/v1/risk/bounty-approvals"
         );
         assert_eq!(
+            manifest.endpoints.risk_payout_approvals,
+            "http://127.0.0.1:8080/v1/risk/payout-approvals"
+        );
+        assert_eq!(
             manifest.endpoints.risk_event_rejections,
             "http://127.0.0.1:8080/v1/risk/events/{risk_event_id}/reject"
         );
@@ -2553,6 +2574,7 @@ mod tests {
         assert!(paths.contains_key("/v1/risk/events"));
         assert!(paths.contains_key("/v1/risk/reviews"));
         assert!(paths.contains_key("/v1/risk/bounty-approvals"));
+        assert!(paths.contains_key("/v1/risk/payout-approvals"));
         assert!(paths.contains_key("/v1/risk/events/{id}/reject"));
         assert!(paths.contains_key("/v1/agents/{id}/paid-status"));
         assert!(paths.contains_key("/v1/capabilities/search"));
@@ -2674,6 +2696,106 @@ mod tests {
         assert_eq!(approval.review.outcome, domain::RiskReviewOutcome::Approved);
         let reviews = list_risk_reviews(State(state)).await.0;
         assert_eq!(reviews.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn risk_payout_approval_endpoint_records_review_for_verification() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "solver".to_string(),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+        });
+        let result = network.post_funded_bounty(PostBountyRequest {
+            title: "Fix deterministic payout reconciliation failure".to_string(),
+            template_slug: "fix-ci-failure".to_string(),
+            amount_minor: 25_000_000,
+            currency: "usdc".to_string(),
+            funding_mode: FundingMode::BaseUsdcEscrow,
+            privacy: PrivacyLevel::Public,
+        });
+        assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
+        let bounty_event_id = network
+            .list_risk_events(RiskEventFilter {
+                action: Some(domain::RiskAction::NeedsReview),
+                surface: Some(domain::RiskSurface::Bounty),
+                limit: Some(1),
+                ..RiskEventFilter::default()
+            })
+            .first()
+            .unwrap()
+            .id;
+        let approval = network
+            .approve_risk_bounty(ApproveRiskBountyRequest {
+                risk_event_id: bounty_event_id,
+                title: "Fix deterministic payout reconciliation failure".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 25_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+                operator_id: "operator-1".to_string(),
+                note: "Approved bounty scope".to_string(),
+            })
+            .unwrap();
+        network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: approval.bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        let submission = network
+            .submit_result(SubmitResultRequest {
+                bounty_id: approval.bounty.id,
+                solver_agent_id: solver.id,
+                artifact_uri: "https://github.com/example/repo/actions/runs/1".to_string(),
+                artifact_body: "{\"check\":\"green\"}".to_string(),
+            })
+            .unwrap();
+        let result = network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: approval.bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: "not-used-by-github-ci".to_string(),
+                verifier_kind: None,
+                rubric: None,
+                evidence: Some(serde_json::json!({
+                    "check_conclusion": "success",
+                    "check_name": "test"
+                })),
+                approved_risk_event_id: None,
+            })
+            .await;
+        assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
+        let payout_event_id = network
+            .list_risk_events(RiskEventFilter {
+                action: Some(domain::RiskAction::NeedsReview),
+                surface: Some(domain::RiskSurface::Payout),
+                bounty_id: Some(approval.bounty.id),
+                limit: Some(1),
+                ..RiskEventFilter::default()
+            })
+            .first()
+            .unwrap()
+            .id;
+        let state = test_state(network);
+
+        let review = approve_risk_payout(
+            State(state.clone()),
+            Json(ApproveRiskPayoutRequest {
+                risk_event_id: payout_event_id,
+                operator_id: "operator-1".to_string(),
+                note: "Approved payout after verifier scope review".to_string(),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(review.outcome, domain::RiskReviewOutcome::Approved);
+        assert_eq!(review.surface, domain::RiskSurface::Payout);
+        assert_eq!(review.bounty_id, Some(approval.bounty.id));
+        let reviews = list_risk_reviews(State(state)).await.0;
+        assert_eq!(reviews.len(), 2);
     }
 
     #[tokio::test]
@@ -3133,6 +3255,7 @@ mod tests {
                 verifier_kind: Some(domain::VerifierKind::JsonSchema),
                 rubric: None,
                 evidence: None,
+                approved_risk_event_id: None,
             })
             .await
             .unwrap();

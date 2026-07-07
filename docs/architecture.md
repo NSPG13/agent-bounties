@@ -105,8 +105,9 @@ low-value cap. AI-judge filters may request review, but deterministic policy and
 operator decisions are the only gates that can stop or release funds. The API,
 MCP server, SDKs, and CLI expose a filtered risk-event queue so agents and
 operators can explain blocked automatic flows without treating those events as
-payment authorization. Bounty review approvals are represented as separate
-`RiskReviewRecord` audit entries: approval can turn a reviewed bounty posting
-into a funded `Claimable` bounty, while rejection records the operator decision
-without creating a bounty. Settlement still requires verifier/proof state and
-payment-rail reconciliation.
+payment authorization. Review approvals are represented as separate
+`RiskReviewRecord` audit entries: bounty approval can turn a reviewed posting
+into a funded `Claimable` bounty, payout approval can let the matching
+verification request continue with `approved_risk_event_id`, and rejection
+records the operator decision without creating a bounty or moving funds.
+Settlement still requires verifier/proof state and payment-rail reconciliation.

@@ -1,9 +1,9 @@
 use app::{
-    ApproveRiskBountyRequest, BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest,
-    CreateHelpRequestRequest, FundQuoteRequest, PlanBaseDisputeRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
-    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
-    SubmitResultRequest, VerifySubmissionRequest,
+    ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseReleaseQueueRequest, BountyNetwork,
+    ClaimBountyRequest, CreateHelpRequestRequest, FundQuoteRequest, PlanBaseDisputeRequest,
+    PlanBaseRefundRequest, PlanBaseReleaseRequest, PostBountyRequest, RegisterAgentRequest,
+    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
     extract::State,
@@ -269,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/list_risk_events", post(list_risk_events))
         .route("/tools/list_risk_reviews", get(list_risk_reviews))
         .route("/tools/approve_risk_bounty", post(approve_risk_bounty))
+        .route("/tools/approve_risk_payout", post(approve_risk_payout))
         .route("/tools/reject_risk_event", post(reject_risk_event))
         .layer(CorsLayer::permissive())
         .with_state(state);
@@ -433,7 +434,8 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                         "AiJudgeFilter"
                     ], "Optional verifier kind."),
                     "rubric": nullable_string_property("Optional human or AI-judge rubric."),
-                    "evidence": nullable_object_property("Optional verifier evidence payload.")
+                    "evidence": nullable_object_property("Optional verifier evidence payload."),
+                    "approved_risk_event_id": nullable_uuid_property("Optional approved payout risk event UUID that permits verification to continue after operator review.")
                 }),
                 &["bounty_id", "submission_id", "expected_artifact_digest"],
             ),
@@ -794,6 +796,18 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "operator_id",
                     "note",
                 ],
+            ),
+        ),
+        tool(
+            "approve_risk_payout",
+            "Approve a NeedsReview payout risk event so the matching verification request can continue after operator review.",
+            object_tool_schema(
+                json!({
+                    "risk_event_id": uuid_property("Payout risk event UUID being approved."),
+                    "operator_id": string_property("Human or service operator identifier."),
+                    "note": string_property("Concise reason for approving this payout review item.")
+                }),
+                &["risk_event_id", "operator_id", "note"],
             ),
         ),
         tool(
@@ -1920,6 +1934,23 @@ async fn approve_risk_bounty(
     mcp_json(approval)
 }
 
+async fn approve_risk_payout(
+    State(state): State<SharedState>,
+    Json(args): Json<ApproveRiskPayoutRequest>,
+) -> Json<serde_json::Value> {
+    let review = {
+        let mut network = state.network.lock().expect("state poisoned");
+        match network.approve_risk_payout(args) {
+            Ok(review) => review,
+            Err(error) => return mcp_error(error),
+        }
+    };
+    if let Err(error) = persist_risk_review(&state, &review).await {
+        return mcp_error(error);
+    }
+    mcp_json(review)
+}
+
 async fn reject_risk_event(
     State(state): State<SharedState>,
     Json(args): Json<RejectRiskEventRequest>,
@@ -2238,6 +2269,16 @@ mod tests {
             .iter()
             .any(|value| value == "risk_event_id"));
 
+        let approve_risk_payout = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "approve_risk_payout")
+            .expect("approve_risk_payout descriptor exists");
+        assert!(approve_risk_payout.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "operator_id"));
+
         let reject_risk_event = descriptors
             .iter()
             .find(|descriptor| descriptor.name == "reject_risk_event")
@@ -2351,6 +2392,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn payout_review_tool_approves_verification_risk_event() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "solver".to_string(),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+        });
+        let result = network.post_funded_bounty(PostBountyRequest {
+            title: "Fix deterministic payout reconciliation failure".to_string(),
+            template_slug: "fix-ci-failure".to_string(),
+            amount_minor: 25_000_000,
+            currency: "usdc".to_string(),
+            funding_mode: domain::FundingMode::BaseUsdcEscrow,
+            privacy: PrivacyLevel::Public,
+        });
+        assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
+        let bounty_event_id = network.risk_events.values().next().unwrap().id;
+        let approval = network
+            .approve_risk_bounty(ApproveRiskBountyRequest {
+                risk_event_id: bounty_event_id,
+                title: "Fix deterministic payout reconciliation failure".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 25_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: domain::FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+                operator_id: "operator-1".to_string(),
+                note: "Approved bounty scope".to_string(),
+            })
+            .unwrap();
+        network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: approval.bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        let submission = network
+            .submit_result(SubmitResultRequest {
+                bounty_id: approval.bounty.id,
+                solver_agent_id: solver.id,
+                artifact_uri: "https://github.com/example/repo/actions/runs/1".to_string(),
+                artifact_body: "{\"check\":\"green\"}".to_string(),
+            })
+            .unwrap();
+        let result = network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: approval.bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: "not-used-by-github-ci".to_string(),
+                verifier_kind: None,
+                rubric: None,
+                evidence: Some(json!({
+                    "check_conclusion": "success",
+                    "check_name": "test"
+                })),
+                approved_risk_event_id: None,
+            })
+            .await;
+        assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
+        let payout_event_id = network
+            .list_risk_events(RiskEventFilter {
+                action: Some(domain::RiskAction::NeedsReview),
+                surface: Some(domain::RiskSurface::Payout),
+                bounty_id: Some(approval.bounty.id),
+                limit: Some(1),
+                ..RiskEventFilter::default()
+            })
+            .first()
+            .unwrap()
+            .id;
+        let state = test_state_with_network(network);
+
+        let review = approve_risk_payout(
+            State(state.clone()),
+            Json(ApproveRiskPayoutRequest {
+                risk_event_id: payout_event_id,
+                operator_id: "operator-1".to_string(),
+                note: "Approved payout after verifier scope review".to_string(),
+            }),
+        )
+        .await
+        .0;
+
+        assert_eq!(review["content"][0]["json"]["surface"], "Payout");
+        assert_eq!(review["content"][0]["json"]["outcome"], "Approved");
+        let reviews = list_risk_reviews(State(state)).await.0;
+        let review_items = reviews["content"][0]["json"].as_array().unwrap();
+        assert_eq!(review_items.len(), 2);
+    }
+
+    #[tokio::test]
     async fn reject_risk_event_tool_records_rejection_without_bounty() {
         let state = test_state();
         let risk_event_id = {
@@ -2410,8 +2541,12 @@ mod tests {
     }
 
     fn test_state() -> SharedState {
+        test_state_with_network(BountyNetwork::default())
+    }
+
+    fn test_state_with_network(network: BountyNetwork) -> SharedState {
         Arc::new(AppState {
-            network: Mutex::new(BountyNetwork::default()),
+            network: Mutex::new(network),
             base_log_worker: Mutex::new(BaseEscrowLogWorker::default()),
             eval_runs: Mutex::new(Vec::new()),
             base_rpc_urls: BaseRpcUrlConfig::default(),
