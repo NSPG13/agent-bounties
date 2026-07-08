@@ -108,3 +108,8 @@ ready:
   mock-provider simulations.
 
 Do not put live private keys in compose files or committed env templates.
+
+For a step-by-step low-value Base USDC beta process, including operator roles,
+environment variables, funding, release, refund, dispute, and read-only
+post-deploy checks, see
+[Hosted Low-Value Base USDC Beta Runbook](hosted-base-usdc-beta-runbook.md).
