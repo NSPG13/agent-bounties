@@ -11,6 +11,7 @@ anyhow.workspace = true
 app = { path = "../app" }
 async-trait.workspace = true
 chain-base = { path = "../chain-base" }
+chrono.workspace = true
 db = { path = "../db" }
 domain = { path = "../domain" }
 ledger = { path = "../ledger" }
@@ -20,4 +21,3 @@ tokio.workspace = true
 verifier-sdk = { path = "../verifier-sdk" }
 
 [dev-dependencies]
-chrono.workspace = true

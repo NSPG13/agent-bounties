@@ -135,6 +135,7 @@ pub struct BaseIndexerStatusConfig {
     pub escrow_contract: Option<String>,
     pub database_configured: bool,
     pub cursor: Option<BaseIndexerScanCursor>,
+    pub heartbeat: Option<BaseIndexerHeartbeatStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,12 +148,32 @@ pub struct BaseIndexerScanCursor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BaseIndexerHeartbeatStatus {
+    pub network: String,
+    pub escrow_contract: String,
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub latest_block: Option<u64>,
+    pub confirmed_to_block: Option<u64>,
+    pub from_block: Option<u64>,
+    pub to_block: Option<u64>,
+    pub fetched_logs: u64,
+    pub persisted_cursor_block: Option<u64>,
+    pub skipped_reason: Option<String>,
+    pub error_message: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BaseIndexerStatusReport {
     pub status: String,
     pub indexer_ready: bool,
     pub database_configured: bool,
     pub escrow_contract_configured: bool,
     pub cursor_found: bool,
+    pub heartbeat_found: bool,
+    pub worker_healthy: Option<bool>,
     pub network: String,
     pub network_chain_id: u64,
     pub network_rpc_url_env: String,
@@ -160,6 +181,18 @@ pub struct BaseIndexerStatusReport {
     pub last_scanned_block: Option<u64>,
     pub last_log_key: Option<String>,
     pub cursor_updated_at: Option<DateTime<Utc>>,
+    pub last_poll_status: Option<String>,
+    pub last_poll_started_at: Option<DateTime<Utc>>,
+    pub last_poll_completed_at: Option<DateTime<Utc>>,
+    pub last_poll_latest_block: Option<u64>,
+    pub last_poll_confirmed_to_block: Option<u64>,
+    pub last_poll_from_block: Option<u64>,
+    pub last_poll_to_block: Option<u64>,
+    pub last_poll_fetched_logs: Option<u64>,
+    pub last_poll_persisted_cursor_block: Option<u64>,
+    pub last_poll_skipped_reason: Option<String>,
+    pub last_poll_error_message: Option<String>,
+    pub heartbeat_updated_at: Option<DateTime<Utc>>,
     pub warnings: Vec<String>,
     pub evidence_boundaries: Vec<String>,
     pub commands: Vec<String>,
@@ -201,6 +234,23 @@ pub fn build_base_indexer_status_report(
         && escrow_contract_configured
         && cursor_found
         && cursor_matches_request;
+    let heartbeat = config.heartbeat.as_ref();
+    let heartbeat_found = heartbeat.is_some();
+    let heartbeat_matches_request = match (heartbeat, escrow_contract.as_deref()) {
+        (Some(heartbeat), Some(escrow_contract)) => {
+            heartbeat.network == config.network
+                && heartbeat
+                    .escrow_contract
+                    .eq_ignore_ascii_case(escrow_contract)
+        }
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
+    let worker_healthy = heartbeat.and_then(|heartbeat| match heartbeat.status.as_str() {
+        "Success" | "Skipped" => Some(true),
+        "Failed" => Some(false),
+        _ => None,
+    });
     let status = if !config.database_configured {
         "persistence_unavailable"
     } else if !escrow_contract_configured {
@@ -237,6 +287,25 @@ pub fn build_base_indexer_status_report(
                 .to_string(),
         );
     }
+    if config.database_configured && escrow_contract_configured && cursor_found && !heartbeat_found
+    {
+        warnings.push(
+            "No Base indexer heartbeat was found; run the worker to persist the latest poll outcome."
+                .to_string(),
+        );
+    }
+    if !heartbeat_matches_request {
+        warnings.push(
+            "The persisted worker heartbeat does not match the requested network and escrow contract."
+                .to_string(),
+        );
+    }
+    if worker_healthy == Some(false) {
+        warnings.push(
+            "The most recent Base indexer worker poll failed; inspect last_poll_error_message before trusting worker freshness."
+                .to_string(),
+        );
+    }
 
     Ok(BaseIndexerStatusReport {
         status: status.to_string(),
@@ -244,6 +313,8 @@ pub fn build_base_indexer_status_report(
         database_configured: config.database_configured,
         escrow_contract_configured,
         cursor_found,
+        heartbeat_found,
+        worker_healthy,
         network: network_descriptor.name,
         network_chain_id: network_descriptor.chain_id,
         network_rpc_url_env: network_descriptor.rpc_url_env,
@@ -251,11 +322,24 @@ pub fn build_base_indexer_status_report(
         last_scanned_block: cursor.map(|cursor| cursor.last_scanned_block),
         last_log_key: cursor.and_then(|cursor| cursor.last_log_key.clone()),
         cursor_updated_at: cursor.map(|cursor| cursor.updated_at),
+        last_poll_status: heartbeat.map(|heartbeat| heartbeat.status.clone()),
+        last_poll_started_at: heartbeat.map(|heartbeat| heartbeat.started_at),
+        last_poll_completed_at: heartbeat.and_then(|heartbeat| heartbeat.completed_at),
+        last_poll_latest_block: heartbeat.and_then(|heartbeat| heartbeat.latest_block),
+        last_poll_confirmed_to_block: heartbeat.and_then(|heartbeat| heartbeat.confirmed_to_block),
+        last_poll_from_block: heartbeat.and_then(|heartbeat| heartbeat.from_block),
+        last_poll_to_block: heartbeat.and_then(|heartbeat| heartbeat.to_block),
+        last_poll_fetched_logs: heartbeat.map(|heartbeat| heartbeat.fetched_logs),
+        last_poll_persisted_cursor_block: heartbeat
+            .and_then(|heartbeat| heartbeat.persisted_cursor_block),
+        last_poll_skipped_reason: heartbeat.and_then(|heartbeat| heartbeat.skipped_reason.clone()),
+        last_poll_error_message: heartbeat.and_then(|heartbeat| heartbeat.error_message.clone()),
+        heartbeat_updated_at: heartbeat.map(|heartbeat| heartbeat.updated_at),
         warnings,
         evidence_boundaries: vec![
             "Indexer status is operational evidence only; it does not fund, release, refund, dispute, or authorize settlement.".to_string(),
             "Base USDC state changes still require decoded escrow logs to be reconciled into platform state.".to_string(),
-            "A cursor proves the worker persisted scan progress for this contract; it does not prove the worker is currently running.".to_string(),
+            "A cursor proves the worker persisted scan progress for this contract; heartbeat proves only the last recorded poll outcome, not current liveness.".to_string(),
         ],
         commands: vec![
             "cargo run -p worker -- --once".to_string(),
@@ -4246,6 +4330,7 @@ mod tests {
             escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
             database_configured: false,
             cursor: None,
+            heartbeat: None,
         })
         .unwrap();
 
@@ -4254,6 +4339,7 @@ mod tests {
         assert!(!report.database_configured);
         assert!(report.escrow_contract_configured);
         assert!(!report.cursor_found);
+        assert!(!report.heartbeat_found);
         assert_eq!(report.network_chain_id, 8_453);
         assert!(report
             .warnings
@@ -4267,6 +4353,7 @@ mod tests {
     #[test]
     fn base_indexer_status_reports_matching_cursor() {
         let updated_at = Utc::now();
+        let heartbeat_at = Utc::now();
         let report = build_base_indexer_status_report(BaseIndexerStatusConfig {
             network: "base-sepolia".to_string(),
             escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
@@ -4278,6 +4365,22 @@ mod tests {
                 last_log_key: Some("0xabc:0".to_string()),
                 updated_at,
             }),
+            heartbeat: Some(BaseIndexerHeartbeatStatus {
+                network: "base-sepolia".to_string(),
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                status: "Success".to_string(),
+                started_at: heartbeat_at,
+                completed_at: Some(heartbeat_at),
+                latest_block: Some(12_360),
+                confirmed_to_block: Some(12_358),
+                from_block: Some(12_345),
+                to_block: Some(12_358),
+                fetched_logs: 3,
+                persisted_cursor_block: Some(12_358),
+                skipped_reason: None,
+                error_message: None,
+                updated_at: heartbeat_at,
+            }),
         })
         .unwrap();
 
@@ -4285,11 +4388,61 @@ mod tests {
         assert!(report.indexer_ready);
         assert!(report.database_configured);
         assert!(report.cursor_found);
+        assert!(report.heartbeat_found);
+        assert_eq!(report.worker_healthy, Some(true));
         assert_eq!(report.network_chain_id, 84_532);
         assert_eq!(report.last_scanned_block, Some(12_345));
         assert_eq!(report.last_log_key.as_deref(), Some("0xabc:0"));
         assert_eq!(report.cursor_updated_at, Some(updated_at));
+        assert_eq!(report.last_poll_status.as_deref(), Some("Success"));
+        assert_eq!(report.last_poll_fetched_logs, Some(3));
+        assert_eq!(report.heartbeat_updated_at, Some(heartbeat_at));
         assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn base_indexer_status_warns_on_failed_heartbeat() {
+        let updated_at = Utc::now();
+        let report = build_base_indexer_status_report(BaseIndexerStatusConfig {
+            network: "base-sepolia".to_string(),
+            escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+            database_configured: true,
+            cursor: Some(BaseIndexerScanCursor {
+                network: "base-sepolia".to_string(),
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                last_scanned_block: 12_345,
+                last_log_key: Some("0xabc:0".to_string()),
+                updated_at,
+            }),
+            heartbeat: Some(BaseIndexerHeartbeatStatus {
+                network: "base-sepolia".to_string(),
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                status: "Failed".to_string(),
+                started_at: updated_at,
+                completed_at: Some(updated_at),
+                latest_block: None,
+                confirmed_to_block: None,
+                from_block: None,
+                to_block: None,
+                fetched_logs: 0,
+                persisted_cursor_block: None,
+                skipped_reason: None,
+                error_message: Some("rpc timeout".to_string()),
+                updated_at,
+            }),
+        })
+        .unwrap();
+
+        assert_eq!(report.status, "cursor_persisted");
+        assert_eq!(report.worker_healthy, Some(false));
+        assert_eq!(
+            report.last_poll_error_message.as_deref(),
+            Some("rpc timeout")
+        );
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("most recent Base indexer worker poll failed")));
     }
 
     fn fund_base_bounty(

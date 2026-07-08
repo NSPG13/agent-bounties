@@ -133,7 +133,10 @@ available when the Base RPC URL is configured.
 The `worker` binary can run a one-shot or continuous Base USDC indexer against
 Postgres. Set `DATABASE_URL`, `BASE_INDEXER_NETWORK`,
 `BASE_INDEXER_START_BLOCK`, and RPC/escrow contract env vars before running it;
-in production compose, enable the optional `base-indexer` profile.
+in production compose, enable the optional `base-indexer` profile. Each poll
+persists a non-secret worker heartbeat with the last Success, Skipped, or Failed
+outcome so API/MCP status callers can distinguish cursor progress from worker
+freshness.
 
 Hosted API and MCP operator mutation surfaces can require
 `OPERATOR_API_TOKEN`. When set, risk approvals/rejections, Base settlement log

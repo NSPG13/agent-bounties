@@ -62,6 +62,24 @@ pub struct BaseLogScanCursor {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseIndexerHeartbeat {
+    pub network: String,
+    pub escrow_contract: String,
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub latest_block: Option<u64>,
+    pub confirmed_to_block: Option<u64>,
+    pub from_block: Option<u64>,
+    pub to_block: Option<u64>,
+    pub fetched_logs: u64,
+    pub persisted_cursor_block: Option<u64>,
+    pub skipped_reason: Option<String>,
+    pub error_message: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Default)]
 pub struct InMemoryStore {
     pub agents: HashMap<Id, Agent>,
@@ -753,6 +771,94 @@ impl PostgresStore {
         .bind(normalize_key_address(escrow_contract))
         .bind(i64_from_u64(last_scanned_block)?)
         .bind(last_log_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_base_indexer_heartbeat(
+        &self,
+        network: &str,
+        escrow_contract: &str,
+    ) -> DbResult<Option<BaseIndexerHeartbeat>> {
+        let row = sqlx::query(
+            r#"
+            SELECT network, escrow_contract, status, started_at, completed_at,
+                   latest_block, confirmed_to_block, from_block, to_block,
+                   fetched_logs, persisted_cursor_block, skipped_reason,
+                   error_message, updated_at
+            FROM base_indexer_heartbeats
+            WHERE network = $1 AND escrow_contract = $2
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(escrow_contract))
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| {
+            Ok(BaseIndexerHeartbeat {
+                network: row.try_get("network")?,
+                escrow_contract: row.try_get("escrow_contract")?,
+                status: row.try_get("status")?,
+                started_at: row.try_get("started_at")?,
+                completed_at: row.try_get("completed_at")?,
+                latest_block: optional_u64_from_i64(row.try_get("latest_block")?)?,
+                confirmed_to_block: optional_u64_from_i64(row.try_get("confirmed_to_block")?)?,
+                from_block: optional_u64_from_i64(row.try_get("from_block")?)?,
+                to_block: optional_u64_from_i64(row.try_get("to_block")?)?,
+                fetched_logs: u64_from_i64(row.try_get("fetched_logs")?)?,
+                persisted_cursor_block: optional_u64_from_i64(
+                    row.try_get("persisted_cursor_block")?,
+                )?,
+                skipped_reason: row.try_get("skipped_reason")?,
+                error_message: row.try_get("error_message")?,
+                updated_at: row.try_get("updated_at")?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn upsert_base_indexer_heartbeat(
+        &self,
+        heartbeat: &BaseIndexerHeartbeat,
+    ) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO base_indexer_heartbeats
+              (network, escrow_contract, status, started_at, completed_at,
+               latest_block, confirmed_to_block, from_block, to_block,
+               fetched_logs, persisted_cursor_block, skipped_reason,
+               error_message, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+            ON CONFLICT (network, escrow_contract) DO UPDATE SET
+              status = EXCLUDED.status,
+              started_at = EXCLUDED.started_at,
+              completed_at = EXCLUDED.completed_at,
+              latest_block = EXCLUDED.latest_block,
+              confirmed_to_block = EXCLUDED.confirmed_to_block,
+              from_block = EXCLUDED.from_block,
+              to_block = EXCLUDED.to_block,
+              fetched_logs = EXCLUDED.fetched_logs,
+              persisted_cursor_block = EXCLUDED.persisted_cursor_block,
+              skipped_reason = EXCLUDED.skipped_reason,
+              error_message = EXCLUDED.error_message,
+              updated_at = now()
+            "#,
+        )
+        .bind(&heartbeat.network)
+        .bind(normalize_key_address(&heartbeat.escrow_contract))
+        .bind(&heartbeat.status)
+        .bind(heartbeat.started_at)
+        .bind(heartbeat.completed_at)
+        .bind(optional_i64_from_u64(heartbeat.latest_block)?)
+        .bind(optional_i64_from_u64(heartbeat.confirmed_to_block)?)
+        .bind(optional_i64_from_u64(heartbeat.from_block)?)
+        .bind(optional_i64_from_u64(heartbeat.to_block)?)
+        .bind(i64_from_u64(heartbeat.fetched_logs)?)
+        .bind(optional_i64_from_u64(heartbeat.persisted_cursor_block)?)
+        .bind(&heartbeat.skipped_reason)
+        .bind(&heartbeat.error_message)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1482,6 +1588,14 @@ fn u64_from_i64(value: i64) -> DbResult<u64> {
     u64::try_from(value).map_err(|_| DbError::IntegerOverflow(value.to_string()))
 }
 
+fn optional_i64_from_u64(value: Option<u64>) -> DbResult<Option<i64>> {
+    value.map(i64_from_u64).transpose()
+}
+
+fn optional_u64_from_i64(value: Option<i64>) -> DbResult<Option<u64>> {
+    value.map(u64_from_i64).transpose()
+}
+
 fn normalize_key_address(address: &str) -> String {
     address.trim().to_ascii_lowercase()
 }
@@ -1583,6 +1697,7 @@ mod tests {
             "ledger_entries",
             "payment_events",
             "eval_runs",
+            "base_indexer_heartbeats",
         ] {
             assert!(CORE_MIGRATION.contains(table), "missing {table}");
         }

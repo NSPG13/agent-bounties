@@ -1,16 +1,16 @@
 use app::{
     build_base_indexer_status_report, build_live_money_readiness_report, hash_artifact,
     stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
-    ApproveRiskPayoutRequest, BaseEscrowReconciliation, BaseIndexerScanCursor,
-    BaseIndexerStatusConfig, BaseIndexerStatusReport, BaseReleaseQueueRequest, BountyNetwork,
-    BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest,
-    FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
-    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest, PlanStripeTransferRequest as AppPlanStripeTransferRequest,
-    PooledFundingReport, PostBountyRequest, QuoteSet, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
-    ReviewedBountyApproval, RiskEventFilter, StripeTransferPlan, StripeTransferReconciliation,
-    SubmitResultRequest, VerifySubmissionRequest,
+    ApproveRiskPayoutRequest, BaseEscrowReconciliation, BaseIndexerHeartbeatStatus,
+    BaseIndexerScanCursor, BaseIndexerStatusConfig, BaseIndexerStatusReport,
+    BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
+    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport,
+    LiveMoneyReadinessConfig, LiveMoneyReadinessReport, OpenPooledBountyRequest,
+    PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
+    PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
+    PostBountyRequest, QuoteSet, RegisterAgentRequest, RegisterCapabilityRequest,
+    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
+    StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
     body::Bytes,
@@ -737,12 +737,21 @@ async fn base_indexer_status(
             .map(base_indexer_scan_cursor_from_db),
         _ => None,
     };
+    let heartbeat = match (&state.store, escrow_contract.as_deref()) {
+        (Some(store), Some(escrow_contract)) => store
+            .get_base_indexer_heartbeat(&network, escrow_contract)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map(base_indexer_heartbeat_from_db),
+        _ => None,
+    };
 
     build_base_indexer_status_report(BaseIndexerStatusConfig {
         network,
         escrow_contract,
         database_configured: state.store.is_some(),
         cursor,
+        heartbeat,
     })
     .map(Json)
     .map_err(|_| StatusCode::BAD_REQUEST)
@@ -755,6 +764,27 @@ fn base_indexer_scan_cursor_from_db(cursor: db::BaseLogScanCursor) -> BaseIndexe
         last_scanned_block: cursor.last_scanned_block,
         last_log_key: cursor.last_log_key,
         updated_at: cursor.updated_at,
+    }
+}
+
+fn base_indexer_heartbeat_from_db(
+    heartbeat: db::BaseIndexerHeartbeat,
+) -> BaseIndexerHeartbeatStatus {
+    BaseIndexerHeartbeatStatus {
+        network: heartbeat.network,
+        escrow_contract: heartbeat.escrow_contract,
+        status: heartbeat.status,
+        started_at: heartbeat.started_at,
+        completed_at: heartbeat.completed_at,
+        latest_block: heartbeat.latest_block,
+        confirmed_to_block: heartbeat.confirmed_to_block,
+        from_block: heartbeat.from_block,
+        to_block: heartbeat.to_block,
+        fetched_logs: heartbeat.fetched_logs,
+        persisted_cursor_block: heartbeat.persisted_cursor_block,
+        skipped_reason: heartbeat.skipped_reason,
+        error_message: heartbeat.error_message,
+        updated_at: heartbeat.updated_at,
     }
 }
 
@@ -4075,6 +4105,9 @@ mod tests {
         assert!(report.escrow_contract_configured);
         assert_eq!(report.network_chain_id, 8_453);
         assert!(report.last_scanned_block.is_none());
+        assert!(!report.heartbeat_found);
+        assert_eq!(report.worker_healthy, None);
+        assert_eq!(report.last_poll_status, None);
         assert!(report.evidence_boundaries.iter().any(|boundary| {
             boundary.contains("does not fund, release, refund, dispute, or authorize settlement")
         }));

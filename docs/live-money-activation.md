@@ -91,10 +91,11 @@ curl "$env:MCP_BASE_URL/tools/get_base_indexer_status" `
 ```
 
 These reports intentionally expose only Stripe key mode, configured gates, chain
-metadata, native USDC address, indexer cursor state, warnings, and settlement
-evidence boundaries. They must not expose Stripe secrets, webhook secrets, RPC
-URLs, or operator tokens. Indexer status is monitoring evidence only; it does
-not fund, release, refund, dispute, or authorize settlement.
+metadata, native USDC address, indexer cursor state, last worker heartbeat
+outcome, warnings, and settlement evidence boundaries. They must not expose
+Stripe secrets, webhook secrets, RPC URLs, or operator tokens. Indexer status is
+monitoring evidence only; it does not fund, release, refund, dispute, or
+authorize settlement.
 
 ## Automated Base Indexing
 
@@ -113,10 +114,12 @@ subtracts `BASE_INDEXER_CONFIRMATIONS`, scans up to
 `BASE_INDEXER_MAX_BLOCKS_PER_QUERY` confirmed blocks, applies decoded escrow
 logs through the same deterministic state machine as the API/MCP reconciliation
 endpoints, and persists a Postgres scan cursor. Empty ranges advance the scan
-cursor; failed ranges do not.
+cursor; failed ranges do not. Every poll writes a heartbeat row so operators
+and agents can see the latest Success, Skipped, or Failed poll outcome without
+granting that heartbeat settlement authority.
 Check `GET /v1/base/indexer-status?network=<network>` after startup to confirm
-Postgres persistence is configured and a cursor is being written for the escrow
-contract.
+Postgres persistence is configured and cursor plus heartbeat records are being
+written for the escrow contract.
 
 For a one-shot rehearsal without a long-running container, run:
 

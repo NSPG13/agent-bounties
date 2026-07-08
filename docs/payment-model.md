@@ -266,7 +266,9 @@ that pipeline: it fetches `eth_blockNumber`, waits for a configurable
 confirmation depth, scans bounded block ranges for the configured escrow
 contract, persists a Postgres scan cursor even for empty ranges, and writes
 only decoded escrow evidence into bounty, escrow, settlement, Base event, and
-ledger state.
+ledger state. It also persists a heartbeat for the last poll outcome, including
+Success, Skipped, or Failed status, block range, fetched log count, skipped
+reason, and error message when present.
 
 Run a one-shot local indexer pass after setting `DATABASE_URL`,
 `BASE_INDEXER_NETWORK`, `BASE_INDEXER_START_BLOCK`, and either
@@ -281,8 +283,8 @@ Hosted deployments can run the same binary through the production compose
 `base-indexer` profile. The worker does not sign transactions, broadcast
 transactions, or treat transaction hashes as settlement evidence. API
 `GET /v1/base/indexer-status` and MCP `get_base_indexer_status` expose the
-non-secret persisted cursor for monitoring, but that status is not settlement
-authorization.
+non-secret persisted cursor and heartbeat for monitoring, but that status is
+not settlement authorization.
 
 Generate a local sample plan:
 

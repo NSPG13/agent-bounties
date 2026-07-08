@@ -2,7 +2,7 @@ use anyhow::Context;
 use db::PostgresStore;
 use std::{env, time::Duration};
 use tokio::time::sleep;
-use worker::{poll_base_indexer_once, BaseIndexerConfig};
+use worker::{poll_base_indexer_once_with_heartbeat, BaseIndexerConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     store.migrate().await?;
 
     loop {
-        let report = poll_base_indexer_once(&store, &config).await?;
+        let report = poll_base_indexer_once_with_heartbeat(&store, &config).await?;
         println!("{}", serde_json::to_string(&report)?);
         if once {
             return Ok(());
