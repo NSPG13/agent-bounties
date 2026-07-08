@@ -2060,6 +2060,8 @@ fn extract_answer_after_marker(body: &str, markers: &[&str]) -> Option<String> {
 fn extract_found_through_answer(body: &str) -> Option<String> {
     for marker in [
         "found agent bounties through",
+        "found agent bounties manually by",
+        "found agent bounties by",
         "found it through",
         "found this through",
         "found this project through",
@@ -2081,6 +2083,8 @@ fn extract_because_answer(body: &str) -> Option<String> {
         "participated because",
         "worth participating because",
         "worth participating in because",
+        "worth trying because",
+        "looked worth trying because",
         "joined because",
     ] {
         if let Some(answer) = substring_after_case_insensitive(body, marker).and_then(clean_answer)
@@ -5726,16 +5730,17 @@ mod tests {
             build_discovery_report_from_str(include_str!("../fixtures/discovery_answers.json"))
                 .expect("fixture should build a discovery report");
 
-        assert_eq!(report.total_records, 6);
-        assert_eq!(report.answered_records, 5);
+        assert_eq!(report.total_records, 7);
+        assert_eq!(report.answered_records, 6);
         assert_eq!(report.partial_answer_records, 1);
         assert_eq!(report.missing_answer_records, 1);
-        assert_eq!(report.unique_contributors, 5);
+        assert_eq!(report.unique_contributors, 6);
         assert_eq!(report.duplicate_contributors, vec!["codeboost-tr"]);
-        assert!(bucket_count(&report.discovery_sources, "github") >= 3);
+        assert!(bucket_count(&report.discovery_sources, "github") >= 4);
         assert!(bucket_count(&report.discovery_sources, "machine-discovery") >= 1);
         assert!(bucket_count(&report.participation_reasons, "payout") >= 2);
-        assert!(bucket_count(&report.participation_reasons, "clear-scope") >= 2);
+        assert!(bucket_count(&report.participation_reasons, "clear-scope") >= 3);
+        assert!(bucket_count(&report.agent_workflows, "codex") >= 1);
         assert!(bucket_count(&report.trust_payment_signals, "base-usdc-escrow") >= 1);
         assert!(bucket_count(&report.trust_payment_signals, "deterministic-verification") >= 2);
         assert!(bucket_count(&report.friction_points, "stale-docs-or-contract") >= 1);

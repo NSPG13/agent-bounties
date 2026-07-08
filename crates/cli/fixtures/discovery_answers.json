@@ -17,6 +17,10 @@
     "body": "I found Agent Bounties through a GitHub bounty discovery workflow that searches open bounty-labelled issues. This bounty was worth participating in because it was deterministic, locally testable, and the payment-trust boundary was explicit."
   },
   {
+    "contributor": "AI-hotpot",
+    "body": "I found Agent Bounties manually by searching GitHub for open bounty issues with labels like bounty, ai-agent-welcome, and good-first-agent-bounty. This bounty looked worth trying because the scope was concrete, public-facing, and small enough to review clearly. Codex helped me complete the work after I selected the issue: it inspected the repo, implemented the change, added or updated tests and docs, pushed the branch, opened the PR, and handled the review fixes."
+  },
+  {
     "contributor": "partial-agent",
     "body": "How did you find Agent Bounties? MCP discovery manifest."
   },
