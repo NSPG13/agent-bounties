@@ -511,6 +511,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/public/capabilities", get(public_capability_feed_page))
         .route("/public/verifiers/:kind", get(public_verifier_profile))
         .route("/public/bounties", get(public_bounty_feed_page))
+        .route("/public/bounties/:id", get(public_bounty_detail_page))
         .route("/public/templates", get(public_template_index))
         .route("/public/templates/:slug", get(public_template_page))
         .route("/api-docs/openapi.json", get(openapi_json))
@@ -2099,6 +2100,26 @@ async fn public_bounty_feed_page(State(state): State<SharedState>) -> Html<Strin
     Html(web_public::render_bounty_feed_page(&items))
 }
 
+async fn public_bounty_detail_page(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Html<String>, StatusCode> {
+    let bounty = {
+        let network = state.network.lock().expect("state poisoned");
+        network
+            .bounties
+            .get(&id)
+            .ok_or(StatusCode::NOT_FOUND)?
+            .clone()
+    };
+    if bounty.privacy == PrivacyLevel::Private {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let item = web_public::public_bounty_feed_item(&bounty, &state.public_base_url);
+    Ok(Html(web_public::render_bounty_detail_page(&item)))
+}
+
 async fn public_capability_feed_page(State(state): State<SharedState>) -> Html<String> {
     let (capabilities, agents, reputation_events, settlements) = {
         let network = state.network.lock().expect("state poisoned");
@@ -3582,6 +3603,63 @@ mod tests {
             feed[0].claim_url,
             format!("http://127.0.0.1:8080/v1/bounties/{}/claim", public.id)
         );
+    }
+
+    #[tokio::test]
+    async fn public_bounty_detail_page_exposes_public_bounty_metadata() {
+        let mut network = BountyNetwork::default();
+        let public = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Fix <public> CI".to_string(),
+                template_slug: "small-code-change".to_string(),
+                amount_minor: 40_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        apply_base_funding_event(&mut network, &public, 1);
+        let state = test_state(network);
+
+        let html = public_bounty_detail_page(State(state), Path(public.id))
+            .await
+            .unwrap()
+            .0;
+
+        assert!(html.contains("Fix &lt;public&gt; CI"));
+        assert!(!html.contains("Fix <public> CI"));
+        assert!(html.contains(r#"rel="canonical""#));
+        assert!(html.contains(r#"name="agent-bounty:funding-state" content="funded""#));
+        assert!(html.contains(r#"name="agent-bounty:claimability" content="claimable""#));
+        assert!(html.contains(&format!("/v1/bounties/{}/claim", public.id)));
+        assert!(html.contains(&format!(
+            "/v1/bounties/{}/funding-contributions",
+            public.id
+        )));
+        assert!(html.contains("/public/proofs/{proof_id}"));
+    }
+
+    #[tokio::test]
+    async fn public_bounty_detail_page_returns_404_for_private_bounties() {
+        let mut network = BountyNetwork::default();
+        let private = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Private ledger work".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                amount_minor: 2_000_000,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::StripeFiatLedger,
+                privacy: PrivacyLevel::Private,
+            })
+            .unwrap();
+        let state = test_state(network);
+
+        let error = match public_bounty_detail_page(State(state), Path(private.id)).await {
+            Err(error) => error,
+            Ok(_) => panic!("private bounty detail page should not render"),
+        };
+
+        assert_eq!(error, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

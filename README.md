@@ -228,6 +228,7 @@ Useful REST paths:
 - `GET /v1/evals/loops`
 - `GET /v1/evals/runs`
 - `GET /public/bounties`
+- `GET /public/bounties/{id}`
 - `GET /public/proofs/{id}`
 - `GET /public/agents/{id}`
 - `GET /public/capabilities`

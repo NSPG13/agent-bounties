@@ -67,6 +67,7 @@ pub struct DiscoveryEndpoints {
     pub pooled_bounties: String,
     pub bounty_funding_contributions: String,
     pub bounty_feed: String,
+    pub public_bounty_detail: String,
     pub capability_feed: String,
     pub eval_runs: String,
     pub risk_policy: String,
@@ -134,15 +135,22 @@ pub struct PublicBountyFeedItem {
     pub bounty_id: String,
     pub title: String,
     pub template_slug: String,
+    pub template_title: String,
+    pub verification_type: String,
     pub amount_minor: i64,
     pub currency: String,
     pub funding_mode: String,
+    pub funding_state: String,
     pub status: String,
     pub privacy: String,
+    pub claimability: String,
     pub terms_hash: Option<String>,
     pub claim_url: String,
     pub status_url: String,
     pub template_url: String,
+    pub public_detail_url: String,
+    pub proof_url_template: String,
+    pub funding_contribution_url: String,
     pub created_at: String,
 }
 
@@ -191,6 +199,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             pooled_bounties: format!("{api}/v1/bounties/pooled"),
             bounty_funding_contributions: format!("{api}/v1/bounties/{{bounty_id}}/funding-contributions"),
             bounty_feed: format!("{api}/v1/bounties/feed"),
+            public_bounty_detail: format!("{api}/public/bounties/{{bounty_id}}"),
             capability_feed: format!("{api}/v1/capabilities/feed"),
             eval_runs: format!("{api}/v1/evals/runs"),
             risk_policy: format!("{api}/v1/risk/policy"),
@@ -359,6 +368,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         proof_surfaces: vec![
             format!("{api}/public/proofs/{{proof_id}}"),
             format!("{api}/public/agents/{{agent_id}}"),
+            format!("{api}/public/bounties/{{bounty_id}}"),
             format!("{api}/public/capabilities"),
             format!("{api}/public/verifiers/{{verifier_kind}}"),
             format!("{api}/public/templates/{{template_slug}}"),
@@ -391,6 +401,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - MCP tools: {mcp_tools}
 - Agent quickstart: {agent_quickstart}
 - Public bounty feed: {bounty_feed}
+- Public bounty detail: {public_bounty_detail}
 - Open pooled bounty: {pooled_bounties}
 - Add pooled bounty funding: {bounty_funding_contributions}
 - Public capability feed: {capability_feed}
@@ -412,7 +423,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 1. If blocked, call MCP `route_blocked_goal`.
 2. If you can do paid work, register with `register_agent` and `register_capability`.
 3. If multiple parties want the same work, open a pooled bounty and add funding contributions until the target is claimable.
-4. Find funded work with `list_claimable_bounties` or `{bounty_feed}`.
+4. Find funded work with `list_claimable_bounties` or `{bounty_feed}`, then inspect `{public_bounty_detail}` for canonical metadata and action links.
 5. Claim, submit, request verification, then poll `get_paid_status`.
 6. Every accepted public bounty creates proof, reputation, settlement, and template signals.
 
@@ -461,6 +472,7 @@ The repository is designed for agent contributors. Start with the agent quicksta
         mcp_tools = &endpoints.mcp_tools,
         agent_quickstart = &endpoints.agent_quickstart,
         bounty_feed = &endpoints.bounty_feed,
+        public_bounty_detail = &endpoints.public_bounty_detail,
         pooled_bounties = &endpoints.pooled_bounties,
         bounty_funding_contributions = &endpoints.bounty_funding_contributions,
         capability_feed = &endpoints.capability_feed,
@@ -492,27 +504,75 @@ pub fn discovery_manifest_schema_json() -> &'static str {
     include_str!("../../../schemas/discovery-manifest.v1.json")
 }
 
-pub fn public_bounty_feed(bounties: &[Bounty], api_base_url: &str) -> Vec<PublicBountyFeedItem> {
+pub fn public_bounty_feed_item(bounty: &Bounty, api_base_url: &str) -> PublicBountyFeedItem {
     let api = normalize_base_url(api_base_url);
+    let template = bounty_templates()
+        .into_iter()
+        .find(|template| template.slug == bounty.template_slug.as_str());
+    let (template_title, verification_type) = template
+        .map(|template| (template.title.to_string(), template.verifier.to_string()))
+        .unwrap_or_else(|| {
+            (
+                "Custom Bounty Template".to_string(),
+                "Operator review".to_string(),
+            )
+        });
+
+    PublicBountyFeedItem {
+        bounty_id: bounty.id.to_string(),
+        title: bounty.title.clone(),
+        template_slug: bounty.template_slug.clone(),
+        template_title,
+        verification_type,
+        amount_minor: bounty.amount.amount,
+        currency: bounty.amount.currency.clone(),
+        funding_mode: format!("{:?}", bounty.funding_mode),
+        funding_state: funding_state_for(bounty).to_string(),
+        status: format!("{:?}", bounty.status),
+        privacy: format!("{:?}", bounty.privacy),
+        claimability: if bounty.status == BountyStatus::Claimable {
+            "claimable".to_string()
+        } else {
+            "not_claimable".to_string()
+        },
+        terms_hash: bounty.terms_hash.clone(),
+        claim_url: format!("{api}/v1/bounties/{}/claim", bounty.id),
+        status_url: format!("{api}/v1/bounties/{}", bounty.id),
+        template_url: format!("{api}/public/templates/{}", bounty.template_slug),
+        public_detail_url: format!("{api}/public/bounties/{}", bounty.id),
+        proof_url_template: format!("{api}/public/proofs/{{proof_id}}"),
+        funding_contribution_url: format!(
+            "{api}/v1/bounties/{}/funding-contributions",
+            bounty.id
+        ),
+        created_at: bounty.created_at.to_rfc3339(),
+    }
+}
+
+fn funding_state_for(bounty: &Bounty) -> &'static str {
+    match bounty.status {
+        BountyStatus::Unfunded => "needs_funding",
+        BountyStatus::Funded => "funded_pending_claimability",
+        BountyStatus::Claimable
+        | BountyStatus::Claimed
+        | BountyStatus::Submitted
+        | BountyStatus::Verifying
+        | BountyStatus::Accepted
+        | BountyStatus::Payable => "funded",
+        BountyStatus::Paid => "paid",
+        BountyStatus::Refunding => "refunding",
+        BountyStatus::Refunded => "refunded",
+        BountyStatus::Disputed => "disputed",
+        BountyStatus::Expired => "expired",
+    }
+}
+
+pub fn public_bounty_feed(bounties: &[Bounty], api_base_url: &str) -> Vec<PublicBountyFeedItem> {
     let mut feed = bounties
         .iter()
         .filter(|bounty| bounty.status == BountyStatus::Claimable)
         .filter(|bounty| bounty.privacy != PrivacyLevel::Private)
-        .map(|bounty| PublicBountyFeedItem {
-            bounty_id: bounty.id.to_string(),
-            title: bounty.title.clone(),
-            template_slug: bounty.template_slug.clone(),
-            amount_minor: bounty.amount.amount,
-            currency: bounty.amount.currency.clone(),
-            funding_mode: format!("{:?}", bounty.funding_mode),
-            status: format!("{:?}", bounty.status),
-            privacy: format!("{:?}", bounty.privacy),
-            terms_hash: bounty.terms_hash.clone(),
-            claim_url: format!("{api}/v1/bounties/{}/claim", bounty.id),
-            status_url: format!("{api}/v1/bounties/{}", bounty.id),
-            template_url: format!("{api}/public/templates/{}", bounty.template_slug),
-            created_at: bounty.created_at.to_rfc3339(),
-        })
+        .map(|bounty| public_bounty_feed_item(bounty, api_base_url))
         .collect::<Vec<_>>();
     feed.sort_by(|left, right| {
         right
@@ -723,13 +783,15 @@ pub fn render_bounty_feed_page(items: &[PublicBountyFeedItem]) -> String {
         .iter()
         .map(|item| {
             format!(
-                r#"<li><a href="{}">{}</a><span>{} {}</span><span>{}</span><a href="{}">Claim</a></li>"#,
-                escape_html(&item.status_url),
+                r#"<li><a href="{}">{}</a><span>{} {}</span><span>{}</span><span>{}</span><a href="{}">Claim</a><a href="{}">Fund</a></li>"#,
+                escape_html(&item.public_detail_url),
                 escape_html(&item.title),
                 item.amount_minor,
                 escape_html(&item.currency),
-                escape_html(&item.template_slug),
+                escape_html(&item.template_title),
+                escape_html(&item.funding_state),
                 escape_html(&item.claim_url),
+                escape_html(&item.funding_contribution_url),
             )
         })
         .collect::<Vec<_>>()
@@ -749,6 +811,82 @@ pub fn render_bounty_feed_page(items: &[PublicBountyFeedItem]) -> String {
 </body>
 </html>"#,
         rows
+    )
+}
+
+pub fn render_bounty_detail_page(item: &PublicBountyFeedItem) -> String {
+    let terms_hash = item.terms_hash.as_deref().unwrap_or("none");
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{title} - Agent Bounty</title>
+  <link rel="canonical" href="{detail_url}">
+  <link rel="claim" href="{claim_url}">
+  <link rel="status" href="{status_url}">
+  <link rel="template" href="{template_url}">
+  <link rel="proof" href="{proof_url_template}">
+  <link rel="funding-contribution" href="{funding_contribution_url}">
+  <meta name="agent-bounty:id" content="{bounty_id}">
+  <meta name="agent-bounty:title" content="{title}">
+  <meta name="agent-bounty:template" content="{template_slug}">
+  <meta name="agent-bounty:template-title" content="{template_title}">
+  <meta name="agent-bounty:amount-minor" content="{amount_minor}">
+  <meta name="agent-bounty:currency" content="{currency}">
+  <meta name="agent-bounty:funding-mode" content="{funding_mode}">
+  <meta name="agent-bounty:funding-state" content="{funding_state}">
+  <meta name="agent-bounty:privacy" content="{privacy}">
+  <meta name="agent-bounty:claimability" content="{claimability}">
+  <meta name="agent-bounty:verification-type" content="{verification_type}">
+</head>
+<body>
+  <main>
+    <p><a href="/public/bounties">All claimable bounties</a></p>
+    <h1>{title}</h1>
+    <dl>
+      <dt>Bounty ID</dt><dd>{bounty_id}</dd>
+      <dt>Template</dt><dd><a href="{template_url}">{template_title}</a></dd>
+      <dt>Amount</dt><dd>{amount_minor} {currency}</dd>
+      <dt>Funding mode</dt><dd>{funding_mode}</dd>
+      <dt>Funding state</dt><dd>{funding_state}</dd>
+      <dt>Status</dt><dd>{status}</dd>
+      <dt>Privacy</dt><dd>{privacy}</dd>
+      <dt>Claimability</dt><dd>{claimability}</dd>
+      <dt>Verification type</dt><dd>{verification_type}</dd>
+      <dt>Terms hash</dt><dd>{terms_hash}</dd>
+      <dt>Created</dt><dd>{created_at}</dd>
+    </dl>
+    <nav>
+      <a href="{claim_url}">Claim</a>
+      <a href="{status_url}">Status API</a>
+      <a href="{template_url}">Template</a>
+      <a href="{proof_url_template}">Proof URL template</a>
+      <a href="{funding_contribution_url}">Add funding</a>
+    </nav>
+  </main>
+</body>
+</html>"#,
+        title = escape_html(&item.title),
+        detail_url = escape_html(&item.public_detail_url),
+        claim_url = escape_html(&item.claim_url),
+        status_url = escape_html(&item.status_url),
+        template_url = escape_html(&item.template_url),
+        proof_url_template = escape_html(&item.proof_url_template),
+        funding_contribution_url = escape_html(&item.funding_contribution_url),
+        bounty_id = escape_html(&item.bounty_id),
+        template_slug = escape_html(&item.template_slug),
+        template_title = escape_html(&item.template_title),
+        amount_minor = item.amount_minor,
+        currency = escape_html(&item.currency),
+        funding_mode = escape_html(&item.funding_mode),
+        funding_state = escape_html(&item.funding_state),
+        privacy = escape_html(&item.privacy),
+        claimability = escape_html(&item.claimability),
+        verification_type = escape_html(&item.verification_type),
+        terms_hash = escape_html(terms_hash),
+        created_at = escape_html(&item.created_at),
+        status = escape_html(&item.status),
     )
 }
 
@@ -1052,6 +1190,10 @@ mod tests {
             "https://network.example/v1/bounties/feed"
         );
         assert_eq!(
+            manifest.endpoints.public_bounty_detail,
+            "https://network.example/public/bounties/{bounty_id}"
+        );
+        assert_eq!(
             manifest.endpoints.pooled_bounties,
             "https://network.example/v1/bounties/pooled"
         );
@@ -1216,6 +1358,10 @@ mod tests {
         assert!(manifest
             .proof_surfaces
             .iter()
+            .any(|surface| surface.contains("/public/bounties/")));
+        assert!(manifest
+            .proof_surfaces
+            .iter()
             .any(|surface| surface.contains("/public/verifiers/")));
     }
 
@@ -1238,6 +1384,8 @@ mod tests {
         assert!(text.contains(AGENT_QUICKSTART_URL));
         assert!(text.contains("route_blocked_goal"));
         assert!(text.contains("Open pooled bounty"));
+        assert!(text.contains("Public bounty detail"));
+        assert!(text.contains("https://network.example/public/bounties/{bounty_id}"));
         assert!(text.contains("https://network.example/v1/bounties/pooled"));
         assert!(
             text.contains("https://network.example/v1/bounties/{bounty_id}/funding-contributions")
@@ -1264,6 +1412,7 @@ mod tests {
             discovery_manifest_schema_json().contains("\"github_proof_comment_from_proof_plan\"")
         );
         assert!(discovery_manifest_schema_json().contains("\"pooled_bounties\""));
+        assert!(discovery_manifest_schema_json().contains("\"public_bounty_detail\""));
         assert!(discovery_manifest_schema_json().contains("\"bounty_funding_contributions\""));
     }
 
@@ -1285,6 +1434,28 @@ mod tests {
             feed[0].claim_url,
             format!(
                 "https://network.example/v1/bounties/{}/claim",
+                public_bounty.id
+            )
+        );
+        assert_eq!(feed[0].template_title, "Fix CI Failure");
+        assert_eq!(feed[0].verification_type, "GitHub CI");
+        assert_eq!(feed[0].claimability, "claimable");
+        assert_eq!(feed[0].funding_state, "funded");
+        assert_eq!(
+            feed[0].public_detail_url,
+            format!(
+                "https://network.example/public/bounties/{}",
+                public_bounty.id
+            )
+        );
+        assert_eq!(
+            feed[0].proof_url_template,
+            "https://network.example/public/proofs/{proof_id}"
+        );
+        assert_eq!(
+            feed[0].funding_contribution_url,
+            format!(
+                "https://network.example/v1/bounties/{}/funding-contributions",
                 public_bounty.id
             )
         );
@@ -1391,15 +1562,22 @@ mod tests {
             bounty_id: Uuid::new_v4().to_string(),
             title: "<script>alert(1)</script>".to_string(),
             template_slug: "fix-ci-failure".to_string(),
+            template_title: "Fix CI Failure".to_string(),
+            verification_type: "GitHub CI".to_string(),
             amount_minor: 1_000,
             currency: "usdc".to_string(),
             funding_mode: "BaseUsdcEscrow".to_string(),
+            funding_state: "funded".to_string(),
             status: "Claimable".to_string(),
             privacy: "Public".to_string(),
+            claimability: "claimable".to_string(),
             terms_hash: None,
             claim_url: "/claim".to_string(),
             status_url: "/status".to_string(),
             template_url: "/template".to_string(),
+            public_detail_url: "/public/bounties/1".to_string(),
+            proof_url_template: "/public/proofs/{proof_id}".to_string(),
+            funding_contribution_url: "/funding".to_string(),
             created_at: Utc::now().to_rfc3339(),
         };
 
@@ -1408,6 +1586,48 @@ mod tests {
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
         assert!(html.contains("/v1/bounties/feed"));
+        assert!(html.contains("/public/bounties/1"));
+        assert!(html.contains("/funding"));
+    }
+
+    #[test]
+    fn bounty_detail_page_exposes_canonical_metadata_and_action_links() {
+        let item = PublicBountyFeedItem {
+            bounty_id: "bounty-1".to_string(),
+            title: "<b>Fix parser</b>".to_string(),
+            template_slug: "small-code-change".to_string(),
+            template_title: "Small Code Change".to_string(),
+            verification_type: "GitHub CI or operator review".to_string(),
+            amount_minor: 40_000_000,
+            currency: "usdc".to_string(),
+            funding_mode: "BaseUsdcEscrow".to_string(),
+            funding_state: "funded".to_string(),
+            status: "Claimable".to_string(),
+            privacy: "Public".to_string(),
+            claimability: "claimable".to_string(),
+            terms_hash: Some("terms-123".to_string()),
+            claim_url: "https://network.example/v1/bounties/bounty-1/claim".to_string(),
+            status_url: "https://network.example/v1/bounties/bounty-1".to_string(),
+            template_url: "https://network.example/public/templates/small-code-change".to_string(),
+            public_detail_url: "https://network.example/public/bounties/bounty-1".to_string(),
+            proof_url_template: "https://network.example/public/proofs/{proof_id}".to_string(),
+            funding_contribution_url:
+                "https://network.example/v1/bounties/bounty-1/funding-contributions".to_string(),
+            created_at: Utc::now().to_rfc3339(),
+        };
+
+        let html = render_bounty_detail_page(&item);
+
+        assert!(!html.contains("<b>Fix parser</b>"));
+        assert!(html.contains("&lt;b&gt;Fix parser&lt;/b&gt;"));
+        assert!(html.contains(r#"rel="canonical""#));
+        assert!(html.contains(r#"name="agent-bounty:funding-state" content="funded""#));
+        assert!(html.contains(r#"name="agent-bounty:verification-type""#));
+        assert!(html.contains(r#"rel="claim""#));
+        assert!(html.contains(r#"rel="status""#));
+        assert!(html.contains(r#"rel="template""#));
+        assert!(html.contains(r#"rel="proof""#));
+        assert!(html.contains(r#"rel="funding-contribution""#));
     }
 
     fn claimable_bounty(title: &str, amount_minor: i64, privacy: PrivacyLevel) -> Bounty {
