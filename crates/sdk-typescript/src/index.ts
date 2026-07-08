@@ -45,6 +45,13 @@ export interface OpenPooledBountyRequest {
   currency: string;
   funding_mode: string;
   privacy: PrivacyLevel;
+  funding_targets?: FundingPartitionTargetRequest[] | null;
+}
+
+export interface FundingPartitionTargetRequest {
+  rail: "StripeFiat" | "BaseUsdc";
+  amount_minor: number;
+  currency: string;
 }
 
 export interface AddFundingContributionRequest {

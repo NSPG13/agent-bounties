@@ -4015,6 +4015,7 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
             }),
         )
         .await

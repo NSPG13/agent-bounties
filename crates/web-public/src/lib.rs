@@ -359,6 +359,14 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 funding_required_before_claim: true,
                 automatic_release_limit_minor: None,
             },
+            PaymentRailDescriptor {
+                name: "Mixed Stripe fiat plus Base USDC partitions".to_string(),
+                currency: "multi".to_string(),
+                status: "open source deterministic harness".to_string(),
+                settlement: "One verified proof creates separate per-rail settlements; fiat and USDC are never netted into one balance.".to_string(),
+                funding_required_before_claim: true,
+                automatic_release_limit_minor: Some(low_value_usdc_cap_minor),
+            },
         ],
         trust_tiers: vec![
             TrustTierDescriptor {
@@ -402,6 +410,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "Open Base USDC automatic release is capped at low value.".to_string(),
             "Private or unsafe work requires review before automatic flows.".to_string(),
             "Hosted operator mutation surfaces can require OPERATOR_API_TOKEN.".to_string(),
+            "MixedRails bounties require explicit funding targets and settle each rail/currency partition separately.".to_string(),
         ],
         risk_policy,
     }
@@ -1420,6 +1429,10 @@ mod tests {
             .payment_rails
             .iter()
             .any(|rail| rail.name.contains("Base Sepolia") && rail.funding_required_before_claim));
+        assert!(manifest
+            .payment_rails
+            .iter()
+            .any(|rail| rail.name.contains("Mixed Stripe fiat")));
         assert_eq!(manifest.risk_policy.low_value_usdc_cap_minor, 10_000_000);
         assert!(!manifest.risk_policy.ai_judges_can_authorize_payment);
         assert!(manifest

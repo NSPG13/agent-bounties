@@ -55,6 +55,7 @@ pub enum FundingMode {
     Simulated,
     BaseUsdcEscrow,
     StripeFiatLedger,
+    MixedRails,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -193,6 +194,8 @@ pub struct Bounty {
     pub title: String,
     pub template_slug: String,
     pub amount: Money,
+    #[serde(default)]
+    pub funding_targets: Vec<FundingPartitionTarget>,
     pub funding_mode: FundingMode,
     pub privacy: PrivacyLevel,
     pub status: BountyStatus,
@@ -214,12 +217,18 @@ impl Bounty {
             title: title.into(),
             template_slug: template_slug.into(),
             amount,
+            funding_targets: Vec::new(),
             funding_mode,
             privacy,
             status: BountyStatus::Unfunded,
             terms_hash: None,
             created_at: Utc::now(),
         }
+    }
+
+    pub fn with_funding_targets(mut self, funding_targets: Vec<FundingPartitionTarget>) -> Self {
+        self.funding_targets = funding_targets;
+        self
     }
 
     pub fn mark_funded(&mut self, terms_hash: impl Into<String>) -> DomainResult<()> {
@@ -461,6 +470,12 @@ pub enum PaymentRail {
     Simulated,
     BaseUsdc,
     StripeFiat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FundingPartitionTarget {
+    pub rail: PaymentRail,
+    pub amount: Money,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

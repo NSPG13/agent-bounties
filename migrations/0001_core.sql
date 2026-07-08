@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS bounties (
   template_slug TEXT NOT NULL,
   amount BIGINT NOT NULL CHECK (amount > 0),
   currency TEXT NOT NULL,
+  funding_targets JSONB NOT NULL DEFAULT '[]'::jsonb,
   funding_mode TEXT NOT NULL,
   privacy TEXT NOT NULL DEFAULT 'Public',
   status TEXT NOT NULL,
@@ -46,6 +47,8 @@ CREATE TABLE IF NOT EXISTS bounties (
 
 ALTER TABLE bounties
   ADD COLUMN IF NOT EXISTS privacy TEXT NOT NULL DEFAULT 'Public';
+ALTER TABLE bounties
+  ADD COLUMN IF NOT EXISTS funding_targets JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS escrows (
   id UUID PRIMARY KEY,

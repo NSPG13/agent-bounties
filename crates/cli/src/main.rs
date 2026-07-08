@@ -623,6 +623,7 @@ fn pooled_funding_demo() -> Result<()> {
         currency: "usdc".to_string(),
         funding_mode: FundingMode::Simulated,
         privacy: PrivacyLevel::Public,
+        funding_targets: vec![],
     })?;
     let first = network.add_funding_contribution(AddFundingContributionRequest {
         bounty_id: bounty.id,

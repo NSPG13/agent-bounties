@@ -245,6 +245,7 @@ class AgentBountiesClient:
         currency: str,
         funding_mode: str,
         privacy: str,
+        funding_targets: list[dict] | None = None,
     ):
         return self._request(
             "POST",
@@ -256,6 +257,7 @@ class AgentBountiesClient:
                 "currency": currency,
                 "funding_mode": funding_mode,
                 "privacy": privacy,
+                "funding_targets": funding_targets or [],
             },
         )
 
