@@ -5205,6 +5205,7 @@ fn docs_contract_check(root: PathBuf, contract_root: PathBuf) -> Result<()> {
 
     let mut issues = Vec::new();
     check_agent_quickstart_contract(&root, &mut issues);
+    check_production_env_contract(&root, &mut issues);
     for file in &files {
         let text = fs::read_to_string(file)
             .with_context(|| format!("failed to read docs file {}", file.display()))?;
@@ -5290,6 +5291,128 @@ fn check_agent_quickstart_contract(root: &Path, issues: &mut Vec<DocsContractIss
             );
         }
     }
+}
+
+fn check_production_env_contract(root: &Path, issues: &mut Vec<DocsContractIssue>) {
+    let env_path = root.join(".env.example");
+    let compose_path = root.join("docker-compose.production.yml");
+    let env_text = match fs::read_to_string(&env_path) {
+        Ok(text) => text.replace("\r\n", "\n"),
+        Err(error) => {
+            push_doc_issue(
+                issues,
+                &PathBuf::from(".env.example"),
+                1,
+                &format!("failed to read production env template: {error}"),
+            );
+            return;
+        }
+    };
+    let compose_text = match fs::read_to_string(&compose_path) {
+        Ok(text) => text.replace("\r\n", "\n"),
+        Err(error) => {
+            push_doc_issue(
+                issues,
+                &PathBuf::from("docker-compose.production.yml"),
+                1,
+                &format!("failed to read production compose file: {error}"),
+            );
+            return;
+        }
+    };
+    let api_block = service_block(&compose_text, "api").unwrap_or_default();
+    let mcp_block = service_block(&compose_text, "mcp").unwrap_or_default();
+    if api_block.is_empty() {
+        push_doc_issue(
+            issues,
+            &PathBuf::from("docker-compose.production.yml"),
+            1,
+            "production compose missing api service block",
+        );
+    }
+    if mcp_block.is_empty() {
+        push_doc_issue(
+            issues,
+            &PathBuf::from("docker-compose.production.yml"),
+            1,
+            "production compose missing mcp service block",
+        );
+    }
+
+    for name in production_live_money_env_vars() {
+        let env_decl = format!("{name}=");
+        if !env_text
+            .lines()
+            .any(|line| line.trim_start().starts_with(&env_decl))
+        {
+            push_doc_issue(
+                issues,
+                &PathBuf::from(".env.example"),
+                1,
+                &format!("production env template missing `{name}`"),
+            );
+        }
+        for (service_name, block) in [("api", api_block.as_str()), ("mcp", mcp_block.as_str())] {
+            let compose_decl = format!("{name}:");
+            let compose_ref = format!("${{{name}");
+            if !block.contains(&compose_decl) || !block.contains(&compose_ref) {
+                push_doc_issue(
+                    issues,
+                    &PathBuf::from("docker-compose.production.yml"),
+                    1,
+                    &format!("production compose {service_name} service does not pass `{name}`"),
+                );
+            }
+        }
+    }
+}
+
+fn service_block(compose_text: &str, service_name: &str) -> Option<String> {
+    let service_header = format!("  {service_name}:");
+    let mut lines = Vec::new();
+    let mut in_service = false;
+    for line in compose_text.lines() {
+        let is_top_level_service =
+            line.starts_with("  ") && !line.starts_with("    ") && line.trim_end().ends_with(':');
+        if line.trim_end() == service_header {
+            in_service = true;
+            continue;
+        }
+        if in_service && is_top_level_service {
+            break;
+        }
+        if in_service {
+            lines.push(line);
+        }
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn production_live_money_env_vars() -> &'static [&'static str] {
+    &[
+        "PUBLIC_BASE_URL",
+        "MCP_BASE_URL",
+        "DATABASE_URL",
+        "BASE_SEPOLIA_RPC_URL",
+        "BASE_MAINNET_RPC_URL",
+        "BASE_SEPOLIA_USDC_TOKEN",
+        "BASE_MAINNET_USDC_TOKEN",
+        "BASE_SEPOLIA_ESCROW_CONTRACT",
+        "BASE_MAINNET_ESCROW_CONTRACT",
+        "BASE_SETTLEMENT_SIGNER",
+        "BASE_PLATFORM_FEE_WALLET",
+        "ENABLE_BASE_TX_BROADCAST",
+        "ENABLE_STRIPE_LIVE_EXECUTION",
+        "OPERATOR_API_TOKEN",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_API_BASE_URL",
+        "STRIPE_WEBHOOK_SECRET",
+        "ALLOW_UNSIGNED_STRIPE_WEBHOOKS",
+    ]
 }
 
 fn collect_doc_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -6134,6 +6257,55 @@ mod tests {
         assert!(json.contains("\"duplicate_contributors\""));
         assert!(markdown.contains("# Contributor Discovery Report"));
         assert!(markdown.contains("base-usdc-escrow"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn production_env_contract_reports_missing_compose_vars() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-bounties-env-contract-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("should create temp root");
+        fs::write(
+            root.join(".env.example"),
+            production_live_money_env_vars()
+                .iter()
+                .map(|name| format!("{name}=\n"))
+                .collect::<String>(),
+        )
+        .expect("should write temp env template");
+        fs::write(
+            root.join("docker-compose.production.yml"),
+            r#"services:
+  api:
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL}
+      MCP_BASE_URL: ${MCP_BASE_URL:?Set MCP_BASE_URL}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+  mcp:
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL}
+      MCP_BASE_URL: ${MCP_BASE_URL:?Set MCP_BASE_URL}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+"#,
+        )
+        .expect("should write temp compose file");
+
+        let mut issues = Vec::new();
+        check_production_env_contract(&root, &mut issues);
+
+        assert!(issues.iter().any(|issue| {
+            issue.message.contains(
+                "production compose api service does not pass `BASE_SEPOLIA_ESCROW_CONTRACT`",
+            )
+        }));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .message
+                .contains("production compose mcp service does not pass `STRIPE_WEBHOOK_SECRET`")
+        }));
 
         let _ = fs::remove_dir_all(root);
     }
