@@ -103,6 +103,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery schema must require the proof-record GitHub proof comment planner endpoint",
     )
     _require(
+        "github_funding_comment_plan" in endpoint_required,
+        "discovery schema must require the GitHub funding comment planner endpoint",
+    )
+    _require(
         "base_escrow_events" in endpoint_required,
         "discovery schema must require the Base escrow event endpoint",
     )
@@ -148,6 +152,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(
         isinstance(discovery.get("endpoints", {}).get("github_issue_bounty_plan"), str),
         "discovery manifest missing GitHub issue bounty planner endpoint",
+    )
+    _require(
+        isinstance(discovery.get("endpoints", {}).get("github_funding_comment_plan"), str),
+        "discovery manifest missing GitHub funding comment planner endpoint",
     )
     _require(
         isinstance(discovery.get("endpoints", {}).get("github_proof_comment_plan"), str),
@@ -376,6 +384,23 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(
         github_issue_plan["check"]["conclusion"] == "Success",
         "GitHub issue planner did not produce a success check",
+    )
+    github_funding_plan = client.plan_github_funding_comment(
+        "agent-bounties/agent-bounties",
+        "https://github.com/agent-bounties/agent-bounties/issues/1",
+        "[bounty]: Fix CI",
+        "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n",
+        "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+        contributor_login="python-sdk-smoke",
+        comment_id="12345",
+    )
+    _require(
+        github_funding_plan["ready"] is True,
+        "GitHub funding comment planner rejected valid signal",
+    )
+    _require(
+        github_funding_plan["signal"]["requires_operator_reconciliation"] is True,
+        "GitHub funding comment planner must require operator reconciliation",
     )
     github_proof_plan = client.plan_github_proof_comment(
         solver["id"],

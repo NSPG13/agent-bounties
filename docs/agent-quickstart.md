@@ -132,6 +132,17 @@ curl -X POST http://127.0.0.1:8090/tools/open_pooled_bounty \
   --data '{"title":"Implement a deterministic mixed-funding test","template_slug":"extract-data-to-schema","target_amount_minor":500,"currency":"usd","funding_mode":"MixedRails","privacy":"Public","funding_targets":[{"rail":"StripeFiat","amount_minor":500,"currency":"usd"},{"rail":"BaseUsdc","amount_minor":1000000,"currency":"usdc"}]}'
 ```
 
+To rehearse the complete dev/testnet funding and payout path without external
+secrets, run:
+
+```bash
+cargo run -p cli -- funding-rehearsal-demo
+```
+
+It simulates a paid Stripe Checkout webhook, applies a Base Sepolia escrow
+created event, verifies deterministic evidence, then distributes Stripe and Base
+settlements only after their respective reconciliation events.
+
 ## 6. Claim, Submit, Verify, Check Payment
 
 SDK examples with deterministic assertions are available for the same flow:

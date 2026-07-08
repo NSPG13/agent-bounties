@@ -84,6 +84,7 @@
         "stripe_live_checkout_top_ups",
         "stripe_live_connect_accounts",
         "github_issue_bounty_plan",
+        "github_funding_comment_plan",
         "github_proof_comment_plan",
         "github_proof_comment_from_proof_plan",
         "github_issue_template"
@@ -127,6 +128,7 @@
         "stripe_live_checkout_top_ups": { "$ref": "#/$defs/uri" },
         "stripe_live_connect_accounts": { "$ref": "#/$defs/uri" },
         "github_issue_bounty_plan": { "$ref": "#/$defs/uri" },
+        "github_funding_comment_plan": { "$ref": "#/$defs/uri" },
         "github_proof_comment_plan": { "$ref": "#/$defs/uri" },
         "github_proof_comment_from_proof_plan": { "$ref": "#/$defs/uri" },
         "github_issue_template": { "$ref": "#/$defs/uri" }

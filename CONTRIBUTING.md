@@ -14,6 +14,15 @@ Good first contributions:
 - Improve MCP/OpenAPI agent ergonomics.
 - Add GitHub dogfooding bounties.
 
+Every issue, bounty, and PR should answer two distribution questions when
+possible:
+
+- How did you find Agent Bounties?
+- What made this bounty or project worth participating in?
+
+Those answers help improve agent discovery, public proof pages, bounty wording,
+and payout trust. They are not part of bounty acceptance or payout approval.
+
 If your PR is useful but not ready for `main`, maintainers may copy it to a
 `collab/pr-<number>-<topic>` branch so other contributors can target follow-up
 PRs there. That keeps iteration moving while protected payment, workflow,

@@ -34,7 +34,8 @@ use eval_harness::{
     BountyBench, EvalSuiteResult, JudgeBench, LoopSuiteResult,
 };
 use github_app::{
-    bounty_check_output, parse_issue_form_bounty, proof_comment_plan, GitHubCheckRunOutput,
+    bounty_check_output, funding_comment_plan, parse_issue_form_bounty, proof_comment_plan,
+    GitHubCheckRunOutput, GitHubFundingCommentInput, GitHubFundingCommentPlan,
     GitHubIssueFormBounty, GitHubProofComment, GitHubProofCommentPlan,
 };
 use ledger::Ledger;
@@ -102,6 +103,7 @@ use worker::BaseEscrowLogWorker;
         reconcile_stripe_connect_snapshot,
         reconcile_stripe_checkout_webhook,
         plan_github_issue_bounty,
+        plan_github_funding_comment,
         plan_github_proof_comment,
         plan_github_proof_comment_from_proof,
         post_bounty,
@@ -124,6 +126,7 @@ use worker::BaseEscrowLogWorker;
         PlanStripeCheckoutTopUpRequest,
         PlanStripeConnectAccountRequest,
         PlanGitHubIssueBountyRequest,
+        PlanGitHubFundingCommentRequest,
         PlanGitHubProofCommentRequest,
         PlanGitHubProofCommentFromProofRequest,
         PlanBaseLogQueryRequest,
@@ -263,6 +266,19 @@ struct PlanGitHubIssueBountyRequest {
     issue_url: String,
     title: String,
     body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct PlanGitHubFundingCommentRequest {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
+    #[serde(default)]
+    existing_idempotency_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -497,6 +513,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/github/issue-bounty-plan",
             post(plan_github_issue_bounty),
+        )
+        .route(
+            "/v1/github/funding-comment-plan",
+            post(plan_github_funding_comment),
         )
         .route(
             "/v1/github/proof-comment-plan",
@@ -1914,6 +1934,27 @@ fn github_issue_bounty_plan(request: PlanGitHubIssueBountyRequest) -> GitHubIssu
 
 #[utoipa::path(
     post,
+    path = "/v1/github/funding-comment-plan",
+    request_body = PlanGitHubFundingCommentRequest,
+    responses((status = 200, description = "GitHub public funding-comment signal plan"))
+)]
+async fn plan_github_funding_comment(
+    Json(request): Json<PlanGitHubFundingCommentRequest>,
+) -> Json<GitHubFundingCommentPlan> {
+    Json(funding_comment_plan(GitHubFundingCommentInput {
+        repository: request.repository,
+        issue_url: request.issue_url,
+        title: request.title,
+        body: request.body,
+        comment_body: request.comment_body,
+        contributor_login: request.contributor_login,
+        comment_id: request.comment_id,
+        existing_idempotency_keys: request.existing_idempotency_keys,
+    }))
+}
+
+#[utoipa::path(
+    post,
     path = "/v1/github/proof-comment-plan",
     request_body = PlanGitHubProofCommentRequest,
     responses((status = 200, description = "GitHub proof comment markdown and check-run plan"))
@@ -3118,6 +3159,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn github_funding_comment_plan_flags_operator_reconciliation() {
+        let plan = plan_github_funding_comment(Json(PlanGitHubFundingCommentRequest {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "[bounty]: Co-funding".to_string(),
+            body: valid_github_issue_body(),
+            comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
+            contributor_login: Some("solver-agent".to_string()),
+            comment_id: Some("123".to_string()),
+            existing_idempotency_keys: vec![],
+        }))
+        .await
+        .0;
+
+        assert!(plan.ready);
+        let signal = plan.signal.expect("funding signal");
+        assert!(signal.requires_operator_reconciliation);
+        assert_eq!(signal.amount.currency, "usdc");
+        assert!(signal.idempotency_key.ends_with(":comment:123"));
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+    }
+
+    #[tokio::test]
+    async fn github_funding_comment_plan_rejects_duplicate_signal() {
+        let existing_key =
+            "github-funding-comment:agent-bounties/agent-bounties:https://github.com/agent-bounties/agent-bounties/issues/20:comment:123";
+        let plan = plan_github_funding_comment(Json(PlanGitHubFundingCommentRequest {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "[bounty]: Co-funding".to_string(),
+            body: valid_github_issue_body(),
+            comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
+            contributor_login: None,
+            comment_id: Some("123".to_string()),
+            existing_idempotency_keys: vec![existing_key.to_string()],
+        }))
+        .await
+        .0;
+
+        assert!(!plan.ready);
+        assert!(plan.error.unwrap().contains("duplicate funding signal"));
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+    }
+
+    #[tokio::test]
     async fn github_proof_comment_plan_returns_markdown_and_fingerprint() {
         let bounty_id = Uuid::new_v4();
         let plan = plan_github_proof_comment(Json(PlanGitHubProofCommentRequest {
@@ -3242,6 +3328,10 @@ mod tests {
             manifest.endpoints.github_proof_comment_from_proof_plan,
             "http://127.0.0.1:8080/v1/github/proof-comment-plan-from-proof"
         );
+        assert_eq!(
+            manifest.endpoints.github_funding_comment_plan,
+            "http://127.0.0.1:8080/v1/github/funding-comment-plan"
+        );
         assert_eq!(manifest.risk_policy.low_value_usdc_cap_minor, 10_000_000);
         assert!(manifest
             .agent_entrypoints
@@ -3294,6 +3384,7 @@ mod tests {
         assert!(paths.contains_key("/v1/stripe/connect-snapshots"));
         assert!(paths.contains_key("/v1/stripe/checkout-webhooks"));
         assert!(paths.contains_key("/v1/github/issue-bounty-plan"));
+        assert!(paths.contains_key("/v1/github/funding-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan-from-proof"));
         assert!(paths.contains_key("/v1/evals/loops"));

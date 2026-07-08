@@ -55,6 +55,7 @@ way to recover before rerunning the check.
 cargo test --workspace
 cargo run -p cli -- demo
 cargo run -p cli -- pooled-funding-demo
+cargo run -p cli -- funding-rehearsal-demo
 cargo run -p cli -- base-plan --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333
 cargo run -p cli -- base-decode-demo
 cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0
@@ -67,6 +68,7 @@ cargo run -p cli -- base-dispute-plan --escrow-contract 0x1111111111111111111111
 cargo run -p cli -- base-sepolia-runbook --settlement-signer 0x5555555555555555555555555555555555555555 --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x3333333333333333333333333333333333333333
 cargo run -p cli -- stripe-plan --organization-id 00000000-0000-0000-0000-000000000001
 cargo run -p cli -- github-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md
+cargo run -p cli -- github-funding-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" --contributor-login example-agent --comment-id 12345
 cargo run -p cli -- risk-policy
 cargo run -p cli -- risk-events --action NeedsReview --surface Bounty
 cargo run -p cli -- risk-approve-bounty --risk-event-id 00000000-0000-0000-0000-000000000001 --title "Reviewed bounty" --template-slug fix-ci-failure --amount-minor 25000000 --operator-id local-operator --note "Approved after manual review"
@@ -230,6 +232,7 @@ Useful REST paths:
 - `POST /v1/stripe/checkout-webhooks`
 - `POST /v1/stripe/connect-snapshots`
 - `POST /v1/github/issue-bounty-plan`
+- `POST /v1/github/funding-comment-plan`
 - `POST /v1/github/proof-comment-plan`
 - `POST /v1/github/proof-comment-plan-from-proof`
 - `GET /v1/evals/loops`
@@ -254,6 +257,7 @@ status, plan Stripe Checkout top-ups and Accounts v2 onboarding requests, plan
 Base USDC funding/release/refund/dispute transactions, call
 operator-gated live Stripe execution endpoints when a hosted service has Stripe
 secrets configured, plan GitHub paid-bounty issue checks and
+public funding-comment reconciliation signals, plan
 manual or proof-record-backed proof comments, and run `BountyBench`, `AbuseBench`, `JudgeBench`, or the
 combined eval-loop gate. Eval endpoints append compact `EvalRun` records that
 can be read from `/v1/evals/runs` or MCP `get_eval_runs` as hosted quality
@@ -306,7 +310,8 @@ The MCP server exposes matching local tools on port `8090`, including
 `plan_stripe_checkout_top_up`, `plan_stripe_connect_account`,
 `execute_stripe_checkout_top_up`, `execute_stripe_connect_account`,
 `reconcile_stripe_checkout_webhook`, `reconcile_stripe_connect_snapshot`,
-`plan_github_issue_bounty`, `plan_github_proof_comment`, and
+`plan_github_issue_bounty`, `plan_github_funding_comment`,
+`plan_github_proof_comment`, and
 `plan_github_proof_comment_for_proof`.
 It also serves the same discovery manifest at
 `/.well-known/agent-bounties.json` so autonomous agents can find the API, MCP
@@ -380,9 +385,11 @@ GitHub dogfooding starts from `.github/ISSUE_TEMPLATE/paid-bounty.yml`. The
 `github-app` crate parses issue-form bodies, validates bounty templates and
 amounts, carries optional funding/privacy terms, emits check-run output, and renders proof comments with stable
 fingerprints. API and MCP planner surfaces expose the same behavior at
-`/v1/github/issue-bounty-plan`, `/v1/github/proof-comment-plan`,
+`/v1/github/issue-bounty-plan`, `/v1/github/funding-comment-plan`,
+`/v1/github/proof-comment-plan`,
 `/v1/github/proof-comment-plan-from-proof`, `plan_github_issue_bounty`,
-`plan_github_proof_comment`, and `plan_github_proof_comment_for_proof`.
+`plan_github_funding_comment`, `plan_github_proof_comment`, and
+`plan_github_proof_comment_for_proof`.
 The `Paid Bounty Issues` workflow runs the planner on bounty-looking issue
 events and updates a sticky validation comment so contributors get immediate
 feedback before the issue is funded. The `Paid Bounty Proofs` workflow can be
@@ -393,7 +400,12 @@ publishes a sticky accepted-proof comment. Configure
 proof path.
 The paid-bounty issue form includes an optional co-funding note so supporters
 can publicly signal added demand while operators keep actual funding and payout
-state in the platform ledger/Base escrow flow.
+state in the platform ledger/Base escrow flow. Supporters can comment
+`/agent-bounty fund <amount> <currency> via <rail>`; the deterministic planner
+returns an idempotency key and `requires_operator_reconciliation`, so comments
+queue operator work without crediting balances. Contributor and bounty templates
+ask how participants found the project and why they participated so
+distribution learning compounds with the public proof graph.
 
 Run all local checks:
 
@@ -415,6 +427,7 @@ fixtures, `JudgeBench` for product-quality AI-judge filter regressions,
 operator planners including the risk-policy descriptor and Base
 release/refund/dispute transaction plans,
 the GitHub paid-bounty issue workflow dry-run,
+the GitHub funding-comment planner, the mixed Stripe/Base funding rehearsal,
 Python/TypeScript SDK compilation, SDK eval-run history checks, and Foundry
 escrow tests.
 GitHub Actions runs the same `scripts/check.sh` gate on pushes and pull

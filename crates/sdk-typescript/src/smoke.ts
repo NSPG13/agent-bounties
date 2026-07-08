@@ -157,6 +157,10 @@ async function main(): Promise<void> {
     "discovery schema must require the proof-record GitHub proof comment planner endpoint",
   );
   requireCondition(
+    endpointRequired.includes("github_funding_comment_plan"),
+    "discovery schema must require the GitHub funding comment planner endpoint",
+  );
+  requireCondition(
     endpointRequired.includes("base_escrow_events"),
     "discovery schema must require the Base escrow event endpoint",
   );
@@ -199,6 +203,10 @@ async function main(): Promise<void> {
   requireCondition(
     typeof endpoints.github_issue_bounty_plan === "string",
     "discovery manifest missing GitHub issue bounty planner endpoint",
+  );
+  requireCondition(
+    typeof endpoints.github_funding_comment_plan === "string",
+    "discovery manifest missing GitHub funding comment planner endpoint",
   );
   requireCondition(
     typeof endpoints.github_proof_comment_plan === "string",
@@ -477,6 +485,28 @@ async function main(): Promise<void> {
   requireCondition(
     githubIssueCheck.conclusion === "Success",
     "GitHub issue planner did not produce a success check",
+  );
+  const githubFundingPlan = asObject(
+    await client.planGitHubFundingComment({
+      repository: "agent-bounties/agent-bounties",
+      issue_url: "https://github.com/agent-bounties/agent-bounties/issues/1",
+      title: "[bounty]: Fix CI",
+      body:
+        "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n",
+      comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+      contributor_login: "typescript-sdk-smoke",
+      comment_id: "12345",
+    }),
+    "githubFundingPlan",
+  );
+  requireCondition(
+    githubFundingPlan.ready === true,
+    "GitHub funding comment planner rejected valid signal",
+  );
+  const githubFundingSignal = asObject(githubFundingPlan.signal, "githubFundingPlan.signal");
+  requireCondition(
+    githubFundingSignal.requires_operator_reconciliation === true,
+    "GitHub funding comment planner must require operator reconciliation",
   );
   const githubProofPlan = asObject(
     await client.planGitHubProofComment({

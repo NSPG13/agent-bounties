@@ -51,6 +51,20 @@ means a Checkout Session request, issue comment, or funding intention cannot
 make fiat work claimable; only a reconciled paid Checkout webhook can create the
 balance that a later funding contribution reserves.
 
+Run the deterministic mixed-funding rehearsal locally:
+
+```powershell
+cargo run -p cli -- funding-rehearsal-demo
+```
+
+The rehearsal plans a Stripe Checkout top-up, applies a simulated paid Checkout
+webhook, reserves fiat balance into a mixed bounty, plans and reconciles a Base
+Sepolia escrow-created event, accepts a deterministic digest-verified
+submission, plans and reconciles Base release, then applies a Stripe Connect
+eligibility snapshot. It prints the funding summary, settlement splits, and
+ledger entry count. It does not call Stripe or Base RPC unless you run the
+separate live execution or broadcast commands.
+
 ## Base USDC
 
 Base USDC escrow is the lowest-friction open payout rail. A bounty must be funded

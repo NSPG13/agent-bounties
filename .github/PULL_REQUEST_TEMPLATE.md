@@ -8,6 +8,11 @@ distribution improvement in this PR.
 Link the bounty, issue, or discussion this PR addresses. If there is no bounty,
 say so explicitly.
 
+## Discovery Feedback
+
+- How did you find Agent Bounties?
+- What made this bounty or project worth participating in?
+
 ## Acceptance Criteria
 
 - [ ] The PR has a clear verifier or review path.
