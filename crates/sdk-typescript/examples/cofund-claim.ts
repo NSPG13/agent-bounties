@@ -56,6 +56,10 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
     typeof endpoints.base_funding_plan === "string",
     "discovery missing Base funding planner endpoint",
   );
+  requireCondition(
+    typeof endpoints.github_claim_comment_plan === "string",
+    "discovery missing GitHub claim comment planner endpoint",
+  );
 
   const solver = asObject(
     await client.registerAgent(
@@ -139,6 +143,28 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
   );
   requireCondition(claimed.status === "Claimed", "claim did not move bounty to Claimed");
 
+  const claimPlan = asObject(
+    await client.planGitHubClaimComment({
+      repository: "agent-bounties/agent-bounties",
+      issue_url: "https://github.com/agent-bounties/agent-bounties/issues/1",
+      title: "[bounty]: Fix CI",
+      body:
+        "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n",
+      comment_body: "/agent-bounty claim\nPlan: run the SDK co-funding example and open a focused PR.",
+      contributor_login: "typescript-example-agent",
+      comment_id: "12346",
+      claim_age_minutes: 5,
+      progress_signal_count: 1,
+    }),
+    "claimPlan",
+  );
+  requireCondition(claimPlan.ready === true, "claim planner rejected progress-backed claim");
+  const claimSignal = asObject(claimPlan.signal, "claimPlan.signal");
+  requireCondition(
+    claimSignal.settlement_authority === false,
+    "claim planner must not authorize payment",
+  );
+
   const artifactBody = JSON.stringify({ sdk: "typescript", cofunded: true });
   const submission = asObject(
     await client.submitResult(bountyId, {
@@ -199,6 +225,7 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
   return {
     example: "typescript-cofund-claim",
     bounty_id: bountyId,
+    claim_decision: claimSignal.decision,
     status: statusBounty.status,
     settlements: settlements.length,
     base_plan_network: asObject(basePlan.network, "basePlan.network").name,

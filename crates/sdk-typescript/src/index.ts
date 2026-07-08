@@ -213,6 +213,19 @@ export interface PlanGitHubFundingCommentRequest {
   existing_idempotency_keys?: string[] | null;
 }
 
+export interface PlanGitHubClaimCommentRequest {
+  repository: string;
+  issue_url: string;
+  title: string;
+  body: string;
+  comment_body: string;
+  contributor_login?: string | null;
+  comment_id?: string | null;
+  claim_age_minutes?: number | null;
+  progress_signal_count?: number | null;
+  active_claim_login?: string | null;
+}
+
 export interface PlanGitHubProofCommentRequest {
   bounty_id: string;
   proof_url: string;
@@ -708,6 +721,24 @@ export class AgentBountiesClient {
         contributor_login: request.contributor_login ?? null,
         comment_id: request.comment_id ?? null,
         existing_idempotency_keys: request.existing_idempotency_keys ?? [],
+      }),
+    });
+  }
+
+  async planGitHubClaimComment(request: PlanGitHubClaimCommentRequest): Promise<unknown> {
+    return this.request("/v1/github/claim-comment-plan", {
+      method: "POST",
+      body: JSON.stringify({
+        repository: request.repository,
+        issue_url: request.issue_url,
+        title: request.title,
+        body: request.body,
+        comment_body: request.comment_body,
+        contributor_login: request.contributor_login ?? null,
+        comment_id: request.comment_id ?? null,
+        claim_age_minutes: request.claim_age_minutes ?? null,
+        progress_signal_count: request.progress_signal_count ?? 0,
+        active_claim_login: request.active_claim_login ?? null,
       }),
     });
   }

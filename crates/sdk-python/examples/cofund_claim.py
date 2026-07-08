@@ -25,6 +25,10 @@ def run_example(client: AgentBountiesClient) -> dict:
         isinstance(endpoints.get("base_funding_plan"), str),
         "discovery missing Base funding planner endpoint",
     )
+    require(
+        isinstance(endpoints.get("github_claim_comment_plan"), str),
+        "discovery missing GitHub claim comment planner endpoint",
+    )
 
     solver = client.register_agent(
         f"python-example-solver-{suffix}",
@@ -74,6 +78,23 @@ def run_example(client: AgentBountiesClient) -> dict:
     claimed = client.claim_bounty(bounty_id, solver["id"])
     require(claimed["status"] == "Claimed", "claim did not move bounty to Claimed")
 
+    claim_plan = client.plan_github_claim_comment(
+        "agent-bounties/agent-bounties",
+        "https://github.com/agent-bounties/agent-bounties/issues/1",
+        "[bounty]: Fix CI",
+        "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n",
+        "/agent-bounty claim\nPlan: run the SDK co-funding example and open a focused PR.",
+        contributor_login="python-example-agent",
+        comment_id="12346",
+        claim_age_minutes=5,
+        progress_signal_count=1,
+    )
+    require(claim_plan["ready"] is True, "claim planner rejected progress-backed claim")
+    require(
+        claim_plan["signal"]["settlement_authority"] is False,
+        "claim planner must not authorize payment",
+    )
+
     artifact_body = json.dumps({"sdk": "python", "cofunded": True}, separators=(",", ":"))
     submission = client.submit_result(
         bounty_id,
@@ -119,6 +140,7 @@ def run_example(client: AgentBountiesClient) -> dict:
     return {
         "example": "python-cofund-claim",
         "bounty_id": bounty_id,
+        "claim_decision": claim_plan["signal"]["decision"],
         "status": status["bounty"]["status"],
         "settlements": len(paid["settlements"]),
         "base_plan_network": base_plan["network"]["name"],

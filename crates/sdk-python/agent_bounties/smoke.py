@@ -18,6 +18,17 @@ def _github_ci_evidence() -> dict:
     return {
         "repository": "example/repo",
         "pull_request_url": "https://github.com/example/repo/pull/1",
+        "pull_request": {
+            "author_login": "solver-agent",
+            "merged": True,
+            "merged_by_login": "maintainer",
+            "reviews": [
+                {
+                    "author_login": "maintainer",
+                    "state": "APPROVED",
+                }
+            ],
+        },
         "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "check_run": {
             "id": 123456789,
@@ -107,6 +118,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery schema must require the GitHub funding comment planner endpoint",
     )
     _require(
+        "github_claim_comment_plan" in endpoint_required,
+        "discovery schema must require the GitHub claim comment planner endpoint",
+    )
+    _require(
         "base_escrow_events" in endpoint_required,
         "discovery schema must require the Base escrow event endpoint",
     )
@@ -172,6 +187,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(
         isinstance(discovery.get("endpoints", {}).get("github_funding_comment_plan"), str),
         "discovery manifest missing GitHub funding comment planner endpoint",
+    )
+    _require(
+        isinstance(discovery.get("endpoints", {}).get("github_claim_comment_plan"), str),
+        "discovery manifest missing GitHub claim comment planner endpoint",
     )
     _require(
         isinstance(discovery.get("endpoints", {}).get("github_proof_comment_plan"), str),
@@ -430,6 +449,33 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(
         github_funding_plan["signal"]["requires_operator_reconciliation"] is True,
         "GitHub funding comment planner must require operator reconciliation",
+    )
+    github_claim_plan = client.plan_github_claim_comment(
+        "agent-bounties/agent-bounties",
+        "https://github.com/agent-bounties/agent-bounties/issues/1",
+        "[bounty]: Fix CI",
+        "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n",
+        "/agent-bounty claim\nPlan: open a focused PR and run cargo test -p github-app.",
+        contributor_login="python-sdk-smoke",
+        comment_id="12346",
+        claim_age_minutes=5,
+        progress_signal_count=1,
+    )
+    _require(
+        github_claim_plan["ready"] is True,
+        "GitHub claim comment planner rejected progress-backed claim",
+    )
+    _require(
+        github_claim_plan["signal"]["decision"] == "Reserved",
+        "GitHub claim comment planner did not reserve progress-backed claim",
+    )
+    _require(
+        github_claim_plan["signal"]["settlement_authority"] is False,
+        "GitHub claim comment planner must not authorize payment settlement",
+    )
+    _require(
+        "How did you find Agent Bounties?" in github_claim_plan["check"]["text"],
+        "GitHub claim comment planner must carry the distribution feedback prompt",
     )
     github_proof_plan = client.plan_github_proof_comment(
         solver["id"],
