@@ -108,19 +108,18 @@ curl -sS "$PUBLIC_BASE_URL/v1/base/funding-plan" \
   -H "authorization: Bearer $OPERATOR_API_TOKEN" \
   --data '{
     "network": "base-sepolia",
-    "payer": "0x2222222222222222222222222222222222222222",
-    "payee": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "bounty_id": "00000000-0000-0000-0000-000000000001",
     "escrow_contract": "0x1111111111111111111111111111111111111111",
-    "usdc_token": "0x3333333333333333333333333333333333333333",
-    "amount_minor": 35000000,
-    "platform_fee_minor": 0,
-    "terms_hash": "0x7777777777777777777777777777777777777777777777777777777777777777"
+    "payer": "0x2222222222222222222222222222222222222222",
+    "token": "0x3333333333333333333333333333333333333333"
   }'
 ```
 
 Review the returned USDC `approve` and escrow `createEscrow` call data. Sign
 with the payer wallet outside the hosted app. If hosted broadcast is disabled,
 broadcast through the wallet or a trusted operator workstation.
+The posted bounty supplies the amount, payee, and terms hash; they are not part
+of the funding-plan request payload.
 
 ## 4. Make the Bounty Claimable
 
@@ -135,12 +134,14 @@ curl -sS "$PUBLIC_BASE_URL/v1/base/fetch-rpc-logs" \
     "network": "base-sepolia",
     "escrow_contract": "0x1111111111111111111111111111111111111111",
     "from_block": 0,
-    "to_block": "latest"
+    "to_block": 12345678
   }'
 ```
 
 The bounty should become claimable only after the indexed `EscrowCreated` event
 matches the expected bounty, payer, payee, amount, token, and terms hash.
+Omit `to_block` to let the configured RPC fetch use the latest block; if it is
+included, pass an integer block number.
 
 ## 5. Complete and Verify Work
 
@@ -167,7 +168,8 @@ curl -sS "$PUBLIC_BASE_URL/v1/base/release-queue" \
   -H "authorization: Bearer $OPERATOR_API_TOKEN" \
   --data '{
     "network": "base-sepolia",
-    "escrow_contract": "0x1111111111111111111111111111111111111111"
+    "escrow_contract": "0x1111111111111111111111111111111111111111",
+    "platform_fee_wallet": "0x4444444444444444444444444444444444444444"
   }'
 ```
 
@@ -179,8 +181,9 @@ curl -sS "$PUBLIC_BASE_URL/v1/base/release-plan" \
   -H "authorization: Bearer $OPERATOR_API_TOKEN" \
   --data '{
     "network": "base-sepolia",
+    "bounty_id": "00000000-0000-0000-0000-000000000001",
     "escrow_contract": "0x1111111111111111111111111111111111111111",
-    "onchain_escrow_id": 1
+    "platform_fee_wallet": "0x4444444444444444444444444444444444444444"
   }'
 ```
 
