@@ -94,6 +94,10 @@ cargo run -p cli -- github-proof-comment-plan \
 cargo run -p cli -- discovery \
   --public-base-url https://agentbounties.local \
   --mcp-base-url https://agentbounties.local/mcp
+cargo run -p cli -- discovery-report \
+  --input-fixture crates/cli/fixtures/discovery_answers.json \
+  --json-out target/tmp/discovery-report.json \
+  --markdown-out target/tmp/discovery-report.md
 cargo run -p cli -- docs-contract-check
 cargo run -p cli -- demo
 cargo run -p cli -- pooled-funding-demo

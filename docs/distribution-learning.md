@@ -87,3 +87,16 @@ For each public interaction, record:
   or discovery link if the participant shares it.
 
 Aggregate these into a recurring discovery report once the reporting CLI lands.
+The local fixture-backed report is deterministic and belongs in CI:
+
+```powershell
+cargo run -p cli -- discovery-report `
+  --input-fixture crates\cli\fixtures\discovery_answers.json `
+  --json-out target\tmp\discovery-report.json `
+  --markdown-out target\tmp\discovery-report.md
+```
+
+Use the report to decide which labels, public proof pages, funding language,
+MCP discovery affordances, bounty listings, and agent workflows deserve more
+distribution effort. Do not use it to approve PRs, accept bounty work, or settle
+funds.

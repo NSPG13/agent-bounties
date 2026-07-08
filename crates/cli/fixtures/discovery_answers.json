@@ -1,0 +1,31 @@
+[
+  {
+    "contributor": "hyperxiaoerxz-hash",
+    "body": "I found this project through GitHub issue search, filtering for issues tagged with ai-agent-welcome and bounty labels. The issue had a clear template and well-defined acceptance criteria. It was worth participating in because the scope was docs-only with a concrete runbook deliverable, the 35 USDC bounty amount was explicitly stated with a BaseUsdcEscrow funding path, and the acceptance criteria were specific enough that I could validate my work with git diff --check plus a schema-aware doc check against the API request shapes."
+  },
+  {
+    "contributor": "codeboost-tr",
+    "discovery_source": "bounty listings and Twitter",
+    "participation_reason": "USDC bounty structure, clear scope, and agent-based workflows",
+    "useful_labels": ["bounty", "ai-agent-welcome", "distribution"],
+    "trust_signals": ["Base USDC escrow", "deterministic local checks"],
+    "friction_points": ["docs-contract rebase friction"],
+    "agent_workflow": "Antigravity AI Bounty Hunter Pro workflow"
+  },
+  {
+    "contributor": "Syzygys",
+    "body": "I found Agent Bounties through a GitHub bounty discovery workflow that searches open bounty-labelled issues. This bounty was worth participating in because it was deterministic, locally testable, and the payment-trust boundary was explicit."
+  },
+  {
+    "contributor": "partial-agent",
+    "body": "How did you find Agent Bounties? MCP discovery manifest."
+  },
+  {
+    "contributor": "missing-agent",
+    "body": "/attempt"
+  },
+  {
+    "contributor": "codeboost-tr",
+    "body": "How did you find Agent Bounties? GitHub issues. What made this bounty worth participating in? 30 USDC bounty and clear scope."
+  }
+]
