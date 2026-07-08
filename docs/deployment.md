@@ -25,6 +25,7 @@ Manual builds:
 ```bash
 docker build --build-arg APP_PACKAGE=api --build-arg APP_BINARY=api -t agent-bounties-api:local .
 docker build --build-arg APP_PACKAGE=mcp-server --build-arg APP_BINARY=mcp-server -t agent-bounties-mcp:local .
+docker build --build-arg APP_PACKAGE=worker --build-arg APP_BINARY=worker -t agent-bounties-worker:local .
 ```
 
 ## Production Compose
@@ -67,11 +68,34 @@ The compose file sets:
 - optional Stripe live execution, API base URL, secret key, webhook secret, and
   unsigned-webhook simulation variables
 - optional `OPERATOR_API_TOKEN` for hosted operator-only mutation surfaces
+- optional `base-indexer` profile variables for automated Base USDC escrow log
+  polling
 
 The API and MCP containers receive the same live-money environment contract so
 `GET /v1/readiness/live-money` and MCP `get_live_money_readiness` agree about
 Stripe webhook readiness, Base escrow addresses, native USDC tokens, and
 operator mutation protection.
+
+To run the Base USDC indexer alongside API and MCP, set the indexer variables
+and opt into its compose profile:
+
+```powershell
+$env:COMPOSE_PROFILES = "base-indexer"
+docker compose --env-file .env -f docker-compose.production.yml up -d --build
+```
+
+On Unix-like shells:
+
+```bash
+COMPOSE_PROFILES=base-indexer docker compose --env-file .env -f docker-compose.production.yml up -d --build
+```
+
+The worker uses `DATABASE_URL`, `BASE_INDEXER_NETWORK`, RPC/escrow contract
+configuration, and `BASE_INDEXER_START_BLOCK` on first run. After it scans a
+range, it persists a Postgres cursor keyed by network and escrow contract, so
+later polls continue from the last confirmed scanned block even when no escrow
+events were found. Money state still changes only when decoded escrow logs are
+persisted.
 
 `DATABASE_URL` should point at the compose service hostname, for example
 `postgres://agent_bounties:change-me@postgres:5432/agent_bounties`. If
@@ -111,6 +135,9 @@ ready:
   it unset for local open-source demos.
 - Base receipt polling and log reconciliation still require configured RPC URLs
   and do not mark funds paid without indexed escrow logs.
+- The optional `base-indexer` worker automates Base escrow log polling, but it
+  does not sign or broadcast transactions and does not bypass deterministic log
+  reconciliation.
 - Stripe ledger credits require `STRIPE_WEBHOOK_SECRET` and verified Checkout
   webhooks. Keep `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false` outside local
   mock-provider simulations.

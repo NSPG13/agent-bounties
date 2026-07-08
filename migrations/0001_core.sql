@@ -127,6 +127,15 @@ CREATE TABLE IF NOT EXISTS base_escrow_events (
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS base_log_cursors (
+  network TEXT NOT NULL,
+  escrow_contract TEXT NOT NULL,
+  last_scanned_block BIGINT NOT NULL CHECK (last_scanned_block >= 0),
+  last_log_key TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (network, escrow_contract)
+);
+
 CREATE TABLE IF NOT EXISTS claims (
   id UUID PRIMARY KEY,
   bounty_id UUID NOT NULL REFERENCES bounties(id),

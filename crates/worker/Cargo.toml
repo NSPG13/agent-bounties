@@ -11,9 +11,11 @@ anyhow.workspace = true
 app = { path = "../app" }
 async-trait.workspace = true
 chain-base = { path = "../chain-base" }
+db = { path = "../db" }
 domain = { path = "../domain" }
 ledger = { path = "../ledger" }
 serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 verifier-sdk = { path = "../verifier-sdk" }
 

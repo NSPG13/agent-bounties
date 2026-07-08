@@ -261,7 +261,25 @@ The `worker` crate wraps that decoder into a resumable indexer pipeline for
 hosted operation. It processes raw EVM logs in chain order, applies decoded
 events to the app before marking log keys indexed, skips duplicate provider
 replays, and stops without advancing the cursor when a terminal log arrives
-before its create log.
+before its create log. The deployable `worker` binary adds RPC polling around
+that pipeline: it fetches `eth_blockNumber`, waits for a configurable
+confirmation depth, scans bounded block ranges for the configured escrow
+contract, persists a Postgres scan cursor even for empty ranges, and writes
+only decoded escrow evidence into bounty, escrow, settlement, Base event, and
+ledger state.
+
+Run a one-shot local indexer pass after setting `DATABASE_URL`,
+`BASE_INDEXER_NETWORK`, `BASE_INDEXER_START_BLOCK`, and either
+`BASE_INDEXER_RPC_URL`/`BASE_INDEXER_ESCROW_CONTRACT` or the network-specific
+`BASE_*_RPC_URL` and `BASE_*_ESCROW_CONTRACT` variables:
+
+```powershell
+cargo run -p worker -- --once
+```
+
+Hosted deployments can run the same binary through the production compose
+`base-indexer` profile. The worker does not sign transactions, broadcast
+transactions, or treat transaction hashes as settlement evidence.
 
 Generate a local sample plan:
 
