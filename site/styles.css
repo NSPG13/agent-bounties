@@ -372,6 +372,10 @@ input {
   background: rgba(255, 255, 255, 0.62);
 }
 
+.prefill-output {
+  background: rgba(255, 255, 255, 0.62);
+}
+
 code {
   padding: 0.1em 0.3em;
   border-radius: 4px;

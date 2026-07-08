@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 const DISCOVERY_SCHEMA: &str = "https://agentbounties.org/schemas/discovery-manifest.v1.json";
 const GITHUB_ISSUE_TEMPLATE_URL: &str =
     "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml";
+const STATIC_FUNDING_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/funding.html";
 const AGENT_QUICKSTART_URL: &str =
     "https://github.com/NSPG13/agent-bounties/blob/main/docs/agent-quickstart.md";
 const REAL_FUNDING_REHEARSAL_URL: &str =
@@ -1216,6 +1217,15 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
                         escape_html(&item.funding_intent_url)
                     )
                 };
+                let stripe_checkout_funding_action =
+                    stripe_checkout_funding_page_url_for_feed(item, "public-funding-feed")
+                        .map(|href| {
+                            format!(
+                                r#"<a data-agent-action="open_stripe_checkout_funding_page" href="{}">Open Stripe Checkout funding page</a> "#,
+                                escape_html(&href)
+                            )
+                        })
+                        .unwrap_or_default();
                 format!(
                     r#"<li>
         <h2><a href="{}">{}</a></h2>
@@ -1225,7 +1235,7 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
         <p><code>{}</code></p>
         <h3>Funding intent payloads</h3>
         <ul>{}</ul>
-        <p>{}<a data-agent-action="add_funding_evidence" href="{}">Add funding evidence</a> <a data-agent-action="status" href="{}">Machine status</a> <a data-agent-action="template" href="{}">Template</a></p>
+        <p>{}{}<a data-agent-action="add_funding_evidence" href="{}">Add funding evidence</a> <a data-agent-action="status" href="{}">Machine status</a> <a data-agent-action="template" href="{}">Template</a></p>
       </li>"#,
                     escape_html(&item.public_url),
                     escape_html(&item.title),
@@ -1243,6 +1253,7 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
                     partition_rows,
                     escape_html(&command),
                     funding_intent_example_rows,
+                    stripe_checkout_funding_action,
                     funding_intent_action,
                     escape_html(&item.funding_contribution_url),
                     escape_html(&item.status_url),
@@ -1659,6 +1670,95 @@ pub fn public_funding_feed_cofunding_command(item: &PublicFundingFeedItem) -> Op
     ))
 }
 
+pub fn stripe_checkout_funding_page_url_for_feed(
+    item: &PublicFundingFeedItem,
+    source: &str,
+) -> Option<String> {
+    public_stripe_checkout_funding_page_url(
+        &item.bounty_id,
+        &item.funding_intent_url,
+        &item.funding_mode,
+        item.funding_remaining_minor,
+        &item.currency,
+        &item.funding_partitions,
+        source,
+    )
+}
+
+pub fn stripe_checkout_funding_page_url_for_bounty(
+    item: &PublicBountyPage,
+    source: &str,
+) -> Option<String> {
+    public_stripe_checkout_funding_page_url(
+        &item.bounty_id,
+        &item.funding_intent_url,
+        &item.funding_mode,
+        item.funding_remaining_minor,
+        &item.currency,
+        &item.funding_partitions,
+        source,
+    )
+}
+
+fn public_stripe_checkout_funding_page_url(
+    bounty_id: &str,
+    funding_intent_url: &str,
+    funding_mode: &str,
+    fallback_amount_minor: i64,
+    fallback_currency: &str,
+    funding_partitions: &[PublicFundingPartition],
+    source: &str,
+) -> Option<String> {
+    let (amount_minor, currency) = funding_partitions
+        .iter()
+        .find(|partition| partition.rail == "StripeFiat" && partition.remaining_minor > 0)
+        .map(|partition| (partition.remaining_minor, partition.currency.as_str()))
+        .or_else(|| {
+            if funding_mode == "StripeFiatLedger" && fallback_amount_minor > 0 {
+                Some((fallback_amount_minor, fallback_currency))
+            } else {
+                None
+            }
+        })?;
+    let api_base_url = api_base_url_from_funding_intent_url(funding_intent_url)?;
+    let query = vec![
+        ("apiBaseUrl", api_base_url.to_string()),
+        ("bountyId", bounty_id.to_string()),
+        ("amountMinor", amount_minor.to_string()),
+        ("currency", currency.to_lowercase()),
+        ("rail", "StripeFiat".to_string()),
+        ("source", source.to_string()),
+    ]
+    .into_iter()
+    .map(|(key, value)| format!("{key}={}", encode_query_component(&value)))
+    .collect::<Vec<_>>()
+    .join("&");
+    Some(format!("{STATIC_FUNDING_PAGE_URL}?{query}"))
+}
+
+fn api_base_url_from_funding_intent_url(funding_intent_url: &str) -> Option<&str> {
+    let marker = "/v1/bounties/";
+    let index = funding_intent_url.find(marker)?;
+    let api_base_url = &funding_intent_url[..index];
+    if api_base_url.starts_with("https://") || api_base_url.starts_with("http://") {
+        Some(api_base_url.trim_end_matches('/'))
+    } else {
+        None
+    }
+}
+
+fn encode_query_component(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![byte as char]
+            }
+            _ => format!("%{byte:02X}").chars().collect::<Vec<_>>(),
+        })
+        .collect()
+}
+
 fn cofunding_command_for(bounty_id: &str, amount_minor: i64, currency: &str, rail: &str) -> String {
     format!(
         "/agent-bounty fund {} {} {} via {}",
@@ -1821,6 +1921,13 @@ pub fn public_bounty_next_actions(
         href: item.template_url.clone(),
     });
     if can_add_funding {
+        if let Some(href) = stripe_checkout_funding_page_url_for_bounty(item, "public-bounty") {
+            actions.push(PublicBountyNextAction {
+                kind: "open_stripe_checkout_funding_page".to_string(),
+                label: "Open Stripe Checkout funding page".to_string(),
+                href,
+            });
+        }
         if !item.funding_intent_examples.is_empty() {
             actions.push(PublicBountyNextAction {
                 kind: "create_funding_intent".to_string(),
@@ -2921,6 +3028,7 @@ mod tests {
         assert!(html.contains("agent-bounty-funding-feed"));
         assert!(html.contains(r#"data-agent-action="create_funding_intent""#));
         assert!(html.contains(r#"data-agent-action="add_funding_evidence""#));
+        assert!(!html.contains(r#"data-agent-action="open_stripe_checkout_funding_page""#));
         assert!(html.contains(r#"data-agent-action="distribution_feedback""#));
         assert!(html.contains("How did you find Agent Bounties?"));
         assert!(html.contains("What would make the project easier or more trustworthy"));
@@ -2934,6 +3042,23 @@ mod tests {
             "/agent-bounty fund {} 0.5 USDC via BaseUsdc",
             item.bounty_id
         )));
+    }
+
+    #[test]
+    fn funding_feed_page_exposes_prefilled_stripe_checkout_funding_link() {
+        let item = public_stripe_funding_feed_item_fixture();
+
+        let html = render_funding_feed_page(&[item.clone()]);
+
+        assert!(html.contains(r#"data-agent-action="open_stripe_checkout_funding_page""#));
+        assert!(html.contains("Open Stripe Checkout funding page"));
+        assert!(html.contains("https://nspg13.github.io/agent-bounties/funding.html?"));
+        assert!(html.contains("apiBaseUrl=https%3A%2F%2Fnetwork.example"));
+        assert!(html.contains(&format!("bountyId={}", item.bounty_id)));
+        assert!(html.contains("amountMinor=500"));
+        assert!(html.contains("currency=usd"));
+        assert!(html.contains("rail=StripeFiat"));
+        assert!(html.contains("source=public-funding-feed"));
     }
 
     #[test]
@@ -3122,10 +3247,50 @@ mod tests {
         assert!(html.contains(r#"rel="payment""#));
         assert!(html.contains(r#"data-agent-action="create_funding_intent""#));
         assert!(html.contains(r#"data-agent-action="add_funding_evidence""#));
+        assert!(!html.contains(r#"data-agent-action="open_stripe_checkout_funding_page""#));
         assert!(html.contains("base_network"));
         assert!(html.contains("https://network.example/v1/bounties/1/funding-contributions"));
         assert!(html.contains("https://network.example/v1/bounties/1/funding-intents"));
         assert!(!html.contains(r#"data-agent-action="claim""#));
+    }
+
+    #[test]
+    fn public_bounty_page_exposes_prefilled_stripe_checkout_funding_link() {
+        let mut item = public_bounty_page_fixture("Unfunded", 0, 500, false);
+        item.currency = "usd".to_string();
+        item.funding_mode = "StripeFiatLedger".to_string();
+        item.funding_target_minor = 500;
+        item.funding_remaining_minor = 500;
+        item.funding_partitions = vec![PublicFundingPartition {
+            rail: "StripeFiat".to_string(),
+            target_minor: 500,
+            confirmed_minor: 0,
+            remaining_minor: 500,
+            currency: "usd".to_string(),
+            contribution_count: 0,
+            escrow_count: 0,
+            claimable: false,
+        }];
+        item.funding_intent_examples = public_funding_intent_examples(
+            &item.bounty_id,
+            &item.funding_intent_url,
+            &item.public_url,
+            &item.funding_mode,
+            item.funding_remaining_minor,
+            &item.currency,
+            &item.funding_partitions,
+        );
+
+        let html = render_public_bounty_page(&item);
+
+        assert!(html.contains(r#"data-agent-action="open_stripe_checkout_funding_page""#));
+        assert!(html.contains("Open Stripe Checkout funding page"));
+        assert!(html.contains("apiBaseUrl=https%3A%2F%2Fnetwork.example"));
+        assert!(html.contains(&format!("bountyId={}", item.bounty_id)));
+        assert!(html.contains("amountMinor=500"));
+        assert!(html.contains("currency=usd"));
+        assert!(html.contains("source=public-bounty"));
+        assert!(html.contains("open_stripe_checkout_funding_page"));
     }
 
     #[test]
@@ -3340,6 +3505,32 @@ mod tests {
             funding_partitions,
             funding_intent_examples,
         }
+    }
+
+    fn public_stripe_funding_feed_item_fixture() -> PublicFundingFeedItem {
+        let mut item = public_funding_feed_item_fixture(0, 500, "StripeFiat");
+        item.currency = "usd".to_string();
+        item.funding_mode = "StripeFiatLedger".to_string();
+        item.funding_partitions = vec![PublicFundingPartition {
+            rail: "StripeFiat".to_string(),
+            target_minor: 500,
+            confirmed_minor: 0,
+            remaining_minor: 500,
+            currency: "usd".to_string(),
+            contribution_count: 0,
+            escrow_count: 0,
+            claimable: false,
+        }];
+        item.funding_intent_examples = public_funding_intent_examples(
+            &item.bounty_id,
+            &item.funding_intent_url,
+            &item.public_url,
+            &item.funding_mode,
+            item.funding_remaining_minor,
+            &item.currency,
+            &item.funding_partitions,
+        );
+        item
     }
 
     fn claimable_bounty(title: &str, amount_minor: i64, privacy: PrivacyLevel) -> Bounty {
