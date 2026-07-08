@@ -70,6 +70,7 @@
 
   const form = document.getElementById("funding-form");
   const output = document.getElementById("funding-output");
+  const prefillOutput = document.getElementById("prefill-output");
   const readinessButton = document.getElementById("readiness-button");
   const readinessOutput = document.getElementById("readiness-output");
   if (!form || !output) return;
@@ -86,6 +87,25 @@
     return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
   }
 
+  function firstQueryParam(searchParams, names) {
+    for (const name of names) {
+      const value = searchParams.get(name);
+      if (value && value.trim()) {
+        return value.trim();
+      }
+    }
+    return "";
+  }
+
+  function setInputValue(name, value) {
+    const field = form.elements.namedItem(name);
+    if (field instanceof HTMLInputElement && value) {
+      field.value = value;
+      return true;
+    }
+    return false;
+  }
+
   const organizationField = form.elements.namedItem("organizationId");
   if (organizationField instanceof HTMLInputElement) {
     const storageKey = "agent-bounties-public-funder-id";
@@ -96,6 +116,40 @@
     }
     if (!organizationField.value) {
       organizationField.value = funderId;
+    }
+  }
+
+  const query = new URLSearchParams(window.location.search);
+  const prefillValues = {
+    apiBaseUrl: firstQueryParam(query, ["apiBaseUrl", "api_base_url", "api"]),
+    bountyId: firstQueryParam(query, ["bountyId", "bounty_id"]),
+    organizationId: firstQueryParam(query, ["organizationId", "organization_id", "sourceOrganizationId", "source_organization_id"]),
+    amountMinor: firstQueryParam(query, ["amountMinor", "amount_minor"]),
+    currency: firstQueryParam(query, ["currency"]),
+    externalReference: firstQueryParam(query, ["externalReference", "external_reference"]),
+    source: firstQueryParam(query, ["source", "funding_source"]),
+    rail: firstQueryParam(query, ["rail"]),
+  };
+
+  const prefilledFields = [
+    setInputValue("apiBaseUrl", prefillValues.apiBaseUrl) && "hosted API",
+    setInputValue("bountyId", prefillValues.bountyId) && "bounty id",
+    setInputValue("organizationId", prefillValues.organizationId) && "funder ledger id",
+    setInputValue("amountMinor", prefillValues.amountMinor) && "amount",
+    setInputValue("currency", prefillValues.currency.toLowerCase()) && "currency",
+    setInputValue("externalReference", prefillValues.externalReference) && "external reference",
+  ].filter(Boolean);
+  const fundingSource = prefillValues.source || "funding-page";
+  form.dataset.fundingSource = fundingSource;
+  form.dataset.fundingRail = prefillValues.rail || "StripeFiat";
+  if (prefillOutput) {
+    if (prefilledFields.length > 0) {
+      const railNotice = prefillValues.rail && prefillValues.rail !== "StripeFiat"
+        ? `\nRail warning: this page creates StripeFiat Checkout only; use the API/Base funding plan for ${prefillValues.rail}.`
+        : "";
+      prefillOutput.textContent = `Prefilled funding request from ${fundingSource}: ${prefilledFields.join(", ")}.${railNotice}\nReview the values and readiness before opening Checkout. Query parameters are UI defaults only; funding still requires a verified Stripe webhook.`;
+    } else {
+      prefillOutput.textContent = "Open this page from a public bounty funding link to prefill the hosted API, bounty, amount, and source.";
     }
   }
 
@@ -165,9 +219,12 @@
     const organizationId = String(data.get("organizationId") || "").trim();
     const amountMinor = Number(data.get("amountMinor"));
     const currency = String(data.get("currency") || "usd").trim().toLowerCase();
+    const source = form.dataset.fundingSource || "funding-page";
     const externalReference =
       String(data.get("externalReference") || "").trim() ||
-      `checkout-funding-${Date.now()}`;
+      `${source}-checkout-${Date.now()}`;
+    const pageBase = `${window.location.origin}${window.location.pathname.replace(/funding\.html$/, "")}`;
+    const returnQuery = `?bountyId=${encodeURIComponent(bountyId)}&source=${encodeURIComponent(source)}`;
 
     try {
       const intentResponse = await fetch(`${apiBaseUrl}/v1/bounties/${bountyId}/funding-intents`, {
@@ -181,8 +238,8 @@
           currency,
           rail: "StripeFiat",
           external_reference: externalReference,
-          stripe_success_url: `${window.location.origin}${window.location.pathname.replace(/funding\.html$/, "success.html")}`,
-          stripe_cancel_url: `${window.location.origin}${window.location.pathname.replace(/funding\.html$/, "cancel.html")}`,
+          stripe_success_url: `${pageBase}success.html${returnQuery}`,
+          stripe_cancel_url: `${pageBase}cancel.html${returnQuery}`,
           base_escrow_contract: null,
           base_payer: null,
           base_token: null,

@@ -375,6 +375,11 @@ only: they do not credit balances or make the bounty claimable.
 The optional `STRIPE_API_BASE_URL` or `--api-base-url` can target a sandbox or
 mock provider. The optional `STRIPE_PAYMENT_METHOD_CONFIGURATION` can target a
 Dashboard-managed Checkout method set without changing ledger reconciliation.
+Public bounty pages may link human funders to the static funding page with
+prefilled `apiBaseUrl`, `bountyId`, `amountMinor`, `currency`, `rail`, and
+`source` query parameters. Those links only reduce copy-paste friction for
+StripeFiat Checkout funding. They are not ledger evidence, do not authorize
+settlement, and are not offered for Base-only funding partitions.
 The live surfaces are:
 
 - `POST /v1/stripe/live/checkout-top-ups`, which creates the planned Checkout

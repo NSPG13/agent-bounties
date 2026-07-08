@@ -107,6 +107,11 @@ def main() -> int:
         "Check readiness",
         "/v1/readiness/live-money?network=base-mainnet",
         "stripe_payment_method_configuration_configured",
+        "Prefilled funding request",
+        "apiBaseUrl",
+        "bountyId",
+        "amountMinor",
+        "funding_source",
     ]
     for phrase in required_funding_phrases:
         if phrase not in funding and phrase not in main_js:
@@ -128,6 +133,14 @@ def main() -> int:
         not in hosted_readiness.get("non_secret_fields", [])
     ):
         fail("static discovery manifest must advertise hosted readiness preflight fields")
+    funding_handoff = discovery.get("funding_handoff", {})
+    if (
+        funding_handoff.get("page") != "https://nspg13.github.io/agent-bounties/funding.html"
+        or "apiBaseUrl" not in funding_handoff.get("query_params", [])
+        or "bountyId" not in funding_handoff.get("query_params", [])
+        or "amountMinor" not in funding_handoff.get("query_params", [])
+    ):
+        fail("static discovery manifest must advertise public funding handoff query params")
 
     print("site check ok")
     return 0

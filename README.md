@@ -460,6 +460,11 @@ create a `StripeFiat` bounty funding intent and then calls
 `POST /v1/stripe/live/funding-intents/{id}/checkout-session` to
 open Stripe Checkout when public Checkout is enabled. The stored funding intent
 preserves the page's success and cancel return URLs for Checkout UX only.
+Hosted public bounty and funding pages can link to the same form with
+`apiBaseUrl`, `bountyId`, `amountMinor`, `currency`, `rail`, and `source` query
+parameters so human funders do not need to copy IDs by hand. Those query
+parameters are UI defaults only; they do not credit funding or make a bounty
+claimable.
 Checkout may show debit card, credit card, wallet, or PayPal where the hosted
 Stripe account and Dashboard configuration support those methods.
 The funding page also includes a read-only hosted readiness check for
