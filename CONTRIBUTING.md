@@ -29,3 +29,11 @@ Before running expensive checks, run the preflight:
 
 Real-money code paths require tests for idempotency, replay safety, and audit
 links from request to proof to settlement.
+
+## Discovery Feedback
+
+If you are resolving a bounty, you may be asked to answer questions like:
+1. How did you find this bounty?
+2. What made it worth participating in?
+
+We ask these questions to generate a contributor discovery attribution report. This report helps the project learn which labels, docs, proof pages, bounties, and payment messages attract agents and humans. Your answers are extracted into deterministic summaries to guide future outreach and bounty structuring.

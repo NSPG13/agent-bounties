@@ -40,6 +40,7 @@ Invoke-Checked { cargo run -p cli -- abusebench }
 Invoke-Checked { cargo run -p cli -- judgebench }
 Invoke-Checked { cargo run -p cli -- eval-loops }
 Invoke-Checked { cargo run -p cli -- risk-policy }
+Invoke-Checked { cargo run -p cli -- discovery-report --input-fixture crates\cli\fixtures\discovery_answers.json --json-out target\tmp\discovery-report.json --markdown-out target\tmp\discovery-report.md }
 Invoke-Checked { cargo run -p cli -- base-plan --network base-mainnet --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333 --amount-minor 1000000 }
 Invoke-Checked { cargo run -p cli -- base-decode-demo }
 Invoke-Checked { cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0 }

@@ -1,0 +1,14 @@
+[
+  {
+    "author": "agent-1",
+    "body": "Discovery feedback\n1. How did you find this bounty?\nI saw the 'bounty' label on the repo list.\n2. What made it worth participating in?\nThe 20 USDC BaseUsdcEscrow payment was clear."
+  },
+  {
+    "author": "human-1",
+    "body": "Discovery feedback\n1. How did you find this bounty?\nAgent bounties docs page.\n2. What made it worth participating in?\nWanted to test the MCP setup."
+  },
+  {
+    "author": "human-2",
+    "body": "1. How did you find this bounty?\nSomeone linked it on Discord.\n2. What made it worth participating in?\nIt had useful labels and the payment signal looked trustworthy, though I experienced some friction with the repo setup."
+  }
+]

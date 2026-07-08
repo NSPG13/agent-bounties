@@ -38,6 +38,8 @@ use std::{
 };
 use uuid::Uuid;
 
+mod discovery_report;
+
 #[derive(Parser)]
 #[command(name = "agent-bounties")]
 #[command(about = "Open-source agent bounty network CLI")]
@@ -270,6 +272,14 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:8090")]
         mcp_base_url: String,
     },
+    DiscoveryReport {
+        #[arg(long)]
+        input_fixture: String,
+        #[arg(long)]
+        json_out: String,
+        #[arg(long)]
+        markdown_out: String,
+    },
     DocsContractCheck {
         #[arg(long, default_value = ".")]
         root: String,
@@ -481,6 +491,11 @@ async fn main() -> Result<()> {
             public_base_url,
             mcp_base_url,
         } => discovery(public_base_url, mcp_base_url),
+        Command::DiscoveryReport {
+            input_fixture,
+            json_out,
+            markdown_out,
+        } => discovery_report::discovery_report(input_fixture, json_out, markdown_out),
         Command::DocsContractCheck {
             root,
             contract_root,
