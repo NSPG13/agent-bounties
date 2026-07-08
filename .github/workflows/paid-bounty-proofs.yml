@@ -1,0 +1,49 @@
+name: Paid Bounty Proofs
+
+on:
+  workflow_dispatch:
+    inputs:
+      proof_id:
+        description: Accepted public proof record UUID.
+        required: true
+      issue_number:
+        description: GitHub issue number to receive the proof comment.
+        required: true
+      api_base_url:
+        description: Public Agent Bounties API base URL.
+        required: true
+      settlement_url:
+        description: Optional settlement transaction or record URL.
+        required: false
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: paid-bounty-proof-${{ github.event.issue.number || github.event.inputs.issue_number }}
+  cancel-in-progress: true
+
+jobs:
+  publish-proof:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || startsWith(github.event.comment.body, '/agent-bounty proof')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Publish accepted proof comment
+        run: python scripts/github_proof_comment.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGENT_BOUNTIES_API_BASE_URL: ${{ github.event.inputs.api_base_url || vars.AGENT_BOUNTIES_API_BASE_URL }}
+          PROOF_ID: ${{ github.event.inputs.proof_id }}
+          ISSUE_NUMBER: ${{ github.event.inputs.issue_number }}
+          SETTLEMENT_URL: ${{ github.event.inputs.settlement_url }}

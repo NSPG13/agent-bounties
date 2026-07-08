@@ -77,6 +77,7 @@ cargo run -p cli -- github-plan \
   --title "[bounty]: Fix CI" \
   --body-file examples/github-paid-bounty-issue.md
 "${python_cmd[@]}" scripts/github_issue_plan_comment.py --self-test
+"${python_cmd[@]}" scripts/github_proof_comment.py --self-test
 cargo run -p cli -- github-proof-comment-plan \
   --bounty-id 00000000-0000-0000-0000-000000000001 \
   --proof-url https://agentbounties.local/public/proofs/example \
@@ -88,7 +89,9 @@ cargo run -p cli -- demo
 "${python_cmd[@]}" -m py_compile \
   crates/sdk-python/agent_bounties/client.py \
   crates/sdk-python/agent_bounties/smoke.py \
-  crates/sdk-python/agent_bounties/__init__.py
+  crates/sdk-python/agent_bounties/__init__.py \
+  scripts/github_issue_plan_comment.py \
+  scripts/github_proof_comment.py
 
 cd "$repo_root/crates/sdk-typescript"
 npm ci

@@ -355,7 +355,12 @@ fingerprints. API and MCP planner surfaces expose the same behavior at
 `plan_github_proof_comment`, and `plan_github_proof_comment_for_proof`.
 The `Paid Bounty Issues` workflow runs the planner on bounty-looking issue
 events and updates a sticky validation comment so contributors get immediate
-feedback before the issue is funded.
+feedback before the issue is funded. The `Paid Bounty Proofs` workflow can be
+run manually or triggered with an issue comment like
+`/agent-bounty proof <proof_id>`; it calls the hosted proof-record planner and
+publishes a sticky accepted-proof comment. Configure
+`AGENT_BOUNTIES_API_BASE_URL` as a repository variable for the comment-triggered
+proof path.
 
 Run all local checks:
 

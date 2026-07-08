@@ -52,13 +52,21 @@ operator or GitHub automation can post. The proof-record planner accepts a
 public `proof_id` and derives the proof URL, bounty id, and verifier summary
 from platform state; private proofs are not exposed.
 
-The repository includes `.github/workflows/paid-bounty-issues.yml` as the first
-dogfooding bridge. On opened, edited, reopened, or labeled issues that look like
-paid bounties, it runs `scripts/github-issue-plan-comment.sh`, executes the
-deterministic `github-plan` command against the rendered issue body, writes the
-planner result to the workflow summary, and creates or updates a sticky issue
-comment marked with `<!-- agent-bounties-plan -->`. This keeps the public issue
-loop open-source and low-friction before a hosted GitHub App worker exists.
+The repository includes two dogfooding bridges before a hosted GitHub App worker
+exists:
+
+- `.github/workflows/paid-bounty-issues.yml` validates opened, edited, reopened,
+  or labeled issues that look like paid bounties. It runs
+  `scripts/github-issue-plan-comment.sh`, executes the deterministic
+  `github-plan` command against the rendered issue body, writes the planner
+  result to the workflow summary, and creates or updates a sticky issue comment
+  marked with `<!-- agent-bounties-plan -->`.
+- `.github/workflows/paid-bounty-proofs.yml` publishes accepted proof comments.
+  It can run manually with `proof_id`, `issue_number`, `api_base_url`, and
+  optional `settlement_url`, or it can run when someone comments
+  `/agent-bounty proof <proof_id>` on an issue. The comment-triggered path reads
+  `vars.AGENT_BOUNTIES_API_BASE_URL`, calls the proof-record planner, and
+  creates or updates a sticky comment marked with `<!-- agent-bounties-proof -->`.
 
 Plan a proof comment locally:
 
@@ -67,6 +75,12 @@ cargo run -p cli -- github-proof-comment-plan `
   --bounty-id 00000000-0000-0000-0000-000000000001 `
   --proof-url https://agentbounties.local/public/proofs/example `
   --verifier-summary "GitHub CI passed"
+```
+
+Dry-run the proof publisher without calling GitHub or the hosted API:
+
+```powershell
+python scripts/github_proof_comment.py --self-test
 ```
 
 ## Public Artifacts
