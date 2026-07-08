@@ -1,0 +1,32 @@
+name: Discovery Report Generator
+
+on:
+  schedule:
+    - cron: '0 8 * * 1' # Runs every Monday at 08:00 UTC
+  workflow_dispatch: # Allows manual trigger from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Generate Report
+        run: |
+          mkdir -p output
+          cargo run -p cli -- discovery-report \
+            --input-fixture crates/cli/fixtures/discovery_answers.json \
+            --markdown-out output/discovery-report.md
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-report
+          path: output/discovery-report.md
+          retention-days: 14
