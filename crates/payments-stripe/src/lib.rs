@@ -215,13 +215,25 @@ pub struct ConnectAccountV2CreateIntent {
 #[derive(Debug, Clone)]
 pub struct StripePlanner {
     pub platform_base_url: String,
+    pub payment_method_configuration: Option<String>,
 }
 
 impl StripePlanner {
     pub fn new(platform_base_url: impl Into<String>) -> Self {
         Self {
             platform_base_url: platform_base_url.into(),
+            payment_method_configuration: None,
         }
+    }
+
+    pub fn with_payment_method_configuration(
+        mut self,
+        payment_method_configuration: impl Into<String>,
+    ) -> Self {
+        let payment_method_configuration = payment_method_configuration.into();
+        self.payment_method_configuration =
+            normalized_payment_method_configuration(Some(&payment_method_configuration));
+        self
     }
 
     pub fn checkout_top_up(
@@ -229,7 +241,7 @@ impl StripePlanner {
         request: &CheckoutTopUpRequest,
     ) -> Result<StripeRequestIntent, StripeIntegrationError> {
         validate_minimum_charge(&request.amount)?;
-        Ok(StripeRequestIntent {
+        let mut intent = StripeRequestIntent {
             method: "POST".to_string(),
             endpoint: CHECKOUT_SESSIONS_ENDPOINT.to_string(),
             api_version: STRIPE_API_VERSION.to_string(),
@@ -258,7 +270,12 @@ impl StripePlanner {
                     "purpose": "platform_balance_top_up"
                 }
             }),
-        })
+        };
+        apply_checkout_payment_method_configuration(
+            &mut intent,
+            self.payment_method_configuration.as_deref(),
+        )?;
+        Ok(intent)
     }
 
     pub fn connect_account_v2(
@@ -341,6 +358,38 @@ impl StripePlanner {
             }),
         })
     }
+}
+
+pub fn apply_checkout_payment_method_configuration(
+    intent: &mut StripeRequestIntent,
+    payment_method_configuration: Option<&str>,
+) -> Result<(), StripeIntegrationError> {
+    let Some(payment_method_configuration) =
+        normalized_payment_method_configuration(payment_method_configuration)
+    else {
+        return Ok(());
+    };
+    if intent.endpoint != CHECKOUT_SESSIONS_ENDPOINT {
+        return Err(StripeIntegrationError::InvalidEndpoint(
+            intent.endpoint.clone(),
+        ));
+    }
+    let body = intent
+        .body
+        .as_object_mut()
+        .ok_or_else(|| StripeIntegrationError::InvalidField("body".to_string()))?;
+    body.insert(
+        "payment_method_configuration".to_string(),
+        serde_json::Value::String(payment_method_configuration),
+    );
+    Ok(())
+}
+
+fn normalized_payment_method_configuration(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 pub async fn execute_stripe_request(
@@ -901,6 +950,29 @@ mod tests {
             intent.body["line_items"][0]["price_data"]["unit_amount"],
             5_000
         );
+        assert!(intent.body.get("payment_method_types").is_none());
+        assert!(intent.body.get("payment_method_configuration").is_none());
+    }
+
+    #[test]
+    fn checkout_top_up_can_target_payment_method_configuration() {
+        let organization_id = Uuid::new_v4();
+        let planner = StripePlanner::new("https://agentbounties.test")
+            .with_payment_method_configuration(" pmc_paypal_enabled ");
+        let intent = planner
+            .checkout_top_up(&CheckoutTopUpRequest {
+                organization_id,
+                amount: Money::new(5_000, "usd").unwrap(),
+                success_url: "https://agentbounties.test/success".to_string(),
+                cancel_url: "https://agentbounties.test/cancel".to_string(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            intent.body["payment_method_configuration"],
+            "pmc_paypal_enabled"
+        );
+        assert!(intent.body.get("payment_method_types").is_none());
     }
 
     #[test]
@@ -1123,6 +1195,7 @@ mod tests {
     fn checkout_execution_uses_form_encoded_stripe_request() {
         let organization_id = Uuid::new_v4();
         let intent = StripePlanner::new("https://agentbounties.test")
+            .with_payment_method_configuration("pmc_paypal_enabled")
             .checkout_top_up(&CheckoutTopUpRequest {
                 organization_id,
                 amount: Money::new(5_000, "usd").unwrap(),
@@ -1145,6 +1218,10 @@ mod tests {
         assert!(request
             .body
             .contains(&format!("client_reference_id={}", organization_id)));
+        assert!(request
+            .body
+            .contains("payment_method_configuration=pmc_paypal_enabled"));
+        assert!(!request.body.contains("payment_method_types"));
     }
 
     #[test]

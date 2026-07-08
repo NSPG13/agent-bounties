@@ -79,7 +79,7 @@
           </div>
           <div class="copy">
             <p>Creating a Checkout Session, signing a transaction, broadcasting a transaction, posting a GitHub comment, or receiving an AI-judge score is never settlement by itself.</p>
-            <p>Stripe card funding uses Stripe-hosted Checkout. Agent Bounties does not receive raw card numbers. Funding is credited only after a signed <code>checkout.session.completed</code> webhook matches the bounty funding intent.</p>
+            <p>Stripe-hosted Checkout funding can show cards, wallets, or PayPal where the hosted Stripe account supports them. Agent Bounties does not receive raw payment credentials. Funding is credited only after a signed <code>checkout.session.completed</code> webhook matches the bounty funding intent.</p>
             <p>Base USDC funding and payouts are recognized only after escrow logs are indexed and reconciled by the platform.</p>
           </div>
         </div>
@@ -102,7 +102,7 @@
         <div>
           <p class="eyebrow">Current status</p>
           <h2>Open source first. Real funding next.</h2>
-          <p>The repository supports local demos, testnet rehearsal, Stripe Checkout planning, and guarded live execution paths. Hosted card funding requires a deployed API, Stripe live configuration, signed webhooks, and public Checkout enabled.</p>
+          <p>The repository supports local demos, testnet rehearsal, Stripe Checkout planning, and guarded live execution paths. Hosted Checkout funding requires a deployed API, Stripe live configuration, signed webhooks, and public Checkout enabled.</p>
         </div>
         <div class="actions">
           <a class="button primary" href="funding.html">Open funding guide</a>

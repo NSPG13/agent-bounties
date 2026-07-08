@@ -42,6 +42,7 @@ $env:OPERATOR_API_TOKEN = "<operator-token>"
 $env:ENABLE_STRIPE_LIVE_EXECUTION = "true"
 $env:ENABLE_STRIPE_PUBLIC_CHECKOUT = "true"
 $env:STRIPE_SECRET_KEY = "sk_test_..."
+$env:STRIPE_PAYMENT_METHOD_CONFIGURATION = "" # optional Dashboard-managed Checkout method set
 $env:STRIPE_WEBHOOK_SECRET = "whsec_..."
 $env:ENABLE_BASE_TX_BROADCAST = "true"
 $env:BASE_SEPOLIA_RPC_URL = "https://..."
@@ -179,8 +180,8 @@ cargo run -p cli -- stripe-execute-request-intent `
   --intent-file target\stripe-funding-intent.json
 ```
 
-Open the returned Checkout URL and pay with a Stripe test card. The Checkout
-Session itself still does not credit the bounty. The command executes the
+Open the returned Checkout URL and pay with a Stripe test payment method. The
+Checkout Session itself still does not credit the bounty. The command executes the
 funding intent's own `StripeRequestIntent`, preserving `bounty_id`,
 `funding_intent_id`, and `funding_intent_reference` metadata for webhook
 reconciliation.
@@ -195,6 +196,11 @@ The endpoint requires `ENABLE_STRIPE_LIVE_EXECUTION=true`,
 `ENABLE_STRIPE_PUBLIC_CHECKOUT=true`, and Stripe credentials on the hosted API.
 It returns a Stripe Checkout URL for the specific funding intent. The bounty is
 still funded only after the signed webhook is reconciled.
+
+If `STRIPE_PAYMENT_METHOD_CONFIGURATION` is set, the Checkout Session request
+includes that Stripe Dashboard configuration id. This is useful for rehearsing
+PayPal-capable Checkout where the Stripe account supports it, but the redirect
+and request creation are still not funding evidence.
 
 4. Reconcile the signed webhook.
 

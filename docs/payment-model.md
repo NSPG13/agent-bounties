@@ -334,6 +334,14 @@ verified webhook processing. Stripe Connect Accounts v2 represents fiat payout
 eligibility and onboarding state. Fiat payouts can remain blocked while Base
 USDC payouts are available.
 
+Stripe Checkout payment methods stay Dashboard-managed by default. The planner
+does not set `payment_method_types`, so Stripe can show eligible methods such as
+card, wallet, or PayPal when the platform account, customer location, currency,
+and Stripe approval state allow them. Hosted operators can set
+`STRIPE_PAYMENT_METHOD_CONFIGURATION` to target a specific Stripe Payment Method
+Configuration, for example one where PayPal is enabled. This does not add a
+direct PayPal ledger, direct PayPal API integration, or PayPal payout rail.
+
 The Stripe integration deliberately plans platform balance top-ups, not
 per-bounty card charges. Checkout top-ups must satisfy Stripe's minimum charge
 amount. The deterministic planner emits:
@@ -363,7 +371,9 @@ That endpoint only executes stored `StripeFiat` funding intents and preserves
 webhook reconciliation. It does not credit balances or make the bounty
 claimable.
 The optional `STRIPE_API_BASE_URL` or `--api-base-url` can target a sandbox or
-mock provider. The live surfaces are:
+mock provider. The optional `STRIPE_PAYMENT_METHOD_CONFIGURATION` can target a
+Dashboard-managed Checkout method set without changing ledger reconciliation.
+The live surfaces are:
 
 - `POST /v1/stripe/live/checkout-top-ups`, which creates the planned Checkout
   Session and returns Stripe's response,

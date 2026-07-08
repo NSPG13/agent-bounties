@@ -29,6 +29,7 @@ $env:OPERATOR_API_TOKEN = "<strong-random-token>"
 $env:ENABLE_STRIPE_LIVE_EXECUTION = "true"
 $env:ENABLE_STRIPE_PUBLIC_CHECKOUT = "false" # true only after website, limits, and webhooks are ready
 $env:STRIPE_SECRET_KEY = "sk_test_..." # use sk_live_ only after test-mode signoff
+$env:STRIPE_PAYMENT_METHOD_CONFIGURATION = "" # optional Stripe Dashboard configuration id for PayPal-capable Checkout
 $env:STRIPE_WEBHOOK_SECRET = "whsec_..."
 $env:ALLOW_UNSIGNED_STRIPE_WEBHOOKS = "false"
 $env:BASE_SEPOLIA_RPC_URL = "https://..."
@@ -151,7 +152,7 @@ cargo run -p worker -- --once
 Only after all required partitions are reconciled does the bounty become
 claimable.
 
-Public card funding uses:
+Public Stripe Checkout funding uses:
 
 ```powershell
 curl -X POST "$env:PUBLIC_BASE_URL/v1/stripe/live/funding-intents/{id}/checkout-session"
@@ -162,6 +163,14 @@ and `ENABLE_STRIPE_PUBLIC_CHECKOUT=true` are set. It can execute only a stored
 `StripeFiat` funding intent and returns a Stripe-hosted Checkout URL. It does
 not credit balances or make the bounty claimable; signed webhook evidence is
 still required.
+
+Checkout payment methods are Dashboard-managed by default. To make Checkout
+show PayPal where Stripe supports and approves it for the platform account,
+enable PayPal in Stripe Dashboard and optionally set
+`STRIPE_PAYMENT_METHOD_CONFIGURATION` to the relevant Payment Method
+Configuration id. This remains Stripe Checkout funding: no direct PayPal API
+calls, no PayPal payout rail, and no funding credit from the redirect success
+page.
 
 ## Payout Flow
 

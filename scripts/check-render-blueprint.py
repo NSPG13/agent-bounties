@@ -104,7 +104,15 @@ def main() -> int:
             fail(f"render.yaml must not contain secret marker {secret_marker}")
 
     require_group(text, "agent-bounties-operator", ["OPERATOR_API_TOKEN"])
-    require_group(text, "agent-bounties-stripe", ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"])
+    require_group(
+        text,
+        "agent-bounties-stripe",
+        [
+            "STRIPE_SECRET_KEY",
+            "STRIPE_WEBHOOK_SECRET",
+            "STRIPE_PAYMENT_METHOD_CONFIGURATION",
+        ],
+    )
     require_group(
         text,
         "agent-bounties-base",

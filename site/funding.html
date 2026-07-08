@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Fund a bounty | Agent Bounties</title>
-    <meta name="description" content="Fund Agent Bounties with Stripe-hosted card Checkout or Base USDC escrow after hosted payment rails are configured.">
+    <meta name="description" content="Fund Agent Bounties with Stripe-hosted Checkout, including card and PayPal-capable payment methods where supported, or Base USDC escrow after hosted payment rails are configured.">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -21,15 +21,15 @@
     <main class="page">
       <section class="page-head">
         <p class="eyebrow">Funding</p>
-        <h1>Fund a bounty with a debit or credit card</h1>
-        <p>Card payments use Stripe-hosted Checkout. Agent Bounties never sees raw card numbers, and a bounty is funded only after Stripe sends a verified webhook for the matching funding intent.</p>
+        <h1>Fund a bounty with Stripe Checkout</h1>
+        <p>Stripe-hosted Checkout can show eligible payment methods such as debit card, credit card, wallet, or PayPal when the hosted Stripe account supports them. Agent Bounties never sees raw payment credentials, and a bounty is funded only after Stripe sends a verified webhook for the matching funding intent.</p>
       </section>
 
       <section class="band compact">
         <div class="section-grid">
           <div>
             <h2>Self-serve Checkout</h2>
-            <p class="fine">Requires a hosted API with <code>ENABLE_STRIPE_LIVE_EXECUTION=true</code>, <code>ENABLE_STRIPE_PUBLIC_CHECKOUT=true</code>, <code>STRIPE_SECRET_KEY</code>, <code>STRIPE_WEBHOOK_SECRET</code>, and signed webhooks enabled.</p>
+            <p class="fine">Requires a hosted API with <code>ENABLE_STRIPE_LIVE_EXECUTION=true</code>, <code>ENABLE_STRIPE_PUBLIC_CHECKOUT=true</code>, <code>STRIPE_SECRET_KEY</code>, <code>STRIPE_WEBHOOK_SECRET</code>, and signed webhooks enabled. Operators can set <code>STRIPE_PAYMENT_METHOD_CONFIGURATION</code> to target a Stripe Dashboard configuration that enables PayPal where Stripe supports it.</p>
           </div>
           <form id="funding-form" class="funding-form">
             <label>
@@ -57,7 +57,7 @@
             </div>
             <label>
               External reference
-              <input name="externalReference" placeholder="card-funding-001">
+              <input name="externalReference" placeholder="checkout-funding-001">
             </label>
             <button class="button primary" type="submit">Create Stripe Checkout</button>
             <output id="funding-output" class="output" aria-live="polite"></output>
@@ -73,7 +73,7 @@
           <ol class="steps">
             <li>The site asks the hosted API to create a Stripe fiat funding intent for the bounty.</li>
             <li>The hosted API creates a Stripe Checkout Session for that exact funding intent.</li>
-            <li>You enter card details on Stripe Checkout, not on this website.</li>
+            <li>You choose an eligible payment method on Stripe Checkout, not on this website.</li>
             <li>Stripe sends <code>checkout.session.completed</code> to the hosted webhook endpoint.</li>
             <li>The platform verifies the signature, checks bounty metadata, credits the ledger, and reserves funding into the bounty.</li>
           </ol>
@@ -86,7 +86,8 @@
             <h2>Other funding rails</h2>
           </div>
           <div class="copy">
-            <p>Base USDC funding uses escrow transaction plans and indexed escrow logs. Base funding is useful when funders want public, portable settlement. Stripe fiat funding is useful when funders want debit card or bank-card payment through hosted Checkout.</p>
+            <p>Base USDC funding uses escrow transaction plans and indexed escrow logs. Base funding is useful when funders want public, portable settlement. Stripe fiat funding is useful when funders want hosted Checkout with cards, wallets, or PayPal where the platform account is eligible.</p>
+            <p>PayPal is not a separate payout rail in this MVP. Solver fiat payouts still follow Stripe Connect eligibility and signed transfer evidence.</p>
             <p>Mixed bounties can have separate Stripe fiat and Base USDC partitions. Each partition must be confirmed by its own evidence before the bounty becomes claimable.</p>
           </div>
         </div>

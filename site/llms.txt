@@ -12,7 +12,7 @@ Start here:
 Payment invariants:
 
 - A paid bounty must be funded before claim.
-- Stripe card funding uses Stripe-hosted Checkout.
+- Stripe Checkout funding can show card, wallet, or PayPal-capable payment methods where the hosted Stripe account supports them.
 - Stripe funding is credited only after a verified checkout.session.completed webhook.
 - Base USDC funding and payouts require indexed escrow logs.
 - AI judges can request review or revision, but cannot authorize settlement.

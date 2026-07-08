@@ -108,7 +108,7 @@
     const currency = String(data.get("currency") || "usd").trim().toLowerCase();
     const externalReference =
       String(data.get("externalReference") || "").trim() ||
-      `card-funding-${Date.now()}`;
+      `checkout-funding-${Date.now()}`;
 
     try {
       const intentResponse = await fetch(`${apiBaseUrl}/v1/bounties/${bountyId}/funding-intents`, {
@@ -154,7 +154,7 @@
       output.textContent = `Checkout session created.\n\nOpen Stripe Checkout: ${checkout.url}`;
       window.location.assign(checkout.url);
     } catch (error) {
-      output.textContent = `${error.message}\n\nNo card data was collected here. Confirm the hosted API URL, bounty id, organization id, Stripe live settings, and ENABLE_STRIPE_PUBLIC_CHECKOUT=true.`;
+      output.textContent = `${error.message}\n\nNo payment credentials were collected here. Confirm the hosted API URL, bounty id, organization id, Stripe live settings, and ENABLE_STRIPE_PUBLIC_CHECKOUT=true.`;
     }
   });
 })();

@@ -102,7 +102,8 @@ def main() -> int:
         "ENABLE_STRIPE_PUBLIC_CHECKOUT=true",
         "/v1/bounties/",
         "/v1/stripe/live/funding-intents/",
-        "No card data was collected here",
+        "No payment credentials were collected here",
+        "STRIPE_PAYMENT_METHOD_CONFIGURATION",
     ]
     for phrase in required_funding_phrases:
         if phrase not in funding and phrase not in main_js:
@@ -110,8 +111,8 @@ def main() -> int:
 
     if "sk_live" in index + funding + main_js:
         fail("site must not include secret-looking Stripe live keys")
-    if "Stripe card funding" not in llms:
-        fail("llms.txt must orient agents to Stripe card funding")
+    if "Stripe Checkout funding" not in llms or "PayPal-capable" not in llms:
+        fail("llms.txt must orient agents to Stripe Checkout and PayPal-capable funding")
     if discovery.get("open_source") is not True:
         fail("static discovery manifest must advertise open_source=true")
     questions = discovery.get("distribution_feedback", {}).get("questions", [])

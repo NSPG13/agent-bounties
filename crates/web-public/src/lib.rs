@@ -528,7 +528,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 name: "Stripe fiat ledger".to_string(),
                 currency: "usd".to_string(),
                 status: "onboarding and compliance gated".to_string(),
-                settlement: "Checkout funds internal balances; Connect snapshots control eligibility; transfer.created evidence marks fiat payout intents paid.".to_string(),
+                settlement: "Stripe-hosted Checkout can show cards, wallets, or PayPal where eligible; Checkout funds internal balances, Connect snapshots control payout eligibility, and transfer.created evidence marks fiat payout intents paid.".to_string(),
                 funding_required_before_claim: true,
                 automatic_release_limit_minor: None,
             },
@@ -596,7 +596,7 @@ fn real_money_rehearsal_descriptor() -> RealMoneyRehearsalDescriptor {
         command: "cargo run -p cli -- funding-rehearsal-demo".to_string(),
         runbook_url: REAL_FUNDING_REHEARSAL_URL.to_string(),
         rails: vec![
-            "Stripe test-mode Checkout for fiat funding".to_string(),
+            "Stripe test-mode Checkout for fiat funding with Dashboard-managed payment methods".to_string(),
             "Base Sepolia USDC escrow for public testnet funding".to_string(),
             "Stripe test-mode Connect transfer planning and reconciliation for fiat payouts"
                 .to_string(),
@@ -743,6 +743,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Release, refund, and dispute plans are unsigned operator transactions.
 - Paid/refunded/disputed state changes only after indexed escrow logs are reconciled.
 - Stripe live execution is gated by operator secrets and compliance state.
+- Stripe Checkout funding can show cards, wallets, or PayPal where the hosted Stripe account supports and enables them.
 - Stripe Connect eligibility does not mark fiat payouts paid; transfer.created evidence does.
 - Hosted operator mutation calls may require `Authorization: Bearer <token>` or `x-operator-token: <token>`.
 - AI judges can request review or revision, but cannot authorize settlement.
@@ -2706,6 +2707,8 @@ mod tests {
         assert!(text.contains("https://network.example/v1/agents/{agent_id}/paid-status"));
         assert!(text.contains("Base refund plan"));
         assert!(text.contains("Stripe Connect transfer plan"));
+        assert!(text.contains("PayPal"));
+        assert!(text.contains("Stripe Checkout funding"));
         assert!(text.contains("Real Funding Rehearsal"));
         assert!(text.contains("cargo run -p cli -- funding-rehearsal-demo"));
         assert!(text.contains(REAL_FUNDING_REHEARSAL_URL));
