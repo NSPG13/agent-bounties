@@ -45,6 +45,7 @@ way to recover before rerunning the check.
 ```powershell
 cargo test --workspace
 cargo run -p cli -- demo
+cargo run -p cli -- pooled-funding-demo
 cargo run -p cli -- base-plan --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333
 cargo run -p cli -- base-decode-demo
 cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0
@@ -185,8 +186,10 @@ Useful REST paths:
 - `POST /v1/help-requests`
 - `POST /v1/help-requests/{id}/quotes`
 - `POST /v1/quotes/{id}/fund-bounty`
+- `POST /v1/bounties/pooled`
 - `GET /v1/bounties/claimable`
 - `GET /v1/bounties/feed`
+- `POST /v1/bounties/{id}/funding-contributions`
 - `POST /v1/bounties/{id}/claim`
 - `POST /v1/bounties/{id}/submit`
 - `POST /v1/bounties/{id}/verify`
@@ -224,8 +227,8 @@ Useful REST paths:
 
 The Python and TypeScript SDKs cover the same core agent loop: read `/llms.txt`
 or the machine-discovery manifest and schema, route a blocked goal, register agents/capabilities,
-create help requests, request quotes, fund quotes, post Base funding-ready
-bounties, reconcile Base funding events, claim/submit/verify bounties, inspect
+create help requests, request quotes, fund quotes, open pooled bounty targets,
+add funding contributions, post Base funding-ready bounties, reconcile Base funding events, claim/submit/verify bounties, inspect
 the public claimable bounty and capability feeds, check bounty and agent paid
 status, plan Stripe Checkout top-ups and Accounts v2 onboarding requests, plan
 Base USDC funding/release/refund/dispute transactions, call
@@ -271,7 +274,8 @@ script can launch a native Unix API binary.
 
 The MCP server exposes matching local tools on port `8090`, including
 `route_blocked_goal`, `claim_bounty`, `get_bounty_status`, `get_paid_status`,
-`list_claimable_bounties`, `search_capabilities`, `run_bountybench`, `run_abusebench`,
+`list_claimable_bounties`, `open_pooled_bounty`, `add_bounty_funding`,
+`search_capabilities`, `run_bountybench`, `run_abusebench`,
 `run_judgebench`, `run_eval_loops`, `get_eval_runs`, `get_risk_policy`,
 `list_risk_events`, `list_risk_reviews`, `approve_risk_bounty`,
 `approve_risk_payout`, `reject_risk_event`, `reconcile_base_escrow_event`,

@@ -7,10 +7,11 @@ use chain_base::{
 use chrono::{DateTime, Utc};
 use domain::{
     Agent, Bounty, BountyStatus, Capability, CapabilityClass, Claim, Escrow, EscrowStatus,
-    FundingMode, HelpRequest, Id, Money, PaymentEvent, PaymentEventStatus, PaymentRail,
-    PayoutIntent, PayoutStatus, PrivacyLevel, ProofRecord, Quote, ReputationEvent, RiskAction,
-    RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement, Submission,
-    TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
+    FundingContribution, FundingContributionStatus, FundingMode, HelpRequest, Id, Money,
+    PaymentEvent, PaymentEventStatus, PaymentRail, PayoutIntent, PayoutStatus, PrivacyLevel,
+    ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome,
+    RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal, VerificationDecision,
+    VerifierKind, VerifierResult,
 };
 use ledger::{credit, debit, Ledger, LedgerEntry};
 use payments_stripe::{
@@ -64,6 +65,8 @@ pub enum AppError {
     InvalidBaseReleasePlan(String),
     #[error("invalid Base escrow plan: {0}")]
     InvalidBaseEscrowPlan(String),
+    #[error("invalid funding contribution: {0}")]
+    InvalidFundingContribution(String),
     #[error("invalid Stripe payout reconciliation: {0}")]
     InvalidStripePayout(String),
     #[error(transparent)]
@@ -90,6 +93,26 @@ pub struct PostBountyRequest {
     pub currency: String,
     pub funding_mode: FundingMode,
     pub privacy: PrivacyLevel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenPooledBountyRequest {
+    pub title: String,
+    pub template_slug: String,
+    pub target_amount_minor: i64,
+    pub currency: String,
+    pub funding_mode: FundingMode,
+    pub privacy: PrivacyLevel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddFundingContributionRequest {
+    pub bounty_id: Id,
+    pub contributor_agent_id: Option<Id>,
+    pub amount_minor: i64,
+    pub currency: String,
+    pub rail: PaymentRail,
+    pub external_reference: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,6 +283,8 @@ pub struct BaseReleaseQueueItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BountyStatusResponse {
     pub bounty: Bounty,
+    pub funding_summary: PooledFundingSummary,
+    pub funding_contributions: Vec<FundingContribution>,
     pub escrows: Vec<Escrow>,
     pub claims: Vec<Claim>,
     pub submissions: Vec<Submission>,
@@ -353,6 +378,24 @@ pub struct BaseEscrowReconciliation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PooledFundingSummary {
+    pub bounty_id: Id,
+    pub target: Money,
+    pub applied: Money,
+    pub remaining: Money,
+    pub contribution_count: usize,
+    pub claimable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PooledFundingReport {
+    pub bounty: Bounty,
+    pub contribution: FundingContribution,
+    pub funding_summary: PooledFundingSummary,
+    pub ledger_entries: Vec<LedgerEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StripeConnectPayoutReconciliation {
     pub payout_state: ConnectPayoutState,
     pub settlements: Vec<Settlement>,
@@ -374,6 +417,7 @@ pub struct BountyNetwork {
     pub help_requests: HashMap<Id, HelpRequest>,
     pub quotes: HashMap<Id, Quote>,
     pub bounties: HashMap<Id, Bounty>,
+    pub funding_contributions: HashMap<Id, FundingContribution>,
     pub escrows: HashMap<Id, Escrow>,
     pub claims: HashMap<Id, Claim>,
     pub submissions: HashMap<Id, Submission>,
@@ -397,6 +441,7 @@ impl Default for BountyNetwork {
             help_requests: HashMap::new(),
             quotes: HashMap::new(),
             bounties: HashMap::new(),
+            funding_contributions: HashMap::new(),
             escrows: HashMap::new(),
             claims: HashMap::new(),
             submissions: HashMap::new(),
@@ -585,6 +630,16 @@ impl BountyNetwork {
 
         bounty.mark_funded(terms_hash)?;
         bounty.make_claimable()?;
+        let contribution = FundingContribution {
+            id: Uuid::new_v4(),
+            bounty_id: bounty.id,
+            contributor_agent_id: None,
+            rail: payment_rail_for_funding_mode(&funding_mode),
+            amount: amount.clone(),
+            status: FundingContributionStatus::Applied,
+            external_reference: Some(format!("initial:{}", bounty.id)),
+            created_at: Utc::now(),
+        };
 
         self.ledger.append(LedgerEntry::new(
             "fund bounty",
@@ -595,8 +650,154 @@ impl BountyNetwork {
             ],
         )?)?;
 
+        self.funding_contributions
+            .insert(contribution.id, contribution);
         self.bounties.insert(bounty.id, bounty.clone());
         Ok(bounty)
+    }
+
+    pub fn open_pooled_bounty(&mut self, request: OpenPooledBountyRequest) -> AppResult<Bounty> {
+        let amount = Money::new(request.target_amount_minor, request.currency)?;
+        let funding_mode = request.funding_mode.clone();
+        let mut bounty = Bounty::new(
+            request.title,
+            request.template_slug,
+            amount.clone(),
+            funding_mode.clone(),
+            request.privacy.clone(),
+        );
+        let risk = self.risk_policy.evaluate_bounty(&BountyRiskInput {
+            title: bounty.title.clone(),
+            template_slug: bounty.template_slug.clone(),
+            amount: amount.clone(),
+            funding_mode,
+            privacy: request.privacy,
+        });
+        self.enforce_risk(risk, bounty.id, None, Some(bounty.id))?;
+        bounty.terms_hash = Some(hash_terms(&bounty.title, &bounty.template_slug, &amount));
+        self.bounties.insert(bounty.id, bounty.clone());
+        Ok(bounty)
+    }
+
+    pub fn add_funding_contribution(
+        &mut self,
+        request: AddFundingContributionRequest,
+    ) -> AppResult<PooledFundingReport> {
+        let bounty = self
+            .bounties
+            .get(&request.bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .clone();
+        if let Some(agent_id) = request.contributor_agent_id {
+            if !self.agents.contains_key(&agent_id) {
+                return Err(AppError::AgentNotFound);
+            }
+        }
+        if bounty.status != BountyStatus::Unfunded && bounty.status != BountyStatus::Funded {
+            return Err(AppError::InvalidFundingContribution(format!(
+                "funding contributions are closed after {:?}",
+                bounty.status
+            )));
+        }
+        if bounty.funding_mode == FundingMode::BaseUsdcEscrow {
+            return Err(AppError::InvalidFundingContribution(
+                "pooled Base USDC contributions require a multi-contributor escrow contract; use plan_base_funding for the current single-escrow rail".to_string(),
+            ));
+        }
+        let expected_rail = payment_rail_for_funding_mode(&bounty.funding_mode);
+        if request.rail != expected_rail {
+            return Err(AppError::InvalidFundingContribution(format!(
+                "contribution rail {:?} does not match bounty funding mode {:?}",
+                request.rail, bounty.funding_mode
+            )));
+        }
+        let amount = Money::new(request.amount_minor, request.currency)?;
+        if amount.currency != bounty.amount.currency {
+            return Err(AppError::InvalidFundingContribution(format!(
+                "contribution currency {} does not match bounty currency {}",
+                amount.currency, bounty.amount.currency
+            )));
+        }
+        if let Some(reference) = request.external_reference.as_deref() {
+            if self.funding_contributions.values().any(|contribution| {
+                contribution.bounty_id == bounty.id
+                    && contribution.external_reference.as_deref() == Some(reference)
+                    && contribution.status == FundingContributionStatus::Applied
+            }) {
+                return Err(AppError::InvalidFundingContribution(format!(
+                    "duplicate funding contribution reference: {reference}"
+                )));
+            }
+        }
+
+        let funded_before = self.applied_funding_amount(&bounty);
+        let remaining_before = bounty.amount.amount.saturating_sub(funded_before);
+        if remaining_before == 0 {
+            return Err(AppError::InvalidFundingContribution(
+                "bounty is already fully funded".to_string(),
+            ));
+        }
+        if amount.amount > remaining_before {
+            return Err(AppError::InvalidFundingContribution(format!(
+                "contribution would overfund bounty by {} {}",
+                amount.amount - remaining_before,
+                amount.currency
+            )));
+        }
+
+        let contribution = FundingContribution {
+            id: Uuid::new_v4(),
+            bounty_id: bounty.id,
+            contributor_agent_id: request.contributor_agent_id,
+            rail: request.rail,
+            amount: amount.clone(),
+            status: FundingContributionStatus::Applied,
+            external_reference: request.external_reference,
+            created_at: Utc::now(),
+        };
+        let contributor_account = contribution
+            .contributor_agent_id
+            .map(|id| format!("contributor_funds:{id}"))
+            .unwrap_or_else(|| "external_contributor_funds".to_string());
+        let entry = LedgerEntry::new(
+            "pooled bounty funding contribution",
+            Some(format!("fund-contribution:{}", contribution.id)),
+            vec![
+                debit(contributor_account, amount.clone()),
+                credit(format!("bounty_liability:{}", bounty.id), amount),
+            ],
+        )?;
+        self.ledger.append(entry.clone())?;
+        self.funding_contributions
+            .insert(contribution.id, contribution.clone());
+
+        let funded_after = funded_before + contribution.amount.amount;
+        if funded_after == bounty.amount.amount {
+            let bounty = self
+                .bounties
+                .get_mut(&bounty.id)
+                .ok_or(AppError::BountyNotFound)?;
+            if bounty.status == BountyStatus::Unfunded {
+                let terms_hash = bounty.terms_hash.clone().unwrap_or_else(|| {
+                    hash_terms(&bounty.title, &bounty.template_slug, &bounty.amount)
+                });
+                bounty.mark_funded(terms_hash)?;
+            }
+            bounty.make_claimable()?;
+        }
+
+        let bounty = self
+            .bounties
+            .get(&contribution.bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .clone();
+        let funding_summary = self.funding_summary_for_bounty(&bounty);
+        Ok(PooledFundingReport {
+            bounty,
+            contribution,
+            funding_summary,
+            ledger_entries: vec![entry],
+        })
     }
 
     pub fn claim_bounty(&mut self, request: ClaimBountyRequest) -> AppResult<Bounty> {
@@ -1050,6 +1251,13 @@ impl BountyNetwork {
             .get(&bounty_id)
             .ok_or(AppError::BountyNotFound)?
             .clone();
+        let funding_summary = self.funding_summary_for_bounty(&bounty);
+        let funding_contributions = self
+            .funding_contributions
+            .values()
+            .filter(|contribution| contribution.bounty_id == bounty_id)
+            .cloned()
+            .collect();
         let escrows = self
             .escrows
             .values()
@@ -1107,6 +1315,8 @@ impl BountyNetwork {
 
         Ok(BountyStatusResponse {
             bounty,
+            funding_summary,
+            funding_contributions,
             escrows,
             claims,
             submissions,
@@ -2418,6 +2628,14 @@ fn validate_created_base_escrow(
 }
 
 impl BountyNetwork {
+    pub fn funding_summary(&self, bounty_id: Id) -> AppResult<PooledFundingSummary> {
+        let bounty = self
+            .bounties
+            .get(&bounty_id)
+            .ok_or(AppError::BountyNotFound)?;
+        Ok(self.funding_summary_for_bounty(bounty))
+    }
+
     fn is_claimable_with_confirmed_funding(&self, bounty: &Bounty) -> bool {
         if bounty.status != BountyStatus::Claimable {
             return false;
@@ -2426,6 +2644,60 @@ impl BountyNetwork {
             return true;
         }
         self.has_funded_base_escrow(bounty.id)
+    }
+
+    fn funding_summary_for_bounty(&self, bounty: &Bounty) -> PooledFundingSummary {
+        let applied_amount = self.applied_funding_amount(bounty);
+        let remaining_amount = bounty.amount.amount.saturating_sub(applied_amount);
+        PooledFundingSummary {
+            bounty_id: bounty.id,
+            target: bounty.amount.clone(),
+            applied: Money {
+                amount: applied_amount.max(0),
+                currency: bounty.amount.currency.clone(),
+            },
+            remaining: Money {
+                amount: remaining_amount,
+                currency: bounty.amount.currency.clone(),
+            },
+            contribution_count: self
+                .funding_contributions
+                .values()
+                .filter(|contribution| contribution.bounty_id == bounty.id)
+                .filter(|contribution| contribution.status == FundingContributionStatus::Applied)
+                .count(),
+            claimable: self.is_claimable_with_confirmed_funding(bounty),
+        }
+    }
+
+    fn applied_funding_amount(&self, bounty: &Bounty) -> i64 {
+        let contribution_total = self
+            .funding_contributions
+            .values()
+            .filter(|contribution| contribution.bounty_id == bounty.id)
+            .filter(|contribution| contribution.status == FundingContributionStatus::Applied)
+            .filter(|contribution| contribution.amount.currency == bounty.amount.currency)
+            .map(|contribution| contribution.amount.amount)
+            .sum::<i64>();
+        if contribution_total > 0 || bounty.funding_mode != FundingMode::BaseUsdcEscrow {
+            if contribution_total == 0 && bounty.status != BountyStatus::Unfunded {
+                return bounty.amount.amount;
+            }
+            return contribution_total;
+        }
+        self.escrows
+            .values()
+            .filter(|escrow| escrow.bounty_id == bounty.id)
+            .filter(|escrow| escrow.rail == PaymentRail::BaseUsdc)
+            .filter(|escrow| escrow.amount.currency == bounty.amount.currency)
+            .filter(|escrow| {
+                matches!(
+                    escrow.status,
+                    EscrowStatus::Funded | EscrowStatus::Disputed | EscrowStatus::Released
+                )
+            })
+            .map(|escrow| escrow.amount.amount)
+            .sum()
     }
 
     fn has_funded_base_escrow(&self, bounty_id: Id) -> bool {
@@ -2748,6 +3020,145 @@ mod tests {
         let replay = network.apply_base_escrow_event(released).unwrap();
         assert!(replay.ledger_entries.is_empty());
         assert_eq!(network.ledger.entries().len(), 2);
+    }
+
+    #[test]
+    fn pooled_simulated_funding_becomes_claimable_only_at_target() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "solver".to_string(),
+            payout_wallet: None,
+        });
+        let sponsor_a = network.register_agent(RegisterAgentRequest {
+            handle: "sponsor-a".to_string(),
+            payout_wallet: None,
+        });
+        let sponsor_b = network.register_agent(RegisterAgentRequest {
+            handle: "sponsor-b".to_string(),
+            payout_wallet: None,
+        });
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                title: "Write agent onboarding docs".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+
+        assert_eq!(bounty.status, BountyStatus::Unfunded);
+        assert!(network.list_claimable_bounties().is_empty());
+        assert!(matches!(
+            network
+                .claim_bounty(ClaimBountyRequest {
+                    bounty_id: bounty.id,
+                    solver_agent_id: solver.id,
+                })
+                .unwrap_err(),
+            AppError::Domain(domain::DomainError::UnfundedBounty)
+        ));
+
+        let partial = network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: Some(sponsor_a.id),
+                amount_minor: 400,
+                currency: "USDC".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("sponsor-a-400".to_string()),
+            })
+            .unwrap();
+        assert_eq!(partial.bounty.status, BountyStatus::Unfunded);
+        assert_eq!(partial.funding_summary.applied.amount, 400);
+        assert_eq!(partial.funding_summary.remaining.amount, 600);
+        assert!(!partial.funding_summary.claimable);
+        assert!(network.list_claimable_bounties().is_empty());
+
+        let funded = network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: Some(sponsor_b.id),
+                amount_minor: 600,
+                currency: "usdc".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("sponsor-b-600".to_string()),
+            })
+            .unwrap();
+        assert_eq!(funded.bounty.status, BountyStatus::Claimable);
+        assert_eq!(funded.funding_summary.applied.amount, 1_000);
+        assert_eq!(funded.funding_summary.remaining.amount, 0);
+        assert_eq!(funded.funding_summary.contribution_count, 2);
+        assert!(funded.funding_summary.claimable);
+        assert_eq!(network.list_claimable_bounties().len(), 1);
+        assert_eq!(network.ledger.entries().len(), 2);
+
+        let claimed = network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        assert_eq!(claimed.status, BountyStatus::Claimed);
+    }
+
+    #[test]
+    fn pooled_funding_rejects_overfunding_and_duplicate_references() {
+        let mut network = BountyNetwork::default();
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                title: "Fix docs typo".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+
+        network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                amount_minor: 700,
+                currency: "usdc".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("shared-ref".to_string()),
+            })
+            .unwrap();
+        assert!(matches!(
+            network
+                .add_funding_contribution(AddFundingContributionRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    amount_minor: 100,
+                    currency: "usdc".to_string(),
+                    rail: PaymentRail::Simulated,
+                    external_reference: Some("shared-ref".to_string()),
+                })
+                .unwrap_err(),
+            AppError::InvalidFundingContribution(_)
+        ));
+        assert!(matches!(
+            network
+                .add_funding_contribution(AddFundingContributionRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    amount_minor: 400,
+                    currency: "usdc".to_string(),
+                    rail: PaymentRail::Simulated,
+                    external_reference: Some("too-much".to_string()),
+                })
+                .unwrap_err(),
+            AppError::InvalidFundingContribution(_)
+        ));
+
+        let status = network.status(bounty.id).unwrap();
+        assert_eq!(status.funding_contributions.len(), 1);
+        assert_eq!(status.funding_summary.applied.amount, 700);
+        assert_eq!(status.funding_summary.remaining.amount, 300);
+        assert!(!status.funding_summary.claimable);
     }
 
     #[tokio::test]

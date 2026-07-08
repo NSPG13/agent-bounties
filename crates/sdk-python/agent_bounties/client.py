@@ -237,6 +237,50 @@ class AgentBountiesClient:
             },
         )
 
+    def open_pooled_bounty(
+        self,
+        title: str,
+        template_slug: str,
+        target_amount_minor: int,
+        currency: str,
+        funding_mode: str,
+        privacy: str,
+    ):
+        return self._request(
+            "POST",
+            "/v1/bounties/pooled",
+            json={
+                "title": title,
+                "template_slug": template_slug,
+                "target_amount_minor": target_amount_minor,
+                "currency": currency,
+                "funding_mode": funding_mode,
+                "privacy": privacy,
+            },
+        )
+
+    def add_funding_contribution(
+        self,
+        bounty_id: str,
+        amount_minor: int,
+        currency: str,
+        rail: str,
+        contributor_agent_id: str | None = None,
+        external_reference: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            f"/v1/bounties/{bounty_id}/funding-contributions",
+            json={
+                "bounty_id": bounty_id,
+                "contributor_agent_id": contributor_agent_id,
+                "amount_minor": amount_minor,
+                "currency": currency,
+                "rail": rail,
+                "external_reference": external_reference,
+            },
+        )
+
     def list_claimable_bounties(self):
         return self._request("GET", "/v1/bounties/claimable")
 

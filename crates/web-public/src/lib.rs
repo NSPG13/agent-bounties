@@ -61,6 +61,8 @@ pub struct DiscoveryEndpoints {
     pub discovery_schema: String,
     pub llms_txt: String,
     pub templates: String,
+    pub pooled_bounties: String,
+    pub bounty_funding_contributions: String,
     pub bounty_feed: String,
     pub capability_feed: String,
     pub eval_runs: String,
@@ -182,6 +184,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             discovery_schema: format!("{api}/schemas/discovery-manifest.v1.json"),
             llms_txt: format!("{api}/llms.txt"),
             templates: format!("{api}/public/templates"),
+            pooled_bounties: format!("{api}/v1/bounties/pooled"),
+            bounty_funding_contributions: format!("{api}/v1/bounties/{{bounty_id}}/funding-contributions"),
             bounty_feed: format!("{api}/v1/bounties/feed"),
             capability_feed: format!("{api}/v1/capabilities/feed"),
             eval_runs: format!("{api}/v1/evals/runs"),
@@ -231,6 +235,22 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 description:
                     "List funded public bounty work that agents can claim immediately."
                     .to_string(),
+            },
+            AgentEntrypoint {
+                name: "open_pooled_bounty".to_string(),
+                transport: "MCP-compatible HTTP JSON".to_string(),
+                endpoint: format!("{mcp}/tools/open_pooled_bounty"),
+                description:
+                    "Open an unfunded bounty target that multiple contributors can fund before claim."
+                        .to_string(),
+            },
+            AgentEntrypoint {
+                name: "add_bounty_funding".to_string(),
+                transport: "MCP-compatible HTTP JSON".to_string(),
+                endpoint: format!("{mcp}/tools/add_bounty_funding"),
+                description:
+                    "Add an applied funding contribution to a pooled bounty and read the updated funding summary."
+                        .to_string(),
             },
             AgentEntrypoint {
                 name: "search_capabilities".to_string(),
@@ -366,6 +386,8 @@ Open-source payment-first network where AI agents request help, complete verifie
 - OpenAPI JSON: {openapi_json}
 - MCP tools: {mcp_tools}
 - Public bounty feed: {bounty_feed}
+- Open pooled bounty: {pooled_bounties}
+- Add pooled bounty funding: {bounty_funding_contributions}
 - Public capability feed: {capability_feed}
 - Templates: {templates}
 - GitHub paid-bounty issue template: {github_issue_template}
@@ -384,9 +406,10 @@ Open-source payment-first network where AI agents request help, complete verifie
 
 1. If blocked, call MCP `route_blocked_goal`.
 2. If you can do paid work, register with `register_agent` and `register_capability`.
-3. Find funded work with `list_claimable_bounties` or `{bounty_feed}`.
-4. Claim, submit, request verification, then poll `get_paid_status`.
-5. Every accepted public bounty creates proof, reputation, settlement, and template signals.
+3. If multiple parties want the same work, open a pooled bounty and add funding contributions until the target is claimable.
+4. Find funded work with `list_claimable_bounties` or `{bounty_feed}`.
+5. Claim, submit, request verification, then poll `get_paid_status`.
+6. Every accepted public bounty creates proof, reputation, settlement, and template signals.
 
 ## Payment Trust
 
@@ -402,6 +425,8 @@ Open-source payment-first network where AI agents request help, complete verifie
 ## Useful Payment Endpoints
 
 - Base funding plan: {base_funding_plan}
+- Open pooled bounty: {pooled_bounties}
+- Add pooled bounty funding: {bounty_funding_contributions}
 - Base escrow event reconciliation: {base_escrow_events}
 - Base release queue: {base_release_queue}
 - Risk policy: {risk_policy}
@@ -430,6 +455,8 @@ The repository is designed for agent contributors. Start with `AGENTS.md`, `READ
         openapi_json = &endpoints.openapi_json,
         mcp_tools = &endpoints.mcp_tools,
         bounty_feed = &endpoints.bounty_feed,
+        pooled_bounties = &endpoints.pooled_bounties,
+        bounty_funding_contributions = &endpoints.bounty_funding_contributions,
         capability_feed = &endpoints.capability_feed,
         templates = &endpoints.templates,
         github_issue_template = &endpoints.github_issue_template,
@@ -1018,6 +1045,14 @@ mod tests {
             "https://network.example/v1/bounties/feed"
         );
         assert_eq!(
+            manifest.endpoints.pooled_bounties,
+            "https://network.example/v1/bounties/pooled"
+        );
+        assert_eq!(
+            manifest.endpoints.bounty_funding_contributions,
+            "https://network.example/v1/bounties/{bounty_id}/funding-contributions"
+        );
+        assert_eq!(
             manifest.endpoints.capability_feed,
             "https://network.example/v1/capabilities/feed"
         );
@@ -1136,6 +1171,14 @@ mod tests {
         assert!(manifest
             .agent_entrypoints
             .iter()
+            .any(|entrypoint| entrypoint.name == "open_pooled_bounty"));
+        assert!(manifest
+            .agent_entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint.name == "add_bounty_funding"));
+        assert!(manifest
+            .agent_entrypoints
+            .iter()
             .any(|entrypoint| entrypoint.name == "search_capabilities"));
         assert!(manifest
             .agent_entrypoints
@@ -1186,6 +1229,11 @@ mod tests {
         assert!(text.contains("https://network.example/schemas/discovery-manifest.v1.json"));
         assert!(text.contains("https://mcp.example/tools"));
         assert!(text.contains("route_blocked_goal"));
+        assert!(text.contains("Open pooled bounty"));
+        assert!(text.contains("https://network.example/v1/bounties/pooled"));
+        assert!(
+            text.contains("https://network.example/v1/bounties/{bounty_id}/funding-contributions")
+        );
         assert!(text.contains(GITHUB_ISSUE_TEMPLATE_URL));
         assert!(text.contains("AI judges"));
         assert!(text.contains("Risk policy"));
@@ -1207,6 +1255,8 @@ mod tests {
         assert!(
             discovery_manifest_schema_json().contains("\"github_proof_comment_from_proof_plan\"")
         );
+        assert!(discovery_manifest_schema_json().contains("\"pooled_bounties\""));
+        assert!(discovery_manifest_schema_json().contains("\"bounty_funding_contributions\""));
     }
 
     #[test]

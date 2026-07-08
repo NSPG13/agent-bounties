@@ -87,6 +87,7 @@ cargo run -p cli -- discovery \
   --mcp-base-url https://agentbounties.local/mcp
 cargo run -p cli -- docs-contract-check
 cargo run -p cli -- demo
+cargo run -p cli -- pooled-funding-demo
 "${python_cmd[@]}" -m py_compile \
   crates/sdk-python/agent_bounties/client.py \
   crates/sdk-python/agent_bounties/smoke.py \

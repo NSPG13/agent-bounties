@@ -1,8 +1,9 @@
 use anyhow::{bail, Context, Result};
 use app::{
-    hash_artifact, BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest,
-    CreateHelpRequestRequest, FundQuoteRequest, PostBountyRequest, RegisterAgentRequest,
-    RegisterCapabilityRequest, RequestQuotesRequest, SubmitResultRequest, VerifySubmissionRequest,
+    hash_artifact, AddFundingContributionRequest, BaseReleaseQueueRequest, BountyNetwork,
+    ClaimBountyRequest, CreateHelpRequestRequest, FundQuoteRequest, OpenPooledBountyRequest,
+    PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest, RequestQuotesRequest,
+    SubmitResultRequest, VerifySubmissionRequest,
 };
 use chain_base::{
     base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
@@ -14,7 +15,7 @@ use chain_base::{
 };
 use chrono::Utc;
 use clap::{Parser, Subcommand};
-use domain::{CapabilityClass, FundingMode, Money, PrivacyLevel, VerifierKind};
+use domain::{CapabilityClass, FundingMode, Money, PaymentRail, PrivacyLevel, VerifierKind};
 use eval_harness::{
     bundled_abuse_fixtures, bundled_fixtures, bundled_judge_fixtures, run_eval_loops, AbuseBench,
     BountyBench, JudgeBench,
@@ -48,6 +49,7 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     Demo,
+    PooledFundingDemo,
     Bountybench,
     Abusebench,
     Judgebench,
@@ -305,6 +307,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {
         Command::Demo => demo().await,
+        Command::PooledFundingDemo => pooled_funding_demo(),
         Command::Bountybench => bountybench(),
         Command::Abusebench => abusebench(),
         Command::Judgebench => judgebench(),
@@ -600,6 +603,58 @@ async fn demo() -> Result<()> {
     println!("escrows={}", status.escrows.len());
     println!("indexed_chain_events={}", indexer.events().len());
     println!("solver={}", solver.handle);
+    Ok(())
+}
+
+fn pooled_funding_demo() -> Result<()> {
+    let mut network = BountyNetwork::default();
+    let sponsor_a = network.register_agent(RegisterAgentRequest {
+        handle: "sponsor-a".to_string(),
+        payout_wallet: None,
+    });
+    let sponsor_b = network.register_agent(RegisterAgentRequest {
+        handle: "sponsor-b".to_string(),
+        payout_wallet: None,
+    });
+    let bounty = network.open_pooled_bounty(OpenPooledBountyRequest {
+        title: "Write the first agent quickstart".to_string(),
+        template_slug: "write-docs-for-area".to_string(),
+        target_amount_minor: 1_000_000,
+        currency: "usdc".to_string(),
+        funding_mode: FundingMode::Simulated,
+        privacy: PrivacyLevel::Public,
+    })?;
+    let first = network.add_funding_contribution(AddFundingContributionRequest {
+        bounty_id: bounty.id,
+        contributor_agent_id: Some(sponsor_a.id),
+        amount_minor: 400_000,
+        currency: "usdc".to_string(),
+        rail: PaymentRail::Simulated,
+        external_reference: Some("sponsor-a-demo".to_string()),
+    })?;
+    let second = network.add_funding_contribution(AddFundingContributionRequest {
+        bounty_id: bounty.id,
+        contributor_agent_id: Some(sponsor_b.id),
+        amount_minor: 600_000,
+        currency: "usdc".to_string(),
+        rail: PaymentRail::Simulated,
+        external_reference: Some("sponsor-b-demo".to_string()),
+    })?;
+    let status = network.status(bounty.id)?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "bounty_id": bounty.id,
+            "status": format!("{:?}", status.bounty.status),
+            "first_remaining_minor": first.funding_summary.remaining.amount,
+            "final_applied_minor": second.funding_summary.applied.amount,
+            "final_remaining_minor": second.funding_summary.remaining.amount,
+            "claimable": second.funding_summary.claimable,
+            "contribution_count": status.funding_contributions.len(),
+            "ledger_entries": network.ledger.entries().len()
+        }))?
+    );
     Ok(())
 }
 

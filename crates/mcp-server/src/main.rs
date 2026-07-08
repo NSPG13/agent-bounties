@@ -1,7 +1,8 @@
 use app::{
-    ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseReleaseQueueRequest, BountyNetwork,
-    ClaimBountyRequest, CreateHelpRequestRequest, FundQuoteRequest, PlanBaseDisputeRequest,
-    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest, PostBountyRequest,
+    AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
+    BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest, CreateHelpRequestRequest,
+    FundQuoteRequest, OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest,
+    PlanBaseRefundRequest, PlanBaseReleaseRequest, PooledFundingReport, PostBountyRequest,
     RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
@@ -281,6 +282,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/request_quotes", post(request_quotes))
         .route("/tools/fund_quote_as_bounty", post(fund_quote_as_bounty))
         .route("/tools/post_bounty", post(post_bounty))
+        .route("/tools/open_pooled_bounty", post(open_pooled_bounty))
+        .route("/tools/add_bounty_funding", post(add_bounty_funding))
         .route(
             "/tools/list_claimable_bounties",
             get(list_claimable_bounties),
@@ -473,6 +476,43 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "funding_mode",
                     "privacy",
                 ],
+            ),
+        ),
+        tool(
+            "open_pooled_bounty",
+            "Open an unfunded pooled bounty target so multiple contributors can add funds before it becomes claimable.",
+            object_tool_schema(
+                json!({
+                    "title": string_property("Bounty title."),
+                    "template_slug": string_property("Reusable bounty template slug."),
+                    "target_amount_minor": integer_property("Target amount in minor units before the bounty becomes claimable."),
+                    "currency": string_property("Currency code."),
+                    "funding_mode": funding_mode_property(),
+                    "privacy": privacy_property()
+                }),
+                &[
+                    "title",
+                    "template_slug",
+                    "target_amount_minor",
+                    "currency",
+                    "funding_mode",
+                    "privacy",
+                ],
+            ),
+        ),
+        tool(
+            "add_bounty_funding",
+            "Add an applied funding contribution to a pooled bounty and return the updated funding summary.",
+            object_tool_schema(
+                json!({
+                    "bounty_id": uuid_property("Pooled bounty UUID."),
+                    "contributor_agent_id": nullable_uuid_property("Optional contributor agent UUID."),
+                    "amount_minor": integer_property("Contribution amount in minor units."),
+                    "currency": string_property("Currency code."),
+                    "rail": enum_property(&["Simulated", "StripeFiat"], "Funding rail for this contribution."),
+                    "external_reference": nullable_string_property("Optional per-bounty idempotency reference from the funding rail.")
+                }),
+                &["bounty_id", "amount_minor", "currency", "rail"],
             ),
         ),
         tool(
@@ -1356,6 +1396,47 @@ async fn post_bounty(
         return mcp_error(error);
     }
     mcp_json(bounty)
+}
+
+async fn open_pooled_bounty(
+    State(state): State<SharedState>,
+    Json(args): Json<OpenPooledBountyRequest>,
+) -> Json<serde_json::Value> {
+    let result = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network.open_pooled_bounty(args)
+    };
+    let bounty = match result {
+        Ok(bounty) => bounty,
+        Err(error) => {
+            if let Err(persist_error) = persist_all_risk_events(&state).await {
+                return mcp_error(persist_error);
+            }
+            return mcp_error(error);
+        }
+    };
+    if let Err(error) = persist_bounty_and_ledger(&state, &bounty, &[]).await {
+        return mcp_error(error);
+    }
+    mcp_json(bounty)
+}
+
+async fn add_bounty_funding(
+    State(state): State<SharedState>,
+    Json(args): Json<AddFundingContributionRequest>,
+) -> Json<serde_json::Value> {
+    let result = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network.add_funding_contribution(args)
+    };
+    let report = match result {
+        Ok(report) => report,
+        Err(error) => return mcp_error(error),
+    };
+    if let Err(error) = persist_pooled_funding_report(&state, &report).await {
+        return mcp_error(error);
+    }
+    mcp_json(report)
 }
 
 async fn list_claimable_bounties(State(state): State<SharedState>) -> Json<serde_json::Value> {
@@ -2494,6 +2575,30 @@ mod tests {
             .unwrap()
             .is_empty());
 
+        let open_pooled = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "open_pooled_bounty")
+            .expect("open_pooled_bounty descriptor exists");
+        assert!(open_pooled.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "target_amount_minor"));
+
+        let add_funding = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "add_bounty_funding")
+            .expect("add_bounty_funding descriptor exists");
+        assert_eq!(
+            add_funding.input_schema["properties"]["bounty_id"]["format"],
+            "uuid"
+        );
+        assert!(add_funding.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "amount_minor"));
+
         let get_paid_status = descriptors
             .iter()
             .find(|descriptor| descriptor.name == "get_paid_status")
@@ -3258,6 +3363,12 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
             .into_iter()
             .map(|bounty| (bounty.id, bounty))
             .collect(),
+        funding_contributions: store
+            .list_funding_contributions()
+            .await?
+            .into_iter()
+            .map(|contribution| (contribution.id, contribution))
+            .collect(),
         escrows: store
             .list_escrows()
             .await?
@@ -3346,6 +3457,21 @@ async fn persist_bounty_and_ledger(
             .upsert_bounty(bounty)
             .await
             .map_err(|error| error.to_string())?;
+        let contributions = {
+            let network = state.network.lock().expect("state poisoned");
+            network
+                .funding_contributions
+                .values()
+                .filter(|contribution| contribution.bounty_id == bounty.id)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        for contribution in &contributions {
+            store
+                .upsert_funding_contribution(contribution)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
         persist_ledger_entries(store, ledger_entries).await?;
     }
     Ok(())
@@ -3366,6 +3492,24 @@ async fn persist_reviewed_bounty_approval(
             .await
             .map_err(|error| error.to_string())?;
         persist_ledger_entries(store, ledger_entries).await?;
+    }
+    Ok(())
+}
+
+async fn persist_pooled_funding_report(
+    state: &SharedState,
+    report: &PooledFundingReport,
+) -> Result<(), String> {
+    if let Some(store) = &state.store {
+        store
+            .upsert_bounty(&report.bounty)
+            .await
+            .map_err(|error| error.to_string())?;
+        store
+            .upsert_funding_contribution(&report.contribution)
+            .await
+            .map_err(|error| error.to_string())?;
+        persist_ledger_entries(store, &report.ledger_entries).await?;
     }
     Ok(())
 }

@@ -1,9 +1,10 @@
 use app::{
-    hash_artifact, ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseEscrowReconciliation,
-    BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
-    CreateHelpRequestRequest, FundQuoteRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest,
-    PlanBaseRefundRequest, PlanBaseReleaseRequest, PostBountyRequest, QuoteSet,
-    RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    hash_artifact, AddFundingContributionRequest, ApproveRiskBountyRequest,
+    ApproveRiskPayoutRequest, BaseEscrowReconciliation, BaseReleaseQueueRequest, BountyNetwork,
+    BountyStatusResponse, ClaimBountyRequest, CreateHelpRequestRequest, FundQuoteRequest,
+    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
+    PlanBaseReleaseRequest, PooledFundingReport, PostBountyRequest, QuoteSet, RegisterAgentRequest,
+    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
@@ -104,6 +105,8 @@ use worker::BaseEscrowLogWorker;
         plan_github_proof_comment,
         plan_github_proof_comment_from_proof,
         post_bounty,
+        open_pooled_bounty,
+        add_funding_contribution,
         claim_bounty,
         submit_result,
         verify_submission,
@@ -438,8 +441,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/help-requests/:id/quotes", post(request_quotes))
         .route("/v1/quotes/:id/fund-bounty", post(fund_quote))
         .route("/v1/bounties", post(post_bounty))
+        .route("/v1/bounties/pooled", post(open_pooled_bounty))
         .route("/v1/bounties/claimable", get(list_claimable_bounties))
         .route("/v1/bounties/feed", get(public_bounty_feed))
+        .route(
+            "/v1/bounties/:id/funding-contributions",
+            post(add_funding_contribution),
+        )
         .route("/v1/bounties/:id/claim", post(claim_bounty))
         .route("/v1/bounties/:id/submit", post(submit_result))
         .route("/v1/bounties/:id/verify", post(verify_submission))
@@ -989,6 +997,42 @@ async fn post_bounty(
     };
     persist_bounty_and_ledger(&state, &bounty, &ledger_entries).await?;
     Ok(Json(bounty))
+}
+
+#[utoipa::path(post, path = "/v1/bounties/pooled")]
+async fn open_pooled_bounty(
+    State(state): State<SharedState>,
+    Json(request): Json<OpenPooledBountyRequest>,
+) -> Result<Json<domain::Bounty>, StatusCode> {
+    let result = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network.open_pooled_bounty(request)
+    };
+    let bounty = match result {
+        Ok(bounty) => bounty,
+        Err(_) => {
+            persist_all_risk_events(&state).await?;
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+    persist_bounty_and_ledger(&state, &bounty, &[]).await?;
+    Ok(Json(bounty))
+}
+
+#[utoipa::path(post, path = "/v1/bounties/{id}/funding-contributions")]
+async fn add_funding_contribution(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    Json(mut request): Json<AddFundingContributionRequest>,
+) -> Result<Json<PooledFundingReport>, StatusCode> {
+    request.bounty_id = id;
+    let result = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network.add_funding_contribution(request)
+    };
+    let report = result.map_err(|_| StatusCode::BAD_REQUEST)?;
+    persist_pooled_funding_report(&state, &report).await?;
+    Ok(Json(report))
 }
 
 #[utoipa::path(post, path = "/v1/bounties/{id}/claim")]
@@ -2219,6 +2263,12 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
             .into_iter()
             .map(|bounty| (bounty.id, bounty))
             .collect(),
+        funding_contributions: store
+            .list_funding_contributions()
+            .await?
+            .into_iter()
+            .map(|contribution| (contribution.id, contribution))
+            .collect(),
         escrows: store
             .list_escrows()
             .await?
@@ -2307,6 +2357,21 @@ async fn persist_bounty_and_ledger(
             .upsert_bounty(bounty)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let contributions = {
+            let network = state.network.lock().expect("state poisoned");
+            network
+                .funding_contributions
+                .values()
+                .filter(|contribution| contribution.bounty_id == bounty.id)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        for contribution in &contributions {
+            store
+                .upsert_funding_contribution(contribution)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
         persist_ledger_entries(store, ledger_entries).await?;
     }
     Ok(())
@@ -2327,6 +2392,24 @@ async fn persist_reviewed_bounty_approval(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         persist_ledger_entries(store, ledger_entries).await?;
+    }
+    Ok(())
+}
+
+async fn persist_pooled_funding_report(
+    state: &SharedState,
+    report: &PooledFundingReport,
+) -> Result<(), StatusCode> {
+    if let Some(store) = &state.store {
+        store
+            .upsert_bounty(&report.bounty)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store
+            .upsert_funding_contribution(&report.contribution)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        persist_ledger_entries(store, &report.ledger_entries).await?;
     }
     Ok(())
 }
@@ -2383,15 +2466,16 @@ fn expected_digest_for_body(body: &str) -> String {
 mod tests {
     use super::*;
     use app::{
-        ClaimBountyRequest, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
-        SubmitResultRequest, VerifySubmissionRequest,
+        AddFundingContributionRequest, ClaimBountyRequest, OpenPooledBountyRequest,
+        PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest, SubmitResultRequest,
+        VerifySubmissionRequest,
     };
     use chain_base::{
         evm_address_word, evm_bytes32_word, evm_event_topic, evm_uint256_word, evm_words_data,
         EvmLog,
     };
     use domain::{
-        Bounty, BountyStatus, CapabilityClass, FundingMode, Money, PaymentEventStatus,
+        Bounty, BountyStatus, CapabilityClass, FundingMode, Money, PaymentEventStatus, PaymentRail,
         PayoutStatus, ProofRecord, VerifierKind,
     };
     use github_app::GitHubCheckConclusion;
@@ -3768,6 +3852,73 @@ mod tests {
 
         assert_eq!(search.len(), 1);
         assert_eq!(search[0].agent_handle, "capability-solver");
+    }
+
+    #[tokio::test]
+    async fn pooled_funding_endpoints_make_bounty_claimable_at_target() {
+        let state = test_state(BountyNetwork::default());
+
+        let bounty = open_pooled_bounty(
+            State(state.clone()),
+            Json(OpenPooledBountyRequest {
+                title: "Fund shared docs work".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        let partial = add_funding_contribution(
+            State(state.clone()),
+            Path(bounty.id),
+            Json(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                amount_minor: 400,
+                currency: "USDC".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("first".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(partial.bounty.status, BountyStatus::Unfunded);
+        assert_eq!(partial.funding_summary.remaining.amount, 600);
+
+        let funded = add_funding_contribution(
+            State(state.clone()),
+            Path(bounty.id),
+            Json(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                amount_minor: 600,
+                currency: "usdc".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("second".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(funded.bounty.status, BountyStatus::Claimable);
+        assert!(funded.funding_summary.claimable);
+        assert_eq!(funded.funding_summary.contribution_count, 2);
+
+        let status = bounty_status(State(state.clone()), Path(bounty.id))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(status.funding_contributions.len(), 2);
+        assert_eq!(status.funding_summary.applied.amount, 1_000);
+        let feed = list_claimable_bounties(State(state)).await.0;
+        assert_eq!(feed.len(), 1);
+        assert_eq!(feed[0].id, bounty.id);
     }
 
     #[tokio::test]

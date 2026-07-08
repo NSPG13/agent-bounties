@@ -2,6 +2,23 @@
 
 Payment distribution is part of the MVP.
 
+## Pooled Funding
+
+Pooled funding lets multiple contributors fund the same bounty target before a
+solver can claim it. `POST /v1/bounties/pooled` and MCP
+`open_pooled_bounty` create an unfunded target with a terms hash. Contributors
+then call `POST /v1/bounties/{id}/funding-contributions` or MCP
+`add_bounty_funding`. Each applied contribution writes a balanced ledger entry,
+updates the bounty funding summary, and leaves the bounty unclaimable until the
+applied total exactly reaches the target amount. Overfunding and duplicate
+external contribution references are rejected deterministically.
+
+This first pooled path is implemented for internal ledger rails such as
+`Simulated` and `StripeFiatLedger`. The current Base escrow contract remains a
+single-escrow rail: Base bounties still become claimable only after an indexed
+`EscrowCreated` event for the full bounty amount. Multi-contributor Base escrow
+support requires a contract and ABI upgrade.
+
 ## Base USDC
 
 Base USDC escrow is the lowest-friction open payout rail. A bounty must be funded
