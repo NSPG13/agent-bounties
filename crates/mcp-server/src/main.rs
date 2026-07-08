@@ -193,6 +193,7 @@ struct PlanGitHubFundingCommentArgs {
     comment_body: String,
     contributor_login: Option<String>,
     comment_id: Option<String>,
+    funding_api_base_url: Option<String>,
     #[serde(default)]
     existing_idempotency_keys: Vec<String>,
 }
@@ -933,6 +934,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "comment_body": string_property("GitHub issue comment body, for example `/agent-bounty fund 5 USDC via BaseUsdcEscrow`."),
                     "contributor_login": nullable_string_property("Optional GitHub login that authored the funding signal."),
                     "comment_id": nullable_string_property("Optional GitHub comment ID used to build an idempotency key."),
+                    "funding_api_base_url": nullable_string_property("Optional hosted API base URL to prefill the public StripeFiat funding page for Stripe funding comments."),
                     "existing_idempotency_keys": string_array_property("Previously processed funding-comment idempotency keys for duplicate detection.")
                 }),
                 &["repository", "issue_url", "title", "body", "comment_body"],
@@ -2262,6 +2264,7 @@ async fn plan_github_funding_comment(
         comment_body: args.comment_body,
         contributor_login: args.contributor_login,
         comment_id: args.comment_id,
+        funding_api_base_url: args.funding_api_base_url,
         existing_idempotency_keys: args.existing_idempotency_keys,
     }))
 }
@@ -3159,6 +3162,10 @@ mod tests {
         assert_eq!(
             plan_github_funding.input_schema["properties"]["existing_idempotency_keys"]["type"],
             "array"
+        );
+        assert_eq!(
+            plan_github_funding.input_schema["properties"]["funding_api_base_url"]["type"][0],
+            "string"
         );
 
         let plan_github_claim = descriptors

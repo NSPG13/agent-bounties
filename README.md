@@ -522,7 +522,11 @@ The maintainer follow-up loop and current adoption signals are documented in
 The `Paid Bounty Funding Comments` workflow runs the same Rust planner for
 funding comments and publishes a GitHub result comment keyed to the source
 comment id, which gives supporters fast feedback while keeping Stripe/Base
-reconciliation as the only funding authority.
+reconciliation as the only funding authority. For `StripeFiatLedger` funding
+comments, set repository variable `AGENT_BOUNTIES_API_BASE_URL` so the planner
+comment can include a prefilled public Stripe Checkout funding-page handoff;
+that link is a UI default only and verified Stripe webhooks remain the funding
+authority.
 
 Run all local checks:
 
