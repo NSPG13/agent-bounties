@@ -1001,6 +1001,21 @@ async fn verifier_suite() -> Result<EvalSuiteResult, EvalError> {
         )
         .await?,
         verifier_case(
+            "github_ci_needs_review_without_pr_acceptance",
+            VerifierKind::GitHubCi,
+            "abc123abc123abc123",
+            None,
+            None,
+            Some({
+                let mut evidence =
+                    github_ci_evidence("success", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+                evidence.as_object_mut().unwrap().remove("pull_request");
+                evidence
+            }),
+            VerificationDecision::NeedsReview,
+        )
+        .await?,
+        verifier_case(
             "docker_accepts_zero_exit_and_digest",
             VerifierKind::DockerCommand,
             "abc123abc123abc123",
@@ -1138,6 +1153,17 @@ fn github_ci_evidence(conclusion: &str, head_sha: &str) -> serde_json::Value {
     serde_json::json!({
         "repository": "agent-bounties/agent-bounties",
         "pull_request_url": "https://github.com/agent-bounties/agent-bounties/pull/42",
+        "pull_request": {
+            "author_login": "solver-agent",
+            "merged": true,
+            "merged_by_login": "maintainer",
+            "reviews": [
+                {
+                    "author_login": "maintainer",
+                    "state": "APPROVED"
+                }
+            ]
+        },
         "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "check_run": {
             "id": 123456789_u64,

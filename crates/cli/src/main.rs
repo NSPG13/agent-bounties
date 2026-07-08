@@ -4674,6 +4674,17 @@ fn github_ci_evidence() -> serde_json::Value {
     serde_json::json!({
         "repository": "example/repo",
         "pull_request_url": "https://github.com/example/repo/pull/1",
+        "pull_request": {
+            "author_login": "solver-agent",
+            "merged": true,
+            "merged_by_login": "maintainer",
+            "reviews": [
+                {
+                    "author_login": "maintainer",
+                    "state": "APPROVED"
+                }
+            ]
+        },
         "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "check_run": {
             "id": 123456789_u64,
