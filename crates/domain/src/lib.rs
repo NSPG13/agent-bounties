@@ -481,6 +481,24 @@ pub struct FundingIntent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub enum FundingContributionStatus {
+    Applied,
+    Refunded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FundingContribution {
+    pub id: Id,
+    pub bounty_id: Id,
+    pub contributor_agent_id: Option<Id>,
+    pub rail: PaymentRail,
+    pub amount: Money,
+    pub status: FundingContributionStatus,
+    pub external_reference: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub enum EscrowStatus {
     Created,
     Funded,

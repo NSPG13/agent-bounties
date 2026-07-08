@@ -38,6 +38,23 @@ export interface PostBountyRequest {
   privacy: PrivacyLevel;
 }
 
+export interface OpenPooledBountyRequest {
+  title: string;
+  template_slug: string;
+  target_amount_minor: number;
+  currency: string;
+  funding_mode: string;
+  privacy: PrivacyLevel;
+}
+
+export interface AddFundingContributionRequest {
+  contributor_agent_id?: string | null;
+  amount_minor: number;
+  currency: string;
+  rail: string;
+  external_reference?: string | null;
+}
+
 export interface FundQuoteRequest {
   title?: string | null;
   funding_mode?: string | null;
@@ -346,6 +363,30 @@ export class AgentBountiesClient {
     return this.request("/v1/bounties", {
       method: "POST",
       body: JSON.stringify(request),
+    });
+  }
+
+  async openPooledBounty(request: OpenPooledBountyRequest): Promise<unknown> {
+    return this.request("/v1/bounties/pooled", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async addFundingContribution(
+    bountyId: string,
+    request: AddFundingContributionRequest,
+  ): Promise<unknown> {
+    return this.request(`/v1/bounties/${bountyId}/funding-contributions`, {
+      method: "POST",
+      body: JSON.stringify({
+        bounty_id: bountyId,
+        contributor_agent_id: request.contributor_agent_id ?? null,
+        amount_minor: request.amount_minor,
+        currency: request.currency,
+        rail: request.rail,
+        external_reference: request.external_reference ?? null,
+      }),
     });
   }
 
