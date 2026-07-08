@@ -176,6 +176,16 @@ pub struct PublicBountyPage {
     pub template_url: String,
     pub funding_contribution_url: String,
     pub proof_urls: Vec<String>,
+    pub funding_partitions: Vec<PublicFundingPartition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublicFundingPartition {
+    pub rail: String,
+    pub confirmed_minor: i64,
+    pub remaining_minor: i64,
+    pub currency: String,
+    pub claimable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -857,6 +867,25 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let partitions_html = if item.funding_partitions.is_empty() {
+        "<li>None</li>".to_string()
+    } else {
+        item.funding_partitions
+            .iter()
+            .map(|p| {
+                format!(
+                    "<li>{}: {} {} (Remaining: {} {}, Claimable: {})</li>",
+                    escape_html(&p.rail),
+                    p.confirmed_minor,
+                    escape_html(&p.currency),
+                    p.remaining_minor,
+                    escape_html(&p.currency),
+                    p.claimable
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let metadata = serde_json::json!({
         "@context": "https://schema.org",
         "@type": "Action",
@@ -931,12 +960,11 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
     </dl>
     <section>
       <h2>Funding State</h2>
-      <dl>
-        <dt>Target</dt><dd>{} {}</dd>
-        <dt>Applied</dt><dd>{} {}</dd>
-        <dt>Remaining</dt><dd>{} {}</dd>
-        <dt>Contributions</dt><dd>{}</dd>
-      </dl>
+      <h3>Funding Partitions (By Rail)</h3>
+      <ul>
+        {}
+      </ul>
+      {}
     </section>
     <nav aria-label="Agent actions">
       <a href="{}">Claim</a>
@@ -945,12 +973,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
       <a href="{}">Add funding</a>
       <a href="/public/bounties">Back to public bounties</a>
     </nav>
-    <section>
-      <h2>Proof Links</h2>
-      <ul>
-        {}
-      </ul>
-    </section>
+    {}
   </main>
 </body>
 </html>"#,
@@ -982,18 +1005,21 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
         escape_html(&item.verification_type),
         escape_html(item.terms_hash.as_deref().unwrap_or("pending")),
         escape_html(&item.created_at),
-        item.funding_target_minor,
-        escape_html(&item.currency),
-        item.funding_applied_minor,
-        escape_html(&item.currency),
-        item.funding_remaining_minor,
-        escape_html(&item.currency),
-        item.contribution_count,
+        partitions_html,
+        if (item.status == "Open" || item.status == "Claimable") && item.funding_partitions.iter().any(|p| p.remaining_minor > 0) {
+            "<p><strong>Co-funding Instructions:</strong> To add funding, agents or humans can use the command: <code>/agent-bounty fund &lt;amount&gt; &lt;currency&gt; via &lt;rail&gt;</code></p>"
+        } else {
+            ""
+        },
         escape_html(&item.claim_url),
         escape_html(&item.status_url),
         escape_html(&item.template_url),
         escape_html(&item.funding_contribution_url),
-        proof_links,
+        if item.proof_urls.is_empty() {
+            "".to_string()
+        } else {
+            format!("<section>\n      <h2>Proof Links</h2>\n      <ul>\n        {}\n      </ul>\n    </section>", proof_links)
+        }
     )
 }
 
@@ -1740,6 +1766,13 @@ mod tests {
             funding_contribution_url: "https://network.example/v1/bounties/1/funding-contributions"
                 .to_string(),
             proof_urls: vec!["https://network.example/public/proofs/1".to_string()],
+            funding_partitions: vec![PublicFundingPartition {
+                rail: "BaseUsdc".to_string(),
+                confirmed_minor: 1000,
+                remaining_minor: 500,
+                currency: "USDC".to_string(),
+                claimable: true,
+            }],
         };
 
         let html = render_public_bounty_page(&item);

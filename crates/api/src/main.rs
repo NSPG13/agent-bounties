@@ -2258,6 +2258,19 @@ fn public_bounty_page_model(
         .filter(|proof| proof.privacy != PrivacyLevel::Private)
         .map(|proof| format!("{api}/public/proofs/{}", proof.id))
         .collect();
+    let funding_partitions = status
+        .funding_summary
+        .partitions
+        .iter()
+        .map(|p| web_public::PublicFundingPartition {
+            rail: format!("{:?}", p.rail),
+            confirmed_minor: p.confirmed.amount,
+            remaining_minor: p.remaining.amount,
+            currency: p.confirmed.currency.clone(),
+            claimable: p.claimable,
+        })
+        .collect();
+
     web_public::PublicBountyPage {
         bounty_id: bounty.id.to_string(),
         title: bounty.title.clone(),
@@ -2281,6 +2294,7 @@ fn public_bounty_page_model(
         template_url: format!("{api}/public/templates/{}", bounty.template_slug),
         funding_contribution_url: format!("{api}/v1/bounties/{}/funding-contributions", bounty.id),
         proof_urls,
+        funding_partitions,
     }
 }
 
