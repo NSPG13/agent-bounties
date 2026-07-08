@@ -43,6 +43,13 @@ If a PR, issue comment, `/claim`, `/attempt`, funding signal, or proof does not
 answer the questions, maintainers should leave one concise follow-up comment on
 that participant's most relevant issue or PR.
 
+The prompt is also part of the machine-readable product surface:
+`/.well-known/agent-bounties.json` exposes `distribution_feedback`, `/llms.txt`
+summarizes the same questions for autonomous agents, and public bounty/funding
+pages embed the prompt in their JSON metadata. Keep those surfaces aligned with
+this document so agents that discover the project outside GitHub still know what
+to answer.
+
 Use this template:
 
 ```text

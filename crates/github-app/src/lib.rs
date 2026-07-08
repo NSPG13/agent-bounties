@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
+const DISTRIBUTION_FEEDBACK_REQUEST: &str = "Distribution feedback requested, separate from review or payout decisions:\n\n- How did you find Agent Bounties?\n- What made this bounty or project worth participating in?\n- If an AI agent helped you find or complete this work, what tool, prompt, link, label, scanner, or workflow led it here?\n\nThese answers help improve agent discovery, bounty templates, proof pages, and payment-trust messaging.";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GitHubBountySource {
     Issue,
@@ -136,14 +138,15 @@ pub enum GitHubFundingCommentError {
 impl GitHubProofComment {
     pub fn markdown(&self) -> String {
         format!(
-            "Agent bounty completed.\n\nProof: {}\n\nVerifier: {}\n\nBounty: `{}`{}\n\nDistribution feedback requested: please add how you found Agent Bounties and what made this bounty worth claiming or completing.",
+            "Agent bounty completed.\n\nProof: {}\n\nVerifier: {}\n\nBounty: `{}`{}\n\n{}",
             self.proof_url,
             self.verifier_summary,
             self.bounty_id,
             self.settlement_url
                 .as_ref()
                 .map(|url| format!("\n\nSettlement: {url}"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            DISTRIBUTION_FEEDBACK_REQUEST
         )
     }
 }
@@ -270,7 +273,7 @@ pub fn bounty_check_output(
                 bounty
                     .discovery_feedback
                     .as_deref()
-                    .unwrap_or("Not provided yet. Please comment with how you found Agent Bounties and what made this bounty worth posting, funding, claiming, or completing.")
+                    .unwrap_or(DISTRIBUTION_FEEDBACK_REQUEST)
             ),
             conclusion: GitHubCheckConclusion::Success,
         },
@@ -303,7 +306,7 @@ pub fn funding_comment_check_output(
                 signal.amount.amount, signal.amount.currency, signal.rail
             ),
             text: format!(
-                "Issue: {}\nContributor: {}\nAmount: {} {}\nRail: {:?}\nIdempotency key: {}\nRequires operator reconciliation: true\n\nThis GitHub comment is a public funding signal only. It does not credit the ledger, create a Stripe balance, or mark Base escrow funded.\n\nDistribution feedback requested: please add how you found Agent Bounties and what made this bounty worth funding.",
+                "Issue: {}\nContributor: {}\nAmount: {} {}\nRail: {:?}\nIdempotency key: {}\nRequires operator reconciliation: true\n\nThis GitHub comment is a public funding signal only. It does not credit the ledger, create a Stripe balance, or mark Base escrow funded.\n\n{}",
                 signal.issue_url,
                 signal
                     .contributor_login
@@ -312,7 +315,8 @@ pub fn funding_comment_check_output(
                 signal.amount.amount,
                 signal.amount.currency,
                 signal.rail,
-                signal.idempotency_key
+                signal.idempotency_key,
+                DISTRIBUTION_FEEDBACK_REQUEST
             ),
             conclusion: GitHubCheckConclusion::Success,
         },
@@ -598,6 +602,7 @@ mod tests {
         assert!(markdown.contains("GitHub CI passed"));
         assert!(markdown.contains("Settlement:"));
         assert!(markdown.contains("Distribution feedback requested"));
+        assert!(markdown.contains("what tool, prompt, link, label, scanner, or workflow"));
     }
 
     #[test]
@@ -811,6 +816,7 @@ extract-data-to-schema
         assert_eq!(output.conclusion, GitHubCheckConclusion::Success);
         assert!(output.summary.contains("ready for funding"));
         assert!(output.text.contains("Distribution feedback"));
+        assert!(output.text.contains("How did you find Agent Bounties?"));
     }
 
     #[test]
@@ -836,6 +842,10 @@ extract-data-to-schema
         assert!(signal.idempotency_key.ends_with(":comment:123"));
         assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
         assert!(plan.check.text.contains("Distribution feedback requested"));
+        assert!(plan
+            .check
+            .text
+            .contains("what tool, prompt, link, label, scanner, or workflow"));
     }
 
     #[test]

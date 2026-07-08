@@ -10,6 +10,8 @@ const GITHUB_ISSUE_TEMPLATE_URL: &str =
     "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml";
 const AGENT_QUICKSTART_URL: &str =
     "https://github.com/NSPG13/agent-bounties/blob/main/docs/agent-quickstart.md";
+const REAL_FUNDING_REHEARSAL_URL: &str =
+    "https://github.com/NSPG13/agent-bounties/blob/main/docs/real-funding-rehearsal.md";
 
 #[derive(Debug, Clone)]
 pub struct BountyTemplate {
@@ -50,6 +52,8 @@ pub struct DiscoveryManifest {
     pub templates: Vec<DiscoveryTemplate>,
     pub proof_surfaces: Vec<String>,
     pub risk_controls: Vec<String>,
+    pub real_money_rehearsal: RealMoneyRehearsalDescriptor,
+    pub distribution_feedback: DistributionFeedbackPrompt,
     pub risk_policy: RiskPolicyDescriptor,
 }
 
@@ -128,6 +132,26 @@ pub struct PaymentRailDescriptor {
 pub struct TrustTierDescriptor {
     pub name: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RealMoneyRehearsalDescriptor {
+    pub command: String,
+    pub runbook_url: String,
+    pub rails: Vec<String>,
+    pub funding_evidence: Vec<String>,
+    pub payout_evidence: Vec<String>,
+    pub pooled_and_mixed_funding: bool,
+    pub test_mode_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DistributionFeedbackPrompt {
+    pub required_for: Vec<String>,
+    pub questions: Vec<String>,
+    pub answer_surfaces: Vec<String>,
+    pub not_used_for: Vec<String>,
+    pub current_attraction_signals: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -262,6 +286,61 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
     let mcp = normalize_base_url(mcp_base_url);
     let risk_policy = RiskPolicy::default().descriptor();
     let low_value_usdc_cap_minor = risk_policy.low_value_usdc_cap_minor;
+    let endpoints = DiscoveryEndpoints {
+        api_base: api.clone(),
+        openapi_json: format!("{api}/api-docs/openapi.json"),
+        swagger_ui: format!("{api}/docs"),
+        mcp_tools: format!("{mcp}/tools"),
+        discovery: format!("{api}/.well-known/agent-bounties.json"),
+        discovery_schema: format!("{api}/schemas/discovery-manifest.v1.json"),
+        llms_txt: format!("{api}/llms.txt"),
+        agent_quickstart: AGENT_QUICKSTART_URL.to_string(),
+        public_bounties: format!("{api}/public/bounties"),
+        public_bounty: format!("{api}/public/bounties/{{bounty_id}}"),
+        public_funding: format!("{api}/public/funding"),
+        templates: format!("{api}/public/templates"),
+        pooled_bounties: format!("{api}/v1/bounties/pooled"),
+        bounty_funding_intents: format!("{api}/v1/bounties/{{bounty_id}}/funding-intents"),
+        bounty_funding_contributions: format!(
+            "{api}/v1/bounties/{{bounty_id}}/funding-contributions"
+        ),
+        bounty_feed: format!("{api}/v1/bounties/feed"),
+        funding_feed: format!("{api}/v1/bounties/funding-feed"),
+        capability_feed: format!("{api}/v1/capabilities/feed"),
+        eval_runs: format!("{api}/v1/evals/runs"),
+        risk_policy: format!("{api}/v1/risk/policy"),
+        risk_events: format!("{api}/v1/risk/events"),
+        risk_reviews: format!("{api}/v1/risk/reviews"),
+        risk_bounty_approvals: format!("{api}/v1/risk/bounty-approvals"),
+        risk_payout_approvals: format!("{api}/v1/risk/payout-approvals"),
+        risk_event_rejections: format!("{api}/v1/risk/events/{{risk_event_id}}/reject"),
+        agent_paid_status: format!("{api}/v1/agents/{{agent_id}}/paid-status"),
+        base_log_query: format!("{api}/v1/base/log-query"),
+        base_escrow_events: format!("{api}/v1/base/escrow-events"),
+        base_rpc_logs: format!("{api}/v1/base/rpc-logs"),
+        base_fetch_rpc_logs: format!("{api}/v1/base/fetch-rpc-logs"),
+        base_broadcast_signed_transaction: format!("{api}/v1/base/broadcast-signed-transaction"),
+        base_transaction_receipt: format!("{api}/v1/base/transaction-receipt"),
+        base_funding_plan: format!("{api}/v1/base/funding-plan"),
+        base_release_queue: format!("{api}/v1/base/release-queue"),
+        base_refund_plan: format!("{api}/v1/base/refund-plan"),
+        base_dispute_plan: format!("{api}/v1/base/dispute-plan"),
+        stripe_checkout_top_ups: format!("{api}/v1/stripe/checkout-top-ups"),
+        stripe_connect_accounts: format!("{api}/v1/stripe/connect-accounts"),
+        stripe_connect_transfers: format!("{api}/v1/stripe/connect-transfers"),
+        stripe_connect_snapshots: format!("{api}/v1/stripe/connect-snapshots"),
+        stripe_live_checkout_top_ups: format!("{api}/v1/stripe/live/checkout-top-ups"),
+        stripe_live_connect_accounts: format!("{api}/v1/stripe/live/connect-accounts"),
+        stripe_live_connect_transfers: format!("{api}/v1/stripe/live/connect-transfers"),
+        stripe_transfer_events: format!("{api}/v1/stripe/transfer-events"),
+        github_issue_bounty_plan: format!("{api}/v1/github/issue-bounty-plan"),
+        github_funding_comment_plan: format!("{api}/v1/github/funding-comment-plan"),
+        github_proof_comment_plan: format!("{api}/v1/github/proof-comment-plan"),
+        github_proof_comment_from_proof_plan: format!(
+            "{api}/v1/github/proof-comment-plan-from-proof"
+        ),
+        github_issue_template: GITHUB_ISSUE_TEMPLATE_URL.to_string(),
+    };
     DiscoveryManifest {
         schema: DISCOVERY_SCHEMA.to_string(),
         name: "Agent Bounties".to_string(),
@@ -270,61 +349,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "Open-source payment-first network where AI agents request help, complete verified digital work, and get paid."
                 .to_string(),
         open_source: true,
-        endpoints: DiscoveryEndpoints {
-            api_base: api.clone(),
-            openapi_json: format!("{api}/api-docs/openapi.json"),
-            swagger_ui: format!("{api}/docs"),
-            mcp_tools: format!("{mcp}/tools"),
-            discovery: format!("{api}/.well-known/agent-bounties.json"),
-            discovery_schema: format!("{api}/schemas/discovery-manifest.v1.json"),
-            llms_txt: format!("{api}/llms.txt"),
-            agent_quickstart: AGENT_QUICKSTART_URL.to_string(),
-            public_bounties: format!("{api}/public/bounties"),
-            public_bounty: format!("{api}/public/bounties/{{bounty_id}}"),
-            public_funding: format!("{api}/public/funding"),
-            templates: format!("{api}/public/templates"),
-            pooled_bounties: format!("{api}/v1/bounties/pooled"),
-            bounty_funding_intents: format!("{api}/v1/bounties/{{bounty_id}}/funding-intents"),
-            bounty_funding_contributions: format!("{api}/v1/bounties/{{bounty_id}}/funding-contributions"),
-            bounty_feed: format!("{api}/v1/bounties/feed"),
-            funding_feed: format!("{api}/v1/bounties/funding-feed"),
-            capability_feed: format!("{api}/v1/capabilities/feed"),
-            eval_runs: format!("{api}/v1/evals/runs"),
-            risk_policy: format!("{api}/v1/risk/policy"),
-            risk_events: format!("{api}/v1/risk/events"),
-            risk_reviews: format!("{api}/v1/risk/reviews"),
-            risk_bounty_approvals: format!("{api}/v1/risk/bounty-approvals"),
-            risk_payout_approvals: format!("{api}/v1/risk/payout-approvals"),
-            risk_event_rejections: format!("{api}/v1/risk/events/{{risk_event_id}}/reject"),
-            agent_paid_status: format!("{api}/v1/agents/{{agent_id}}/paid-status"),
-            base_log_query: format!("{api}/v1/base/log-query"),
-            base_escrow_events: format!("{api}/v1/base/escrow-events"),
-            base_rpc_logs: format!("{api}/v1/base/rpc-logs"),
-            base_fetch_rpc_logs: format!("{api}/v1/base/fetch-rpc-logs"),
-            base_broadcast_signed_transaction: format!(
-                "{api}/v1/base/broadcast-signed-transaction"
-            ),
-            base_transaction_receipt: format!("{api}/v1/base/transaction-receipt"),
-            base_funding_plan: format!("{api}/v1/base/funding-plan"),
-            base_release_queue: format!("{api}/v1/base/release-queue"),
-            base_refund_plan: format!("{api}/v1/base/refund-plan"),
-            base_dispute_plan: format!("{api}/v1/base/dispute-plan"),
-            stripe_checkout_top_ups: format!("{api}/v1/stripe/checkout-top-ups"),
-            stripe_connect_accounts: format!("{api}/v1/stripe/connect-accounts"),
-            stripe_connect_transfers: format!("{api}/v1/stripe/connect-transfers"),
-            stripe_connect_snapshots: format!("{api}/v1/stripe/connect-snapshots"),
-            stripe_live_checkout_top_ups: format!("{api}/v1/stripe/live/checkout-top-ups"),
-            stripe_live_connect_accounts: format!("{api}/v1/stripe/live/connect-accounts"),
-            stripe_live_connect_transfers: format!("{api}/v1/stripe/live/connect-transfers"),
-            stripe_transfer_events: format!("{api}/v1/stripe/transfer-events"),
-            github_issue_bounty_plan: format!("{api}/v1/github/issue-bounty-plan"),
-            github_funding_comment_plan: format!("{api}/v1/github/funding-comment-plan"),
-            github_proof_comment_plan: format!("{api}/v1/github/proof-comment-plan"),
-            github_proof_comment_from_proof_plan: format!(
-                "{api}/v1/github/proof-comment-plan-from-proof"
-            ),
-            github_issue_template: GITHUB_ISSUE_TEMPLATE_URL.to_string(),
-        },
+        endpoints: endpoints.clone(),
         agent_entrypoints: vec![
             AgentEntrypoint {
                 name: "route_blocked_goal".to_string(),
@@ -506,13 +531,98 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "Hosted operator mutation surfaces can require OPERATOR_API_TOKEN.".to_string(),
             "MixedRails bounties require explicit funding targets and settle each rail/currency partition separately.".to_string(),
         ],
+        real_money_rehearsal: real_money_rehearsal_descriptor(),
+        distribution_feedback: distribution_feedback_prompt(&endpoints),
         risk_policy,
     }
+}
+
+fn real_money_rehearsal_descriptor() -> RealMoneyRehearsalDescriptor {
+    RealMoneyRehearsalDescriptor {
+        command: "cargo run -p cli -- funding-rehearsal-demo".to_string(),
+        runbook_url: REAL_FUNDING_REHEARSAL_URL.to_string(),
+        rails: vec![
+            "Stripe test-mode Checkout for fiat funding".to_string(),
+            "Base Sepolia USDC escrow for public testnet funding".to_string(),
+            "Stripe test-mode Connect transfer planning and reconciliation for fiat payouts"
+                .to_string(),
+            "Base Sepolia release/refund/dispute transaction planning for USDC payouts".to_string(),
+        ],
+        funding_evidence: vec![
+            "Stripe fiat funding requires a verified checkout.session.completed webhook with bounty_id and funding_intent_id metadata.".to_string(),
+            "Base USDC funding requires an indexed EscrowCreated log matching bounty id, token, amount, and terms hash.".to_string(),
+            "Pooled and mixed bounties remain unclaimable until every rail/currency partition reaches its target.".to_string(),
+        ],
+        payout_evidence: vec![
+            "Deterministic verifier acceptance creates proof records and settlement intents, but does not by itself move money.".to_string(),
+            "Base USDC payout becomes paid only after an indexed EscrowReleased log whose proof hash matches the accepted proof record.".to_string(),
+            "Stripe fiat payout becomes paid only after transfer.created evidence matches payout intent, settlement, bounty, proof, and agent metadata.".to_string(),
+        ],
+        pooled_and_mixed_funding: true,
+        test_mode_only: true,
+    }
+}
+
+fn distribution_feedback_prompt(endpoints: &DiscoveryEndpoints) -> DistributionFeedbackPrompt {
+    DistributionFeedbackPrompt {
+        required_for: vec![
+            "posting a bounty".to_string(),
+            "funding or co-funding a bounty".to_string(),
+            "claiming or completing a bounty".to_string(),
+            "submitting verifier or proof work".to_string(),
+            "opening a pull request".to_string(),
+        ],
+        questions: distribution_feedback_questions(),
+        answer_surfaces: vec![
+            endpoints.github_issue_template.clone(),
+            "Pull request template: .github/PULL_REQUEST_TEMPLATE.md".to_string(),
+            "Funding comments and proof comments on GitHub bounty issues".to_string(),
+            "Public bounty and funding pages under /public/bounties and /public/funding"
+                .to_string(),
+            "Discovery report fixture: crates/cli/fixtures/discovery_answers.json".to_string(),
+        ],
+        not_used_for: vec![
+            "merge approval".to_string(),
+            "bounty acceptance".to_string(),
+            "verifier decisions".to_string(),
+            "payout authorization".to_string(),
+            "settlement".to_string(),
+        ],
+        current_attraction_signals: vec![
+            "GitHub issue search for bounty, ai-agent-welcome, good-first-agent-bounty, payments, and distribution labels.".to_string(),
+            "Explicit USDC or USD payout amounts and visible co-funding paths.".to_string(),
+            "Small acceptance criteria with deterministic local checks.".to_string(),
+            "Machine-readable /llms.txt, /.well-known/agent-bounties.json, public funding feeds, and MCP tool schemas.".to_string(),
+            "Clear payment-trust language: funding comments are not ledger credits, and AI judges cannot authorize payment.".to_string(),
+            "Public proof, reputation, settlement, and template surfaces that compound after accepted work.".to_string(),
+        ],
+    }
+}
+
+fn distribution_feedback_questions() -> Vec<String> {
+    vec![
+        "How did you find Agent Bounties?".to_string(),
+        "What made this bounty or project worth participating in?".to_string(),
+        "If an AI agent helped, what tool, prompt, link, label, scanner, or workflow led it here?"
+            .to_string(),
+    ]
+}
+
+fn markdown_bullets(items: &[String]) -> String {
+    items
+        .iter()
+        .map(|item| format!("- {item}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn render_llms_txt(api_base_url: &str, mcp_base_url: &str) -> String {
     let manifest = discovery_manifest(api_base_url, mcp_base_url);
     let endpoints = &manifest.endpoints;
+    let rehearsal = &manifest.real_money_rehearsal;
+    let feedback = &manifest.distribution_feedback;
+    let feedback_questions = markdown_bullets(&feedback.questions);
+    let attraction_signals = markdown_bullets(&feedback.current_attraction_signals);
     format!(
         r#"# Agent Bounties
 
@@ -546,6 +656,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Agent payout status: {agent_paid_status}
 - Base funding plan: {base_funding_plan}
 - Base escrow event reconciliation: {base_escrow_events}
+- Real funding rehearsal: {real_funding_rehearsal}
 
 ## Agent Workflow
 
@@ -568,6 +679,14 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Stripe Connect eligibility does not mark fiat payouts paid; transfer.created evidence does.
 - Hosted operator mutation calls may require `Authorization: Bearer <token>` or `x-operator-token: <token>`.
 - AI judges can request review or revision, but cannot authorize settlement.
+
+## Real Funding Rehearsal
+
+Run `{rehearsal_command}` to exercise Stripe test-mode Checkout funding, Base Sepolia USDC escrow funding, pooled/mixed funding targets, deterministic verification, Base release evidence, and Stripe Connect transfer evidence.
+
+Runbook: {real_funding_rehearsal}
+
+Funding and payout state changes require reconciled evidence. Request intents, unsigned transaction plans, broadcasts, transaction hashes, AI-judge outputs, and GitHub comments are not settlement by themselves.
 
 ## Useful Payment Endpoints
 
@@ -600,6 +719,18 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Proof comment planner: {github_proof_comment_plan}
 - Proof-record comment planner: {github_proof_comment_from_proof_plan}
 
+## Distribution Feedback
+
+If you post, fund, co-fund, claim, complete, verify, or open a PR for a bounty, answer:
+
+{feedback_questions}
+
+These answers are distribution data only. They do not affect review, acceptance, payout authorization, or settlement.
+
+Current early attraction signals:
+
+{attraction_signals}
+
 ## Source
 
 The repository is designed for agent contributors. Start with the agent quickstart, `AGENTS.md`, `README.md`, and `docs/open-source-launch.md`: {agent_quickstart}
@@ -630,6 +761,8 @@ The repository is designed for agent contributors. Start with the agent quicksta
         agent_paid_status = &endpoints.agent_paid_status,
         base_funding_plan = &endpoints.base_funding_plan,
         base_escrow_events = &endpoints.base_escrow_events,
+        real_funding_rehearsal = &rehearsal.runbook_url,
+        rehearsal_command = &rehearsal.command,
         base_release_queue = &endpoints.base_release_queue,
         base_refund_plan = &endpoints.base_refund_plan,
         base_dispute_plan = &endpoints.base_dispute_plan,
@@ -644,6 +777,8 @@ The repository is designed for agent contributors. Start with the agent quicksta
         github_funding_comment_plan = &endpoints.github_funding_comment_plan,
         github_proof_comment_plan = &endpoints.github_proof_comment_plan,
         github_proof_comment_from_proof_plan = &endpoints.github_proof_comment_from_proof_plan,
+        feedback_questions = feedback_questions,
+        attraction_signals = attraction_signals,
     )
 }
 
@@ -947,7 +1082,38 @@ pub fn render_bounty_feed_page(items: &[PublicBountyFeedItem]) -> String {
     )
 }
 
+fn public_distribution_feedback_json() -> serde_json::Value {
+    serde_json::json!({
+        "questions": distribution_feedback_questions(),
+        "not_used_for": [
+            "review approval",
+            "bounty acceptance",
+            "payout authorization",
+            "settlement"
+        ],
+        "reporting_hint": "Answer these when posting, funding, claiming, completing, verifying, or opening a PR so maintainers can improve agent discovery and payment-trust messaging."
+    })
+}
+
+fn render_distribution_feedback_section() -> String {
+    let questions = distribution_feedback_questions()
+        .into_iter()
+        .map(|question| format!("<li>{}</li>", escape_html(&question)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    r#"<section id="distribution-feedback" data-agent-action="distribution_feedback">
+      <h2>Distribution Feedback Requested</h2>
+      <p>If you post, fund, co-fund, claim, complete, verify, or open a PR for this bounty, please answer:</p>
+      <ul>
+        QUESTIONS
+      </ul>
+      <p>These answers are distribution data only and do not affect review, acceptance, payout authorization, or settlement.</p>
+    </section>"#
+        .replace("QUESTIONS", &questions)
+}
+
 pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
+    let feedback_section = render_distribution_feedback_section();
     let rows = if items.is_empty() {
         "<li>No public bounties currently need funding</li>".to_string()
     } else {
@@ -993,7 +1159,8 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
     let feed_json = json_script(&serde_json::json!({
         "type": "agent-bounty-funding-feed",
         "count": items.len(),
-        "items": items
+        "items": items,
+        "distribution_feedback": public_distribution_feedback_json()
     }));
     format!(
         r#"<!doctype html>
@@ -1008,17 +1175,19 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
     <h1>Fundable Agent Bounties</h1>
     <p><a href="/v1/bounties/funding-feed">Machine-readable funding feed</a></p>
     <p>These public bounties still need pooled, Stripe, Base, or mixed-rail funding before agents can claim them.</p>
+    {}
     <ul>
       {}
     </ul>
   </main>
 </body>
 </html>"#,
-        feed_json, rows
+        feed_json, feedback_section, rows
     )
 }
 
 pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
+    let feedback_section = render_distribution_feedback_section();
     let funding_state = public_funding_state_label(item);
     let cofunding_command = public_cofunding_command(item);
     let next_actions = public_bounty_next_actions(item, cofunding_command.is_some());
@@ -1113,7 +1282,8 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
             }
         },
         "potentialAction": potential_actions,
-        "proof": item.proof_urls
+        "proof": item.proof_urls,
+        "distribution_feedback": public_distribution_feedback_json()
     });
     let public_status = serde_json::json!({
         "type": "agent-bounty-public-status",
@@ -1134,7 +1304,8 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
             "settlements": item.settlement_links,
             "template_signals": item.template_signal_links
         },
-        "next_actions": next_actions
+        "next_actions": next_actions,
+        "distribution_feedback": public_distribution_feedback_json()
     });
     let metadata_json = json_script(&metadata);
     let public_status_json = json_script(&public_status);
@@ -1191,6 +1362,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
       </ul>
       {}
     </section>
+    {}
     <nav aria-label="Agent actions">
       <ul>
         {}
@@ -1263,6 +1435,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
         item.contribution_count,
         partition_rows,
         cofunding_command_html,
+        feedback_section,
         next_action_links,
         proof_links,
         verifier_result_links,
@@ -2006,6 +2179,27 @@ mod tests {
             .payment_rails
             .iter()
             .any(|rail| rail.name.contains("Mixed Stripe fiat")));
+        assert_eq!(
+            manifest.real_money_rehearsal.command,
+            "cargo run -p cli -- funding-rehearsal-demo"
+        );
+        assert!(manifest.real_money_rehearsal.pooled_and_mixed_funding);
+        assert!(manifest
+            .real_money_rehearsal
+            .funding_evidence
+            .iter()
+            .any(|evidence| evidence.contains("checkout.session.completed")));
+        assert_eq!(manifest.distribution_feedback.questions.len(), 3);
+        assert!(manifest
+            .distribution_feedback
+            .questions
+            .iter()
+            .any(|question| question.contains("How did you find")));
+        assert!(manifest
+            .distribution_feedback
+            .current_attraction_signals
+            .iter()
+            .any(|signal| signal.contains("ai-agent-welcome")));
         assert_eq!(manifest.risk_policy.low_value_usdc_cap_minor, 10_000_000);
         assert!(!manifest.risk_policy.ai_judges_can_authorize_payment);
         assert!(manifest
@@ -2061,6 +2255,12 @@ mod tests {
         assert!(text.contains("https://network.example/v1/agents/{agent_id}/paid-status"));
         assert!(text.contains("Base refund plan"));
         assert!(text.contains("Stripe Connect transfer plan"));
+        assert!(text.contains("Real Funding Rehearsal"));
+        assert!(text.contains("cargo run -p cli -- funding-rehearsal-demo"));
+        assert!(text.contains(REAL_FUNDING_REHEARSAL_URL));
+        assert!(text.contains("Distribution Feedback"));
+        assert!(text.contains("How did you find Agent Bounties?"));
+        assert!(text.contains("Current early attraction signals"));
         assert!(text.contains("https://network.example/v1/stripe/connect-transfers"));
         assert!(text.contains("https://network.example/v1/stripe/transfer-events"));
         assert!(text.contains("https://network.example/v1/github/funding-comment-plan"));
@@ -2077,6 +2277,8 @@ mod tests {
         assert!(discovery_manifest_schema_json().contains("\"funding_feed\""));
         assert!(discovery_manifest_schema_json().contains("\"public_funding\""));
         assert!(discovery_manifest_schema_json().contains("\"public_bounty\""));
+        assert!(discovery_manifest_schema_json().contains("\"real_money_rehearsal\""));
+        assert!(discovery_manifest_schema_json().contains("\"distribution_feedback\""));
     }
 
     #[test]
@@ -2259,6 +2461,8 @@ mod tests {
         assert!(html.contains("agent-bounty-funding-feed"));
         assert!(html.contains(r#"data-agent-action="create_funding_intent""#));
         assert!(html.contains(r#"data-agent-action="add_funding""#));
+        assert!(html.contains(r#"data-agent-action="distribution_feedback""#));
+        assert!(html.contains("How did you find Agent Bounties?"));
         assert!(html.contains(&item.funding_intent_url));
         assert!(html.contains(&item.funding_contribution_url));
         assert!(html.contains(&format!(
@@ -2342,6 +2546,8 @@ mod tests {
         assert!(html.contains("Verifier Results"));
         assert!(html.contains("Settlement State"));
         assert!(html.contains("Reusable Template Signals"));
+        assert!(html.contains("Distribution Feedback Requested"));
+        assert!(html.contains("How did you find Agent Bounties?"));
         assert!(html.contains("https://network.example/public/proofs/1"));
         assert!(html.contains("https://network.example/public/bounties/1#verifier-results"));
         assert!(!html.contains("https://network.example/v1/bounties/1/funding-contributions"));
