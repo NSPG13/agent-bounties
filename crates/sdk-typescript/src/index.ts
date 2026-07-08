@@ -343,6 +343,14 @@ export class AgentBountiesClient {
     return this.request(`/v1/readiness/live-money${query ? `?${query}` : ""}`);
   }
 
+  async getBaseIndexerStatus(network?: string | null, escrowContract?: string | null): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (network) params.set("network", network);
+    if (escrowContract) params.set("escrow_contract", escrowContract);
+    const query = params.toString();
+    return this.request(`/v1/base/indexer-status${query ? `?${query}` : ""}`);
+  }
+
   async getRiskEvents(request: RiskEventsRequest = {}): Promise<unknown> {
     const params = new URLSearchParams();
     if (request.action) params.set("action", request.action);

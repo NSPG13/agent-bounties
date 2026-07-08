@@ -87,6 +87,7 @@ pub struct DiscoveryEndpoints {
     pub risk_payout_approvals: String,
     pub risk_event_rejections: String,
     pub agent_paid_status: String,
+    pub base_indexer_status: String,
     pub base_log_query: String,
     pub base_escrow_events: String,
     pub base_rpc_logs: String,
@@ -346,6 +347,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         risk_payout_approvals: format!("{api}/v1/risk/payout-approvals"),
         risk_event_rejections: format!("{api}/v1/risk/events/{{risk_event_id}}/reject"),
         agent_paid_status: format!("{api}/v1/agents/{{agent_id}}/paid-status"),
+        base_indexer_status: format!("{api}/v1/base/indexer-status"),
         base_log_query: format!("{api}/v1/base/log-query"),
         base_escrow_events: format!("{api}/v1/base/escrow-events"),
         base_rpc_logs: format!("{api}/v1/base/rpc-logs"),
@@ -421,6 +423,14 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 endpoint: format!("{api}/v1/readiness/live-money"),
                 description:
                     "Read non-secret Stripe/Base readiness gates before deciding whether this host can move real value."
+                        .to_string(),
+            },
+            AgentEntrypoint {
+                name: "check_base_indexer_status".to_string(),
+                transport: "HTTP JSON plus MCP-compatible HTTP JSON".to_string(),
+                endpoint: format!("{api}/v1/base/indexer-status"),
+                description:
+                    "Read whether the hosted Base escrow log indexer has durable persistence and a scan cursor for the selected contract."
                         .to_string(),
             },
             AgentEntrypoint {
@@ -704,6 +714,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Risk payout approvals: {risk_payout_approvals}
 - Risk event rejections: {risk_event_rejections}
 - Agent payout status: {agent_paid_status}
+- Base indexer status: {base_indexer_status}
 - Base funding plan: {base_funding_plan}
 - Base escrow event reconciliation: {base_escrow_events}
 - Real funding rehearsal: {real_funding_rehearsal}
@@ -748,6 +759,7 @@ Funding and payout state changes require reconciled evidence. Request intents, u
 - Create real-rail funding intent: {bounty_funding_intents}
 - Add pooled bounty funding: {bounty_funding_contributions}
 - Base escrow event reconciliation: {base_escrow_events}
+- Base indexer status: {base_indexer_status}
 - Base release queue: {base_release_queue}
 - Risk policy: {risk_policy}
 - Live-money readiness: {live_money_readiness}
@@ -816,6 +828,7 @@ The repository is designed for agent contributors. Start with the agent quicksta
         risk_payout_approvals = &endpoints.risk_payout_approvals,
         risk_event_rejections = &endpoints.risk_event_rejections,
         agent_paid_status = &endpoints.agent_paid_status,
+        base_indexer_status = &endpoints.base_indexer_status,
         base_funding_plan = &endpoints.base_funding_plan,
         base_escrow_events = &endpoints.base_escrow_events,
         real_funding_rehearsal = &rehearsal.runbook_url,
@@ -2437,6 +2450,10 @@ mod tests {
             "https://network.example/v1/agents/{agent_id}/paid-status"
         );
         assert_eq!(
+            manifest.endpoints.base_indexer_status,
+            "https://network.example/v1/base/indexer-status"
+        );
+        assert_eq!(
             manifest.endpoints.base_funding_plan,
             "https://network.example/v1/base/funding-plan"
         );
@@ -2548,6 +2565,10 @@ mod tests {
             .agent_entrypoints
             .iter()
             .any(|entrypoint| entrypoint.name == "discover_fundable_bounties"));
+        assert!(manifest
+            .agent_entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint.name == "check_base_indexer_status"));
         assert!(manifest
             .agent_entrypoints
             .iter()
@@ -2685,6 +2706,7 @@ mod tests {
         assert!(text.contains("Current early attraction signals"));
         assert!(text.contains("https://network.example/v1/stripe/connect-transfers"));
         assert!(text.contains("https://network.example/v1/stripe/transfer-events"));
+        assert!(text.contains("https://network.example/v1/base/indexer-status"));
         assert!(text.contains("https://network.example/v1/github/funding-comment-plan"));
         assert!(text.contains("https://network.example/v1/github/proof-comment-plan-from-proof"));
         assert!(discovery_manifest_schema_json().contains("\"$id\""));
@@ -2702,6 +2724,7 @@ mod tests {
         assert!(discovery_manifest_schema_json().contains("\"public_bounty\""));
         assert!(discovery_manifest_schema_json().contains("\"real_money_rehearsal\""));
         assert!(discovery_manifest_schema_json().contains("\"live_money_readiness\""));
+        assert!(discovery_manifest_schema_json().contains("\"base_indexer_status\""));
         assert!(discovery_manifest_schema_json().contains("\"distribution_feedback\""));
     }
 

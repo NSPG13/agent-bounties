@@ -1,6 +1,7 @@
 use app::{
-    build_live_money_readiness_report, stripe_secret_key_mode_from_secret,
-    AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
+    build_base_indexer_status_report, build_live_money_readiness_report,
+    stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
+    ApproveRiskPayoutRequest, BaseIndexerScanCursor, BaseIndexerStatusConfig,
     BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest, CreateFundingIntentRequest,
     CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
     OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
@@ -263,6 +264,12 @@ struct GetBaseTransactionReceiptArgs {
     reconcile_logs: Option<bool>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BaseIndexerStatusArgs {
+    network: Option<String>,
+    escrow_contract: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let store = match env::var("DATABASE_URL") {
@@ -412,6 +419,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/get_base_transaction_receipt",
             post(get_base_transaction_receipt),
+        )
+        .route(
+            "/tools/get_base_indexer_status",
+            post(get_base_indexer_status),
         )
         .route("/tools/plan_base_log_query", post(plan_base_log_query))
         .route("/tools/plan_base_funding", post(plan_base_funding))
@@ -1052,6 +1063,17 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 &["tx_hash"],
             ),
             "OPERATOR_API_TOKEN is configured and reconcile_logs=true.",
+        ),
+        tool(
+            "get_base_indexer_status",
+            "Read the hosted Base indexer persistence and scan-cursor status for a network escrow contract.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "escrow_contract": nullable_string_property("Optional Base escrow contract address; defaults to the configured contract for the selected network.")
+                }),
+                &[],
+            ),
         ),
         tool(
             "plan_base_log_query",
@@ -2709,6 +2731,53 @@ async fn get_live_money_readiness(
     }
 }
 
+async fn get_base_indexer_status(
+    State(state): State<SharedState>,
+    Json(args): Json<BaseIndexerStatusArgs>,
+) -> Json<serde_json::Value> {
+    let network = args
+        .network
+        .and_then(non_empty_secret)
+        .unwrap_or_else(|| "base-mainnet".to_string());
+    let descriptor = match base_network_descriptor(&network) {
+        Ok(descriptor) => descriptor,
+        Err(error) => return mcp_error(error.to_string()),
+    };
+    let escrow_contract = args
+        .escrow_contract
+        .and_then(non_empty_secret)
+        .or_else(|| base_escrow_contract_for_chain(descriptor.chain_id));
+    let cursor = match (&state.store, escrow_contract.as_deref()) {
+        (Some(store), Some(escrow_contract)) => {
+            match store.get_base_log_cursor(&network, escrow_contract).await {
+                Ok(cursor) => cursor.map(base_indexer_scan_cursor_from_db),
+                Err(error) => return mcp_error(error.to_string()),
+            }
+        }
+        _ => None,
+    };
+
+    match build_base_indexer_status_report(BaseIndexerStatusConfig {
+        network,
+        escrow_contract,
+        database_configured: state.store.is_some(),
+        cursor,
+    }) {
+        Ok(report) => mcp_json(report),
+        Err(error) => mcp_error(error.to_string()),
+    }
+}
+
+fn base_indexer_scan_cursor_from_db(cursor: db::BaseLogScanCursor) -> BaseIndexerScanCursor {
+    BaseIndexerScanCursor {
+        network: cursor.network,
+        escrow_contract: cursor.escrow_contract,
+        last_scanned_block: cursor.last_scanned_block,
+        last_log_key: cursor.last_log_key,
+        updated_at: cursor.updated_at,
+    }
+}
+
 fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
     let descriptor = base_network_descriptor(network).ok();
     LiveMoneyReadinessConfig {
@@ -3213,6 +3282,23 @@ mod tests {
             .required_when
             .contains("reconcile_logs=true"));
 
+        let get_base_indexer_status = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "get_base_indexer_status")
+            .expect("get_base_indexer_status descriptor exists");
+        assert!(get_base_indexer_status.authorization.is_none());
+        assert!(
+            get_base_indexer_status.input_schema["properties"]["network"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "base-mainnet")
+        );
+        assert!(get_base_indexer_status.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
         let plan_base_funding = descriptors
             .iter()
             .find(|descriptor| descriptor.name == "plan_base_funding")
@@ -3509,6 +3595,34 @@ mod tests {
                 .unwrap()
                 .contains("Stripe live-money execution")
         }));
+    }
+
+    #[tokio::test]
+    async fn base_indexer_status_tool_reports_missing_database() {
+        let response = get_base_indexer_status(
+            State(test_state()),
+            Json(BaseIndexerStatusArgs {
+                network: Some("base-mainnet".to_string()),
+                escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+            }),
+        )
+        .await
+        .0;
+        let body = &response["content"][0]["json"];
+
+        assert_eq!(body["status"], "persistence_unavailable");
+        assert_eq!(body["indexer_ready"], false);
+        assert_eq!(body["database_configured"], false);
+        assert_eq!(body["network_chain_id"], 8_453);
+        assert_eq!(body["last_scanned_block"], serde_json::Value::Null);
+        assert!(body["evidence_boundaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|boundary| boundary
+                .as_str()
+                .unwrap()
+                .contains("does not fund, release, refund, dispute, or authorize settlement")));
     }
 
     #[tokio::test]

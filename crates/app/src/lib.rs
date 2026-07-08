@@ -129,6 +129,42 @@ pub struct LiveMoneyReadinessReport {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseIndexerStatusConfig {
+    pub network: String,
+    pub escrow_contract: Option<String>,
+    pub database_configured: bool,
+    pub cursor: Option<BaseIndexerScanCursor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BaseIndexerScanCursor {
+    pub network: String,
+    pub escrow_contract: String,
+    pub last_scanned_block: u64,
+    pub last_log_key: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BaseIndexerStatusReport {
+    pub status: String,
+    pub indexer_ready: bool,
+    pub database_configured: bool,
+    pub escrow_contract_configured: bool,
+    pub cursor_found: bool,
+    pub network: String,
+    pub network_chain_id: u64,
+    pub network_rpc_url_env: String,
+    pub escrow_contract: Option<String>,
+    pub last_scanned_block: Option<u64>,
+    pub last_log_key: Option<String>,
+    pub cursor_updated_at: Option<DateTime<Utc>>,
+    pub warnings: Vec<String>,
+    pub evidence_boundaries: Vec<String>,
+    pub commands: Vec<String>,
+}
+
 struct ReadinessWarningInputs<'a> {
     stripe_test_mode_ready: bool,
     stripe_live_mode_ready: bool,
@@ -139,6 +175,93 @@ struct ReadinessWarningInputs<'a> {
     operator_token: bool,
     token_mismatch: bool,
     native_usdc_token_address: &'a str,
+}
+
+pub fn build_base_indexer_status_report(
+    config: BaseIndexerStatusConfig,
+) -> Result<BaseIndexerStatusReport, ChainBaseError> {
+    let network_descriptor = base_network_descriptor(&config.network)?;
+    let escrow_contract = config
+        .escrow_contract
+        .as_deref()
+        .filter(|value| nonempty(value))
+        .map(|value| value.trim().to_string());
+    let escrow_contract_configured = escrow_contract.is_some();
+    let cursor = config.cursor.as_ref();
+    let cursor_found = cursor.is_some();
+    let cursor_matches_request = match (cursor, escrow_contract.as_deref()) {
+        (Some(cursor), Some(escrow_contract)) => {
+            cursor.network == config.network
+                && cursor.escrow_contract.eq_ignore_ascii_case(escrow_contract)
+        }
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
+    let indexer_ready = config.database_configured
+        && escrow_contract_configured
+        && cursor_found
+        && cursor_matches_request;
+    let status = if !config.database_configured {
+        "persistence_unavailable"
+    } else if !escrow_contract_configured {
+        "escrow_contract_missing"
+    } else if !cursor_found {
+        "cursor_missing"
+    } else if !cursor_matches_request {
+        "cursor_contract_mismatch"
+    } else {
+        "cursor_persisted"
+    };
+
+    let mut warnings = Vec::new();
+    if !config.database_configured {
+        warnings.push(
+            "DATABASE_URL is not configured, so the hosted Base indexer cannot expose a durable scan cursor."
+                .to_string(),
+        );
+    }
+    if !escrow_contract_configured {
+        warnings.push(
+            "No Base escrow contract was supplied or configured for this network.".to_string(),
+        );
+    }
+    if config.database_configured && escrow_contract_configured && !cursor_found {
+        warnings.push(
+            "No persisted Base indexer cursor was found; run the worker after setting BASE_INDEXER_START_BLOCK."
+                .to_string(),
+        );
+    }
+    if !cursor_matches_request {
+        warnings.push(
+            "The persisted cursor does not match the requested network and escrow contract."
+                .to_string(),
+        );
+    }
+
+    Ok(BaseIndexerStatusReport {
+        status: status.to_string(),
+        indexer_ready,
+        database_configured: config.database_configured,
+        escrow_contract_configured,
+        cursor_found,
+        network: network_descriptor.name,
+        network_chain_id: network_descriptor.chain_id,
+        network_rpc_url_env: network_descriptor.rpc_url_env,
+        escrow_contract,
+        last_scanned_block: cursor.map(|cursor| cursor.last_scanned_block),
+        last_log_key: cursor.and_then(|cursor| cursor.last_log_key.clone()),
+        cursor_updated_at: cursor.map(|cursor| cursor.updated_at),
+        warnings,
+        evidence_boundaries: vec![
+            "Indexer status is operational evidence only; it does not fund, release, refund, dispute, or authorize settlement.".to_string(),
+            "Base USDC state changes still require decoded escrow logs to be reconciled into platform state.".to_string(),
+            "A cursor proves the worker persisted scan progress for this contract; it does not prove the worker is currently running.".to_string(),
+        ],
+        commands: vec![
+            "cargo run -p worker -- --once".to_string(),
+            "cargo run -p cli -- base-log-query --escrow-contract <escrow> --from-block <block>".to_string(),
+        ],
+    })
 }
 
 pub fn build_live_money_readiness_report(
@@ -4114,6 +4237,59 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains(chain_base::BASE_SEPOLIA_USDC_TOKEN_ADDRESS)));
+    }
+
+    #[test]
+    fn base_indexer_status_reports_missing_persistence() {
+        let report = build_base_indexer_status_report(BaseIndexerStatusConfig {
+            network: "base-mainnet".to_string(),
+            escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+            database_configured: false,
+            cursor: None,
+        })
+        .unwrap();
+
+        assert_eq!(report.status, "persistence_unavailable");
+        assert!(!report.indexer_ready);
+        assert!(!report.database_configured);
+        assert!(report.escrow_contract_configured);
+        assert!(!report.cursor_found);
+        assert_eq!(report.network_chain_id, 8_453);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("DATABASE_URL")));
+        assert!(report.evidence_boundaries.iter().any(|boundary| {
+            boundary.contains("does not fund, release, refund, dispute, or authorize settlement")
+        }));
+    }
+
+    #[test]
+    fn base_indexer_status_reports_matching_cursor() {
+        let updated_at = Utc::now();
+        let report = build_base_indexer_status_report(BaseIndexerStatusConfig {
+            network: "base-sepolia".to_string(),
+            escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+            database_configured: true,
+            cursor: Some(BaseIndexerScanCursor {
+                network: "base-sepolia".to_string(),
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                last_scanned_block: 12_345,
+                last_log_key: Some("0xabc:0".to_string()),
+                updated_at,
+            }),
+        })
+        .unwrap();
+
+        assert_eq!(report.status, "cursor_persisted");
+        assert!(report.indexer_ready);
+        assert!(report.database_configured);
+        assert!(report.cursor_found);
+        assert_eq!(report.network_chain_id, 84_532);
+        assert_eq!(report.last_scanned_block, Some(12_345));
+        assert_eq!(report.last_log_key.as_deref(), Some("0xabc:0"));
+        assert_eq!(report.cursor_updated_at, Some(updated_at));
+        assert!(report.warnings.is_empty());
     }
 
     fn fund_base_bounty(

@@ -184,6 +184,10 @@ async function main(): Promise<void> {
     "discovery schema must require the live-money readiness endpoint",
   );
   requireCondition(
+    endpointRequired.includes("base_indexer_status"),
+    "discovery schema must require the Base indexer status endpoint",
+  );
+  requireCondition(
     typeof endpoints.base_fetch_rpc_logs === "string",
     "discovery manifest missing Base RPC fetch endpoint",
   );
@@ -268,6 +272,10 @@ async function main(): Promise<void> {
     "discovery manifest missing live-money readiness endpoint",
   );
   requireCondition(
+    typeof endpoints.base_indexer_status === "string",
+    "discovery manifest missing Base indexer status endpoint",
+  );
+  requireCondition(
     typeof endpoints.risk_events === "string",
     "discovery manifest missing risk review events endpoint",
   );
@@ -322,6 +330,24 @@ async function main(): Promise<void> {
     !String(liveMoneyReadiness.stripe_secret_key_mode).startsWith("sk_")
       && !String(liveMoneyReadiness.stripe_secret_key_mode).startsWith("rk_"),
     "live-money readiness exposed Stripe secret material",
+  );
+  const baseIndexerStatus = asObject(
+    await client.getBaseIndexerStatus("base-mainnet"),
+    "baseIndexerStatus",
+  );
+  requireCondition(
+    baseIndexerStatus.network_chain_id === 8453,
+    "Base indexer status did not expose Base mainnet chain id",
+  );
+  requireCondition(
+    typeof baseIndexerStatus.indexer_ready === "boolean",
+    "Base indexer status did not expose an indexer_ready boolean",
+  );
+  requireCondition(
+    asArray(baseIndexerStatus.evidence_boundaries, "Base indexer evidence boundaries").some(
+      (boundary) => typeof boundary === "string" && boundary.includes("does not fund"),
+    ),
+    "Base indexer status did not explain that status evidence is not settlement",
   );
   let reviewRequired = false;
   try {
