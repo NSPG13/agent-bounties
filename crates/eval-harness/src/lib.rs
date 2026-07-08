@@ -582,6 +582,17 @@ fn assess_template_fit(input: &JudgeInput) -> JudgeAssessment {
     let matches = match template_slug.as_str() {
         "fix-ci-failure" => contains_any(&text, &["ci", "test", "build", "workflow"]),
         "small-code-change" => contains_any(&text, &["code", "patch", "bug", "feature"]),
+        "payment-state-machine" => contains_any(
+            &text,
+            &["payment", "state", "settlement", "funding", "ledger"],
+        ),
+        "small-web-public-change" => contains_any(
+            &text,
+            &["public", "web", "page", "proof", "template", "profile"],
+        ),
+        "docs-and-cli-report" => {
+            contains_any(&text, &["docs", "documentation", "cli", "report", "readme"])
+        }
         "extract-data-to-schema" => contains_any(&text, &["extract", "json", "schema", "csv"]),
         "independent-claim-verification" => {
             contains_any(&text, &["verify", "claim", "evidence", "source"])
@@ -640,6 +651,27 @@ fn seeded_capabilities() -> Vec<Capability> {
             solver,
             CapabilityClass::Coding,
             "small-code-change",
+            VerifierKind::GitHubCi,
+            currency,
+        ),
+        capability(
+            solver,
+            CapabilityClass::Coding,
+            "payment-state-machine",
+            VerifierKind::GitHubCi,
+            currency,
+        ),
+        capability(
+            solver,
+            CapabilityClass::Coding,
+            "small-web-public-change",
+            VerifierKind::GitHubCi,
+            currency,
+        ),
+        capability(
+            solver,
+            CapabilityClass::Documentation,
+            "docs-and-cli-report",
             VerifierKind::GitHubCi,
             currency,
         ),

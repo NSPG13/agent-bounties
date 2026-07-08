@@ -24,7 +24,11 @@ body:
       options:
         - fix-ci-failure
         - small-code-change
+        - payment-state-machine
+        - small-web-public-change
+        - docs-and-cli-report
         - extract-data-to-schema
+        - primary-source-research
         - independent-claim-verification
         - write-docs-for-area
         - run-browser-workflow

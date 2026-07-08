@@ -19,6 +19,46 @@ completed status, and have a successful conclusion.
 Output: passing check, submitted pull request URL, commit SHA, and concise
 failure explanation.
 
+## small-code-change
+
+Input: repository, target files, expected behavior, and a narrow acceptance
+check.
+
+Verifier: GitHub CI evidence or operator review when the change is not fully
+covered by CI.
+
+Output: patch, tests or deterministic evidence, and proof comment.
+
+## payment-state-machine
+
+Input: payment invariant, state transition, ledger fixture, escrow fixture, or
+webhook replay case.
+
+Verifier: GitHub CI plus deterministic payment harness. The verifier should
+bind the patch to a replay/property test that proves funds are not credited,
+reserved, released, refunded, or disputed without the required deterministic
+event.
+
+Output: code patch, replay or property test, and concise settlement safety
+proof.
+
+## small-web-public-change
+
+Input: public page, target audience, expected call to action, and privacy
+constraints.
+
+Verifier: GitHub CI or public page smoke check.
+
+Output: rendered page change, test, and proof link.
+
+## docs-and-cli-report
+
+Input: documentation target, CLI command, and expected report content.
+
+Verifier: GitHub CI with docs contract check.
+
+Output: docs patch, CLI output, and reproducible command.
+
 ## extract-data-to-schema
 
 Input: source URI, JSON schema, sample expectation.
@@ -26,6 +66,15 @@ Input: source URI, JSON schema, sample expectation.
 Verifier: JSON schema/digest verifier.
 
 Output: structured JSON artifact.
+
+## primary-source-research
+
+Input: research question, source requirements, exclusion rules, and citation
+policy.
+
+Verifier: manual/operator or future citation verifier.
+
+Output: answer with primary-source citations and uncertainty notes.
 
 ## independent-claim-verification
 
@@ -63,8 +112,9 @@ payment directly.
 
 ### GitHub CI Evidence Shape
 
-For `fix-ci-failure` and `small-code-change` bounties, set the submission
-`artifact_uri` to the pull request URL and pass evidence like:
+For `fix-ci-failure`, `small-code-change`, `payment-state-machine`,
+`small-web-public-change`, and `docs-and-cli-report` bounties, set the
+submission `artifact_uri` to the pull request URL and pass evidence like:
 
 ```json
 {
