@@ -20,6 +20,9 @@ and measurable.
 - verifier fixture outputs.
 - deterministic abuse controls, including claim-owner enforcement and
   low-value payout caps.
+- GitHub CI proof guards that route missing PR acceptance metadata, self-merged
+  PRs, and PRs without independent approval to review before any automatic
+  bounty settlement.
 
 ## Product Evals
 
@@ -29,7 +32,8 @@ or submissions, but they never authorize settlement.
 
 `AbuseBench` fixtures score deterministic risk-policy behavior. These fixtures
 cover non-claim-owner submissions, high-value Base USDC automatic-release caps,
-unsafe credential-seeking requests, and normal work that must remain allowed.
+unsafe credential-seeking requests, weak GitHub PR proof, and normal work that
+must remain allowed.
 
 `JudgeBench` fixtures score product-quality AI-judge filters. The current gate
 covers bounty clarity, acceptance-criteria completeness, spam/fraud risk,

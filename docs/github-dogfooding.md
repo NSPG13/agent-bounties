@@ -166,6 +166,17 @@ the pull request to the exact commit and check run that passed:
 {
   "repository": "agent-bounties/agent-bounties",
   "pull_request_url": "https://github.com/agent-bounties/agent-bounties/pull/42",
+  "pull_request": {
+    "author_login": "solver-agent",
+    "merged": true,
+    "merged_by_login": "maintainer",
+    "reviews": [
+      {
+        "author_login": "maintainer",
+        "state": "APPROVED"
+      }
+    ]
+  },
   "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "check_run": {
     "id": 123456789,
@@ -182,10 +193,13 @@ the pull request to the exact commit and check run that passed:
 ```
 
 The verifier accepts only completed successful check runs that belong to the
-submitted repository and commit. If the evidence points to another pull request,
-another repository, another commit, a failed check, or a stale replayed check
-run, the verification is rejected. Missing or incomplete evidence is routed to
-review and cannot authorize payment.
+submitted repository and commit. Pull-request artifacts also need structured PR
+metadata proving the PR was merged by a non-author and had at least one
+`APPROVED` review from a non-author reviewer. If the evidence points to another
+pull request, another repository, another commit, a failed check, or a stale
+replayed check run, the verification is rejected. Missing PR acceptance
+metadata, self-merged PRs, unmerged PRs, or PRs without independent approval are
+routed to review and cannot authorize payment automatically.
 
 ## Public Artifacts
 

@@ -171,6 +171,21 @@ impl Verifier for GitHubCiVerifier {
         let succeeded = matches!(conclusion.as_str(), "success" | "passed");
         let accepted = completed && succeeded;
         let short_sha = short_sha(&parsed.commit_sha);
+        let payload = parsed.canonical_payload();
+        if accepted {
+            if let Some(reason) = parsed.automatic_acceptance_review_reason() {
+                return Ok(make_result_with_payload(ResultSeed {
+                    bounty_id: input.bounty_id,
+                    submission_id: input.submission.id,
+                    verifier_agent_id: None,
+                    kind: VerifierKind::GitHubCi,
+                    decision: VerificationDecision::NeedsReview,
+                    summary: format!("GitHub CI evidence needs review: {reason}"),
+                    confidence: 0.62,
+                    payload: Some(&payload),
+                }));
+            }
+        }
         let summary = if accepted {
             format!(
                 "GitHub CI evidence accepted: {} {} commit {} check {}#{} succeeded",
@@ -207,7 +222,7 @@ impl Verifier for GitHubCiVerifier {
             },
             summary,
             confidence: if accepted { 0.98 } else { 0.0 },
-            payload: Some(&parsed.canonical_payload()),
+            payload: Some(&payload),
         }))
     }
 }
@@ -216,6 +231,7 @@ impl Verifier for GitHubCiVerifier {
 struct GitHubCiEvidence {
     repository: String,
     pull_request_url: Option<String>,
+    pull_request: Option<GitHubPullRequestEvidence>,
     commit_sha: String,
     check_run_id: String,
     check_name: String,
@@ -249,6 +265,12 @@ impl GitHubCiEvidence {
                 return Err("pull_request_url repository does not match repository".to_string());
             }
         }
+
+        let pull_request = evidence
+            .get("pull_request")
+            .filter(|value| value.is_object())
+            .map(GitHubPullRequestEvidence::from_value)
+            .transpose()?;
 
         let commit_sha = evidence_string(evidence, "commit_sha")
             .or_else(|| evidence_string(evidence, "head_sha"))
@@ -307,6 +329,7 @@ impl GitHubCiEvidence {
         Ok(Self {
             repository,
             pull_request_url,
+            pull_request,
             commit_sha,
             check_run_id: check_run_id.trim().to_string(),
             check_name: check_name.trim().to_string(),
@@ -360,11 +383,48 @@ impl GitHubCiEvidence {
         Ok(())
     }
 
+    fn automatic_acceptance_review_reason(&self) -> Option<String> {
+        self.pull_request_url.as_ref()?;
+        let Some(pull_request) = &self.pull_request else {
+            return Some(
+                "pull_request metadata with author, merge state, merger, and reviews is required"
+                    .to_string(),
+            );
+        };
+        if !pull_request.merged {
+            return Some(
+                "pull request must be merged before automatic bounty acceptance".to_string(),
+            );
+        }
+        let Some(merged_by_login) = &pull_request.merged_by_login else {
+            return Some(
+                "pull_request.merged_by_login is required to rule out self-merge".to_string(),
+            );
+        };
+        if merged_by_login == &pull_request.author_login {
+            return Some(
+                "pull request was merged by its author; independent operator review is required"
+                    .to_string(),
+            );
+        }
+        if !pull_request.has_independent_approval() {
+            return Some(
+                "pull request needs at least one APPROVED review from a non-author reviewer"
+                    .to_string(),
+            );
+        }
+        None
+    }
+
     fn canonical_payload(&self) -> String {
         format!(
-            "github-ci:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            "github-ci:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
             self.repository,
             self.pull_request_url.as_deref().unwrap_or(""),
+            self.pull_request
+                .as_ref()
+                .map(GitHubPullRequestEvidence::canonical_payload)
+                .unwrap_or_default(),
             self.commit_sha,
             self.check_run_id,
             self.check_name,
@@ -380,6 +440,113 @@ impl GitHubCiEvidence {
             .as_deref()
             .and_then(github_pr_reference)
             .map(|pr| pr.number)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitHubPullRequestEvidence {
+    author_login: String,
+    merged: bool,
+    merged_by_login: Option<String>,
+    reviews: Vec<GitHubReviewEvidence>,
+}
+
+impl GitHubPullRequestEvidence {
+    fn from_value(value: &Value) -> Result<Self, String> {
+        let author_login = evidence_string(value, "author_login")
+            .or_else(|| evidence_string(value, "user_login"))
+            .or_else(|| nested_string(value, &["author", "login"]))
+            .or_else(|| nested_string(value, &["user", "login"]))
+            .and_then(|login| normalize_github_login(&login))
+            .ok_or_else(|| "pull_request.author_login is required".to_string())?;
+        let merged = evidence_bool(value, "merged").unwrap_or_else(|| {
+            evidence_string(value, "merged_at").is_some_and(|text| !text.trim().is_empty())
+        });
+        let merged_by_login = evidence_string(value, "merged_by_login")
+            .or_else(|| nested_string(value, &["merged_by", "login"]))
+            .and_then(|login| normalize_github_login(&login));
+        let reviews = value
+            .get("reviews")
+            .and_then(Value::as_array)
+            .map(|reviews| {
+                reviews
+                    .iter()
+                    .filter_map(GitHubReviewEvidence::from_value)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(Self {
+            author_login,
+            merged,
+            merged_by_login,
+            reviews,
+        })
+    }
+
+    fn has_independent_approval(&self) -> bool {
+        self.reviews.iter().any(|review| {
+            review.state == GitHubReviewState::Approved && review.author_login != self.author_login
+        })
+    }
+
+    fn canonical_payload(&self) -> String {
+        let reviews = self
+            .reviews
+            .iter()
+            .map(GitHubReviewEvidence::canonical_payload)
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "pr:{}:{}:{}:{}",
+            self.author_login,
+            self.merged,
+            self.merged_by_login.as_deref().unwrap_or(""),
+            reviews
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitHubReviewEvidence {
+    author_login: String,
+    state: GitHubReviewState,
+}
+
+impl GitHubReviewEvidence {
+    fn from_value(value: &Value) -> Option<Self> {
+        let author_login = evidence_string(value, "author_login")
+            .or_else(|| evidence_string(value, "user_login"))
+            .or_else(|| nested_string(value, &["author", "login"]))
+            .or_else(|| nested_string(value, &["user", "login"]))
+            .and_then(|login| normalize_github_login(&login))?;
+        let state = evidence_string(value, "state")
+            .and_then(|state| GitHubReviewState::from_str(&state))
+            .unwrap_or(GitHubReviewState::Other);
+        Some(Self {
+            author_login,
+            state,
+        })
+    }
+
+    fn canonical_payload(&self) -> String {
+        format!("{}:{:?}", self.author_login, self.state)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GitHubReviewState {
+    Approved,
+    Other,
+}
+
+impl GitHubReviewState {
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "APPROVED" => Some(Self::Approved),
+            "" => None,
+            _ => Some(Self::Other),
+        }
     }
 }
 
@@ -606,6 +773,20 @@ fn normalize_git_sha(value: &str) -> Option<String> {
     }
 }
 
+fn normalize_github_login(value: &str) -> Option<String> {
+    let login = value.trim().trim_start_matches('@').to_ascii_lowercase();
+    if login.is_empty()
+        || login.len() > 64
+        || !login
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '[' | ']'))
+    {
+        None
+    } else {
+        Some(login)
+    }
+}
+
 fn github_pr_reference(url: &str) -> Option<GitHubPullRequestRef> {
     let trimmed = url.trim();
     let path = trimmed
@@ -784,6 +965,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn github_ci_verifier_needs_review_without_pr_acceptance_metadata() {
+        let bounty_id = Uuid::new_v4();
+        let submission = Submission {
+            artifact_uri: "https://github.com/agent-bounties/agent-bounties/pull/42".to_string(),
+            ..submission_for(bounty_id, "abc123abc123abc123")
+        };
+        let mut evidence = github_ci_evidence();
+        evidence.as_object_mut().unwrap().remove("pull_request");
+
+        let result = GitHubCiVerifier
+            .verify(VerificationInput {
+                bounty_id,
+                submission,
+                expected_artifact_digest: None,
+                rubric: None,
+                evidence: Some(evidence),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.decision, VerificationDecision::NeedsReview);
+        assert!(result.summary.contains("pull_request metadata"));
+    }
+
+    #[tokio::test]
+    async fn github_ci_verifier_needs_review_for_self_merged_pr() {
+        let bounty_id = Uuid::new_v4();
+        let submission = Submission {
+            artifact_uri: "https://github.com/agent-bounties/agent-bounties/pull/42".to_string(),
+            ..submission_for(bounty_id, "abc123abc123abc123")
+        };
+        let mut evidence = github_ci_evidence();
+        evidence["pull_request"]["merged_by_login"] = serde_json::json!("solver-agent");
+
+        let result = GitHubCiVerifier
+            .verify(VerificationInput {
+                bounty_id,
+                submission,
+                expected_artifact_digest: None,
+                rubric: None,
+                evidence: Some(evidence),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.decision, VerificationDecision::NeedsReview);
+        assert!(result.summary.contains("merged by its author"));
+    }
+
+    #[tokio::test]
+    async fn github_ci_verifier_needs_review_without_independent_approval() {
+        let bounty_id = Uuid::new_v4();
+        let submission = Submission {
+            artifact_uri: "https://github.com/agent-bounties/agent-bounties/pull/42".to_string(),
+            ..submission_for(bounty_id, "abc123abc123abc123")
+        };
+        let mut evidence = github_ci_evidence();
+        evidence["pull_request"]["reviews"] = serde_json::json!([
+            {
+                "author_login": "solver-agent",
+                "state": "APPROVED"
+            }
+        ]);
+
+        let result = GitHubCiVerifier
+            .verify(VerificationInput {
+                bounty_id,
+                submission,
+                expected_artifact_digest: None,
+                rubric: None,
+                evidence: Some(evidence),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.decision, VerificationDecision::NeedsReview);
+        assert!(result.summary.contains("non-author reviewer"));
+    }
+
+    #[tokio::test]
     async fn github_ci_verifier_needs_review_for_missing_evidence() {
         let bounty_id = Uuid::new_v4();
         let submission = submission_for(bounty_id, "abc123abc123abc123");
@@ -921,6 +1182,17 @@ mod tests {
         serde_json::json!({
             "repository": "agent-bounties/agent-bounties",
             "pull_request_url": "https://github.com/agent-bounties/agent-bounties/pull/42",
+            "pull_request": {
+                "author_login": "solver-agent",
+                "merged": true,
+                "merged_by_login": "maintainer",
+                "reviews": [
+                    {
+                        "author_login": "maintainer",
+                        "state": "APPROVED"
+                    }
+                ]
+            },
             "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "check_run": {
                 "id": 123456789_u64,
