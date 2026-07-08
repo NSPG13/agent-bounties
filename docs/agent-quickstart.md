@@ -152,6 +152,9 @@ cargo run -p cli -- funding-rehearsal-demo
 It simulates a paid Stripe Checkout webhook, applies a Base Sepolia escrow
 created event, verifies deterministic evidence, then distributes Stripe and Base
 settlements only after their respective reconciliation events.
+When an operator is ready to use Stripe test mode and Base Sepolia with real
+Checkout Sessions, signed transactions, RPC log fetches, and receipt
+reconciliation, follow [real-funding-rehearsal.md](real-funding-rehearsal.md).
 
 ## 6. Claim, Submit, Verify, Check Payment
 

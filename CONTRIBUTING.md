@@ -22,6 +22,9 @@ possible:
 
 Those answers help improve agent discovery, public proof pages, bounty wording,
 and payout trust. They are not part of bounty acceptance or payout approval.
+Maintainers should ask once on the relevant issue or PR when a participant has
+not answered yet; see [docs/distribution-learning.md](docs/distribution-learning.md)
+for the prompt and current adoption signals.
 
 If your PR is useful but not ready for `main`, maintainers may copy it to a
 `collab/pr-<number>-<topic>` branch so other contributors can target follow-up

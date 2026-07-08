@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
 use app::{
     hash_artifact, AddFundingContributionRequest, BaseReleaseQueueRequest, BountyNetwork,
-    ClaimBountyRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingPartitionTargetRequest,
-    OpenPooledBountyRequest, PlanBaseFundingRequest, PlanBaseReleaseRequest, PostBountyRequest,
-    RegisterAgentRequest, RegisterCapabilityRequest, RequestQuotesRequest, SubmitResultRequest,
-    VerifySubmissionRequest,
+    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
+    FundingIntentNextAction, FundingPartitionTargetRequest, OpenPooledBountyRequest,
+    PlanBaseReleaseRequest, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
+    RequestQuotesRequest, SubmitResultRequest, VerifySubmissionRequest,
 };
 use chain_base::{
     base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
@@ -27,7 +27,7 @@ use github_app::{
 };
 use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper,
-    StripePlanner, StripeWebhookEvent, STRIPE_API_BASE_URL,
+    StripePlanner, StripeRequestIntent, StripeWebhookEvent, STRIPE_API_BASE_URL,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -255,6 +255,14 @@ enum Command {
     StripeExecuteConnectAccount {
         #[arg(long)]
         agent_id: Uuid,
+        #[arg(long)]
+        secret_key: Option<String>,
+        #[arg(long)]
+        api_base_url: Option<String>,
+    },
+    StripeExecuteRequestIntent {
+        #[arg(long)]
+        intent_file: String,
         #[arg(long)]
         secret_key: Option<String>,
         #[arg(long)]
@@ -500,6 +508,11 @@ async fn main() -> Result<()> {
             secret_key,
             api_base_url,
         } => stripe_execute_connect_account(agent_id, secret_key, api_base_url).await,
+        Command::StripeExecuteRequestIntent {
+            intent_file,
+            secret_key,
+            api_base_url,
+        } => stripe_execute_request_intent(intent_file, secret_key, api_base_url).await,
         Command::GithubPlan {
             repository,
             issue_url,
@@ -723,27 +736,6 @@ async fn funding_rehearsal_demo() -> Result<()> {
         payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
     });
     let platform_url = "https://agentbounties.local".to_string();
-    let stripe_top_up_intent =
-        StripePlanner::new(platform_url.clone()).checkout_top_up(&CheckoutTopUpRequest {
-            organization_id,
-            amount: Money::new(500, "usd")?,
-            success_url: format!("{platform_url}/stripe/success"),
-            cancel_url: format!("{platform_url}/stripe/cancel"),
-        })?;
-    let stripe_webhook = StripeWebhookEvent {
-        id: "evt_test_funding_rehearsal_topup".to_string(),
-        event_type: "checkout.session.completed".to_string(),
-        payload: serde_json::json!({
-            "id": "cs_test_funding_rehearsal_topup",
-            "payment_status": "paid",
-            "client_reference_id": organization_id.to_string(),
-            "amount_total": 500,
-            "currency": "usd",
-            "payment_intent": "pi_test_funding_rehearsal_topup"
-        }),
-    };
-    let stripe_credit = StripeEventDeduper::default().apply_checkout_top_up(&stripe_webhook)?;
-    let stripe_reconciliation = network.apply_stripe_funding_credit(stripe_credit)?;
 
     let bounty = network.open_pooled_bounty(OpenPooledBountyRequest {
         title: "Funding rehearsal mixed Stripe and Base bounty".to_string(),
@@ -765,25 +757,83 @@ async fn funding_rehearsal_demo() -> Result<()> {
             },
         ],
     })?;
-    let stripe_contribution = network.add_funding_contribution(AddFundingContributionRequest {
-        bounty_id: bounty.id,
-        contributor_agent_id: None,
-        source_organization_id: Some(organization_id),
-        amount_minor: 500,
-        currency: "usd".to_string(),
-        rail: PaymentRail::StripeFiat,
-        external_reference: Some("funding-rehearsal-stripe-500".to_string()),
-    })?;
+
+    let stripe_intent = network.create_funding_intent(
+        CreateFundingIntentRequest {
+            bounty_id: bounty.id,
+            contributor_agent_id: None,
+            source_organization_id: Some(organization_id),
+            amount_minor: 500,
+            currency: "usd".to_string(),
+            rail: PaymentRail::StripeFiat,
+            external_reference: Some("funding-rehearsal-stripe-intent-500".to_string()),
+            stripe_success_url: Some(format!("{platform_url}/stripe/success")),
+            stripe_cancel_url: Some(format!("{platform_url}/stripe/cancel")),
+            base_escrow_contract: None,
+            base_payer: None,
+            base_token: None,
+            base_network: None,
+        },
+        platform_url.clone(),
+    )?;
+    let stripe_checkout_request = match &stripe_intent.next_action {
+        FundingIntentNextAction::StripeCheckout { request } => request.clone(),
+        FundingIntentNextAction::BaseEscrowFunding { .. } => {
+            bail!("Stripe funding intent returned Base next action")
+        }
+    };
+    let stripe_webhook = StripeWebhookEvent {
+        id: "evt_test_funding_rehearsal_topup".to_string(),
+        event_type: "checkout.session.completed".to_string(),
+        payload: serde_json::json!({
+            "id": "cs_test_funding_rehearsal_topup",
+            "payment_status": "paid",
+            "client_reference_id": organization_id.to_string(),
+            "amount_total": 500,
+            "currency": "usd",
+            "payment_intent": "pi_test_funding_rehearsal_topup",
+            "metadata": {
+                "bounty_id": bounty.id.to_string(),
+                "funding_intent_id": stripe_intent.intent.id.to_string(),
+                "funding_intent_reference": "funding-rehearsal-stripe-intent-500",
+                "purpose": "bounty_funding_intent"
+            }
+        }),
+    };
+    let stripe_credit = StripeEventDeduper::default().apply_checkout_top_up(&stripe_webhook)?;
+    let stripe_reconciliation = network.apply_stripe_funding_credit(stripe_credit)?;
+    let stripe_contribution = stripe_reconciliation
+        .funding_report
+        .as_ref()
+        .map(|report| report.contribution.clone())
+        .context("Stripe funding intent webhook did not reserve bounty funding")?;
 
     let escrow_contract = "0x1111111111111111111111111111111111111111".to_string();
     let usdc_token = "0x3333333333333333333333333333333333333333".to_string();
-    let base_funding_plan = network.plan_base_funding(PlanBaseFundingRequest {
-        bounty_id: bounty.id,
-        escrow_contract: escrow_contract.clone(),
-        payer: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-        token: usdc_token.clone(),
-        network: Some("base-sepolia".to_string()),
-    })?;
+    let base_intent = network.create_funding_intent(
+        CreateFundingIntentRequest {
+            bounty_id: bounty.id,
+            contributor_agent_id: None,
+            source_organization_id: None,
+            amount_minor: 1_000,
+            currency: "usdc".to_string(),
+            rail: PaymentRail::BaseUsdc,
+            external_reference: Some("funding-rehearsal-base-intent-1000".to_string()),
+            stripe_success_url: None,
+            stripe_cancel_url: None,
+            base_escrow_contract: Some(escrow_contract.clone()),
+            base_payer: Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            base_token: Some(usdc_token.clone()),
+            base_network: Some("base-sepolia".to_string()),
+        },
+        platform_url.clone(),
+    )?;
+    let base_funding_plan = match &base_intent.next_action {
+        FundingIntentNextAction::BaseEscrowFunding { plan } => plan.as_ref().clone(),
+        FundingIntentNextAction::StripeCheckout { .. } => {
+            bail!("Base funding intent returned Stripe next action")
+        }
+    };
     let terms_hash = bounty
         .terms_hash
         .clone()
@@ -851,18 +901,27 @@ async fn funding_rehearsal_demo() -> Result<()> {
                 "Stripe payout is paid only after Connect eligibility reconciliation."
             ],
             "stripe": {
-                "checkout_top_up_intent": stripe_top_up_intent,
+                "funding_intent": stripe_intent.intent,
+                "checkout_request": stripe_checkout_request,
                 "webhook_event_id": stripe_webhook.id,
                 "funding_reconciliation": stripe_reconciliation,
-                "funding_contribution": stripe_contribution.contribution,
+                "funding_contribution": stripe_contribution,
                 "payout_reconciliation": stripe_payout
             },
             "base": {
+                "funding_intent": base_intent.intent,
                 "funding_plan": base_funding_plan,
                 "created_reconciliation": base_created,
                 "release_plan": base_release_plan,
                 "released_reconciliation": base_released
             },
+            "operator_test_mode_next_steps": [
+                "Execute the Stripe checkout_request with a sk_test key through stripe-execute-request-intent; the Checkout Session still does not credit the bounty.",
+                "Complete the Stripe test Checkout or replay a signed checkout.session.completed webhook carrying bounty_id and funding_intent_id metadata.",
+                "Sign and send the Base Sepolia approve and createEscrow transactions from the Base funding plan, then reconcile indexed EscrowCreated logs.",
+                "After deterministic verification, sign and send the Base release plan, then reconcile the indexed EscrowReleased log.",
+                "Reconcile Stripe Connect eligibility before treating fiat payout intents as paid."
+            ],
             "proof": proof,
             "final_bounty": final_status.bounty,
             "funding_summary": final_status.funding_summary,
@@ -1513,6 +1572,41 @@ async fn stripe_execute_connect_account(
     .await?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
+}
+
+async fn stripe_execute_request_intent(
+    intent_file: String,
+    secret_key: Option<String>,
+    api_base_url: Option<String>,
+) -> Result<()> {
+    let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(intent_file)?)?;
+    let intent = stripe_request_intent_from_value(&value)?;
+    let report = execute_stripe_request(
+        &intent,
+        &resolve_stripe_secret(secret_key)?,
+        &resolve_stripe_api_base(api_base_url),
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn stripe_request_intent_from_value(value: &serde_json::Value) -> Result<StripeRequestIntent> {
+    if let Ok(intent) = serde_json::from_value::<StripeRequestIntent>(value.clone()) {
+        return Ok(intent);
+    }
+    for pointer in [
+        "/next_action/payload/request",
+        "/next_action/StripeCheckout/request",
+        "/stripe/checkout_request",
+    ] {
+        if let Some(request) = value.pointer(pointer) {
+            return serde_json::from_value(request.clone()).with_context(|| {
+                format!("failed to parse StripeRequestIntent at JSON pointer {pointer}")
+            });
+        }
+    }
+    bail!("intent file must contain a StripeRequestIntent or funding-intent report")
 }
 
 fn resolve_stripe_secret(secret_key: Option<String>) -> Result<String> {
