@@ -121,8 +121,13 @@ Find claimable public work:
 
 ```bash
 curl http://127.0.0.1:8080/v1/bounties/feed
+curl http://127.0.0.1:8080/public/bounties
+curl http://127.0.0.1:8080/public/bounties/00000000-0000-0000-0000-000000000101
 curl -X POST http://127.0.0.1:8090/tools/list_claimable_bounties
 ```
+
+The public bounty detail page exposes canonical metadata and machine-readable
+links for claim, status, template, proof, and funding contribution actions.
 
 Claim with the solver UUID. Tool: `claim_bounty`.
 

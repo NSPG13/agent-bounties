@@ -511,6 +511,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/public/capabilities", get(public_capability_feed_page))
         .route("/public/verifiers/:kind", get(public_verifier_profile))
         .route("/public/bounties", get(public_bounty_feed_page))
+        .route("/public/bounties/:id", get(public_bounty_page))
         .route("/public/templates", get(public_template_index))
         .route("/public/templates/:slug", get(public_template_page))
         .route("/api-docs/openapi.json", get(openapi_json))
@@ -2099,6 +2100,72 @@ async fn public_bounty_feed_page(State(state): State<SharedState>) -> Html<Strin
     Html(web_public::render_bounty_feed_page(&items))
 }
 
+async fn public_bounty_page(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Html<String>, StatusCode> {
+    let status = {
+        let network = state.network.lock().expect("state poisoned");
+        network.status(id).map_err(|_| StatusCode::NOT_FOUND)?
+    };
+    if status.bounty.privacy == PrivacyLevel::Private {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(Html(web_public::render_public_bounty_page(
+        &public_bounty_page_model(&status, &state.public_base_url),
+    )))
+}
+
+fn public_bounty_page_model(
+    status: &BountyStatusResponse,
+    public_base_url: &str,
+) -> web_public::PublicBountyPage {
+    let api = public_base_url.trim_end_matches('/');
+    let bounty = &status.bounty;
+    let verification_type = status
+        .verifier_results
+        .iter()
+        .max_by_key(|result| result.created_at)
+        .map(|result| format!("{:?}", result.kind))
+        .or_else(|| {
+            web_public::bounty_templates()
+                .into_iter()
+                .find(|template| template.slug == bounty.template_slug)
+                .map(|template| template.verifier.to_string())
+        })
+        .unwrap_or_else(|| "Unknown".to_string());
+    let proof_urls = status
+        .proofs
+        .iter()
+        .filter(|proof| proof.privacy != PrivacyLevel::Private)
+        .map(|proof| format!("{api}/public/proofs/{}", proof.id))
+        .collect();
+    web_public::PublicBountyPage {
+        bounty_id: bounty.id.to_string(),
+        title: bounty.title.clone(),
+        template_slug: bounty.template_slug.clone(),
+        amount_minor: bounty.amount.amount,
+        currency: bounty.amount.currency.clone(),
+        funding_mode: format!("{:?}", bounty.funding_mode),
+        privacy: format!("{:?}", bounty.privacy),
+        status: format!("{:?}", bounty.status),
+        terms_hash: bounty.terms_hash.clone(),
+        created_at: bounty.created_at.to_rfc3339(),
+        verification_type,
+        claimable: status.funding_summary.claimable,
+        funding_target_minor: status.funding_summary.target.amount,
+        funding_applied_minor: status.funding_summary.applied.amount,
+        funding_remaining_minor: status.funding_summary.remaining.amount,
+        contribution_count: status.funding_summary.contribution_count,
+        public_url: format!("{api}/public/bounties/{}", bounty.id),
+        claim_url: format!("{api}/v1/bounties/{}/claim", bounty.id),
+        status_url: format!("{api}/v1/bounties/{}", bounty.id),
+        template_url: format!("{api}/public/templates/{}", bounty.template_slug),
+        funding_contribution_url: format!("{api}/v1/bounties/{}/funding-contributions", bounty.id),
+        proof_urls,
+    }
+}
+
 async fn public_capability_feed_page(State(state): State<SharedState>) -> Html<String> {
     let (capabilities, agents, reputation_events, settlements) = {
         let network = state.network.lock().expect("state poisoned");
@@ -3122,6 +3189,14 @@ mod tests {
             .agent_quickstart
             .contains("docs/agent-quickstart.md"));
         assert_eq!(
+            manifest.endpoints.public_bounties,
+            "http://127.0.0.1:8080/public/bounties"
+        );
+        assert_eq!(
+            manifest.endpoints.public_bounty,
+            "http://127.0.0.1:8080/public/bounties/{bounty_id}"
+        );
+        assert_eq!(
             manifest.endpoints.risk_policy,
             "http://127.0.0.1:8080/v1/risk/policy"
         );
@@ -3582,6 +3657,63 @@ mod tests {
             feed[0].claim_url,
             format!("http://127.0.0.1:8080/v1/bounties/{}/claim", public.id)
         );
+        assert_eq!(
+            feed[0].public_url,
+            format!("http://127.0.0.1:8080/public/bounties/{}", public.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn public_bounty_detail_exposes_agent_actions() {
+        let mut network = BountyNetwork::default();
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Fix public <CI>".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        apply_base_funding_event(&mut network, &bounty, 1);
+        let state = test_state(network);
+
+        let html = public_bounty_page(State(state), Path(bounty.id))
+            .await
+            .unwrap()
+            .0;
+
+        assert!(html.contains("Fix public &lt;CI&gt;"));
+        assert!(html.contains("Funding State"));
+        assert!(html.contains("application/ld+json"));
+        assert!(html.contains("Machine status"));
+        assert!(html.contains("Add funding"));
+        assert!(html.contains(&format!("/public/bounties/{}", bounty.id)));
+        assert!(html.contains(&format!("/v1/bounties/{}/claim", bounty.id)));
+        assert!(html.contains(&format!("/v1/bounties/{}/funding-contributions", bounty.id)));
+    }
+
+    #[tokio::test]
+    async fn public_bounty_detail_hides_private_bounties() {
+        let mut network = BountyNetwork::default();
+        let private = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Private ledger work".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                amount_minor: 2_000_000,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::StripeFiatLedger,
+                privacy: PrivacyLevel::Private,
+            })
+            .unwrap();
+        let state = test_state(network);
+
+        let error = public_bounty_page(State(state), Path(private.id))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

@@ -1447,6 +1447,8 @@ async fn production_smoke_check(
         "/endpoints/discovery_schema",
         "/endpoints/llms_txt",
         "/endpoints/agent_quickstart",
+        "/endpoints/public_bounties",
+        "/endpoints/public_bounty",
         "/endpoints/templates",
         "/endpoints/bounty_feed",
         "/endpoints/capability_feed",
@@ -1508,6 +1510,12 @@ async fn production_smoke_check(
                     && required
                         .iter()
                         .any(|value| value.as_str() == Some("agent_quickstart"))
+                    && required
+                        .iter()
+                        .any(|value| value.as_str() == Some("public_bounties"))
+                    && required
+                        .iter()
+                        .any(|value| value.as_str() == Some("public_bounty"))
                     && required
                         .iter()
                         .any(|value| value.as_str() == Some("discovery_schema"))
@@ -1856,7 +1864,8 @@ async fn production_smoke_check(
     let public_bounties = production_get_text(&client, &format!("{api}/public/bounties")).await?;
     require(
         public_bounties.contains("Claimable Agent Bounties")
-            && public_bounties.contains("Machine-readable feed"),
+            && public_bounties.contains("Machine-readable feed")
+            && public_bounties.contains("Add funding"),
         "public bounty page must point agents at the machine-readable feed",
     )?;
     let public_capabilities =
@@ -2026,6 +2035,14 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     require(
         discovery.pointer("/endpoints/agent_quickstart").is_some(),
         "discovery manifest must include agent quickstart",
+    )?;
+    require(
+        discovery.pointer("/endpoints/public_bounties").is_some(),
+        "discovery manifest must include public bounty pages",
+    )?;
+    require(
+        discovery.pointer("/endpoints/public_bounty").is_some(),
+        "discovery manifest must include public bounty detail route",
     )?;
     require(
         discovery.pointer("/endpoints/capability_feed").is_some(),
@@ -2328,6 +2345,14 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
                 .unwrap_or(false)
         }),
         "newly posted public bounty must appear in public feed",
+    )?;
+    let public_bounty_page = get_text(&format!("{api}/public/bounties/{bounty_id}"))?;
+    require(
+        public_bounty_page.contains("Funding State")
+            && public_bounty_page.contains("application/ld+json")
+            && public_bounty_page.contains("Machine status")
+            && public_bounty_page.contains("Add funding"),
+        "public bounty detail page must expose funding state and machine-readable actions",
     )?;
 
     let mcp_discovery = get_json(&format!("{mcp}/.well-known/agent-bounties.json"))?;
