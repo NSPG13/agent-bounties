@@ -6,6 +6,72 @@ binary. API, MCP, and worker containers use the same image recipe and differ by
 Rust and Cargo 1.88 or newer are required for local builds because the locked
 dependency graph includes crates with that minimum supported Rust version.
 
+## Render Blueprint
+
+The root [render.yaml](../render.yaml) is the lowest-friction hosted deployment
+path for connecting the public website and Stripe funding page to a durable API.
+It defines:
+
+- `agent-bounties-api`: public API web service.
+- `agent-bounties-mcp`: public MCP-compatible tool service.
+- `agent-bounties-base-indexer`: background worker for Base escrow log polling.
+- `agent-bounties-postgres`: shared Postgres database for API, MCP, and worker
+  persistence.
+
+The API and MCP binaries now fall back to Render's `PORT` environment variable
+when `API_BIND_ADDR` or `MCP_BIND_ADDR` is unset, so hosted web services bind to
+`0.0.0.0:$PORT` while local defaults remain `127.0.0.1:8080` and
+`127.0.0.1:8090`.
+
+Before applying the Blueprint, inspect and adjust these non-secret URL defaults
+if you rename services or attach custom domains:
+
+- `PUBLIC_BASE_URL=https://agent-bounties-api.onrender.com`
+- `MCP_BASE_URL=https://agent-bounties-mcp.onrender.com`
+
+The Blueprint intentionally starts with live-value mutation disabled:
+
+- `ENABLE_STRIPE_LIVE_EXECUTION=false`
+- `ENABLE_STRIPE_PUBLIC_CHECKOUT=false`
+- `ENABLE_BASE_TX_BROADCAST=false`
+- `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false`
+
+Render generates `OPERATOR_API_TOKEN`. Stripe secrets, Base RPC URLs, escrow
+contracts, settlement signer, platform fee wallet, and indexer start block are
+Dashboard-provided values. Do not enable public card funding until Stripe
+webhooks are configured and `GET /v1/readiness/live-money?network=base-mainnet`
+reports the expected non-secret readiness gates.
+
+Validate the checked-in Blueprint contract without requiring the Render CLI:
+
+```powershell
+python scripts\check-render-blueprint.py
+```
+
+On Unix-like shells:
+
+```bash
+python3 scripts/check-render-blueprint.py
+```
+
+To deploy from the Dashboard after the PR is merged:
+
+1. Open
+   `https://dashboard.render.com/blueprint/new?repo=https://github.com/NSPG13/agent-bounties`.
+2. Connect GitHub if prompted and select the merged `main` branch.
+3. Review the API, MCP, worker, and Postgres resources.
+4. Fill the `sync: false` values for Stripe/Base only when you are ready to run
+   the corresponding rail.
+5. Apply the Blueprint and wait for all services to deploy.
+6. Update `PUBLIC_BASE_URL` and `MCP_BASE_URL` if Render assigned different
+   hostnames or you attached custom domains.
+7. Run the read-only production smoke against the deployed URLs.
+
+The Blueprint uses low paid service/database plans because the Base indexer is a
+background worker and real-money webhooks should not depend on sleeping
+instances. For no-money experiments, use local Docker Compose or the local
+service smoke instead.
+
 ## Container Images
 
 Build the deployable API, MCP, and Base indexer worker images locally:

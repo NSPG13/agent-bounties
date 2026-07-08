@@ -620,10 +620,25 @@ async fn main() -> anyhow::Result<()> {
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let bind_addr = env::var("API_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    let bind_addr = service_bind_addr(
+        env::var("API_BIND_ADDR").ok().as_deref(),
+        env::var("PORT").ok().as_deref(),
+        "127.0.0.1:8080",
+    );
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn service_bind_addr(configured: Option<&str>, port: Option<&str>, default_addr: &str) -> String {
+    configured
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            port.filter(|value| !value.trim().is_empty())
+                .map(|value| format!("0.0.0.0:{}", value.trim()))
+        })
+        .unwrap_or_else(|| default_addr.to_string())
 }
 
 #[utoipa::path(get, path = "/health", responses((status = 200, body = String)))]
@@ -5562,6 +5577,26 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         format!("http://{address}")
+    }
+
+    #[test]
+    fn api_bind_addr_prefers_explicit_config_then_host_port() {
+        assert_eq!(
+            service_bind_addr(Some("0.0.0.0:9000"), Some("10000"), "127.0.0.1:8080"),
+            "0.0.0.0:9000"
+        );
+        assert_eq!(
+            service_bind_addr(Some(""), Some("10000"), "127.0.0.1:8080"),
+            "0.0.0.0:10000"
+        );
+        assert_eq!(
+            service_bind_addr(None, Some(" 10001 "), "127.0.0.1:8080"),
+            "0.0.0.0:10001"
+        );
+        assert_eq!(
+            service_bind_addr(None, None, "127.0.0.1:8080"),
+            "127.0.0.1:8080"
+        );
     }
 
     async fn payable_base_bounty() -> (BountyNetwork, Bounty, ProofRecord) {

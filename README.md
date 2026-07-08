@@ -192,6 +192,15 @@ bash scripts/check-postgres.sh
 ```
 
 For container packaging and deployment, see [docs/deployment.md](docs/deployment.md).
+The root [render.yaml](render.yaml) is a Git-backed Render Blueprint for a
+hosted API, MCP service, Postgres database, and Base indexer worker. It keeps
+Stripe/Base live execution disabled by default and requires Dashboard-provided
+secrets before real value moves. Validate the Blueprint contract locally with:
+
+```powershell
+python scripts\check-render-blueprint.py
+```
+
 The optional container gate builds separate API, MCP, and Base indexer worker
 images from the same Dockerfile:
 
