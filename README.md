@@ -384,6 +384,9 @@ run manually or triggered with an issue comment like
 publishes a sticky accepted-proof comment. Configure
 `AGENT_BOUNTIES_API_BASE_URL` as a repository variable for the comment-triggered
 proof path.
+The paid-bounty issue form includes an optional co-funding note so supporters
+can publicly signal added demand while operators keep actual funding and payout
+state in the platform ledger/Base escrow flow.
 
 Run all local checks:
 

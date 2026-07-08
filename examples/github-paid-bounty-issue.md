@@ -14,5 +14,10 @@ fix-ci-failure
 ### Funding mode
 BaseUsdcEscrow
 
+### Co-funding note
+Supporters can add funds once the hosted Base rail is enabled, or rehearse the
+same pooled funding path locally with `open_pooled_bounty` and
+`add_bounty_funding`.
+
 ### Privacy
 Public
