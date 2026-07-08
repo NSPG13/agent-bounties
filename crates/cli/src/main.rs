@@ -2940,6 +2940,7 @@ async fn production_smoke_check(
         "rail",
         "source",
         "externalReference",
+        "paymentPreference",
     ] {
         require(
             funding_handoff_params

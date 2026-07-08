@@ -607,7 +607,7 @@ fn funding_handoff_descriptor() -> FundingHandoffDescriptor {
     FundingHandoffDescriptor {
         page: STATIC_FUNDING_PAGE_URL.to_string(),
         purpose:
-            "Prefill the public Stripe Checkout funding form from a hosted public bounty or funding feed."
+            "Prefill the public Stripe Checkout funding form from a hosted public bounty or funding feed, including optional PayPal preference for human funders."
                 .to_string(),
         query_params: vec![
             "apiBaseUrl".to_string(),
@@ -618,10 +618,11 @@ fn funding_handoff_descriptor() -> FundingHandoffDescriptor {
             "rail".to_string(),
             "source".to_string(),
             "externalReference".to_string(),
+            "paymentPreference".to_string(),
         ],
         supported_rail: "StripeFiat".to_string(),
         settlement_authority:
-            "Query parameters are UI defaults only; funding still requires verified Stripe webhook reconciliation."
+            "Query parameters and PayPal preference are UI defaults only; funding still requires verified Stripe webhook reconciliation."
                 .to_string(),
     }
 }
@@ -740,6 +741,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Public bounty feed: {bounty_feed}
 - Public funding feed: {funding_feed}
 - Prefilled Stripe funding handoff: {funding_handoff_page}
+- PayPal-capable Stripe funding handoff: {funding_handoff_page}?apiBaseUrl={{api}}&bountyId={{bounty_id}}&amountMinor={{amount_minor}}&currency=usd&rail=StripeFiat&paymentPreference=paypal&source={{source}}
 - Open pooled bounty: {pooled_bounties}
 - Create real-rail funding intent: {bounty_funding_intents}
 - Add pooled bounty funding: {bounty_funding_contributions}
@@ -781,7 +783,8 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Paid/refunded/disputed state changes only after indexed escrow logs are reconciled.
 - Stripe live execution is gated by operator secrets and compliance state.
 - Stripe Checkout funding can show cards, wallets, or PayPal where the hosted Stripe account supports and enables them.
-- Use the prefilled funding handoff for human StripeFiat funding; its query parameters are UI defaults only and verified webhooks remain the funding authority.
+- Use the prefilled funding handoff for human StripeFiat funding; its query parameters and PayPal preference are UI defaults only and verified webhooks remain the funding authority.
+- PayPal availability is decided inside Stripe Checkout by Stripe account eligibility, Dashboard setup, currency, location, browser, and payment-method configuration.
 - Stripe Connect eligibility does not mark fiat payouts paid; transfer.created evidence does.
 - Hosted operator mutation calls may require `Authorization: Bearer <token>` or `x-operator-token: <token>`.
 - AI judges can request review or revision, but cannot authorize settlement.
@@ -2784,6 +2787,11 @@ mod tests {
             .any(|param| param == "amountMinor"));
         assert!(manifest
             .funding_handoff
+            .query_params
+            .iter()
+            .any(|param| param == "paymentPreference"));
+        assert!(manifest
+            .funding_handoff
             .settlement_authority
             .contains("verified Stripe webhook"));
         assert_eq!(
@@ -2851,6 +2859,8 @@ mod tests {
         assert!(text.contains("https://network.example/v1/bounties/funding-feed"));
         assert!(text.contains(STATIC_FUNDING_PAGE_URL));
         assert!(text.contains("Prefilled Stripe funding handoff"));
+        assert!(text.contains("PayPal-capable Stripe funding handoff"));
+        assert!(text.contains("paymentPreference=paypal"));
         assert!(text.contains("route_blocked_goal"));
         assert!(text.contains("Open pooled bounty"));
         assert!(text.contains("https://network.example/v1/bounties/pooled"));

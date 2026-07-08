@@ -101,7 +101,7 @@
 
   function setInputValue(name, value) {
     const field = form.elements.namedItem(name);
-    if (field instanceof HTMLInputElement && value) {
+    if ((field instanceof HTMLInputElement || field instanceof HTMLSelectElement) && value) {
       field.value = value;
       return true;
     }
@@ -115,6 +115,17 @@
       return true;
     }
     return false;
+  }
+
+  function normalizePaymentPreference(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "paypal" || normalized === "pay_pal") {
+      return "paypal";
+    }
+    if (normalized === "auto") {
+      return "auto";
+    }
+    return "";
   }
 
   const organizationField = form.elements.namedItem("organizationId");
@@ -140,6 +151,7 @@
     externalReference: firstQueryParam(query, ["externalReference", "external_reference"]),
     source: firstQueryParam(query, ["source", "funding_source"]),
     rail: firstQueryParam(query, ["rail"]),
+    paymentPreference: normalizePaymentPreference(firstQueryParam(query, ["paymentPreference", "payment_preference", "preferredPaymentMethod", "preferred_payment_method"])),
     network: firstQueryParam(query, ["network", "baseNetwork", "base_network"]),
     escrowContract: firstQueryParam(query, ["escrowContract", "escrow_contract", "baseEscrowContract", "base_escrow_contract"]),
     payer: firstQueryParam(query, ["payer", "basePayer", "base_payer"]),
@@ -152,11 +164,13 @@
     setInputValue("organizationId", prefillValues.organizationId) && "funder ledger id",
     setInputValue("amountMinor", prefillValues.amountMinor) && "amount",
     setInputValue("currency", prefillValues.currency.toLowerCase()) && "currency",
+    setInputValue("paymentPreference", prefillValues.paymentPreference) && "checkout preference",
     setInputValue("externalReference", prefillValues.externalReference) && "external reference",
   ].filter(Boolean);
   const fundingSource = prefillValues.source || "funding-page";
   form.dataset.fundingSource = fundingSource;
   form.dataset.fundingRail = prefillValues.rail || "StripeFiat";
+  form.dataset.paymentPreference = prefillValues.paymentPreference || "auto";
   if (baseForm) {
     setNamedInputValue(baseForm, "baseApiBaseUrl", prefillValues.apiBaseUrl);
     setNamedInputValue(baseForm, "baseBountyId", prefillValues.bountyId);
@@ -170,7 +184,10 @@
       const railNotice = prefillValues.rail && prefillValues.rail !== "StripeFiat"
         ? `\nRail warning: this page creates StripeFiat Checkout only; use the API/Base funding plan for ${prefillValues.rail}.`
         : "";
-      prefillOutput.textContent = `Prefilled funding request from ${fundingSource}: ${prefilledFields.join(", ")}.${railNotice}\nReview the values and readiness before opening Checkout. Query parameters are UI defaults only; funding still requires a verified Stripe webhook.`;
+      const preferenceNotice = form.dataset.paymentPreference === "paypal"
+        ? "\nPayment preference: PayPal requested. Stripe Checkout may show PayPal only if the hosted Stripe account, location, browser, currency, and payment-method configuration support it."
+        : "";
+      prefillOutput.textContent = `Prefilled funding request from ${fundingSource}: ${prefilledFields.join(", ")}.${railNotice}${preferenceNotice}\nReview the values and readiness before opening Checkout. Query parameters are UI defaults only; funding still requires a verified Stripe webhook.`;
     } else {
       prefillOutput.textContent = "Open this page from a public bounty funding link to prefill the hosted API, bounty, amount, and source.";
     }
@@ -212,6 +229,7 @@
       `Signed webhook evidence: ${configuredLabel(report.stripe_webhook_ready === true)}`,
       `Checkout method configuration: ${configuredLabel(methodConfig)}`,
       `PayPal-capable setup indicator: ${methodConfig ? "configured" : "not configured"}`,
+      "PayPal availability is decided inside Stripe Checkout by account eligibility, Dashboard setup, currency, location, browser, and payment-method configuration.",
       `Base mainnet escrow: ${configuredLabel(report.base_mainnet_ready === true)}`,
       `Webhook settlement boundary: ${webhookBoundary ? "present" : "missing"}`,
       checkoutMethodCheck && checkoutMethodCheck.detail
@@ -304,13 +322,18 @@
     const amountMinor = Number(data.get("amountMinor"));
     const currency = String(data.get("currency") || "usd").trim().toLowerCase();
     const source = form.dataset.fundingSource || "funding-page";
+    const paymentPreference = normalizePaymentPreference(data.get("paymentPreference")) || "auto";
+    form.dataset.paymentPreference = paymentPreference;
     const externalReference =
       String(data.get("externalReference") || "").trim() ||
-      `${source}-checkout-${Date.now()}`;
+      `${source}-${paymentPreference === "paypal" ? "paypal-" : ""}checkout-${Date.now()}`;
     const pageBase = `${window.location.origin}${window.location.pathname.replace(/funding\.html$/, "")}`;
-    const returnQuery = `?bountyId=${encodeURIComponent(bountyId)}&source=${encodeURIComponent(source)}`;
+    const returnQuery = `?bountyId=${encodeURIComponent(bountyId)}&source=${encodeURIComponent(source)}&paymentPreference=${encodeURIComponent(paymentPreference)}`;
 
     try {
+      if (paymentPreference === "paypal") {
+        output.textContent = "Creating Stripe Checkout for PayPal-capable funding. Select PayPal inside Stripe Checkout if it appears.";
+      }
       const intentResponse = await fetch(`${apiBaseUrl}/v1/bounties/${bountyId}/funding-intents`, {
         method: "POST",
         headers: { "content-type": "application/json" },
