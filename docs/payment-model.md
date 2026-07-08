@@ -70,13 +70,16 @@ Run the deterministic mixed-funding rehearsal locally:
 cargo run -p cli -- funding-rehearsal-demo
 ```
 
-The rehearsal plans a Stripe Checkout top-up, applies a simulated paid Checkout
-webhook, reserves fiat balance into a mixed bounty, plans and reconciles a Base
-Sepolia escrow-created event, accepts a deterministic digest-verified
+The rehearsal creates Stripe and Base funding intents, applies a simulated paid
+Checkout webhook to reserve fiat balance into a mixed bounty, plans and
+reconciles a Base Sepolia escrow-created event, accepts a deterministic digest-verified
 submission, plans and reconciles Base release, then applies a Stripe Connect
 eligibility snapshot. It prints the funding summary, settlement splits, and
 ledger entry count. It does not call Stripe or Base RPC unless you run the
 separate live execution or broadcast commands.
+For Stripe test-mode Checkout plus Base Sepolia signing, broadcast, log
+reconciliation, and mixed-rail distribution, use
+[real-funding-rehearsal.md](real-funding-rehearsal.md).
 
 ## Base USDC
 
@@ -301,6 +304,9 @@ mock provider. The live surfaces are:
   `execute_stripe_connect_account`,
 - CLI commands `stripe-execute-checkout-top-up` and
   `stripe-execute-connect-account`,
+- CLI command `stripe-execute-request-intent` for executing the exact
+  `StripeRequestIntent` returned by a funding-intent response, preserving
+  bounty metadata for webhook reconciliation,
 - Python and TypeScript SDK methods with the same names in idiomatic casing.
 
 Live execution does not credit balances or mark payouts paid. Checkout balance
