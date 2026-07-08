@@ -88,6 +88,10 @@ async function main(): Promise<void> {
     "discovery manifest missing llms.txt endpoint",
   );
   requireCondition(
+    typeof endpoints.agent_quickstart === "string",
+    "discovery manifest missing agent quickstart endpoint",
+  );
+  requireCondition(
     typeof endpoints.discovery_schema === "string",
     "discovery manifest missing schema endpoint",
   );
@@ -127,6 +131,10 @@ async function main(): Promise<void> {
   requireCondition(
     endpointRequired.includes("github_issue_template"),
     "discovery schema must require the GitHub bounty issue template endpoint",
+  );
+  requireCondition(
+    endpointRequired.includes("agent_quickstart"),
+    "discovery schema must require the agent quickstart endpoint",
   );
   requireCondition(
     endpointRequired.includes("github_proof_comment_from_proof_plan"),

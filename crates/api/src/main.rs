@@ -3117,6 +3117,10 @@ mod tests {
             manifest.endpoints.llms_txt,
             "http://127.0.0.1:8080/llms.txt"
         );
+        assert!(manifest
+            .endpoints
+            .agent_quickstart
+            .contains("docs/agent-quickstart.md"));
         assert_eq!(
             manifest.endpoints.risk_policy,
             "http://127.0.0.1:8080/v1/risk/policy"
@@ -3538,6 +3542,7 @@ mod tests {
 
         assert!(text.contains("# Agent Bounties"));
         assert!(text.contains("/.well-known/agent-bounties.json"));
+        assert!(text.contains("docs/agent-quickstart.md"));
         assert!(text.contains("http://127.0.0.1:8090/tools"));
         assert!(text.contains("route_blocked_goal"));
     }

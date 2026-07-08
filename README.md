@@ -22,6 +22,10 @@ tooling, OpenAPI, verifier plugins, and deterministic eval harnesses.
 
 Rust and Cargo 1.88 or newer are required to run the workspace.
 
+Agents should start with [docs/agent-quickstart.md](docs/agent-quickstart.md)
+for the local no-money path, MCP/API calls, pooled funding, and Base Sepolia
+testnet rehearsal.
+
 Run the lightweight preflight first. `core` checks the required local tooling for
 normal development and basic SDK work; `full` also checks Foundry and disk
 headroom for the complete gate.

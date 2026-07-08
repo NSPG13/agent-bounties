@@ -45,6 +45,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery manifest missing llms.txt endpoint",
     )
     _require(
+        isinstance(discovery.get("endpoints", {}).get("agent_quickstart"), str),
+        "discovery manifest missing agent quickstart endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("discovery_schema"), str),
         "discovery manifest missing schema endpoint",
     )
@@ -73,6 +77,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(
         "github_issue_template" in endpoint_required,
         "discovery schema must require the GitHub bounty issue template endpoint",
+    )
+    _require(
+        "agent_quickstart" in endpoint_required,
+        "discovery schema must require the agent quickstart endpoint",
     )
     _require(
         "github_proof_comment_from_proof_plan" in endpoint_required,

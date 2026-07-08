@@ -3272,6 +3272,7 @@ mod tests {
         assert!(text.contains("# Agent Bounties"));
         assert!(text.contains("route_blocked_goal"));
         assert!(text.contains("/.well-known/agent-bounties.json"));
+        assert!(text.contains("docs/agent-quickstart.md"));
     }
 
     fn test_state() -> SharedState {
