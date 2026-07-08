@@ -28,6 +28,12 @@ if (-not $pythonCommand) {
     throw "python or py is required to run the Python SDK smoke"
 }
 
+& $pythonCommand.Source @pythonArgs -c "import httpx" *> $null
+if ($LASTEXITCODE -ne 0) {
+    Invoke-Checked { & $pythonCommand.Source @pythonArgs -m pip install "httpx>=0.27" }
+}
+$global:LASTEXITCODE = 0
+
 Push-Location $repoRoot
 try {
     Invoke-Checked { cargo build -p api }
