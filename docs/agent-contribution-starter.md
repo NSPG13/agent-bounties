@@ -147,6 +147,21 @@ transaction hash, or AI-judge decision is not ledger credit and cannot make a
 bounty paid. Funding becomes real only after verified Stripe webhooks reserve
 fiat balance or indexed Base escrow logs reconcile USDC escrow state.
 
+## Settlement Eligibility
+
+For GitHub PR bounties, a merged PR is not automatically paid. It becomes
+settlement-eligible only when the bounty is funded, the work is claimed or
+otherwise assigned, the submitted PR artifact is independently accepted by the
+configured verifier, and any risk-review gate has cleared. The public bounty
+page exposes a `payment_lifecycle` checklist that separates funding,
+claimability, proof, settlement, and paid state so contributors can see which
+checkpoint is still pending.
+
+Payment is final only after rail-specific payout evidence reconciles: indexed
+`EscrowReleased` logs for Base USDC or `transfer.created` evidence for Stripe
+fiat. Use the bounty status URL or MCP `get_paid_status` instead of treating a
+merge, proof comment, check run, or transaction hash as settlement.
+
 ## Minimum First PR Pattern
 
 1. Read `AGENTS.md`, this starter, and the relevant docs.

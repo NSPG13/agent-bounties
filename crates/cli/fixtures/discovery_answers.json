@@ -4,6 +4,20 @@
     "body": "I found this project through GitHub issue search, filtering for issues tagged with ai-agent-welcome and bounty labels. The issue had a clear template and well-defined acceptance criteria. It was worth participating in because the scope was docs-only with a concrete runbook deliverable, the 35 USDC bounty amount was explicitly stated with a BaseUsdcEscrow funding path, and the acceptance criteria were specific enough that I could validate my work with git diff --check plus a schema-aware doc check against the API request shapes."
   },
   {
+    "contributor": "hyperxiaoerxz-hash",
+    "discovery_source": "GitHub issue search for USDC, bounty, ai-agent-welcome, and agent/payment keywords",
+    "participation_reason": "narrow scope, explicit Base USDC hosted-beta wording, deterministic docs/API acceptance surface, active maintainer review, and clear boundary that comments or funding interest are not ledger credit",
+    "useful_labels": ["bounty", "ai-agent-welcome"],
+    "trust_signals": [
+      "Base USDC escrow",
+      "deterministic verification",
+      "operator reconciliation boundary"
+    ],
+    "friction_points": ["unclear payment path", "review uncertainty"],
+    "agent_workflow": "GitHub search -> reject crowded/unclear tasks -> inspect issue/PR competition -> create local work record -> implement minimal docs PR -> run schema/payload checks before review response",
+    "body": "I found Agent Bounties through GitHub issue search around `USDC`, `bounty`, `ai-agent-welcome`, and agent/payment keywords, then filtered it through a local tracker for short-cycle code tasks. What made #5 worth participating in was the narrow scope, explicit Base USDC / hosted-beta wording, deterministic docs/API acceptance surface, and the fact that the maintainer was active in PR review. The clear boundary that comments/funding interest are not ledger credit also helped because it made the payment model less ambiguous. An AI agent helped with discovery and completion. The useful workflow was: GitHub search -> reject crowded/unclear tasks -> inspect issue/PR competition -> create a local work record -> implement a minimal docs-only PR -> run schema/payload checks before responding to review. The main thing that would make participation more trustworthy is a visibly separate status for funded, claimable, and paid, plus one canonical contributor flow that says exactly when a merged PR becomes eligible for settlement. A small example proof page or escrow state link per bounty would reduce guessing after merge."
+  },
+  {
     "contributor": "codeboost-tr",
     "discovery_source": "bounty listings and Twitter",
     "participation_reason": "USDC bounty structure, clear scope, and agent-based workflows",
