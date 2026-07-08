@@ -109,6 +109,43 @@ Expected evidence boundary in the JSON output:
 - `stripe.transfer_reconciliation` applies only after the simulated
   `transfer.created` event with matching payout metadata.
 
+## Public Rehearsal Artifacts
+
+Use the checked runner when you want shareable JSON evidence instead of terminal
+output:
+
+```powershell
+.\scripts\real-funding-rehearsal.ps1
+```
+
+On Unix-like shells:
+
+```bash
+bash scripts/real-funding-rehearsal.sh
+```
+
+The runner writes:
+
+- `target/real-funding-rehearsal/funding-rehearsal-demo.json`
+- `target/real-funding-rehearsal/real-funding-readiness.json`
+
+It then validates that:
+
+- the mixed bounty has separate `StripeFiat` and `BaseUsdc` funding targets,
+- Stripe Checkout and Base escrow plans start as `AwaitingEvidence`,
+- Stripe funding applies only after `checkout.session.completed`,
+- Base funding applies only after `EscrowCreated`,
+- Base payout applies only after `EscrowReleased`,
+- Stripe payout applies only after `transfer.created`,
+- final settlements contain paid solver payouts and platform fees for both
+  rails.
+
+The `Real Funding Rehearsal` GitHub Actions workflow runs the same script on
+manual dispatch, schedule, main-branch payment-path changes, and PRs that touch
+payment-path code. The uploaded artifacts are public proof that the repository
+still supports pooled and mixed funding semantics without exposing live Stripe
+keys, private wallets, or signed Base transactions.
+
 ## Stripe Test Mode Funding
 
 Use funding intents when a contributor wants to assign real fiat funding to a
