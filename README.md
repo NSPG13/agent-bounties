@@ -60,9 +60,9 @@ cargo test --workspace
 cargo run -p cli -- demo
 cargo run -p cli -- pooled-funding-demo
 cargo run -p cli -- funding-rehearsal-demo
-cargo run -p cli -- real-funding-readiness --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x3333333333333333333333333333333333333333
+cargo run -p cli -- real-funding-readiness --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 .\scripts\real-funding-rehearsal.ps1
-cargo run -p cli -- base-plan --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333
+cargo run -p cli -- base-plan --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 cargo run -p cli -- base-decode-demo
 cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0
 cargo run -p cli -- base-fetch-logs --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0
@@ -71,7 +71,7 @@ cargo run -p cli -- base-transaction-receipt --tx-hash 0xccccccccccccccccccccccc
 cargo run -p cli -- base-release-queue-demo
 cargo run -p cli -- base-refund-plan --escrow-contract 0x1111111111111111111111111111111111111111 --onchain-escrow-id 1 --reason-hash 0x5555555555555555555555555555555555555555555555555555555555555555
 cargo run -p cli -- base-dispute-plan --escrow-contract 0x1111111111111111111111111111111111111111 --onchain-escrow-id 1 --dispute-hash 0x6666666666666666666666666666666666666666666666666666666666666666
-cargo run -p cli -- base-sepolia-runbook --settlement-signer 0x5555555555555555555555555555555555555555 --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x3333333333333333333333333333333333333333
+cargo run -p cli -- base-sepolia-runbook --settlement-signer 0x5555555555555555555555555555555555555555 --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 cargo run -p cli -- stripe-plan --organization-id 00000000-0000-0000-0000-000000000001
 cargo run -p cli -- stripe-execute-request-intent --intent-file target\stripe-funding-intent.json
 cargo run -p cli -- github-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md
@@ -116,6 +116,9 @@ For an operator runbook that combines Stripe test-mode Checkout, Base Sepolia
 USDC escrow, pooled funding, mixed funding, deterministic verification, and
 post-evidence distribution, see
 [docs/real-funding-rehearsal.md](docs/real-funding-rehearsal.md).
+For the guarded production activation path for live Stripe fiat and Base
+mainnet USDC value movement, see
+[docs/live-money-activation.md](docs/live-money-activation.md).
 The `Real Funding Rehearsal` workflow publishes public JSON artifacts for the
 deterministic StripeFiat plus BaseUsdc mixed-funding path. It does not execute
 live Stripe or Base transactions; it proves the evidence boundary used before
@@ -403,6 +406,12 @@ metadata matches the payout intent, settlement, bounty, proof record, and agent.
 Unsigned Checkout webhook replay is rejected by default; set
 `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=true` only for local or mock-provider
 simulation, never for hosted real-money environments.
+Use the strict readiness command before allowing hosted production money
+movement:
+
+```powershell
+cargo run -p cli -- real-funding-readiness --network base-mainnet --escrow-contract <escrow> --usdc-token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --require-live-money
+```
 
 `service-smoke-spawn` starts the compiled API and MCP binaries on local
 high-numbered ports, checks health/discovery/tool listing, posts a Base public

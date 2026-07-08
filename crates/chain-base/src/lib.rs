@@ -324,7 +324,11 @@ pub struct BaseNetworkDescriptor {
     pub name: String,
     pub chain_id: u64,
     pub rpc_url_env: String,
+    pub native_usdc_token_address: String,
 }
+
+pub const BASE_MAINNET_USDC_TOKEN_ADDRESS: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+pub const BASE_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BaseRpcUrlConfig {
@@ -532,11 +536,13 @@ pub fn base_network_descriptor(network: &str) -> Result<BaseNetworkDescriptor, C
             name: "Base Sepolia".to_string(),
             chain_id: 84_532,
             rpc_url_env: "BASE_SEPOLIA_RPC_URL".to_string(),
+            native_usdc_token_address: BASE_SEPOLIA_USDC_TOKEN_ADDRESS.to_string(),
         }),
         "base" | "base-mainnet" | "mainnet" | "8453" => Ok(BaseNetworkDescriptor {
             name: "Base".to_string(),
             chain_id: 8_453,
             rpc_url_env: "BASE_MAINNET_RPC_URL".to_string(),
+            native_usdc_token_address: BASE_MAINNET_USDC_TOKEN_ADDRESS.to_string(),
         }),
         other => Err(ChainBaseError::UnknownNetwork(other.to_string())),
     }
@@ -1527,6 +1533,10 @@ mod tests {
 
         assert_eq!(plan.network.name, "Base Sepolia");
         assert_eq!(plan.network.chain_id, 84_532);
+        assert_eq!(
+            plan.network.native_usdc_token_address,
+            BASE_SEPOLIA_USDC_TOKEN_ADDRESS
+        );
         assert_eq!(plan.approve.from, Some(create.payer.clone()));
         assert_eq!(plan.approve.to, create.token);
         assert!(plan.approve.data.starts_with("0x095ea7b3"));
@@ -1555,6 +1565,10 @@ mod tests {
         assert_eq!(plan.network.name, "Base");
         assert_eq!(plan.network.chain_id, 8_453);
         assert_eq!(plan.network.rpc_url_env, "BASE_MAINNET_RPC_URL");
+        assert_eq!(
+            plan.network.native_usdc_token_address,
+            BASE_MAINNET_USDC_TOKEN_ADDRESS
+        );
         assert_eq!(plan.approve.to, create.token);
         assert_eq!(plan.create_escrow.to, planner.escrow_contract);
     }
@@ -1644,8 +1658,16 @@ mod tests {
 
         assert_eq!(sepolia.chain_id, 84_532);
         assert_eq!(sepolia.rpc_url_env, "BASE_SEPOLIA_RPC_URL");
+        assert_eq!(
+            sepolia.native_usdc_token_address,
+            BASE_SEPOLIA_USDC_TOKEN_ADDRESS
+        );
         assert_eq!(mainnet.chain_id, 8_453);
         assert_eq!(mainnet.rpc_url_env, "BASE_MAINNET_RPC_URL");
+        assert_eq!(
+            mainnet.native_usdc_token_address,
+            BASE_MAINNET_USDC_TOKEN_ADDRESS
+        );
         assert_eq!(
             base_network_descriptor("optimism").unwrap_err(),
             ChainBaseError::UnknownNetwork("optimism".to_string())

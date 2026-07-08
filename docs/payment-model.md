@@ -269,7 +269,7 @@ Generate a local sample plan:
 cargo run -p cli -- base-plan `
   --network base-sepolia `
   --escrow-contract 0x1111111111111111111111111111111111111111 `
-  --token 0x3333333333333333333333333333333333333333 `
+  --token 0x036CbD53842c5426634e7929541eC2318f3dCF7e `
   --amount-minor 1000000
 
 cargo run -p cli -- base-decode-demo
@@ -297,7 +297,7 @@ Generate a Base Sepolia operator runbook with Foundry commands:
 cargo run -p cli -- base-sepolia-runbook `
   --settlement-signer 0x5555555555555555555555555555555555555555 `
   --escrow-contract 0x1111111111111111111111111111111111111111 `
-  --usdc-token 0x3333333333333333333333333333333333333333
+  --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 ```
 
 The generated commands use environment variables for RPC URLs and private keys.

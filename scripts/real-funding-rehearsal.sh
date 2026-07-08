@@ -37,7 +37,7 @@ cargo run -q -p cli -- funding-rehearsal-demo > "$out_dir/funding-rehearsal-demo
 cargo run -q -p cli -- real-funding-readiness \
   --network base-sepolia \
   --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --usdc-token 0x3333333333333333333333333333333333333333 \
+  --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
   > "$out_dir/real-funding-readiness.json"
 
 "${python_cmd[@]}" scripts/validate_real_funding_rehearsal.py "$out_dir"

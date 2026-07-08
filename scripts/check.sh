@@ -46,7 +46,7 @@ cargo run -p cli -- risk-policy
 cargo run -p cli -- base-plan \
   --network base-mainnet \
   --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --token 0x3333333333333333333333333333333333333333 \
+  --token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
   --amount-minor 1000000
 cargo run -p cli -- base-decode-demo
 cargo run -p cli -- base-log-query \
@@ -66,7 +66,7 @@ cargo run -p cli -- base-dispute-plan \
 cargo run -p cli -- base-sepolia-runbook \
   --settlement-signer 0x5555555555555555555555555555555555555555 \
   --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --usdc-token 0x3333333333333333333333333333333333333333
+  --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 cargo run -p cli -- stripe-plan \
   --organization-id 00000000-0000-0000-0000-000000000001 \
   --amount-minor 5000 \
@@ -115,7 +115,7 @@ cargo run -p cli -- funding-rehearsal-demo
 cargo run -p cli -- real-funding-readiness \
   --network base-sepolia \
   --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --usdc-token 0x3333333333333333333333333333333333333333
+  --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 bash scripts/real-funding-rehearsal.sh
 "${python_cmd[@]}" -m py_compile \
   crates/sdk-python/agent_bounties/client.py \

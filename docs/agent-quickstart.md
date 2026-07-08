@@ -221,7 +221,7 @@ mainnet limits are enabled.
 Generate the runbook commands:
 
 ```bash
-cargo run -p cli -- base-sepolia-runbook --settlement-signer 0x5555555555555555555555555555555555555555 --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x3333333333333333333333333333333333333333
+cargo run -p cli -- base-sepolia-runbook --settlement-signer 0x5555555555555555555555555555555555555555 --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 ```
 
 Open a Base USDC escrow bounty:
@@ -238,7 +238,7 @@ Plan unsigned approval and escrow creation transactions. API endpoint:
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/base/funding-plan \
   -H "content-type: application/json" \
-  --data '{"bounty_id":"00000000-0000-0000-0000-000000000301","escrow_contract":"0x1111111111111111111111111111111111111111","payer":"0x2222222222222222222222222222222222222222","token":"0x3333333333333333333333333333333333333333","network":"base-sepolia"}'
+  --data '{"bounty_id":"00000000-0000-0000-0000-000000000301","escrow_contract":"0x1111111111111111111111111111111111111111","payer":"0x2222222222222222222222222222222222222222","token":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","network":"base-sepolia"}'
 ```
 
 Sign and broadcast the planned transactions with the wallet or operator system
@@ -252,7 +252,7 @@ Tool: `reconcile_base_escrow_event`.
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/base/escrow-events \
   -H "content-type: application/json" \
-  --data '{"id":"00000000-0000-0000-0000-000000000401","log_key":"base-sepolia:quickstart:created","tx_hash":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","block_number":1,"onchain_escrow_id":1,"bounty_id":"00000000-0000-0000-0000-000000000301","kind":"Created","status":"Funded","token":"0x3333333333333333333333333333333333333333","amount":{"amount":1000000,"currency":"usdc"},"terms_hash":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","proof_hash":null,"reason_hash":null,"dispute_hash":null,"occurred_at":"2026-07-08T00:00:00Z"}'
+  --data '{"id":"00000000-0000-0000-0000-000000000401","log_key":"base-sepolia:quickstart:created","tx_hash":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","block_number":1,"onchain_escrow_id":1,"bounty_id":"00000000-0000-0000-0000-000000000301","kind":"Created","status":"Funded","token":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","amount":{"amount":1000000,"currency":"usdc"},"terms_hash":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","proof_hash":null,"reason_hash":null,"dispute_hash":null,"occurred_at":"2026-07-08T00:00:00Z"}'
 ```
 
 Only after the indexed `EscrowCreated` event is reconciled can Base escrow work

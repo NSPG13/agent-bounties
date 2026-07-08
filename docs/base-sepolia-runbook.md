@@ -23,7 +23,7 @@ rerun the command with the deployed escrow address.
 cargo run -p cli -- base-sepolia-runbook `
   --settlement-signer 0x5555555555555555555555555555555555555555 `
   --escrow-contract 0x1111111111111111111111111111111111111111 `
-  --usdc-token 0x3333333333333333333333333333333333333333
+  --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 ```
 
 The output includes:

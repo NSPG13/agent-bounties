@@ -1,3 +1,4 @@
+use chain_base::BASE_SEPOLIA_USDC_TOKEN_ADDRESS;
 use domain::{
     Agent, AgentStatus, Bounty, BountyStatus, Capability, PrivacyLevel, ProofRecord,
     ReputationEvent, Settlement, VerifierResult,
@@ -1713,7 +1714,7 @@ fn funding_intent_example_for_partition(
             "external_reference": format!("base-sepolia-{bounty_id}-{amount_minor}"),
             "base_escrow_contract": "<base-sepolia-escrow-contract>",
             "base_payer": "<payer-wallet>",
-            "base_token": "<base-sepolia-usdc-token>",
+            "base_token": BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
             "base_network": "base-sepolia"
         }),
         _ => return None,
@@ -2937,6 +2938,10 @@ mod tests {
             .find(|example| example.rail == "BaseUsdc")
             .expect("Base example");
         assert_eq!(base.request_body["base_network"], "base-sepolia");
+        assert_eq!(
+            base.request_body["base_token"],
+            BASE_SEPOLIA_USDC_TOKEN_ADDRESS
+        );
         assert!(base.evidence_required.contains("EscrowCreated"));
         assert!(examples
             .iter()

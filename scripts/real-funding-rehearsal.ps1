@@ -33,7 +33,7 @@ try {
     $readinessJson = cargo run -q -p cli -- real-funding-readiness `
         --network base-sepolia `
         --escrow-contract 0x1111111111111111111111111111111111111111 `
-        --usdc-token 0x3333333333333333333333333333333333333333 |
+        --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e |
         Out-String
     [System.IO.File]::WriteAllText(
         (Join-Path $resolvedOutDir "real-funding-readiness.json"),

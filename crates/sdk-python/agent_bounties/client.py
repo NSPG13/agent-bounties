@@ -327,6 +327,9 @@ class AgentBountiesClient:
     def list_public_bounty_feed(self):
         return self._request("GET", "/v1/bounties/feed")
 
+    def list_public_funding_feed(self):
+        return self._request("GET", "/v1/bounties/funding-feed")
+
     def list_capability_feed(self):
         return self._request("GET", "/v1/capabilities/feed")
 

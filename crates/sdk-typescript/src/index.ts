@@ -475,6 +475,10 @@ export class AgentBountiesClient {
     return this.request("/v1/bounties/feed");
   }
 
+  async listPublicFundingFeed(): Promise<unknown> {
+    return this.request("/v1/bounties/funding-feed");
+  }
+
   async listCapabilityFeed(): Promise<unknown> {
     return this.request("/v1/capabilities/feed");
   }

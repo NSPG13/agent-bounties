@@ -40,13 +40,13 @@ Invoke-Checked { cargo run -p cli -- abusebench }
 Invoke-Checked { cargo run -p cli -- judgebench }
 Invoke-Checked { cargo run -p cli -- eval-loops }
 Invoke-Checked { cargo run -p cli -- risk-policy }
-Invoke-Checked { cargo run -p cli -- base-plan --network base-mainnet --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333 --amount-minor 1000000 }
+Invoke-Checked { cargo run -p cli -- base-plan --network base-mainnet --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount-minor 1000000 }
 Invoke-Checked { cargo run -p cli -- base-decode-demo }
 Invoke-Checked { cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0 }
 Invoke-Checked { cargo run -p cli -- base-release-queue-demo --escrow-contract 0x1111111111111111111111111111111111111111 --platform-fee-wallet 0x4444444444444444444444444444444444444444 }
 Invoke-Checked { cargo run -p cli -- base-refund-plan --escrow-contract 0x1111111111111111111111111111111111111111 --onchain-escrow-id 1 --reason-hash 0x5555555555555555555555555555555555555555555555555555555555555555 }
 Invoke-Checked { cargo run -p cli -- base-dispute-plan --escrow-contract 0x1111111111111111111111111111111111111111 --onchain-escrow-id 1 --dispute-hash 0x6666666666666666666666666666666666666666666666666666666666666666 }
-Invoke-Checked { cargo run -p cli -- base-sepolia-runbook --settlement-signer 0x5555555555555555555555555555555555555555 --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x3333333333333333333333333333333333333333 }
+Invoke-Checked { cargo run -p cli -- base-sepolia-runbook --settlement-signer 0x5555555555555555555555555555555555555555 --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e }
 Invoke-Checked { cargo run -p cli -- stripe-plan --organization-id 00000000-0000-0000-0000-000000000001 --amount-minor 5000 --platform-url https://agentbounties.local }
 Invoke-Checked { cargo run -p cli -- github-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md }
 Invoke-Checked { cargo run -p cli -- github-funding-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" --contributor-login check-script --comment-id 12345 }
@@ -62,7 +62,7 @@ Invoke-Checked { cargo run -p cli -- docs-contract-check }
 Invoke-Checked { cargo run -p cli -- demo }
 Invoke-Checked { cargo run -p cli -- pooled-funding-demo }
 Invoke-Checked { cargo run -p cli -- funding-rehearsal-demo }
-Invoke-Checked { cargo run -p cli -- real-funding-readiness --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x3333333333333333333333333333333333333333 }
+Invoke-Checked { cargo run -p cli -- real-funding-readiness --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e }
 Invoke-Checked { & (Join-Path $repoRoot "scripts\real-funding-rehearsal.ps1") }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py crates\sdk-python\examples\cofund_claim.py }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py scripts\validate_real_funding_rehearsal.py }
