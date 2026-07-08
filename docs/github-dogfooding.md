@@ -213,3 +213,6 @@ Accepted public bounties should link to:
 Those links create the distribution loop: every completed bounty becomes a
 public proof, a contributor reputation signal, a verifier-quality signal, and a
 reusable template entry.
+
+## Claim Controls
+See [docs/claim_control_policy.md](docs/claim_control_policy.md) for the stale-claim and claim-squatting policy, reservation windows, progress signals, and release paths.

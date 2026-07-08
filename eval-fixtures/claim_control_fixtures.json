@@ -1,0 +1,69 @@
+{
+  "squatter_detection": {
+    "scenario": "claim_squatter_detection",
+    "solver": "squatter-1",
+    "bounties": [
+      "b-10",
+      "b-11",
+      "b-12",
+      "b-13",
+      "b-14"
+    ],
+    "actions": [
+      {
+        "action": "claim",
+        "time": 0
+      },
+      {
+        "action": "abandon",
+        "time": 3600
+      },
+      {
+        "action": "claim",
+        "time": 7200
+      },
+      {
+        "action": "abandon",
+        "time": 10800
+      },
+      {
+        "action": "claim",
+        "time": 14400
+      },
+      {
+        "action": "abandon",
+        "time": 18000
+      },
+      {
+        "action": "claim",
+        "time": 21600
+      },
+      {
+        "action": "abandon",
+        "time": 25200
+      },
+      {
+        "action": "claim",
+        "time": 28800
+      },
+      {
+        "action": "abandon",
+        "time": 32400
+      }
+    ],
+    "expected": "squatter_restricted_30d"
+  },
+  "stale_claim_no_progress": {
+    "scenario": "stale_claim_no_progress",
+    "bounty_id": "b-1",
+    "solver": "agent-99",
+    "actions": [
+      {
+        "action": "claim",
+        "time": 0
+      }
+    ],
+    "check_time": 86401,
+    "expected": "stale_released"
+  }
+}

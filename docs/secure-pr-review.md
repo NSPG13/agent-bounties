@@ -228,3 +228,6 @@ acceptance, payout approval, or payment settlement.
 - key curl JSON examples whose fields do not match request contracts.
 
 This gate is also part of `scripts/check.ps1` and `scripts/check.sh`.
+
+## Claim Validation
+PR review does not validate claims. See [docs/claim_control_policy.md](docs/claim_control_policy.md) for the stale-claim release path and squatter detection rules.
