@@ -2552,7 +2552,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         serde_json::json!({
             "bounty_id": mcp_reviewed_bounty_id,
             "solver_agent_id": mcp_review_solver_id,
-            "artifact_uri": "https://github.com/example/repo/actions/runs/1",
+            "artifact_uri": "https://github.com/example/repo/pull/1",
             "artifact_body": reviewed_artifact_body
         }),
     )?;
@@ -2566,10 +2566,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             "expected_artifact_digest": "not-used-by-github-ci",
             "verifier_kind": null,
             "rubric": null,
-            "evidence": {
-                "check_conclusion": "success",
-                "check_name": "test"
-            },
+            "evidence": github_ci_evidence(),
             "approved_risk_event_id": null
         }),
     )?;
@@ -2635,10 +2632,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             "expected_artifact_digest": "not-used-by-github-ci",
             "verifier_kind": null,
             "rubric": null,
-            "evidence": {
-                "check_conclusion": "success",
-                "check_name": "test"
-            },
+            "evidence": github_ci_evidence(),
             "approved_risk_event_id": mcp_payout_risk_event_id.as_str()
         }),
     )?;
@@ -3273,6 +3267,25 @@ fn post_json(url: &str, body: serde_json::Value) -> Result<serde_json::Value> {
         url,
         Some(body.to_string()),
     )?)?)
+}
+
+fn github_ci_evidence() -> serde_json::Value {
+    serde_json::json!({
+        "repository": "example/repo",
+        "pull_request_url": "https://github.com/example/repo/pull/1",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "check_run": {
+            "id": 123456789_u64,
+            "name": "full-check",
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "html_url": "https://github.com/example/repo/actions/runs/123456789",
+            "repository": {
+                "full_name": "example/repo"
+            }
+        }
+    })
 }
 
 fn mcp_tool_get(mcp_base_url: &str, tool_name: &str) -> Result<serde_json::Value> {

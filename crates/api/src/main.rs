@@ -3438,7 +3438,7 @@ mod tests {
             .submit_result(SubmitResultRequest {
                 bounty_id: approval.bounty.id,
                 solver_agent_id: solver.id,
-                artifact_uri: "https://github.com/example/repo/actions/runs/1".to_string(),
+                artifact_uri: "https://github.com/example/repo/pull/1".to_string(),
                 artifact_body: "{\"check\":\"green\"}".to_string(),
             })
             .unwrap();
@@ -3449,10 +3449,7 @@ mod tests {
                 expected_artifact_digest: "not-used-by-github-ci".to_string(),
                 verifier_kind: None,
                 rubric: None,
-                evidence: Some(serde_json::json!({
-                    "check_conclusion": "success",
-                    "check_name": "test"
-                })),
+                evidence: Some(github_ci_evidence()),
                 approved_risk_event_id: None,
             })
             .await;
@@ -4259,6 +4256,25 @@ mod tests {
             timestamp,
             hex::encode(mac.finalize().into_bytes())
         )
+    }
+
+    fn github_ci_evidence() -> serde_json::Value {
+        serde_json::json!({
+            "repository": "example/repo",
+            "pull_request_url": "https://github.com/example/repo/pull/1",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "check_run": {
+                "id": 123456789_u64,
+                "name": "full-check",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "html_url": "https://github.com/example/repo/actions/runs/123456789",
+                "repository": {
+                    "full_name": "example/repo"
+                }
+            }
+        })
     }
 
     fn valid_github_issue_body() -> String {

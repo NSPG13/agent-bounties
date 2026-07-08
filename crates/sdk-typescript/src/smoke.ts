@@ -52,6 +52,23 @@ function operatorApiTokenFromArgs(): string | undefined {
   return token && token.trim() ? token : undefined;
 }
 
+function githubCiEvidence(): JsonObject {
+  return {
+    repository: "example/repo",
+    pull_request_url: "https://github.com/example/repo/pull/1",
+    commit_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    check_run: {
+      id: 123456789,
+      name: "full-check",
+      status: "completed",
+      conclusion: "success",
+      head_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      html_url: "https://github.com/example/repo/actions/runs/123456789",
+      repository: { full_name: "example/repo" },
+    },
+  };
+}
+
 async function main(): Promise<void> {
   const client = new AgentBountiesClient({
     baseUrl: baseUrlFromArgs(),
@@ -310,12 +327,12 @@ async function main(): Promise<void> {
   const reviewedSubmission = asObject(
     await client.submitResult(reviewedBountyId, {
       solver_agent_id: stringField(reviewSolver, "id"),
-      artifact_uri: "https://github.com/example/repo/actions/runs/1",
+      artifact_uri: "https://github.com/example/repo/pull/1",
       artifact_body: JSON.stringify({ check: "green" }),
     }),
     "reviewedSubmission",
   );
-  const reviewedEvidence = { check_conclusion: "success", check_name: "test" };
+  const reviewedEvidence = githubCiEvidence();
   try {
     await client.requestVerification(reviewedBountyId, {
       submission_id: stringField(reviewedSubmission, "id"),

@@ -948,7 +948,10 @@ async fn verifier_suite() -> Result<EvalSuiteResult, EvalError> {
             "abc123abc123abc123",
             None,
             None,
-            Some(serde_json::json!({ "check_conclusion": "success" })),
+            Some(github_ci_evidence(
+                "success",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )),
             VerificationDecision::Accepted,
         )
         .await?,
@@ -958,7 +961,10 @@ async fn verifier_suite() -> Result<EvalSuiteResult, EvalError> {
             "abc123abc123abc123",
             None,
             None,
-            Some(serde_json::json!({ "check_conclusion": "failure" })),
+            Some(github_ci_evidence(
+                "failure",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )),
             VerificationDecision::Rejected,
         )
         .await?,
@@ -1055,7 +1061,11 @@ async fn verifier_case(
         bounty_id,
         solver_agent_id: Uuid::new_v4(),
         artifact_digest: artifact_digest.to_string(),
-        artifact_uri: format!("s3://eval-harness/{name}.json"),
+        artifact_uri: if kind == VerifierKind::GitHubCi {
+            "https://github.com/agent-bounties/agent-bounties/pull/42".to_string()
+        } else {
+            format!("s3://eval-harness/{name}.json")
+        },
         submitted_at: Utc::now(),
     };
     let result = verify_with_builtin(
@@ -1089,6 +1099,25 @@ async fn verifier_case(
         passed: failures.is_empty(),
         score: if failures.is_empty() { 1.0 } else { 0.0 },
         failures,
+    })
+}
+
+fn github_ci_evidence(conclusion: &str, head_sha: &str) -> serde_json::Value {
+    serde_json::json!({
+        "repository": "agent-bounties/agent-bounties",
+        "pull_request_url": "https://github.com/agent-bounties/agent-bounties/pull/42",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "check_run": {
+            "id": 123456789_u64,
+            "name": "full-check",
+            "status": "completed",
+            "conclusion": conclusion,
+            "head_sha": head_sha,
+            "html_url": "https://github.com/agent-bounties/agent-bounties/actions/runs/123456789",
+            "repository": {
+                "full_name": "agent-bounties/agent-bounties"
+            }
+        }
     })
 }
 
