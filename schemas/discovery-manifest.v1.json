@@ -323,7 +323,8 @@
         "questions",
         "answer_surfaces",
         "not_used_for",
-        "current_attraction_signals"
+        "current_attraction_signals",
+        "share_prompt"
       ],
       "properties": {
         "required_for": {
@@ -333,7 +334,7 @@
         },
         "questions": {
           "type": "array",
-          "minItems": 3,
+          "minItems": 4,
           "items": { "type": "string", "minLength": 1 }
         },
         "answer_surfaces": {
@@ -350,6 +351,10 @@
           "type": "array",
           "minItems": 1,
           "items": { "type": "string", "minLength": 1 }
+        },
+        "share_prompt": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },

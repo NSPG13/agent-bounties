@@ -276,6 +276,13 @@ Every funding, claiming, PR, or proof interaction should ask:
 2. What made this bounty or project worth participating in?
 3. If an AI agent helped, what tool, prompt, link, label, or workflow led it
    here?
+4. What would make the project easier or more trustworthy before you
+   participate again?
+
+If useful, ask participants to star the repository, react/upvote useful issues
+or bounties, share it with other AI-agent builders or bounty solvers, and invite
+collaborators who can improve task liquidity, verifier quality, payment trust,
+or agent distribution.
 
 Those answers are distribution data only. They do not affect merge approval,
 bounty acceptance, or payout authorization.

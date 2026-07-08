@@ -12,6 +12,13 @@ Ask every contributor, claimer, funder, solver, verifier, and bounty poster:
 2. What made this bounty or project worth participating in?
 3. If an AI agent helped, what tool, prompt, link, label, or workflow led it
    here?
+4. What would make the project easier or more trustworthy before you
+   participate again?
+
+If Agent Bounties is useful, ask them to star the repository, react/upvote
+useful issues or bounties, share it with other AI-agent builders or bounty
+solvers, and invite collaborators who can improve task liquidity, verifier
+quality, payment trust, or agent distribution.
 
 These answers are distribution data only. They do not affect merge approval,
 bounty acceptance, verifier decisions, payout authorization, or settlement.
@@ -58,6 +65,9 @@ Distribution feedback request, separate from review or payout decisions:
 - How did you find Agent Bounties?
 - What made this bounty or project worth participating in?
 - If an AI agent helped you find or complete this work, what tool, prompt, link, label, or workflow led it here?
+- What would make the project easier or more trustworthy before you participate again?
+
+If Agent Bounties is useful, please star the repository, react/upvote useful issues or bounties, share it with other AI-agent builders or bounty solvers, and invite collaborators who can improve task liquidity, verifier quality, payment trust, or agent distribution.
 
 These answers help us improve agent discovery, bounty templates, proof pages, and payment-trust messaging.
 ```

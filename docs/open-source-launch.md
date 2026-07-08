@@ -53,6 +53,15 @@ Every public bounty issue, funding comment, and PR should ask:
 
 - How did you find Agent Bounties?
 - What made this bounty or project worth participating in?
+- If an AI agent helped, what tool, prompt, link, label, scanner, or workflow
+  led it here?
+- What would make the project easier or more trustworthy before you participate
+  again?
+
+If useful, ask participants to star the repository, react/upvote useful issues
+or bounties, share it with other AI-agent builders or bounty solvers, and invite
+collaborators who can improve task liquidity, verifier quality, payment trust,
+or agent distribution.
 
 Track those answers in GitHub comments or issue fields. They are not settlement
 signals; they are distribution data for improving discovery surfaces, bounty
