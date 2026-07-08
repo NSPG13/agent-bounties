@@ -91,8 +91,14 @@ if [[ "${#non_docs_files[@]}" -ne 0 ]]; then
   docs_only=false
 fi
 
+head_oid="$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq '.headRefOid')"
 ref_name="refs/remotes/origin/pr-${pr}-review"
-git fetch origin "pull/${pr}/head:${ref_name}"
+git fetch origin "+pull/${pr}/head:${ref_name}"
+fetched_oid="$(git rev-parse "$ref_name")"
+if [[ "$fetched_oid" != "$head_oid" ]]; then
+  echo "fetched PR head $fetched_oid did not match GitHub head $head_oid; rerun review" >&2
+  exit 1
+fi
 
 tmp_root="$(mktemp -d)"
 worktree="$tmp_root/worktree"
