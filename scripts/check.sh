@@ -85,6 +85,7 @@ cargo run -p cli -- github-proof-comment-plan \
 cargo run -p cli -- discovery \
   --public-base-url https://agentbounties.local \
   --mcp-base-url https://agentbounties.local/mcp
+cargo run -p cli -- docs-contract-check
 cargo run -p cli -- demo
 "${python_cmd[@]}" -m py_compile \
   crates/sdk-python/agent_bounties/client.py \

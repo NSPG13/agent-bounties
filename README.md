@@ -65,7 +65,13 @@ cargo run -p cli -- discovery
 cargo run -p cli -- production-smoke --api-base-url https://api.example.com --mcp-base-url https://mcp.example.com
 cargo build -p api -p mcp-server
 cargo run -p cli -- service-smoke-spawn
+cargo run -p cli -- docs-contract-check
 ```
+
+Before approving gated Actions on an external PR, run
+`scripts\review-external-pr.ps1 -Pr <number>` or
+`bash scripts/review-external-pr.sh --pr <number>`. See
+[docs/secure-pr-review.md](docs/secure-pr-review.md).
 
 The local demo uses simulated credits and deterministic verifiers. Base Sepolia,
 Stripe, and GitHub adapters are present as integration boundaries and are gated
