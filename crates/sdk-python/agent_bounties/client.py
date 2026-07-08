@@ -660,6 +660,12 @@ class AgentBountiesClient:
             },
         )
 
+    def execute_stripe_funding_intent_checkout(self, funding_intent_id: str):
+        return self._request(
+            "POST",
+            f"/v1/stripe/live/funding-intents/{funding_intent_id}/checkout-session",
+        )
+
     def execute_stripe_connect_account(self, agent_id: str):
         return self._request(
             "POST",

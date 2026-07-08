@@ -108,6 +108,7 @@ cargo run -p cli -- discovery-report \
   --input-fixture crates/cli/fixtures/discovery_answers.json \
   --json-out target/tmp/discovery-report.json \
   --markdown-out target/tmp/discovery-report.md
+"${python_cmd[@]}" scripts/check-site.py
 cargo run -p cli -- docs-contract-check
 cargo run -p cli -- demo
 cargo run -p cli -- pooled-funding-demo
@@ -126,6 +127,7 @@ bash scripts/real-funding-rehearsal.sh
   scripts/github_funding_comment.py \
   scripts/github_claim_comment.py \
   scripts/github_proof_comment.py \
+  scripts/check-site.py \
   scripts/validate_real_funding_rehearsal.py
 
 cd "$repo_root/crates/sdk-typescript"

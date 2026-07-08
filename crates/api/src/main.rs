@@ -106,6 +106,7 @@ use worker::BaseEscrowLogWorker;
         plan_stripe_checkout_top_up,
         plan_stripe_connect_account,
         plan_stripe_connect_transfer,
+        execute_stripe_funding_intent_checkout,
         plan_base_refund,
         plan_base_dispute,
         execute_stripe_checkout_top_up,
@@ -184,6 +185,7 @@ struct AppState {
     allow_unsigned_stripe_webhooks: bool,
     stripe_secret_key: Option<String>,
     stripe_live_execution_enabled: bool,
+    stripe_public_checkout_enabled: bool,
     stripe_api_base_url: String,
     store: Option<PostgresStore>,
     base_rpc_urls: BaseRpcUrlConfig,
@@ -457,6 +459,9 @@ async fn main() -> anyhow::Result<()> {
         stripe_live_execution_enabled: env::var("ENABLE_STRIPE_LIVE_EXECUTION")
             .map(|value| value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
+        stripe_public_checkout_enabled: env::var("ENABLE_STRIPE_PUBLIC_CHECKOUT")
+            .map(|value| value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false),
         stripe_api_base_url: env::var("STRIPE_API_BASE_URL")
             .unwrap_or_else(|_| STRIPE_API_BASE_URL.to_string()),
         store,
@@ -556,6 +561,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/stripe/live/checkout-top-ups",
             post(execute_stripe_checkout_top_up),
+        )
+        .route(
+            "/v1/stripe/live/funding-intents/:id/checkout-session",
+            post(execute_stripe_funding_intent_checkout),
         )
         .route(
             "/v1/stripe/live/connect-accounts",
@@ -2060,6 +2069,32 @@ async fn execute_stripe_checkout_top_up(
 ) -> Result<Json<StripeExecutionReport>, StatusCode> {
     require_operator(&state, &headers)?;
     let intent = stripe_checkout_top_up_intent(&state, request)?;
+    execute_stripe_intent(&state, intent).await.map(Json)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/stripe/live/funding-intents/{id}/checkout-session",
+    params(("id" = Uuid, Path, description = "Stripe fiat funding intent id")),
+    responses(
+        (status = 200, description = "Live Stripe Checkout Session execution report for a bounty funding intent"),
+        (status = 400, description = "Unknown, non-Stripe, already-applied, or invalid funding intent"),
+        (status = 502, description = "Stripe API execution failed"),
+        (status = 503, description = "Public Stripe Checkout execution is disabled or live Stripe execution is not configured")
+    )
+)]
+async fn execute_stripe_funding_intent_checkout(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<StripeExecutionReport>, StatusCode> {
+    if !state.stripe_public_checkout_enabled {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let intent = {
+        let network = state.network.lock().expect("state poisoned");
+        network.stripe_checkout_for_funding_intent(id, state.public_base_url.clone())
+    }
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
     execute_stripe_intent(&state, intent).await.map(Json)
 }
 
@@ -3739,6 +3774,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn public_stripe_funding_intent_checkout_executes_bounty_checkout() {
+        let mut network = BountyNetwork::default();
+        let organization_id = Uuid::new_v4();
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                title: "Debit card funded bounty".to_string(),
+                template_slug: "small-code-change".to_string(),
+                target_amount_minor: 5_000,
+                currency: "usd".to_string(),
+                funding_mode: domain::FundingMode::StripeFiatLedger,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
+            })
+            .unwrap();
+        let funding_intent = network
+            .create_funding_intent(
+                CreateFundingIntentRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    source_organization_id: Some(organization_id),
+                    amount_minor: 5_000,
+                    currency: "usd".to_string(),
+                    rail: domain::PaymentRail::StripeFiat,
+                    external_reference: Some("card-funding-test".to_string()),
+                    stripe_success_url: None,
+                    stripe_cancel_url: None,
+                    base_escrow_contract: None,
+                    base_payer: None,
+                    base_token: None,
+                    base_network: None,
+                },
+                "http://127.0.0.1:8080",
+            )
+            .unwrap()
+            .intent;
+        let stripe_api_base_url = spawn_rpc_response(serde_json::json!({
+            "id": "cs_test_bounty",
+            "object": "checkout.session",
+            "url": "https://checkout.stripe.com/c/pay/cs_test_bounty",
+            "livemode": false
+        }));
+        let state = test_state_with_stripe_public_checkout(network, stripe_api_base_url);
+
+        let report = execute_stripe_funding_intent_checkout(State(state), Path(funding_intent.id))
+            .await
+            .unwrap()
+            .0;
+
+        assert_eq!(report.status, 200);
+        assert_eq!(report.request.endpoint, "/v1/checkout/sessions");
+        assert_eq!(
+            report.request.idempotency_key,
+            format!("bounty_funding_intent:{}", funding_intent.id)
+        );
+        assert_eq!(
+            report.request.body["metadata"]["bounty_id"],
+            bounty.id.to_string()
+        );
+        assert_eq!(
+            report.request.body["metadata"]["funding_intent_id"],
+            funding_intent.id.to_string()
+        );
+        assert_eq!(
+            report.url.as_deref(),
+            Some("https://checkout.stripe.com/c/pay/cs_test_bounty")
+        );
+    }
+
+    #[tokio::test]
+    async fn public_stripe_funding_intent_checkout_is_disabled_by_default() {
+        let state =
+            test_state_with_stripe_live(BountyNetwork::default(), "http://127.0.0.1:9".to_string());
+
+        let error = execute_stripe_funding_intent_checkout(State(state), Path(Uuid::new_v4()))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
     async fn live_stripe_execution_is_disabled_by_default() {
         let state = test_state(BountyNetwork::default());
 
@@ -4016,6 +4132,10 @@ mod tests {
             "http://127.0.0.1:8080/v1/agents/{agent_id}/paid-status"
         );
         assert_eq!(
+            manifest.endpoints.stripe_live_funding_intent_checkouts,
+            "http://127.0.0.1:8080/v1/stripe/live/funding-intents/{funding_intent_id}/checkout-session"
+        );
+        assert_eq!(
             manifest.endpoints.github_proof_comment_from_proof_plan,
             "http://127.0.0.1:8080/v1/github/proof-comment-plan-from-proof"
         );
@@ -4168,6 +4288,7 @@ mod tests {
         assert!(paths.contains_key("/v1/base/refund-plan"));
         assert!(paths.contains_key("/v1/base/dispute-plan"));
         assert!(paths.contains_key("/v1/stripe/live/checkout-top-ups"));
+        assert!(paths.contains_key("/v1/stripe/live/funding-intents/{id}/checkout-session"));
         assert!(paths.contains_key("/v1/stripe/live/connect-accounts"));
         assert!(paths.contains_key("/v1/stripe/connect-snapshots"));
         assert!(paths.contains_key("/v1/stripe/checkout-webhooks"));
@@ -4230,6 +4351,17 @@ mod tests {
             .any(|requirement| requirement.get("operator_api_token").is_some()));
         assert!(paths["/v1/base/transaction-receipt"]["post"]["responses"]["401"].is_object());
 
+        assert!(
+            paths["/v1/stripe/live/funding-intents/{id}/checkout-session"]["post"]
+                .get("security")
+                .is_none(),
+            "Public funder Checkout must not require operator auth"
+        );
+        assert!(
+            paths["/v1/stripe/live/funding-intents/{id}/checkout-session"]["post"]["responses"]
+                ["503"]
+                .is_object()
+        );
         assert!(
             paths["/v1/stripe/checkout-webhooks"]["post"]
                 .get("security")
@@ -5271,6 +5403,7 @@ mod tests {
             allow_unsigned_stripe_webhooks: false,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
+            stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
@@ -5290,6 +5423,7 @@ mod tests {
             allow_unsigned_stripe_webhooks: true,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
+            stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
@@ -5309,6 +5443,7 @@ mod tests {
             allow_unsigned_stripe_webhooks: false,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
+            stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
@@ -5328,6 +5463,7 @@ mod tests {
             allow_unsigned_stripe_webhooks: false,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
+            stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
@@ -5350,6 +5486,7 @@ mod tests {
             allow_unsigned_stripe_webhooks: false,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
+            stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             store: None,
             base_rpc_urls: BaseRpcUrlConfig {
@@ -5375,6 +5512,30 @@ mod tests {
             allow_unsigned_stripe_webhooks: false,
             stripe_secret_key: Some("sk_test_mock".to_string()),
             stripe_live_execution_enabled: true,
+            stripe_public_checkout_enabled: false,
+            stripe_api_base_url,
+            store: None,
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            operator_api_token: None,
+            public_base_url: "http://127.0.0.1:8080".to_string(),
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+        })
+    }
+
+    fn test_state_with_stripe_public_checkout(
+        network: BountyNetwork,
+        stripe_api_base_url: String,
+    ) -> SharedState {
+        Arc::new(AppState {
+            network: Arc::new(Mutex::new(network)),
+            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
+            eval_runs: Arc::new(Mutex::new(Vec::new())),
+            stripe_webhook_secret: None,
+            allow_unsigned_stripe_webhooks: false,
+            stripe_secret_key: Some("sk_test_mock".to_string()),
+            stripe_live_execution_enabled: true,
+            stripe_public_checkout_enabled: true,
             stripe_api_base_url,
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),

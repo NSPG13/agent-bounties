@@ -707,6 +707,15 @@ export class AgentBountiesClient {
     });
   }
 
+  async executeStripeFundingIntentCheckout(fundingIntentId: string): Promise<unknown> {
+    return this.request(
+      `/v1/stripe/live/funding-intents/${fundingIntentId}/checkout-session`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
   async executeStripeConnectAccount(request: PlanStripeConnectAccountRequest): Promise<unknown> {
     return this.request("/v1/stripe/live/connect-accounts", {
       method: "POST",

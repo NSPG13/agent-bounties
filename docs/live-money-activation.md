@@ -24,6 +24,7 @@ Use `.env.example` as the shape for hosted secrets and deployment settings.
 ```powershell
 $env:OPERATOR_API_TOKEN = "<strong-random-token>"
 $env:ENABLE_STRIPE_LIVE_EXECUTION = "true"
+$env:ENABLE_STRIPE_PUBLIC_CHECKOUT = "false" # true only after website, limits, and webhooks are ready
 $env:STRIPE_SECRET_KEY = "sk_test_..." # use sk_live_ only after test-mode signoff
 $env:STRIPE_WEBHOOK_SECRET = "whsec_..."
 $env:ALLOW_UNSIGNED_STRIPE_WEBHOOKS = "false"
@@ -134,7 +135,8 @@ cargo run -p worker -- --once
    `GET /v1/bounties/funding-feed`.
 2. Create a funding intent with `POST /v1/bounties/{id}/funding-intents`.
 3. For Stripe, execute the returned Checkout Sessions request through the
-   live operator endpoint or CLI. Do not credit the bounty yet.
+   public funding-intent Checkout endpoint, live operator endpoint, or CLI. Do
+   not credit the bounty yet.
 4. For Base, sign and send the returned USDC `approve` and escrow
    `createEscrow` transactions from the funder's wallet. Do not mark funded yet.
 5. Reconcile evidence:
@@ -145,6 +147,18 @@ cargo run -p worker -- --once
 
 Only after all required partitions are reconciled does the bounty become
 claimable.
+
+Public card funding uses:
+
+```powershell
+curl -X POST "$env:PUBLIC_BASE_URL/v1/stripe/live/funding-intents/{id}/checkout-session"
+```
+
+This endpoint is unavailable unless both `ENABLE_STRIPE_LIVE_EXECUTION=true`
+and `ENABLE_STRIPE_PUBLIC_CHECKOUT=true` are set. It can execute only a stored
+`StripeFiat` funding intent and returns a Stripe-hosted Checkout URL. It does
+not credit balances or make the bounty claimable; signed webhook evidence is
+still required.
 
 ## Payout Flow
 

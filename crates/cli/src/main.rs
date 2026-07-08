@@ -2762,6 +2762,7 @@ async fn production_smoke_check(
         "/endpoints/base_broadcast_signed_transaction",
         "/endpoints/base_transaction_receipt",
         "/endpoints/stripe_live_checkout_top_ups",
+        "/endpoints/stripe_live_funding_intent_checkouts",
         "/endpoints/stripe_live_connect_accounts",
         "/endpoints/github_issue_bounty_plan",
         "/endpoints/github_claim_comment_plan",
@@ -2977,6 +2978,7 @@ async fn production_smoke_check(
         "/v1/base/broadcast-signed-transaction",
         "/v1/base/transaction-receipt",
         "/v1/stripe/live/checkout-top-ups",
+        "/v1/stripe/live/funding-intents/{id}/checkout-session",
         "/v1/stripe/live/connect-accounts",
         "/v1/stripe/live/connect-transfers",
         "/v1/stripe/connect-transfers",
@@ -3048,6 +3050,14 @@ async fn production_smoke_check(
             &format!("OpenAPI {path} must document 401 operator auth responses"),
         )?;
     }
+    let public_checkout_operation = paths
+        .get("/v1/stripe/live/funding-intents/{id}/checkout-session")
+        .and_then(|path_item| path_item.get("post"))
+        .context("OpenAPI missing POST operation for public funding-intent Checkout")?;
+    require(
+        public_checkout_operation.get("security").is_none(),
+        "OpenAPI public funding-intent Checkout must not require operator security",
+    )?;
     let receipt_operation = paths
         .get("/v1/base/transaction-receipt")
         .and_then(|path_item| path_item.get("post"))
@@ -3536,6 +3546,12 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .pointer("/endpoints/stripe_live_checkout_top_ups")
             .is_some(),
         "discovery manifest must include live Stripe Checkout execution",
+    )?;
+    require(
+        discovery
+            .pointer("/endpoints/stripe_live_funding_intent_checkouts")
+            .is_some(),
+        "discovery manifest must include live Stripe funding-intent Checkout execution",
     )?;
     require(
         discovery

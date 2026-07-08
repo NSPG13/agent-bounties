@@ -1576,44 +1576,13 @@ impl BountyNetwork {
         let platform_base_url = platform_base_url.into();
         let (next_action, reconciliation_hint) = match request.rail {
             PaymentRail::StripeFiat => {
-                let organization_id = request.source_organization_id.ok_or_else(|| {
-                    AppError::InvalidFundingIntent(
-                        "Stripe fiat funding intents require source_organization_id".to_string(),
-                    )
-                })?;
-                let success_url = request.stripe_success_url.unwrap_or_else(|| {
-                    format!("{}/stripe/success", platform_base_url.trim_end_matches('/'))
-                });
-                let cancel_url = request.stripe_cancel_url.unwrap_or_else(|| {
-                    format!("{}/stripe/cancel", platform_base_url.trim_end_matches('/'))
-                });
-                let mut checkout = StripePlanner::new(platform_base_url.clone())
-                    .checkout_top_up(&CheckoutTopUpRequest {
-                        organization_id,
-                        amount: amount.clone(),
-                        success_url,
-                        cancel_url,
-                    })
-                    .map_err(|error| AppError::InvalidFundingIntent(error.to_string()))?;
-                if let Some(metadata) = checkout
-                    .body
-                    .get_mut("metadata")
-                    .and_then(serde_json::Value::as_object_mut)
-                {
-                    metadata.insert("bounty_id".to_string(), serde_json::json!(bounty.id));
-                    metadata.insert(
-                        "funding_intent_id".to_string(),
-                        serde_json::json!(intent.id),
-                    );
-                    metadata.insert(
-                        "funding_intent_reference".to_string(),
-                        serde_json::json!(external_reference),
-                    );
-                    metadata.insert(
-                        "purpose".to_string(),
-                        serde_json::json!("bounty_funding_intent"),
-                    );
-                }
+                let checkout = stripe_checkout_for_funding_intent(
+                    &bounty,
+                    &intent,
+                    &platform_base_url,
+                    request.stripe_success_url,
+                    request.stripe_cancel_url,
+                )?;
                 (
                     FundingIntentNextAction::StripeCheckout { request: checkout },
                     "Stripe intent remains pending until a verified paid Checkout webhook credits the source organization and reserves the balance into the bounty.".to_string(),
@@ -1663,6 +1632,26 @@ impl BountyNetwork {
             requires_reconciliation: true,
             reconciliation_hint,
         })
+    }
+
+    pub fn stripe_checkout_for_funding_intent(
+        &self,
+        funding_intent_id: Id,
+        platform_base_url: impl Into<String>,
+    ) -> AppResult<StripeRequestIntent> {
+        let intent = self
+            .funding_intents
+            .get(&funding_intent_id)
+            .ok_or_else(|| {
+                AppError::InvalidFundingIntent(format!(
+                    "funding intent not found: {funding_intent_id}"
+                ))
+            })?;
+        let bounty = self
+            .bounties
+            .get(&intent.bounty_id)
+            .ok_or(AppError::BountyNotFound)?;
+        stripe_checkout_for_funding_intent(bounty, intent, &platform_base_url.into(), None, None)
     }
 
     pub fn claim_bounty(&mut self, request: ClaimBountyRequest) -> AppResult<Bounty> {
@@ -4184,6 +4173,67 @@ fn funding_intent_reference(
     )
 }
 
+fn stripe_checkout_for_funding_intent(
+    bounty: &Bounty,
+    intent: &FundingIntent,
+    platform_base_url: &str,
+    success_url: Option<String>,
+    cancel_url: Option<String>,
+) -> AppResult<StripeRequestIntent> {
+    if intent.bounty_id != bounty.id {
+        return Err(AppError::InvalidFundingIntent(
+            "funding intent does not belong to bounty".to_string(),
+        ));
+    }
+    if intent.rail != PaymentRail::StripeFiat {
+        return Err(AppError::InvalidFundingIntent(
+            "only Stripe fiat funding intents can create Checkout Sessions".to_string(),
+        ));
+    }
+    if intent.status != FundingIntentStatus::AwaitingEvidence {
+        return Err(AppError::InvalidFundingIntent(format!(
+            "funding intent is not awaiting evidence: {:?}",
+            intent.status
+        )));
+    }
+    let organization_id = intent.source_organization_id.ok_or_else(|| {
+        AppError::InvalidFundingIntent(
+            "Stripe fiat funding intents require source_organization_id".to_string(),
+        )
+    })?;
+    let platform_base_url = platform_base_url.trim_end_matches('/');
+    let mut checkout = StripePlanner::new(platform_base_url)
+        .checkout_top_up(&CheckoutTopUpRequest {
+            organization_id,
+            amount: intent.amount.clone(),
+            success_url: success_url
+                .unwrap_or_else(|| format!("{platform_base_url}/stripe/success")),
+            cancel_url: cancel_url.unwrap_or_else(|| format!("{platform_base_url}/stripe/cancel")),
+        })
+        .map_err(|error| AppError::InvalidFundingIntent(error.to_string()))?;
+    checkout.idempotency_key = format!("bounty_funding_intent:{}", intent.id);
+    if let Some(metadata) = checkout
+        .body
+        .get_mut("metadata")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        metadata.insert("bounty_id".to_string(), serde_json::json!(bounty.id));
+        metadata.insert(
+            "funding_intent_id".to_string(),
+            serde_json::json!(intent.id),
+        );
+        metadata.insert(
+            "funding_intent_reference".to_string(),
+            serde_json::json!(intent.external_reference.clone()),
+        );
+        metadata.insert(
+            "purpose".to_string(),
+            serde_json::json!("bounty_funding_intent"),
+        );
+    }
+    Ok(checkout)
+}
+
 fn required_base_field(value: Option<String>, field: &str) -> AppResult<String> {
     value
         .filter(|value| !value.trim().is_empty())
@@ -4569,12 +4619,20 @@ mod tests {
             FundingIntentNextAction::BaseEscrowFunding { .. } => panic!("expected Stripe action"),
         };
         assert_eq!(
+            checkout.idempotency_key,
+            format!("bounty_funding_intent:{}", stripe_intent.intent.id)
+        );
+        assert_eq!(
             checkout.body["metadata"]["funding_intent_id"],
             stripe_intent.intent.id.to_string()
         );
         assert_eq!(
             checkout.body["metadata"]["bounty_id"],
             bounty.id.to_string()
+        );
+        assert_eq!(
+            checkout.body["metadata"]["purpose"],
+            "bounty_funding_intent"
         );
 
         let stripe_event = payments_stripe::StripeWebhookEvent {
