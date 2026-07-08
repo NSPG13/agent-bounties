@@ -368,8 +368,10 @@ API can create a Stripe-hosted Checkout Session through
 `POST /v1/stripe/live/funding-intents/{id}/checkout-session`.
 That endpoint only executes stored `StripeFiat` funding intents and preserves
 `bounty_id`, `funding_intent_id`, and `funding_intent_reference` metadata for
-webhook reconciliation. It does not credit balances or make the bounty
-claimable.
+webhook reconciliation. If the funding intent carried public success and cancel
+URLs, those return URLs are preserved for Stripe Checkout so funders land back
+on the intended website after payment or cancellation. Redirect URLs are UX
+only: they do not credit balances or make the bounty claimable.
 The optional `STRIPE_API_BASE_URL` or `--api-base-url` can target a sandbox or
 mock provider. The optional `STRIPE_PAYMENT_METHOD_CONFIGURATION` can target a
 Dashboard-managed Checkout method set without changing ledger reconciliation.

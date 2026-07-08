@@ -458,9 +458,10 @@ The static website includes a Stripe Checkout funding form at
 https://nspg13.github.io/agent-bounties/funding.html. It calls the hosted API to
 create a `StripeFiat` bounty funding intent and then calls
 `POST /v1/stripe/live/funding-intents/{id}/checkout-session` to
-open Stripe Checkout when public Checkout is enabled. Checkout may show debit
-card, credit card, wallet, or PayPal where the hosted Stripe account and
-Dashboard configuration support those methods.
+open Stripe Checkout when public Checkout is enabled. The stored funding intent
+preserves the page's success and cancel return URLs for Checkout UX only.
+Checkout may show debit card, credit card, wallet, or PayPal where the hosted
+Stripe account and Dashboard configuration support those methods.
 The funding page also includes a read-only hosted readiness check for
 `/v1/readiness/live-money?network=base-mainnet` so funders can see non-secret
 Stripe live, signed-webhook, Base mainnet, and PayPal-capable
