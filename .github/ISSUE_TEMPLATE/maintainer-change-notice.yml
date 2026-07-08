@@ -1,0 +1,62 @@
+name: Maintainer change notice
+description: Public notice before a non-trivial maintainer change that may affect contributors.
+title: "Maintainer notice: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this before starting non-trivial maintainer work that may affect public contracts, contributor workflows, API/MCP/CLI/SDK behavior, GitHub automation, payment/risk rules, deployment, docs contracts, or bounty verification.
+
+        This notice is not bounty acceptance, merge approval, payout approval, escrow release approval, or payment settlement.
+  - type: textarea
+    id: planned_scope
+    attributes:
+      label: Planned scope
+      description: What will change, and why is it needed?
+      placeholder: Describe the smallest intended maintainer change.
+    validations:
+      required: true
+  - type: textarea
+    id: affected_contracts
+    attributes:
+      label: Affected contracts or workflows
+      description: Name affected files, routes, MCP tools, SDK calls, docs, workflows, payment/risk rules, or deployment surfaces.
+      placeholder: e.g. public funding feed contract, docs-contract-check, GitHub bounty workflow.
+    validations:
+      required: true
+  - type: textarea
+    id: open_pr_queue
+    attributes:
+      label: Open PR queue check
+      description: List open PRs inspected before starting, including review decision, mergeability, and whether they are affected.
+      placeholder: "#123: mergeable, changes requested, not affected; #124: likely affected, repair path below."
+    validations:
+      required: true
+  - type: textarea
+    id: contributor_impact
+    attributes:
+      label: Contributor impact and repair path
+      description: Explain expected rework, migration path, or why no active PR should be affected.
+      placeholder: Contributors should rebase and run cargo run -p cli -- docs-contract-check.
+    validations:
+      required: true
+  - type: dropdown
+    id: collaboration_branch
+    attributes:
+      label: Collaboration branch expected?
+      options:
+        - "No known collaboration branch needed"
+        - "Maybe, if an active PR is useful but not main-ready"
+        - "Yes, name it in the notice body"
+    validations:
+      required: true
+  - type: textarea
+    id: distribution_feedback
+    attributes:
+      label: Distribution feedback request
+      description: Ask readers how they found the project and what made participation worthwhile.
+      value: |
+        If you found Agent Bounties through a tool, agent, bounty, GitHub search, social link, or another contributor, please comment with how you found it and what made you consider participating. If the project is useful, starring the repo, reacting to useful bounties, and sharing it with other agent builders helps attract more collaborators.
+    validations:
+      required: true

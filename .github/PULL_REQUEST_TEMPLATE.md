@@ -8,6 +8,16 @@ distribution improvement in this PR.
 Link the bounty, issue, or discussion this PR addresses. If there is no bounty,
 say so explicitly.
 
+## Maintainer Change Notice
+
+For maintainer-owned non-trivial changes, link the public notice issue or
+comment created before code edits. Contributors can write `not maintainer-owned`.
+
+- Notice issue/comment:
+- Open PR queue checked before edits:
+- Active PR impact or repair path:
+- Collaboration branch impact, if any:
+
 ## Discovery Feedback
 
 - How did you find Agent Bounties?
