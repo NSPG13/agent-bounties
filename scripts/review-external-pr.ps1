@@ -38,6 +38,7 @@ function Test-DocsPath {
         $Path -eq "README.md" -or
         $Path -eq "AGENTS.md" -or
         $Path -eq "llms.txt" -or
+        $Path -eq ".github/PULL_REQUEST_TEMPLATE.md" -or
         $Path.StartsWith("docs/") -or
         $Path.StartsWith("examples/") -or
         $Path.StartsWith(".github/ISSUE_TEMPLATE/")
@@ -317,19 +318,34 @@ try {
     $result | ConvertTo-Json -Depth 6
 
     if ($PostReview) {
+        $passedItems = @()
+        if ($docsOnly) {
+            $passedItems += "The changed files are limited to documentation or contributor-facing metadata."
+        }
+        if ($riskyFiles.Count -eq 0) {
+            $passedItems += "No risky paths were changed by the PR head reviewed here."
+        }
+        if ($docsCheckOk) {
+            $passedItems += "`docs-contract-check` passed against the trusted maintainer checkout."
+        }
+        if ($passedItems.Count -eq 0) {
+            $passedItems += "The PR head was fetched and matched against GitHub before review; no merge-ready checks passed yet."
+        }
+
         if ($mainCandidate) {
             $body = @"
 Automated external PR intake passed.
 
-What passed:
-- The changed files are docs-only.
-- No risky paths were changed.
-- `docs-contract-check` passed against the trusted maintainer checkout.
+Decision: main-candidate.
 
-Recommended lane: main-candidate.
+What passed:
+$(Format-MarkdownList $passedItems)
+
+What blocks main:
+- Nothing from the automated external intake gate. A maintainer still needs to review semantics before merge.
 
 Next steps:
-- A maintainer should still review the semantics before merging.
+- A maintainer should review the content and required checks before merging to `main`.
 - This review does not approve bounty acceptance, payout, or payment settlement.
 "@
             Invoke-Checked { gh pr review $Pr --repo $Repo --comment --body $body }
@@ -354,11 +370,14 @@ Next steps:
                 "Do not move this to an upstream collaboration branch automatically. The risky or non-doc paths need manual maintainer security review first."
             }
             $body = @"
-Thanks for the contribution. I cannot approve this for `main` yet, but the next repair steps are concrete.
+Thanks for the contribution. Decision: request-changes for `main`. The next repair steps are concrete.
 
 Recommended lane: $recommendedLane.
 
-Why it is blocked:
+What passed:
+$(Format-MarkdownList $passedItems)
+
+What blocks main:
 $(($blockers | ForEach-Object { $_ }) -join "`n`n")
 
 How to fix:
@@ -372,6 +391,8 @@ cargo run -p cli -- docs-contract-check
 
 Collaboration branch guidance:
 $branchGuidance
+
+This review does not approve bounty acceptance, merge, payout, or payment settlement.
 "@
             Invoke-Checked { gh pr review $Pr --repo $Repo --request-changes --body $body }
         }

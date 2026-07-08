@@ -61,6 +61,7 @@ is_docs_path() {
   [[ "$path" == "README.md" ]] ||
     [[ "$path" == "AGENTS.md" ]] ||
     [[ "$path" == "llms.txt" ]] ||
+    [[ "$path" == ".github/PULL_REQUEST_TEMPLATE.md" ]] ||
     [[ "$path" == docs/* ]] ||
     [[ "$path" == examples/* ]] ||
     [[ "$path" == .github/ISSUE_TEMPLATE/* ]]
@@ -250,6 +251,20 @@ if [[ "${#feedback_items[@]}" -eq 0 ]]; then
   feedback_items+=("Perform semantic review before approving merge, and keep payment or bounty acceptance separate from code review.")
 fi
 
+passed_items=()
+if [[ "$docs_only" == true ]]; then
+  passed_items+=("The changed files are limited to documentation or contributor-facing metadata.")
+fi
+if [[ "${#risky_files[@]}" -eq 0 ]]; then
+  passed_items+=("No risky paths were changed by the PR head reviewed here.")
+fi
+if [[ "$docs_contract_check" == "ok" ]]; then
+  passed_items+=("docs-contract-check passed against the trusted maintainer checkout.")
+fi
+if [[ "${#passed_items[@]}" -eq 0 ]]; then
+  passed_items+=("The PR head was fetched and matched against GitHub before review; no merge-ready checks passed yet.")
+fi
+
 printf '{\n'
 printf '  "pr": %s,\n' "$pr"
 printf '  "docs_only": %s,\n' "$docs_only"
@@ -266,29 +281,27 @@ printf '}\n'
 
 if [[ "$post_review" == true ]]; then
   if [[ "$safe_for_maintainer_ci" == true ]]; then
-    body="$(
-      cat <<'EOF'
-Automated external PR intake passed.
-
-What passed:
-- The changed files are docs-only.
-- No risky paths were changed.
-- docs-contract-check passed against the trusted maintainer checkout.
-
-Recommended lane: main-candidate.
-
-Next steps:
-- A maintainer should still review the semantics before merging.
-- This review does not approve bounty acceptance, payout, or payment settlement.
-EOF
-    )"
-    gh pr review "$pr" --repo "$repo" --comment --body "$body"
+    body_file="$tmp_root/review-body.md"
+    {
+      printf 'Automated external PR intake passed.\n\n'
+      printf 'Decision: main-candidate.\n\n'
+      printf 'What passed:\n'
+      markdown_list "- None" "${passed_items[@]}"
+      printf '\nWhat blocks main:\n'
+      printf -- '- Nothing from the automated external intake gate. A maintainer still needs to review semantics before merge.\n'
+      printf '\nNext steps:\n'
+      printf -- '- A maintainer should review the content and required checks before merging to main.\n'
+      printf -- '- This review does not approve bounty acceptance, payout, or payment settlement.\n'
+    } >"$body_file"
+    gh pr review "$pr" --repo "$repo" --comment --body "$(cat "$body_file")"
   else
     body_file="$tmp_root/review-body.md"
     {
-      printf 'Thanks for the contribution. I cannot approve this for main yet, but the next repair steps are concrete.\n\n'
+      printf 'Thanks for the contribution. Decision: request-changes for main. The next repair steps are concrete.\n\n'
       printf 'Recommended lane: %s.\n\n' "$recommended_lane"
-      printf 'Why it is blocked:\n'
+      printf 'What passed:\n'
+      markdown_list "- None" "${passed_items[@]}"
+      printf '\nWhat blocks main:\n'
       if [[ "${#non_docs_files[@]}" -gt 0 ]]; then
         printf '\nNon-doc files changed:\n'
         markdown_list "- None" "${non_docs_files[@]}"
@@ -315,6 +328,7 @@ EOF
       else
         printf 'Do not move this to an upstream collaboration branch automatically. The risky or non-doc paths need manual maintainer security review first.\n'
       fi
+      printf '\nThis review does not approve bounty acceptance, merge, payout, or payment settlement.\n'
     } >"$body_file"
     gh pr review "$pr" --repo "$repo" --request-changes --body "$(cat "$body_file")"
   fi

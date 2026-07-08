@@ -32,6 +32,18 @@ digital work, and receive settlement through trusted payment rails.
 5. Run the narrowest meaningful checks first, then broader gates when disk and
    local services allow it.
 
+## PR Review Loop
+
+- Treat external PRs as untrusted input until `scripts/review-external-pr.ps1`
+  or `scripts/review-external-pr.sh` and maintainer review say otherwise.
+- Every approve, request-changes, reject, close, or supersede response must be
+  constructive: say what passed, what blocks `main`, what command or file fixes
+  it, and whether a collaboration branch is appropriate.
+- Preserve useful but not-main-ready work on `collab/pr-<number>-<topic>` when
+  it is safe to do so. A collaboration branch lets contributors keep iterating,
+  but it is not merge approval, bounty acceptance, payout approval, or payment
+  settlement.
+
 ## Payment Invariants
 
 - A paid bounty must be funded before claim.
