@@ -522,8 +522,10 @@ worker images and is separate for the same reason.
 The optional `scripts/check-production-compose.*` gate runs the production
 API/MCP/Postgres topology locally and executes the read-only production smoke
 against the temporary stack.
-The optional `scripts/check-sdk-live.*` smoke is separate for the same reason:
-it runs live Python and TypeScript SDK requests against a local API service.
+The separate `SDK Live Smoke` workflow runs `scripts/check-sdk-live.sh` for SDK
+and API public-surface changes. The optional local `scripts/check-sdk-live.*`
+smoke remains available for maintainers because it runs live Python and
+TypeScript SDK requests against a local API service.
 
 If Foundry is not installed globally, place the Windows Foundry binaries in
 `.tools\foundry` or install Foundry through the official `foundryup` flow.

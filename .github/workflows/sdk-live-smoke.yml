@@ -1,0 +1,71 @@
+name: SDK Live Smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/sdk-live-smoke.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/api/**"
+      - "crates/app/**"
+      - "crates/chain-base/**"
+      - "crates/domain/**"
+      - "crates/github-app/**"
+      - "crates/ledger/**"
+      - "crates/payments-stripe/**"
+      - "crates/risk/**"
+      - "crates/sdk-python/**"
+      - "crates/sdk-typescript/**"
+      - "crates/verifier-sdk/**"
+      - "crates/web-public/**"
+      - "scripts/check-sdk-live.ps1"
+      - "scripts/check-sdk-live.sh"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sdk-live-smoke.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/api/**"
+      - "crates/app/**"
+      - "crates/chain-base/**"
+      - "crates/domain/**"
+      - "crates/github-app/**"
+      - "crates/ledger/**"
+      - "crates/payments-stripe/**"
+      - "crates/risk/**"
+      - "crates/sdk-python/**"
+      - "crates/sdk-typescript/**"
+      - "crates/verifier-sdk/**"
+      - "crates/web-public/**"
+      - "scripts/check-sdk-live.ps1"
+      - "scripts/check-sdk-live.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-live-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk-live-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: crates/sdk-typescript/package-lock.json
+
+      - run: bash scripts/check-sdk-live.sh

@@ -25,6 +25,10 @@ else
   exit 127
 fi
 
+if ! "${python_cmd[@]}" -c "import httpx" >/dev/null 2>&1; then
+  "${python_cmd[@]}" -m pip install "httpx>=0.27"
+fi
+
 cd "$repo_root"
 cargo build -p api
 
