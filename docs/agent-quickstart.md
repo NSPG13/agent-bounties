@@ -122,6 +122,9 @@ insufficient.
 For mixed real-money funding, create a `MixedRails` bounty with explicit
 partition targets. Stripe partitions are funded through verified platform
 balance reservations; Base partitions are confirmed only by indexed escrow logs.
+If a Base escrow is refunded before work starts, only the Base partition is
+reopened; the bounty is removed from claimable feeds until a replacement Base
+escrow is indexed.
 
 ```bash
 curl -X POST http://127.0.0.1:8090/tools/open_pooled_bounty \

@@ -33,6 +33,15 @@ broadcast the escrow funding transaction, then wait for the indexed
 escrow support still requires a contract and ABI upgrade, so the MVP supports
 one Base escrow target per mixed bounty.
 
+Mixed funding is partition-aware during refund handling. If an indexed
+`EscrowRefunded` event arrives for the Base partition before work starts, the
+platform reverses only the Base escrow liability and reopens the bounty for
+replacement Base funding; the Stripe partition remains reserved and visible in
+the funding summary. The bounty does not become claimable again until every
+partition is funded at claim time. If the Base partition is refunded after work
+has started, the bounty moves to dispute review instead of pretending the fiat
+partition was also refunded.
+
 For `StripeFiatLedger` pooled bounties, each `StripeFiat` contribution must
 include `source_organization_id`. The platform accepts the contribution only
 when that organization has enough verified Stripe Checkout top-up balance in the
@@ -150,8 +159,10 @@ and testnet development.
 The API accepts normalized chain events at `POST /v1/base/escrow-events`.
 `EscrowCreated` records durable escrow state, `EscrowReleased` marks pending
 payout intents paid and appends the settlement ledger entry, `EscrowRefunded`
-reverses the bounty liability, and replayed release/refund events cannot create
-duplicate ledger entries.
+reverses the relevant Base escrow liability, and replayed release/refund events
+cannot create duplicate ledger entries. For single-rail Base bounties, a
+refunded escrow makes the bounty `Refunded`; for mixed bounties, it reopens or
+disputes the bounty according to whether work has already started.
 For provider-facing workers and agents, the API also accepts raw EVM logs at
 `POST /v1/base/evm-logs`. That endpoint runs the same decoder/indexer pipeline
 used by the worker crate, returns the cursor/report, and persists affected
