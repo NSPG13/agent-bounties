@@ -26,6 +26,7 @@ use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, StripePlanner, STRIPE_API_BASE_URL,
 };
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     io::{Read, Write},
     net::TcpStream,
@@ -267,6 +268,12 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:8090")]
         mcp_base_url: String,
     },
+    DocsContractCheck {
+        #[arg(long, default_value = ".")]
+        root: String,
+        #[arg(long, default_value = ".")]
+        contract_root: String,
+    },
     ProductionSmoke {
         #[arg(long, env = "PRODUCTION_API_BASE_URL")]
         api_base_url: String,
@@ -471,6 +478,10 @@ async fn main() -> Result<()> {
             public_base_url,
             mcp_base_url,
         } => discovery(public_base_url, mcp_base_url),
+        Command::DocsContractCheck {
+            root,
+            contract_root,
+        } => docs_contract_check(PathBuf::from(root), PathBuf::from(contract_root)),
         Command::ProductionSmoke {
             api_base_url,
             mcp_base_url,
@@ -3396,6 +3407,730 @@ fn decode_chunked_body(body: &str) -> Result<String> {
         rest = &after_size[size + 2..];
     }
     Ok(decoded)
+}
+
+#[derive(Debug)]
+struct DocsContractIssue {
+    file: PathBuf,
+    line: usize,
+    message: String,
+}
+
+#[derive(Debug, Clone)]
+struct RequestContract {
+    required: Vec<&'static str>,
+    allowed: Vec<&'static str>,
+    numeric_fields: Vec<&'static str>,
+}
+
+fn docs_contract_check(root: PathBuf, contract_root: PathBuf) -> Result<()> {
+    let root = fs::canonicalize(&root)
+        .with_context(|| format!("docs root does not exist: {}", root.display()))?;
+    let contract_root = fs::canonicalize(&contract_root)
+        .with_context(|| format!("contract root does not exist: {}", contract_root.display()))?;
+    let api_routes = load_api_routes(&contract_root)?;
+    let mcp_tools = load_mcp_tools(&contract_root)?;
+    let request_contracts = request_contracts();
+    let mut files = Vec::new();
+    collect_doc_files(&root, &mut files)?;
+
+    let mut issues = Vec::new();
+    for file in &files {
+        let text = fs::read_to_string(file)
+            .with_context(|| format!("failed to read docs file {}", file.display()))?;
+        let rel = file.strip_prefix(&root).unwrap_or(file.as_path());
+        check_doc_text(
+            rel,
+            &text,
+            &api_routes,
+            &mcp_tools,
+            &request_contracts,
+            &mut issues,
+        );
+    }
+
+    if !issues.is_empty() {
+        for issue in &issues {
+            eprintln!("{}:{}: {}", issue.file.display(), issue.line, issue.message);
+        }
+        bail!("docs contract check failed with {} issue(s)", issues.len());
+    }
+
+    println!(
+        "docs_contract_check=ok files={} api_routes={} mcp_tools={}",
+        files.len(),
+        api_routes.len(),
+        mcp_tools.len()
+    );
+    Ok(())
+}
+
+fn collect_doc_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if path.is_dir() {
+            if matches!(
+                file_name,
+                ".git" | "target" | "node_modules" | ".next" | "__pycache__"
+            ) {
+                continue;
+            }
+            collect_doc_files(&path, files)?;
+        } else if is_doc_contract_file(&path) {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(())
+}
+
+fn is_doc_contract_file(path: &Path) -> bool {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if matches!(file_name, "README.md" | "AGENTS.md" | "llms.txt") {
+        return true;
+    }
+    matches!(
+        path.extension().and_then(|value| value.to_str()),
+        Some("md" | "txt")
+    )
+}
+
+fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
+    let source_path = contract_root.join("crates/api/src/main.rs");
+    let source = fs::read_to_string(&source_path)
+        .with_context(|| format!("failed to read {}", source_path.display()))?;
+    let mut routes = BTreeSet::new();
+    let mut expecting_route = false;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(route_start) = trimmed.find(".route(") {
+            if let Some(route) = first_string_literal(&trimmed[route_start..]) {
+                routes.insert(normalize_route(route));
+                expecting_route = false;
+            } else {
+                expecting_route = true;
+            }
+            continue;
+        }
+        if expecting_route {
+            if let Some(route) = first_string_literal(trimmed) {
+                routes.insert(normalize_route(route));
+                expecting_route = false;
+            }
+        }
+    }
+    Ok(routes)
+}
+
+fn load_mcp_tools(contract_root: &Path) -> Result<BTreeSet<String>> {
+    let source_path = contract_root.join("crates/mcp-server/src/main.rs");
+    let source = fs::read_to_string(&source_path)
+        .with_context(|| format!("failed to read {}", source_path.display()))?;
+    let mut tools = BTreeSet::new();
+    let mut expecting_name = false;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed == "tool(" || trimmed == "operator_tool(" {
+            expecting_name = true;
+            continue;
+        }
+        if expecting_name {
+            if let Some(name) = first_string_literal(trimmed) {
+                tools.insert(name.to_string());
+                expecting_name = false;
+            }
+        }
+    }
+    Ok(tools)
+}
+
+fn check_doc_text(
+    file: &Path,
+    text: &str,
+    api_routes: &BTreeSet<String>,
+    mcp_tools: &BTreeSet<String>,
+    request_contracts: &BTreeMap<String, RequestContract>,
+    issues: &mut Vec<DocsContractIssue>,
+) {
+    for (line_index, line) in text.lines().enumerate() {
+        let line_number = line_index + 1;
+        if line_mentions_mcp_port_for_api(line) {
+            push_doc_issue(
+                issues,
+                file,
+                line_number,
+                "REST/API path is pointed at port 8090; API defaults to 8080 and MCP defaults to 8090",
+            );
+        }
+        for alias in stale_discovery_aliases() {
+            if line.contains(alias) {
+                push_doc_issue(
+                    issues,
+                    file,
+                    line_number,
+                    &format!(
+                        "stale discovery endpoint `{alias}`; use the manifest `endpoints` object keys"
+                    ),
+                );
+            }
+        }
+        for tool in tool_names_from_line(line) {
+            if !mcp_tools.contains(&tool) {
+                push_doc_issue(
+                    issues,
+                    file,
+                    line_number,
+                    &format!("unknown MCP tool `{tool}`"),
+                );
+            }
+        }
+        for path in api_paths_from_line(line) {
+            let normalized = normalize_route(&path);
+            if is_checked_api_path(&normalized)
+                && !is_external_api_path(&normalized)
+                && !api_routes.contains(&normalized)
+            {
+                push_doc_issue(
+                    issues,
+                    file,
+                    line_number,
+                    &format!("unknown API route `{path}`"),
+                );
+            }
+        }
+    }
+
+    for (start_line, block) in markdown_code_blocks(text) {
+        check_curl_payload_block(file, start_line, &block, request_contracts, issues);
+    }
+}
+
+fn check_curl_payload_block(
+    file: &Path,
+    start_line: usize,
+    block: &str,
+    request_contracts: &BTreeMap<String, RequestContract>,
+    issues: &mut Vec<DocsContractIssue>,
+) {
+    if !block.contains("curl") || !(block.contains("--data") || block.contains(" -d ")) {
+        return;
+    }
+    let Some(path) = block.lines().flat_map(api_paths_from_line).next() else {
+        return;
+    };
+    let normalized = normalize_route(&path);
+    let Some(contract) = request_contracts.get(&normalized) else {
+        return;
+    };
+    let Some(json_text) = extract_first_json_object(block) else {
+        push_doc_issue(
+            issues,
+            file,
+            start_line,
+            &format!("curl payload for `{path}` does not contain a JSON object"),
+        );
+        return;
+    };
+    let value: serde_json::Value = match serde_json::from_str(&json_text) {
+        Ok(value) => value,
+        Err(error) => {
+            push_doc_issue(
+                issues,
+                file,
+                start_line,
+                &format!("curl payload for `{path}` is not valid JSON: {error}"),
+            );
+            return;
+        }
+    };
+    let Some(object) = value.as_object() else {
+        push_doc_issue(
+            issues,
+            file,
+            start_line,
+            &format!("curl payload for `{path}` must be a JSON object"),
+        );
+        return;
+    };
+
+    for field in &contract.required {
+        if !object.contains_key(*field) {
+            push_doc_issue(
+                issues,
+                file,
+                start_line,
+                &format!("curl payload for `{path}` is missing required field `{field}`"),
+            );
+        }
+    }
+    for field in object.keys() {
+        if !contract.allowed.iter().any(|allowed| allowed == field) {
+            push_doc_issue(
+                issues,
+                file,
+                start_line,
+                &format!("curl payload for `{path}` contains unknown field `{field}`"),
+            );
+        }
+    }
+    for field in &contract.numeric_fields {
+        if let Some(value) = object.get(*field) {
+            if !value.is_number() {
+                push_doc_issue(
+                    issues,
+                    file,
+                    start_line,
+                    &format!("curl payload for `{path}` field `{field}` must be numeric"),
+                );
+            }
+        }
+    }
+}
+
+fn request_contracts() -> BTreeMap<String, RequestContract> {
+    let mut contracts = BTreeMap::new();
+    insert_request_contract(
+        &mut contracts,
+        "/v1/agents",
+        &["handle"],
+        &["handle", "payout_wallet"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/capabilities",
+        &[
+            "agent_id",
+            "class",
+            "template_slugs",
+            "min_price_minor",
+            "max_price_minor",
+            "currency",
+            "latency_seconds",
+            "supported_verifiers",
+        ],
+        &[
+            "agent_id",
+            "class",
+            "template_slugs",
+            "min_price_minor",
+            "max_price_minor",
+            "currency",
+            "latency_seconds",
+            "supported_verifiers",
+        ],
+        &["min_price_minor", "max_price_minor", "latency_seconds"],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/capabilities/search",
+        &["query"],
+        &["query"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/bounties/{param}/claim",
+        &["bounty_id", "solver_agent_id"],
+        &["bounty_id", "solver_agent_id"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/bounties/{param}/submit",
+        &[
+            "bounty_id",
+            "solver_agent_id",
+            "artifact_uri",
+            "artifact_body",
+        ],
+        &[
+            "bounty_id",
+            "solver_agent_id",
+            "artifact_uri",
+            "artifact_body",
+        ],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/bounties/{param}/verify",
+        &["bounty_id", "submission_id", "expected_artifact_digest"],
+        &[
+            "bounty_id",
+            "submission_id",
+            "expected_artifact_digest",
+            "verifier_kind",
+            "rubric",
+            "evidence",
+            "approved_risk_event_id",
+        ],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/funding-plan",
+        &["bounty_id", "escrow_contract", "payer", "token"],
+        &["bounty_id", "escrow_contract", "payer", "token", "network"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/fetch-rpc-logs",
+        &["escrow_contract", "from_block"],
+        &[
+            "escrow_contract",
+            "from_block",
+            "to_block",
+            "request_id",
+            "network",
+        ],
+        &["from_block", "to_block", "request_id"],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/release-queue",
+        &[],
+        &["escrow_contract", "platform_fee_wallet", "network"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/release-plan",
+        &["bounty_id", "escrow_contract", "platform_fee_wallet"],
+        &[
+            "bounty_id",
+            "escrow_contract",
+            "platform_fee_wallet",
+            "network",
+        ],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/refund-plan",
+        &["bounty_id", "escrow_contract", "reason_hash"],
+        &["bounty_id", "escrow_contract", "reason_hash", "network"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/dispute-plan",
+        &["bounty_id", "escrow_contract", "dispute_hash"],
+        &["bounty_id", "escrow_contract", "dispute_hash", "network"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/broadcast-signed-transaction",
+        &["signed_transaction"],
+        &["signed_transaction", "request_id", "network"],
+        &["request_id"],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/transaction-receipt",
+        &["tx_hash"],
+        &["tx_hash", "request_id", "network", "reconcile_logs"],
+        &["request_id"],
+    );
+    contracts
+}
+
+fn insert_request_contract(
+    contracts: &mut BTreeMap<String, RequestContract>,
+    path: &str,
+    required: &'static [&'static str],
+    allowed: &'static [&'static str],
+    numeric_fields: &'static [&'static str],
+) {
+    contracts.insert(
+        normalize_route(path),
+        RequestContract {
+            required: required.to_vec(),
+            allowed: allowed.to_vec(),
+            numeric_fields: numeric_fields.to_vec(),
+        },
+    );
+}
+
+fn line_mentions_mcp_port_for_api(line: &str) -> bool {
+    (line.contains("localhost:8090") || line.contains("127.0.0.1:8090"))
+        && (line.contains("/v1/") || line.contains("/api-docs/") || line.contains("/public/"))
+}
+
+fn stale_discovery_aliases() -> &'static [&'static str] {
+    &[
+        "openapi_url",
+        "mcp_url",
+        "templates_url",
+        "claimable_bounties_url",
+        "capabilities_feed_url",
+        "public_proofs_url",
+    ]
+}
+
+fn tool_names_from_line(line: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some((_, after)) = line.split_once("Tool:") {
+        if let Some(name) = first_identifier(after) {
+            names.push(name);
+        }
+    }
+
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("mcp") || lower.contains("tool") {
+        for name in backtick_identifiers(line) {
+            if looks_like_tool_reference(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn looks_like_tool_reference(value: &str) -> bool {
+    const VERBS: &[&str] = &[
+        "route_",
+        "request_",
+        "post_",
+        "claim_",
+        "submit_",
+        "get_",
+        "register_",
+        "list_",
+        "search_",
+        "plan_",
+        "reconcile_",
+        "fetch_",
+        "broadcast_",
+        "approve_",
+        "reject_",
+        "execute_",
+        "run_",
+        "fund_",
+    ];
+    VERBS.iter().any(|prefix| value.starts_with(prefix))
+}
+
+fn backtick_identifiers(line: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find('`') {
+        let after_start = &rest[start + 1..];
+        let Some(end) = after_start.find('`') else {
+            break;
+        };
+        let value = &after_start[..end];
+        if is_snake_identifier(value) {
+            values.push(value.to_string());
+        }
+        rest = &after_start[end + 1..];
+    }
+    values
+}
+
+fn is_snake_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.contains('_')
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+fn first_identifier(value: &str) -> Option<String> {
+    let mut chars = value.trim_start().chars().peekable();
+    let mut ident = String::new();
+    while let Some(ch) = chars.peek().copied() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' {
+            ident.push(ch);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if ident.is_empty() {
+        None
+    } else {
+        Some(ident)
+    }
+}
+
+fn first_string_literal(line: &str) -> Option<&str> {
+    let start = line.find('"')?;
+    let after_start = &line[start + 1..];
+    let end = after_start.find('"')?;
+    Some(&after_start[..end])
+}
+
+fn api_paths_from_line(line: &str) -> Vec<String> {
+    let chars = line.char_indices().collect::<Vec<_>>();
+    let mut paths = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let (byte_index, ch) = chars[index];
+        if ch != '/' {
+            index += 1;
+            continue;
+        }
+        let prev = if index == 0 {
+            None
+        } else {
+            Some(chars[index - 1].1)
+        };
+        let next = chars.get(index + 1).map(|(_, ch)| *ch);
+        if prev == Some(':') || next == Some('/') {
+            index += 1;
+            continue;
+        }
+        let mut end = byte_index + ch.len_utf8();
+        let mut cursor = index + 1;
+        while let Some((next_byte, next_ch)) = chars.get(cursor).copied() {
+            if is_path_char(next_ch) {
+                end = next_byte + next_ch.len_utf8();
+                cursor += 1;
+            } else {
+                break;
+            }
+        }
+        let path = trim_path_token(&line[byte_index..end]);
+        if is_checked_api_path(&normalize_route(path)) {
+            paths.push(path.to_string());
+        }
+        index = cursor.max(index + 1);
+    }
+    paths
+}
+
+fn is_path_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
+        || matches!(
+            ch,
+            '/' | '{' | '}' | ':' | '_' | '-' | '.' | '?' | '=' | '&'
+        )
+}
+
+fn trim_path_token(value: &str) -> &str {
+    value
+        .trim_end_matches(['.', ',', ')', ']', '>', ';', ':'])
+        .split('?')
+        .next()
+        .unwrap_or(value)
+}
+
+fn is_checked_api_path(path: &str) -> bool {
+    path.starts_with("/v1/")
+        || path.starts_with("/public/")
+        || path.starts_with("/api-docs/")
+        || path.starts_with("/.well-known/")
+        || path.starts_with("/schemas/")
+        || matches!(path, "/llms.txt" | "/docs" | "/health")
+}
+
+fn is_external_api_path(path: &str) -> bool {
+    matches!(path, "/v1/checkout/sessions")
+}
+
+fn normalize_route(path: &str) -> String {
+    let trimmed = trim_path_token(path.trim()).trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+    let mut normalized = String::new();
+    for segment in trimmed.split('/') {
+        if segment.is_empty() {
+            continue;
+        }
+        normalized.push('/');
+        if segment.starts_with(':') || (segment.starts_with('{') && segment.ends_with('}')) {
+            normalized.push_str("{param}");
+        } else {
+            normalized.push_str(segment);
+        }
+    }
+    if normalized.is_empty() {
+        "/".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn markdown_code_blocks(text: &str) -> Vec<(usize, String)> {
+    let mut blocks = Vec::new();
+    let mut in_block = false;
+    let mut start_line = 0;
+    let mut current = String::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.trim_start().starts_with("```") {
+            if in_block {
+                blocks.push((start_line, current.clone()));
+                current.clear();
+                in_block = false;
+            } else {
+                in_block = true;
+                start_line = index + 2;
+            }
+            continue;
+        }
+        if in_block {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    blocks
+}
+
+fn extract_first_json_object(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, ch) in text[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let end = start + offset + ch.len_utf8();
+                    return Some(text[start..end].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn push_doc_issue(issues: &mut Vec<DocsContractIssue>, file: &Path, line: usize, message: &str) {
+    issues.push(DocsContractIssue {
+        file: file.to_path_buf(),
+        line,
+        message: message.to_string(),
+    });
 }
 
 fn require(condition: bool, message: &str) -> Result<()> {
