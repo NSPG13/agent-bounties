@@ -12,6 +12,7 @@ use chain_base::{
     BaseEscrowLogDecoder, BaseEscrowLogQuery, BaseEscrowReleaseCall, BaseEscrowTxPlanner,
     BaseRpcUrlConfig, ChainEventIndexer, EscrowRecipient, EvmLog,
 };
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use domain::{CapabilityClass, FundingMode, Money, PrivacyLevel, VerifierKind};
 use eval_harness::{
@@ -540,6 +541,16 @@ async fn demo() -> Result<()> {
         title: Some("Extract invoice fields".to_string()),
         funding_mode: Some(FundingMode::BaseUsdcEscrow),
     })?;
+    let mut indexer = ChainEventIndexer::default();
+    let created = simulated_created_event(
+        bounty.id,
+        1,
+        "0x3333333333333333333333333333333333333333",
+        bounty.amount.clone(),
+        bounty.terms_hash.clone().expect("funded bounty has terms"),
+    );
+    indexer.ingest(created.clone())?;
+    network.apply_base_escrow_event(created)?;
 
     network.claim_bounty(ClaimBountyRequest {
         bounty_id: bounty.id,
@@ -563,16 +574,6 @@ async fn demo() -> Result<()> {
             approved_risk_event_id: None,
         })
         .await?;
-    let mut indexer = ChainEventIndexer::default();
-    let created = simulated_created_event(
-        bounty.id,
-        1,
-        "0x3333333333333333333333333333333333333333",
-        bounty.amount.clone(),
-        bounty.terms_hash.clone().expect("funded bounty has terms"),
-    );
-    indexer.ingest(created.clone())?;
-    network.apply_base_escrow_event(created)?;
     let released = simulated_released_event(bounty.id, 1, proof.proof_hash.clone());
     indexer.ingest(released.clone())?;
     network.apply_base_escrow_event(released)?;
@@ -1088,6 +1089,14 @@ async fn base_release_queue_demo(
         funding_mode: FundingMode::BaseUsdcEscrow,
         privacy: PrivacyLevel::Public,
     })?;
+    let created = simulated_created_event(
+        bounty.id,
+        1,
+        "0x3333333333333333333333333333333333333333",
+        bounty.amount.clone(),
+        bounty.terms_hash.clone().expect("funded bounty has terms"),
+    );
+    network.apply_base_escrow_event(created)?;
     network.claim_bounty(ClaimBountyRequest {
         bounty_id: bounty.id,
         solver_agent_id: solver.id,
@@ -1110,14 +1119,6 @@ async fn base_release_queue_demo(
             approved_risk_event_id: None,
         })
         .await?;
-    let created = simulated_created_event(
-        bounty.id,
-        1,
-        "0x3333333333333333333333333333333333333333",
-        bounty.amount,
-        bounty.terms_hash.expect("funded bounty has terms"),
-    );
-    network.apply_base_escrow_event(created)?;
     let queue = network.list_base_release_queue(BaseReleaseQueueRequest {
         escrow_contract: Some(escrow_contract),
         platform_fee_wallet: Some(platform_fee_wallet),
@@ -1837,6 +1838,7 @@ async fn production_smoke_check(
         "execute_stripe_connect_account",
         "reconcile_stripe_connect_snapshot",
         "reconcile_stripe_checkout_webhook",
+        "reconcile_base_escrow_event",
         "reconcile_base_evm_logs",
         "reconcile_base_rpc_logs",
         "fetch_base_rpc_logs",
@@ -2097,6 +2099,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     )?;
 
     let smoke_id = Uuid::new_v4();
+    let smoke_escrow_seed = smoke_id.as_u128() % 1_000_000_000 + 10_000;
     let requester = post_json(
         &format!("{api}/v1/agents"),
         serde_json::json!({
@@ -2198,6 +2201,20 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     let bounty_id = value_str(&bounty, "/id")
         .context("bounty id missing")?
         .to_string();
+    let bounty_terms_hash =
+        value_str(&bounty, "/terms_hash").context("bounty terms hash missing")?;
+    require(
+        value_str(&bounty, "/status") == Some("Unfunded"),
+        "newly posted Base bounty must start funding-ready",
+    )?;
+    let funded_bounty = post_json(
+        &format!("{api}/v1/base/escrow-events"),
+        base_created_event_json(&bounty_id, 1_000_000, bounty_terms_hash, smoke_escrow_seed),
+    )?;
+    require(
+        value_str(&funded_bounty, "/bounty/status") == Some("Claimable"),
+        "Base escrow event must make API bounty claimable",
+    )?;
 
     let feed = get_json(&format!("{api}/v1/bounties/feed"))?;
     let feed_items = feed.as_array().context("bounty feed must be an array")?;
@@ -2229,6 +2246,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "search_capabilities",
         "list_claimable_bounties",
         "plan_base_log_query",
+        "reconcile_base_escrow_event",
         "reconcile_base_rpc_logs",
         "fetch_base_rpc_logs",
         "broadcast_base_signed_transaction",
@@ -2380,13 +2398,26 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     )?;
     let mcp_reviewed_bounty_id =
         value_str(&mcp_reviewed_bounty, "/bounty/id").context("MCP reviewed bounty id missing")?;
+    let mcp_reviewed_terms_hash = value_str(&mcp_reviewed_bounty, "/bounty/terms_hash")
+        .context("MCP reviewed bounty terms hash missing")?;
     require(
-        value_str(&mcp_reviewed_bounty, "/bounty/status") == Some("Claimable"),
-        "MCP approve_risk_bounty must create a Claimable bounty",
+        value_str(&mcp_reviewed_bounty, "/bounty/status") == Some("Unfunded"),
+        "MCP approve_risk_bounty must create a funding-ready Base bounty",
     )?;
     require(
         value_str(&mcp_reviewed_bounty, "/review/outcome") == Some("Approved"),
         "MCP approve_risk_bounty must record an Approved review",
+    )?;
+    let mcp_reviewed_funding = mcp_reconcile_base_created(
+        mcp,
+        mcp_reviewed_bounty_id,
+        25_000_000,
+        mcp_reviewed_terms_hash,
+        smoke_escrow_seed + 1,
+    )?;
+    require(
+        value_str(&mcp_reviewed_funding, "/bounty/status") == Some("Claimable"),
+        "MCP reconcile_base_escrow_event must make reviewed Base bounty claimable",
     )?;
     let mcp_risk_reviews = mcp_tool_get(mcp, "list_risk_reviews")?;
     require(
@@ -2728,6 +2759,23 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     let mcp_bounty_id = value_str(&mcp_bounty, "/id")
         .context("MCP bounty id missing")?
         .to_string();
+    let mcp_bounty_terms_hash =
+        value_str(&mcp_bounty, "/terms_hash").context("MCP bounty terms hash missing")?;
+    require(
+        value_str(&mcp_bounty, "/status") == Some("Unfunded"),
+        "MCP post_bounty must create a funding-ready Base bounty",
+    )?;
+    let mcp_bounty_funding = mcp_reconcile_base_created(
+        mcp,
+        mcp_bounty_id.as_str(),
+        1_000_000,
+        mcp_bounty_terms_hash,
+        smoke_escrow_seed + 2,
+    )?;
+    require(
+        value_str(&mcp_bounty_funding, "/bounty/status") == Some("Claimable"),
+        "MCP reconcile_base_escrow_event must make posted Base bounty claimable",
+    )?;
 
     let mcp_claimable = mcp_tool_get(mcp, "list_claimable_bounties")?;
     let mcp_claimable_items = mcp_claimable
@@ -3132,6 +3180,49 @@ fn mcp_tool_result(response: serde_json::Value, tool_name: &str) -> Result<serde
         .pointer("/content/0/json")
         .cloned()
         .with_context(|| format!("MCP tool {tool_name} response missing content[0].json"))
+}
+
+fn mcp_reconcile_base_created(
+    mcp_base_url: &str,
+    bounty_id: &str,
+    amount_minor: i64,
+    terms_hash: &str,
+    onchain_escrow_id: u128,
+) -> Result<serde_json::Value> {
+    mcp_tool_post(
+        mcp_base_url,
+        "reconcile_base_escrow_event",
+        base_created_event_json(bounty_id, amount_minor, terms_hash, onchain_escrow_id),
+    )
+}
+
+fn base_created_event_json(
+    bounty_id: &str,
+    amount_minor: i64,
+    terms_hash: &str,
+    onchain_escrow_id: u128,
+) -> serde_json::Value {
+    let tx_seed = Uuid::new_v4().simple().to_string();
+    serde_json::json!({
+        "id": Uuid::new_v4(),
+        "log_key": format!("base:{onchain_escrow_id}:{bounty_id}:created"),
+        "tx_hash": format!("0x{tx_seed}{tx_seed}"),
+        "block_number": onchain_escrow_id,
+        "onchain_escrow_id": onchain_escrow_id,
+        "bounty_id": bounty_id,
+        "kind": "Created",
+        "status": "Funded",
+        "token": "0x3333333333333333333333333333333333333333",
+        "amount": {
+            "amount": amount_minor,
+            "currency": "usdc"
+        },
+        "terms_hash": terms_hash,
+        "proof_hash": null,
+        "reason_hash": null,
+        "dispute_hash": null,
+        "occurred_at": Utc::now(),
+    })
 }
 
 fn get_text(url: &str) -> Result<String> {

@@ -81,14 +81,15 @@ request creation does not mutate balances until the corresponding webhook or
 eligibility snapshot is reconciled.
 
 Every accepted paid bounty must leave an auditable graph:
-help request -> quote -> funded bounty -> submission -> verifier result -> proof
-record -> settlement record -> reputation event -> template signal. Public
+help request -> quote -> funding-ready bounty -> indexed funding event ->
+claimable bounty -> submission -> verifier result -> proof record -> settlement
+record -> reputation event -> template signal. Public
 pages and profiles are derived from that graph rather than from free-form
 marketing data. Template pages expose accepted-completion and accepted-value
 signals so every completed public bounty improves future template discovery.
 The public bounty feed is also graph-derived: it only projects claimable
-non-private bounties into a small machine-readable record with claim, status,
-and template links.
+non-private bounties with confirmed funding into a small machine-readable record
+with claim, status, and template links.
 
 GitHub dogfooding is a deterministic integration boundary. The hosted API and
 MCP server can parse paid-bounty issue forms into check-run output and render

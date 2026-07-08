@@ -3131,7 +3131,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn risk_bounty_approval_endpoint_creates_claimable_bounty() {
+    async fn risk_bounty_approval_endpoint_creates_funding_ready_bounty() {
         let mut network = BountyNetwork::default();
         let result = network.post_funded_bounty(PostBountyRequest {
             title: "Fix deterministic payout reconciliation failure".to_string(),
@@ -3173,8 +3173,25 @@ mod tests {
         .unwrap()
         .0;
 
-        assert_eq!(approval.bounty.status, BountyStatus::Claimable);
+        assert_eq!(approval.bounty.status, BountyStatus::Unfunded);
+        assert!(approval.bounty.terms_hash.is_some());
         assert_eq!(approval.review.outcome, domain::RiskReviewOutcome::Approved);
+        let funded = reconcile_base_escrow_event(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(chain_base::simulated_created_event(
+                approval.bounty.id,
+                99,
+                "0x3333333333333333333333333333333333333333",
+                approval.bounty.amount.clone(),
+                approval.bounty.terms_hash.clone().unwrap(),
+            )),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(funded.bounty.status, BountyStatus::Claimable);
+        assert_eq!(funded.ledger_entries.len(), 1);
         let reviews = list_risk_reviews(State(state)).await.0;
         assert_eq!(reviews.len(), 1);
     }
@@ -3218,6 +3235,7 @@ mod tests {
                 note: "Approved bounty scope".to_string(),
             })
             .unwrap();
+        apply_base_funding_event(&mut network, &approval.bounty, 99);
         network
             .claim_bounty(ClaimBountyRequest {
                 bounty_id: approval.bounty.id,
@@ -3348,6 +3366,7 @@ mod tests {
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
+        apply_base_funding_event(&mut network, &public, 1);
         let private = network
             .post_funded_bounty(PostBountyRequest {
                 title: "Private ledger work".to_string(),
@@ -3815,6 +3834,7 @@ mod tests {
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
+        apply_base_funding_event(&mut network, &bounty, 7);
         network
             .claim_bounty(ClaimBountyRequest {
                 bounty_id: bounty.id,
@@ -3843,6 +3863,22 @@ mod tests {
             .await
             .unwrap();
         (network, bounty, proof)
+    }
+
+    fn apply_base_funding_event(
+        network: &mut BountyNetwork,
+        bounty: &Bounty,
+        onchain_escrow_id: u128,
+    ) {
+        network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                bounty.id,
+                onchain_escrow_id,
+                "0x3333333333333333333333333333333333333333",
+                bounty.amount.clone(),
+                bounty.terms_hash.clone().unwrap(),
+            ))
+            .unwrap();
     }
 
     fn raw_created_and_released_logs(bounty: &Bounty, proof: &ProofRecord) -> Vec<EvmLog> {

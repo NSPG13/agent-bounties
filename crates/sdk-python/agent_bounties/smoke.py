@@ -176,8 +176,8 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "Approved review-required bounty during Python SDK smoke.",
     )
     _require(
-        reviewed_approval["bounty"]["status"] == "Claimable",
-        "risk approval did not create a claimable bounty",
+        reviewed_approval["bounty"]["status"] == "Unfunded",
+        "risk approval did not create a funding-ready bounty",
     )
     _require(
         reviewed_approval["review"]["outcome"] == "Approved",
@@ -198,6 +198,28 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "0x2222222222222222222222222222222222222222",
     )
     reviewed_bounty_id = reviewed_approval["bounty"]["id"]
+    reviewed_created_event = {
+        "id": str(uuid.uuid4()),
+        "log_key": f"python-sdk-review:{reviewed_bounty_id}:created",
+        "tx_hash": f"0x{uuid.uuid4().hex}",
+        "block_number": 2,
+        "onchain_escrow_id": 2,
+        "bounty_id": reviewed_bounty_id,
+        "kind": "Created",
+        "status": "Funded",
+        "token": "0x3333333333333333333333333333333333333333",
+        "amount": {"amount": 25_000_000, "currency": "usdc"},
+        "terms_hash": reviewed_approval["bounty"]["terms_hash"],
+        "proof_hash": None,
+        "reason_hash": None,
+        "dispute_hash": None,
+        "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    reviewed_funding = client.reconcile_base_escrow_event(reviewed_created_event)
+    _require(
+        reviewed_funding["bounty"]["status"] == "Claimable",
+        "reviewed Base escrow create event did not make bounty claimable",
+    )
     reviewed_claim = client.claim_bounty(reviewed_bounty_id, review_solver["id"])
     _require(
         reviewed_claim["status"] == "Claimed",
@@ -387,6 +409,33 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "Base funding plan used the wrong createEscrow function",
     )
 
+    created_event = {
+        "id": str(uuid.uuid4()),
+        "log_key": f"python-sdk-smoke:{bounty_id}:created",
+        "tx_hash": f"0x{uuid.uuid4().hex}",
+        "block_number": 1,
+        "onchain_escrow_id": 1,
+        "bounty_id": bounty_id,
+        "kind": "Created",
+        "status": "Funded",
+        "token": "0x3333333333333333333333333333333333333333",
+        "amount": {"amount": 1_000_000, "currency": "usdc"},
+        "terms_hash": bounty["terms_hash"],
+        "proof_hash": None,
+        "reason_hash": None,
+        "dispute_hash": None,
+        "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    escrow_reconciliation = client.reconcile_base_escrow_event(created_event)
+    _require(
+        escrow_reconciliation["bounty"]["status"] == "Claimable",
+        "Base escrow create event did not make bounty claimable",
+    )
+    _require(
+        escrow_reconciliation["escrow"]["status"] == "Funded",
+        "Base escrow create event did not produce funded escrow state",
+    )
+
     feed = client.list_public_bounty_feed()
     _require(
         any(item["bounty_id"] == bounty_id for item in feed),
@@ -423,28 +472,6 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
             for total in agent_paid["totals"]
         ),
         "agent paid status missing pending USDC total",
-    )
-    created_event = {
-        "id": str(uuid.uuid4()),
-        "log_key": f"python-sdk-smoke:{bounty_id}:created",
-        "tx_hash": f"0x{uuid.uuid4().hex}",
-        "block_number": 1,
-        "onchain_escrow_id": 1,
-        "bounty_id": bounty_id,
-        "kind": "Created",
-        "status": "Funded",
-        "token": "0x3333333333333333333333333333333333333333",
-        "amount": {"amount": 1_000_000, "currency": "usdc"},
-        "terms_hash": bounty["terms_hash"],
-        "proof_hash": None,
-        "reason_hash": None,
-        "dispute_hash": None,
-        "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    escrow_reconciliation = client.reconcile_base_escrow_event(created_event)
-    _require(
-        escrow_reconciliation["escrow"]["status"] == "Funded",
-        "Base escrow create event did not produce funded escrow state",
     )
     release_queue = client.list_base_release_queue(
         "0x1111111111111111111111111111111111111111",

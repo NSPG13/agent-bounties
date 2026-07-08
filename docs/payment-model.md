@@ -24,8 +24,10 @@ they do not authorize settlement.
 For bounty-posting review, an operator can approve the exact machine-readable
 terms through `POST /v1/risk/bounty-approvals`, MCP `approve_risk_bounty`, or
 CLI `risk-approve-bounty`. Approval binds the created bounty to the original
-risk-event subject ID, records a `RiskReviewRecord`, funds the bounty ledger
-entry, and moves the bounty only to `Claimable`. Operators can also reject a
+risk-event subject ID and records a `RiskReviewRecord`. For Base USDC, approval
+publishes a funding-ready `Unfunded` bounty with a terms hash; the funding
+ledger entry and `Claimable` state occur only after the indexed `EscrowCreated`
+event is reconciled. Operators can also reject a
 review item through `POST /v1/risk/events/{id}/reject`, MCP
 `reject_risk_event`, or CLI `risk-reject-event`. Neither path marks work
 accepted, payable, or paid.
@@ -57,6 +59,11 @@ For a posted bounty, `POST /v1/base/funding-plan` and MCP
 calldata bound to the bounty ID, amount, and terms hash. They do not mutate
 platform state, and they refuse to plan again after indexed Base escrow state
 already exists for that bounty.
+A posted Base bounty is funding-ready, not claimable. API
+`POST /v1/base/escrow-events`, MCP `reconcile_base_escrow_event`, raw-log
+reconciliation, RPC-log reconciliation, or receipt reconciliation must apply the
+indexed `EscrowCreated` log before the bounty appears in public claimable feeds
+or can be claimed.
 After an accepted Base-funded bounty has a funded escrow and pending settlement,
 operators can call `POST /v1/base/release-queue` with the escrow contract and
 platform fee wallet. The queue returns each payable Base settlement, pending
@@ -94,10 +101,11 @@ normalizes receipt logs and runs the same Base escrow decoder/indexer. A bounty
 is marked `Paid` only if an indexed `EscrowReleased` log applies.
 
 Hosted operators should also set `OPERATOR_API_TOKEN`. When configured, API and
-MCP calls that submit settlement logs, fetch provider logs through server-side
-RPC URLs, broadcast signed transactions, or reconcile receipt logs must include
-either `Authorization: Bearer <token>` or `x-operator-token: <token>`. The token
-is intentionally optional for local demos and testnet development.
+MCP calls that reconcile normalized escrow events, submit settlement logs, fetch
+provider logs through server-side RPC URLs, broadcast signed transactions, or
+reconcile receipt logs must include either `Authorization: Bearer <token>` or
+`x-operator-token: <token>`. The token is intentionally optional for local demos
+and testnet development.
 
 The API accepts normalized chain events at `POST /v1/base/escrow-events`.
 `EscrowCreated` records durable escrow state, `EscrowReleased` marks pending

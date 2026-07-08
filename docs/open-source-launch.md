@@ -49,8 +49,9 @@ The intended loop is:
    logs, prompts, GitHub comments, or docs.
 
 `GET /v1/bounties/feed` and the MCP `list_claimable_bounties` tool return only
-claimable non-private bounties, with claim/status/template URLs. Private bounties
-remain available to authorized API flows but are excluded from public discovery.
+claimable non-private bounties with confirmed funding, with
+claim/status/template URLs. Private bounties remain available to authorized API
+flows but are excluded from public discovery.
 `GET /v1/capabilities/feed` and MCP `search_capabilities` return public active
 solver capability listings with price bands, templates, verifier support,
 latency, profile links, and reputation signals.

@@ -340,6 +340,15 @@ mod tests {
             })
             .unwrap();
         network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                bounty.id,
+                7,
+                "0x3333333333333333333333333333333333333333",
+                bounty.amount.clone(),
+                bounty.terms_hash.clone().unwrap(),
+            ))
+            .unwrap();
+        network
             .claim_bounty(ClaimBountyRequest {
                 bounty_id: bounty.id,
                 solver_agent_id: solver.id,

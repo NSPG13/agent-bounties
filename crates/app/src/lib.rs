@@ -560,22 +560,29 @@ impl BountyNetwork {
 
     pub fn post_funded_bounty(&mut self, request: PostBountyRequest) -> AppResult<Bounty> {
         let amount = Money::new(request.amount_minor, request.currency)?;
+        let funding_mode = request.funding_mode.clone();
         let mut bounty = Bounty::new(
             request.title,
             request.template_slug,
             amount.clone(),
-            request.funding_mode.clone(),
+            funding_mode.clone(),
             request.privacy.clone(),
         );
         let risk = self.risk_policy.evaluate_bounty(&BountyRiskInput {
             title: bounty.title.clone(),
             template_slug: bounty.template_slug.clone(),
             amount: amount.clone(),
-            funding_mode: request.funding_mode,
+            funding_mode: funding_mode.clone(),
             privacy: request.privacy,
         });
         self.enforce_risk(risk, bounty.id, None, Some(bounty.id))?;
         let terms_hash = hash_terms(&bounty.title, &bounty.template_slug, &amount);
+        if funding_mode == FundingMode::BaseUsdcEscrow {
+            bounty.terms_hash = Some(terms_hash);
+            self.bounties.insert(bounty.id, bounty.clone());
+            return Ok(bounty);
+        }
+
         bounty.mark_funded(terms_hash)?;
         bounty.make_claimable()?;
 
@@ -595,6 +602,18 @@ impl BountyNetwork {
     pub fn claim_bounty(&mut self, request: ClaimBountyRequest) -> AppResult<Bounty> {
         if !self.agents.contains_key(&request.solver_agent_id) {
             return Err(AppError::AgentNotFound);
+        }
+
+        let requires_base_escrow = self
+            .bounties
+            .get(&request.bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .funding_mode
+            == FundingMode::BaseUsdcEscrow;
+        if requires_base_escrow && !self.has_funded_base_escrow(request.bounty_id) {
+            return Err(AppError::InvalidBaseEscrowEvent(
+                "Base USDC bounty cannot be claimed before funded escrow is indexed".to_string(),
+            ));
         }
 
         let bounty = self
@@ -825,6 +844,15 @@ impl BountyNetwork {
                     )
                 })?;
                 validate_created_base_escrow(&bounty, &amount, &terms_hash)?;
+                if self.escrows.values().any(|escrow| {
+                    escrow.bounty_id == event.bounty_id
+                        && escrow.rail == PaymentRail::BaseUsdc
+                        && escrow.id != escrow_id
+                }) {
+                    return Err(AppError::InvalidBaseEscrowEvent(
+                        "bounty already has a different indexed Base USDC escrow".to_string(),
+                    ));
+                }
 
                 let status = self
                     .escrows
@@ -832,6 +860,12 @@ impl BountyNetwork {
                     .map(|escrow| escrow.status.clone())
                     .filter(|status| *status != EscrowStatus::Funded)
                     .unwrap_or(EscrowStatus::Funded);
+                if let Some(entry) = self.mark_base_escrow_funded(
+                    event.bounty_id,
+                    format!("base-fund:{}", event.log_key),
+                )? {
+                    ledger_entries.push(entry);
+                }
                 self.escrows.insert(
                     escrow_id,
                     Escrow {
@@ -1242,11 +1276,30 @@ impl BountyNetwork {
             request.title,
             request.template_slug,
             amount.clone(),
-            request.funding_mode,
+            request.funding_mode.clone(),
             request.privacy,
         );
         bounty.id = event.subject_id;
         let terms_hash = hash_terms(&bounty.title, &bounty.template_slug, &amount);
+        if request.funding_mode == FundingMode::BaseUsdcEscrow {
+            bounty.terms_hash = Some(terms_hash);
+            let review = RiskReviewRecord {
+                id: Uuid::new_v4(),
+                risk_event_id: event.id,
+                subject_id: event.subject_id,
+                bounty_id: Some(bounty.id),
+                surface: event.surface,
+                outcome: RiskReviewOutcome::Approved,
+                operator_id: request.operator_id,
+                note: request.note,
+                created_at: Utc::now(),
+            };
+            self.bounties.insert(bounty.id, bounty.clone());
+            self.risk_reviews.insert(review.id, review.clone());
+
+            return Ok(ReviewedBountyApproval { bounty, review });
+        }
+
         bounty.mark_funded(terms_hash)?;
         bounty.make_claimable()?;
 
@@ -1646,7 +1699,7 @@ impl BountyNetwork {
     pub fn list_claimable_bounties(&self) -> Vec<Bounty> {
         self.bounties
             .values()
-            .filter(|bounty| bounty.status == BountyStatus::Claimable)
+            .filter(|bounty| self.is_claimable_with_confirmed_funding(bounty))
             .cloned()
             .collect()
     }
@@ -1848,6 +1901,79 @@ impl BountyNetwork {
         })?;
         escrow.status = status;
         Ok(())
+    }
+
+    fn mark_base_escrow_funded(
+        &mut self,
+        bounty_id: Id,
+        external_event_id: String,
+    ) -> AppResult<Option<LedgerEntry>> {
+        let already_has_base_escrow = self
+            .escrows
+            .values()
+            .any(|escrow| escrow.bounty_id == bounty_id && escrow.rail == PaymentRail::BaseUsdc);
+        let amount = self
+            .bounties
+            .get(&bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .amount
+            .clone();
+        let terms_hash = self
+            .bounties
+            .get(&bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .terms_hash
+            .clone()
+            .ok_or_else(|| {
+                AppError::InvalidBaseEscrowEvent(
+                    "Base bounty is missing terms hash before funding".to_string(),
+                )
+            })?;
+
+        {
+            let bounty = self
+                .bounties
+                .get_mut(&bounty_id)
+                .ok_or(AppError::BountyNotFound)?;
+            match bounty.status {
+                BountyStatus::Unfunded => {
+                    bounty.mark_funded(terms_hash)?;
+                    bounty.make_claimable()?;
+                }
+                BountyStatus::Funded => bounty.make_claimable()?,
+                BountyStatus::Claimable
+                | BountyStatus::Claimed
+                | BountyStatus::Submitted
+                | BountyStatus::Verifying
+                | BountyStatus::Accepted
+                | BountyStatus::Payable => {}
+                BountyStatus::Paid
+                | BountyStatus::Refunding
+                | BountyStatus::Refunded
+                | BountyStatus::Disputed
+                | BountyStatus::Expired => {
+                    return Err(domain::DomainError::InvalidTransition {
+                        from: format!("{:?}", bounty.status),
+                        to: "Claimable".to_string(),
+                    }
+                    .into());
+                }
+            }
+        }
+
+        if self.ledger.has_external_event(&external_event_id) || already_has_base_escrow {
+            return Ok(None);
+        }
+        let entry = LedgerEntry::new(
+            "base escrow funded",
+            Some(external_event_id),
+            vec![
+                debit("escrow_asset", amount.clone()),
+                credit("bounty_liability", amount),
+            ],
+        )?;
+        self.ledger.append(entry.clone())?;
+        Ok(Some(entry))
     }
 
     fn mark_base_release_paid(
@@ -2291,6 +2417,26 @@ fn validate_created_base_escrow(
     Ok(())
 }
 
+impl BountyNetwork {
+    fn is_claimable_with_confirmed_funding(&self, bounty: &Bounty) -> bool {
+        if bounty.status != BountyStatus::Claimable {
+            return false;
+        }
+        if bounty.funding_mode != FundingMode::BaseUsdcEscrow {
+            return true;
+        }
+        self.has_funded_base_escrow(bounty.id)
+    }
+
+    fn has_funded_base_escrow(&self, bounty_id: Id) -> bool {
+        self.escrows.values().any(|escrow| {
+            escrow.bounty_id == bounty_id
+                && escrow.rail == PaymentRail::BaseUsdc
+                && escrow.status == EscrowStatus::Funded
+        })
+    }
+}
+
 fn base_escrow_uuid(bounty_id: Id, onchain_escrow_id: u128) -> Id {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
@@ -2378,6 +2524,22 @@ fn normalize_hash(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn fund_base_bounty(
+        network: &mut BountyNetwork,
+        bounty: &Bounty,
+        onchain_escrow_id: u128,
+    ) -> BaseEscrowReconciliation {
+        network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                bounty.id,
+                onchain_escrow_id,
+                "0x3333333333333333333333333333333333333333",
+                bounty.amount.clone(),
+                bounty.terms_hash.clone().unwrap(),
+            ))
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn full_in_memory_paid_bounty_loop() {
         let mut network = BountyNetwork::default();
@@ -2395,6 +2557,66 @@ mod tests {
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
+
+        assert_eq!(bounty.status, BountyStatus::Unfunded);
+        assert!(bounty.terms_hash.is_some());
+        assert!(network.list_claimable_bounties().is_empty());
+        assert!(matches!(
+            network
+                .claim_bounty(ClaimBountyRequest {
+                    bounty_id: bounty.id,
+                    solver_agent_id: solver.id,
+                })
+                .unwrap_err(),
+            AppError::InvalidBaseEscrowEvent(_)
+        ));
+
+        let funding_plan = network
+            .plan_base_funding(PlanBaseFundingRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                payer: "0x2222222222222222222222222222222222222222".to_string(),
+                token: "0x3333333333333333333333333333333333333333".to_string(),
+                network: Some("base-mainnet".to_string()),
+            })
+            .unwrap();
+        assert_eq!(funding_plan.network.chain_id, 8_453);
+        assert_eq!(funding_plan.bounty.id, bounty.id);
+        assert_eq!(funding_plan.create.bounty_id, bounty.id);
+        assert_eq!(
+            funding_plan.create.terms_hash,
+            bounty.terms_hash.clone().unwrap()
+        );
+        assert_eq!(
+            funding_plan.funding.create_escrow.function,
+            "createEscrow(bytes32,address,uint256,bytes32)"
+        );
+        assert!(funding_plan
+            .funding
+            .create_escrow
+            .data
+            .contains(&bounty.id.simple().to_string()));
+
+        let funding_reconciliation = fund_base_bounty(&mut network, &bounty, 1);
+        assert_eq!(
+            funding_reconciliation.bounty.status,
+            BountyStatus::Claimable
+        );
+        assert_eq!(funding_reconciliation.ledger_entries.len(), 1);
+        assert_eq!(network.ledger.entries().len(), 1);
+        assert_eq!(network.list_claimable_bounties().len(), 1);
+        assert!(matches!(
+            network
+                .plan_base_funding(PlanBaseFundingRequest {
+                    bounty_id: bounty.id,
+                    escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                    payer: "0x2222222222222222222222222222222222222222".to_string(),
+                    token: "0x3333333333333333333333333333333333333333".to_string(),
+                    network: None,
+                })
+                .unwrap_err(),
+            AppError::InvalidBaseFundingPlan(_)
+        ));
 
         network
             .claim_bounty(ClaimBountyRequest {
@@ -2455,53 +2677,6 @@ mod tests {
         );
         assert_eq!(status.template_signals[0].amount.amount, 1_000_000);
         assert!(status.template_signals[0].success);
-
-        let funding_plan = network
-            .plan_base_funding(PlanBaseFundingRequest {
-                bounty_id: bounty.id,
-                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
-                payer: "0x2222222222222222222222222222222222222222".to_string(),
-                token: "0x3333333333333333333333333333333333333333".to_string(),
-                network: Some("base-mainnet".to_string()),
-            })
-            .unwrap();
-        assert_eq!(funding_plan.network.chain_id, 8_453);
-        assert_eq!(funding_plan.bounty.id, bounty.id);
-        assert_eq!(funding_plan.create.bounty_id, bounty.id);
-        assert_eq!(
-            funding_plan.create.terms_hash,
-            bounty.terms_hash.clone().unwrap()
-        );
-        assert_eq!(
-            funding_plan.funding.create_escrow.function,
-            "createEscrow(bytes32,address,uint256,bytes32)"
-        );
-        assert!(funding_plan
-            .funding
-            .create_escrow
-            .data
-            .contains(&bounty.id.simple().to_string()));
-
-        let created = chain_base::simulated_created_event(
-            bounty.id,
-            1,
-            "0x3333333333333333333333333333333333333333",
-            bounty.amount.clone(),
-            bounty.terms_hash.clone().unwrap(),
-        );
-        network.apply_base_escrow_event(created).unwrap();
-        assert!(matches!(
-            network
-                .plan_base_funding(PlanBaseFundingRequest {
-                    bounty_id: bounty.id,
-                    escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
-                    payer: "0x2222222222222222222222222222222222222222".to_string(),
-                    token: "0x3333333333333333333333333333333333333333".to_string(),
-                    network: None,
-                })
-                .unwrap_err(),
-            AppError::InvalidBaseFundingPlan(_)
-        ));
         let queue = network.list_base_release_queue(BaseReleaseQueueRequest {
             escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
             platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
@@ -2592,6 +2767,7 @@ mod tests {
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
+        fund_base_bounty(&mut network, &bounty, 1);
         network
             .claim_bounty(ClaimBountyRequest {
                 bounty_id: bounty.id,
@@ -2619,15 +2795,6 @@ mod tests {
             })
             .await
             .unwrap();
-        let created = chain_base::simulated_created_event(
-            bounty.id,
-            1,
-            "0x3333333333333333333333333333333333333333",
-            bounty.amount,
-            bounty.terms_hash.unwrap(),
-        );
-        network.apply_base_escrow_event(created).unwrap();
-
         let queue = network.list_base_release_queue(BaseReleaseQueueRequest {
             escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
             platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
@@ -2697,7 +2864,11 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(bounty.status, BountyStatus::Claimable);
+        assert_eq!(bounty.status, BountyStatus::Unfunded);
+        assert!(bounty.terms_hash.is_some());
+        assert!(network.list_claimable_bounties().is_empty());
+        let funded = fund_base_bounty(&mut network, &bounty, 1);
+        assert_eq!(funded.bounty.status, BountyStatus::Claimable);
         assert_eq!(bounty.template_slug, "fix-ci-failure");
         assert_eq!(bounty.help_request_id, Some(help_request.id));
     }
@@ -2719,6 +2890,7 @@ mod tests {
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
+        fund_base_bounty(&mut network, &bounty, 1);
         network
             .claim_bounty(ClaimBountyRequest {
                 bounty_id: bounty.id,
@@ -2786,6 +2958,7 @@ mod tests {
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
+        fund_base_bounty(&mut network, &first, 1);
         network
             .claim_bounty(ClaimBountyRequest {
                 bounty_id: first.id,
@@ -2818,7 +2991,7 @@ mod tests {
         assert!(matches!(err, AppError::SubmissionBountyMismatch));
         assert_eq!(
             network.status(second.id).unwrap().bounty.status,
-            BountyStatus::Claimable
+            BountyStatus::Unfunded
         );
     }
 
@@ -2948,6 +3121,7 @@ mod tests {
             })
             .unwrap();
 
+        fund_base_bounty(&mut network, &bounty, 1);
         network
             .claim_bounty(ClaimBountyRequest {
                 bounty_id: bounty.id,
@@ -3036,13 +3210,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(approval.bounty.id, risk_event.subject_id);
-        assert_eq!(approval.bounty.status, BountyStatus::Claimable);
+        assert_eq!(approval.bounty.status, BountyStatus::Unfunded);
+        assert!(approval.bounty.terms_hash.is_some());
         assert_eq!(approval.review.outcome, RiskReviewOutcome::Approved);
         assert_eq!(network.bounties.len(), 1);
         assert_eq!(network.risk_reviews.len(), 1);
+        assert!(network.ledger.entries().is_empty());
+
+        let funded = fund_base_bounty(&mut network, &approval.bounty, 99);
+        assert_eq!(funded.bounty.status, BountyStatus::Claimable);
         assert!(network
             .ledger
-            .has_external_event(&format!("fund:{}", approval.bounty.id)));
+            .has_external_event("base-fund:base:99:created"));
     }
 
     #[tokio::test]
@@ -3086,6 +3265,7 @@ mod tests {
             })
             .unwrap();
 
+        fund_base_bounty(&mut network, &approval.bounty, 99);
         network
             .claim_bounty(ClaimBountyRequest {
                 bounty_id: approval.bounty.id,
@@ -3258,6 +3438,36 @@ mod tests {
         let replay = network.apply_base_escrow_event(refunded).unwrap();
         assert!(replay.ledger_entries.is_empty());
         assert_eq!(network.ledger.entries().len(), 2);
+    }
+
+    #[test]
+    fn second_base_created_escrow_for_bounty_is_rejected() {
+        let mut network = BountyNetwork::default();
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Fix deterministic double funding path".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        fund_base_bounty(&mut network, &bounty, 7);
+
+        let err = network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                bounty.id,
+                8,
+                "0x3333333333333333333333333333333333333333",
+                bounty.amount.clone(),
+                bounty.terms_hash.clone().unwrap(),
+            ))
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::InvalidBaseEscrowEvent(_)));
+        assert_eq!(network.escrows.len(), 1);
+        assert_eq!(network.ledger.entries().len(), 1);
     }
 
     #[test]

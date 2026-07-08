@@ -16,7 +16,8 @@ use bounty_router::BountyRouter;
 use chain_base::{
     broadcast_signed_transaction, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, fetch_base_escrow_logs, fetch_transaction_receipt,
-    rpc_logs_to_evm_logs, BaseEscrowLogQuery, BaseRpcUrlConfig, EvmLog, RpcLogSubmission,
+    rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery, BaseRpcUrlConfig, EvmLog,
+    RpcLogSubmission,
 };
 use chrono::Utc;
 use db::PostgresStore;
@@ -319,6 +320,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/reconcile_base_evm_logs",
             post(reconcile_base_evm_logs),
+        )
+        .route(
+            "/tools/reconcile_base_escrow_event",
+            post(reconcile_base_escrow_event),
         )
         .route(
             "/tools/reconcile_base_rpc_logs",
@@ -696,6 +701,47 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["bounty_id", "proof_url", "verifier_summary", "settlement_url"],
             ),
+        ),
+        operator_tool(
+            "reconcile_base_escrow_event",
+            "Apply one normalized Base escrow event after it has been indexed.",
+            object_tool_schema(
+                json!({
+                    "id": uuid_property("Stable indexed event UUID."),
+                    "log_key": string_property("Idempotency key for the indexed escrow log."),
+                    "tx_hash": string_property("Base transaction hash."),
+                    "block_number": integer_property("Base block number."),
+                    "onchain_escrow_id": integer_property("On-chain escrow id from the contract."),
+                    "bounty_id": uuid_property("Platform bounty UUID."),
+                    "kind": enum_property(&["Created", "Released", "Refunded", "Disputed", "Paused"], "Escrow event kind."),
+                    "status": enum_property(&["Created", "Funded", "Disputed", "Released", "Refunded"], "Escrow status after the event."),
+                    "token": nullable_string_property("Token address for Created events."),
+                    "amount": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "amount": {"type": "integer"},
+                            "currency": {"type": "string"}
+                        }
+                    },
+                    "terms_hash": nullable_string_property("Terms hash for Created events."),
+                    "proof_hash": nullable_string_property("Proof hash for Released events."),
+                    "reason_hash": nullable_string_property("Reason hash for Refunded events."),
+                    "dispute_hash": nullable_string_property("Dispute hash for Disputed events."),
+                    "occurred_at": string_property("RFC3339 timestamp for the indexed event.")
+                }),
+                &[
+                    "id",
+                    "log_key",
+                    "tx_hash",
+                    "block_number",
+                    "onchain_escrow_id",
+                    "bounty_id",
+                    "kind",
+                    "status",
+                    "occurred_at",
+                ],
+            ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
         operator_tool(
             "reconcile_base_evm_logs",
@@ -1739,6 +1785,53 @@ async fn plan_github_proof_comment(
     }))
 }
 
+async fn reconcile_base_escrow_event(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(event): Json<BaseEscrowEvent>,
+) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
+    let indexed_event = event.clone();
+    let reconciliation = {
+        let mut network = state.network.lock().expect("state poisoned");
+        let reconciliation = match network.apply_base_escrow_event(event) {
+            Ok(reconciliation) => reconciliation,
+            Err(error) => return mcp_error(error),
+        };
+        if let Err(error) = state
+            .base_log_worker
+            .lock()
+            .expect("state poisoned")
+            .ingest_indexed_event(indexed_event.clone())
+        {
+            return mcp_error(error);
+        }
+        reconciliation
+    };
+    if let Some(store) = &state.store {
+        if let Err(error) = store.upsert_bounty(&reconciliation.bounty).await {
+            return mcp_error(error);
+        }
+        if let Err(error) = store.upsert_base_escrow_event(&indexed_event).await {
+            return mcp_error(error);
+        }
+        if let Err(error) = store.upsert_escrow(&reconciliation.escrow).await {
+            return mcp_error(error);
+        }
+        for settlement in &reconciliation.settlements {
+            if let Err(error) = store.upsert_settlement(settlement).await {
+                return mcp_error(error);
+            }
+        }
+        if let Err(error) = persist_ledger_entries(store, &reconciliation.ledger_entries).await {
+            return mcp_error(error);
+        }
+    }
+    mcp_json(reconciliation)
+}
+
 async fn reconcile_base_evm_logs(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -2717,11 +2810,29 @@ mod tests {
 
         assert_eq!(
             approval["content"][0]["json"]["bounty"]["status"],
-            "Claimable"
+            "Unfunded"
         );
         assert_eq!(
             approval["content"][0]["json"]["review"]["outcome"],
             "Approved"
+        );
+        let bounty = &approval["content"][0]["json"]["bounty"];
+        let funded = reconcile_base_escrow_event(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(chain_base::simulated_created_event(
+                Uuid::parse_str(bounty["id"].as_str().unwrap()).unwrap(),
+                99,
+                "0x3333333333333333333333333333333333333333",
+                domain::Money::new(25_000_000, "usdc").unwrap(),
+                bounty["terms_hash"].as_str().unwrap(),
+            )),
+        )
+        .await
+        .0;
+        assert_eq!(
+            funded["content"][0]["json"]["bounty"]["status"],
+            "Claimable"
         );
 
         let reviews = list_risk_reviews(State(state)).await.0;
@@ -2759,6 +2870,15 @@ mod tests {
                 operator_id: "operator-1".to_string(),
                 note: "Approved bounty scope".to_string(),
             })
+            .unwrap();
+        network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                approval.bounty.id,
+                99,
+                "0x3333333333333333333333333333333333333333",
+                approval.bounty.amount.clone(),
+                approval.bounty.terms_hash.clone().unwrap(),
+            ))
             .unwrap();
         network
             .claim_bounty(ClaimBountyRequest {

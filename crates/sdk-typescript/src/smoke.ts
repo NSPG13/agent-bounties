@@ -233,8 +233,8 @@ async function main(): Promise<void> {
   );
   const reviewedBounty = asObject(reviewedApproval.bounty, "reviewedApproval.bounty");
   requireCondition(
-    reviewedBounty.status === "Claimable",
-    "risk approval did not create a claimable bounty",
+    reviewedBounty.status === "Unfunded",
+    "risk approval did not create a funding-ready bounty",
   );
   const reviewedReview = asObject(reviewedApproval.review, "reviewedApproval.review");
   requireCondition(reviewedReview.outcome === "Approved", "risk approval did not record review");
@@ -256,6 +256,31 @@ async function main(): Promise<void> {
     "reviewSolver",
   );
   const reviewedBountyId = stringField(reviewedBounty, "id");
+  const reviewedCreatedEvent = {
+    id: crypto.randomUUID(),
+    log_key: `typescript-sdk-review:${reviewedBountyId}:created`,
+    tx_hash: `0x${crypto.randomUUID().replaceAll("-", "")}`,
+    block_number: 2,
+    onchain_escrow_id: 2,
+    bounty_id: reviewedBountyId,
+    kind: "Created",
+    status: "Funded",
+    token: "0x3333333333333333333333333333333333333333",
+    amount: { amount: 25_000_000, currency: "usdc" },
+    terms_hash: stringField(reviewedBounty, "terms_hash"),
+    proof_hash: null,
+    reason_hash: null,
+    dispute_hash: null,
+    occurred_at: new Date().toISOString(),
+  };
+  const reviewedFunding = asObject(
+    await client.reconcileBaseEscrowEvent(reviewedCreatedEvent),
+    "reviewedFunding",
+  );
+  requireCondition(
+    asObject(reviewedFunding.bounty, "reviewedFunding.bounty").status === "Claimable",
+    "reviewed Base escrow create event did not make bounty claimable",
+  );
   const reviewedClaim = asObject(
     await client.claimBounty(reviewedBountyId, {
       solver_agent_id: stringField(reviewSolver, "id"),
@@ -516,6 +541,36 @@ async function main(): Promise<void> {
     "Base funding plan used the wrong createEscrow function",
   );
 
+  const createdEvent = {
+    id: crypto.randomUUID(),
+    log_key: `typescript-sdk-smoke:${bountyId}:created`,
+    tx_hash: `0x${crypto.randomUUID().replaceAll("-", "")}`,
+    block_number: 1,
+    onchain_escrow_id: 1,
+    bounty_id: bountyId,
+    kind: "Created",
+    status: "Funded",
+    token: "0x3333333333333333333333333333333333333333",
+    amount: { amount: 1_000_000, currency: "usdc" },
+    terms_hash: stringField(bounty, "terms_hash"),
+    proof_hash: null,
+    reason_hash: null,
+    dispute_hash: null,
+    occurred_at: new Date().toISOString(),
+  };
+  const escrowReconciliation = asObject(
+    await client.reconcileBaseEscrowEvent(createdEvent),
+    "escrowReconciliation",
+  );
+  requireCondition(
+    asObject(escrowReconciliation.bounty, "escrowReconciliation.bounty").status === "Claimable",
+    "Base escrow create event did not make bounty claimable",
+  );
+  requireCondition(
+    asObject(escrowReconciliation.escrow, "escrowReconciliation.escrow").status === "Funded",
+    "Base escrow create event did not produce funded escrow state",
+  );
+
   const feed = asArray(await client.listPublicBountyFeed(), "feed").map((item) =>
     asObject(item, "feed item"),
   );
@@ -567,31 +622,6 @@ async function main(): Promise<void> {
   requireCondition(
     agentTotals.some((total) => total.currency === "usdc" && total.pending_minor === 900_000),
     "agent paid status missing pending USDC total",
-  );
-  const createdEvent = {
-    id: crypto.randomUUID(),
-    log_key: `typescript-sdk-smoke:${bountyId}:created`,
-    tx_hash: `0x${crypto.randomUUID().replaceAll("-", "")}`,
-    block_number: 1,
-    onchain_escrow_id: 1,
-    bounty_id: bountyId,
-    kind: "Created",
-    status: "Funded",
-    token: "0x3333333333333333333333333333333333333333",
-    amount: { amount: 1_000_000, currency: "usdc" },
-    terms_hash: stringField(bounty, "terms_hash"),
-    proof_hash: null,
-    reason_hash: null,
-    dispute_hash: null,
-    occurred_at: new Date().toISOString(),
-  };
-  const escrowReconciliation = asObject(
-    await client.reconcileBaseEscrowEvent(createdEvent),
-    "escrowReconciliation",
-  );
-  requireCondition(
-    asObject(escrowReconciliation.escrow, "escrowReconciliation.escrow").status === "Funded",
-    "Base escrow create event did not produce funded escrow state",
   );
   const releaseQueue = asArray(
     await client.listBaseReleaseQueue({
