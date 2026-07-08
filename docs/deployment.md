@@ -69,6 +69,13 @@ To deploy from the Dashboard after the PR is merged:
 6. Update `PUBLIC_BASE_URL` and `MCP_BASE_URL` if Render assigned different
    hostnames or you attached custom domains.
 7. Run the read-only production smoke against the deployed URLs.
+8. After production smoke passes, set repository variables
+   `PRODUCTION_API_BASE_URL` and `PRODUCTION_MCP_BASE_URL` so the scheduled
+   `Production Smoke` workflow can keep checking the hosted API/MCP surfaces.
+9. Only after the same API URL passes production smoke, set
+   `AGENT_BOUNTIES_API_BASE_URL` so GitHub funding-comment handoffs can prefill
+   the public Stripe Checkout funding page. A dead or unverified API URL should
+   not be advertised to funders.
 
 The Blueprint uses low paid service/database plans because the Base indexer is a
 background worker and real-money webhooks should not depend on sleeping
@@ -198,6 +205,13 @@ bash scripts/check-production-smoke.sh --api-base-url https://api.example.com --
 
 Use `-RequireEvalHistory` or `--require-eval-history` after the environment has
 run and persisted at least one eval suite.
+
+The same gate is available as the `Production Smoke` GitHub Actions workflow.
+Use manual dispatch for one-off URL checks, or set repository variables
+`PRODUCTION_API_BASE_URL` and `PRODUCTION_MCP_BASE_URL` for scheduled/push
+checks. The workflow skips when URLs are absent and fails when configured hosted
+endpoints are unhealthy. Treat a passing run as the prerequisite for configuring
+`AGENT_BOUNTIES_API_BASE_URL` in the GitHub repository.
 
 ## Payment Controls
 
