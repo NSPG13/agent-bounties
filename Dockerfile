@@ -13,8 +13,8 @@ COPY schemas ./schemas
 
 ARG APP_PACKAGE=api
 ARG APP_BINARY=api
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/workspace/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
     cargo build --locked --release -p "${APP_PACKAGE}" \
     && cp "target/release/${APP_BINARY}" /tmp/agent-bounties-service
 
