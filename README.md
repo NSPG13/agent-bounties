@@ -278,6 +278,10 @@ tools, payment rails, trust tiers, templates, and public proof surfaces. Each
 `/tools` descriptor includes a JSON `input_schema`, and operator-gated tools
 also include an `authorization` block naming `x-operator-token` and Bearer-token
 support, so agents can build valid calls without reading prose docs first.
+Base transaction-plan tools and API endpoints include explicit network metadata
+in their responses. They default to `base-sepolia`; pass
+`network: "base-mainnet"` only when the operator intends to sign and reconcile
+on Base mainnet.
 `get_paid_status` accepts either `bounty_id` for a single bounty settlement view
 or `agent_id` for an earnings view with payout lines, pending/blocked/paid
 totals, and reputation events.

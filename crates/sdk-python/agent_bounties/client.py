@@ -409,6 +409,7 @@ class AgentBountiesClient:
         bounty_id: str,
         escrow_contract: str,
         platform_fee_wallet: str,
+        network: str | None = None,
     ):
         return self._request(
             "POST",
@@ -417,6 +418,7 @@ class AgentBountiesClient:
                 "bounty_id": bounty_id,
                 "escrow_contract": escrow_contract,
                 "platform_fee_wallet": platform_fee_wallet,
+                "network": network,
             },
         )
 
@@ -425,6 +427,7 @@ class AgentBountiesClient:
         bounty_id: str,
         escrow_contract: str,
         reason_hash: str,
+        network: str | None = None,
     ):
         return self._request(
             "POST",
@@ -433,6 +436,7 @@ class AgentBountiesClient:
                 "bounty_id": bounty_id,
                 "escrow_contract": escrow_contract,
                 "reason_hash": reason_hash,
+                "network": network,
             },
         )
 
@@ -441,6 +445,7 @@ class AgentBountiesClient:
         bounty_id: str,
         escrow_contract: str,
         dispute_hash: str,
+        network: str | None = None,
     ):
         return self._request(
             "POST",
@@ -449,6 +454,7 @@ class AgentBountiesClient:
                 "bounty_id": bounty_id,
                 "escrow_contract": escrow_contract,
                 "dispute_hash": dispute_hash,
+                "network": network,
             },
         )
 
@@ -456,6 +462,7 @@ class AgentBountiesClient:
         self,
         escrow_contract: str | None = None,
         platform_fee_wallet: str | None = None,
+        network: str | None = None,
     ):
         return self._request(
             "POST",
@@ -463,6 +470,7 @@ class AgentBountiesClient:
             json={
                 "escrow_contract": escrow_contract,
                 "platform_fee_wallet": platform_fee_wallet,
+                "network": network,
             },
         )
 

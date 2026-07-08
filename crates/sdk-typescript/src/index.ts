@@ -66,23 +66,27 @@ export interface PlanBaseReleaseRequest {
   bounty_id: string;
   escrow_contract: string;
   platform_fee_wallet: string;
+  network?: string | null;
 }
 
 export interface PlanBaseRefundRequest {
   bounty_id: string;
   escrow_contract: string;
   reason_hash: string;
+  network?: string | null;
 }
 
 export interface PlanBaseDisputeRequest {
   bounty_id: string;
   escrow_contract: string;
   dispute_hash: string;
+  network?: string | null;
 }
 
 export interface BaseReleaseQueueRequest {
   escrow_contract?: string | null;
   platform_fee_wallet?: string | null;
+  network?: string | null;
 }
 
 export interface PlanBaseLogQueryRequest {
@@ -501,6 +505,7 @@ export class AgentBountiesClient {
       body: JSON.stringify({
         escrow_contract: request.escrow_contract ?? null,
         platform_fee_wallet: request.platform_fee_wallet ?? null,
+        network: request.network ?? null,
       }),
     });
   }

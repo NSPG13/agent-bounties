@@ -2381,11 +2381,13 @@ mod tests {
                 bounty_id: bounty.id,
                 escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                 platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                network: Some("base-mainnet".to_string()),
             }),
         )
         .await
         .unwrap()
         .0;
+        assert_eq!(release_plan.network.chain_id, 8_453);
         assert_eq!(release_plan.release_call.onchain_escrow_id, 7);
         assert_eq!(release_plan.release_call.recipients.len(), 2);
         let release_log = raw_released_log(7, &format!("0x{}", proof.proof_hash), 11, 0);
@@ -2425,6 +2427,7 @@ mod tests {
             Json(BaseReleaseQueueRequest {
                 escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
                 platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
+                network: None,
             }),
         )
         .await
@@ -2509,11 +2512,13 @@ mod tests {
                 bounty_id: bounty.id,
                 escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                 reason_hash: format!("0x{}", "aa".repeat(32)),
+                network: None,
             }),
         )
         .await
         .unwrap()
         .0;
+        assert_eq!(refund_plan.network.chain_id, 84_532);
         assert_eq!(refund_plan.onchain_escrow_id, 7);
         assert_eq!(refund_plan.transaction.function, "refund(uint256,bytes32)");
 
@@ -2523,11 +2528,13 @@ mod tests {
                 bounty_id: bounty.id,
                 escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                 dispute_hash: format!("0x{}", "bb".repeat(32)),
+                network: Some("base-mainnet".to_string()),
             }),
         )
         .await
         .unwrap()
         .0;
+        assert_eq!(dispute_plan.network.chain_id, 8_453);
         assert_eq!(dispute_plan.onchain_escrow_id, 7);
         assert_eq!(
             dispute_plan.transaction.function,

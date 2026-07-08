@@ -778,7 +778,8 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 json!({
                     "bounty_id": uuid_property("Payable bounty UUID."),
                     "escrow_contract": string_property("Escrow contract EVM address."),
-                    "platform_fee_wallet": string_property("Platform fee recipient EVM address.")
+                    "platform_fee_wallet": string_property("Platform fee recipient EVM address."),
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
                 }),
                 &["bounty_id", "escrow_contract", "platform_fee_wallet"],
             ),
@@ -790,7 +791,8 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 json!({
                     "bounty_id": uuid_property("Funded, claimed, submitted, disputed, or refunding bounty UUID."),
                     "escrow_contract": string_property("Escrow contract EVM address."),
-                    "reason_hash": string_property("0x-prefixed bytes32 refund reason hash.")
+                    "reason_hash": string_property("0x-prefixed bytes32 refund reason hash."),
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
                 }),
                 &["bounty_id", "escrow_contract", "reason_hash"],
             ),
@@ -802,7 +804,8 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 json!({
                     "bounty_id": uuid_property("Submitted or verifying bounty UUID."),
                     "escrow_contract": string_property("Escrow contract EVM address."),
-                    "dispute_hash": string_property("0x-prefixed bytes32 dispute evidence hash.")
+                    "dispute_hash": string_property("0x-prefixed bytes32 dispute evidence hash."),
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
                 }),
                 &["bounty_id", "escrow_contract", "dispute_hash"],
             ),
@@ -813,7 +816,8 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             object_tool_schema(
                 json!({
                     "escrow_contract": nullable_string_property("Optional escrow contract address for release planning."),
-                    "platform_fee_wallet": nullable_string_property("Optional platform fee recipient address.")
+                    "platform_fee_wallet": nullable_string_property("Optional platform fee recipient address."),
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network for embedded release plans; defaults to base-sepolia.")
                 }),
                 &[],
             ),
@@ -2423,6 +2427,13 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "reason_hash"));
+        assert!(
+            plan_base_refund.input_schema["properties"]["network"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "base-mainnet")
+        );
 
         let plan_base_dispute = descriptors
             .iter()
@@ -2433,6 +2444,37 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "dispute_hash"));
+        assert!(
+            plan_base_dispute.input_schema["properties"]["network"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "base-mainnet")
+        );
+
+        let plan_base_release = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_base_release")
+            .expect("plan_base_release descriptor exists");
+        assert!(
+            plan_base_release.input_schema["properties"]["network"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "base-mainnet")
+        );
+
+        let list_base_release_queue = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "list_base_release_queue")
+            .expect("list_base_release_queue descriptor exists");
+        assert!(
+            list_base_release_queue.input_schema["properties"]["network"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "base-mainnet")
+        );
 
         let get_eval_runs = descriptors
             .iter()

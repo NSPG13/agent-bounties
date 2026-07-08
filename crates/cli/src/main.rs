@@ -1111,6 +1111,7 @@ async fn base_release_queue_demo(
     let queue = network.list_base_release_queue(BaseReleaseQueueRequest {
         escrow_contract: Some(escrow_contract),
         platform_fee_wallet: Some(platform_fee_wallet),
+        network: None,
     });
 
     println!(

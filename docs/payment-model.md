@@ -60,6 +60,11 @@ wallets, reconstruct the solver, verifier, and platform split, check the split
 against the bounty amount, and return unsigned `release(...)` calldata. They do
 not sign the transaction or mark the bounty paid; payment state still changes
 only after the indexed `EscrowReleased` log is reconciled.
+Release, refund, dispute, broadcast, receipt, and RPC-fetch requests accept an
+optional `network` field. Transaction-plan responses include a `network` object
+with the Base name, chain ID, and expected RPC URL environment variable. The
+default is `base-sepolia`; hosted low-value mainnet operators must pass
+`base-mainnet` and sign the returned calldata on the matching chain.
 Refund and dispute controls follow the same rule. `POST /v1/base/refund-plan`
 and MCP `plan_base_refund` return unsigned `refund(uint256,bytes32)` calldata
 only when the bounty and indexed escrow are in a refundable state. `POST

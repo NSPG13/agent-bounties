@@ -1,7 +1,8 @@
 use bounty_router::{template_for_class, BountyRouter};
 use chain_base::{
-    BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowRelease, BaseEscrowReleaseCall,
-    BaseEscrowTxPlanner, EscrowRecipient, EvmTransactionIntent,
+    base_network_descriptor, BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowRelease,
+    BaseEscrowReleaseCall, BaseEscrowTxPlanner, BaseNetworkDescriptor, EscrowRecipient,
+    EvmTransactionIntent,
 };
 use chrono::{DateTime, Utc};
 use domain::{
@@ -161,6 +162,8 @@ pub struct PlanBaseReleaseRequest {
     pub bounty_id: Id,
     pub escrow_contract: String,
     pub platform_fee_wallet: String,
+    #[serde(default)]
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +171,8 @@ pub struct PlanBaseRefundRequest {
     pub bounty_id: Id,
     pub escrow_contract: String,
     pub reason_hash: String,
+    #[serde(default)]
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,16 +180,21 @@ pub struct PlanBaseDisputeRequest {
     pub bounty_id: Id,
     pub escrow_contract: String,
     pub dispute_hash: String,
+    #[serde(default)]
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BaseReleaseQueueRequest {
     pub escrow_contract: Option<String>,
     pub platform_fee_wallet: Option<String>,
+    #[serde(default)]
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseReleasePlan {
+    pub network: BaseNetworkDescriptor,
     pub bounty: Bounty,
     pub escrow: Escrow,
     pub settlement: Settlement,
@@ -194,6 +204,7 @@ pub struct BaseReleasePlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseRefundPlan {
+    pub network: BaseNetworkDescriptor,
     pub bounty: Bounty,
     pub escrow: Escrow,
     pub onchain_escrow_id: u128,
@@ -203,6 +214,7 @@ pub struct BaseRefundPlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseDisputePlan {
+    pub network: BaseNetworkDescriptor,
     pub bounty: Bounty,
     pub escrow: Escrow,
     pub onchain_escrow_id: u128,
@@ -1328,6 +1340,7 @@ impl BountyNetwork {
     }
 
     pub fn plan_base_release(&self, request: PlanBaseReleaseRequest) -> AppResult<BaseReleasePlan> {
+        let network = base_plan_network(request.network.as_deref(), "release")?;
         let bounty = self
             .bounties
             .get(&request.bounty_id)
@@ -1426,6 +1439,7 @@ impl BountyNetwork {
             .map_err(|error| AppError::InvalidBaseReleasePlan(error.to_string()))?;
 
         Ok(BaseReleasePlan {
+            network,
             bounty,
             escrow,
             settlement,
@@ -1435,6 +1449,7 @@ impl BountyNetwork {
     }
 
     pub fn plan_base_refund(&self, request: PlanBaseRefundRequest) -> AppResult<BaseRefundPlan> {
+        let network = base_plan_network(request.network.as_deref(), "refund")?;
         let bounty = self
             .bounties
             .get(&request.bounty_id)
@@ -1476,6 +1491,7 @@ impl BountyNetwork {
             .map_err(|error| AppError::InvalidBaseEscrowPlan(error.to_string()))?;
 
         Ok(BaseRefundPlan {
+            network,
             bounty,
             escrow,
             onchain_escrow_id,
@@ -1485,6 +1501,7 @@ impl BountyNetwork {
     }
 
     pub fn plan_base_dispute(&self, request: PlanBaseDisputeRequest) -> AppResult<BaseDisputePlan> {
+        let network = base_plan_network(request.network.as_deref(), "dispute")?;
         let bounty = self
             .bounties
             .get(&request.bounty_id)
@@ -1521,6 +1538,7 @@ impl BountyNetwork {
             .map_err(|error| AppError::InvalidBaseEscrowPlan(error.to_string()))?;
 
         Ok(BaseDisputePlan {
+            network,
             bounty,
             escrow,
             onchain_escrow_id,
@@ -1627,6 +1645,7 @@ impl BountyNetwork {
                         bounty_id: bounty.id,
                         escrow_contract: escrow_contract.clone(),
                         platform_fee_wallet: platform_fee_wallet.clone(),
+                        network: request.network.clone(),
                     }) {
                         Ok(plan) => release_plan = Some(plan),
                         Err(error) => readiness_error = Some(error.to_string()),
@@ -2232,6 +2251,16 @@ fn parse_base_escrow_reference(reference: &Option<String>) -> AppResult<u128> {
         })
 }
 
+fn base_plan_network(network: Option<&str>, plan_kind: &str) -> AppResult<BaseNetworkDescriptor> {
+    base_network_descriptor(network.unwrap_or("base-sepolia")).map_err(|error| {
+        let message = error.to_string();
+        match plan_kind {
+            "release" => AppError::InvalidBaseReleasePlan(message),
+            _ => AppError::InvalidBaseEscrowPlan(message),
+        }
+    })
+}
+
 fn is_releasable_base_escrow_status(status: &EscrowStatus) -> bool {
     matches!(status, EscrowStatus::Funded | EscrowStatus::Disputed)
 }
@@ -2368,6 +2397,7 @@ mod tests {
         let queue = network.list_base_release_queue(BaseReleaseQueueRequest {
             escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
             platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
+            network: Some("base-mainnet".to_string()),
         });
         assert_eq!(queue.len(), 1);
         assert!(queue[0].ready);
@@ -2394,8 +2424,11 @@ mod tests {
                 bounty_id: bounty.id,
                 escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                 platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                network: Some("base-mainnet".to_string()),
             })
             .unwrap();
+        assert_eq!(release_plan.network.name, "Base");
+        assert_eq!(release_plan.network.chain_id, 8_453);
         assert_eq!(release_plan.release_call.onchain_escrow_id, 1);
         assert_eq!(release_plan.release_call.recipients.len(), 2);
         assert_eq!(
@@ -2490,6 +2523,7 @@ mod tests {
         let queue = network.list_base_release_queue(BaseReleaseQueueRequest {
             escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
             platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
+            network: None,
         });
 
         assert_eq!(queue.len(), 1);
@@ -3150,8 +3184,10 @@ mod tests {
                 bounty_id: bounty.id,
                 escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                 reason_hash: format!("0x{}", "aa".repeat(32)),
+                network: None,
             })
             .unwrap();
+        assert_eq!(refund_plan.network.chain_id, 84_532);
         assert_eq!(refund_plan.onchain_escrow_id, 7);
         assert_eq!(refund_plan.transaction.function, "refund(uint256,bytes32)");
         assert!(refund_plan.transaction.data.starts_with("0x71eedb88"));
@@ -3176,8 +3212,10 @@ mod tests {
                 bounty_id: bounty.id,
                 escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                 dispute_hash: format!("0x{}", "bb".repeat(32)),
+                network: Some("base-mainnet".to_string()),
             })
             .unwrap();
+        assert_eq!(dispute_plan.network.chain_id, 8_453);
         assert_eq!(dispute_plan.onchain_escrow_id, 7);
         assert_eq!(
             dispute_plan.transaction.function,
@@ -3238,6 +3276,7 @@ mod tests {
                 bounty_id: bounty.id,
                 escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                 reason_hash: format!("0x{}", "cc".repeat(32)),
+                network: None,
             })
             .unwrap();
         assert_eq!(refund_plan.escrow.status, EscrowStatus::Disputed);

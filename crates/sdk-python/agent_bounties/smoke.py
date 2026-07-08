@@ -399,6 +399,59 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         ),
         "agent paid status missing pending USDC total",
     )
+    created_event = {
+        "id": str(uuid.uuid4()),
+        "log_key": f"python-sdk-smoke:{bounty_id}:created",
+        "tx_hash": f"0x{uuid.uuid4().hex}",
+        "block_number": 1,
+        "onchain_escrow_id": 1,
+        "bounty_id": bounty_id,
+        "kind": "Created",
+        "status": "Funded",
+        "token": "0x3333333333333333333333333333333333333333",
+        "amount": {"amount": 1_000_000, "currency": "usdc"},
+        "terms_hash": bounty["terms_hash"],
+        "proof_hash": None,
+        "reason_hash": None,
+        "dispute_hash": None,
+        "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    escrow_reconciliation = client.reconcile_base_escrow_event(created_event)
+    _require(
+        escrow_reconciliation["escrow"]["status"] == "Funded",
+        "Base escrow create event did not produce funded escrow state",
+    )
+    release_queue = client.list_base_release_queue(
+        "0x1111111111111111111111111111111111111111",
+        "0x4444444444444444444444444444444444444444",
+    )
+    release_queue_item = next(
+        (item for item in release_queue if item["bounty"]["id"] == bounty_id),
+        None,
+    )
+    _require(
+        release_queue_item is not None,
+        "Base release queue did not return the SDK smoke bounty",
+    )
+    _require(release_queue_item["ready"] is True, "Base release queue did not become ready")
+    _require(
+        release_queue_item["release_plan"]["network"]["chain_id"] == 84_532,
+        "Base release queue did not default to Base Sepolia",
+    )
+    release_plan = client.plan_base_release(
+        bounty_id,
+        "0x1111111111111111111111111111111111111111",
+        "0x4444444444444444444444444444444444444444",
+        network="base-mainnet",
+    )
+    _require(
+        release_plan["network"]["chain_id"] == 8_453,
+        "Base release plan did not honor explicit Base mainnet network",
+    )
+    _require(
+        release_plan["transaction"]["function"] == "release(uint256,address[],uint256[],bytes32)",
+        "Base release plan used the wrong transaction function",
+    )
     eval_loops = client.run_eval_loops()
     _require(eval_loops["passed"] is True, "eval loop suite did not pass")
     _require(len(eval_loops["loops"]) == 5, "eval loop count changed")

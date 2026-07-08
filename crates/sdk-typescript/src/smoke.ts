@@ -540,6 +540,71 @@ async function main(): Promise<void> {
     agentTotals.some((total) => total.currency === "usdc" && total.pending_minor === 900_000),
     "agent paid status missing pending USDC total",
   );
+  const createdEvent = {
+    id: crypto.randomUUID(),
+    log_key: `typescript-sdk-smoke:${bountyId}:created`,
+    tx_hash: `0x${crypto.randomUUID().replaceAll("-", "")}`,
+    block_number: 1,
+    onchain_escrow_id: 1,
+    bounty_id: bountyId,
+    kind: "Created",
+    status: "Funded",
+    token: "0x3333333333333333333333333333333333333333",
+    amount: { amount: 1_000_000, currency: "usdc" },
+    terms_hash: stringField(bounty, "terms_hash"),
+    proof_hash: null,
+    reason_hash: null,
+    dispute_hash: null,
+    occurred_at: new Date().toISOString(),
+  };
+  const escrowReconciliation = asObject(
+    await client.reconcileBaseEscrowEvent(createdEvent),
+    "escrowReconciliation",
+  );
+  requireCondition(
+    asObject(escrowReconciliation.escrow, "escrowReconciliation.escrow").status === "Funded",
+    "Base escrow create event did not produce funded escrow state",
+  );
+  const releaseQueue = asArray(
+    await client.listBaseReleaseQueue({
+      escrow_contract: "0x1111111111111111111111111111111111111111",
+      platform_fee_wallet: "0x4444444444444444444444444444444444444444",
+    }),
+    "releaseQueue",
+  ).map((item) => asObject(item, "release queue item"));
+  const releaseQueueItem = releaseQueue.find(
+    (item) => asObject(item.bounty, "release queue bounty").id === bountyId,
+  );
+  if (releaseQueueItem === undefined) {
+    throw new Error("Base release queue did not return the SDK smoke bounty");
+  }
+  requireCondition(releaseQueueItem.ready === true, "Base release queue did not become ready");
+  const queueReleasePlan = asObject(
+    releaseQueueItem.release_plan,
+    "releaseQueue.release_plan",
+  );
+  requireCondition(
+    asObject(queueReleasePlan.network, "releaseQueue.release_plan.network").chain_id === 84_532,
+    "Base release queue did not default to Base Sepolia",
+  );
+  const releasePlan = asObject(
+    await client.planBaseRelease({
+      bounty_id: bountyId,
+      escrow_contract: "0x1111111111111111111111111111111111111111",
+      platform_fee_wallet: "0x4444444444444444444444444444444444444444",
+      network: "base-mainnet",
+    }),
+    "releasePlan",
+  );
+  requireCondition(
+    asObject(releasePlan.network, "releasePlan.network").chain_id === 8_453,
+    "Base release plan did not honor explicit Base mainnet network",
+  );
+  requireCondition(
+    asObject(releasePlan.transaction, "releasePlan.transaction").function ===
+      "release(uint256,address[],uint256[],bytes32)",
+    "Base release plan used the wrong transaction function",
+  );
   const evalLoops = asObject(await client.runEvalLoops(), "evalLoops");
   requireCondition(evalLoops.passed === true, "eval loop suite did not pass");
   requireCondition(asArray(evalLoops.loops, "evalLoops.loops").length === 5, "eval loop count changed");
