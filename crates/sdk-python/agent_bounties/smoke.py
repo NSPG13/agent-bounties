@@ -169,6 +169,13 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery manifest missing live Stripe Checkout execution endpoint",
     )
     _require(
+        isinstance(
+            discovery.get("endpoints", {}).get("stripe_live_funding_intent_checkouts"),
+            str,
+        ),
+        "discovery manifest missing live Stripe funding-intent Checkout endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("stripe_connect_transfers"), str),
         "discovery manifest missing Stripe Connect transfer planner endpoint",
     )

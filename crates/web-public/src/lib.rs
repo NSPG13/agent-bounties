@@ -103,6 +103,7 @@ pub struct DiscoveryEndpoints {
     pub stripe_connect_transfers: String,
     pub stripe_connect_snapshots: String,
     pub stripe_live_checkout_top_ups: String,
+    pub stripe_live_funding_intent_checkouts: String,
     pub stripe_live_connect_accounts: String,
     pub stripe_live_connect_transfers: String,
     pub stripe_transfer_events: String,
@@ -363,6 +364,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         stripe_connect_transfers: format!("{api}/v1/stripe/connect-transfers"),
         stripe_connect_snapshots: format!("{api}/v1/stripe/connect-snapshots"),
         stripe_live_checkout_top_ups: format!("{api}/v1/stripe/live/checkout-top-ups"),
+        stripe_live_funding_intent_checkouts: format!(
+            "{api}/v1/stripe/live/funding-intents/{{funding_intent_id}}/checkout-session"
+        ),
         stripe_live_connect_accounts: format!("{api}/v1/stripe/live/connect-accounts"),
         stripe_live_connect_transfers: format!("{api}/v1/stripe/live/connect-transfers"),
         stripe_transfer_events: format!("{api}/v1/stripe/transfer-events"),
@@ -770,6 +774,7 @@ Funding and payout state changes require reconciled evidence. Request intents, u
 - Base dispute plan: {base_dispute_plan}
 - Base transaction receipt: {base_transaction_receipt}
 - Stripe Checkout top-ups: {stripe_checkout_top_ups}
+- Stripe bounty funding Checkout: {stripe_live_funding_intent_checkouts}
 - Stripe Connect accounts: {stripe_connect_accounts}
 - Stripe Connect snapshots: {stripe_connect_snapshots}
 - Stripe Connect transfer plan: {stripe_connect_transfers}
@@ -838,6 +843,7 @@ The repository is designed for agent contributors. Start with the agent quicksta
         base_dispute_plan = &endpoints.base_dispute_plan,
         base_transaction_receipt = &endpoints.base_transaction_receipt,
         stripe_checkout_top_ups = &endpoints.stripe_checkout_top_ups,
+        stripe_live_funding_intent_checkouts = &endpoints.stripe_live_funding_intent_checkouts,
         stripe_connect_accounts = &endpoints.stripe_connect_accounts,
         stripe_connect_snapshots = &endpoints.stripe_connect_snapshots,
         stripe_connect_transfers = &endpoints.stripe_connect_transfers,
@@ -2512,6 +2518,10 @@ mod tests {
         assert_eq!(
             manifest.endpoints.stripe_live_checkout_top_ups,
             "https://network.example/v1/stripe/live/checkout-top-ups"
+        );
+        assert_eq!(
+            manifest.endpoints.stripe_live_funding_intent_checkouts,
+            "https://network.example/v1/stripe/live/funding-intents/{funding_intent_id}/checkout-session"
         );
         assert_eq!(
             manifest.endpoints.stripe_live_connect_accounts,

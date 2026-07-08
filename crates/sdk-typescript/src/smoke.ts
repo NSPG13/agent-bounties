@@ -277,6 +277,10 @@ async function main(): Promise<void> {
     "discovery manifest missing live Stripe Checkout execution endpoint",
   );
   requireCondition(
+    typeof endpoints.stripe_live_funding_intent_checkouts === "string",
+    "discovery manifest missing live Stripe funding-intent Checkout endpoint",
+  );
+  requireCondition(
     typeof endpoints.stripe_connect_transfers === "string",
     "discovery manifest missing Stripe Connect transfer planner endpoint",
   );

@@ -40,6 +40,7 @@ Optional hosted safety controls:
 ```powershell
 $env:OPERATOR_API_TOKEN = "<operator-token>"
 $env:ENABLE_STRIPE_LIVE_EXECUTION = "true"
+$env:ENABLE_STRIPE_PUBLIC_CHECKOUT = "true"
 $env:STRIPE_SECRET_KEY = "sk_test_..."
 $env:STRIPE_WEBHOOK_SECRET = "whsec_..."
 $env:ENABLE_BASE_TX_BROADCAST = "true"
@@ -183,6 +184,17 @@ Session itself still does not credit the bounty. The command executes the
 funding intent's own `StripeRequestIntent`, preserving `bounty_id`,
 `funding_intent_id`, and `funding_intent_reference` metadata for webhook
 reconciliation.
+
+Hosted self-serve funding can execute the stored bounty funding intent through:
+
+```powershell
+curl.exe -sS -X POST http://127.0.0.1:8080/v1/stripe/live/funding-intents/{id}/checkout-session
+```
+
+The endpoint requires `ENABLE_STRIPE_LIVE_EXECUTION=true`,
+`ENABLE_STRIPE_PUBLIC_CHECKOUT=true`, and Stripe credentials on the hosted API.
+It returns a Stripe Checkout URL for the specific funding intent. The bounty is
+still funded only after the signed webhook is reconciled.
 
 4. Reconcile the signed webhook.
 

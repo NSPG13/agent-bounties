@@ -66,8 +66,8 @@ The compose file sets:
 - `PUBLIC_BASE_URL` and `MCP_BASE_URL` for discovery and `/llms.txt`
 - optional Base RPC, escrow address, native USDC token, settlement signer, and
   platform-fee wallet variables
-- optional Stripe live execution, API base URL, secret key, webhook secret, and
-  unsigned-webhook simulation variables
+- optional Stripe live execution, public funder Checkout, API base URL, secret
+  key, webhook secret, and unsigned-webhook simulation variables
 - optional `OPERATOR_API_TOKEN` for hosted operator-only mutation surfaces
 - optional `base-indexer` profile variables for automated Base USDC escrow log
   polling
@@ -135,6 +135,8 @@ ready:
 - `ENABLE_BASE_TX_BROADCAST=false` keeps Base transaction broadcasting disabled.
 - `ENABLE_STRIPE_LIVE_EXECUTION=false` keeps Stripe Checkout and Connect live
   creation disabled.
+- `ENABLE_STRIPE_PUBLIC_CHECKOUT=false` keeps public funder Checkout disabled
+  even when operator-only Stripe live execution is configured.
 - `OPERATOR_API_TOKEN` can require `Authorization: Bearer <token>` or
   `x-operator-token: <token>` on hosted risk review, settlement reconciliation,
   Base broadcast, receipt reconciliation, and live Stripe execution calls. Leave

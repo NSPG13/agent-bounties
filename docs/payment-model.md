@@ -354,11 +354,21 @@ gates: API and MCP require `ENABLE_STRIPE_LIVE_EXECUTION=true` plus
 `STRIPE_SECRET_KEY`, and require the operator token header when
 `OPERATOR_API_TOKEN` is configured. The CLI requires `STRIPE_SECRET_KEY` or
 `--secret-key`.
+Public funder Checkout for an already-created bounty funding intent is a
+separate hosted switch: `ENABLE_STRIPE_PUBLIC_CHECKOUT=true`. When enabled, the
+API can create a Stripe-hosted Checkout Session through
+`POST /v1/stripe/live/funding-intents/{id}/checkout-session`.
+That endpoint only executes stored `StripeFiat` funding intents and preserves
+`bounty_id`, `funding_intent_id`, and `funding_intent_reference` metadata for
+webhook reconciliation. It does not credit balances or make the bounty
+claimable.
 The optional `STRIPE_API_BASE_URL` or `--api-base-url` can target a sandbox or
 mock provider. The live surfaces are:
 
 - `POST /v1/stripe/live/checkout-top-ups`, which creates the planned Checkout
   Session and returns Stripe's response,
+- `POST /v1/stripe/live/funding-intents/{id}/checkout-session`,
+  which creates a Stripe Checkout Session for a specific bounty funding intent,
 - `POST /v1/stripe/live/connect-accounts`, which creates the planned Accounts
   v2 object and returns Stripe's response,
 - `POST /v1/stripe/live/connect-transfers`, which creates the planned Connect
