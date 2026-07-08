@@ -217,6 +217,7 @@ Useful REST paths:
 - `GET /api-docs/openapi.json`
 - `GET /v1/discovery`
 - `GET /v1/risk/policy`
+- `GET /v1/readiness/live-money`
 - `GET /v1/risk/events`
 - `GET /v1/risk/reviews`
 - `POST /v1/risk/bounty-approvals`
@@ -296,7 +297,9 @@ combined eval-loop gate. Eval endpoints append compact `EvalRun` records that
 can be read from `/v1/evals/runs` or MCP `get_eval_runs` as hosted quality
 evidence; those records are never settlement authorization. SDKs can also read
 `/v1/risk/policy` before posting work to learn the low-value Base USDC cap,
-review triggers, blocked rules, and settlement invariants, and
+review triggers, blocked rules, and settlement invariants,
+`/v1/readiness/live-money` to inspect non-secret Stripe/Base readiness gates
+before relying on hosted real-value movement, and
 `/v1/risk/events` to inspect deterministic review/block events that explain why
 automatic flows stopped. Operator flows can approve a `NeedsReview` bounty event
 through `/v1/risk/bounty-approvals`, approve a matching high-value payout event
@@ -335,7 +338,7 @@ The MCP server exposes matching local tools on port `8090`, including
 `add_bounty_funding`,
 `search_capabilities`, `run_bountybench`, `run_abusebench`,
 `run_judgebench`, `run_eval_loops`, `get_eval_runs`, `get_risk_policy`,
-`list_risk_events`, `list_risk_reviews`, `approve_risk_bounty`,
+`get_live_money_readiness`, `list_risk_events`, `list_risk_reviews`, `approve_risk_bounty`,
 `approve_risk_payout`, `reject_risk_event`, `reconcile_base_escrow_event`,
 `reconcile_base_evm_logs`, `plan_base_log_query`, `reconcile_base_rpc_logs`,
 `fetch_base_rpc_logs`, `broadcast_base_signed_transaction`,
@@ -386,8 +389,8 @@ bash scripts/check-production-smoke.sh --api-base-url https://api.example.com --
 The smoke checks public agent discovery, the discovery manifest schema,
 `/llms.txt`, OpenAPI, MCP tool schemas,
 public proof/template/feed surfaces, risk policy invariants, eval history
-availability, and payment rail advertising without posting bounties or touching
-live Stripe/Base execution endpoints. Use `-RequireEvalHistory` or
+availability, live-money readiness reporting, and payment rail advertising
+without posting bounties or touching live Stripe/Base execution endpoints. Use `-RequireEvalHistory` or
 `--require-eval-history` once the hosted environment has persisted at least one
 eval run. See [docs/production-smoke.md](docs/production-smoke.md).
 
@@ -412,6 +415,11 @@ movement:
 ```powershell
 cargo run -p cli -- real-funding-readiness --network base-mainnet --escrow-contract <escrow> --usdc-token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --require-live-money
 ```
+
+Hosted services expose the same non-secret gate at
+`GET /v1/readiness/live-money?network=base-mainnet` and MCP
+`get_live_money_readiness`. Agents and operators should check it before posting
+or funding bounties that expect live Stripe fiat or Base mainnet USDC movement.
 
 `service-smoke-spawn` starts the compiled API and MCP binaries on local
 high-numbered ports, checks health/discovery/tool listing, posts a Base public

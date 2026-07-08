@@ -336,6 +336,13 @@ export class AgentBountiesClient {
     return this.request("/v1/risk/policy");
   }
 
+  async getLiveMoneyReadiness(network?: string | null): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (network) params.set("network", network);
+    const query = params.toString();
+    return this.request(`/v1/readiness/live-money${query ? `?${query}` : ""}`);
+  }
+
   async getRiskEvents(request: RiskEventsRequest = {}): Promise<unknown> {
     const params = new URLSearchParams();
     if (request.action) params.set("action", request.action);

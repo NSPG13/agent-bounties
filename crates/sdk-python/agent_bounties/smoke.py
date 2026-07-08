@@ -126,6 +126,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery schema must require the Base escrow event endpoint",
     )
     _require(
+        "live_money_readiness" in endpoint_required,
+        "discovery schema must require the live-money readiness endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("base_fetch_rpc_logs"), str),
         "discovery manifest missing Base RPC fetch endpoint",
     )
@@ -212,6 +216,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery manifest missing risk policy endpoint",
     )
     _require(
+        isinstance(discovery.get("endpoints", {}).get("live_money_readiness"), str),
+        "discovery manifest missing live-money readiness endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("risk_events"), str),
         "discovery manifest missing risk review events endpoint",
     )
@@ -243,6 +251,24 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(
         risk_policy["ai_judges_can_authorize_payment"] is False,
         "risk policy must state that AI judges cannot authorize payment",
+    )
+    live_money_readiness = client.get_live_money_readiness("base-mainnet")
+    _require(
+        live_money_readiness["network_chain_id"] == 8_453,
+        "live-money readiness did not expose Base mainnet chain id",
+    )
+    _require(
+        live_money_readiness["network_native_usdc_token_address"].lower()
+        == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "live-money readiness did not expose native Base USDC",
+    )
+    _require(
+        isinstance(live_money_readiness["live_money_ready"], bool),
+        "live-money readiness did not expose a boolean live_money_ready gate",
+    )
+    _require(
+        not live_money_readiness["stripe_secret_key_mode"].startswith(("sk_", "rk_")),
+        "live-money readiness exposed Stripe secret material",
     )
     try:
         client.post_bounty(

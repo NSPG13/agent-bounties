@@ -67,6 +67,13 @@ class AgentBountiesClient:
     def get_risk_policy(self):
         return self._request("GET", "/v1/risk/policy")
 
+    def get_live_money_readiness(self, network: str | None = None):
+        return self._request(
+            "GET",
+            "/v1/readiness/live-money",
+            params={"network": network},
+        )
+
     def get_risk_events(
         self,
         action: str | None = None,
