@@ -54,6 +54,7 @@ pub struct DiscoveryManifest {
     pub templates: Vec<DiscoveryTemplate>,
     pub proof_surfaces: Vec<String>,
     pub risk_controls: Vec<String>,
+    pub funding_handoff: FundingHandoffDescriptor,
     pub real_money_rehearsal: RealMoneyRehearsalDescriptor,
     pub distribution_feedback: DistributionFeedbackPrompt,
     pub risk_policy: RiskPolicyDescriptor,
@@ -149,6 +150,15 @@ pub struct RealMoneyRehearsalDescriptor {
     pub payout_evidence: Vec<String>,
     pub pooled_and_mixed_funding: bool,
     pub test_mode_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FundingHandoffDescriptor {
+    pub page: String,
+    pub purpose: String,
+    pub query_params: Vec<String>,
+    pub supported_rail: String,
+    pub settlement_authority: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -586,9 +596,33 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "Hosted operator mutation surfaces can require OPERATOR_API_TOKEN.".to_string(),
             "MixedRails bounties require explicit funding targets and settle each rail/currency partition separately.".to_string(),
         ],
+        funding_handoff: funding_handoff_descriptor(),
         real_money_rehearsal: real_money_rehearsal_descriptor(),
         distribution_feedback: distribution_feedback_prompt(&endpoints),
         risk_policy,
+    }
+}
+
+fn funding_handoff_descriptor() -> FundingHandoffDescriptor {
+    FundingHandoffDescriptor {
+        page: STATIC_FUNDING_PAGE_URL.to_string(),
+        purpose:
+            "Prefill the public Stripe Checkout funding form from a hosted public bounty or funding feed."
+                .to_string(),
+        query_params: vec![
+            "apiBaseUrl".to_string(),
+            "bountyId".to_string(),
+            "organizationId".to_string(),
+            "amountMinor".to_string(),
+            "currency".to_string(),
+            "rail".to_string(),
+            "source".to_string(),
+            "externalReference".to_string(),
+        ],
+        supported_rail: "StripeFiat".to_string(),
+        settlement_authority:
+            "Query parameters are UI defaults only; funding still requires verified Stripe webhook reconciliation."
+                .to_string(),
     }
 }
 
@@ -682,6 +716,7 @@ fn markdown_bullets(items: &[String]) -> String {
 pub fn render_llms_txt(api_base_url: &str, mcp_base_url: &str) -> String {
     let manifest = discovery_manifest(api_base_url, mcp_base_url);
     let endpoints = &manifest.endpoints;
+    let funding_handoff = &manifest.funding_handoff;
     let rehearsal = &manifest.real_money_rehearsal;
     let feedback = &manifest.distribution_feedback;
     let feedback_questions = markdown_bullets(&feedback.questions);
@@ -704,6 +739,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Public funding opportunities: {public_funding}
 - Public bounty feed: {bounty_feed}
 - Public funding feed: {funding_feed}
+- Prefilled Stripe funding handoff: {funding_handoff_page}
 - Open pooled bounty: {pooled_bounties}
 - Create real-rail funding intent: {bounty_funding_intents}
 - Add pooled bounty funding: {bounty_funding_contributions}
@@ -745,6 +781,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Paid/refunded/disputed state changes only after indexed escrow logs are reconciled.
 - Stripe live execution is gated by operator secrets and compliance state.
 - Stripe Checkout funding can show cards, wallets, or PayPal where the hosted Stripe account supports and enables them.
+- Use the prefilled funding handoff for human StripeFiat funding; its query parameters are UI defaults only and verified webhooks remain the funding authority.
 - Stripe Connect eligibility does not mark fiat payouts paid; transfer.created evidence does.
 - Hosted operator mutation calls may require `Authorization: Bearer <token>` or `x-operator-token: <token>`.
 - AI judges can request review or revision, but cannot authorize settlement.
@@ -820,6 +857,7 @@ The repository is designed for agent contributors. Start with the agent quicksta
         public_funding = &endpoints.public_funding,
         bounty_feed = &endpoints.bounty_feed,
         funding_feed = &endpoints.funding_feed,
+        funding_handoff_page = &funding_handoff.page,
         pooled_bounties = &endpoints.pooled_bounties,
         bounty_funding_intents = &endpoints.bounty_funding_intents,
         bounty_funding_contributions = &endpoints.bounty_funding_contributions,
@@ -2727,6 +2765,27 @@ mod tests {
             .payment_rails
             .iter()
             .any(|rail| rail.name.contains("Mixed Stripe fiat")));
+        assert_eq!(manifest.funding_handoff.page, STATIC_FUNDING_PAGE_URL);
+        assert_eq!(manifest.funding_handoff.supported_rail, "StripeFiat");
+        assert!(manifest
+            .funding_handoff
+            .query_params
+            .iter()
+            .any(|param| param == "apiBaseUrl"));
+        assert!(manifest
+            .funding_handoff
+            .query_params
+            .iter()
+            .any(|param| param == "bountyId"));
+        assert!(manifest
+            .funding_handoff
+            .query_params
+            .iter()
+            .any(|param| param == "amountMinor"));
+        assert!(manifest
+            .funding_handoff
+            .settlement_authority
+            .contains("verified Stripe webhook"));
         assert_eq!(
             manifest.real_money_rehearsal.command,
             "cargo run -p cli -- funding-rehearsal-demo"
@@ -2790,6 +2849,8 @@ mod tests {
         assert!(text.contains("https://network.example/public/bounties/{bounty_id}"));
         assert!(text.contains("https://network.example/public/funding"));
         assert!(text.contains("https://network.example/v1/bounties/funding-feed"));
+        assert!(text.contains(STATIC_FUNDING_PAGE_URL));
+        assert!(text.contains("Prefilled Stripe funding handoff"));
         assert!(text.contains("route_blocked_goal"));
         assert!(text.contains("Open pooled bounty"));
         assert!(text.contains("https://network.example/v1/bounties/pooled"));
@@ -2842,6 +2903,8 @@ mod tests {
         assert!(discovery_manifest_schema_json().contains("\"funding_feed\""));
         assert!(discovery_manifest_schema_json().contains("\"public_funding\""));
         assert!(discovery_manifest_schema_json().contains("\"public_bounty\""));
+        assert!(discovery_manifest_schema_json().contains("\"funding_handoff\""));
+        assert!(discovery_manifest_schema_json().contains("\"supported_rail\""));
         assert!(discovery_manifest_schema_json().contains("\"real_money_rehearsal\""));
         assert!(discovery_manifest_schema_json().contains("\"live_money_readiness\""));
         assert!(discovery_manifest_schema_json().contains("\"base_indexer_status\""));

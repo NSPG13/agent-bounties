@@ -44,6 +44,8 @@ use std::{
 };
 use uuid::Uuid;
 
+const STATIC_FUNDING_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/funding.html";
+
 #[derive(Parser)]
 #[command(name = "agent-bounties")]
 #[command(about = "Open-source agent bounty network CLI")]
@@ -2799,9 +2801,12 @@ async fn production_smoke_check(
                     && required
                         .iter()
                         .any(|value| value.as_str() == Some("payment_rails"))
+                    && required
+                        .iter()
+                        .any(|value| value.as_str() == Some("funding_handoff"))
             })
             .unwrap_or(false),
-        "discovery schema must require agent entrypoints and payment rails",
+        "discovery schema must require agent entrypoints, payment rails, and funding handoff",
     )?;
     require(
         discovery_schema
@@ -2900,6 +2905,50 @@ async fn production_smoke_check(
                 == Some(true)
         }),
         "all advertised payment rails must require funding before claim",
+    )?;
+    let funding_handoff = discovery
+        .pointer("/funding_handoff")
+        .and_then(|value| value.as_object())
+        .context("discovery manifest must expose a funding_handoff object")?;
+    require(
+        funding_handoff.get("page").and_then(|value| value.as_str())
+            == Some(STATIC_FUNDING_PAGE_URL),
+        "funding handoff must point to the static public funding page",
+    )?;
+    require(
+        funding_handoff
+            .get("supported_rail")
+            .and_then(|value| value.as_str())
+            == Some("StripeFiat"),
+        "funding handoff must advertise StripeFiat support",
+    )?;
+    let funding_handoff_params = funding_handoff
+        .get("query_params")
+        .and_then(|value| value.as_array())
+        .context("funding handoff must expose query_params")?;
+    for param in [
+        "apiBaseUrl",
+        "bountyId",
+        "amountMinor",
+        "currency",
+        "rail",
+        "source",
+        "externalReference",
+    ] {
+        require(
+            funding_handoff_params
+                .iter()
+                .any(|value| value.as_str() == Some(param)),
+            &format!("funding handoff missing query parameter {param}"),
+        )?;
+    }
+    require(
+        funding_handoff
+            .get("settlement_authority")
+            .and_then(|value| value.as_str())
+            .map(|authority| authority.contains("verified Stripe webhook"))
+            .unwrap_or(false),
+        "funding handoff must keep verified Stripe webhook reconciliation as settlement authority",
     )?;
 
     let trust_tiers = discovery

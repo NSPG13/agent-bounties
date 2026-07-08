@@ -35,6 +35,9 @@ The gate checks:
   operation metadata.
 - Discovery fields for Base funding plans and normalized escrow event
   reconciliation, so indexed `EscrowCreated` remains discoverable before claim.
+- Discovery fields for the public StripeFiat funding handoff, including the
+  static funding page URL, prefill query parameters, and the rule that verified
+  Stripe webhook reconciliation remains the funding authority.
 - Live-money readiness and Base indexer status reporting for Base mainnet USDC
   and Stripe mode, including the optional Stripe Checkout payment-method
   configuration boolean and the indexer's nullable heartbeat fields, without
