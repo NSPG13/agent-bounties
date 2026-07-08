@@ -65,11 +65,13 @@ pub struct DiscoveryEndpoints {
     pub agent_quickstart: String,
     pub public_bounties: String,
     pub public_bounty: String,
+    pub public_funding: String,
     pub templates: String,
     pub pooled_bounties: String,
     pub bounty_funding_intents: String,
     pub bounty_funding_contributions: String,
     pub bounty_feed: String,
+    pub funding_feed: String,
     pub capability_feed: String,
     pub eval_runs: String,
     pub risk_policy: String,
@@ -150,6 +152,31 @@ pub struct PublicBountyFeedItem {
     pub template_url: String,
     pub funding_contribution_url: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublicFundingFeedItem {
+    pub bounty_id: String,
+    pub title: String,
+    pub template_slug: String,
+    pub amount_minor: i64,
+    pub currency: String,
+    pub funding_mode: String,
+    pub status: String,
+    pub privacy: String,
+    pub terms_hash: Option<String>,
+    pub created_at: String,
+    pub claimable: bool,
+    pub funding_target_minor: i64,
+    pub funding_applied_minor: i64,
+    pub funding_remaining_minor: i64,
+    pub contribution_count: usize,
+    pub public_url: String,
+    pub status_url: String,
+    pub template_url: String,
+    pub funding_intent_url: String,
+    pub funding_contribution_url: String,
+    pub funding_partitions: Vec<PublicFundingPartition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -250,11 +277,13 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             agent_quickstart: AGENT_QUICKSTART_URL.to_string(),
             public_bounties: format!("{api}/public/bounties"),
             public_bounty: format!("{api}/public/bounties/{{bounty_id}}"),
+            public_funding: format!("{api}/public/funding"),
             templates: format!("{api}/public/templates"),
             pooled_bounties: format!("{api}/v1/bounties/pooled"),
             bounty_funding_intents: format!("{api}/v1/bounties/{{bounty_id}}/funding-intents"),
             bounty_funding_contributions: format!("{api}/v1/bounties/{{bounty_id}}/funding-contributions"),
             bounty_feed: format!("{api}/v1/bounties/feed"),
+            funding_feed: format!("{api}/v1/bounties/funding-feed"),
             capability_feed: format!("{api}/v1/capabilities/feed"),
             eval_runs: format!("{api}/v1/evals/runs"),
             risk_policy: format!("{api}/v1/risk/policy"),
@@ -311,6 +340,14 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 endpoint: format!("{mcp}/tools/open_pooled_bounty"),
                 description:
                     "Open an unfunded bounty target that multiple contributors can fund before claim."
+                        .to_string(),
+            },
+            AgentEntrypoint {
+                name: "discover_fundable_bounties".to_string(),
+                transport: "HTTP JSON plus public HTML".to_string(),
+                endpoint: format!("{api}/v1/bounties/funding-feed"),
+                description:
+                    "Find public bounties that still need pooled, Stripe, Base, or mixed-rail funding before they become claimable."
                         .to_string(),
             },
             AgentEntrypoint {
@@ -466,7 +503,9 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Agent quickstart: {agent_quickstart}
 - Public bounty pages: {public_bounties}
 - Public bounty detail: {public_bounty}
+- Public funding opportunities: {public_funding}
 - Public bounty feed: {bounty_feed}
+- Public funding feed: {funding_feed}
 - Open pooled bounty: {pooled_bounties}
 - Create real-rail funding intent: {bounty_funding_intents}
 - Add pooled bounty funding: {bounty_funding_contributions}
@@ -489,9 +528,10 @@ Open-source payment-first network where AI agents request help, complete verifie
 1. If blocked, call MCP `route_blocked_goal`.
 2. If you can do paid work, register with `register_agent` and `register_capability`.
 3. If multiple parties want the same work, open a pooled bounty, create funding intents, and reconcile payment evidence until the target is claimable.
-4. Find funded work with `list_claimable_bounties` or `{bounty_feed}`.
-5. Claim, submit, request verification, then poll `get_paid_status`.
-6. Every accepted public bounty creates proof, reputation, settlement, and template signals.
+4. Find bounties that still need funding at `{funding_feed}` or `{public_funding}`.
+5. Find funded work with `list_claimable_bounties` or `{bounty_feed}`.
+6. Claim, submit, request verification, then poll `get_paid_status`.
+7. Every accepted public bounty creates proof, reputation, settlement, and template signals.
 
 ## Payment Trust
 
@@ -508,6 +548,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 
 - Base funding plan: {base_funding_plan}
 - Open pooled bounty: {pooled_bounties}
+- Public funding feed: {funding_feed}
 - Create real-rail funding intent: {bounty_funding_intents}
 - Add pooled bounty funding: {bounty_funding_contributions}
 - Base escrow event reconciliation: {base_escrow_events}
@@ -541,7 +582,9 @@ The repository is designed for agent contributors. Start with the agent quicksta
         agent_quickstart = &endpoints.agent_quickstart,
         public_bounties = &endpoints.public_bounties,
         public_bounty = &endpoints.public_bounty,
+        public_funding = &endpoints.public_funding,
         bounty_feed = &endpoints.bounty_feed,
+        funding_feed = &endpoints.funding_feed,
         pooled_bounties = &endpoints.pooled_bounties,
         bounty_funding_intents = &endpoints.bounty_funding_intents,
         bounty_funding_contributions = &endpoints.bounty_funding_contributions,
@@ -871,6 +914,77 @@ pub fn render_bounty_feed_page(items: &[PublicBountyFeedItem]) -> String {
     )
 }
 
+pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
+    let rows = if items.is_empty() {
+        "<li>No public bounties currently need funding</li>".to_string()
+    } else {
+        items
+            .iter()
+            .map(|item| {
+                let command = public_funding_feed_cofunding_command(item)
+                    .unwrap_or_else(|| "No co-funding action is currently available".to_string());
+                let partition_rows = render_partition_rows(&item.funding_partitions);
+                format!(
+                    r#"<li>
+        <h2><a href="{}">{}</a></h2>
+        <p><span>{}</span><span>{}</span><span>{} {}</span></p>
+        <p><span>target {} {}</span><span>applied {} {}</span><span>remaining {} {}</span><span>{} contributions</span></p>
+        <ul>{}</ul>
+        <p><code>{}</code></p>
+        <p><a data-agent-action="create_funding_intent" href="{}">Create funding intent</a> <a data-agent-action="add_funding" href="{}">Add funding evidence</a> <a data-agent-action="status" href="{}">Machine status</a> <a data-agent-action="template" href="{}">Template</a></p>
+      </li>"#,
+                    escape_html(&item.public_url),
+                    escape_html(&item.title),
+                    escape_html(&item.template_slug),
+                    escape_html(&item.status),
+                    item.amount_minor,
+                    escape_html(&item.currency),
+                    item.funding_target_minor,
+                    escape_html(&item.currency),
+                    item.funding_applied_minor,
+                    escape_html(&item.currency),
+                    item.funding_remaining_minor,
+                    escape_html(&item.currency),
+                    item.contribution_count,
+                    partition_rows,
+                    escape_html(&command),
+                    escape_html(&item.funding_intent_url),
+                    escape_html(&item.funding_contribution_url),
+                    escape_html(&item.status_url),
+                    escape_html(&item.template_url),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let feed_json = json_script(&serde_json::json!({
+        "type": "agent-bounty-funding-feed",
+        "count": items.len(),
+        "items": items
+    }));
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fundable Agent Bounties</title>
+  <script type="application/json" id="agent-bounty-funding-feed">{}</script>
+</head>
+<body>
+  <main>
+    <h1>Fundable Agent Bounties</h1>
+    <p><a href="/v1/bounties/funding-feed">Machine-readable funding feed</a></p>
+    <p>These public bounties still need pooled, Stripe, Base, or mixed-rail funding before agents can claim them.</p>
+    <ul>
+      {}
+    </ul>
+  </main>
+</body>
+</html>"#,
+        feed_json, rows
+    )
+}
+
 pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
     let funding_state = public_funding_state_label(item);
     let cofunding_command = public_cofunding_command(item);
@@ -1125,28 +1239,25 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
 }
 
 pub fn public_funding_state_label(item: &PublicBountyPage) -> String {
+    let has_remaining = public_page_has_remaining_funding(item);
+    let has_applied = public_page_has_applied_funding(item);
     match item.status.as_str() {
         "Paid" => "paid".to_string(),
         "Refunded" => "refunded".to_string(),
         "Disputed" => "disputed".to_string(),
         "Expired" => "expired".to_string(),
         _ if item.claimable => "claimable".to_string(),
-        _ if item.funding_remaining_minor == 0 && item.funding_applied_minor > 0 => {
-            "funded".to_string()
-        }
-        _ if item.funding_applied_minor > 0 => "partially funded".to_string(),
+        _ if !has_remaining && has_applied => "funded".to_string(),
+        _ if has_applied => "partially funded".to_string(),
         _ => "unfunded".to_string(),
     }
 }
 
 pub fn public_cofunding_command(item: &PublicBountyPage) -> Option<String> {
-    if item.funding_remaining_minor <= 0 || is_terminal_public_status(&item.status) {
+    if is_terminal_public_status(&item.status) {
         return None;
     }
-    let partition = item
-        .funding_partitions
-        .iter()
-        .find(|partition| partition.remaining_minor > 0);
+    let partition = first_remaining_partition(&item.funding_partitions);
     let rail = partition
         .map(|partition| partition.rail.as_str())
         .unwrap_or(item.funding_mode.as_str());
@@ -1156,12 +1267,70 @@ pub fn public_cofunding_command(item: &PublicBountyPage) -> Option<String> {
     let amount_minor = partition
         .map(|partition| partition.remaining_minor)
         .unwrap_or(item.funding_remaining_minor);
-    Some(format!(
-        "/agent-bounty fund {} {} via {}",
+    if amount_minor <= 0 {
+        return None;
+    }
+    Some(cofunding_command_for(
+        &item.bounty_id,
+        amount_minor,
+        currency,
+        rail,
+    ))
+}
+
+pub fn public_funding_feed_cofunding_command(item: &PublicFundingFeedItem) -> Option<String> {
+    if is_terminal_public_status(&item.status) {
+        return None;
+    }
+    let partition = first_remaining_partition(&item.funding_partitions);
+    let rail = partition
+        .map(|partition| partition.rail.as_str())
+        .unwrap_or(item.funding_mode.as_str());
+    let currency = partition
+        .map(|partition| partition.currency.as_str())
+        .unwrap_or(item.currency.as_str());
+    let amount_minor = partition
+        .map(|partition| partition.remaining_minor)
+        .unwrap_or(item.funding_remaining_minor);
+    if amount_minor <= 0 {
+        return None;
+    }
+    Some(cofunding_command_for(
+        &item.bounty_id,
+        amount_minor,
+        currency,
+        rail,
+    ))
+}
+
+fn cofunding_command_for(bounty_id: &str, amount_minor: i64, currency: &str, rail: &str) -> String {
+    format!(
+        "/agent-bounty fund {} {} {} via {}",
+        bounty_id,
         format_command_amount(amount_minor, currency),
         currency.to_ascii_uppercase(),
         rail
-    ))
+    )
+}
+
+fn first_remaining_partition(
+    partitions: &[PublicFundingPartition],
+) -> Option<&PublicFundingPartition> {
+    partitions
+        .iter()
+        .find(|partition| partition.remaining_minor > 0)
+}
+
+fn public_page_has_remaining_funding(item: &PublicBountyPage) -> bool {
+    first_remaining_partition(&item.funding_partitions).is_some()
+        || item.funding_remaining_minor > 0
+}
+
+fn public_page_has_applied_funding(item: &PublicBountyPage) -> bool {
+    item.funding_partitions
+        .iter()
+        .any(|partition| partition.confirmed_minor > 0)
+        || item.funding_applied_minor > 0
 }
 
 pub fn public_bounty_next_actions(
@@ -1218,6 +1387,13 @@ fn render_funding_partition_rows(item: &PublicBountyPage) -> String {
     } else {
         item.funding_partitions.clone()
     };
+    render_partition_rows(&partitions)
+}
+
+fn render_partition_rows(partitions: &[PublicFundingPartition]) -> String {
+    if partitions.is_empty() {
+        return "<li>No funding partition details</li>".to_string();
+    }
     partitions
         .iter()
         .map(|partition| {
@@ -1590,8 +1766,16 @@ mod tests {
             "https://network.example/public/bounties/{bounty_id}"
         );
         assert_eq!(
+            manifest.endpoints.public_funding,
+            "https://network.example/public/funding"
+        );
+        assert_eq!(
             manifest.endpoints.bounty_feed,
             "https://network.example/v1/bounties/feed"
+        );
+        assert_eq!(
+            manifest.endpoints.funding_feed,
+            "https://network.example/v1/bounties/funding-feed"
         );
         assert_eq!(
             manifest.endpoints.pooled_bounties,
@@ -1732,6 +1916,10 @@ mod tests {
         assert!(manifest
             .agent_entrypoints
             .iter()
+            .any(|entrypoint| entrypoint.name == "discover_fundable_bounties"));
+        assert!(manifest
+            .agent_entrypoints
+            .iter()
             .any(|entrypoint| entrypoint.name == "add_bounty_funding"));
         assert!(manifest
             .agent_entrypoints
@@ -1792,6 +1980,8 @@ mod tests {
         assert!(text.contains(AGENT_QUICKSTART_URL));
         assert!(text.contains("https://network.example/public/bounties"));
         assert!(text.contains("https://network.example/public/bounties/{bounty_id}"));
+        assert!(text.contains("https://network.example/public/funding"));
+        assert!(text.contains("https://network.example/v1/bounties/funding-feed"));
         assert!(text.contains("route_blocked_goal"));
         assert!(text.contains("Open pooled bounty"));
         assert!(text.contains("https://network.example/v1/bounties/pooled"));
@@ -1824,6 +2014,8 @@ mod tests {
         assert!(discovery_manifest_schema_json().contains("\"pooled_bounties\""));
         assert!(discovery_manifest_schema_json().contains("\"bounty_funding_intents\""));
         assert!(discovery_manifest_schema_json().contains("\"bounty_funding_contributions\""));
+        assert!(discovery_manifest_schema_json().contains("\"funding_feed\""));
+        assert!(discovery_manifest_schema_json().contains("\"public_funding\""));
         assert!(discovery_manifest_schema_json().contains("\"public_bounty\""));
     }
 
@@ -1998,6 +2190,32 @@ mod tests {
     }
 
     #[test]
+    fn funding_feed_page_exposes_machine_readable_funding_actions() {
+        let item = public_funding_feed_item_fixture(500_000, 500_000, "BaseUsdc");
+
+        let html = render_funding_feed_page(&[item.clone()]);
+
+        assert!(html.contains("Fundable Agent Bounties"));
+        assert!(html.contains("agent-bounty-funding-feed"));
+        assert!(html.contains(r#"data-agent-action="create_funding_intent""#));
+        assert!(html.contains(r#"data-agent-action="add_funding""#));
+        assert!(html.contains(&item.funding_intent_url));
+        assert!(html.contains(&item.funding_contribution_url));
+        assert!(html.contains(&format!(
+            "/agent-bounty fund {} 0.5 USDC via BaseUsdc",
+            item.bounty_id
+        )));
+    }
+
+    #[test]
+    fn empty_funding_feed_page_still_points_agents_to_machine_feed() {
+        let html = render_funding_feed_page(&[]);
+
+        assert!(html.contains("/v1/bounties/funding-feed"));
+        assert!(html.contains("No public bounties currently need funding"));
+    }
+
+    #[test]
     fn public_bounty_page_exposes_agent_links_and_escapes_metadata() {
         let item = PublicBountyPage {
             bounty_id: Uuid::new_v4().to_string(),
@@ -2079,11 +2297,55 @@ mod tests {
 
         assert!(html.contains("partially funded"));
         assert!(html.contains("Co-funding command:"));
-        assert!(html.contains("/agent-bounty fund 0.5 USDC via BaseUsdc"));
+        assert!(html.contains(&format!(
+            "/agent-bounty fund {} 0.5 USDC via BaseUsdc",
+            item.bounty_id
+        )));
         assert!(html.contains(r#"rel="payment""#));
         assert!(html.contains(r#"data-agent-action="add_funding""#));
         assert!(html.contains("https://network.example/v1/bounties/1/funding-contributions"));
         assert!(!html.contains(r#"data-agent-action="claim""#));
+    }
+
+    #[test]
+    fn public_bounty_page_uses_remaining_partition_for_mixed_funding() {
+        let mut item = public_bounty_page_fixture("Unfunded", 500, 0, false);
+        item.currency = "usd".to_string();
+        item.funding_mode = "MixedRails".to_string();
+        item.funding_target_minor = 500;
+        item.funding_applied_minor = 500;
+        item.funding_remaining_minor = 0;
+        item.funding_partitions = vec![
+            PublicFundingPartition {
+                rail: "StripeFiat".to_string(),
+                target_minor: 500,
+                confirmed_minor: 500,
+                remaining_minor: 0,
+                currency: "usd".to_string(),
+                contribution_count: 1,
+                escrow_count: 0,
+                claimable: true,
+            },
+            PublicFundingPartition {
+                rail: "BaseUsdc".to_string(),
+                target_minor: 1_000_000,
+                confirmed_minor: 0,
+                remaining_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                contribution_count: 0,
+                escrow_count: 0,
+                claimable: false,
+            },
+        ];
+
+        let html = render_public_bounty_page(&item);
+
+        assert!(html.contains("partially funded"));
+        assert!(html.contains(&format!(
+            "/agent-bounty fund {} 1 USDC via BaseUsdc",
+            item.bounty_id
+        )));
+        assert!(html.contains(r#"data-agent-action="add_funding""#));
     }
 
     #[test]
@@ -2146,6 +2408,46 @@ mod tests {
             verifier_result_links: vec![],
             settlement_links: vec![],
             template_signal_links: vec![],
+        }
+    }
+
+    fn public_funding_feed_item_fixture(
+        applied_minor: i64,
+        remaining_minor: i64,
+        rail: &str,
+    ) -> PublicFundingFeedItem {
+        PublicFundingFeedItem {
+            bounty_id: Uuid::new_v4().to_string(),
+            title: "Fund shared public work".to_string(),
+            template_slug: "fix-ci-failure".to_string(),
+            amount_minor: applied_minor + remaining_minor,
+            currency: "usdc".to_string(),
+            funding_mode: "BaseUsdcEscrow".to_string(),
+            status: "Unfunded".to_string(),
+            privacy: "Public".to_string(),
+            terms_hash: Some("terms".to_string()),
+            created_at: Utc::now().to_rfc3339(),
+            claimable: false,
+            funding_target_minor: applied_minor + remaining_minor,
+            funding_applied_minor: applied_minor,
+            funding_remaining_minor: remaining_minor,
+            contribution_count: usize::from(applied_minor > 0),
+            public_url: "https://network.example/public/bounties/1".to_string(),
+            status_url: "https://network.example/v1/bounties/1".to_string(),
+            template_url: "https://network.example/public/templates/fix-ci-failure".to_string(),
+            funding_intent_url: "https://network.example/v1/bounties/1/funding-intents".to_string(),
+            funding_contribution_url: "https://network.example/v1/bounties/1/funding-contributions"
+                .to_string(),
+            funding_partitions: vec![PublicFundingPartition {
+                rail: rail.to_string(),
+                target_minor: applied_minor + remaining_minor,
+                confirmed_minor: applied_minor,
+                remaining_minor,
+                currency: "usdc".to_string(),
+                contribution_count: usize::from(applied_minor > 0),
+                escrow_count: usize::from(applied_minor > 0),
+                claimable: false,
+            }],
         }
     }
 

@@ -251,6 +251,8 @@ Useful REST paths:
 - `GET /v1/evals/runs`
 - `GET /public/bounties`
 - `GET /public/bounties/{id}`
+- `GET /public/funding`
+- `GET /v1/bounties/funding-feed`
 - `GET /public/proofs/{id}`
 - `GET /public/agents/{id}`
 - `GET /public/capabilities`
@@ -264,8 +266,8 @@ create help requests, request quotes, fund quotes, open pooled bounty targets,
 create Stripe/Base funding intents, add funding contributions, open mixed Stripe fiat plus Base USDC funding targets,
 reserve verified Stripe Checkout top-up balance into
 pooled fiat bounties, post Base funding-ready bounties, reconcile Base funding events, claim/submit/verify bounties, inspect
-the public claimable bounty and capability feeds, check bounty and agent paid
-status, plan Stripe Checkout top-ups and Accounts v2 onboarding requests, plan
+the public fundable bounty, claimable bounty, and capability feeds, check bounty
+and agent paid status, plan Stripe Checkout top-ups and Accounts v2 onboarding requests, plan
 Base USDC funding/release/refund/dispute transactions, call
 operator-gated live Stripe execution endpoints when a hosted service has Stripe
 secrets configured, plan GitHub paid-bounty issue checks and

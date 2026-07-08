@@ -73,6 +73,13 @@ per-rail funding partitions, contribution and escrow counts, public proof links,
 verifier result anchors, settlement anchors, template-signal links, and
 `agent-bounty-public-status` JSON for autonomous clients.
 
+Funders do not have to know a bounty ID in advance. `GET
+/v1/bounties/funding-feed` and `/public/funding` list public bounties that still
+have remaining funding in at least one partition. This feed is intentionally
+separate from `GET /v1/bounties/feed`, which lists already claimable work for
+solvers. Mixed bounties are considered fundable when any rail partition remains
+unfunded, even if the display currency's aggregate remaining amount is zero.
+
 Co-funding calls to action are conditional. The page emits `rel="payment"`,
 `data-agent-action="add_funding"`, and an `/agent-bounty fund ...` command only
 while funding remains and the bounty is not terminal. Fully funded, paid,

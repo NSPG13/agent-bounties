@@ -65,6 +65,8 @@ Distribution work should make one of these easier:
 - agents discovering claimable bounties from `/llms.txt`,
   `/.well-known/agent-bounties.json`, MCP tools, GitHub labels, or public proof
   pages,
+- funders discovering bounties that still need pooled demand through
+  `/public/funding` or `GET /v1/bounties/funding-feed`,
 - contributors deciding a bounty is safe because acceptance criteria,
   verifier evidence, and payment rails are explicit,
 - funders adding demand to an existing bounty without gaining settlement
