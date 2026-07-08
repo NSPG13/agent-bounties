@@ -2,6 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [int] $Pr,
     [string] $Repo = "NSPG13/agent-bounties",
+    [string] $CollaborationBranch,
+    [switch] $CreateCollaborationBranch,
     [switch] $PostReview
 )
 
@@ -85,6 +87,62 @@ function Get-DocsContractIssues {
     )
 }
 
+function New-CollaborationBranchName {
+    param(
+        [int] $Pr,
+        [string] $Topic
+    )
+
+    $slug = $Topic.ToLowerInvariant()
+    $slug = [regex]::Replace($slug, "[^a-z0-9]+", "-").Trim("-")
+    if ($slug.Length -gt 48) {
+        $slug = $slug.Substring(0, 48).Trim("-")
+    }
+    if ([string]::IsNullOrWhiteSpace($slug)) {
+        $slug = "contribution"
+    }
+    return "collab/pr-$Pr-$slug"
+}
+
+function Get-ExistingCollaborationBranch {
+    param([int] $Pr)
+
+    $prefix = "refs/heads/collab/pr-$Pr-"
+    $matches = @(
+        & git ls-remote --heads origin "$prefix*" |
+            ForEach-Object {
+                $parts = $_ -split "\s+", 2
+                if ($parts.Count -eq 2 -and $parts[1].StartsWith("refs/heads/")) {
+                    [pscustomobject]@{
+                        oid = $parts[0]
+                        name = $parts[1].Substring("refs/heads/".Length)
+                    }
+                }
+            }
+    )
+    if ($global:LASTEXITCODE -ne 0) {
+        throw "Unable to list existing collaboration branches"
+    }
+    $global:LASTEXITCODE = 0
+    if ($matches.Count -eq 1) {
+        return $matches[0]
+    }
+    return $null
+}
+
+function Assert-SafeCollaborationBranch {
+    param([string] $Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name) -or -not $Name.StartsWith("collab/")) {
+        throw "Collaboration branches must be named collab/<topic>: $Name"
+    }
+    & git check-ref-format --branch $Name | Out-Null
+    if ($global:LASTEXITCODE -ne 0) {
+        throw "Invalid collaboration branch name: $Name"
+    }
+    $global:LASTEXITCODE = 0
+}
+
 function New-ConstructiveFeedback {
     param(
         [bool] $DocsOnly,
@@ -115,7 +173,7 @@ function New-ConstructiveFeedback {
 
 Push-Location $repoRoot
 try {
-    $prJson = gh pr view $Pr --repo $Repo --json number,title,url,author,headRefOid,files | ConvertFrom-Json
+    $prJson = gh pr view $Pr --repo $Repo --json number,title,url,author,headRefName,headRefOid,files | ConvertFrom-Json
     $changedFiles = @($prJson.files | ForEach-Object { $_.path })
     if ($changedFiles.Count -eq 0) {
         throw "PR #$Pr has no changed files"
@@ -194,6 +252,49 @@ try {
         -DocsCheckOk $docsCheckOk `
         -DocsIssues $docsIssues
 
+    $collaborationBranchName = $null
+    $collaborationBranchStatus = "not_requested"
+    if ($CreateCollaborationBranch) {
+        if (-not $collaborationBranchCandidate) {
+            throw "Refusing to create an upstream collaboration branch for PR #$Pr because the changed files require manual security review."
+        }
+        $existingCollaborationBranch = if ([string]::IsNullOrWhiteSpace($CollaborationBranch)) {
+            Get-ExistingCollaborationBranch -Pr $Pr
+        } else {
+            $null
+        }
+        $collaborationBranchName = if (-not [string]::IsNullOrWhiteSpace($CollaborationBranch)) {
+            $CollaborationBranch
+        } elseif ($null -ne $existingCollaborationBranch) {
+            $existingCollaborationBranch.name
+        } else {
+            New-CollaborationBranchName -Pr $Pr -Topic $prJson.headRefName
+        }
+        Assert-SafeCollaborationBranch -Name $collaborationBranchName
+        $remoteRef = "refs/heads/$collaborationBranchName"
+        $existingBranchLine = & git ls-remote --heads origin $remoteRef
+        if ($global:LASTEXITCODE -ne 0) {
+            throw "Unable to inspect remote collaboration branch: $collaborationBranchName"
+        }
+        $global:LASTEXITCODE = 0
+        $existingBranchOid = if (-not [string]::IsNullOrWhiteSpace($existingBranchLine)) {
+            ($existingBranchLine -split "\s+", 2)[0]
+        } else {
+            $null
+        }
+        if ($existingBranchOid) {
+            $collaborationBranchStatus = if ($existingBranchOid -eq $fetchedOid) {
+                "exists_at_pr_head"
+            } else {
+                "exists_different_head"
+            }
+        } else {
+            $refspec = "${fetchedOid}:$remoteRef"
+            Invoke-Checked { git push origin $refspec }
+            $collaborationBranchStatus = "created"
+        }
+    }
+
     $result = [ordered]@{
         pr = $prJson.number
         title = $prJson.title
@@ -203,6 +304,8 @@ try {
         safe_for_maintainer_ci = ($safeForMaintainerCi -and $docsCheckOk)
         main_candidate = $mainCandidate
         collaboration_branch_candidate = $collaborationBranchCandidate
+        collaboration_branch = $collaborationBranchName
+        collaboration_branch_status = $collaborationBranchStatus
         recommended_lane = $recommendedLane
         risky_files = [string[]]@($riskyFiles)
         non_docs_files = [string[]]@($nonDocsFiles)
@@ -242,7 +345,11 @@ Next steps:
                 $blockers += "Docs contract check failed:`n$(Format-MarkdownList $docsIssues -Empty '- The checker failed without line-specific issues. Run the command below for full output.')"
             }
             $branchGuidance = if ($collaborationBranchCandidate) {
-                "This looks suitable for a collaboration branch such as `collab/pr-$Pr-<short-topic>` if a maintainer wants others to iterate on it without merging to `main` yet. That branch would not imply bounty acceptance or payment approval."
+                if ($CreateCollaborationBranch) {
+                    "This is suitable for a collaboration branch. Branch `$collaborationBranchName` status: `$collaborationBranchStatus`. That branch does not imply bounty acceptance, merge approval, or payment approval."
+                } else {
+                    "This looks suitable for a collaboration branch such as `collab/pr-$Pr-<short-topic>` if a maintainer wants others to iterate on it without merging to `main` yet. That branch would not imply bounty acceptance or payment approval."
+                }
             } else {
                 "Do not move this to an upstream collaboration branch automatically. The risky or non-doc paths need manual maintainer security review first."
             }

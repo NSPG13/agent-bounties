@@ -87,6 +87,75 @@ scripts\review-external-pr.ps1 -Pr 6 -PostReview
 bash scripts/review-external-pr.sh --pr 6 --post-review
 ```
 
+To preserve useful work for continued iteration without merging it into
+`main`, opt in to creating or reusing a collaboration branch:
+
+```powershell
+scripts\review-external-pr.ps1 -Pr 6 -CreateCollaborationBranch -PostReview
+```
+
+```bash
+bash scripts/review-external-pr.sh --pr 6 --create-collaboration-branch --post-review
+```
+
+Use an explicit branch name when a maintainer has already announced one:
+
+```powershell
+scripts\review-external-pr.ps1 -Pr 6 -CreateCollaborationBranch -CollaborationBranch collab/pr-6-agent-quickstart
+```
+
+```bash
+bash scripts/review-external-pr.sh --pr 6 --create-collaboration-branch --collaboration-branch collab/pr-6-agent-quickstart
+```
+
+The branch creation flag is intentionally narrow. It refuses PRs that touch
+risky paths, will reuse an existing `collab/pr-<number>-...` branch when exactly
+one exists, and will not overwrite an existing branch that points at a different
+commit. A maintainer can still make a manual branch after deeper review, but the
+automation should not turn untrusted code into an upstream execution surface.
+
+## Constructive Review Format
+
+Every review outcome should leave the contributor with a repair path:
+
+- **Approve for main**: state what passed, list the checks that were trusted,
+  and remind readers that code review does not approve bounty payout or payment
+  settlement.
+- **Request changes**: state the blocker, give the exact local command to run,
+  point at the first failing file or contract mismatch, and explain what would
+  make the PR main-ready.
+- **Accept for collaboration branch**: state that the work is useful but not
+  main-ready, name the branch, invite follow-up PRs against that branch, and
+  say clearly that the branch is not a merge approval, bounty acceptance, or
+  payout approval.
+- **Manual security review**: state which risky paths triggered the lane and ask
+  for a smaller split if that would help review.
+
+Suggested "not main-ready yet" comment:
+
+```text
+Thanks for the contribution. I cannot approve this for main yet, but the repair
+path is concrete.
+
+What passed:
+- <docs-only / useful topic / no risky paths, when true>
+
+What blocks main:
+- <first failing check or risky path>
+
+Please run:
+`cargo run -p cli -- docs-contract-check`
+
+Recommended lane:
+<main-candidate | collaboration-branch-candidate | manual-security-review>
+
+Collaboration branch:
+<branch name or why one is not safe yet>
+
+This review does not approve bounty acceptance, merge, payout, or payment
+settlement.
+```
+
 ## Docs Contract Check
 
 `docs-contract-check` fails when docs reference:

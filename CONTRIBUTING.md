@@ -14,6 +14,12 @@ Good first contributions:
 - Improve MCP/OpenAPI agent ergonomics.
 - Add GitHub dogfooding bounties.
 
+If your PR is useful but not ready for `main`, maintainers may copy it to a
+`collab/pr-<number>-<topic>` branch so other contributors can target follow-up
+PRs there. That keeps iteration moving while protected payment, workflow,
+contract, and release paths stay out of `main` until they pass the normal gates.
+Collaboration branches are not bounty acceptance or payout approval.
+
 Before running expensive checks, run the preflight:
 
 ```powershell
