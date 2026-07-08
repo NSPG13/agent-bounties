@@ -1127,6 +1127,7 @@ async fn verify_submission(
         bounty,
         verifier_result,
         settlements,
+        funding_contributions,
         reputation_events,
         template_signals,
         ledger_entries,
@@ -1148,6 +1149,12 @@ async fn verify_submission(
                 .filter(|settlement| settlement.bounty_id == proof.bounty_id)
                 .cloned()
                 .collect::<Vec<_>>();
+            let funding_contributions = network
+                .funding_contributions
+                .values()
+                .filter(|contribution| contribution.bounty_id == proof.bounty_id)
+                .cloned()
+                .collect::<Vec<_>>();
             let reputation_events = network
                 .reputation_events
                 .values()
@@ -1166,6 +1173,7 @@ async fn verify_submission(
                 bounty,
                 verifier_result,
                 settlements,
+                funding_contributions,
                 reputation_events,
                 template_signals,
                 ledger_entries,
@@ -1201,6 +1209,12 @@ async fn verify_submission(
         for settlement in &settlements {
             store
                 .upsert_settlement(settlement)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        for contribution in &funding_contributions {
+            store
+                .upsert_funding_contribution(contribution)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }

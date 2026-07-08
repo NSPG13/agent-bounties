@@ -630,25 +630,29 @@ impl BountyNetwork {
 
         bounty.mark_funded(terms_hash)?;
         bounty.make_claimable()?;
+        let entry = LedgerEntry::new(
+            "fund bounty",
+            Some(format!("fund:{}", bounty.id)),
+            vec![
+                debit("escrow_asset", amount.clone()),
+                credit("bounty_liability", amount.clone()),
+            ],
+        )?;
+        self.ledger.append(entry.clone())?;
+
         let contribution = FundingContribution {
             id: Uuid::new_v4(),
             bounty_id: bounty.id,
             contributor_agent_id: None,
             rail: payment_rail_for_funding_mode(&funding_mode),
-            amount: amount.clone(),
+            amount,
             status: FundingContributionStatus::Applied,
+            funding_ledger_entry_id: Some(entry.id),
+            refund_ledger_entry_id: None,
+            settlement_id: None,
             external_reference: Some(format!("initial:{}", bounty.id)),
             created_at: Utc::now(),
         };
-
-        self.ledger.append(LedgerEntry::new(
-            "fund bounty",
-            Some(format!("fund:{}", bounty.id)),
-            vec![
-                debit("escrow_asset", amount.clone()),
-                credit("bounty_liability", amount),
-            ],
-        )?)?;
 
         self.funding_contributions
             .insert(contribution.id, contribution);
@@ -745,29 +749,35 @@ impl BountyNetwork {
             )));
         }
 
-        let contribution = FundingContribution {
-            id: Uuid::new_v4(),
-            bounty_id: bounty.id,
-            contributor_agent_id: request.contributor_agent_id,
-            rail: request.rail,
-            amount: amount.clone(),
-            status: FundingContributionStatus::Applied,
-            external_reference: request.external_reference,
-            created_at: Utc::now(),
-        };
-        let contributor_account = contribution
-            .contributor_agent_id
+        let contribution_id = Uuid::new_v4();
+        let contributor_agent_id = request.contributor_agent_id;
+        let rail = request.rail;
+        let external_reference = request.external_reference;
+        let contributor_account = contributor_agent_id
             .map(|id| format!("contributor_funds:{id}"))
             .unwrap_or_else(|| "external_contributor_funds".to_string());
         let entry = LedgerEntry::new(
             "pooled bounty funding contribution",
-            Some(format!("fund-contribution:{}", contribution.id)),
+            Some(format!("fund-contribution:{contribution_id}")),
             vec![
                 debit(contributor_account, amount.clone()),
-                credit(format!("bounty_liability:{}", bounty.id), amount),
+                credit(format!("bounty_liability:{}", bounty.id), amount.clone()),
             ],
         )?;
         self.ledger.append(entry.clone())?;
+        let contribution = FundingContribution {
+            id: contribution_id,
+            bounty_id: bounty.id,
+            contributor_agent_id,
+            rail,
+            amount: amount.clone(),
+            status: FundingContributionStatus::Applied,
+            funding_ledger_entry_id: Some(entry.id),
+            refund_ledger_entry_id: None,
+            settlement_id: None,
+            external_reference,
+            created_at: Utc::now(),
+        };
         self.funding_contributions
             .insert(contribution.id, contribution.clone());
 
@@ -963,6 +973,7 @@ impl BountyNetwork {
             submission.solver_agent_id,
             result.verifier_agent_id,
         )?;
+        self.link_funding_contributions_to_settlement(request.bounty_id, settlement.id);
         let reputation_reason = if settlement
             .payout_intents
             .iter()
@@ -2103,6 +2114,18 @@ impl BountyNetwork {
         })
     }
 
+    fn link_funding_contributions_to_settlement(&mut self, bounty_id: Id, settlement_id: Id) {
+        for contribution in self
+            .funding_contributions
+            .values_mut()
+            .filter(|contribution| contribution.bounty_id == bounty_id)
+        {
+            if contribution.status == FundingContributionStatus::Applied {
+                contribution.settlement_id = Some(settlement_id);
+            }
+        }
+    }
+
     fn update_base_escrow_status(&mut self, escrow_id: Id, status: EscrowStatus) -> AppResult<()> {
         let escrow = self.escrows.get_mut(&escrow_id).ok_or_else(|| {
             AppError::InvalidBaseEscrowEvent(
@@ -3023,6 +3046,32 @@ mod tests {
     }
 
     #[test]
+    fn initial_non_base_funding_contribution_links_to_ledger_entry() {
+        let mut network = BountyNetwork::default();
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Write onboarding docs".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+
+        let status = network.status(bounty.id).unwrap();
+        let contribution = status.funding_contributions.first().unwrap();
+
+        assert_eq!(network.ledger.entries().len(), 1);
+        assert_eq!(
+            contribution.funding_ledger_entry_id,
+            Some(network.ledger.entries()[0].id)
+        );
+        assert_eq!(contribution.settlement_id, None);
+        assert_eq!(contribution.refund_ledger_entry_id, None);
+    }
+
+    #[test]
     fn pooled_simulated_funding_becomes_claimable_only_at_target() {
         let mut network = BountyNetwork::default();
         let solver = network.register_agent(RegisterAgentRequest {
@@ -3074,6 +3123,12 @@ mod tests {
         assert_eq!(partial.funding_summary.applied.amount, 400);
         assert_eq!(partial.funding_summary.remaining.amount, 600);
         assert!(!partial.funding_summary.claimable);
+        assert_eq!(
+            partial.contribution.funding_ledger_entry_id,
+            Some(partial.ledger_entries[0].id)
+        );
+        assert_eq!(partial.contribution.settlement_id, None);
+        assert_eq!(partial.contribution.refund_ledger_entry_id, None);
         assert!(network.list_claimable_bounties().is_empty());
 
         let funded = network
@@ -3091,6 +3146,10 @@ mod tests {
         assert_eq!(funded.funding_summary.remaining.amount, 0);
         assert_eq!(funded.funding_summary.contribution_count, 2);
         assert!(funded.funding_summary.claimable);
+        assert_eq!(
+            funded.contribution.funding_ledger_entry_id,
+            Some(funded.ledger_entries[0].id)
+        );
         assert_eq!(network.list_claimable_bounties().len(), 1);
         assert_eq!(network.ledger.entries().len(), 2);
 
@@ -3101,6 +3160,78 @@ mod tests {
             })
             .unwrap();
         assert_eq!(claimed.status, BountyStatus::Claimed);
+    }
+
+    #[tokio::test]
+    async fn pooled_contributions_link_to_settlement_after_verification() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "solver".to_string(),
+            payout_wallet: None,
+        });
+        let sponsor = network.register_agent(RegisterAgentRequest {
+            handle: "sponsor".to_string(),
+            payout_wallet: None,
+        });
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                title: "Extract public data".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                target_amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: Some(sponsor.id),
+                amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("sponsor-full".to_string()),
+            })
+            .unwrap();
+        network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        let artifact = "{\"ok\":true}";
+        let submission = network
+            .submit_result(SubmitResultRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+                artifact_uri: "memory://pooled-artifact".to_string(),
+                artifact_body: artifact.to_string(),
+            })
+            .unwrap();
+
+        network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: hash_artifact(artifact),
+                verifier_kind: Some(VerifierKind::JsonSchema),
+                rubric: None,
+                evidence: None,
+                approved_risk_event_id: None,
+            })
+            .await
+            .unwrap();
+
+        let status = network.status(bounty.id).unwrap();
+        let settlement = status.settlements.first().unwrap();
+
+        assert_eq!(status.funding_contributions.len(), 1);
+        assert_eq!(
+            status.funding_contributions[0].settlement_id,
+            Some(settlement.id)
+        );
+        assert_eq!(status.funding_contributions[0].refund_ledger_entry_id, None);
+        assert_eq!(status.bounty.status, BountyStatus::Paid);
     }
 
     #[test]

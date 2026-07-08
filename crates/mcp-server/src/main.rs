@@ -1532,6 +1532,7 @@ async fn request_verification(
         bounty,
         verifier_result,
         settlements,
+        funding_contributions,
         reputation_events,
         template_signals,
         ledger_entries,
@@ -1553,6 +1554,12 @@ async fn request_verification(
                 .filter(|settlement| settlement.bounty_id == proof.bounty_id)
                 .cloned()
                 .collect::<Vec<_>>();
+            let funding_contributions = network
+                .funding_contributions
+                .values()
+                .filter(|contribution| contribution.bounty_id == proof.bounty_id)
+                .cloned()
+                .collect::<Vec<_>>();
             let reputation_events = network
                 .reputation_events
                 .values()
@@ -1571,6 +1578,7 @@ async fn request_verification(
                 bounty,
                 verifier_result,
                 settlements,
+                funding_contributions,
                 reputation_events,
                 template_signals,
                 ledger_entries,
@@ -1603,6 +1611,11 @@ async fn request_verification(
         }
         for settlement in &settlements {
             if let Err(error) = store.upsert_settlement(settlement).await {
+                return mcp_error(error);
+            }
+        }
+        for contribution in &funding_contributions {
+            if let Err(error) = store.upsert_funding_contribution(contribution).await {
                 return mcp_error(error);
             }
         }

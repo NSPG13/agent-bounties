@@ -66,9 +66,19 @@ CREATE TABLE IF NOT EXISTS funding_contributions (
   amount BIGINT NOT NULL CHECK (amount > 0),
   currency TEXT NOT NULL,
   status TEXT NOT NULL,
+  funding_ledger_entry_id UUID,
+  refund_ledger_entry_id UUID,
+  settlement_id UUID,
   external_reference TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE funding_contributions
+  ADD COLUMN IF NOT EXISTS funding_ledger_entry_id UUID;
+ALTER TABLE funding_contributions
+  ADD COLUMN IF NOT EXISTS refund_ledger_entry_id UUID;
+ALTER TABLE funding_contributions
+  ADD COLUMN IF NOT EXISTS settlement_id UUID;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_funding_contributions_external_reference
   ON funding_contributions (bounty_id, external_reference)
@@ -216,6 +226,15 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
   postings JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+UPDATE funding_contributions fc
+SET funding_ledger_entry_id = le.id
+FROM ledger_entries le
+WHERE fc.funding_ledger_entry_id IS NULL
+  AND (
+    le.external_event_id = 'fund-contribution:' || fc.id::text
+    OR le.external_event_id = 'fund:' || fc.bounty_id::text
+  );
 
 CREATE TABLE IF NOT EXISTS payment_events (
   id UUID PRIMARY KEY,

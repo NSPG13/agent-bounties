@@ -494,6 +494,9 @@ pub struct FundingContribution {
     pub rail: PaymentRail,
     pub amount: Money,
     pub status: FundingContributionStatus,
+    pub funding_ledger_entry_id: Option<Id>,
+    pub refund_ledger_entry_id: Option<Id>,
+    pub settlement_id: Option<Id>,
     pub external_reference: Option<String>,
     pub created_at: DateTime<Utc>,
 }
