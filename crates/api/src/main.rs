@@ -1,13 +1,15 @@
 use app::{
-    hash_artifact, AddFundingContributionRequest, ApproveRiskBountyRequest,
-    ApproveRiskPayoutRequest, BaseEscrowReconciliation, BaseReleaseQueueRequest, BountyNetwork,
-    BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest,
-    FundQuoteRequest, FundingIntentReport, OpenPooledBountyRequest, PlanBaseDisputeRequest,
-    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
-    PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
-    PostBountyRequest, QuoteSet, RegisterAgentRequest, RegisterCapabilityRequest,
-    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
-    StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest, VerifySubmissionRequest,
+    build_live_money_readiness_report, hash_artifact, stripe_secret_key_mode_from_secret,
+    AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
+    BaseEscrowReconciliation, BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse,
+    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
+    FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
+    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
+    PlanBaseReleaseRequest, PlanStripeTransferRequest as AppPlanStripeTransferRequest,
+    PooledFundingReport, PostBountyRequest, QuoteSet, RegisterAgentRequest,
+    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    ReviewedBountyApproval, RiskEventFilter, StripeTransferPlan, StripeTransferReconciliation,
+    SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
     body::Bytes,
@@ -19,7 +21,7 @@ use axum::{
 };
 use bounty_router::{BountyRouter, RouteDecision};
 use chain_base::{
-    broadcast_signed_transaction, eth_get_transaction_receipt_request,
+    base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, fetch_base_escrow_logs, fetch_transaction_receipt,
     rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery, BaseNetworkDescriptor,
     BaseRpcUrlConfig, ChainBaseError, EthGetLogsRequest, EthGetTransactionReceiptRequest,
@@ -67,6 +69,7 @@ use worker::BaseEscrowLogWorker;
         discovery_manifest_schema,
         agent_bounties_discovery,
         risk_policy,
+        live_money_readiness,
         list_risk_events,
         list_risk_reviews,
         approve_risk_bounty,
@@ -255,6 +258,11 @@ struct RouteRequest {
     budget_minor: i64,
     currency: String,
     privacy: PrivacyLevel,
+}
+
+#[derive(Debug, Deserialize)]
+struct LiveMoneyReadinessQuery {
+    network: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -469,6 +477,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
+        .route("/v1/readiness/live-money", get(live_money_readiness))
         .route("/v1/risk/events", get(list_risk_events))
         .route("/v1/risk/reviews", get(list_risk_reviews))
         .route("/v1/risk/bounty-approvals", post(approve_risk_bounty))
@@ -661,6 +670,72 @@ async fn agent_bounties_discovery(
 #[utoipa::path(get, path = "/v1/risk/policy", responses((status = 200, body = RiskPolicyDescriptor)))]
 async fn risk_policy() -> Json<RiskPolicyDescriptor> {
     Json(RiskPolicy::default().descriptor())
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/readiness/live-money",
+    params(("network" = Option<String>, Query, description = "Base network, defaults to base-mainnet")),
+    responses(
+        (status = 200, description = "Non-secret live-money readiness report"),
+        (status = 400, description = "Unknown Base network")
+    )
+)]
+async fn live_money_readiness(
+    State(state): State<SharedState>,
+    Query(query): Query<LiveMoneyReadinessQuery>,
+) -> Result<Json<LiveMoneyReadinessReport>, StatusCode> {
+    let network = query
+        .network
+        .filter(|network| !network.trim().is_empty())
+        .unwrap_or_else(|| "base-mainnet".to_string());
+    build_live_money_readiness_report(live_money_readiness_config(&state, &network))
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
+    let descriptor = base_network_descriptor(network).ok();
+    LiveMoneyReadinessConfig {
+        network: network.to_string(),
+        escrow_contract: descriptor
+            .as_ref()
+            .and_then(|descriptor| base_escrow_contract_for_chain(descriptor.chain_id)),
+        usdc_token: descriptor
+            .as_ref()
+            .and_then(base_usdc_token_for_chain)
+            .or_else(|| descriptor.map(|descriptor| descriptor.native_usdc_token_address)),
+        stripe_secret_key_mode: stripe_secret_key_mode_from_secret(
+            state.stripe_secret_key.as_deref(),
+        ),
+        stripe_live_execution_enabled: state.stripe_live_execution_enabled,
+        stripe_webhook_secret_configured: state.stripe_webhook_secret.is_some(),
+        allow_unsigned_stripe_webhooks: state.allow_unsigned_stripe_webhooks,
+        operator_auth_configured: state.operator_api_token.is_some(),
+        base_rpc_url_configured: state.base_rpc_urls.resolve(network).is_ok(),
+        base_broadcast_enabled: state.base_broadcast_enabled,
+    }
+}
+
+fn base_escrow_contract_for_chain(chain_id: u64) -> Option<String> {
+    match chain_id {
+        84_532 => env_nonempty_value("BASE_SEPOLIA_ESCROW_CONTRACT"),
+        8_453 => env_nonempty_value("BASE_MAINNET_ESCROW_CONTRACT"),
+        _ => None,
+    }
+}
+
+fn base_usdc_token_for_chain(descriptor: &BaseNetworkDescriptor) -> Option<String> {
+    let configured = match descriptor.chain_id {
+        84_532 => env_nonempty_value("BASE_SEPOLIA_USDC_TOKEN"),
+        8_453 => env_nonempty_value("BASE_MAINNET_USDC_TOKEN"),
+        _ => None,
+    };
+    configured.or_else(|| Some(descriptor.native_usdc_token_address.clone()))
+}
+
+fn env_nonempty_value(name: &str) -> Option<String> {
+    env::var(name).ok().and_then(non_empty_secret)
 }
 
 #[utoipa::path(get, path = "/v1/risk/events", responses((status = 200, body = Vec<RiskEvent>)))]
@@ -3815,6 +3890,10 @@ mod tests {
             "http://127.0.0.1:8080/v1/risk/policy"
         );
         assert_eq!(
+            manifest.endpoints.live_money_readiness,
+            "http://127.0.0.1:8080/v1/readiness/live-money"
+        );
+        assert_eq!(
             manifest.endpoints.risk_events,
             "http://127.0.0.1:8080/v1/risk/events"
         );
@@ -3856,9 +3935,52 @@ mod tests {
             .iter()
             .any(|entrypoint| entrypoint.name == "route_blocked_goal"));
         assert!(manifest
+            .agent_entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint.name == "check_live_money_readiness"));
+        assert!(manifest
             .payment_rails
             .iter()
             .any(|rail| rail.name == "Base Sepolia USDC escrow"));
+    }
+
+    #[tokio::test]
+    async fn live_money_readiness_endpoint_reports_non_secret_defaults() {
+        let state = test_state(BountyNetwork::default());
+        let report = live_money_readiness(
+            State(state),
+            Query(LiveMoneyReadinessQuery {
+                network: Some("base-mainnet".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(report.network, "Base");
+        assert_eq!(report.network_chain_id, 8_453);
+        assert_eq!(report.stripe_secret_key_mode, "unset");
+        assert_eq!(report.supplied_usdc_token_matches_native, Some(true));
+        assert!(!report.live_money_ready);
+        assert!(report
+            .checks
+            .iter()
+            .any(|check| check.name == "Stripe live-money execution gate"));
+    }
+
+    #[tokio::test]
+    async fn live_money_readiness_endpoint_rejects_unknown_network() {
+        let state = test_state(BountyNetwork::default());
+        let error = live_money_readiness(
+            State(state),
+            Query(LiveMoneyReadinessQuery {
+                network: Some("optimism".to_string()),
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -3881,6 +4003,7 @@ mod tests {
         assert!(paths.contains_key("/llms.txt"));
         assert!(paths.contains_key("/schemas/discovery-manifest.v1.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
+        assert!(paths.contains_key("/v1/readiness/live-money"));
         assert!(paths.contains_key("/v1/risk/events"));
         assert!(paths.contains_key("/v1/risk/reviews"));
         assert!(paths.contains_key("/v1/risk/bounty-approvals"));

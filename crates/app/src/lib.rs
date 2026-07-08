@@ -2,7 +2,7 @@ use bounty_router::{template_for_class, BountyRouter};
 use chain_base::{
     base_network_descriptor, BaseEscrowCreate, BaseEscrowEvent, BaseEscrowEventKind,
     BaseEscrowFundingPlan, BaseEscrowRelease, BaseEscrowReleaseCall, BaseEscrowTxPlanner,
-    BaseNetworkDescriptor, EscrowRecipient, EvmTransactionIntent,
+    BaseNetworkDescriptor, ChainBaseError, EscrowRecipient, EvmTransactionIntent,
 };
 use chrono::{DateTime, Utc};
 use domain::{
@@ -82,6 +82,367 @@ pub enum AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveMoneyReadinessConfig {
+    pub network: String,
+    pub escrow_contract: Option<String>,
+    pub usdc_token: Option<String>,
+    pub stripe_secret_key_mode: String,
+    pub stripe_live_execution_enabled: bool,
+    pub stripe_webhook_secret_configured: bool,
+    pub allow_unsigned_stripe_webhooks: bool,
+    pub operator_auth_configured: bool,
+    pub base_rpc_url_configured: bool,
+    pub base_broadcast_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveMoneyReadinessCheck {
+    pub name: String,
+    pub configured: bool,
+    pub required_for: String,
+    pub env_vars: Vec<String>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveMoneyReadinessReport {
+    pub local_rehearsal_ready: bool,
+    pub stripe_test_mode_ready: bool,
+    pub stripe_live_mode_ready: bool,
+    pub stripe_webhook_ready: bool,
+    pub base_testnet_ready: bool,
+    pub base_mainnet_ready: bool,
+    pub base_broadcast_ready: bool,
+    pub operator_auth_configured: bool,
+    pub live_money_ready: bool,
+    pub network: String,
+    pub network_chain_id: u64,
+    pub network_rpc_url_env: String,
+    pub network_native_usdc_token_address: String,
+    pub stripe_secret_key_mode: String,
+    pub supplied_usdc_token_matches_native: Option<bool>,
+    pub checks: Vec<LiveMoneyReadinessCheck>,
+    pub evidence_boundaries: Vec<String>,
+    pub commands: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+struct ReadinessWarningInputs<'a> {
+    stripe_test_mode_ready: bool,
+    stripe_live_mode_ready: bool,
+    stripe_webhook_ready: bool,
+    base_testnet_ready: bool,
+    base_mainnet_ready: bool,
+    unsigned_stripe_webhooks: bool,
+    operator_token: bool,
+    token_mismatch: bool,
+    native_usdc_token_address: &'a str,
+}
+
+pub fn build_live_money_readiness_report(
+    config: LiveMoneyReadinessConfig,
+) -> Result<LiveMoneyReadinessReport, ChainBaseError> {
+    let network_descriptor = base_network_descriptor(&config.network)?;
+    let rpc_env = network_descriptor.rpc_url_env.clone();
+    let stripe_secret_key_mode = config.stripe_secret_key_mode.trim().to_ascii_lowercase();
+    let stripe_webhook_secret = config.stripe_webhook_secret_configured;
+    let unsigned_stripe_webhooks = config.allow_unsigned_stripe_webhooks;
+    let operator_token = config.operator_auth_configured;
+    let base_rpc = config.base_rpc_url_configured;
+    let base_broadcast_enabled = config.base_broadcast_enabled;
+    let escrow_configured = config.escrow_contract.as_deref().is_some_and(nonempty);
+    let token_configured = config.usdc_token.as_deref().is_some_and(nonempty);
+    let supplied_usdc_token_matches_native = config
+        .usdc_token
+        .as_deref()
+        .filter(|value| nonempty(value))
+        .map(|value| {
+            value
+                .trim()
+                .eq_ignore_ascii_case(network_descriptor.native_usdc_token_address.as_str())
+        });
+    let token_matches_native = supplied_usdc_token_matches_native.unwrap_or(false);
+
+    let checks = vec![
+        readiness_check(
+            "local deterministic rehearsal",
+            true,
+            "pooled, Stripe, Base, mixed-funding, verification, and payout state-machine simulation",
+            vec![],
+            "Run cargo run -p cli -- funding-rehearsal-demo; no external credentials required.",
+        ),
+        readiness_check(
+            "Stripe test-mode execution gate",
+            stripe_secret_key_mode == "test" && config.stripe_live_execution_enabled,
+            "creating Stripe test-mode Checkout Sessions and Connect transfers",
+            vec![
+                "STRIPE_SECRET_KEY".to_string(),
+                "ENABLE_STRIPE_LIVE_EXECUTION".to_string(),
+            ],
+            if stripe_secret_key_mode == "test" && config.stripe_live_execution_enabled {
+                "Stripe test-mode execution is operator-enabled."
+            } else if stripe_secret_key_mode == "live" {
+                "A live Stripe key is configured; use the live-money check rather than test-mode execution."
+            } else {
+                "Set STRIPE_SECRET_KEY=sk_test_... and ENABLE_STRIPE_LIVE_EXECUTION=true before executing Stripe request intents."
+            },
+        ),
+        readiness_check(
+            "Stripe live-money execution gate",
+            stripe_secret_key_mode == "live"
+                && config.stripe_live_execution_enabled
+                && stripe_webhook_secret
+                && !unsigned_stripe_webhooks
+                && operator_token,
+            "creating live Stripe Checkout Sessions, live Connect accounts, and live transfer requests",
+            vec![
+                "STRIPE_SECRET_KEY".to_string(),
+                "ENABLE_STRIPE_LIVE_EXECUTION".to_string(),
+                "STRIPE_WEBHOOK_SECRET".to_string(),
+                "OPERATOR_API_TOKEN".to_string(),
+            ],
+            if stripe_secret_key_mode == "live"
+                && config.stripe_live_execution_enabled
+                && stripe_webhook_secret
+                && !unsigned_stripe_webhooks
+                && operator_token
+            {
+                "Live Stripe execution is operator-gated and signed webhook reconciliation is configured."
+            } else {
+                "Use sk_live_ only in a hosted environment with ENABLE_STRIPE_LIVE_EXECUTION=true, STRIPE_WEBHOOK_SECRET, OPERATOR_API_TOKEN, and ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false."
+            },
+        ),
+        readiness_check(
+            "Stripe webhook evidence gate",
+            stripe_webhook_secret || unsigned_stripe_webhooks,
+            "crediting fiat balances and marking fiat transfer evidence in local/test environments",
+            vec![
+                "STRIPE_WEBHOOK_SECRET".to_string(),
+                "ALLOW_UNSIGNED_STRIPE_WEBHOOKS".to_string(),
+            ],
+            if stripe_webhook_secret {
+                "Signed Stripe webhooks are configured."
+            } else if unsigned_stripe_webhooks {
+                "Unsigned Stripe webhook simulation is enabled; use only for local or mock-provider rehearsal."
+            } else {
+                "Set STRIPE_WEBHOOK_SECRET for signed webhooks, or ALLOW_UNSIGNED_STRIPE_WEBHOOKS=true for local-only simulation."
+            },
+        ),
+        readiness_check(
+            "Base RPC log reconciliation",
+            base_rpc,
+            "fetching Base escrow logs and transaction receipts",
+            vec![rpc_env.clone()],
+            if base_rpc {
+                "Base RPC URL is configured for the selected network."
+            } else {
+                "Set the selected network RPC URL before fetching escrow logs or receipts."
+            },
+        ),
+        readiness_check(
+            "Base signed transaction broadcast gate",
+            base_rpc && base_broadcast_enabled,
+            "broadcasting signed Base escrow funding or release transactions through the service",
+            vec![rpc_env.clone(), "ENABLE_BASE_TX_BROADCAST".to_string()],
+            if base_rpc && base_broadcast_enabled {
+                "Base transaction broadcast is enabled for already-signed raw transactions."
+            } else {
+                "Signed transaction broadcast remains disabled; operators can still sign/send externally and reconcile logs."
+            },
+        ),
+        readiness_check(
+            "Base escrow addresses",
+            escrow_configured && token_configured && token_matches_native,
+            "building bounty-bound approve/createEscrow funding plans",
+            vec![
+                "--escrow-contract".to_string(),
+                "--usdc-token".to_string(),
+            ],
+            if escrow_configured && token_configured && token_matches_native {
+                "Escrow contract and the selected network's native USDC token address were supplied."
+            } else if escrow_configured && token_configured {
+                "Escrow contract and token address were supplied, but the token does not match the selected network's native USDC address."
+            } else {
+                "Pass --escrow-contract and --usdc-token when rehearsing Base funding plans."
+            },
+        ),
+        readiness_check(
+            "operator mutation auth",
+            operator_token,
+            "protecting hosted reconciliation, broadcast, and live Stripe execution endpoints",
+            vec!["OPERATOR_API_TOKEN".to_string()],
+            if operator_token {
+                "Hosted operator token is configured."
+            } else {
+                "OPERATOR_API_TOKEN is optional locally but should be set for hosted mutation surfaces."
+            },
+        ),
+    ];
+
+    let stripe_test_mode_ready =
+        stripe_secret_key_mode == "test" && config.stripe_live_execution_enabled;
+    let stripe_live_mode_ready = stripe_secret_key_mode == "live"
+        && config.stripe_live_execution_enabled
+        && stripe_webhook_secret
+        && !unsigned_stripe_webhooks
+        && operator_token;
+    let stripe_webhook_ready = stripe_webhook_secret || unsigned_stripe_webhooks;
+    let base_testnet_ready = network_descriptor.name == "Base Sepolia"
+        && base_rpc
+        && escrow_configured
+        && token_configured
+        && token_matches_native;
+    let base_mainnet_ready = network_descriptor.chain_id == 8_453
+        && base_rpc
+        && escrow_configured
+        && token_configured
+        && token_matches_native
+        && operator_token;
+    let base_broadcast_ready = base_rpc && base_broadcast_enabled;
+    let live_money_ready = stripe_live_mode_ready && base_mainnet_ready;
+    let warnings = readiness_warnings(ReadinessWarningInputs {
+        stripe_test_mode_ready,
+        stripe_live_mode_ready,
+        stripe_webhook_ready,
+        base_testnet_ready,
+        base_mainnet_ready,
+        unsigned_stripe_webhooks,
+        operator_token,
+        token_mismatch: token_configured && !token_matches_native,
+        native_usdc_token_address: network_descriptor.native_usdc_token_address.as_str(),
+    });
+
+    Ok(LiveMoneyReadinessReport {
+        local_rehearsal_ready: true,
+        stripe_test_mode_ready,
+        stripe_live_mode_ready,
+        stripe_webhook_ready,
+        base_testnet_ready,
+        base_mainnet_ready,
+        base_broadcast_ready,
+        operator_auth_configured: operator_token,
+        live_money_ready,
+        network: network_descriptor.name,
+        network_chain_id: network_descriptor.chain_id,
+        network_rpc_url_env: network_descriptor.rpc_url_env,
+        network_native_usdc_token_address: network_descriptor.native_usdc_token_address,
+        stripe_secret_key_mode,
+        supplied_usdc_token_matches_native,
+        checks,
+        evidence_boundaries: vec![
+            "Stripe Checkout Session creation is not funding; only a verified checkout.session.completed webhook credits balance.".to_string(),
+            "Base approve/createEscrow transaction planning is not funding; only an indexed EscrowCreated log makes Base funding applied.".to_string(),
+            "Deterministic verifier acceptance creates settlement intents; it does not pay by itself.".to_string(),
+            "Base release transaction hashes are not payout; only an indexed EscrowReleased log marks USDC payout paid.".to_string(),
+            "Stripe Connect eligibility and transfer planning are not payout; only transfer.created evidence marks fiat payout intents paid.".to_string(),
+        ],
+        commands: vec![
+            "cargo run -p cli -- funding-rehearsal-demo".to_string(),
+            "cargo run -p cli -- stripe-execute-request-intent --intent-file target\\stripe-funding-intent.json".to_string(),
+            "cargo run -p cli -- base-fetch-logs --network base-sepolia --escrow-contract <escrow-contract> --from-block <block>".to_string(),
+            "cargo run -p cli -- base-fetch-logs --network base-mainnet --escrow-contract <escrow-contract> --from-block <block>".to_string(),
+            "cargo run -p cli -- base-transaction-receipt --network base-sepolia --tx-hash <tx-hash>".to_string(),
+            "cargo run -p cli -- base-transaction-receipt --network base-mainnet --tx-hash <tx-hash>".to_string(),
+            "cargo run -p cli -- discovery --public-base-url <url> --mcp-base-url <url>".to_string(),
+        ],
+        warnings,
+    })
+}
+
+pub fn stripe_secret_key_mode_from_secret(secret: Option<&str>) -> String {
+    secret
+        .map(|value| {
+            let value = value.trim();
+            if value.is_empty() {
+                "unset"
+            } else if value.starts_with("sk_test_") {
+                "test"
+            } else if value.starts_with("sk_live_") {
+                "live"
+            } else if value.starts_with("rk_") {
+                "restricted"
+            } else {
+                "unknown"
+            }
+        })
+        .unwrap_or("unset")
+        .to_string()
+}
+
+fn readiness_check(
+    name: impl Into<String>,
+    configured: bool,
+    required_for: impl Into<String>,
+    env_vars: Vec<String>,
+    detail: impl Into<String>,
+) -> LiveMoneyReadinessCheck {
+    LiveMoneyReadinessCheck {
+        name: name.into(),
+        configured,
+        required_for: required_for.into(),
+        env_vars,
+        detail: detail.into(),
+    }
+}
+
+fn readiness_warnings(input: ReadinessWarningInputs<'_>) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if !input.stripe_test_mode_ready {
+        warnings.push(
+            "Stripe request execution is not ready; use plan-only mode or set test-mode credentials and ENABLE_STRIPE_LIVE_EXECUTION=true."
+                .to_string(),
+        );
+    }
+    if !input.stripe_live_mode_ready {
+        warnings.push(
+            "Stripe live-money execution is not ready; hosted live flows require sk_live_ credentials, signed webhooks, ENABLE_STRIPE_LIVE_EXECUTION=true, OPERATOR_API_TOKEN, and unsigned webhooks disabled."
+                .to_string(),
+        );
+    }
+    if !input.stripe_webhook_ready {
+        warnings.push(
+            "Stripe fiat ledger credits will be rejected until signed webhooks or local unsigned webhook simulation are configured."
+                .to_string(),
+        );
+    }
+    if !input.base_testnet_ready {
+        warnings.push(
+            "Base Sepolia funding can be planned locally, but RPC log reconciliation needs RPC URL plus escrow and token addresses."
+                .to_string(),
+        );
+    }
+    if !input.base_mainnet_ready {
+        warnings.push(
+            "Base mainnet USDC is not live-ready; set BASE_MAINNET_RPC_URL, pass the deployed escrow contract, pass the native Base USDC token, and configure OPERATOR_API_TOKEN."
+                .to_string(),
+        );
+    }
+    if input.token_mismatch {
+        warnings.push(format!(
+            "The supplied USDC token does not match the selected network native USDC token: {}.",
+            input.native_usdc_token_address
+        ));
+    }
+    if input.unsigned_stripe_webhooks {
+        warnings.push(
+            "ALLOW_UNSIGNED_STRIPE_WEBHOOKS must not be used for hosted or production money flows."
+                .to_string(),
+        );
+    }
+    if !input.operator_token {
+        warnings.push(
+            "Set OPERATOR_API_TOKEN before exposing hosted reconciliation, broadcast, or live Stripe execution endpoints."
+                .to_string(),
+        );
+    }
+    warnings
+}
+
+fn nonempty(value: &str) -> bool {
+    !value.trim().is_empty()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterAgentRequest {
@@ -3699,6 +4060,61 @@ fn normalize_hash(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_money_readiness_reports_ready_only_with_live_stripe_and_base_mainnet() {
+        let report = build_live_money_readiness_report(LiveMoneyReadinessConfig {
+            network: "base-mainnet".to_string(),
+            escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+            usdc_token: Some(chain_base::BASE_MAINNET_USDC_TOKEN_ADDRESS.to_string()),
+            stripe_secret_key_mode: "live".to_string(),
+            stripe_live_execution_enabled: true,
+            stripe_webhook_secret_configured: true,
+            allow_unsigned_stripe_webhooks: false,
+            operator_auth_configured: true,
+            base_rpc_url_configured: true,
+            base_broadcast_enabled: false,
+        })
+        .unwrap();
+
+        assert!(report.stripe_live_mode_ready);
+        assert!(report.base_mainnet_ready);
+        assert!(report.live_money_ready);
+        assert_eq!(report.network_chain_id, 8_453);
+        assert_eq!(
+            report.network_native_usdc_token_address,
+            chain_base::BASE_MAINNET_USDC_TOKEN_ADDRESS
+        );
+        assert_eq!(report.supplied_usdc_token_matches_native, Some(true));
+        assert!(report
+            .evidence_boundaries
+            .iter()
+            .any(|boundary| boundary.contains("checkout.session.completed")));
+    }
+
+    #[test]
+    fn live_money_readiness_warns_on_wrong_usdc_token() {
+        let report = build_live_money_readiness_report(LiveMoneyReadinessConfig {
+            network: "base-sepolia".to_string(),
+            escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+            usdc_token: Some("0x3333333333333333333333333333333333333333".to_string()),
+            stripe_secret_key_mode: "test".to_string(),
+            stripe_live_execution_enabled: true,
+            stripe_webhook_secret_configured: true,
+            allow_unsigned_stripe_webhooks: false,
+            operator_auth_configured: true,
+            base_rpc_url_configured: true,
+            base_broadcast_enabled: false,
+        })
+        .unwrap();
+
+        assert!(!report.base_testnet_ready);
+        assert_eq!(report.supplied_usdc_token_matches_native, Some(false));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains(chain_base::BASE_SEPOLIA_USDC_TOKEN_ADDRESS)));
+    }
 
     fn fund_base_bounty(
         network: &mut BountyNetwork,

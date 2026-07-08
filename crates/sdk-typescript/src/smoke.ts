@@ -180,6 +180,10 @@ async function main(): Promise<void> {
     "discovery schema must require the Base escrow event endpoint",
   );
   requireCondition(
+    endpointRequired.includes("live_money_readiness"),
+    "discovery schema must require the live-money readiness endpoint",
+  );
+  requireCondition(
     typeof endpoints.base_fetch_rpc_logs === "string",
     "discovery manifest missing Base RPC fetch endpoint",
   );
@@ -260,6 +264,10 @@ async function main(): Promise<void> {
     "discovery manifest missing risk policy endpoint",
   );
   requireCondition(
+    typeof endpoints.live_money_readiness === "string",
+    "discovery manifest missing live-money readiness endpoint",
+  );
+  requireCondition(
     typeof endpoints.risk_events === "string",
     "discovery manifest missing risk review events endpoint",
   );
@@ -292,6 +300,28 @@ async function main(): Promise<void> {
   requireCondition(
     riskPolicy.ai_judges_can_authorize_payment === false,
     "risk policy must state that AI judges cannot authorize payment",
+  );
+  const liveMoneyReadiness = asObject(
+    await client.getLiveMoneyReadiness("base-mainnet"),
+    "liveMoneyReadiness",
+  );
+  requireCondition(
+    liveMoneyReadiness.network_chain_id === 8453,
+    "live-money readiness did not expose Base mainnet chain id",
+  );
+  requireCondition(
+    String(liveMoneyReadiness.network_native_usdc_token_address).toLowerCase()
+      === "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "live-money readiness did not expose native Base USDC",
+  );
+  requireCondition(
+    typeof liveMoneyReadiness.live_money_ready === "boolean",
+    "live-money readiness did not expose a boolean live_money_ready gate",
+  );
+  requireCondition(
+    !String(liveMoneyReadiness.stripe_secret_key_mode).startsWith("sk_")
+      && !String(liveMoneyReadiness.stripe_secret_key_mode).startsWith("rk_"),
+    "live-money readiness exposed Stripe secret material",
   );
   let reviewRequired = false;
   try {

@@ -80,6 +80,7 @@ pub struct DiscoveryEndpoints {
     pub capability_feed: String,
     pub eval_runs: String,
     pub risk_policy: String,
+    pub live_money_readiness: String,
     pub risk_events: String,
     pub risk_reviews: String,
     pub risk_bounty_approvals: String,
@@ -338,6 +339,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         capability_feed: format!("{api}/v1/capabilities/feed"),
         eval_runs: format!("{api}/v1/evals/runs"),
         risk_policy: format!("{api}/v1/risk/policy"),
+        live_money_readiness: format!("{api}/v1/readiness/live-money"),
         risk_events: format!("{api}/v1/risk/events"),
         risk_reviews: format!("{api}/v1/risk/reviews"),
         risk_bounty_approvals: format!("{api}/v1/risk/bounty-approvals"),
@@ -411,6 +413,14 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 endpoint: format!("{api}/v1/bounties/funding-feed"),
                 description:
                     "Find public bounties that still need pooled, Stripe, Base, or mixed-rail funding before they become claimable."
+                        .to_string(),
+            },
+            AgentEntrypoint {
+                name: "check_live_money_readiness".to_string(),
+                transport: "HTTP JSON".to_string(),
+                endpoint: format!("{api}/v1/readiness/live-money"),
+                description:
+                    "Read non-secret Stripe/Base readiness gates before deciding whether this host can move real value."
                         .to_string(),
             },
             AgentEntrypoint {
@@ -687,6 +697,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - GitHub paid-bounty issue template: {github_issue_template}
 - Eval run history: {eval_runs}
 - Risk policy: {risk_policy}
+- Live-money readiness: {live_money_readiness}
 - Risk review events: {risk_events}
 - Risk review records: {risk_reviews}
 - Risk bounty approvals: {risk_bounty_approvals}
@@ -696,6 +707,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Base funding plan: {base_funding_plan}
 - Base escrow event reconciliation: {base_escrow_events}
 - Real funding rehearsal: {real_funding_rehearsal}
+- Live-money readiness: {live_money_readiness}
 
 ## Agent Workflow
 
@@ -710,6 +722,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 ## Payment Trust
 
 - Base USDC work must be funded before claim.
+- Check live-money readiness before relying on hosted Stripe fiat or Base mainnet USDC value movement.
 - A posted Base bounty is only funding-ready until an indexed EscrowCreated event is reconciled.
 - Open Base USDC automatic release is capped at the machine-readable risk policy limit.
 - Release, refund, and dispute plans are unsigned operator transactions.
@@ -737,6 +750,7 @@ Funding and payout state changes require reconciled evidence. Request intents, u
 - Base escrow event reconciliation: {base_escrow_events}
 - Base release queue: {base_release_queue}
 - Risk policy: {risk_policy}
+- Live-money readiness: {live_money_readiness}
 - Risk review events: {risk_events}
 - Risk review records: {risk_reviews}
 - Risk payout approvals: {risk_payout_approvals}
@@ -795,6 +809,7 @@ The repository is designed for agent contributors. Start with the agent quicksta
         github_issue_template = &endpoints.github_issue_template,
         eval_runs = &endpoints.eval_runs,
         risk_policy = &endpoints.risk_policy,
+        live_money_readiness = &endpoints.live_money_readiness,
         risk_events = &endpoints.risk_events,
         risk_reviews = &endpoints.risk_reviews,
         risk_bounty_approvals = &endpoints.risk_bounty_approvals,
@@ -2394,6 +2409,10 @@ mod tests {
             "https://network.example/v1/risk/policy"
         );
         assert_eq!(
+            manifest.endpoints.live_money_readiness,
+            "https://network.example/v1/readiness/live-money"
+        );
+        assert_eq!(
             manifest.endpoints.risk_events,
             "https://network.example/v1/risk/events"
         );
@@ -2642,6 +2661,8 @@ mod tests {
         assert!(text.contains("AI judges"));
         assert!(text.contains("Risk policy"));
         assert!(text.contains("https://network.example/v1/risk/policy"));
+        assert!(text.contains("Live-money readiness"));
+        assert!(text.contains("https://network.example/v1/readiness/live-money"));
         assert!(text.contains("Risk review events"));
         assert!(text.contains("Base escrow event reconciliation"));
         assert!(text.contains("EscrowCreated"));
@@ -2680,6 +2701,7 @@ mod tests {
         assert!(discovery_manifest_schema_json().contains("\"public_funding\""));
         assert!(discovery_manifest_schema_json().contains("\"public_bounty\""));
         assert!(discovery_manifest_schema_json().contains("\"real_money_rehearsal\""));
+        assert!(discovery_manifest_schema_json().contains("\"live_money_readiness\""));
         assert!(discovery_manifest_schema_json().contains("\"distribution_feedback\""));
     }
 

@@ -1,10 +1,11 @@
 use app::{
+    build_live_money_readiness_report, stripe_secret_key_mode_from_secret,
     AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
     BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest, CreateFundingIntentRequest,
-    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, OpenPooledBountyRequest,
-    PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
-    PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
+    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
+    PlanBaseReleaseRequest, PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest,
+    RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
@@ -16,10 +17,10 @@ use axum::{
 };
 use bounty_router::BountyRouter;
 use chain_base::{
-    broadcast_signed_transaction, eth_get_transaction_receipt_request,
+    base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, fetch_base_escrow_logs, fetch_transaction_receipt,
-    rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery, BaseRpcUrlConfig, EvmLog,
-    RpcLogSubmission,
+    rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery, BaseNetworkDescriptor,
+    BaseRpcUrlConfig, EvmLog, RpcLogSubmission,
 };
 use chrono::Utc;
 use db::PostgresStore;
@@ -165,6 +166,11 @@ struct PlanStripeConnectAccountArgs {
 struct PlanStripeConnectTransferArgs {
     payout_intent_id: Uuid,
     connected_account_id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct LiveMoneyReadinessArgs {
+    network: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -422,6 +428,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/run_eval_loops", get(run_eval_loops))
         .route("/tools/get_eval_runs", get(get_eval_runs))
         .route("/tools/get_risk_policy", get(get_risk_policy))
+        .route(
+            "/tools/get_live_money_readiness",
+            post(get_live_money_readiness),
+        )
         .route("/tools/list_risk_events", post(list_risk_events))
         .route("/tools/list_risk_reviews", get(list_risk_reviews))
         .route("/tools/approve_risk_bounty", post(approve_risk_bounty))
@@ -772,6 +782,16 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "connected_account_id": string_property("Stripe connected account ID receiving the transfer.")
                 }),
                 &["payout_intent_id", "connected_account_id"],
+            ),
+        ),
+        tool(
+            "get_live_money_readiness",
+            "Return non-secret Stripe/Base readiness gates for this hosted service before agents or operators rely on real-value movement.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet.")
+                }),
+                &[],
             ),
         ),
         operator_tool(
@@ -2675,6 +2695,71 @@ async fn get_risk_policy() -> Json<serde_json::Value> {
     mcp_json(RiskPolicy::default().descriptor())
 }
 
+async fn get_live_money_readiness(
+    State(state): State<SharedState>,
+    Json(args): Json<LiveMoneyReadinessArgs>,
+) -> Json<serde_json::Value> {
+    let network = args
+        .network
+        .filter(|network| !network.trim().is_empty())
+        .unwrap_or_else(|| "base-mainnet".to_string());
+    match build_live_money_readiness_report(live_money_readiness_config(&state, &network)) {
+        Ok(report) => mcp_json(report),
+        Err(error) => mcp_error(error.to_string()),
+    }
+}
+
+fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
+    let descriptor = base_network_descriptor(network).ok();
+    LiveMoneyReadinessConfig {
+        network: network.to_string(),
+        escrow_contract: descriptor
+            .as_ref()
+            .and_then(|descriptor| base_escrow_contract_for_chain(descriptor.chain_id)),
+        usdc_token: descriptor
+            .as_ref()
+            .and_then(base_usdc_token_for_chain)
+            .or_else(|| descriptor.map(|descriptor| descriptor.native_usdc_token_address)),
+        stripe_secret_key_mode: stripe_secret_key_mode_from_secret(
+            state.stripe_secret_key.as_deref(),
+        ),
+        stripe_live_execution_enabled: state.stripe_live_execution_enabled,
+        stripe_webhook_secret_configured: env_nonempty_value("STRIPE_WEBHOOK_SECRET").is_some(),
+        allow_unsigned_stripe_webhooks: env_flag("ALLOW_UNSIGNED_STRIPE_WEBHOOKS"),
+        operator_auth_configured: state.operator_api_token.is_some(),
+        base_rpc_url_configured: state.base_rpc_urls.resolve(network).is_ok(),
+        base_broadcast_enabled: state.base_broadcast_enabled,
+    }
+}
+
+fn base_escrow_contract_for_chain(chain_id: u64) -> Option<String> {
+    match chain_id {
+        84_532 => env_nonempty_value("BASE_SEPOLIA_ESCROW_CONTRACT"),
+        8_453 => env_nonempty_value("BASE_MAINNET_ESCROW_CONTRACT"),
+        _ => None,
+    }
+}
+
+fn base_usdc_token_for_chain(descriptor: &BaseNetworkDescriptor) -> Option<String> {
+    let configured = match descriptor.chain_id {
+        84_532 => env_nonempty_value("BASE_SEPOLIA_USDC_TOKEN"),
+        8_453 => env_nonempty_value("BASE_MAINNET_USDC_TOKEN"),
+        _ => None,
+    };
+    configured.or_else(|| Some(descriptor.native_usdc_token_address.clone()))
+}
+
+fn env_nonempty_value(name: &str) -> Option<String> {
+    env::var(name).ok().and_then(non_empty_secret)
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(false)
+}
+
 async fn list_risk_events(
     State(state): State<SharedState>,
     Json(filter): Json<RiskEventFilter>,
@@ -3145,6 +3230,18 @@ mod tests {
                 .any(|value| value == "base-mainnet")
         );
 
+        let get_live_money_readiness = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "get_live_money_readiness")
+            .expect("get_live_money_readiness descriptor exists");
+        assert!(
+            get_live_money_readiness.input_schema["properties"]["network"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "base-mainnet")
+        );
+
         let plan_base_refund = descriptors
             .iter()
             .find(|descriptor| descriptor.name == "plan_base_refund")
@@ -3387,6 +3484,31 @@ mod tests {
             .unwrap()
             .iter()
             .any(|rule| rule.as_str().unwrap().contains("indexed escrow logs")));
+    }
+
+    #[tokio::test]
+    async fn live_money_readiness_tool_reports_non_secret_defaults() {
+        let response = get_live_money_readiness(
+            State(test_state()),
+            Json(LiveMoneyReadinessArgs {
+                network: Some("base-mainnet".to_string()),
+            }),
+        )
+        .await
+        .0;
+        let body = &response["content"][0]["json"];
+
+        assert_eq!(body["network"], "Base");
+        assert_eq!(body["network_chain_id"], 8_453);
+        assert_eq!(body["stripe_secret_key_mode"], "unset");
+        assert_eq!(body["supplied_usdc_token_matches_native"], true);
+        assert_eq!(body["live_money_ready"], false);
+        assert!(body["checks"].as_array().unwrap().iter().any(|check| {
+            check["name"]
+                .as_str()
+                .unwrap()
+                .contains("Stripe live-money execution")
+        }));
     }
 
     #[tokio::test]

@@ -71,6 +71,19 @@ The strict gate requires:
 - deployed Base mainnet escrow contract,
 - native Base USDC token.
 
+Hosted API and MCP services expose the same non-secret readiness evidence:
+
+```powershell
+curl "$env:PUBLIC_BASE_URL/v1/readiness/live-money?network=base-mainnet"
+curl "$env:MCP_BASE_URL/tools/get_live_money_readiness" `
+  -H "content-type: application/json" `
+  --data '{"network":"base-mainnet"}'
+```
+
+The report intentionally exposes only Stripe key mode, configured gates, chain
+metadata, native USDC address, warnings, and settlement evidence boundaries. It
+must not expose Stripe secrets, webhook secrets, RPC URLs, or operator tokens.
+
 ## Funding Flow
 
 1. Post or discover a public funding-ready bounty through
