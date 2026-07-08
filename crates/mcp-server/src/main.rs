@@ -1,10 +1,11 @@
 use app::{
     AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
-    BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest, CreateHelpRequestRequest,
-    FundQuoteRequest, OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest,
-    PlanBaseRefundRequest, PlanBaseReleaseRequest, PooledFundingReport, PostBountyRequest,
-    RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
-    ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
+    BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest, CreateFundingIntentRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, OpenPooledBountyRequest,
+    PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
+    PooledFundingReport, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
+    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
+    SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
     extract::State,
@@ -297,6 +298,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/fund_quote_as_bounty", post(fund_quote_as_bounty))
         .route("/tools/post_bounty", post(post_bounty))
         .route("/tools/open_pooled_bounty", post(open_pooled_bounty))
+        .route("/tools/create_funding_intent", post(create_funding_intent))
         .route("/tools/add_bounty_funding", post(add_bounty_funding))
         .route(
             "/tools/list_claimable_bounties",
@@ -528,6 +530,28 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "funding_mode",
                     "privacy",
                 ],
+            ),
+        ),
+        tool(
+            "create_funding_intent",
+            "Create a real-rail funding intent for a bounty and return the Stripe Checkout or Base escrow next action. The intent does not confirm funding until webhook or escrow-log evidence is reconciled.",
+            object_tool_schema(
+                json!({
+                    "bounty_id": uuid_property("Bounty UUID."),
+                    "contributor_agent_id": nullable_uuid_property("Optional contributor agent UUID."),
+                    "source_organization_id": nullable_uuid_property("Stripe-funded organization UUID. Required for StripeFiat intents."),
+                    "amount_minor": integer_property("Intent amount in minor units."),
+                    "currency": string_property("Currency code for the rail partition."),
+                    "rail": enum_property(&["StripeFiat", "BaseUsdc"], "Real payment rail for this intent."),
+                    "external_reference": nullable_string_property("Optional per-bounty idempotency reference for duplicate detection."),
+                    "stripe_success_url": nullable_string_property("Optional Stripe Checkout success URL."),
+                    "stripe_cancel_url": nullable_string_property("Optional Stripe Checkout cancel URL."),
+                    "base_escrow_contract": nullable_string_property("Base escrow contract address. Required for BaseUsdc intents."),
+                    "base_payer": nullable_string_property("Base payer wallet address. Required for BaseUsdc intents."),
+                    "base_token": nullable_string_property("USDC token address. Required for BaseUsdc intents."),
+                    "base_network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Base network. Defaults to base-sepolia.")
+                }),
+                &["bounty_id", "amount_minor", "currency", "rail"],
             ),
         ),
         tool(
@@ -1492,6 +1516,26 @@ async fn add_bounty_funding(
     mcp_json(report)
 }
 
+async fn create_funding_intent(
+    State(state): State<SharedState>,
+    Json(args): Json<CreateFundingIntentRequest>,
+) -> Json<serde_json::Value> {
+    let platform_base_url =
+        env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+    let result = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network.create_funding_intent(args, platform_base_url)
+    };
+    let report = match result {
+        Ok(report) => report,
+        Err(error) => return mcp_error(error),
+    };
+    if let Err(error) = persist_funding_intent_report(&state, &report).await {
+        return mcp_error(error);
+    }
+    mcp_json(report)
+}
+
 async fn list_claimable_bounties(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let bounties = {
         let network = state.network.lock().expect("state poisoned");
@@ -1902,6 +1946,22 @@ async fn reconcile_stripe_checkout_webhook(
                 return mcp_error(error);
             }
         }
+        if let Some(intent) = &reconciliation.funding_intent {
+            if let Err(error) = store.upsert_funding_intent(intent).await {
+                return mcp_error(error);
+            }
+        }
+        if let Some(report) = &reconciliation.funding_report {
+            if let Err(error) = store.upsert_bounty(&report.bounty).await {
+                return mcp_error(error);
+            }
+            if let Err(error) = store
+                .upsert_funding_contribution(&report.contribution)
+                .await
+            {
+                return mcp_error(error);
+            }
+        }
         if let Err(error) = persist_ledger_entries(store, &reconciliation.ledger_entries).await {
             return mcp_error(error);
         }
@@ -2030,6 +2090,11 @@ async fn reconcile_base_escrow_event(
         }
         if let Err(error) = store.upsert_escrow(&reconciliation.escrow).await {
             return mcp_error(error);
+        }
+        for intent in &reconciliation.funding_intents {
+            if let Err(error) = store.upsert_funding_intent(intent).await {
+                return mcp_error(error);
+            }
         }
         for settlement in &reconciliation.settlements {
             if let Err(error) = store.upsert_settlement(settlement).await {
@@ -2223,7 +2288,7 @@ async fn get_base_transaction_receipt(
 }
 
 async fn process_base_evm_logs(state: &SharedState, logs: Vec<EvmLog>) -> Json<serde_json::Value> {
-    let (report, indexed_events, bounties, escrows, settlements) = {
+    let (report, indexed_events, bounties, funding_intents, escrows, settlements) = {
         let mut network = state.network.lock().expect("state poisoned");
         let mut worker = state.base_log_worker.lock().expect("state poisoned");
         let report = worker.process_logs(logs, &mut network);
@@ -2247,6 +2312,12 @@ async fn process_base_evm_logs(state: &SharedState, logs: Vec<EvmLog>) -> Json<s
             .iter()
             .filter_map(|id| network.bounties.get(id).cloned())
             .collect::<Vec<_>>();
+        let funding_intents = network
+            .funding_intents
+            .values()
+            .filter(|intent| bounty_ids.contains(&intent.bounty_id))
+            .cloned()
+            .collect::<Vec<_>>();
         let escrows = network
             .escrows
             .values()
@@ -2259,7 +2330,14 @@ async fn process_base_evm_logs(state: &SharedState, logs: Vec<EvmLog>) -> Json<s
             .filter(|settlement| bounty_ids.contains(&settlement.bounty_id))
             .cloned()
             .collect::<Vec<_>>();
-        (report, indexed_events, bounties, escrows, settlements)
+        (
+            report,
+            indexed_events,
+            bounties,
+            funding_intents,
+            escrows,
+            settlements,
+        )
     };
     if let Some(store) = &state.store {
         for bounty in &bounties {
@@ -2269,6 +2347,11 @@ async fn process_base_evm_logs(state: &SharedState, logs: Vec<EvmLog>) -> Json<s
         }
         for event in &indexed_events {
             if let Err(error) = store.upsert_base_escrow_event(event).await {
+                return mcp_error(error);
+            }
+        }
+        for intent in &funding_intents {
+            if let Err(error) = store.upsert_funding_intent(intent).await {
                 return mcp_error(error);
             }
         }
@@ -2690,6 +2773,21 @@ mod tests {
                 .iter()
                 .any(|value| value == "MixedRails")
         );
+
+        let create_intent = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "create_funding_intent")
+            .expect("create_funding_intent descriptor exists");
+        assert!(create_intent.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "bounty_id"));
+        assert!(create_intent.input_schema["properties"]["rail"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "BaseUsdc"));
 
         let add_funding = descriptors
             .iter()
@@ -3490,6 +3588,12 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
             .into_iter()
             .map(|bounty| (bounty.id, bounty))
             .collect(),
+        funding_intents: store
+            .list_funding_intents()
+            .await?
+            .into_iter()
+            .map(|intent| (intent.id, intent))
+            .collect(),
         funding_contributions: store
             .list_funding_contributions()
             .await?
@@ -3637,6 +3741,23 @@ async fn persist_pooled_funding_report(
             .await
             .map_err(|error| error.to_string())?;
         persist_ledger_entries(store, &report.ledger_entries).await?;
+    }
+    Ok(())
+}
+
+async fn persist_funding_intent_report(
+    state: &SharedState,
+    report: &FundingIntentReport,
+) -> Result<(), String> {
+    if let Some(store) = &state.store {
+        store
+            .upsert_bounty(&report.bounty)
+            .await
+            .map_err(|error| error.to_string())?;
+        store
+            .upsert_funding_intent(&report.intent)
+            .await
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }

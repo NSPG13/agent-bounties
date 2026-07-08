@@ -1,11 +1,12 @@
 use app::{
     hash_artifact, AddFundingContributionRequest, ApproveRiskBountyRequest,
     ApproveRiskPayoutRequest, BaseEscrowReconciliation, BaseReleaseQueueRequest, BountyNetwork,
-    BountyStatusResponse, ClaimBountyRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest, PooledFundingReport, PostBountyRequest, QuoteSet, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
-    ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
+    BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest,
+    FundQuoteRequest, FundingIntentReport, OpenPooledBountyRequest, PlanBaseDisputeRequest,
+    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest, PooledFundingReport,
+    PostBountyRequest, QuoteSet, RegisterAgentRequest, RegisterCapabilityRequest,
+    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
+    SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
     body::Bytes,
@@ -108,6 +109,7 @@ use worker::BaseEscrowLogWorker;
         plan_github_proof_comment_from_proof,
         post_bounty,
         open_pooled_bounty,
+        create_funding_intent,
         add_funding_contribution,
         claim_bounty,
         submit_result,
@@ -460,6 +462,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/bounties/pooled", post(open_pooled_bounty))
         .route("/v1/bounties/claimable", get(list_claimable_bounties))
         .route("/v1/bounties/feed", get(public_bounty_feed))
+        .route(
+            "/v1/bounties/:id/funding-intents",
+            post(create_funding_intent),
+        )
         .route(
             "/v1/bounties/:id/funding-contributions",
             post(add_funding_contribution),
@@ -1040,6 +1046,22 @@ async fn open_pooled_bounty(
     Ok(Json(bounty))
 }
 
+#[utoipa::path(post, path = "/v1/bounties/{id}/funding-intents")]
+async fn create_funding_intent(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    Json(mut request): Json<CreateFundingIntentRequest>,
+) -> Result<Json<FundingIntentReport>, StatusCode> {
+    request.bounty_id = id;
+    let result = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network.create_funding_intent(request, state.public_base_url.clone())
+    };
+    let report = result.map_err(|_| StatusCode::BAD_REQUEST)?;
+    persist_funding_intent_report(&state, &report).await?;
+    Ok(Json(report))
+}
+
 #[utoipa::path(post, path = "/v1/bounties/{id}/funding-contributions")]
 async fn add_funding_contribution(
     State(state): State<SharedState>,
@@ -1298,6 +1320,12 @@ async fn reconcile_base_escrow_event(
             .upsert_escrow(&reconciliation.escrow)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        for intent in &reconciliation.funding_intents {
+            store
+                .upsert_funding_intent(intent)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
         for settlement in &reconciliation.settlements {
             store
                 .upsert_settlement(settlement)
@@ -1528,7 +1556,7 @@ async fn process_base_evm_logs(
     state: &SharedState,
     logs: Vec<chain_base::EvmLog>,
 ) -> Result<worker::BaseLogPipelineReport, StatusCode> {
-    let (report, indexed_events, bounties, escrows, settlements) = {
+    let (report, indexed_events, bounties, funding_intents, escrows, settlements) = {
         let mut network = state.network.lock().expect("state poisoned");
         let mut worker = state.base_log_worker.lock().expect("state poisoned");
         let report = worker.process_logs(logs, &mut network);
@@ -1552,6 +1580,12 @@ async fn process_base_evm_logs(
             .iter()
             .filter_map(|id| network.bounties.get(id).cloned())
             .collect::<Vec<_>>();
+        let funding_intents = network
+            .funding_intents
+            .values()
+            .filter(|intent| bounty_ids.contains(&intent.bounty_id))
+            .cloned()
+            .collect::<Vec<_>>();
         let escrows = network
             .escrows
             .values()
@@ -1564,7 +1598,14 @@ async fn process_base_evm_logs(
             .filter(|settlement| bounty_ids.contains(&settlement.bounty_id))
             .cloned()
             .collect::<Vec<_>>();
-        (report, indexed_events, bounties, escrows, settlements)
+        (
+            report,
+            indexed_events,
+            bounties,
+            funding_intents,
+            escrows,
+            settlements,
+        )
     };
 
     if let Some(store) = &state.store {
@@ -1577,6 +1618,12 @@ async fn process_base_evm_logs(
         for event in &indexed_events {
             store
                 .upsert_base_escrow_event(event)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        for intent in &funding_intents {
+            store
+                .upsert_funding_intent(intent)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
@@ -1888,6 +1935,22 @@ async fn reconcile_stripe_checkout_webhook(
         if !reconciliation.duplicate {
             store
                 .upsert_payment_event(&reconciliation.funding_credit.payment_event)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        if let Some(intent) = &reconciliation.funding_intent {
+            store
+                .upsert_funding_intent(intent)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        if let Some(report) = &reconciliation.funding_report {
+            store
+                .upsert_bounty(&report.bounty)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            store
+                .upsert_funding_contribution(&report.contribution)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
@@ -2385,6 +2448,12 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
             .into_iter()
             .map(|bounty| (bounty.id, bounty))
             .collect(),
+        funding_intents: store
+            .list_funding_intents()
+            .await?
+            .into_iter()
+            .map(|intent| (intent.id, intent))
+            .collect(),
         funding_contributions: store
             .list_funding_contributions()
             .await?
@@ -2536,6 +2605,23 @@ async fn persist_pooled_funding_report(
     Ok(())
 }
 
+async fn persist_funding_intent_report(
+    state: &SharedState,
+    report: &FundingIntentReport,
+) -> Result<(), StatusCode> {
+    if let Some(store) = &state.store {
+        store
+            .upsert_bounty(&report.bounty)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store
+            .upsert_funding_intent(&report.intent)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    Ok(())
+}
+
 async fn persist_risk_review(
     state: &SharedState,
     review: &RiskReviewRecord,
@@ -2588,9 +2674,9 @@ fn expected_digest_for_body(body: &str) -> String {
 mod tests {
     use super::*;
     use app::{
-        AddFundingContributionRequest, ClaimBountyRequest, OpenPooledBountyRequest,
-        PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest, SubmitResultRequest,
-        VerifySubmissionRequest,
+        AddFundingContributionRequest, ClaimBountyRequest, CreateFundingIntentRequest,
+        OpenPooledBountyRequest, PostBountyRequest, RegisterAgentRequest,
+        RegisterCapabilityRequest, SubmitResultRequest, VerifySubmissionRequest,
     };
     use chain_base::{
         evm_address_word, evm_bytes32_word, evm_event_topic, evm_uint256_word, evm_words_data,
@@ -3383,6 +3469,7 @@ mod tests {
         assert!(paths.contains_key("/v1/stripe/live/connect-accounts"));
         assert!(paths.contains_key("/v1/stripe/connect-snapshots"));
         assert!(paths.contains_key("/v1/stripe/checkout-webhooks"));
+        assert!(paths.contains_key("/v1/bounties/{id}/funding-intents"));
         assert!(paths.contains_key("/v1/github/issue-bounty-plan"));
         assert!(paths.contains_key("/v1/github/funding-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan"));
@@ -4161,6 +4248,105 @@ mod tests {
         let feed = list_claimable_bounties(State(state)).await.0;
         assert_eq!(feed.len(), 1);
         assert_eq!(feed[0].id, bounty.id);
+    }
+
+    #[tokio::test]
+    async fn funding_intent_endpoint_waits_for_verified_stripe_webhook() {
+        let state = test_state_with_unsigned_stripe_webhooks(BountyNetwork::default());
+        let organization_id = Uuid::new_v4();
+        let bounty = open_pooled_bounty(
+            State(state.clone()),
+            Json(OpenPooledBountyRequest {
+                title: "Fund mixed API intent".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                target_amount_minor: 500,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::MixedRails,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![
+                    app::FundingPartitionTargetRequest {
+                        rail: PaymentRail::StripeFiat,
+                        amount_minor: 500,
+                        currency: "usd".to_string(),
+                    },
+                    app::FundingPartitionTargetRequest {
+                        rail: PaymentRail::BaseUsdc,
+                        amount_minor: 1_000,
+                        currency: "usdc".to_string(),
+                    },
+                ],
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        let intent = create_funding_intent(
+            State(state.clone()),
+            Path(bounty.id),
+            Json(CreateFundingIntentRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                source_organization_id: Some(organization_id),
+                amount_minor: 500,
+                currency: "usd".to_string(),
+                rail: PaymentRail::StripeFiat,
+                external_reference: Some("api-stripe-intent".to_string()),
+                stripe_success_url: None,
+                stripe_cancel_url: None,
+                base_escrow_contract: None,
+                base_payer: None,
+                base_token: None,
+                base_network: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert!(intent.requires_reconciliation);
+        assert_eq!(intent.funding_summary.applied.amount, 0);
+
+        let status_before = bounty_status(State(state.clone()), Path(bounty.id))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(status_before.funding_intents.len(), 1);
+        assert!(status_before.funding_contributions.is_empty());
+
+        let event = serde_json::json!({
+            "id": "evt_api_intent",
+            "type": "checkout.session.completed",
+            "payload": {
+                "id": "cs_api_intent",
+                "client_reference_id": organization_id.to_string(),
+                "amount_total": 500,
+                "currency": "usd",
+                "payment_status": "paid",
+                "payment_intent": "pi_api_intent",
+                "metadata": {
+                    "bounty_id": bounty.id.to_string(),
+                    "funding_intent_id": intent.intent.id.to_string()
+                }
+            }
+        });
+        let reconciliation = reconcile_stripe_checkout_webhook(
+            State(state.clone()),
+            HeaderMap::new(),
+            Bytes::from(serde_json::to_vec(&event).unwrap()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert!(reconciliation.funding_report.is_some());
+        assert_eq!(reconciliation.ledger_entries.len(), 2);
+
+        let status_after = bounty_status(State(state), Path(bounty.id))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(status_after.funding_contributions.len(), 1);
+        assert_eq!(status_after.funding_summary.applied.amount, 500);
+        assert!(!status_after.funding_summary.claimable);
     }
 
     #[tokio::test]

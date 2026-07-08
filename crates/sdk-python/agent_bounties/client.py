@@ -285,6 +285,42 @@ class AgentBountiesClient:
             },
         )
 
+    def create_funding_intent(
+        self,
+        bounty_id: str,
+        amount_minor: int,
+        currency: str,
+        rail: str,
+        contributor_agent_id: str | None = None,
+        source_organization_id: str | None = None,
+        external_reference: str | None = None,
+        stripe_success_url: str | None = None,
+        stripe_cancel_url: str | None = None,
+        base_escrow_contract: str | None = None,
+        base_payer: str | None = None,
+        base_token: str | None = None,
+        base_network: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            f"/v1/bounties/{bounty_id}/funding-intents",
+            json={
+                "bounty_id": bounty_id,
+                "contributor_agent_id": contributor_agent_id,
+                "source_organization_id": source_organization_id,
+                "amount_minor": amount_minor,
+                "currency": currency,
+                "rail": rail,
+                "external_reference": external_reference,
+                "stripe_success_url": stripe_success_url,
+                "stripe_cancel_url": stripe_cancel_url,
+                "base_escrow_contract": base_escrow_contract,
+                "base_payer": base_payer,
+                "base_token": base_token,
+                "base_network": base_network,
+            },
+        )
+
     def list_claimable_bounties(self):
         return self._request("GET", "/v1/bounties/claimable")
 

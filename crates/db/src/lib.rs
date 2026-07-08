@@ -1,11 +1,11 @@
 use chain_base::{BaseEscrowEvent, BaseEscrowEventKind};
 use domain::{
     Agent, AgentStatus, Bounty, BountyStatus, Capability, CapabilityClass, Claim, Escrow,
-    EscrowStatus, EvalRun, FundingContribution, FundingContributionStatus, FundingMode,
-    HelpRequest, Id, Money, PaymentEvent, PaymentEventStatus, PaymentRail, PrivacyLevel,
-    ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome,
-    RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal, VerificationDecision,
-    VerifierKind, VerifierResult,
+    EscrowStatus, EvalRun, FundingContribution, FundingContributionStatus, FundingIntent,
+    FundingIntentStatus, FundingMode, HelpRequest, Id, Money, PaymentEvent, PaymentEventStatus,
+    PaymentRail, PrivacyLevel, ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent,
+    RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal,
+    VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{LedgerEntry, Posting};
 use sqlx::{PgPool, Row};
@@ -473,6 +473,68 @@ impl PostgresStore {
                     funding_ledger_entry_id: row.try_get("funding_ledger_entry_id")?,
                     refund_ledger_entry_id: row.try_get("refund_ledger_entry_id")?,
                     settlement_id: row.try_get("settlement_id")?,
+                    external_reference: row.try_get("external_reference")?,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_funding_intent(&self, intent: &FundingIntent) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO funding_intents
+              (id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, external_reference, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (id) DO UPDATE SET
+              contributor_agent_id = EXCLUDED.contributor_agent_id,
+              source_organization_id = EXCLUDED.source_organization_id,
+              rail = EXCLUDED.rail,
+              amount = EXCLUDED.amount,
+              currency = EXCLUDED.currency,
+              status = EXCLUDED.status,
+              external_reference = EXCLUDED.external_reference
+            "#,
+        )
+        .bind(intent.id)
+        .bind(intent.bounty_id)
+        .bind(intent.contributor_agent_id)
+        .bind(intent.source_organization_id)
+        .bind(format!("{:?}", intent.rail))
+        .bind(intent.amount.amount)
+        .bind(&intent.amount.currency)
+        .bind(format!("{:?}", intent.status))
+        .bind(&intent.external_reference)
+        .bind(intent.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_funding_intents(&self) -> DbResult<Vec<FundingIntent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, external_reference, created_at
+            FROM funding_intents
+            ORDER BY created_at
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(FundingIntent {
+                    id: row.try_get("id")?,
+                    bounty_id: row.try_get("bounty_id")?,
+                    contributor_agent_id: row.try_get("contributor_agent_id")?,
+                    source_organization_id: row.try_get("source_organization_id")?,
+                    rail: parse_payment_rail(row.try_get::<String, _>("rail")?)?,
+                    amount: Money::new(
+                        row.try_get::<i64, _>("amount")?,
+                        row.try_get::<String, _>("currency")?,
+                    )?,
+                    status: parse_funding_intent_status(row.try_get::<String, _>("status")?)?,
                     external_reference: row.try_get("external_reference")?,
                     created_at: row.try_get("created_at")?,
                 })
@@ -1315,6 +1377,15 @@ fn parse_funding_contribution_status(value: String) -> DbResult<FundingContribut
     }
 }
 
+fn parse_funding_intent_status(value: String) -> DbResult<FundingIntentStatus> {
+    match value.as_str() {
+        "AwaitingEvidence" => Ok(FundingIntentStatus::AwaitingEvidence),
+        "Applied" => Ok(FundingIntentStatus::Applied),
+        "Rejected" => Ok(FundingIntentStatus::Rejected),
+        _ => Err(DbError::InvalidEnum(value)),
+    }
+}
+
 fn parse_base_escrow_event_kind(value: String) -> DbResult<BaseEscrowEventKind> {
     match value.as_str() {
         "Created" => Ok(BaseEscrowEventKind::Created),
@@ -1426,6 +1497,7 @@ mod tests {
             "help_requests",
             "quotes",
             "bounties",
+            "funding_intents",
             "funding_contributions",
             "escrows",
             "base_escrow_events",

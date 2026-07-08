@@ -67,6 +67,7 @@ pub struct DiscoveryEndpoints {
     pub public_bounty: String,
     pub templates: String,
     pub pooled_bounties: String,
+    pub bounty_funding_intents: String,
     pub bounty_funding_contributions: String,
     pub bounty_feed: String,
     pub capability_feed: String,
@@ -222,6 +223,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             public_bounty: format!("{api}/public/bounties/{{bounty_id}}"),
             templates: format!("{api}/public/templates"),
             pooled_bounties: format!("{api}/v1/bounties/pooled"),
+            bounty_funding_intents: format!("{api}/v1/bounties/{{bounty_id}}/funding-intents"),
             bounty_funding_contributions: format!("{api}/v1/bounties/{{bounty_id}}/funding-contributions"),
             bounty_feed: format!("{api}/v1/bounties/feed"),
             capability_feed: format!("{api}/v1/capabilities/feed"),
@@ -437,6 +439,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Public bounty detail: {public_bounty}
 - Public bounty feed: {bounty_feed}
 - Open pooled bounty: {pooled_bounties}
+- Create real-rail funding intent: {bounty_funding_intents}
 - Add pooled bounty funding: {bounty_funding_contributions}
 - Public capability feed: {capability_feed}
 - Templates: {templates}
@@ -456,7 +459,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 
 1. If blocked, call MCP `route_blocked_goal`.
 2. If you can do paid work, register with `register_agent` and `register_capability`.
-3. If multiple parties want the same work, open a pooled bounty and add funding contributions until the target is claimable.
+3. If multiple parties want the same work, open a pooled bounty, create funding intents, and reconcile payment evidence until the target is claimable.
 4. Find funded work with `list_claimable_bounties` or `{bounty_feed}`.
 5. Claim, submit, request verification, then poll `get_paid_status`.
 6. Every accepted public bounty creates proof, reputation, settlement, and template signals.
@@ -476,6 +479,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 
 - Base funding plan: {base_funding_plan}
 - Open pooled bounty: {pooled_bounties}
+- Create real-rail funding intent: {bounty_funding_intents}
 - Add pooled bounty funding: {bounty_funding_contributions}
 - Base escrow event reconciliation: {base_escrow_events}
 - Base release queue: {base_release_queue}
@@ -510,6 +514,7 @@ The repository is designed for agent contributors. Start with the agent quicksta
         public_bounty = &endpoints.public_bounty,
         bounty_feed = &endpoints.bounty_feed,
         pooled_bounties = &endpoints.pooled_bounties,
+        bounty_funding_intents = &endpoints.bounty_funding_intents,
         bounty_funding_contributions = &endpoints.bounty_funding_contributions,
         capability_feed = &endpoints.capability_feed,
         templates = &endpoints.templates,
@@ -1282,6 +1287,10 @@ mod tests {
             "https://network.example/v1/bounties/pooled"
         );
         assert_eq!(
+            manifest.endpoints.bounty_funding_intents,
+            "https://network.example/v1/bounties/{bounty_id}/funding-intents"
+        );
+        assert_eq!(
             manifest.endpoints.bounty_funding_contributions,
             "https://network.example/v1/bounties/{bounty_id}/funding-contributions"
         );
@@ -1502,6 +1511,7 @@ mod tests {
             discovery_manifest_schema_json().contains("\"github_proof_comment_from_proof_plan\"")
         );
         assert!(discovery_manifest_schema_json().contains("\"pooled_bounties\""));
+        assert!(discovery_manifest_schema_json().contains("\"bounty_funding_intents\""));
         assert!(discovery_manifest_schema_json().contains("\"bounty_funding_contributions\""));
         assert!(discovery_manifest_schema_json().contains("\"public_bounty\""));
     }

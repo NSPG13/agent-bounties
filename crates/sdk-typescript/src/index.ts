@@ -63,6 +63,21 @@ export interface AddFundingContributionRequest {
   external_reference?: string | null;
 }
 
+export interface CreateFundingIntentRequest {
+  contributor_agent_id?: string | null;
+  source_organization_id?: string | null;
+  amount_minor: number;
+  currency: string;
+  rail: "StripeFiat" | "BaseUsdc";
+  external_reference?: string | null;
+  stripe_success_url?: string | null;
+  stripe_cancel_url?: string | null;
+  base_escrow_contract?: string | null;
+  base_payer?: string | null;
+  base_token?: string | null;
+  base_network?: "base-sepolia" | "base-mainnet" | null;
+}
+
 export interface FundQuoteRequest {
   title?: string | null;
   funding_mode?: string | null;
@@ -406,6 +421,30 @@ export class AgentBountiesClient {
         currency: request.currency,
         rail: request.rail,
         external_reference: request.external_reference ?? null,
+      }),
+    });
+  }
+
+  async createFundingIntent(
+    bountyId: string,
+    request: CreateFundingIntentRequest,
+  ): Promise<unknown> {
+    return this.request(`/v1/bounties/${bountyId}/funding-intents`, {
+      method: "POST",
+      body: JSON.stringify({
+        bounty_id: bountyId,
+        contributor_agent_id: request.contributor_agent_id ?? null,
+        source_organization_id: request.source_organization_id ?? null,
+        amount_minor: request.amount_minor,
+        currency: request.currency,
+        rail: request.rail,
+        external_reference: request.external_reference ?? null,
+        stripe_success_url: request.stripe_success_url ?? null,
+        stripe_cancel_url: request.stripe_cancel_url ?? null,
+        base_escrow_contract: request.base_escrow_contract ?? null,
+        base_payer: request.base_payer ?? null,
+        base_token: request.base_token ?? null,
+        base_network: request.base_network ?? null,
       }),
     });
   }

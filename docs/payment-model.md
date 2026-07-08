@@ -33,6 +33,19 @@ broadcast the escrow funding transaction, then wait for the indexed
 escrow support still requires a contract and ABI upgrade, so the MVP supports
 one Base escrow target per mixed bounty.
 
+Funding intents are the hosted bridge between "I want to fund this bounty" and
+"the platform has deterministic payment evidence." `POST
+/v1/bounties/{id}/funding-intents` and MCP `create_funding_intent` validate the
+target partition, reject overfunding and duplicate references, store an
+`AwaitingEvidence` intent, and return the next action. For `StripeFiat`, the
+next action is a Checkout Session request intent with `bounty_id` and
+`funding_intent_id` in metadata. A verified paid Checkout webhook can then credit
+the source organization's platform balance and reserve that balance into the
+bounty in one deterministic reconciliation. For `BaseUsdc`, the next action is
+an unsigned Base escrow funding transaction plan; the intent becomes `Applied`
+only after the matching `EscrowCreated` log is indexed and reconciled. Funding
+intents never make a bounty claimable by themselves.
+
 Mixed funding is partition-aware during refund handling. If an indexed
 `EscrowRefunded` event arrives for the Base partition before work starts, the
 platform reverses only the Base escrow liability and reopens the bounty for

@@ -517,13 +517,24 @@ pub enum PaymentEventStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub enum FundingIntentStatus {
+    AwaitingEvidence,
+    Applied,
+    Rejected,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FundingIntent {
     pub id: Id,
     pub bounty_id: Id,
+    pub contributor_agent_id: Option<Id>,
+    pub source_organization_id: Option<Id>,
     pub rail: PaymentRail,
     pub amount: Money,
+    pub status: FundingIntentStatus,
     pub external_reference: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
