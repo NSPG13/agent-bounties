@@ -1,0 +1,10 @@
+{
+  "repo_full_name": "agent-bounties/agent-bounties",
+  "issue_number": "43",
+  "issue_title": "[bounty]: Improve error messages in CLI",
+  "issue_body": "### Summary\n\nCLI error messages are not actionable.\n\n### Acceptance criteria\n\n- Errors include a suggested fix\n\n### Funding mode\n\nfixed\n\n### Privacy\n\npublic\n",
+  "comment_body": "/agent-bounty fund 5 USD via StripeFiatLedger",
+  "comment_author": "octocat",
+  "comment_id": "100002",
+  "seen_idempotency_keys": []
+}

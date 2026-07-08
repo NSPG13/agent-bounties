@@ -1,56 +1,69 @@
 #!/usr/bin/env python3
-"""Deterministic funding-comment planner for the Agent Bounties funding-comment Action.
+"""Wrapper around the canonical Rust funding-comment planner.
 
-This script parses issue comments of the form:
+This script no longer re-implements funding-comment planning logic in
+Python. All rail-alias resolution (e.g. ``BaseUsdcEscrow``,
+``StripeFiatLedger``), currency validation, paid-bounty issue-form
+validation, idempotency key derivation, and the
+``requires_operator_reconciliation=true`` invariant are delegated to the
+canonical planner implemented in the Rust CLI
+(``cargo run -p cli -- github-funding-comment-plan``). This keeps a single
+source of truth shared with the API/MCP/CLI deterministic path, so the
+publicly documented commands (for example
+``/agent-bounty fund 5 USDC via BaseUsdcEscrow`` and
+``/agent-bounty fund 5 USD via StripeFiatLedger``) always resolve the same
+way everywhere.
 
-    /agent-bounty fund <amount> <currency> via <rail>
-
-and produces a *planning* result only. It never credits balances, marks a
+This script is a *planning* wrapper only. It never credits balances, marks a
 bounty funded, authorizes claimability, or releases payout. All results are
 surfaced as public, human-readable feedback that requires operator
 reconciliation through the real Stripe/Base funding path.
 
-The script can run in two modes:
+The script can run in three modes:
 
-1. ``--github-event`` mode, which reads comment/issue context from environment
-   variables populated by the GitHub Actions workflow (``COMMENT_BODY``,
-   ``COMMENT_AUTHOR``, ``COMMENT_ID``, ``ISSUE_NUMBER``, ``ISSUE_LABELS``,
-   ``REPO_FULL_NAME``).
+1. ``--github-event`` mode, which reads comment/issue context from
+   environment variables populated by the GitHub Actions workflow
+   (``COMMENT_BODY``, ``COMMENT_AUTHOR``, ``COMMENT_ID``, ``ISSUE_NUMBER``,
+   ``ISSUE_TITLE``, ``ISSUE_BODY``, ``REPO_FULL_NAME``, and optionally
+   ``SEEN_IDEMPOTENCY_KEYS`` as a JSON array).
 2. ``--fixture <path>`` mode, which reads a JSON fixture file with the same
    shape for local testing without any GitHub secrets.
+3. ``--self-test`` mode, which runs the wrapper against the bundled fixtures
+   in ``scripts/fixtures/funding-comment/`` and asserts the expected
+   ok/action-required outcome for each documented scenario.
 
-In both modes the script prints a Markdown-formatted planner result to
-stdout and exits 0. Invalid input never raises an unhandled exception; it is
-always converted into constructive, action-required Markdown feedback.
+In all modes the script prints a Markdown-formatted planner result to
+stdout and exits 0 on success. Invalid input never raises an unhandled
+exception; it is always converted into constructive, action-required
+Markdown feedback (rendered from the Rust planner's response).
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import re
+import pathlib
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
-from typing import Optional
+from typing import List, Mapping, Optional
 
-SUPPORTED_RAILS = {
-    "base": {"currencies": {"usdc"}},
-    "stripe": {"currencies": {"usd", "eur", "gbp"}},
-}
 
-BOUNTY_LABEL = "bounty"
+class UserError(RuntimeError):
+    pass
 
-COMMAND_PATTERN = re.compile(
-    r"^/agent-bounty\s+fund\s+(?P<amount>[^\s]+)\s+(?P<currency>[A-Za-z]+)\s+via\s+(?P<rail>[A-Za-z]+)\s*$",
-    re.IGNORECASE,
-)
 
-# In-memory duplicate tracking is not persisted across workflow runs by
-# design (the Action has no privileged storage). For local/replay testing,
-# fixtures may supply a `seen_idempotency_keys` list to simulate duplicates
-# that the operator reconciliation ledger would already have observed.
+def script_repo_root() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve().parents[1]
+
+
+def find_executable(names: List[str]) -> Optional[str]:
+    for name in names:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
 
 
 @dataclass
@@ -59,38 +72,28 @@ class CommentContext:
     author: str
     comment_id: str
     issue_number: str
-    issue_labels: list
+    issue_title: str
+    issue_body: str
     repo_full_name: str
     seen_idempotency_keys: list = field(default_factory=list)
 
 
-@dataclass
-class PlannerResult:
-    ok: bool
-    title: str
-    lines: list
-
-    def to_markdown(self) -> str:
-        header = "### ✅ Funding signal planned" if self.ok else "### ⚠️ Action required"
-        body = "\n".join(f"- {line}" for line in self.lines)
-        return f"{header}\n\n**{self.title}**\n\n{body}\n"
-
-
 def load_context_from_env() -> CommentContext:
-    labels_raw = os.environ.get("ISSUE_LABELS", "[]")
+    seen_raw = os.environ.get("SEEN_IDEMPOTENCY_KEYS", "[]")
     try:
-        labels = json.loads(labels_raw)
+        seen = json.loads(seen_raw)
     except json.JSONDecodeError:
-        labels = []
+        seen = []
 
     return CommentContext(
         body=os.environ.get("COMMENT_BODY", ""),
         author=os.environ.get("COMMENT_AUTHOR", "unknown"),
         comment_id=os.environ.get("COMMENT_ID", "0"),
         issue_number=os.environ.get("ISSUE_NUMBER", "0"),
-        issue_labels=labels if isinstance(labels, list) else [],
+        issue_title=os.environ.get("ISSUE_TITLE", ""),
+        issue_body=os.environ.get("ISSUE_BODY", ""),
         repo_full_name=os.environ.get("REPO_FULL_NAME", "unknown/unknown"),
-        seen_idempotency_keys=[],
+        seen_idempotency_keys=seen if isinstance(seen, list) else [],
     )
 
 
@@ -103,129 +106,119 @@ def load_context_from_fixture(path: str) -> CommentContext:
         author=data.get("comment_author", "unknown"),
         comment_id=str(data.get("comment_id", "0")),
         issue_number=str(data.get("issue_number", "0")),
-        issue_labels=data.get("issue_labels", []),
+        issue_title=data.get("issue_title", ""),
+        issue_body=data.get("issue_body", ""),
         repo_full_name=data.get("repo_full_name", "unknown/unknown"),
         seen_idempotency_keys=data.get("seen_idempotency_keys", []),
     )
 
 
-def derive_idempotency_key(ctx: CommentContext, amount: str, currency: str, rail: str) -> str:
-    payload = "|".join(
+def run_github_funding_comment_plan(
+    ctx: CommentContext, workspace: pathlib.Path, tmp_dir: pathlib.Path
+) -> str:
+    """Invoke the canonical Rust planner and return its raw JSON stdout."""
+    cargo_path = find_executable(["cargo", "cargo.exe"])
+    if not cargo_path:
+        raise UserError("cargo is required to plan a funding comment")
+
+    issue_body_file = tmp_dir / "funding-comment-issue-body.md"
+    issue_body_file.write_text(ctx.issue_body, encoding="utf-8")
+
+    comment_body_file = tmp_dir / "funding-comment-body.md"
+    comment_body_file.write_text(ctx.body, encoding="utf-8")
+
+    seen_keys_file = tmp_dir / "funding-comment-seen-idempotency-keys.json"
+    seen_keys_file.write_text(json.dumps(ctx.seen_idempotency_keys), encoding="utf-8")
+
+    result = subprocess.run(
         [
+            cargo_path,
+            "run",
+            "-p",
+            "cli",
+            "--",
+            "github-funding-comment-plan",
+            "--repository",
             ctx.repo_full_name,
+            "--issue-number",
             ctx.issue_number,
+            "--issue-title",
+            ctx.issue_title,
+            "--issue-body-file",
+            str(issue_body_file),
+            "--comment-body-file",
+            str(comment_body_file),
+            "--comment-author",
+            ctx.author,
+            "--comment-id",
             ctx.comment_id,
-            amount,
-            currency.lower(),
-            rail.lower(),
-        ]
-    )
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    return f"fund-{digest[:16]}"
-
-
-def plan_funding_comment(ctx: CommentContext) -> PlannerResult:
-    if BOUNTY_LABEL not in [str(label).lower() for label in ctx.issue_labels]:
-        return PlannerResult(
-            ok=False,
-            title="This issue is not labeled as a bounty",
-            lines=[
-                f"Issue #{ctx.issue_number} does not carry the `{BOUNTY_LABEL}` label.",
-                "The funding-comment planner only runs for bounty issues.",
-                "No amount, currency, or rail has been evaluated.",
-            ],
-        )
-
-    match = COMMAND_PATTERN.match(ctx.body.strip())
-    if not match:
-        return PlannerResult(
-            ok=False,
-            title="Could not parse funding command",
-            lines=[
-                "Expected format: `/agent-bounty fund <amount> <currency> via <rail>`",
-                f"Received: `{ctx.body.strip()}`",
-                "Please retry with the exact command syntax, for example:",
-                "`/agent-bounty fund 25 USDC via base`",
-            ],
-        )
-
-    amount_raw = match.group("amount")
-    currency = match.group("currency").lower()
-    rail = match.group("rail").lower()
-
-    try:
-        amount = Decimal(amount_raw)
-    except InvalidOperation:
-        return PlannerResult(
-            ok=False,
-            title="Invalid amount",
-            lines=[
-                f"`{amount_raw}` is not a valid decimal amount.",
-                "Please provide a positive numeric amount, e.g. `25` or `12.50`.",
-            ],
-        )
-
-    if amount <= 0:
-        return PlannerResult(
-            ok=False,
-            title="Invalid amount",
-            lines=[
-                f"Amount `{amount_raw}` must be greater than zero.",
-            ],
-        )
-
-    if rail not in SUPPORTED_RAILS:
-        supported = ", ".join(sorted(SUPPORTED_RAILS.keys()))
-        return PlannerResult(
-            ok=False,
-            title="Unsupported funding rail",
-            lines=[
-                f"Rail `{rail}` is not supported by this planner.",
-                f"Supported rails: {supported}.",
-            ],
-        )
-
-    supported_currencies = SUPPORTED_RAILS[rail]["currencies"]
-    if currency not in supported_currencies:
-        supported = ", ".join(sorted(supported_currencies))
-        return PlannerResult(
-            ok=False,
-            title="Unsupported currency for rail",
-            lines=[
-                f"Currency `{currency.upper()}` is not supported on rail `{rail}`.",
-                f"Supported currencies for `{rail}`: {supported}.",
-            ],
-        )
-
-    idempotency_key = derive_idempotency_key(ctx, amount_raw, currency, rail)
-
-    if idempotency_key in ctx.seen_idempotency_keys:
-        return PlannerResult(
-            ok=False,
-            title="Duplicate funding signal",
-            lines=[
-                f"Idempotency key `{idempotency_key}` has already been recorded.",
-                "This funding comment appears to be a duplicate of a previously planned signal.",
-                "No new planner result has been generated.",
-            ],
-        )
-
-    return PlannerResult(
-        ok=True,
-        title=f"Funding signal from @{ctx.author}",
-        lines=[
-            f"amount: `{amount_raw}`",
-            f"currency: `{currency.upper()}`",
-            f"rail: `{rail}`",
-            f"contributor_login: `@{ctx.author}`",
-            f"idempotency_key: `{idempotency_key}`",
-            "requires_operator_reconciliation: `true`",
-            "",
-            "This is a demand signal only. No balance has been credited, no bounty has been "
-            "marked funded, no claimability has been authorized, and no payout has been released. "
-            "An operator must reconcile this signal through the real Stripe/Base funding path.",
+            "--seen-idempotency-keys-file",
+            str(seen_keys_file),
         ],
+        cwd=workspace,
+        env=dict(os.environ),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=None,
+        check=False,
     )
+    if result.returncode != 0:
+        raise UserError(f"github-funding-comment-plan failed with exit code {result.returncode}")
+    return result.stdout
+
+
+def render_markdown(plan: Mapping[str, object]) -> str:
+    """Render the Rust planner's `{ok, title, lines}` response as Markdown."""
+    ok = bool(plan.get("ok"))
+    title = str(plan.get("title", ""))
+    lines = plan.get("lines") or []
+    header = "### \u2705 Funding signal planned" if ok else "### \u26a0\ufe0f Action required"
+    body = "\n".join(f"- {line}" for line in lines)
+    return f"{header}\n\n**{title}**\n\n{body}\n"
+
+
+def plan_funding_comment_json(ctx: CommentContext) -> Mapping[str, object]:
+    repo_root = script_repo_root()
+    workspace = pathlib.Path(os.environ.get("GITHUB_WORKSPACE") or repo_root).resolve()
+    tmp_dir = pathlib.Path(os.environ.get("RUNNER_TEMP") or workspace / "target" / "tmp").resolve()
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    plan_json = run_github_funding_comment_plan(ctx, workspace, tmp_dir)
+    return json.loads(plan_json)
+
+
+def plan_funding_comment(ctx: CommentContext) -> str:
+    plan = plan_funding_comment_json(ctx)
+    return render_markdown(plan)
+
+
+def run_self_test() -> int:
+    repo_root = script_repo_root()
+    fixtures_dir = repo_root / "scripts" / "fixtures" / "funding-comment"
+
+    scenarios = [
+        ("valid-base-usdc.json", True),
+        ("valid-stripe-usd.json", True),
+        ("invalid-issue-body.json", False),
+        ("duplicate-idempotency-key.json", False),
+    ]
+
+    failures = []
+    for fixture_name, expect_ok in scenarios:
+        fixture_path = fixtures_dir / fixture_name
+        ctx = load_context_from_fixture(str(fixture_path))
+        plan = plan_funding_comment_json(ctx)
+        actual_ok = bool(plan.get("ok"))
+        if actual_ok != expect_ok:
+            failures.append(
+                f"{fixture_name}: expected ok={expect_ok}, got ok={actual_ok} ({plan})"
+            )
+
+    if failures:
+        raise UserError("self-test failures:\n" + "\n".join(failures))
+
+    print(f"Funding comment planner self-test passed for {len(scenarios)} fixtures")
+    return 0
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -241,15 +234,26 @@ def main(argv: Optional[list] = None) -> int:
         type=str,
         help="Path to a JSON fixture file with comment/issue context for local testing.",
     )
+    group.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run the wrapper against the bundled fixtures and assert expected outcomes.",
+    )
     args = parser.parse_args(argv)
 
-    if args.github_event:
-        ctx = load_context_from_env()
-    else:
-        ctx = load_context_from_fixture(args.fixture)
+    try:
+        if args.self_test:
+            return run_self_test()
 
-    result = plan_funding_comment(ctx)
-    print(result.to_markdown())
+        if args.github_event:
+            ctx = load_context_from_env()
+        else:
+            ctx = load_context_from_fixture(args.fixture)
+
+        print(plan_funding_comment(ctx))
+    except UserError as error:
+        print(error, file=sys.stderr)
+        return 1
     return 0
 
 

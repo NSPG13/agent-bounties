@@ -1,0 +1,10 @@
+{
+  "repo_full_name": "agent-bounties/agent-bounties",
+  "issue_number": "42",
+  "issue_title": "[bounty]: Fix flaky CI job",
+  "issue_body": "### Summary\n\nThe CI job `test-suite` is flaky and needs to be fixed.\n\n### Acceptance criteria\n\n- CI passes 10 times in a row\n\n### Funding mode\n\nfixed\n\n### Privacy\n\npublic\n",
+  "comment_body": "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+  "comment_author": "octocat",
+  "comment_id": "100001",
+  "seen_idempotency_keys": []
+}

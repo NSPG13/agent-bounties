@@ -1,0 +1,10 @@
+{
+  "repo_full_name": "agent-bounties/agent-bounties",
+  "issue_number": "44",
+  "issue_title": "[bounty]: Malformed issue",
+  "issue_body": "This issue does not use the paid-bounty issue template at all, so it is missing required sections like acceptance criteria, funding mode, and privacy.",
+  "comment_body": "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+  "comment_author": "octocat",
+  "comment_id": "100003",
+  "seen_idempotency_keys": []
+}

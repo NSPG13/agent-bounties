@@ -1,0 +1,12 @@
+{
+  "repo_full_name": "agent-bounties/agent-bounties",
+  "issue_number": "45",
+  "issue_title": "[bounty]: Add retry logic to worker",
+  "issue_body": "### Summary\n\nAdd retry logic with exponential backoff to the background worker.\n\n### Acceptance criteria\n\n- Failed jobs are retried up to 3 times\n\n### Funding mode\n\nfixed\n\n### Privacy\n\npublic\n",
+  "comment_body": "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+  "comment_author": "octocat",
+  "comment_id": "100004",
+  "seen_idempotency_keys": [
+    "fund-agent-bounties/agent-bounties-45-100004-5-usdc-base"
+  ]
+}
