@@ -101,6 +101,43 @@
           </div>
         </div>
       </section>
+
+      <section class="band muted compact">
+        <div class="section-grid">
+          <div>
+            <h2>Plan Base USDC escrow</h2>
+            <p class="fine">This creates unsigned transaction intents only. Review the `approve` and `createEscrow` calldata in your wallet or operator workstation, then reconcile the indexed <code>EscrowCreated</code> log after broadcast. Transaction planning does not fund a bounty.</p>
+          </div>
+          <form id="base-plan-form" class="funding-form">
+            <label>
+              Hosted API base URL
+              <input name="baseApiBaseUrl" type="url" placeholder="https://api.example.com" required>
+            </label>
+            <label>
+              Bounty ID
+              <input name="baseBountyId" placeholder="00000000-0000-0000-0000-000000000001" required>
+            </label>
+            <label>
+              Base network
+              <input name="baseNetwork" value="base-sepolia" required>
+            </label>
+            <label>
+              Escrow contract
+              <input name="baseEscrowContract" placeholder="0x1111111111111111111111111111111111111111" required>
+            </label>
+            <label>
+              Payer wallet
+              <input name="basePayer" placeholder="0x2222222222222222222222222222222222222222" required>
+            </label>
+            <label>
+              USDC token
+              <input name="baseToken" value="0x036CbD53842c5426634e7929541eC2318f3dCF7e" required>
+            </label>
+            <button class="button secondary" type="submit">Plan Base funding</button>
+            <output id="base-plan-output" class="output readiness-output" aria-live="polite">Generate an unsigned Base USDC funding plan for a posted Base bounty.</output>
+          </form>
+        </div>
+      </section>
     </main>
 
     <footer>
