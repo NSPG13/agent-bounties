@@ -72,6 +72,14 @@ pub struct GitHubProofComment {
     pub settlement_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubProofCommentPlan {
+    pub comment: GitHubProofComment,
+    pub markdown: String,
+    pub fingerprint: String,
+    pub check: GitHubCheckRunOutput,
+}
+
 impl GitHubProofComment {
     pub fn markdown(&self) -> String {
         format!(
@@ -91,6 +99,18 @@ pub fn proof_comment_fingerprint(comment: &GitHubProofComment) -> String {
     let mut hasher = Sha256::new();
     hasher.update(comment.markdown());
     hex::encode(hasher.finalize())
+}
+
+pub fn proof_comment_plan(comment: GitHubProofComment) -> GitHubProofCommentPlan {
+    let markdown = comment.markdown();
+    let fingerprint = proof_comment_fingerprint(&comment);
+    let check = proof_check_output(&comment);
+    GitHubProofCommentPlan {
+        comment,
+        markdown,
+        fingerprint,
+        check,
+    }
 }
 
 pub fn issue_to_bounty_request(
@@ -328,6 +348,22 @@ mod tests {
         assert!(markdown.contains("Proof:"));
         assert!(markdown.contains("GitHub CI passed"));
         assert!(markdown.contains("Settlement:"));
+    }
+
+    #[test]
+    fn proof_comment_plan_builds_fingerprint_and_check() {
+        let bounty_id = Uuid::new_v4();
+        let plan = proof_comment_plan(GitHubProofComment {
+            bounty_id,
+            proof_url: "https://agentbounties.dev/proofs/1".to_string(),
+            verifier_summary: "JsonSchema: artifact accepted".to_string(),
+            settlement_url: None,
+        });
+
+        assert_eq!(plan.comment.bounty_id, bounty_id);
+        assert_eq!(plan.fingerprint.len(), 64);
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+        assert_eq!(plan.check.text, plan.markdown);
     }
 
     #[test]

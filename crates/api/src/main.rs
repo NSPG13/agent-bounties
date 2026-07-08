@@ -33,8 +33,8 @@ use eval_harness::{
     BountyBench, EvalSuiteResult, JudgeBench, LoopSuiteResult,
 };
 use github_app::{
-    bounty_check_output, parse_issue_form_bounty, proof_check_output, proof_comment_fingerprint,
-    GitHubCheckRunOutput, GitHubIssueFormBounty, GitHubProofComment,
+    bounty_check_output, parse_issue_form_bounty, proof_comment_plan, GitHubCheckRunOutput,
+    GitHubIssueFormBounty, GitHubProofComment, GitHubProofCommentPlan,
 };
 use ledger::Ledger;
 use payments_stripe::{
@@ -102,6 +102,7 @@ use worker::BaseEscrowLogWorker;
         reconcile_stripe_checkout_webhook,
         plan_github_issue_bounty,
         plan_github_proof_comment,
+        plan_github_proof_comment_from_proof,
         post_bounty,
         claim_bounty,
         submit_result,
@@ -121,6 +122,7 @@ use worker::BaseEscrowLogWorker;
         PlanStripeConnectAccountRequest,
         PlanGitHubIssueBountyRequest,
         PlanGitHubProofCommentRequest,
+        PlanGitHubProofCommentFromProofRequest,
         PlanBaseLogQueryRequest,
         FetchBaseRpcLogsRequest,
         BroadcastBaseSignedTransactionRequest,
@@ -268,19 +270,17 @@ struct PlanGitHubProofCommentRequest {
     settlement_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct PlanGitHubProofCommentFromProofRequest {
+    proof_id: Uuid,
+    settlement_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct GitHubIssueBountyPlan {
     ready: bool,
     parsed: Option<GitHubIssueFormBounty>,
     error: Option<String>,
-    check: GitHubCheckRunOutput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GitHubProofCommentPlan {
-    comment: GitHubProofComment,
-    markdown: String,
-    fingerprint: String,
     check: GitHubCheckRunOutput,
 }
 
@@ -493,6 +493,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/github/proof-comment-plan",
             post(plan_github_proof_comment),
+        )
+        .route(
+            "/v1/github/proof-comment-plan-from-proof",
+            post(plan_github_proof_comment_from_proof),
         )
         .route("/public/proofs/:id", get(public_proof_page))
         .route("/public/agents/:id", get(public_agent_profile))
@@ -1864,15 +1868,62 @@ async fn plan_github_proof_comment(
         verifier_summary: request.verifier_summary,
         settlement_url: request.settlement_url,
     };
-    let markdown = comment.markdown();
-    let fingerprint = proof_comment_fingerprint(&comment);
-    let check = proof_check_output(&comment);
-    Json(GitHubProofCommentPlan {
-        comment,
-        markdown,
-        fingerprint,
-        check,
-    })
+    Json(proof_comment_plan(comment))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/github/proof-comment-plan-from-proof",
+    request_body = PlanGitHubProofCommentFromProofRequest,
+    responses(
+        (status = 200, description = "GitHub proof comment plan derived from a stored public proof"),
+        (status = 404, description = "Proof not found, private, or missing verifier result")
+    )
+)]
+async fn plan_github_proof_comment_from_proof(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanGitHubProofCommentFromProofRequest>,
+) -> Result<Json<GitHubProofCommentPlan>, StatusCode> {
+    let network = state.network.lock().expect("state poisoned");
+    github_proof_comment_plan_from_proof(
+        &network,
+        &state.public_base_url,
+        request.proof_id,
+        request.settlement_url,
+    )
+    .map(Json)
+}
+
+fn github_proof_comment_plan_from_proof(
+    network: &BountyNetwork,
+    public_base_url: &str,
+    proof_id: Uuid,
+    settlement_url: Option<String>,
+) -> Result<GitHubProofCommentPlan, StatusCode> {
+    let proof = network.proofs.get(&proof_id).ok_or(StatusCode::NOT_FOUND)?;
+    if proof.privacy == PrivacyLevel::Private {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let verifier = network
+        .verifier_results
+        .get(&proof.verifier_result_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let verifier_summary = if verifier.summary.trim().is_empty() {
+        format!("{:?} verifier accepted", verifier.kind)
+    } else {
+        format!("{:?}: {}", verifier.kind, verifier.summary.trim())
+    };
+    let comment = GitHubProofComment {
+        bounty_id: proof.bounty_id,
+        proof_url: format!(
+            "{}/public/proofs/{}",
+            public_base_url.trim_end_matches('/'),
+            proof.id
+        ),
+        verifier_summary,
+        settlement_url,
+    };
+    Ok(proof_comment_plan(comment))
 }
 
 #[utoipa::path(get, path = "/v1/bounties/{id}")]
@@ -1897,6 +1948,9 @@ async fn public_proof_page(
         .get(&id)
         .ok_or(StatusCode::NOT_FOUND)?
         .clone();
+    if proof.privacy == PrivacyLevel::Private {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let verifier = network
         .verifier_results
         .get(&proof.verifier_result_id)
@@ -2918,6 +2972,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn github_proof_comment_plan_from_proof_uses_stored_public_proof() {
+        let (network, bounty, proof) = payable_base_bounty().await;
+        let state = test_state(network);
+        let plan = plan_github_proof_comment_from_proof(
+            State(state),
+            Json(PlanGitHubProofCommentFromProofRequest {
+                proof_id: proof.id,
+                settlement_url: Some("https://basescan.org/tx/0xabc".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(plan.comment.bounty_id, bounty.id);
+        assert_eq!(
+            plan.comment.proof_url,
+            format!("http://127.0.0.1:8080/public/proofs/{}", proof.id)
+        );
+        assert!(plan.comment.verifier_summary.contains("JsonSchema"));
+        assert!(plan.markdown.contains("Settlement:"));
+        assert_eq!(plan.fingerprint.len(), 64);
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+    }
+
+    #[tokio::test]
+    async fn github_proof_comment_plan_from_proof_rejects_private_proofs() {
+        let (mut network, _bounty, mut proof) = payable_base_bounty().await;
+        proof.privacy = PrivacyLevel::Private;
+        network.proofs.insert(proof.id, proof.clone());
+        let state = test_state(network);
+        let error = plan_github_proof_comment_from_proof(
+            State(state.clone()),
+            Json(PlanGitHubProofCommentFromProofRequest {
+                proof_id: proof.id,
+                settlement_url: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, StatusCode::NOT_FOUND);
+        let public_error = public_proof_page(State(state), Path(proof.id))
+            .await
+            .unwrap_err();
+        assert_eq!(public_error, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn discovery_endpoint_advertises_mcp_and_payment_entrypoints() {
         let state = test_state(BountyNetwork::default());
         let manifest = agent_bounties_discovery(State(state)).await.0;
@@ -2957,6 +3060,10 @@ mod tests {
         assert_eq!(
             manifest.endpoints.agent_paid_status,
             "http://127.0.0.1:8080/v1/agents/{agent_id}/paid-status"
+        );
+        assert_eq!(
+            manifest.endpoints.github_proof_comment_from_proof_plan,
+            "http://127.0.0.1:8080/v1/github/proof-comment-plan-from-proof"
         );
         assert_eq!(manifest.risk_policy.low_value_usdc_cap_minor, 10_000_000);
         assert!(manifest
@@ -3011,6 +3118,7 @@ mod tests {
         assert!(paths.contains_key("/v1/stripe/checkout-webhooks"));
         assert!(paths.contains_key("/v1/github/issue-bounty-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan"));
+        assert!(paths.contains_key("/v1/github/proof-comment-plan-from-proof"));
         assert!(paths.contains_key("/v1/evals/loops"));
         assert!(paths.contains_key("/v1/evals/runs"));
 

@@ -41,12 +41,16 @@ The same deterministic planner is exposed over HTTP and MCP:
 
 - `POST /v1/github/issue-bounty-plan`
 - `POST /v1/github/proof-comment-plan`
+- `POST /v1/github/proof-comment-plan-from-proof`
 - MCP `plan_github_issue_bounty`
 - MCP `plan_github_proof_comment`
+- MCP `plan_github_proof_comment_for_proof`
 
 These surfaces do not call the GitHub API. They produce the parsed issue,
 check-run output, proof-comment markdown, and stable fingerprint that an
-operator or GitHub automation can post.
+operator or GitHub automation can post. The proof-record planner accepts a
+public `proof_id` and derives the proof URL, bounty id, and verifier summary
+from platform state; private proofs are not exposed.
 
 The repository includes `.github/workflows/paid-bounty-issues.yml` as the first
 dogfooding bridge. On opened, edited, reopened, or labeled issues that look like

@@ -584,6 +584,20 @@ class AgentBountiesClient:
             },
         )
 
+    def plan_github_proof_comment_from_proof(
+        self,
+        proof_id: str,
+        settlement_url: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/github/proof-comment-plan-from-proof",
+            json={
+                "proof_id": proof_id,
+                "settlement_url": settlement_url,
+            },
+        )
+
     def reconcile_stripe_connect_snapshot(self, snapshot: dict):
         return self._request("POST", "/v1/stripe/connect-snapshots", json=snapshot)
 

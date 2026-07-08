@@ -112,6 +112,10 @@ async function main(): Promise<void> {
     "discovery schema must require the GitHub bounty issue template endpoint",
   );
   requireCondition(
+    endpointRequired.includes("github_proof_comment_from_proof_plan"),
+    "discovery schema must require the proof-record GitHub proof comment planner endpoint",
+  );
+  requireCondition(
     endpointRequired.includes("base_escrow_events"),
     "discovery schema must require the Base escrow event endpoint",
   );
@@ -158,6 +162,10 @@ async function main(): Promise<void> {
   requireCondition(
     typeof endpoints.github_proof_comment_plan === "string",
     "discovery manifest missing GitHub proof comment planner endpoint",
+  );
+  requireCondition(
+    typeof endpoints.github_proof_comment_from_proof_plan === "string",
+    "discovery manifest missing proof-record GitHub proof comment planner endpoint",
   );
   requireCondition(
     typeof endpoints.eval_runs === "string",
@@ -611,6 +619,25 @@ async function main(): Promise<void> {
     "proof",
   );
   requireCondition("proof_hash" in proof, "verification did not return proof_hash");
+  const proofRecordPlan = asObject(
+    await client.planGitHubProofCommentFromProof({
+      proof_id: stringField(proof, "id"),
+    }),
+    "proofRecordPlan",
+  );
+  const proofRecordComment = asObject(proofRecordPlan.comment, "proofRecordPlan.comment");
+  requireCondition(
+    proofRecordComment.bounty_id === bountyId,
+    "proof-record GitHub proof comment planner used the wrong bounty",
+  );
+  requireCondition(
+    stringField(proofRecordComment, "proof_url").endsWith(`/public/proofs/${stringField(proof, "id")}`),
+    "proof-record GitHub proof comment planner used the wrong proof URL",
+  );
+  requireCondition(
+    stringField(proofRecordPlan, "fingerprint").length === 64,
+    "proof-record GitHub proof comment planner did not produce a stable fingerprint",
+  );
 
   const status = asObject(await client.getBountyStatus(bountyId), "status");
   const statusBounty = asObject(status.bounty, "status.bounty");

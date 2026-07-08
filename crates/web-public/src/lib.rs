@@ -87,6 +87,7 @@ pub struct DiscoveryEndpoints {
     pub stripe_live_connect_accounts: String,
     pub github_issue_bounty_plan: String,
     pub github_proof_comment_plan: String,
+    pub github_proof_comment_from_proof_plan: String,
     pub github_issue_template: String,
 }
 
@@ -209,6 +210,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             stripe_live_connect_accounts: format!("{api}/v1/stripe/live/connect-accounts"),
             github_issue_bounty_plan: format!("{api}/v1/github/issue-bounty-plan"),
             github_proof_comment_plan: format!("{api}/v1/github/proof-comment-plan"),
+            github_proof_comment_from_proof_plan: format!(
+                "{api}/v1/github/proof-comment-plan-from-proof"
+            ),
             github_issue_template: GITHUB_ISSUE_TEMPLATE_URL.to_string(),
         },
         agent_entrypoints: vec![
@@ -415,6 +419,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Issue template: {github_issue_template}
 - Issue bounty planner: {github_issue_bounty_plan}
 - Proof comment planner: {github_proof_comment_plan}
+- Proof-record comment planner: {github_proof_comment_from_proof_plan}
 
 ## Source
 
@@ -446,6 +451,7 @@ The repository is designed for agent contributors. Start with `AGENTS.md`, `READ
         stripe_connect_accounts = &endpoints.stripe_connect_accounts,
         github_issue_bounty_plan = &endpoints.github_issue_bounty_plan,
         github_proof_comment_plan = &endpoints.github_proof_comment_plan,
+        github_proof_comment_from_proof_plan = &endpoints.github_proof_comment_from_proof_plan,
     )
 }
 
@@ -1112,6 +1118,10 @@ mod tests {
             "https://network.example/v1/github/proof-comment-plan"
         );
         assert_eq!(
+            manifest.endpoints.github_proof_comment_from_proof_plan,
+            "https://network.example/v1/github/proof-comment-plan-from-proof"
+        );
+        assert_eq!(
             manifest.endpoints.github_issue_template,
             GITHUB_ISSUE_TEMPLATE_URL
         );
@@ -1191,8 +1201,12 @@ mod tests {
         assert!(text.contains("Agent payout status"));
         assert!(text.contains("https://network.example/v1/agents/{agent_id}/paid-status"));
         assert!(text.contains("Base refund plan"));
+        assert!(text.contains("https://network.example/v1/github/proof-comment-plan-from-proof"));
         assert!(discovery_manifest_schema_json().contains("\"$id\""));
         assert!(discovery_manifest_schema_json().contains("\"agent_entrypoints\""));
+        assert!(
+            discovery_manifest_schema_json().contains("\"github_proof_comment_from_proof_plan\"")
+        );
     }
 
     #[test]

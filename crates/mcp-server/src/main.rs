@@ -24,8 +24,7 @@ use db::PostgresStore;
 use domain::{Agent, CapabilityClass, EvalRun, HelpRequest, Money, PrivacyLevel, RiskReviewRecord};
 use eval_harness::{EvalSuiteResult, LoopSuiteResult};
 use github_app::{
-    bounty_check_output, parse_issue_form_bounty, proof_check_output, proof_comment_fingerprint,
-    GitHubProofComment,
+    bounty_check_output, parse_issue_form_bounty, proof_comment_plan, GitHubProofComment,
 };
 use ledger::Ledger;
 use payments_stripe::{
@@ -175,6 +174,12 @@ struct PlanGitHubProofCommentArgs {
     settlement_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanGitHubProofCommentForProofArgs {
+    proof_id: Uuid,
+    settlement_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SearchCapabilitiesArgs {
     class: Option<CapabilityClass>,
@@ -318,6 +323,10 @@ async fn main() -> anyhow::Result<()> {
             post(plan_github_proof_comment),
         )
         .route(
+            "/tools/plan_github_proof_comment_for_proof",
+            post(plan_github_proof_comment_for_proof),
+        )
+        .route(
             "/tools/reconcile_base_evm_logs",
             post(reconcile_base_evm_logs),
         )
@@ -368,19 +377,23 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn agent_bounties_discovery() -> Json<web_public::DiscoveryManifest> {
-    let api_base_url =
-        env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
-    let mcp_base_url =
-        env::var("MCP_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string());
+    let api_base_url = public_base_url_from_env();
+    let mcp_base_url = mcp_base_url_from_env();
     Json(web_public::discovery_manifest(&api_base_url, &mcp_base_url))
 }
 
 async fn llms_txt() -> String {
-    let api_base_url =
-        env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
-    let mcp_base_url =
-        env::var("MCP_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string());
+    let api_base_url = public_base_url_from_env();
+    let mcp_base_url = mcp_base_url_from_env();
     web_public::render_llms_txt(&api_base_url, &mcp_base_url)
+}
+
+fn public_base_url_from_env() -> String {
+    env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
+}
+
+fn mcp_base_url_from_env() -> String {
+    env::var("MCP_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string())
 }
 
 async fn discovery_manifest_schema() -> impl IntoResponse {
@@ -700,6 +713,17 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "settlement_url": nullable_string_property("Optional settlement transaction or record URL.")
                 }),
                 &["bounty_id", "proof_url", "verifier_summary", "settlement_url"],
+            ),
+        ),
+        tool(
+            "plan_github_proof_comment_for_proof",
+            "Build a GitHub proof comment and check-run output from a stored public proof record.",
+            object_tool_schema(
+                json!({
+                    "proof_id": uuid_property("Public proof record UUID."),
+                    "settlement_url": nullable_string_property("Optional settlement transaction or record URL.")
+                }),
+                &["proof_id", "settlement_url"],
             ),
         ),
         operator_tool(
@@ -1774,15 +1798,40 @@ async fn plan_github_proof_comment(
         verifier_summary: args.verifier_summary,
         settlement_url: args.settlement_url,
     };
-    let markdown = comment.markdown();
-    let fingerprint = proof_comment_fingerprint(&comment);
-    let check = proof_check_output(&comment);
-    mcp_json(serde_json::json!({
-        "comment": comment,
-        "markdown": markdown,
-        "fingerprint": fingerprint,
-        "check": check
-    }))
+    mcp_json(proof_comment_plan(comment))
+}
+
+async fn plan_github_proof_comment_for_proof(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanGitHubProofCommentForProofArgs>,
+) -> Json<serde_json::Value> {
+    let public_base_url = public_base_url_from_env();
+    let network = state.network.lock().expect("state poisoned");
+    let Some(proof) = network.proofs.get(&args.proof_id) else {
+        return mcp_error("proof not found");
+    };
+    if proof.privacy == PrivacyLevel::Private {
+        return mcp_error("proof not found");
+    }
+    let Some(verifier) = network.verifier_results.get(&proof.verifier_result_id) else {
+        return mcp_error("proof verifier result not found");
+    };
+    let verifier_summary = if verifier.summary.trim().is_empty() {
+        format!("{:?} verifier accepted", verifier.kind)
+    } else {
+        format!("{:?}: {}", verifier.kind, verifier.summary.trim())
+    };
+    let comment = GitHubProofComment {
+        bounty_id: proof.bounty_id,
+        proof_url: format!(
+            "{}/public/proofs/{}",
+            public_base_url.trim_end_matches('/'),
+            proof.id
+        ),
+        verifier_summary,
+        settlement_url: args.settlement_url,
+    };
+    mcp_json(proof_comment_plan(comment))
 }
 
 async fn reconcile_base_escrow_event(
@@ -2427,6 +2476,14 @@ mod tests {
             plan_github_proof.input_schema["properties"]["bounty_id"]["format"],
             "uuid"
         );
+        let plan_github_proof_for_proof = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_github_proof_comment_for_proof")
+            .expect("plan_github_proof_comment_for_proof descriptor exists");
+        assert_eq!(
+            plan_github_proof_for_proof.input_schema["properties"]["proof_id"]["format"],
+            "uuid"
+        );
 
         let list_claimable = descriptors
             .iter()
@@ -2675,6 +2732,84 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "note"));
+    }
+
+    #[tokio::test]
+    async fn github_proof_comment_for_proof_uses_stored_public_proof() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "solver".to_string(),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+        });
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Fix MCP proof comments".to_string(),
+                template_slug: "small-code-change".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: domain::FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                bounty.id,
+                77,
+                "0x3333333333333333333333333333333333333333",
+                bounty.amount.clone(),
+                bounty.terms_hash.clone().unwrap(),
+            ))
+            .unwrap();
+        network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        let artifact = "{\"ok\":true}";
+        let submission = network
+            .submit_result(SubmitResultRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+                artifact_uri: "s3://mcp/artifact.json".to_string(),
+                artifact_body: artifact.to_string(),
+            })
+            .unwrap();
+        let proof = network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: app::hash_artifact(artifact),
+                verifier_kind: Some(domain::VerifierKind::JsonSchema),
+                rubric: None,
+                evidence: None,
+                approved_risk_event_id: None,
+            })
+            .await
+            .unwrap();
+        let state = test_state_with_network(network);
+
+        let response = plan_github_proof_comment_for_proof(
+            State(state),
+            Json(PlanGitHubProofCommentForProofArgs {
+                proof_id: proof.id,
+                settlement_url: None,
+            }),
+        )
+        .await
+        .0;
+        let plan = &response["content"][0]["json"];
+
+        assert_eq!(plan["comment"]["bounty_id"], bounty.id.to_string());
+        assert_eq!(
+            plan["comment"]["proof_url"],
+            format!("http://127.0.0.1:8080/public/proofs/{}", proof.id)
+        );
+        assert!(plan["comment"]["verifier_summary"]
+            .as_str()
+            .unwrap()
+            .contains("JsonSchema"));
+        assert_eq!(plan["fingerprint"].as_str().unwrap().len(), 64);
     }
 
     #[tokio::test]

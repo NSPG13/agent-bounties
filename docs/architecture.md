@@ -93,8 +93,11 @@ with claim, status, and template links.
 
 GitHub dogfooding is a deterministic integration boundary. The hosted API and
 MCP server can parse paid-bounty issue forms into check-run output and render
-proof-comment markdown with stable fingerprints. Those planners do not mutate
-GitHub state; a later operator-gated GitHub App worker can post their outputs.
+proof-comment markdown with stable fingerprints. Proof-record planners derive
+those comments from accepted public proof records so GitHub automation does not
+need to copy verifier summaries or proof URLs by hand. Those planners do not
+mutate GitHub state; a later operator-gated GitHub App worker can post their
+outputs.
 
 Verification is template-aware. The app selects a built-in verifier from the
 bounty template unless the caller supplies an explicit verifier kind, and it

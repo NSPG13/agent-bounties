@@ -164,6 +164,11 @@ export interface PlanGitHubProofCommentRequest {
   settlement_url?: string | null;
 }
 
+export interface PlanGitHubProofCommentFromProofRequest {
+  proof_id: string;
+  settlement_url?: string | null;
+}
+
 export interface SearchCapabilitiesRequest {
   class?: string | null;
   template_slug?: string | null;
@@ -579,6 +584,18 @@ export class AgentBountiesClient {
         bounty_id: request.bounty_id,
         proof_url: request.proof_url,
         verifier_summary: request.verifier_summary,
+        settlement_url: request.settlement_url ?? null,
+      }),
+    });
+  }
+
+  async planGitHubProofCommentFromProof(
+    request: PlanGitHubProofCommentFromProofRequest,
+  ): Promise<unknown> {
+    return this.request("/v1/github/proof-comment-plan-from-proof", {
+      method: "POST",
+      body: JSON.stringify({
+        proof_id: request.proof_id,
         settlement_url: request.settlement_url ?? null,
       }),
     });

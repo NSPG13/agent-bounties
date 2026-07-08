@@ -20,8 +20,7 @@ use eval_harness::{
     BountyBench, JudgeBench,
 };
 use github_app::{
-    bounty_check_output, parse_issue_form_bounty, proof_check_output, proof_comment_fingerprint,
-    GitHubProofComment,
+    bounty_check_output, parse_issue_form_bounty, proof_comment_plan, GitHubProofComment,
 };
 use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, StripePlanner, STRIPE_API_BASE_URL,
@@ -1283,16 +1282,14 @@ fn github_proof_comment_plan(
         verifier_summary,
         settlement_url,
     };
-    let markdown = comment.markdown();
-    let fingerprint = proof_comment_fingerprint(&comment);
-    let check = proof_check_output(&comment);
+    let plan = proof_comment_plan(comment);
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
-            "comment": comment,
-            "markdown": markdown,
-            "fingerprint": fingerprint,
-            "check": check
+            "comment": plan.comment,
+            "markdown": plan.markdown,
+            "fingerprint": plan.fingerprint,
+            "check": plan.check
         }))?
     );
     Ok(())
@@ -1400,6 +1397,7 @@ async fn production_smoke_check(
         "/endpoints/stripe_live_connect_accounts",
         "/endpoints/github_issue_bounty_plan",
         "/endpoints/github_proof_comment_plan",
+        "/endpoints/github_proof_comment_from_proof_plan",
     ] {
         require(
             value_str(&discovery, endpoint).is_some(),
@@ -1446,6 +1444,9 @@ async fn production_smoke_check(
                     && required
                         .iter()
                         .any(|value| value.as_str() == Some("base_escrow_events"))
+                    && required
+                        .iter()
+                        .any(|value| value.as_str() == Some("github_proof_comment_from_proof_plan"))
             })
             .unwrap_or(false),
         "discovery schema must require distribution endpoints",
@@ -1538,6 +1539,7 @@ async fn production_smoke_check(
         "Risk policy",
         "AI judges",
         "Stripe live execution is gated",
+        "Proof-record comment planner",
     ] {
         require(
             api_llms.contains(expected),
@@ -1587,6 +1589,7 @@ async fn production_smoke_check(
         "/v1/stripe/live/connect-accounts",
         "/v1/stripe/connect-snapshots",
         "/v1/stripe/checkout-webhooks",
+        "/v1/github/proof-comment-plan-from-proof",
     ] {
         require(
             paths.contains_key(path),
@@ -1831,6 +1834,7 @@ async fn production_smoke_check(
         "approve_risk_bounty",
         "approve_risk_payout",
         "reject_risk_event",
+        "plan_github_proof_comment_for_proof",
     ] {
         require(
             tool_list
@@ -2048,11 +2052,21 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .is_some(),
         "discovery manifest must include GitHub proof comment planning",
     )?;
+    require(
+        discovery
+            .pointer("/endpoints/github_proof_comment_from_proof_plan")
+            .is_some(),
+        "discovery manifest must include proof-record GitHub proof comment planning",
+    )?;
     let api_llms = get_text(&format!("{api}/llms.txt"))?;
     require(
         api_llms.contains("route_blocked_goal")
             && api_llms.contains("/.well-known/agent-bounties.json"),
         "API llms.txt must orient agents to discovery and routing",
+    )?;
+    require(
+        api_llms.contains("Proof-record comment planner"),
+        "API llms.txt must orient agents to proof-record GitHub comments",
     )?;
     let mcp_llms = get_text(&format!("{mcp}/llms.txt"))?;
     require(
@@ -2271,6 +2285,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "execute_stripe_connect_account",
         "plan_github_issue_bounty",
         "plan_github_proof_comment",
+        "plan_github_proof_comment_for_proof",
         "run_eval_loops",
         "get_eval_runs",
         "get_risk_policy",
@@ -2842,6 +2857,32 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     require(
         value_str(&mcp_proof, "/proof_hash").is_some(),
         "MCP request_verification must return a proof hash",
+    )?;
+    let mcp_proof_id = value_str(&mcp_proof, "/id").context("MCP proof id missing")?;
+    let mcp_proof_comment_from_proof = mcp_tool_post(
+        mcp,
+        "plan_github_proof_comment_for_proof",
+        serde_json::json!({
+            "proof_id": mcp_proof_id,
+            "settlement_url": null
+        }),
+    )?;
+    require(
+        value_str(&mcp_proof_comment_from_proof, "/comment/bounty_id")
+            == Some(mcp_bounty_id.as_str()),
+        "MCP proof-record proof comment planner must use the verified bounty",
+    )?;
+    require(
+        value_str(&mcp_proof_comment_from_proof, "/comment/proof_url")
+            .map(|url| url.ends_with(&format!("/public/proofs/{mcp_proof_id}")))
+            .unwrap_or(false),
+        "MCP proof-record proof comment planner must link the public proof page",
+    )?;
+    require(
+        value_str(&mcp_proof_comment_from_proof, "/fingerprint")
+            .map(|fingerprint| fingerprint.len() == 64)
+            .unwrap_or(false),
+        "MCP proof-record proof comment planner must produce a stable fingerprint",
     )?;
 
     let mcp_status = mcp_tool_post(

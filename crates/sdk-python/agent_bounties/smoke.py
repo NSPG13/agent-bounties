@@ -58,6 +58,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery schema must require the GitHub bounty issue template endpoint",
     )
     _require(
+        "github_proof_comment_from_proof_plan" in endpoint_required,
+        "discovery schema must require the proof-record GitHub proof comment planner endpoint",
+    )
+    _require(
         "base_escrow_events" in endpoint_required,
         "discovery schema must require the Base escrow event endpoint",
     )
@@ -107,6 +111,13 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(
         isinstance(discovery.get("endpoints", {}).get("github_proof_comment_plan"), str),
         "discovery manifest missing GitHub proof comment planner endpoint",
+    )
+    _require(
+        isinstance(
+            discovery.get("endpoints", {}).get("github_proof_comment_from_proof_plan"),
+            str,
+        ),
+        "discovery manifest missing proof-record GitHub proof comment planner endpoint",
     )
     _require(
         isinstance(discovery.get("endpoints", {}).get("eval_runs"), str),
@@ -467,6 +478,19 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "JsonSchema",
     )
     _require("proof_hash" in proof, "verification did not return proof_hash")
+    proof_record_plan = client.plan_github_proof_comment_from_proof(proof["id"])
+    _require(
+        proof_record_plan["comment"]["bounty_id"] == bounty_id,
+        "proof-record GitHub proof comment planner used the wrong bounty",
+    )
+    _require(
+        proof_record_plan["comment"]["proof_url"].endswith(f"/public/proofs/{proof['id']}"),
+        "proof-record GitHub proof comment planner used the wrong proof URL",
+    )
+    _require(
+        len(proof_record_plan["fingerprint"]) == 64,
+        "proof-record GitHub proof comment planner did not produce a stable fingerprint",
+    )
 
     status = client.get_bounty_status(bounty_id)
     _require(status["bounty"]["status"] == "Payable", "verified bounty is not Payable")

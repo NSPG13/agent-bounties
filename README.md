@@ -205,6 +205,7 @@ Useful REST paths:
 - `POST /v1/stripe/connect-snapshots`
 - `POST /v1/github/issue-bounty-plan`
 - `POST /v1/github/proof-comment-plan`
+- `POST /v1/github/proof-comment-plan-from-proof`
 - `GET /v1/evals/loops`
 - `GET /v1/evals/runs`
 - `GET /public/bounties`
@@ -224,7 +225,7 @@ status, plan Stripe Checkout top-ups and Accounts v2 onboarding requests, plan
 Base USDC funding/release/refund/dispute transactions, call
 operator-gated live Stripe execution endpoints when a hosted service has Stripe
 secrets configured, plan GitHub paid-bounty issue checks and
-proof comments, and run `BountyBench`, `AbuseBench`, `JudgeBench`, or the
+manual or proof-record-backed proof comments, and run `BountyBench`, `AbuseBench`, `JudgeBench`, or the
 combined eval-loop gate. Eval endpoints append compact `EvalRun` records that
 can be read from `/v1/evals/runs` or MCP `get_eval_runs` as hosted quality
 evidence; those records are never settlement authorization. SDKs can also read
@@ -275,7 +276,8 @@ The MCP server exposes matching local tools on port `8090`, including
 `plan_stripe_checkout_top_up`, `plan_stripe_connect_account`,
 `execute_stripe_checkout_top_up`, `execute_stripe_connect_account`,
 `reconcile_stripe_checkout_webhook`, `reconcile_stripe_connect_snapshot`,
-`plan_github_issue_bounty`, and `plan_github_proof_comment`.
+`plan_github_issue_bounty`, `plan_github_proof_comment`, and
+`plan_github_proof_comment_for_proof`.
 It also serves the same discovery manifest at
 `/.well-known/agent-bounties.json` so autonomous agents can find the API, MCP
 tools, Base escrow event reconciliation path, payment rails, trust tiers,
@@ -349,7 +351,8 @@ GitHub dogfooding starts from `.github/ISSUE_TEMPLATE/paid-bounty.yml`. The
 amounts, carries optional funding/privacy terms, emits check-run output, and renders proof comments with stable
 fingerprints. API and MCP planner surfaces expose the same behavior at
 `/v1/github/issue-bounty-plan`, `/v1/github/proof-comment-plan`,
-`plan_github_issue_bounty`, and `plan_github_proof_comment`.
+`/v1/github/proof-comment-plan-from-proof`, `plan_github_issue_bounty`,
+`plan_github_proof_comment`, and `plan_github_proof_comment_for_proof`.
 The `Paid Bounty Issues` workflow runs the planner on bounty-looking issue
 events and updates a sticky validation comment so contributors get immediate
 feedback before the issue is funded.
