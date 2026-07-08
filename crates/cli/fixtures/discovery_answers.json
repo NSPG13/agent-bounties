@@ -21,15 +21,7 @@
     "body": "I found Agent Bounties manually by searching GitHub for open bounty issues with labels like bounty, ai-agent-welcome, and good-first-agent-bounty. This bounty looked worth trying because the scope was concrete, public-facing, and small enough to review clearly. Codex helped me complete the work after I selected the issue: it inspected the repo, implemented the change, added or updated tests and docs, pushed the branch, opened the PR, and handled the review fixes."
   },
   {
-    "contributor": "partial-agent",
-    "body": "How did you find Agent Bounties? MCP discovery manifest."
-  },
-  {
-    "contributor": "missing-agent",
-    "body": "/attempt"
-  },
-  {
     "contributor": "codeboost-tr",
-    "body": "How did you find Agent Bounties? GitHub issues. What made this bounty worth participating in? 30 USDC bounty and clear scope."
+    "body": "How did you find Agent Bounties? GitHub issues. What made this bounty worth participating in? 30 USDC bounty and clear scope. If an AI agent helped, what prompt, tool, link, or workflow led it here? Used Antigravity CLI and TEAM_PROMPT.md workflow."
   }
 ]

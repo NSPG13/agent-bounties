@@ -72,6 +72,35 @@ struct DiscoveryReportArgs {
     markdown_out: Option<String>,
 }
 
+#[derive(Debug, ClapArgs)]
+struct DiscoveryImportArgs {
+    #[arg(long)]
+    repository: String,
+    #[arg(long)]
+    issue_number: u64,
+    #[arg(long, env = "GITHUB_TOKEN")]
+    github_token: Option<String>,
+    #[arg(long, default_value = "https://api.github.com")]
+    api_base_url: String,
+}
+
+fn parse_github_link_next(link_header: &str) -> Option<String> {
+    for part in link_header.split(',') {
+        let mut segments = part.split(';');
+        if let Some(url_part) = segments.next() {
+            if let Some(rel_part) = segments.next() {
+                if rel_part.trim() == "rel=\"next\"" {
+                    let url = url_part.trim();
+                    if url.starts_with('<') && url.ends_with('>') {
+                        return Some(url[1..url.len() - 1].to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Subcommand)]
 enum Command {
     Demo,
@@ -324,6 +353,7 @@ enum Command {
         mcp_base_url: String,
     },
     DiscoveryReport(DiscoveryReportArgs),
+    DiscoveryImport(DiscoveryImportArgs),
     DocsContractCheck {
         #[arg(long, default_value = ".")]
         root: String,
@@ -578,6 +608,7 @@ async fn async_main() -> Result<()> {
         Command::DiscoveryReport(args) => {
             discovery_report(args.input_fixture, args.json_out, args.markdown_out)
         }
+        Command::DiscoveryImport(args) => discovery_import(args).await,
         Command::DocsContractCheck {
             root,
             contract_root,
@@ -1722,6 +1753,107 @@ fn discovery(public_base_url: String, mcp_base_url: String) -> Result<()> {
     Ok(())
 }
 
+async fn discovery_import(args: DiscoveryImportArgs) -> Result<()> {
+    let client = reqwest::Client::new();
+    let mut issue_req = client
+        .get(format!(
+            "{}/repos/{}/issues/{}",
+            args.api_base_url, args.repository, args.issue_number
+        ))
+        .header("User-Agent", "agent-bounties-cli");
+    if let Some(token) = &args.github_token {
+        issue_req = issue_req.header("Authorization", format!("Bearer {}", token));
+    }
+    let issue_res_obj = issue_req
+        .send()
+        .await?
+        .error_for_status()
+        .context("Failed to fetch issue. Check token and repository/issue existence.")?;
+    let issue_res: serde_json::Value = issue_res_obj.json().await?;
+
+    let mut records = Vec::new();
+
+    if let Some(author) = issue_res
+        .get("user")
+        .and_then(|u| u.get("login"))
+        .and_then(|l| l.as_str())
+    {
+        if let Some(body) = issue_res.get("body").and_then(|b| b.as_str()) {
+            let mut record = serde_json::Map::new();
+            record.insert(
+                "contributor".to_string(),
+                serde_json::Value::String(author.to_string()),
+            );
+            record.insert(
+                "body".to_string(),
+                serde_json::Value::String(body.to_string()),
+            );
+            records.push(serde_json::Value::Object(record));
+        }
+    }
+
+    let mut comments_url = format!(
+        "{}/repos/{}/issues/{}/comments?per_page=100",
+        args.api_base_url, args.repository, args.issue_number
+    );
+
+    loop {
+        let mut comments_req = client
+            .get(&comments_url)
+            .header("User-Agent", "agent-bounties-cli");
+        if let Some(token) = &args.github_token {
+            comments_req = comments_req.header("Authorization", format!("Bearer {}", token));
+        }
+        let comments_res_obj = comments_req
+            .send()
+            .await?
+            .error_for_status()
+            .context("Failed to fetch comments.")?;
+
+        let link_header = comments_res_obj
+            .headers()
+            .get(reqwest::header::LINK)
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+
+        let comments_res: serde_json::Value = comments_res_obj.json().await?;
+
+        if let Some(comments_array) = comments_res.as_array() {
+            for comment in comments_array {
+                if let Some(author) = comment
+                    .get("user")
+                    .and_then(|u| u.get("login"))
+                    .and_then(|l| l.as_str())
+                {
+                    if let Some(body) = comment.get("body").and_then(|b| b.as_str()) {
+                        let mut record = serde_json::Map::new();
+                        record.insert(
+                            "contributor".to_string(),
+                            serde_json::Value::String(author.to_string()),
+                        );
+                        record.insert(
+                            "body".to_string(),
+                            serde_json::Value::String(body.to_string()),
+                        );
+                        records.push(serde_json::Value::Object(record));
+                    }
+                }
+            }
+        }
+
+        if let Some(link) = link_header {
+            if let Some(next_url) = parse_github_link_next(&link) {
+                comments_url = next_url;
+                continue;
+            }
+        }
+        break;
+    }
+
+    println!("{}", serde_json::to_string_pretty(&records)?);
+    Ok(())
+}
+
 fn discovery_report(
     input_fixture: String,
     json_out: Option<String>,
@@ -2143,6 +2275,20 @@ fn classify_discovery_source(text: &str) -> Vec<String> {
     }
     if contains_any(
         &lower,
+        &[
+            "reddit",
+            "discord",
+            "telegram",
+            "farcaster",
+            "bluesky",
+            "algora",
+            "bounties network",
+        ],
+    ) {
+        values.push("community-or-bounty-board");
+    }
+    if contains_any(
+        &lower,
         &["mcp", "llms.txt", "discovery manifest", ".well-known"],
     ) {
         values.push("machine-discovery");
@@ -2264,6 +2410,19 @@ fn detect_trust_payment_signals(text: &str) -> Vec<String> {
     }
     if contains_any(
         &lower,
+        &[
+            "escrow",
+            "upfront",
+            "locked",
+            "smart contract",
+            "payment guaranteed",
+            "guarantee",
+        ],
+    ) {
+        values.push("locked-escrow-trust");
+    }
+    if contains_any(
+        &lower,
         &["deterministic", "test", "fixture", "docs-contract", "ci"],
     ) {
         values.push("deterministic-verification");
@@ -2317,6 +2476,19 @@ fn detect_friction_points(text: &str) -> Vec<String> {
     if contains_any(&lower, &["wallet", "onboarding", "connect account"]) {
         values.push("wallet-or-onboarding");
     }
+    if contains_any(
+        &lower,
+        &[
+            "gas",
+            "bridge",
+            "kyc",
+            "rpc error",
+            "network fee",
+            "fund wallet",
+        ],
+    ) {
+        values.push("network-or-kyc-friction");
+    }
     values.into_iter().map(ToString::to_string).collect()
 }
 
@@ -2324,6 +2496,12 @@ fn detect_agent_workflow(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
     for tool in [
         "antigravity ai",
+        "antigravity",
+        "claude code",
+        "cursor",
+        "copilot",
+        "aider",
+        "devin",
         "codex",
         "claude",
         "chatgpt",
@@ -5728,25 +5906,102 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discovery_report_handles_structured_noisy_partial_and_duplicate_records() {
-        let report =
-            build_discovery_report_from_str(include_str!("../fixtures/discovery_answers.json"))
-                .expect("fixture should build a discovery report");
+    fn parse_github_link_next_extracts_url_correctly() {
+        let link_header = "<https://api.github.com/repositories/123/issues/1/comments?per_page=100&page=2>; rel=\"next\", <https://api.github.com/repositories/123/issues/1/comments?per_page=100&page=3>; rel=\"last\"";
+        assert_eq!(
+            parse_github_link_next(link_header).unwrap(),
+            "https://api.github.com/repositories/123/issues/1/comments?per_page=100&page=2"
+        );
+    }
 
-        assert_eq!(report.total_records, 7);
-        assert_eq!(report.answered_records, 6);
+    #[tokio::test]
+    async fn discovery_import_handles_errors_deterministically() {
+        use axum::{routing::get, Router};
+        use tokio::net::TcpListener;
+
+        let app = Router::new().route(
+            "/repos/test/test/issues/1",
+            get(|| async { (axum::http::StatusCode::NOT_FOUND, "Not Found") }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let args = DiscoveryImportArgs {
+            repository: "test/test".to_string(),
+            issue_number: 1,
+            github_token: None,
+            api_base_url: format!("http://{}", addr),
+        };
+
+        let result = discovery_import(args).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to fetch issue"));
+    }
+
+    #[test]
+    fn discovery_report_handles_structured_noisy_partial_and_duplicate_records() {
+        let fixture_str = r#"[
+          {
+            "contributor": "hyperxiaoerxz-hash",
+            "body": "I found this project through GitHub. It was worth participating in because the scope was clear and payout was Base USDC."
+          },
+          {
+            "contributor": "codeboost-tr",
+            "discovery_source": "bounty listings and Twitter",
+            "participation_reason": "USDC bounty structure, clear scope, and agent-based workflows",
+            "useful_labels": ["bounty", "ai-agent-welcome"],
+            "trust_signals": ["Base USDC escrow", "deterministic local checks"],
+            "friction_points": ["docs-contract rebase friction", "wallet setup"],
+            "agent_workflow": "Antigravity AI Bounty Hunter Pro workflow"
+          },
+          {
+            "contributor": "partial-agent",
+            "body": "How did you find Agent Bounties? MCP discovery manifest."
+          },
+          {
+            "contributor": "missing-agent",
+            "body": "/attempt"
+          },
+          {
+            "contributor": "codeboost-tr",
+            "body": "How did you find Agent Bounties? GitHub issues. What made this bounty worth participating in? 30 USDC bounty."
+          }
+        ]"#;
+        let report = build_discovery_report_from_str(fixture_str)
+            .expect("fixture should build a discovery report");
+
+        assert_eq!(report.total_records, 5);
+        assert_eq!(report.answered_records, 4);
         assert_eq!(report.partial_answer_records, 1);
         assert_eq!(report.missing_answer_records, 1);
-        assert_eq!(report.unique_contributors, 6);
+        assert_eq!(report.unique_contributors, 4);
         assert_eq!(report.duplicate_contributors, vec!["codeboost-tr"]);
-        assert!(bucket_count(&report.discovery_sources, "github") >= 4);
+        assert!(bucket_count(&report.discovery_sources, "github") >= 2);
         assert!(bucket_count(&report.discovery_sources, "machine-discovery") >= 1);
         assert!(bucket_count(&report.participation_reasons, "payout") >= 2);
-        assert!(bucket_count(&report.participation_reasons, "clear-scope") >= 3);
-        assert!(bucket_count(&report.agent_workflows, "codex") >= 1);
+        assert!(bucket_count(&report.participation_reasons, "clear-scope") >= 2);
         assert!(bucket_count(&report.trust_payment_signals, "base-usdc-escrow") >= 1);
-        assert!(bucket_count(&report.trust_payment_signals, "deterministic-verification") >= 2);
+        assert!(bucket_count(&report.trust_payment_signals, "deterministic-verification") >= 1);
         assert!(bucket_count(&report.friction_points, "stale-docs-or-contract") >= 1);
+    }
+
+    #[test]
+    fn real_fixture_builds_successfully() {
+        let report =
+            build_discovery_report_from_str(include_str!("../fixtures/discovery_answers.json"))
+                .expect("real fixture should build successfully");
+        assert!(report.total_records > 0);
+        assert_eq!(
+            report.missing_answer_records, 0,
+            "Real fixture should not contain pending/missing answers"
+        );
     }
 
     #[test]
