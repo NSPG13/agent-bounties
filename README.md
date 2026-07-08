@@ -45,7 +45,7 @@ way to recover before rerunning the check.
 ```powershell
 cargo test --workspace
 cargo run -p cli -- demo
-cargo run -p cli -- base-plan --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333
+cargo run -p cli -- base-plan --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333
 cargo run -p cli -- base-decode-demo
 cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0
 cargo run -p cli -- base-fetch-logs --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0

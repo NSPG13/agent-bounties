@@ -98,6 +98,7 @@ pub struct EvmTransactionIntent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseEscrowFundingPlan {
+    pub network: BaseNetworkDescriptor,
     pub approve: EvmTransactionIntent,
     pub create_escrow: EvmTransactionIntent,
 }
@@ -117,6 +118,15 @@ impl BaseEscrowTxPlanner {
         &self,
         create: &BaseEscrowCreate,
     ) -> Result<BaseEscrowFundingPlan, ChainBaseError> {
+        self.plan_funding_for_network("base-sepolia", create)
+    }
+
+    pub fn plan_funding_for_network(
+        &self,
+        network: &str,
+        create: &BaseEscrowCreate,
+    ) -> Result<BaseEscrowFundingPlan, ChainBaseError> {
+        let network = base_network_descriptor(network)?;
         let token = normalize_address(&create.token)?;
         let payer = normalize_address(&create.payer)?;
         let amount = money_to_uint256(&create.amount)?;
@@ -135,6 +145,7 @@ impl BaseEscrowTxPlanner {
         };
         let create_escrow = self.create_escrow(create)?;
         Ok(BaseEscrowFundingPlan {
+            network,
             approve,
             create_escrow,
         })
@@ -1514,6 +1525,8 @@ mod tests {
 
         let plan = planner.plan_funding(&create).unwrap();
 
+        assert_eq!(plan.network.name, "Base Sepolia");
+        assert_eq!(plan.network.chain_id, 84_532);
         assert_eq!(plan.approve.from, Some(create.payer.clone()));
         assert_eq!(plan.approve.to, create.token);
         assert!(plan.approve.data.starts_with("0x095ea7b3"));
@@ -1521,6 +1534,29 @@ mod tests {
         assert_eq!(plan.create_escrow.to, planner.escrow_contract);
         assert!(plan.create_escrow.data.starts_with("0x64a20554"));
         assert!(plan.create_escrow.data.contains(&"ab".repeat(32)));
+    }
+
+    #[test]
+    fn funding_plan_can_target_base_mainnet() {
+        let planner =
+            BaseEscrowTxPlanner::new("0x1111111111111111111111111111111111111111").unwrap();
+        let create = BaseEscrowCreate {
+            bounty_id: Uuid::from_u128(42),
+            payer: "0x2222222222222222222222222222222222222222".to_string(),
+            token: "0x3333333333333333333333333333333333333333".to_string(),
+            amount: Money::new(1_000_000, "usdc").unwrap(),
+            terms_hash: format!("0x{}", "ab".repeat(32)),
+        };
+
+        let plan = planner
+            .plan_funding_for_network("base-mainnet", &create)
+            .unwrap();
+
+        assert_eq!(plan.network.name, "Base");
+        assert_eq!(plan.network.chain_id, 8_453);
+        assert_eq!(plan.network.rpc_url_env, "BASE_MAINNET_RPC_URL");
+        assert_eq!(plan.approve.to, create.token);
+        assert_eq!(plan.create_escrow.to, planner.escrow_contract);
     }
 
     #[test]

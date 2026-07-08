@@ -49,7 +49,9 @@ The Base rail uses two funding transactions:
 Settlement-signing operators later call `release(uint256,address[],uint256[],bytes32)`,
 `refund(uint256,bytes32)`, or `markDisputed(uint256,bytes32)`. The Rust
 `chain-base` crate creates unsigned EVM transaction intents for these calls and
-checks Solidity function selectors against the contract ABI.
+checks Solidity function selectors against the contract ABI. Funding plans also
+include Base network metadata and default to `base-sepolia` unless the caller
+passes another supported network such as `base-mainnet`.
 After an accepted Base-funded bounty has a funded escrow and pending settlement,
 operators can call `POST /v1/base/release-queue` with the escrow contract and
 platform fee wallet. The queue returns each payable Base settlement, pending
@@ -135,6 +137,7 @@ Generate a local sample plan:
 
 ```powershell
 cargo run -p cli -- base-plan `
+  --network base-sepolia `
   --escrow-contract 0x1111111111111111111111111111111111111111 `
   --token 0x3333333333333333333333333333333333333333 `
   --amount-minor 1000000

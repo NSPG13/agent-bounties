@@ -44,6 +44,7 @@ cargo run -p cli -- judgebench
 cargo run -p cli -- eval-loops
 cargo run -p cli -- risk-policy
 cargo run -p cli -- base-plan \
+  --network base-mainnet \
   --escrow-contract 0x1111111111111111111111111111111111111111 \
   --token 0x3333333333333333333333333333333333333333 \
   --amount-minor 1000000

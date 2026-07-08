@@ -29,6 +29,7 @@ cargo run -p cli -- base-sepolia-runbook `
 The output includes:
 
 - `forge create` commands for `AgentBountyEscrow`,
+- Base Sepolia chain metadata on funding and settlement steps,
 - `cast send --data ...` commands for USDC approval and `createEscrow`,
 - `cast send --data ...` command for settlement-signer release,
 - refund and dispute transaction planning is available through

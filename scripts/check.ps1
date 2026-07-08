@@ -40,7 +40,7 @@ Invoke-Checked { cargo run -p cli -- abusebench }
 Invoke-Checked { cargo run -p cli -- judgebench }
 Invoke-Checked { cargo run -p cli -- eval-loops }
 Invoke-Checked { cargo run -p cli -- risk-policy }
-Invoke-Checked { cargo run -p cli -- base-plan --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333 --amount-minor 1000000 }
+Invoke-Checked { cargo run -p cli -- base-plan --network base-mainnet --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333 --amount-minor 1000000 }
 Invoke-Checked { cargo run -p cli -- base-decode-demo }
 Invoke-Checked { cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0 }
 Invoke-Checked { cargo run -p cli -- base-release-queue-demo --escrow-contract 0x1111111111111111111111111111111111111111 --platform-fee-wallet 0x4444444444444444444444444444444444444444 }

@@ -125,6 +125,8 @@ enum Command {
         token: String,
         #[arg(long, default_value_t = 1_000_000)]
         amount_minor: i64,
+        #[arg(long, default_value = "base-sepolia")]
+        network: String,
     },
     BaseDecodeDemo,
     BaseLogQuery {
@@ -353,7 +355,8 @@ async fn main() -> Result<()> {
             escrow_contract,
             token,
             amount_minor,
-        } => base_plan(escrow_contract, token, amount_minor),
+            network,
+        } => base_plan(escrow_contract, token, amount_minor, network),
         Command::BaseDecodeDemo => base_decode_demo(),
         Command::BaseLogQuery {
             escrow_contract,
@@ -734,7 +737,12 @@ fn agent_paid_status(agent_id: Uuid, api_base_url: String) -> Result<()> {
     Ok(())
 }
 
-fn base_plan(escrow_contract: String, token: String, amount_minor: i64) -> Result<()> {
+fn base_plan(
+    escrow_contract: String,
+    token: String,
+    amount_minor: i64,
+    network: String,
+) -> Result<()> {
     let planner = BaseEscrowTxPlanner::new(escrow_contract)?;
     let bounty_id = Uuid::new_v4();
     let create = BaseEscrowCreate {
@@ -763,7 +771,8 @@ fn base_plan(escrow_contract: String, token: String, amount_minor: i64) -> Resul
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "bounty_id": bounty_id,
-            "funding": planner.plan_funding(&create)?,
+            "network": base_network_descriptor(&network)?,
+            "funding": planner.plan_funding_for_network(&network, &create)?,
             "release": planner.release(&release)?
         }))?
     );
@@ -781,6 +790,8 @@ fn base_sepolia_runbook(
     amount_minor: i64,
 ) -> Result<()> {
     let planner = BaseEscrowTxPlanner::new(escrow_contract)?;
+    let network = base_network_descriptor("base-sepolia")?;
+    let rpc_url_env = network.rpc_url_env.clone();
     let bounty_id = Uuid::new_v4();
     let create = BaseEscrowCreate {
         bounty_id,
@@ -803,20 +814,16 @@ fn base_sepolia_runbook(
             },
         ],
     };
-    let funding = planner.plan_funding(&create)?;
+    let funding = planner.plan_funding_for_network("base-sepolia", &create)?;
     let release_tx = planner.release(&release)?;
 
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
-            "network": {
-                "name": "Base Sepolia",
-                "chain_id": 84532,
-                "rpc_url_env": "BASE_SEPOLIA_RPC_URL"
-            },
+            "network": network,
             "working_directory": "contracts/base-escrow",
             "required_env": [
-                "BASE_SEPOLIA_RPC_URL",
+                rpc_url_env,
                 "BASE_DEPLOYER_PRIVATE_KEY",
                 "BASE_PAYER_PRIVATE_KEY",
                 "BASE_SETTLEMENT_SIGNER_PRIVATE_KEY"
@@ -825,12 +832,12 @@ fn base_sepolia_runbook(
                 "contract": "src/AgentBountyEscrow.sol:AgentBountyEscrow",
                 "settlement_signer": settlement_signer,
                 "bash": format!(
-                    "forge create --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $BASE_DEPLOYER_PRIVATE_KEY --verify src/AgentBountyEscrow.sol:AgentBountyEscrow --constructor-args {}",
-                    settlement_signer
+                    "forge create --rpc-url ${} --private-key $BASE_DEPLOYER_PRIVATE_KEY --verify src/AgentBountyEscrow.sol:AgentBountyEscrow --constructor-args {}",
+                    rpc_url_env, settlement_signer
                 ),
                 "powershell": format!(
-                    "forge create --rpc-url $env:BASE_SEPOLIA_RPC_URL --private-key $env:BASE_DEPLOYER_PRIVATE_KEY --verify src/AgentBountyEscrow.sol:AgentBountyEscrow --constructor-args {}",
-                    settlement_signer
+                    "forge create --rpc-url $env:{} --private-key $env:BASE_DEPLOYER_PRIVATE_KEY --verify src/AgentBountyEscrow.sol:AgentBountyEscrow --constructor-args {}",
+                    rpc_url_env, settlement_signer
                 )
             },
             "sample_bounty": {
@@ -841,11 +848,13 @@ fn base_sepolia_runbook(
                 "proof_hash": release.proof_hash
             },
             "funding": {
-                "approve": cast_send_step(&funding.approve, "BASE_PAYER_PRIVATE_KEY"),
-                "create_escrow": cast_send_step(&funding.create_escrow, "BASE_PAYER_PRIVATE_KEY")
+                "network": funding.network,
+                "approve": cast_send_step(&funding.approve, "BASE_PAYER_PRIVATE_KEY", &rpc_url_env),
+                "create_escrow": cast_send_step(&funding.create_escrow, "BASE_PAYER_PRIVATE_KEY", &rpc_url_env)
             },
             "settlement": {
-                "release": cast_send_step(&release_tx, "BASE_SETTLEMENT_SIGNER_PRIVATE_KEY"),
+                "network": network,
+                "release": cast_send_step(&release_tx, "BASE_SETTLEMENT_SIGNER_PRIVATE_KEY", &rpc_url_env),
                 "note": "The platform should mark the bounty paid only after the EscrowReleased log is indexed through /v1/base/evm-logs."
             }
         }))?
@@ -856,6 +865,7 @@ fn base_sepolia_runbook(
 fn cast_send_step(
     tx: &chain_base::EvmTransactionIntent,
     private_key_env: &str,
+    rpc_url_env: &str,
 ) -> serde_json::Value {
     serde_json::json!({
         "function": tx.function,
@@ -864,12 +874,12 @@ fn cast_send_step(
         "value_wei": tx.value_wei,
         "data": tx.data,
         "bash": format!(
-            "cast send --rpc-url $BASE_SEPOLIA_RPC_URL --private-key ${} {} --data {}",
-            private_key_env, tx.to, tx.data
+            "cast send --rpc-url ${} --private-key ${} {} --data {}",
+            rpc_url_env, private_key_env, tx.to, tx.data
         ),
         "powershell": format!(
-            "cast send --rpc-url $env:BASE_SEPOLIA_RPC_URL --private-key $env:{} {} --data {}",
-            private_key_env, tx.to, tx.data
+            "cast send --rpc-url $env:{} --private-key $env:{} {} --data {}",
+            rpc_url_env, private_key_env, tx.to, tx.data
         )
     })
 }
