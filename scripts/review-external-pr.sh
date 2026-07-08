@@ -69,6 +69,37 @@ is_risky_path() {
     [[ "$path" == *package-lock.json ]]
 }
 
+markdown_list() {
+  local empty="$1"
+  shift || true
+  if [[ "$#" -eq 0 ]]; then
+    printf '%s\n' "$empty"
+    return
+  fi
+  local item
+  for item in "$@"; do
+    printf -- '- %s\n' "$item"
+  done
+}
+
+json_array() {
+  if [[ "$#" -eq 0 ]]; then
+    return
+  fi
+  local first=true
+  local item escaped
+  for item in "$@"; do
+    escaped="${item//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    if [[ "$first" == true ]]; then
+      first=false
+    else
+      printf ','
+    fi
+    printf '"%s"' "$escaped"
+  done
+}
+
 mapfile -t changed_files < <(gh pr view "$pr" --repo "$repo" --json files --jq '.files[].path')
 if [[ "${#changed_files[@]}" -eq 0 ]]; then
   echo "PR #$pr has no changed files" >&2
@@ -113,31 +144,106 @@ trap cleanup EXIT
 git worktree add --detach "$worktree" "$ref_name" >/dev/null
 
 docs_contract_check="failed"
-if cargo run -p cli -- docs-contract-check --root "$worktree" --contract-root "$repo_root"; then
+docs_output="$tmp_root/docs-contract-check.log"
+if cargo run -p cli -- docs-contract-check --root "$worktree" --contract-root "$repo_root" >"$docs_output" 2>&1; then
   docs_contract_check="ok"
 fi
+cat "$docs_output"
+mapfile -t docs_contract_issues < <(grep -E '^[^[:space:]:][^:]+:[0-9]+:' "$docs_output" | head -n 20 || true)
 
 safe_for_maintainer_ci=false
 if [[ "$docs_only" == true && "${#risky_files[@]}" -eq 0 && "$docs_contract_check" == "ok" ]]; then
   safe_for_maintainer_ci=true
+fi
+collaboration_branch_candidate=false
+if [[ "$docs_only" == true && "${#risky_files[@]}" -eq 0 ]]; then
+  collaboration_branch_candidate=true
+fi
+recommended_lane="manual-security-review"
+if [[ "$safe_for_maintainer_ci" == true ]]; then
+  recommended_lane="main-candidate"
+elif [[ "$collaboration_branch_candidate" == true ]]; then
+  recommended_lane="collaboration-branch-candidate"
+fi
+
+feedback_items=()
+if [[ "$docs_only" != true ]]; then
+  feedback_items+=("Split docs-only changes from code or infrastructure changes, or wait for manual maintainer review of the non-doc paths.")
+fi
+if [[ "${#risky_files[@]}" -gt 0 ]]; then
+  feedback_items+=("Risky paths need line-by-line maintainer review before CI or any upstream collaboration branch is approved.")
+fi
+if [[ "$docs_contract_check" != "ok" ]]; then
+  feedback_items+=("Run cargo run -p cli -- docs-contract-check locally and update examples to match the current API routes, MCP tools, discovery manifest shape, and request payloads.")
+fi
+if [[ "${#docs_contract_issues[@]}" -gt 0 ]]; then
+  feedback_items+=("Start with the first docs-contract issue listed below, then rerun the checker until it reports docs_contract_check=ok.")
+fi
+if [[ "${#feedback_items[@]}" -eq 0 ]]; then
+  feedback_items+=("Perform semantic review before approving merge, and keep payment or bounty acceptance separate from code review.")
 fi
 
 printf '{\n'
 printf '  "pr": %s,\n' "$pr"
 printf '  "docs_only": %s,\n' "$docs_only"
 printf '  "safe_for_maintainer_ci": %s,\n' "$safe_for_maintainer_ci"
+printf '  "main_candidate": %s,\n' "$safe_for_maintainer_ci"
+printf '  "collaboration_branch_candidate": %s,\n' "$collaboration_branch_candidate"
+printf '  "recommended_lane": "%s",\n' "$recommended_lane"
 printf '  "docs_contract_check": "%s",\n' "$docs_contract_check"
-printf '  "risky_files": [%s],\n' "$(printf '"%s",' "${risky_files[@]}" | sed 's/,$//')"
-printf '  "non_docs_files": [%s]\n' "$(printf '"%s",' "${non_docs_files[@]}" | sed 's/,$//')"
+printf '  "risky_files": [%s],\n' "$(json_array "${risky_files[@]}")"
+printf '  "non_docs_files": [%s]\n' "$(json_array "${non_docs_files[@]}")"
 printf '}\n'
 
 if [[ "$post_review" == true ]]; then
   if [[ "$safe_for_maintainer_ci" == true ]]; then
-    gh pr review "$pr" --repo "$repo" --comment --body \
-      "Automated external PR intake passed static docs-only review and docs-contract-check. This does not approve merge or payment; a maintainer still needs to review semantics and decide whether to approve CI."
+    body="$(
+      cat <<'EOF'
+Automated external PR intake passed.
+
+What passed:
+- The changed files are docs-only.
+- No risky paths were changed.
+- docs-contract-check passed against the trusted maintainer checkout.
+
+Recommended lane: main-candidate.
+
+Next steps:
+- A maintainer should still review the semantics before merging.
+- This review does not approve bounty acceptance, payout, or payment settlement.
+EOF
+    )"
+    gh pr review "$pr" --repo "$repo" --comment --body "$body"
   else
-    gh pr review "$pr" --repo "$repo" --request-changes --body \
-      "Automated external PR intake failed. risky_files=${risky_files[*]} non_docs_files=${non_docs_files[*]} docs_contract_check=${docs_contract_check}. Maintainer review required; do not approve CI yet."
+    body_file="$tmp_root/review-body.md"
+    {
+      printf 'Thanks for the contribution. I cannot approve this for main yet, but the next repair steps are concrete.\n\n'
+      printf 'Recommended lane: %s.\n\n' "$recommended_lane"
+      printf 'Why it is blocked:\n'
+      if [[ "${#non_docs_files[@]}" -gt 0 ]]; then
+        printf '\nNon-doc files changed:\n'
+        markdown_list "- None" "${non_docs_files[@]}"
+      fi
+      if [[ "${#risky_files[@]}" -gt 0 ]]; then
+        printf '\nRisky files changed:\n'
+        markdown_list "- None" "${risky_files[@]}"
+      fi
+      if [[ "$docs_contract_check" != "ok" ]]; then
+        printf '\nDocs contract check failed:\n'
+        markdown_list "- The checker failed without line-specific issues. Run the command below for full output." "${docs_contract_issues[@]}"
+      fi
+      printf '\nHow to fix:\n'
+      markdown_list "- Rerun the trusted review command and address each blocker." "${feedback_items[@]}"
+      printf '\nLocal command to run before pushing an update:\n\n'
+      printf '```bash\ncargo run -p cli -- docs-contract-check\n```\n\n'
+      printf 'Collaboration branch guidance:\n'
+      if [[ "$collaboration_branch_candidate" == true ]]; then
+        printf 'This looks suitable for a collaboration branch such as collab/pr-%s-<short-topic> if a maintainer wants others to iterate on it without merging to main yet. That branch would not imply bounty acceptance or payment approval.\n' "$pr"
+      else
+        printf 'Do not move this to an upstream collaboration branch automatically. The risky or non-doc paths need manual maintainer security review first.\n'
+      fi
+    } >"$body_file"
+    gh pr review "$pr" --repo "$repo" --request-changes --body "$(cat "$body_file")"
   fi
 fi
 

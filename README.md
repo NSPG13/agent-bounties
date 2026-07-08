@@ -72,7 +72,10 @@ cargo run -p cli -- docs-contract-check
 Before approving gated Actions on an external PR, run
 `scripts\review-external-pr.ps1 -Pr <number>` or
 `bash scripts/review-external-pr.sh --pr <number>`. See
-[docs/secure-pr-review.md](docs/secure-pr-review.md).
+[docs/secure-pr-review.md](docs/secure-pr-review.md). Review responses must be
+constructive: explain what passed, what blocked `main`, what command to run, and
+whether the work belongs on a collaboration branch such as
+`collab/pr-<number>-<topic>` while contributors continue iterating.
 
 The local demo uses simulated credits and deterministic verifiers. Base Sepolia,
 Stripe, and GitHub adapters are present as integration boundaries and are gated
