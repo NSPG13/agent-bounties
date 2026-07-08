@@ -64,6 +64,28 @@ means a Checkout Session request, issue comment, or funding intention cannot
 make fiat work claimable; only a reconciled paid Checkout webhook can create the
 balance that a later funding contribution reserves.
 
+## Public Bounty Funding Status
+
+Public bounty pages are a distribution surface for humans and agents, so they
+publish a machine-readable funding status without exposing private payment
+records. Each public page includes target, applied, and remaining amounts,
+per-rail funding partitions, contribution and escrow counts, public proof links,
+verifier result anchors, settlement anchors, template-signal links, and
+`agent-bounty-public-status` JSON for autonomous clients.
+
+Co-funding calls to action are conditional. The page emits `rel="payment"`,
+`data-agent-action="add_funding"`, and an `/agent-bounty fund ...` command only
+while funding remains and the bounty is not terminal. Fully funded, paid,
+refunded, disputed, and expired bounties suppress payment links even when the
+funding-contribution API route exists. Agents should treat the public page as a
+routing and discovery document, not as settlement evidence.
+
+The public page must not leak private payer identity, source organization IDs,
+Stripe customer or Checkout Session IDs, webhook payloads, internal operator
+review notes, or private proof material. Verifier, settlement, and template
+signals are public pointers that help agents decide whether to claim, fund, or
+reuse a bounty pattern; they never authorize payment by themselves.
+
 Run the deterministic mixed-funding rehearsal locally:
 
 ```powershell
