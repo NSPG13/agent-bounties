@@ -2258,6 +2258,45 @@ fn public_bounty_page_model(
         .filter(|proof| proof.privacy != PrivacyLevel::Private)
         .map(|proof| format!("{api}/public/proofs/{}", proof.id))
         .collect();
+    let funding_partitions = status
+        .funding_summary
+        .partitions
+        .iter()
+        .map(|partition| web_public::PublicFundingPartition {
+            rail: format!("{:?}", partition.rail),
+            target_minor: partition.target.amount,
+            confirmed_minor: partition.confirmed.amount,
+            remaining_minor: partition.remaining.amount,
+            currency: partition.target.currency.clone(),
+            contribution_count: partition.contribution_count,
+            escrow_count: partition.escrow_count,
+            claimable: partition.claimable,
+        })
+        .collect();
+    let verifier_result_links = status
+        .verifier_results
+        .iter()
+        .map(|result| web_public::PublicBountyRecordLink {
+            label: format!("{:?} verifier result {}", result.kind, result.id),
+            url: format!("{api}/v1/bounties/{}#verifier-results", bounty.id),
+        })
+        .collect();
+    let settlement_links = status
+        .settlements
+        .iter()
+        .map(|settlement| web_public::PublicBountyRecordLink {
+            label: format!("{:?} settlement {}", settlement.rail, settlement.id),
+            url: format!("{api}/v1/bounties/{}#settlements", bounty.id),
+        })
+        .collect();
+    let template_signal_links = status
+        .template_signals
+        .iter()
+        .map(|signal| web_public::PublicBountyRecordLink {
+            label: format!("{} template signal {}", signal.template_slug, signal.id),
+            url: format!("{api}/public/templates/{}", signal.template_slug),
+        })
+        .collect();
     web_public::PublicBountyPage {
         bounty_id: bounty.id.to_string(),
         title: bounty.title.clone(),
@@ -2281,6 +2320,10 @@ fn public_bounty_page_model(
         template_url: format!("{api}/public/templates/{}", bounty.template_slug),
         funding_contribution_url: format!("{api}/v1/bounties/{}/funding-contributions", bounty.id),
         proof_urls,
+        funding_partitions,
+        verifier_result_links,
+        settlement_links,
+        template_signal_links,
     }
 }
 
@@ -3878,9 +3921,11 @@ mod tests {
 
         assert!(html.contains("Fix public &lt;CI&gt;"));
         assert!(html.contains("Funding State"));
+        assert!(html.contains("Funding partitions"));
         assert!(html.contains("application/ld+json"));
+        assert!(html.contains("agent-bounty-public-status"));
         assert!(html.contains("Machine status"));
-        assert!(html.contains("Add funding"));
+        assert!(html.contains(r#"data-agent-action="claim""#));
         assert!(html.contains(&format!("/public/bounties/{}", bounty.id)));
         assert!(html.contains(&format!("/v1/bounties/{}/claim", bounty.id)));
         assert!(html.contains(&format!("/v1/bounties/{}/funding-contributions", bounty.id)));

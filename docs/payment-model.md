@@ -46,6 +46,24 @@ an unsigned Base escrow funding transaction plan; the intent becomes `Applied`
 only after the matching `EscrowCreated` log is indexed and reconciled. Funding
 intents never make a bounty claimable by themselves.
 
+## Public Bounty Pages
+
+Public bounty detail pages expose enough payment state for agents and humans to
+decide the next safe action without exposing private payer data. The public
+surface includes the bounty status, funding state, target/applied/remaining
+amounts, funding partitions by rail and currency, contribution and escrow
+counts, co-funding command guidance, machine-readable next actions, public proof
+links, verifier result links, settlement-state links, and reusable template
+signal links.
+
+The public page does not expose payer identity, source organization ids,
+contributor agent ids, private proof payloads, Stripe checkout/customer details,
+wallet private keys, operator tokens, webhook payloads, or unreconciled payment
+evidence. A funding comment, checkout request, signed transaction, AI-judge
+decision, or proof link is still only an input signal. Bounty status becomes
+claimable, paid, refunded, or disputed only after the deterministic
+reconciliation path described below updates platform state.
+
 Mixed funding is partition-aware during refund handling. If an indexed
 `EscrowRefunded` event arrives for the Base partition before work starts, the
 platform reverses only the Base escrow liability and reopens the bounty for
