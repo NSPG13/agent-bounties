@@ -3,10 +3,11 @@ use app::{
     ApproveRiskPayoutRequest, BaseEscrowReconciliation, BaseReleaseQueueRequest, BountyNetwork,
     BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest,
     FundQuoteRequest, FundingIntentReport, OpenPooledBountyRequest, PlanBaseDisputeRequest,
-    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest, PooledFundingReport,
+    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
+    PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
     PostBountyRequest, QuoteSet, RegisterAgentRequest, RegisterCapabilityRequest,
     RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
-    SubmitResultRequest, VerifySubmissionRequest,
+    StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
     body::Bytes,
@@ -98,11 +99,14 @@ use worker::BaseEscrowLogWorker;
         list_base_release_queue,
         plan_stripe_checkout_top_up,
         plan_stripe_connect_account,
+        plan_stripe_connect_transfer,
         plan_base_refund,
         plan_base_dispute,
         execute_stripe_checkout_top_up,
         execute_stripe_connect_account,
+        execute_stripe_connect_transfer,
         reconcile_stripe_connect_snapshot,
+        reconcile_stripe_transfer_event,
         reconcile_stripe_checkout_webhook,
         plan_github_issue_bounty,
         plan_github_funding_comment,
@@ -128,6 +132,7 @@ use worker::BaseEscrowLogWorker;
         RiskPolicyDescriptor,
         PlanStripeCheckoutTopUpRequest,
         PlanStripeConnectAccountRequest,
+        PlanStripeConnectTransferRequest,
         PlanGitHubIssueBountyRequest,
         PlanGitHubFundingCommentRequest,
         PlanGitHubProofCommentRequest,
@@ -261,6 +266,12 @@ struct PlanStripeCheckoutTopUpRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct PlanStripeConnectAccountRequest {
     agent_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct PlanStripeConnectTransferRequest {
+    payout_intent_id: Uuid,
+    connected_account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -503,6 +514,10 @@ async fn main() -> anyhow::Result<()> {
             post(plan_stripe_connect_account),
         )
         .route(
+            "/v1/stripe/connect-transfers",
+            post(plan_stripe_connect_transfer),
+        )
+        .route(
             "/v1/stripe/live/checkout-top-ups",
             post(execute_stripe_checkout_top_up),
         )
@@ -511,8 +526,16 @@ async fn main() -> anyhow::Result<()> {
             post(execute_stripe_connect_account),
         )
         .route(
+            "/v1/stripe/live/connect-transfers",
+            post(execute_stripe_connect_transfer),
+        )
+        .route(
             "/v1/stripe/connect-snapshots",
             post(reconcile_stripe_connect_snapshot),
+        )
+        .route(
+            "/v1/stripe/transfer-events",
+            post(reconcile_stripe_transfer_event),
         )
         .route(
             "/v1/stripe/checkout-webhooks",
@@ -1796,6 +1819,38 @@ fn stripe_connect_account_intent(
 
 #[utoipa::path(
     post,
+    path = "/v1/stripe/connect-transfers",
+    request_body = PlanStripeConnectTransferRequest,
+    responses(
+        (status = 200, description = "Stripe Connect transfer request intent for a fiat payout"),
+        (status = 400, description = "Invalid payout intent or transfer planning request")
+    )
+)]
+async fn plan_stripe_connect_transfer(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanStripeConnectTransferRequest>,
+) -> Result<Json<StripeTransferPlan>, StatusCode> {
+    stripe_connect_transfer_plan(&state, request).map(Json)
+}
+
+fn stripe_connect_transfer_plan(
+    state: &SharedState,
+    request: PlanStripeConnectTransferRequest,
+) -> Result<StripeTransferPlan, StatusCode> {
+    let network = state.network.lock().expect("state poisoned");
+    network
+        .plan_stripe_transfer(
+            AppPlanStripeTransferRequest {
+                payout_intent_id: request.payout_intent_id,
+                connected_account_id: request.connected_account_id,
+            },
+            state.public_base_url.clone(),
+        )
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(
+    post,
     path = "/v1/stripe/live/checkout-top-ups",
     request_body = PlanStripeCheckoutTopUpRequest,
     responses(
@@ -1840,6 +1895,29 @@ async fn execute_stripe_connect_account(
         .map_err(|_| StatusCode::BAD_REQUEST)?
         .request;
     execute_stripe_intent(&state, intent).await.map(Json)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/stripe/live/connect-transfers",
+    request_body = PlanStripeConnectTransferRequest,
+    responses(
+        (status = 200, description = "Live Stripe Connect transfer execution report"),
+        (status = 400, description = "Invalid transfer request"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured"),
+        (status = 502, description = "Stripe API execution failed"),
+        (status = 503, description = "Live Stripe execution is disabled or not configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
+async fn execute_stripe_connect_transfer(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<PlanStripeConnectTransferRequest>,
+) -> Result<Json<StripeExecutionReport>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let plan = stripe_connect_transfer_plan(&state, request)?;
+    execute_stripe_intent(&state, plan.request).await.map(Json)
 }
 
 async fn execute_stripe_intent(
@@ -1899,6 +1977,68 @@ async fn reconcile_stripe_connect_snapshot(
         for settlement in &reconciliation.settlements {
             store
                 .upsert_settlement(settlement)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        persist_ledger_entries(store, &reconciliation.ledger_entries).await?;
+    }
+    Ok(Json(reconciliation))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/stripe/transfer-events",
+    responses(
+        (status = 200, description = "Reconciled Stripe transfer event as fiat payout evidence"),
+        (status = 400, description = "Invalid transfer event payload or signature"),
+        (status = 503, description = "Webhook signature verification is not configured")
+    )
+)]
+async fn reconcile_stripe_transfer_event(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<StripeTransferReconciliation>, StatusCode> {
+    match &state.stripe_webhook_secret {
+        Some(secret) => {
+            let signature = headers
+                .get("stripe-signature")
+                .and_then(|value| value.to_str().ok())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            verify_webhook_signature(&body, signature, secret)
+                .map_err(|_| StatusCode::BAD_REQUEST)?;
+        }
+        None if state.allow_unsigned_stripe_webhooks => {}
+        None => return Err(StatusCode::SERVICE_UNAVAILABLE),
+    }
+    let event: StripeWebhookEvent =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let evidence = StripeEventDeduper::default()
+        .apply_connect_transfer(&event)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let reconciliation = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network
+            .apply_stripe_transfer_evidence(evidence)
+            .map_err(|_| StatusCode::BAD_REQUEST)?
+    };
+
+    if let Some(store) = &state.store {
+        if !reconciliation.duplicate {
+            store
+                .upsert_payment_event(&reconciliation.evidence.payment_event)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        if let Some(settlement) = &reconciliation.settlement {
+            store
+                .upsert_settlement(settlement)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        if let Some(bounty) = &reconciliation.bounty {
+            store
+                .upsert_bounty(bounty)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }

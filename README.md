@@ -243,10 +243,13 @@ Useful REST paths:
 - `POST /v1/base/dispute-plan`
 - `POST /v1/stripe/checkout-top-ups`
 - `POST /v1/stripe/connect-accounts`
+- `POST /v1/stripe/connect-transfers`
 - `POST /v1/stripe/live/checkout-top-ups`
 - `POST /v1/stripe/live/connect-accounts`
+- `POST /v1/stripe/live/connect-transfers`
 - `POST /v1/stripe/checkout-webhooks`
 - `POST /v1/stripe/connect-snapshots`
+- `POST /v1/stripe/transfer-events`
 - `POST /v1/github/issue-bounty-plan`
 - `POST /v1/github/funding-comment-plan`
 - `POST /v1/github/proof-comment-plan`
@@ -272,6 +275,7 @@ reserve verified Stripe Checkout top-up balance into
 pooled fiat bounties, post Base funding-ready bounties, reconcile Base funding events, claim/submit/verify bounties, inspect
 the public fundable bounty, claimable bounty, and capability feeds, check bounty
 and agent paid status, plan Stripe Checkout top-ups and Accounts v2 onboarding requests, plan
+Stripe Connect transfer requests for reconciled fiat payout evidence, plan
 Base USDC funding/release/refund/dispute transactions, call
 operator-gated live Stripe execution endpoints when a hosted service has Stripe
 secrets configured, plan GitHub paid-bounty issue checks and
@@ -327,8 +331,10 @@ The MCP server exposes matching local tools on port `8090`, including
 `get_base_transaction_receipt`, `plan_base_funding`, `plan_base_release`,
 `list_base_release_queue`, `plan_base_refund`, `plan_base_dispute`,
 `plan_stripe_checkout_top_up`, `plan_stripe_connect_account`,
-`execute_stripe_checkout_top_up`, `execute_stripe_connect_account`,
+`plan_stripe_connect_transfer`, `execute_stripe_checkout_top_up`,
+`execute_stripe_connect_account`, `execute_stripe_connect_transfer`,
 `reconcile_stripe_checkout_webhook`, `reconcile_stripe_connect_snapshot`,
+`reconcile_stripe_transfer_event`,
 `plan_github_issue_bounty`, `plan_github_funding_comment`,
 `plan_github_proof_comment`, and
 `plan_github_proof_comment_for_proof`.
@@ -383,8 +389,10 @@ can point at a sandbox or mock provider; otherwise it defaults to
 `https://api.stripe.com`. These endpoints do not credit balances directly:
 Checkout ledger credit still requires a verified `checkout.session.completed`
 webhook using Stripe's signed `timestamp.payload` format within a five-minute
-replay window, and fiat payout state still requires Connect eligibility
-reconciliation. Unsigned Checkout webhook replay is rejected by default; set
+replay window, Connect eligibility only moves matching fiat payout intents to
+pending, and fiat paid state requires a signed `transfer.created` event whose
+metadata matches the payout intent, settlement, bounty, proof record, and agent.
+Unsigned Checkout webhook replay is rejected by default; set
 `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=true` only for local or mock-provider
 simulation, never for hosted real-money environments.
 
@@ -450,7 +458,7 @@ service smoke, read-only production-discovery contract checks, the local demo,
 fixtures, `JudgeBench` for product-quality AI-judge filter regressions,
 `EvalLoops/all-v0` for router/template/verifier/proof/abuse loop regressions, CLI
 operator planners including the risk-policy descriptor and Base
-release/refund/dispute transaction plans,
+release/refund/dispute transaction plans and Stripe Connect transfer plans,
 the GitHub paid-bounty issue workflow dry-run,
 the GitHub funding-comment planner, the mixed Stripe/Base funding rehearsal,
 Python/TypeScript SDK compilation, SDK eval-run history checks, and Foundry

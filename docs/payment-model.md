@@ -314,7 +314,9 @@ amount. The deterministic planner emits:
 - `POST /v1/stripe/connect-accounts`, which returns a Stripe request intent for
   `POST /v2/core/accounts` Connect Accounts v2 onboarding,
 - payout eligibility states derived from connected-account requirements and
-  `payouts_enabled`.
+  `payouts_enabled`,
+- `POST /v1/stripe/connect-transfers`, which returns a Stripe request intent
+  for Stripe's Transfers API tied to one payout intent.
 
 The open-source local and testnet paths do not call Stripe with platform
 secrets. Live Stripe execution is available only through explicit operator
@@ -329,8 +331,11 @@ mock provider. The live surfaces are:
   Session and returns Stripe's response,
 - `POST /v1/stripe/live/connect-accounts`, which creates the planned Accounts
   v2 object and returns Stripe's response,
+- `POST /v1/stripe/live/connect-transfers`, which creates the planned Connect
+  transfer and returns Stripe's response,
 - MCP tools `execute_stripe_checkout_top_up` and
   `execute_stripe_connect_account`,
+- MCP tool `execute_stripe_connect_transfer`,
 - CLI commands `stripe-execute-checkout-top-up` and
   `stripe-execute-connect-account`,
 - CLI command `stripe-execute-request-intent` for executing the exact
@@ -339,17 +344,22 @@ mock provider. The live surfaces are:
 - Python and TypeScript SDK methods with the same names in idiomatic casing.
 
 Live execution does not credit balances or mark payouts paid. Checkout balance
-credit still requires a verified webhook, and fiat payout completion still
-requires Connect eligibility reconciliation. This keeps the ledger tied to
-Stripe-confirmed events rather than to request creation.
+credit still requires a verified webhook, and fiat payout completion requires a
+`transfer.created` event whose metadata matches the payout intent and
+settlement. This keeps the ledger tied to Stripe-confirmed events rather than
+to request creation.
 
 Accepted fiat bounties create blocked Stripe payout intents until Connect
 eligibility is reconciled. The API accepts normalized Connect snapshots at
 `POST /v1/stripe/connect-snapshots`. If the connected account has no disabled
 reason, no currently-due requirements, and payouts enabled, the matching agent
-payout intents are marked paid and credited in the ledger. Platform fees are
-recognized only after all payout intents for the settlement are paid, preventing
-partial eligibility from over-releasing bounty liability.
+payout intents move to `Pending` so operators can plan and execute the Connect
+transfer. Eligibility does not create payout ledger entries. The API accepts
+signed transfer events at `POST /v1/stripe/transfer-events`; local/mock
+simulation can set `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=true`. Platform fees are
+recognized only after all payout intents for the settlement are paid from
+transfer evidence, preventing partial eligibility from over-releasing bounty
+liability.
 
 The API accepts Checkout top-up webhooks at
 `POST /v1/stripe/checkout-webhooks`. In production, configure

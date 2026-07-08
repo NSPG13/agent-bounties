@@ -16,7 +16,8 @@ use domain::{
 use ledger::{credit, debit, AccountCode, Ledger, LedgerEntry};
 use payments_stripe::{
     evaluate_connect_payout, CheckoutTopUpRequest, ConnectAccountSnapshot, ConnectPayoutState,
-    StripeFundingCredit, StripePlanner, StripeRequestIntent,
+    ConnectTransferEvidence, ConnectTransferRequest, StripeFundingCredit, StripePlanner,
+    StripeRequestIntent,
 };
 use risk::{
     BountyRiskInput, HelpRequestRiskInput, PayoutRiskInput, RiskAssessment, RiskPolicy,
@@ -462,6 +463,30 @@ pub struct StripeConnectPayoutReconciliation {
     pub payout_state: ConnectPayoutState,
     pub settlements: Vec<Settlement>,
     pub bounties: Vec<Bounty>,
+    pub ledger_entries: Vec<LedgerEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanStripeTransferRequest {
+    pub payout_intent_id: Id,
+    pub connected_account_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StripeTransferPlan {
+    pub settlement: Settlement,
+    pub payout_intent: PayoutIntent,
+    pub request: StripeRequestIntent,
+    pub requires_reconciliation: bool,
+    pub reconciliation_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StripeTransferReconciliation {
+    pub evidence: ConnectTransferEvidence,
+    pub duplicate: bool,
+    pub settlement: Option<Settlement>,
+    pub bounty: Option<Bounty>,
     pub ledger_entries: Vec<LedgerEntry>,
 }
 
@@ -1374,8 +1399,14 @@ impl BountyNetwork {
                 self.mark_bounty_claimable_if_fully_funded(event.bounty_id)?;
             }
             BaseEscrowEventKind::Released => {
+                let proof_hash = event.proof_hash.clone().ok_or_else(|| {
+                    AppError::InvalidBaseEscrowEvent(
+                        "released event must include proof hash".to_string(),
+                    )
+                })?;
                 if let Some(entry) = self.mark_base_release_paid(
                     event.bounty_id,
+                    &proof_hash,
                     format!("base-release:{}", event.log_key),
                 )? {
                     ledger_entries.push(entry);
@@ -1450,30 +1481,11 @@ impl BountyNetwork {
             .map(|settlement| settlement.id)
             .collect::<Vec<_>>();
 
-        let mut ledger_entries = Vec::new();
         let mut updated_settlement_ids = Vec::new();
-        let mut updated_bounty_ids = Vec::new();
 
         for settlement_id in settlement_ids {
             if payout_state.eligible {
-                let entries = self.mark_stripe_agent_payouts_paid(
-                    settlement_id,
-                    snapshot.agent_id,
-                    snapshot
-                        .connected_account_id
-                        .as_deref()
-                        .unwrap_or("unknown-account"),
-                )?;
-                ledger_entries.extend(entries);
-                if let Some(entry) = self.finalize_stripe_settlement_if_complete(settlement_id)? {
-                    updated_bounty_ids.push(
-                        self.settlements
-                            .get(&settlement_id)
-                            .expect("settlement exists")
-                            .bounty_id,
-                    );
-                    ledger_entries.push(entry);
-                }
+                self.mark_stripe_agent_payouts_pending(settlement_id, snapshot.agent_id)?;
             } else {
                 self.mark_stripe_agent_payouts_blocked(settlement_id, snapshot.agent_id)?;
             }
@@ -1484,15 +1496,154 @@ impl BountyNetwork {
             .into_iter()
             .filter_map(|id| self.settlements.get(&id).cloned())
             .collect();
-        let bounties = updated_bounty_ids
-            .into_iter()
-            .filter_map(|id| self.bounties.get(&id).cloned())
-            .collect();
 
         Ok(StripeConnectPayoutReconciliation {
             payout_state,
             settlements,
-            bounties,
+            bounties: Vec::new(),
+            ledger_entries: Vec::new(),
+        })
+    }
+
+    pub fn plan_stripe_transfer(
+        &self,
+        request: PlanStripeTransferRequest,
+        platform_base_url: impl Into<String>,
+    ) -> AppResult<StripeTransferPlan> {
+        let (settlement, payout_intent) = self
+            .settlement_and_payout_intent(request.payout_intent_id)
+            .ok_or_else(|| AppError::InvalidStripePayout("payout intent not found".to_string()))?;
+        if settlement.rail != PaymentRail::StripeFiat
+            || payout_intent.rail != PaymentRail::StripeFiat
+        {
+            return Err(AppError::InvalidStripePayout(
+                "only Stripe fiat payout intents can be transferred through Stripe".to_string(),
+            ));
+        }
+        if payout_intent.status == PayoutStatus::Paid {
+            return Err(AppError::InvalidStripePayout(
+                "payout intent is already paid".to_string(),
+            ));
+        }
+        if payout_intent.status != PayoutStatus::Pending {
+            return Err(AppError::InvalidStripePayout(
+                "payout intent must be pending after Connect eligibility reconciliation before transfer planning"
+                    .to_string(),
+            ));
+        }
+        let stripe_request = StripePlanner::new(platform_base_url)
+            .connect_transfer(&ConnectTransferRequest {
+                bounty_id: settlement.bounty_id,
+                proof_record_id: settlement.proof_record_id,
+                settlement_id: settlement.id,
+                payout_intent_id: payout_intent.id,
+                agent_id: payout_intent.recipient_agent_id,
+                connected_account_id: request.connected_account_id,
+                amount: payout_intent.amount.clone(),
+            })
+            .map_err(|error| AppError::InvalidStripePayout(error.to_string()))?;
+
+        Ok(StripeTransferPlan {
+            settlement,
+            payout_intent,
+            request: stripe_request,
+            requires_reconciliation: true,
+            reconciliation_hint:
+                "Execute the Stripe transfer request in test mode, then reconcile the transfer.created event with matching payout metadata."
+                    .to_string(),
+        })
+    }
+
+    pub fn apply_stripe_transfer_evidence(
+        &mut self,
+        mut evidence: ConnectTransferEvidence,
+    ) -> AppResult<StripeTransferReconciliation> {
+        let external_event_id = format!(
+            "stripe-connect-transfer:{}:{}",
+            evidence.transfer_id, evidence.payout_intent_id
+        );
+        let duplicate = self.payment_events.values().any(|event| {
+            event.external_id == evidence.payment_event.external_id
+                && event.status == PaymentEventStatus::Applied
+        }) || self.ledger.has_external_event(&external_event_id);
+        if duplicate {
+            evidence.payment_event.status = PaymentEventStatus::IgnoredDuplicate;
+            return Ok(StripeTransferReconciliation {
+                evidence,
+                duplicate: true,
+                settlement: None,
+                bounty: None,
+                ledger_entries: vec![],
+            });
+        }
+
+        let settlement = self
+            .settlements
+            .get(&evidence.settlement_id)
+            .ok_or_else(|| AppError::InvalidStripePayout("settlement not found".to_string()))?
+            .clone();
+        if settlement.bounty_id != evidence.bounty_id
+            || settlement.proof_record_id != evidence.proof_record_id
+            || settlement.rail != PaymentRail::StripeFiat
+        {
+            return Err(AppError::InvalidStripePayout(
+                "Stripe transfer evidence does not match settlement".to_string(),
+            ));
+        }
+        let payout_intent = settlement
+            .payout_intents
+            .iter()
+            .find(|intent| intent.id == evidence.payout_intent_id)
+            .cloned()
+            .ok_or_else(|| AppError::InvalidStripePayout("payout intent not found".to_string()))?;
+        if payout_intent.recipient_agent_id != evidence.agent_id
+            || payout_intent.rail != PaymentRail::StripeFiat
+            || payout_intent.amount != evidence.amount
+        {
+            return Err(AppError::InvalidStripePayout(
+                "Stripe transfer evidence does not match payout intent".to_string(),
+            ));
+        }
+
+        let mut ledger_entries = Vec::new();
+        if payout_intent.status != PayoutStatus::Paid {
+            let entry = LedgerEntry::new(
+                "stripe connect transfer paid",
+                Some(external_event_id),
+                vec![
+                    debit("bounty_liability", payout_intent.amount.clone()),
+                    credit(
+                        format!("agent_payable:{}", payout_intent.recipient_agent_id),
+                        payout_intent.amount.clone(),
+                    ),
+                ],
+            )?;
+            self.ledger.append(entry.clone())?;
+            ledger_entries.push(entry);
+            if let Some(settlement) = self.settlements.get_mut(&evidence.settlement_id) {
+                for intent in settlement
+                    .payout_intents
+                    .iter_mut()
+                    .filter(|intent| intent.id == evidence.payout_intent_id)
+                {
+                    intent.status = PayoutStatus::Paid;
+                }
+            }
+        }
+
+        if let Some(entry) = self.finalize_stripe_settlement_if_complete(evidence.settlement_id)? {
+            ledger_entries.push(entry);
+        }
+        self.payment_events
+            .insert(evidence.payment_event.id, evidence.payment_event.clone());
+        let settlement = self.settlements.get(&evidence.settlement_id).cloned();
+        let bounty = self.bounties.get(&evidence.bounty_id).cloned();
+
+        Ok(StripeTransferReconciliation {
+            evidence,
+            duplicate: false,
+            settlement,
+            bounty,
             ledger_entries,
         })
     }
@@ -2549,6 +2700,7 @@ impl BountyNetwork {
     fn mark_base_release_paid(
         &mut self,
         bounty_id: Id,
+        proof_hash: &str,
         external_event_id: String,
     ) -> AppResult<Option<LedgerEntry>> {
         if self.ledger.has_external_event(&external_event_id) {
@@ -2588,6 +2740,19 @@ impl BountyNetwork {
             .get(&settlement_id)
             .expect("settlement id selected from map")
             .clone();
+        let proof = self
+            .proofs
+            .get(&settlement.proof_record_id)
+            .ok_or_else(|| {
+                AppError::InvalidBaseEscrowEvent(
+                    "released event has no matching proof record".to_string(),
+                )
+            })?;
+        if normalize_hash(&proof.proof_hash) != normalize_hash(proof_hash) {
+            return Err(AppError::InvalidBaseEscrowEvent(
+                "released event proof hash does not match accepted proof".to_string(),
+            ));
+        }
         let settlement_amount = settlement_total_amount(&settlement)?;
         let mut postings = vec![debit("bounty_liability", settlement_amount)];
         for intent in &settlement.payout_intents {
@@ -2712,52 +2877,24 @@ impl BountyNetwork {
         Ok(())
     }
 
-    fn mark_stripe_agent_payouts_paid(
+    fn mark_stripe_agent_payouts_pending(
         &mut self,
         settlement_id: Id,
         agent_id: Id,
-        connected_account_id: &str,
-    ) -> AppResult<Vec<LedgerEntry>> {
+    ) -> AppResult<()> {
         let settlement = self
             .settlements
-            .get(&settlement_id)
-            .ok_or_else(|| AppError::InvalidStripePayout("settlement not found".to_string()))?
-            .clone();
-        let mut entries = Vec::new();
+            .get_mut(&settlement_id)
+            .ok_or_else(|| AppError::InvalidStripePayout("settlement not found".to_string()))?;
         for intent in settlement
             .payout_intents
-            .iter()
+            .iter_mut()
             .filter(|intent| intent.recipient_agent_id == agent_id)
             .filter(|intent| intent.status != PayoutStatus::Paid)
         {
-            let external_event_id =
-                format!("stripe-connect-payout:{connected_account_id}:{}", intent.id);
-            if self.ledger.has_external_event(&external_event_id) {
-                continue;
-            }
-            let entry = LedgerEntry::new(
-                "stripe connect payout eligible",
-                Some(external_event_id),
-                vec![
-                    debit("bounty_liability", intent.amount.clone()),
-                    credit(format!("agent_payable:{agent_id}"), intent.amount.clone()),
-                ],
-            )?;
-            self.ledger.append(entry.clone())?;
-            entries.push(entry);
+            intent.status = PayoutStatus::Pending;
         }
-
-        if let Some(settlement) = self.settlements.get_mut(&settlement_id) {
-            for intent in settlement
-                .payout_intents
-                .iter_mut()
-                .filter(|intent| intent.recipient_agent_id == agent_id)
-            {
-                intent.status = PayoutStatus::Paid;
-            }
-        }
-
-        Ok(entries)
+        Ok(())
     }
 
     fn mark_stripe_agent_payouts_blocked(
@@ -2821,6 +2958,20 @@ impl BountyNetwork {
             self.mark_bounty_paid_if_all_settlements_paid(settlement.bounty_id)?;
         }
         Ok(Some(entry))
+    }
+
+    fn settlement_and_payout_intent(
+        &self,
+        payout_intent_id: Id,
+    ) -> Option<(Settlement, PayoutIntent)> {
+        self.settlements.values().find_map(|settlement| {
+            settlement
+                .payout_intents
+                .iter()
+                .find(|intent| intent.id == payout_intent_id)
+                .cloned()
+                .map(|intent| (settlement.clone(), intent))
+        })
     }
 
     fn claimed_solver_agent_id(&self, bounty_id: Id) -> Option<Id> {
@@ -3584,6 +3735,32 @@ mod tests {
                 external_id: event_id.to_string(),
                 status: PaymentEventStatus::Applied,
                 payload_hash: hash_artifact(event_id),
+                received_at: Utc::now(),
+            },
+        }
+    }
+
+    fn stripe_transfer_evidence(
+        settlement: &Settlement,
+        payout_intent: &PayoutIntent,
+        connected_account_id: &str,
+        transfer_id: &str,
+    ) -> ConnectTransferEvidence {
+        ConnectTransferEvidence {
+            transfer_id: transfer_id.to_string(),
+            connected_account_id: connected_account_id.to_string(),
+            bounty_id: settlement.bounty_id,
+            proof_record_id: settlement.proof_record_id,
+            settlement_id: settlement.id,
+            payout_intent_id: payout_intent.id,
+            agent_id: payout_intent.recipient_agent_id,
+            amount: payout_intent.amount.clone(),
+            payment_event: PaymentEvent {
+                id: Uuid::new_v4(),
+                rail: PaymentRail::StripeFiat,
+                external_id: format!("evt_{transfer_id}"),
+                status: PaymentEventStatus::Applied,
+                payload_hash: hash_artifact(transfer_id),
                 received_at: Utc::now(),
             },
         }
@@ -4483,6 +4660,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn base_release_event_must_match_accepted_proof_hash() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "solver".to_string(),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+        });
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Verify release proof binding".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        fund_base_bounty(&mut network, &bounty, 9);
+        network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        let artifact = "{\"ok\":true}";
+        let submission = network
+            .submit_result(SubmitResultRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+                artifact_uri: "memory://release-proof.json".to_string(),
+                artifact_body: artifact.to_string(),
+            })
+            .unwrap();
+        let proof = network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: hash_artifact(artifact),
+                verifier_kind: Some(VerifierKind::JsonSchema),
+                rubric: None,
+                evidence: None,
+                approved_risk_event_id: None,
+            })
+            .await
+            .unwrap();
+
+        let err = network
+            .apply_base_escrow_event(chain_base::simulated_released_event(
+                bounty.id,
+                9,
+                format!("0x{}", "00".repeat(32)),
+            ))
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidBaseEscrowEvent(_)));
+        let status = network.status(bounty.id).unwrap();
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
+        assert_eq!(
+            status.settlements[0].payout_intents[0].status,
+            PayoutStatus::Pending
+        );
+
+        network
+            .apply_base_escrow_event(chain_base::simulated_released_event(
+                bounty.id,
+                9,
+                proof.proof_hash,
+            ))
+            .unwrap();
+        let status = network.status(bounty.id).unwrap();
+        assert_eq!(status.bounty.status, BountyStatus::Paid);
+        assert_eq!(
+            status.settlements[0].payout_intents[0].status,
+            PayoutStatus::Paid
+        );
+    }
+
+    #[tokio::test]
     async fn capability_help_quote_to_bounty_loop() {
         let mut network = BountyNetwork::default();
         let requester = network.register_agent(RegisterAgentRequest {
@@ -4743,6 +4996,17 @@ mod tests {
         );
         assert_eq!(network.ledger.entries().len(), 2);
 
+        let premature_plan = network
+            .plan_stripe_transfer(
+                PlanStripeTransferRequest {
+                    payout_intent_id: status.settlements[0].payout_intents[0].id,
+                    connected_account_id: "acct_test".to_string(),
+                },
+                "https://agentbounties.test",
+            )
+            .unwrap_err();
+        assert!(matches!(premature_plan, AppError::InvalidStripePayout(_)));
+
         let blocked = network
             .apply_stripe_connect_snapshot(ConnectAccountSnapshot {
                 agent_id: solver.id,
@@ -4759,7 +5023,7 @@ mod tests {
             PayoutStatus::Blocked
         );
 
-        let paid = network
+        let eligible = network
             .apply_stripe_connect_snapshot(ConnectAccountSnapshot {
                 agent_id: solver.id,
                 connected_account_id: Some("acct_test".to_string()),
@@ -4768,8 +5032,42 @@ mod tests {
                 currently_due: vec![],
             })
             .unwrap();
-        assert!(paid.payout_state.eligible);
-        assert_eq!(paid.ledger_entries.len(), 2);
+        assert!(eligible.payout_state.eligible);
+        assert!(eligible.ledger_entries.is_empty());
+
+        let status = network.status(bounty.id).unwrap();
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
+        assert_eq!(
+            status.settlements[0].payout_intents[0].status,
+            PayoutStatus::Pending
+        );
+        assert_eq!(network.ledger.entries().len(), 2);
+
+        let transfer_plan = network
+            .plan_stripe_transfer(
+                PlanStripeTransferRequest {
+                    payout_intent_id: status.settlements[0].payout_intents[0].id,
+                    connected_account_id: "acct_test".to_string(),
+                },
+                "https://agentbounties.test",
+            )
+            .unwrap();
+        assert_eq!(
+            transfer_plan.request.body["metadata"]["payout_intent_id"],
+            status.settlements[0].payout_intents[0].id.to_string()
+        );
+        assert!(transfer_plan.requires_reconciliation);
+
+        let transfer = network
+            .apply_stripe_transfer_evidence(stripe_transfer_evidence(
+                &status.settlements[0],
+                &status.settlements[0].payout_intents[0],
+                "acct_test",
+                "tr_private_notes_solver",
+            ))
+            .unwrap();
+        assert!(!transfer.duplicate);
+        assert_eq!(transfer.ledger_entries.len(), 2);
 
         let status = network.status(bounty.id).unwrap();
         assert_eq!(status.bounty.status, BountyStatus::Paid);
@@ -4780,14 +5078,9 @@ mod tests {
         assert_eq!(network.ledger.entries().len(), 4);
 
         let replay = network
-            .apply_stripe_connect_snapshot(ConnectAccountSnapshot {
-                agent_id: solver.id,
-                connected_account_id: Some("acct_test".to_string()),
-                payouts_enabled: true,
-                disabled_reason: None,
-                currently_due: vec![],
-            })
+            .apply_stripe_transfer_evidence(transfer.evidence.clone())
             .unwrap();
+        assert!(replay.duplicate);
         assert!(replay.ledger_entries.is_empty());
         assert_eq!(network.ledger.entries().len(), 4);
     }
@@ -4944,7 +5237,7 @@ mod tests {
             .apply_base_escrow_event(chain_base::simulated_released_event(
                 bounty.id,
                 42,
-                proof.proof_hash,
+                proof.proof_hash.clone(),
             ))
             .unwrap();
         let after_base = network.status(bounty.id).unwrap();
@@ -4968,6 +5261,26 @@ mod tests {
                 disabled_reason: None,
                 currently_due: vec![],
             })
+            .unwrap();
+        let pending_fiat = network.status(bounty.id).unwrap();
+        assert_eq!(pending_fiat.bounty.status, BountyStatus::Payable);
+        let stripe_after_eligibility = pending_fiat
+            .settlements
+            .iter()
+            .find(|settlement| settlement.rail == PaymentRail::StripeFiat)
+            .unwrap();
+        assert_eq!(
+            stripe_after_eligibility.payout_intents[0].status,
+            PayoutStatus::Pending
+        );
+
+        network
+            .apply_stripe_transfer_evidence(stripe_transfer_evidence(
+                stripe_after_eligibility,
+                &stripe_after_eligibility.payout_intents[0],
+                "acct_mixed",
+                "tr_mixed_solver",
+            ))
             .unwrap();
         let paid = network.status(bounty.id).unwrap();
         assert_eq!(paid.bounty.status, BountyStatus::Paid);

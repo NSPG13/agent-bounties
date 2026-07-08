@@ -13,8 +13,10 @@ after deterministic evidence is reconciled:
 
 - Stripe fiat funding: a verified `checkout.session.completed` webhook.
 - Base USDC funding: an indexed `EscrowCreated` log.
-- Base USDC payout: an indexed `EscrowReleased` log.
-- Stripe fiat payout: a Connect eligibility snapshot or later payout evidence.
+- Base USDC payout: an indexed `EscrowReleased` log whose proof hash matches
+  the accepted proof record.
+- Stripe fiat payout: a `transfer.created` event whose metadata matches the
+  payout intent, settlement, bounty, proof record, and agent.
 
 ## Preconditions
 
@@ -79,7 +81,12 @@ Expected evidence boundary in the JSON output:
   `EscrowCreated` log.
 - `base.release_plan` is unsigned release calldata.
 - `base.released_reconciliation` applies only after the simulated
-  `EscrowReleased` log.
+  `EscrowReleased` log with the accepted proof hash.
+- `stripe.connect_eligibility` can move blocked payout intents back to
+  `Pending`, but it does not create payout ledger entries.
+- `stripe.transfer_plan` is a test-mode Connect transfer request intent.
+- `stripe.transfer_reconciliation` applies only after the simulated
+  `transfer.created` event with matching payout metadata.
 
 ## Stripe Test Mode Funding
 
@@ -187,7 +194,19 @@ synthetic balance.
 After deterministic verification:
 
 - Stripe settlement creates blocked payout intents until Connect eligibility is
-  reconciled.
+  reconciled. Eligibility does not mark the fiat payout paid.
+- Stripe payout planning returns a Stripe Transfers API request intent through
+  `POST /v1/stripe/connect-transfers` or MCP
+  `plan_stripe_connect_transfer`. Execute it in Stripe test mode through
+  `POST /v1/stripe/live/connect-transfers`, MCP
+  `execute_stripe_connect_transfer`, or
+  `cargo run -p cli -- stripe-execute-request-intent` with the returned
+  request saved to disk.
+- Stripe fiat payout state becomes paid only after `POST
+  /v1/stripe/transfer-events` or MCP `reconcile_stripe_transfer_event`
+  reconciles a `transfer.created` event with matching `bounty_id`,
+  `proof_record_id`, `settlement_id`, `payout_intent_id`, and `agent_id`
+  metadata.
 - Base settlement creates pending release calldata until the settlement signer
   releases escrow and the indexed `EscrowReleased` log is reconciled.
 

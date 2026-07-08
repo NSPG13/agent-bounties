@@ -93,8 +93,12 @@ pub struct DiscoveryEndpoints {
     pub base_dispute_plan: String,
     pub stripe_checkout_top_ups: String,
     pub stripe_connect_accounts: String,
+    pub stripe_connect_transfers: String,
+    pub stripe_connect_snapshots: String,
     pub stripe_live_checkout_top_ups: String,
     pub stripe_live_connect_accounts: String,
+    pub stripe_live_connect_transfers: String,
+    pub stripe_transfer_events: String,
     pub github_issue_bounty_plan: String,
     pub github_funding_comment_plan: String,
     pub github_proof_comment_plan: String,
@@ -307,8 +311,12 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             base_dispute_plan: format!("{api}/v1/base/dispute-plan"),
             stripe_checkout_top_ups: format!("{api}/v1/stripe/checkout-top-ups"),
             stripe_connect_accounts: format!("{api}/v1/stripe/connect-accounts"),
+            stripe_connect_transfers: format!("{api}/v1/stripe/connect-transfers"),
+            stripe_connect_snapshots: format!("{api}/v1/stripe/connect-snapshots"),
             stripe_live_checkout_top_ups: format!("{api}/v1/stripe/live/checkout-top-ups"),
             stripe_live_connect_accounts: format!("{api}/v1/stripe/live/connect-accounts"),
+            stripe_live_connect_transfers: format!("{api}/v1/stripe/live/connect-transfers"),
+            stripe_transfer_events: format!("{api}/v1/stripe/transfer-events"),
             github_issue_bounty_plan: format!("{api}/v1/github/issue-bounty-plan"),
             github_funding_comment_plan: format!("{api}/v1/github/funding-comment-plan"),
             github_proof_comment_plan: format!("{api}/v1/github/proof-comment-plan"),
@@ -403,6 +411,22 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                     "List pending Base USDC releases and readiness errors before settlement signing."
                         .to_string(),
             },
+            AgentEntrypoint {
+                name: "plan_stripe_connect_transfer".to_string(),
+                transport: "MCP-compatible HTTP JSON".to_string(),
+                endpoint: format!("{mcp}/tools/plan_stripe_connect_transfer"),
+                description:
+                    "Build a Stripe Connect transfer request for a specific fiat payout intent after deterministic verification."
+                        .to_string(),
+            },
+            AgentEntrypoint {
+                name: "reconcile_stripe_transfer_event".to_string(),
+                transport: "MCP-compatible HTTP JSON".to_string(),
+                endpoint: format!("{mcp}/tools/reconcile_stripe_transfer_event"),
+                description:
+                    "Operator entrypoint for applying transfer.created evidence so Stripe fiat payout intents can become paid."
+                        .to_string(),
+            },
         ],
         payment_rails: vec![
             PaymentRailDescriptor {
@@ -425,7 +449,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 name: "Stripe fiat ledger".to_string(),
                 currency: "usd".to_string(),
                 status: "onboarding and compliance gated".to_string(),
-                settlement: "Checkout funds internal balances; Connect snapshots control fiat payout eligibility.".to_string(),
+                settlement: "Checkout funds internal balances; Connect snapshots control eligibility; transfer.created evidence marks fiat payout intents paid.".to_string(),
                 funding_required_before_claim: true,
                 automatic_release_limit_minor: None,
             },
@@ -541,6 +565,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Release, refund, and dispute plans are unsigned operator transactions.
 - Paid/refunded/disputed state changes only after indexed escrow logs are reconciled.
 - Stripe live execution is gated by operator secrets and compliance state.
+- Stripe Connect eligibility does not mark fiat payouts paid; transfer.created evidence does.
 - Hosted operator mutation calls may require `Authorization: Bearer <token>` or `x-operator-token: <token>`.
 - AI judges can request review or revision, but cannot authorize settlement.
 
@@ -562,6 +587,10 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Base transaction receipt: {base_transaction_receipt}
 - Stripe Checkout top-ups: {stripe_checkout_top_ups}
 - Stripe Connect accounts: {stripe_connect_accounts}
+- Stripe Connect snapshots: {stripe_connect_snapshots}
+- Stripe Connect transfer plan: {stripe_connect_transfers}
+- Stripe live Connect transfer execution: {stripe_live_connect_transfers}
+- Stripe transfer event reconciliation: {stripe_transfer_events}
 
 ## GitHub Dogfooding
 
@@ -607,6 +636,10 @@ The repository is designed for agent contributors. Start with the agent quicksta
         base_transaction_receipt = &endpoints.base_transaction_receipt,
         stripe_checkout_top_ups = &endpoints.stripe_checkout_top_ups,
         stripe_connect_accounts = &endpoints.stripe_connect_accounts,
+        stripe_connect_snapshots = &endpoints.stripe_connect_snapshots,
+        stripe_connect_transfers = &endpoints.stripe_connect_transfers,
+        stripe_live_connect_transfers = &endpoints.stripe_live_connect_transfers,
+        stripe_transfer_events = &endpoints.stripe_transfer_events,
         github_issue_bounty_plan = &endpoints.github_issue_bounty_plan,
         github_funding_comment_plan = &endpoints.github_funding_comment_plan,
         github_proof_comment_plan = &endpoints.github_proof_comment_plan,
@@ -1874,12 +1907,28 @@ mod tests {
             "https://network.example/v1/stripe/connect-accounts"
         );
         assert_eq!(
+            manifest.endpoints.stripe_connect_transfers,
+            "https://network.example/v1/stripe/connect-transfers"
+        );
+        assert_eq!(
+            manifest.endpoints.stripe_connect_snapshots,
+            "https://network.example/v1/stripe/connect-snapshots"
+        );
+        assert_eq!(
             manifest.endpoints.stripe_live_checkout_top_ups,
             "https://network.example/v1/stripe/live/checkout-top-ups"
         );
         assert_eq!(
             manifest.endpoints.stripe_live_connect_accounts,
             "https://network.example/v1/stripe/live/connect-accounts"
+        );
+        assert_eq!(
+            manifest.endpoints.stripe_live_connect_transfers,
+            "https://network.example/v1/stripe/live/connect-transfers"
+        );
+        assert_eq!(
+            manifest.endpoints.stripe_transfer_events,
+            "https://network.example/v1/stripe/transfer-events"
         );
         assert_eq!(
             manifest.endpoints.github_issue_bounty_plan,
@@ -1942,6 +1991,14 @@ mod tests {
             .iter()
             .any(|entrypoint| entrypoint.name == "list_base_release_queue"));
         assert!(manifest
+            .agent_entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint.name == "plan_stripe_connect_transfer"));
+        assert!(manifest
+            .agent_entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint.name == "reconcile_stripe_transfer_event"));
+        assert!(manifest
             .payment_rails
             .iter()
             .any(|rail| rail.name.contains("Base Sepolia") && rail.funding_required_before_claim));
@@ -2003,6 +2060,9 @@ mod tests {
         assert!(text.contains("Agent payout status"));
         assert!(text.contains("https://network.example/v1/agents/{agent_id}/paid-status"));
         assert!(text.contains("Base refund plan"));
+        assert!(text.contains("Stripe Connect transfer plan"));
+        assert!(text.contains("https://network.example/v1/stripe/connect-transfers"));
+        assert!(text.contains("https://network.example/v1/stripe/transfer-events"));
         assert!(text.contains("https://network.example/v1/github/funding-comment-plan"));
         assert!(text.contains("https://network.example/v1/github/proof-comment-plan-from-proof"));
         assert!(discovery_manifest_schema_json().contains("\"$id\""));
