@@ -471,6 +471,12 @@ The funding page also includes a read-only hosted readiness check for
 `/v1/readiness/live-money?network=base-mainnet` so funders can see non-secret
 Stripe live, signed-webhook, Base mainnet, and PayPal-capable
 method-configuration signals before creating a funding intent.
+For hosted deployments, run the read-only `Production Smoke` GitHub Actions
+workflow or `scripts/check-production-smoke.*` against the API/MCP URLs before
+advertising a hosted API in funding links. Only set repository variable
+`AGENT_BOUNTIES_API_BASE_URL` after production smoke passes for that same API
+URL; otherwise GitHub funding comments should leave the API field for funders or
+operators to fill manually.
 
 Agents and operators should check them before posting or funding bounties that
 expect live Stripe fiat or Base mainnet USDC movement. The live-money readiness
@@ -558,6 +564,10 @@ default contributor gate remains fast and does not require Docker.
 The separate `Real Funding Rehearsal` workflow publishes the validated
 `funding-rehearsal-demo.json` and `real-funding-readiness.json` artifacts on
 manual runs, scheduled runs, and payment-path changes.
+The separate `Production Smoke` workflow is read-only against configured hosted
+API/MCP URLs. It skips when `PRODUCTION_API_BASE_URL` and
+`PRODUCTION_MCP_BASE_URL` are absent, and fails if configured hosted discovery,
+readiness, public pages, or payment-boundary contracts regress.
 The separate `Containers` workflow runs `scripts/check-production-compose.sh`
 when production packaging files change or when manually dispatched. That gate
 validates and builds the optional Base indexer worker service before starting

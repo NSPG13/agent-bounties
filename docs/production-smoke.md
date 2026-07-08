@@ -25,6 +25,21 @@ The scripts also read `PRODUCTION_API_BASE_URL` and `PRODUCTION_MCP_BASE_URL`.
 Use `-RequireEvalHistory` or `--require-eval-history` after a deployment has
 run at least one eval suite and persisted the run history.
 
+GitHub Actions also exposes a `Production Smoke` workflow. It runs on schedule,
+on relevant pushes, and by manual dispatch. For scheduled and push runs, set
+repository variables:
+
+- `PRODUCTION_API_BASE_URL`
+- `PRODUCTION_MCP_BASE_URL`
+- optional `PRODUCTION_SMOKE_REQUIRE_EVAL_HISTORY=true`
+
+If either production URL is missing, the workflow skips and writes a summary
+instead of failing contributor PRs. If both URLs are configured, it runs the
+same read-only hosted gate and fails on unhealthy discovery, readiness, or
+public page contracts. Do not set `AGENT_BOUNTIES_API_BASE_URL` for GitHub
+funding-comment handoffs until this production smoke passes for the same API
+URL.
+
 The gate checks:
 
 - API and MCP health endpoints.
