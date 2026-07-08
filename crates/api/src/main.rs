@@ -4248,6 +4248,15 @@ mod tests {
             manifest.endpoints.github_claim_comment_plan,
             "http://127.0.0.1:8080/v1/github/claim-comment-plan"
         );
+        assert_eq!(
+            manifest.funding_handoff.page,
+            "https://nspg13.github.io/agent-bounties/funding.html"
+        );
+        assert_eq!(manifest.funding_handoff.supported_rail, "StripeFiat");
+        assert!(manifest
+            .funding_handoff
+            .settlement_authority
+            .contains("verified Stripe webhook"));
         assert_eq!(manifest.risk_policy.low_value_usdc_cap_minor, 10_000_000);
         assert!(manifest
             .agent_entrypoints
@@ -4782,6 +4791,7 @@ mod tests {
         assert!(text.contains("docs/agent-quickstart.md"));
         assert!(text.contains("http://127.0.0.1:8090/tools"));
         assert!(text.contains("route_blocked_goal"));
+        assert!(text.contains("Prefilled Stripe funding handoff"));
     }
 
     #[tokio::test]

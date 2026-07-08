@@ -4075,6 +4075,7 @@ mod tests {
         assert!(text.contains("route_blocked_goal"));
         assert!(text.contains("/.well-known/agent-bounties.json"));
         assert!(text.contains("docs/agent-quickstart.md"));
+        assert!(text.contains("Prefilled Stripe funding handoff"));
     }
 
     #[tokio::test]

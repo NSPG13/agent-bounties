@@ -18,6 +18,7 @@
     "templates",
     "proof_surfaces",
     "risk_controls",
+    "funding_handoff",
     "real_money_rehearsal",
     "distribution_feedback",
     "risk_policy"
@@ -192,6 +193,7 @@
       }
     },
     "real_money_rehearsal": { "$ref": "#/$defs/real_money_rehearsal" },
+    "funding_handoff": { "$ref": "#/$defs/funding_handoff" },
     "distribution_feedback": { "$ref": "#/$defs/distribution_feedback" },
     "risk_policy": {
       "type": "object",
@@ -319,6 +321,35 @@
         },
         "pooled_and_mixed_funding": { "type": "boolean" },
         "test_mode_only": { "type": "boolean" }
+      }
+    },
+    "funding_handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "page",
+        "purpose",
+        "query_params",
+        "supported_rail",
+        "settlement_authority"
+      ],
+      "properties": {
+        "page": { "$ref": "#/$defs/uri" },
+        "purpose": { "type": "string", "minLength": 1 },
+        "query_params": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "contains": { "const": "bountyId" }
+        },
+        "supported_rail": {
+          "type": "string",
+          "const": "StripeFiat"
+        },
+        "settlement_authority": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "distribution_feedback": {
