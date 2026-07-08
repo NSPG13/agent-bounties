@@ -20,6 +20,9 @@ secrets in the hosted environment.
 ## Required Configuration
 
 Use `.env.example` as the shape for hosted secrets and deployment settings.
+For a Git-backed hosted deployment, use the root `render.yaml` Blueprint and
+fill the same variables in Render's Dashboard. Keep the Blueprint defaults
+disabled until the test-mode checks below pass.
 
 ```powershell
 $env:OPERATOR_API_TOKEN = "<strong-random-token>"

@@ -452,10 +452,25 @@ async fn main() -> anyhow::Result<()> {
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let bind_addr = env::var("MCP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8090".to_string());
+    let bind_addr = service_bind_addr(
+        env::var("MCP_BIND_ADDR").ok().as_deref(),
+        env::var("PORT").ok().as_deref(),
+        "127.0.0.1:8090",
+    );
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn service_bind_addr(configured: Option<&str>, port: Option<&str>, default_addr: &str) -> String {
+    configured
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            port.filter(|value| !value.trim().is_empty())
+                .map(|value| format!("0.0.0.0:{}", value.trim()))
+        })
+        .unwrap_or_else(|| default_addr.to_string())
 }
 
 async fn agent_bounties_discovery() -> Json<web_public::DiscoveryManifest> {
@@ -4091,6 +4106,26 @@ mod tests {
                 "payment_intent": "pi_mcp_paid"
             }),
         }
+    }
+
+    #[test]
+    fn mcp_bind_addr_prefers_explicit_config_then_host_port() {
+        assert_eq!(
+            service_bind_addr(Some("0.0.0.0:9001"), Some("10000"), "127.0.0.1:8090"),
+            "0.0.0.0:9001"
+        );
+        assert_eq!(
+            service_bind_addr(Some(""), Some("10000"), "127.0.0.1:8090"),
+            "0.0.0.0:10000"
+        );
+        assert_eq!(
+            service_bind_addr(None, Some(" 10002 "), "127.0.0.1:8090"),
+            "0.0.0.0:10002"
+        );
+        assert_eq!(
+            service_bind_addr(None, None, "127.0.0.1:8090"),
+            "127.0.0.1:8090"
+        );
     }
 }
 

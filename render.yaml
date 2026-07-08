@@ -1,0 +1,158 @@
+previews:
+  generation: off
+
+envVarGroups:
+  - name: agent-bounties-operator
+    envVars:
+      - key: OPERATOR_API_TOKEN
+        generateValue: true
+
+  - name: agent-bounties-stripe
+    envVars:
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_API_BASE_URL
+        value: ""
+
+  - name: agent-bounties-base
+    envVars:
+      - key: BASE_SEPOLIA_RPC_URL
+        sync: false
+      - key: BASE_MAINNET_RPC_URL
+        sync: false
+      - key: BASE_SEPOLIA_USDC_TOKEN
+        value: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+      - key: BASE_MAINNET_USDC_TOKEN
+        value: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+      - key: BASE_SEPOLIA_ESCROW_CONTRACT
+        sync: false
+      - key: BASE_MAINNET_ESCROW_CONTRACT
+        sync: false
+      - key: BASE_SETTLEMENT_SIGNER
+        sync: false
+      - key: BASE_PLATFORM_FEE_WALLET
+        sync: false
+
+services:
+  - type: web
+    name: agent-bounties-api
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: checksPass
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_PACKAGE
+        value: api
+      - key: APP_BINARY
+        value: api
+      - key: RUST_LOG
+        value: info
+      - key: PUBLIC_BASE_URL
+        value: https://agent-bounties-api.onrender.com
+      - key: MCP_BASE_URL
+        value: https://agent-bounties-mcp.onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agent-bounties-postgres
+          property: connectionString
+      - key: ENABLE_BASE_TX_BROADCAST
+        value: "false"
+      - key: ENABLE_STRIPE_LIVE_EXECUTION
+        value: "false"
+      - key: ENABLE_STRIPE_PUBLIC_CHECKOUT
+        value: "false"
+      - key: ALLOW_UNSIGNED_STRIPE_WEBHOOKS
+        value: "false"
+      - fromGroup: agent-bounties-operator
+      - fromGroup: agent-bounties-stripe
+      - fromGroup: agent-bounties-base
+
+  - type: web
+    name: agent-bounties-mcp
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: checksPass
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_PACKAGE
+        value: mcp-server
+      - key: APP_BINARY
+        value: mcp-server
+      - key: RUST_LOG
+        value: info
+      - key: PUBLIC_BASE_URL
+        value: https://agent-bounties-api.onrender.com
+      - key: MCP_BASE_URL
+        value: https://agent-bounties-mcp.onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agent-bounties-postgres
+          property: connectionString
+      - key: ENABLE_BASE_TX_BROADCAST
+        value: "false"
+      - key: ENABLE_STRIPE_LIVE_EXECUTION
+        value: "false"
+      - key: ENABLE_STRIPE_PUBLIC_CHECKOUT
+        value: "false"
+      - key: ALLOW_UNSIGNED_STRIPE_WEBHOOKS
+        value: "false"
+      - fromGroup: agent-bounties-operator
+      - fromGroup: agent-bounties-stripe
+      - fromGroup: agent-bounties-base
+
+  - type: worker
+    name: agent-bounties-base-indexer
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: checksPass
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_PACKAGE
+        value: worker
+      - key: APP_BINARY
+        value: worker
+      - key: RUST_LOG
+        value: info
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agent-bounties-postgres
+          property: connectionString
+      - key: BASE_INDEXER_NETWORK
+        value: base-sepolia
+      - key: BASE_INDEXER_RPC_URL
+        sync: false
+      - key: BASE_INDEXER_ESCROW_CONTRACT
+        sync: false
+      - key: BASE_INDEXER_START_BLOCK
+        sync: false
+      - key: BASE_INDEXER_POLL_SECONDS
+        value: "15"
+      - key: BASE_INDEXER_CONFIRMATIONS
+        value: "2"
+      - key: BASE_INDEXER_MAX_BLOCKS_PER_QUERY
+        value: "2000"
+
+databases:
+  - name: agent-bounties-postgres
+    databaseName: agent_bounties
+    user: agent_bounties
+    plan: basic-256mb
+    region: oregon
+    postgresMajorVersion: "16"
+    ipAllowList: []

@@ -59,6 +59,7 @@ Invoke-Checked { cargo run -p cli -- github-proof-comment-plan --bounty-id 00000
 Invoke-Checked { cargo run -p cli -- discovery --public-base-url https://agentbounties.local --mcp-base-url https://agentbounties.local/mcp }
 Invoke-Checked { cargo run -p cli -- discovery-report --input-fixture crates\cli\fixtures\discovery_answers.json --json-out target\tmp\discovery-report.json --markdown-out target\tmp\discovery-report.md }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\check-site.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\check-render-blueprint.py }
 Invoke-Checked { cargo run -p cli -- docs-contract-check }
 Invoke-Checked { cargo run -p cli -- demo }
 Invoke-Checked { cargo run -p cli -- pooled-funding-demo }
@@ -67,7 +68,7 @@ Invoke-Checked { cargo run -p cli -- real-funding-readiness --network base-sepol
 Invoke-Checked { & (Join-Path $repoRoot "scripts\real-funding-rehearsal.ps1") }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py crates\sdk-python\examples\cofund_claim.py }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py scripts\validate_real_funding_rehearsal.py }
-Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py scripts\check-render-blueprint.py }
 Pop-Location
 
 Push-Location (Join-Path $repoRoot "crates\sdk-typescript")
