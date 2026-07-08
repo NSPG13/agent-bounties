@@ -57,8 +57,11 @@ $composeArgs = @(
     "-p", $ProjectName,
     "-f", "docker-compose.production.yml"
 )
+$baseIndexerComposeArgs = $composeArgs + @("--profile", "base-indexer")
 
 try {
+    Invoke-Checked { docker compose @baseIndexerComposeArgs config | Out-Null }
+    Invoke-Checked { docker compose @baseIndexerComposeArgs build base-indexer }
     Invoke-Checked { docker compose @composeArgs up -d --build }
     Wait-HttpOk "http://127.0.0.1:$ApiPort/health"
     Wait-HttpOk "http://127.0.0.1:$McpPort/health"

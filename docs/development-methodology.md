@@ -109,7 +109,8 @@ has persisted at least one eval run.
 
 `scripts/check-production-compose.ps1` and
 `scripts/check-production-compose.sh` are the local production-container gate.
-They build the production API/MCP/Postgres compose topology, run the read-only
-production smoke against high local ports, and tear the stack down. The separate
-GitHub Actions `Containers` workflow runs this gate for production packaging
-changes and on manual dispatch.
+They validate and build the optional Base indexer worker service, build the
+production API/MCP/Postgres compose topology, run the read-only production smoke
+against high local ports, and tear the stack down. The separate GitHub Actions
+`Containers` workflow runs this gate for production packaging changes and on
+manual dispatch.
