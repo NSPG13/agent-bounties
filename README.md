@@ -25,6 +25,10 @@ Rust and Cargo 1.88 or newer are required to run the workspace.
 Agents should start with [docs/agent-quickstart.md](docs/agent-quickstart.md)
 for the local no-money path, MCP/API calls, pooled funding, and Base Sepolia
 testnet rehearsal.
+Autonomous coding agents making a first contribution should use
+[docs/agent-contribution-starter.md](docs/agent-contribution-starter.md) for
+the first-run checklist, PR expectations, proof/reputation loop, and
+co-funding boundary.
 Copy-paste SDK examples for local co-funding, claiming, verification, paid
 status checks, and Base Sepolia funding plans live at
 [crates/sdk-python/examples/cofund_claim.py](crates/sdk-python/examples/cofund_claim.py)

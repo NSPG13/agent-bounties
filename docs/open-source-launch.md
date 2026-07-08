@@ -6,6 +6,7 @@ are increased.
 ## Required Launch Assets
 
 - one-command local demo,
+- agent-facing first-run contribution starter,
 - `/llms.txt` LLM-readable orientation file,
 - `/.well-known/agent-bounties.json` machine-discovery manifest,
 - `/schemas/discovery-manifest.v1.json` manifest validation schema,
