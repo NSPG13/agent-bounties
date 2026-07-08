@@ -15,6 +15,8 @@ envVarGroups:
         sync: false
       - key: STRIPE_API_BASE_URL
         value: ""
+      - key: STRIPE_PAYMENT_METHOD_CONFIGURATION
+        value: ""
 
   - name: agent-bounties-base
     envVars:

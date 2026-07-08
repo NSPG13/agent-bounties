@@ -46,9 +46,9 @@ use github_app::{
 };
 use ledger::Ledger;
 use payments_stripe::{
-    execute_stripe_request, verify_webhook_signature, CheckoutTopUpRequest, ConnectAccountSnapshot,
-    StripeEventDeduper, StripeExecutionReport, StripePlanner, StripeRequestIntent,
-    StripeWebhookEvent, STRIPE_API_BASE_URL,
+    apply_checkout_payment_method_configuration, execute_stripe_request, verify_webhook_signature,
+    CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper, StripeExecutionReport,
+    StripePlanner, StripeRequestIntent, StripeWebhookEvent, STRIPE_API_BASE_URL,
 };
 use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
@@ -187,6 +187,7 @@ struct AppState {
     stripe_live_execution_enabled: bool,
     stripe_public_checkout_enabled: bool,
     stripe_api_base_url: String,
+    stripe_payment_method_configuration: Option<String>,
     store: Option<PostgresStore>,
     base_rpc_urls: BaseRpcUrlConfig,
     base_broadcast_enabled: bool,
@@ -464,6 +465,9 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or(false),
         stripe_api_base_url: env::var("STRIPE_API_BASE_URL")
             .unwrap_or_else(|_| STRIPE_API_BASE_URL.to_string()),
+        stripe_payment_method_configuration: env::var("STRIPE_PAYMENT_METHOD_CONFIGURATION")
+            .ok()
+            .and_then(non_empty_secret),
         store,
         base_rpc_urls: BaseRpcUrlConfig::from_env(),
         base_broadcast_enabled: env::var("ENABLE_BASE_TX_BROADCAST")
@@ -1995,7 +1999,7 @@ fn stripe_checkout_top_up_intent(
         cancel_url,
     } = request;
     let platform_base_url = state.public_base_url.clone();
-    let planner = StripePlanner::new(platform_base_url.clone());
+    let planner = stripe_planner_for_state(state, platform_base_url.clone());
     let amount = Money::new(amount_minor, currency).map_err(|_| StatusCode::BAD_REQUEST)?;
     planner
         .checkout_top_up(&CheckoutTopUpRequest {
@@ -2006,6 +2010,30 @@ fn stripe_checkout_top_up_intent(
             cancel_url: cancel_url.unwrap_or_else(|| format!("{platform_base_url}/stripe/cancel")),
         })
         .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn stripe_planner_for_state(
+    state: &SharedState,
+    platform_base_url: impl Into<String>,
+) -> StripePlanner {
+    let planner = StripePlanner::new(platform_base_url);
+    if let Some(payment_method_configuration) = state.stripe_payment_method_configuration.as_deref()
+    {
+        planner.with_payment_method_configuration(payment_method_configuration)
+    } else {
+        planner
+    }
+}
+
+fn apply_state_checkout_payment_method_configuration(
+    state: &SharedState,
+    intent: &mut StripeRequestIntent,
+) -> Result<(), StatusCode> {
+    apply_checkout_payment_method_configuration(
+        intent,
+        state.stripe_payment_method_configuration.as_deref(),
+    )
+    .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
 #[utoipa::path(
@@ -2110,6 +2138,8 @@ async fn execute_stripe_funding_intent_checkout(
         network.stripe_checkout_for_funding_intent(id, state.public_base_url.clone())
     }
     .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mut intent = intent;
+    apply_state_checkout_payment_method_configuration(&state, &mut intent)?;
     execute_stripe_intent(&state, intent).await.map(Json)
 }
 
@@ -3714,6 +3744,37 @@ mod tests {
             intent.body["cancel_url"],
             "http://127.0.0.1:8080/stripe/cancel"
         );
+        assert!(intent.body.get("payment_method_types").is_none());
+        assert!(intent.body.get("payment_method_configuration").is_none());
+    }
+
+    #[tokio::test]
+    async fn stripe_checkout_top_up_endpoint_applies_payment_method_configuration() {
+        let organization_id = Uuid::new_v4();
+        let state = test_state_with_stripe_payment_method_configuration(
+            BountyNetwork::default(),
+            "pmc_paypal_enabled",
+        );
+
+        let intent = plan_stripe_checkout_top_up(
+            State(state),
+            Json(PlanStripeCheckoutTopUpRequest {
+                organization_id,
+                amount_minor: 5_000,
+                currency: "usd".to_string(),
+                success_url: None,
+                cancel_url: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(
+            intent.body["payment_method_configuration"],
+            "pmc_paypal_enabled"
+        );
+        assert!(intent.body.get("payment_method_types").is_none());
     }
 
     #[tokio::test]
@@ -3830,7 +3891,11 @@ mod tests {
             "url": "https://checkout.stripe.com/c/pay/cs_test_bounty",
             "livemode": false
         }));
-        let state = test_state_with_stripe_public_checkout(network, stripe_api_base_url);
+        let state = test_state_with_stripe_public_checkout_and_payment_method_configuration(
+            network,
+            stripe_api_base_url,
+            "pmc_paypal_enabled",
+        );
 
         let report = execute_stripe_funding_intent_checkout(State(state), Path(funding_intent.id))
             .await
@@ -3851,6 +3916,11 @@ mod tests {
             report.request.body["metadata"]["funding_intent_id"],
             funding_intent.id.to_string()
         );
+        assert_eq!(
+            report.request.body["payment_method_configuration"],
+            "pmc_paypal_enabled"
+        );
+        assert!(report.request.body.get("payment_method_types").is_none());
         assert_eq!(
             report.url.as_deref(),
             Some("https://checkout.stripe.com/c/pay/cs_test_bounty")
@@ -5420,6 +5490,7 @@ mod tests {
             stripe_live_execution_enabled: false,
             stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            stripe_payment_method_configuration: None,
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
@@ -5440,6 +5511,7 @@ mod tests {
             stripe_live_execution_enabled: false,
             stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            stripe_payment_method_configuration: None,
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
@@ -5460,6 +5532,7 @@ mod tests {
             stripe_live_execution_enabled: false,
             stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            stripe_payment_method_configuration: None,
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
@@ -5480,6 +5553,7 @@ mod tests {
             stripe_live_execution_enabled: false,
             stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            stripe_payment_method_configuration: None,
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
@@ -5503,6 +5577,7 @@ mod tests {
             stripe_live_execution_enabled: false,
             stripe_public_checkout_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            stripe_payment_method_configuration: None,
             store: None,
             base_rpc_urls: BaseRpcUrlConfig {
                 base_sepolia: Some(base_sepolia_rpc_url),
@@ -5529,6 +5604,7 @@ mod tests {
             stripe_live_execution_enabled: true,
             stripe_public_checkout_enabled: false,
             stripe_api_base_url,
+            stripe_payment_method_configuration: None,
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
@@ -5538,9 +5614,34 @@ mod tests {
         })
     }
 
-    fn test_state_with_stripe_public_checkout(
+    fn test_state_with_stripe_payment_method_configuration(
+        network: BountyNetwork,
+        payment_method_configuration: &str,
+    ) -> SharedState {
+        Arc::new(AppState {
+            network: Arc::new(Mutex::new(network)),
+            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
+            eval_runs: Arc::new(Mutex::new(Vec::new())),
+            stripe_webhook_secret: None,
+            allow_unsigned_stripe_webhooks: false,
+            stripe_secret_key: None,
+            stripe_live_execution_enabled: false,
+            stripe_public_checkout_enabled: false,
+            stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            stripe_payment_method_configuration: Some(payment_method_configuration.to_string()),
+            store: None,
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            operator_api_token: None,
+            public_base_url: "http://127.0.0.1:8080".to_string(),
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+        })
+    }
+
+    fn test_state_with_stripe_public_checkout_and_payment_method_configuration(
         network: BountyNetwork,
         stripe_api_base_url: String,
+        payment_method_configuration: &str,
     ) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
@@ -5552,6 +5653,7 @@ mod tests {
             stripe_live_execution_enabled: true,
             stripe_public_checkout_enabled: true,
             stripe_api_base_url,
+            stripe_payment_method_configuration: Some(payment_method_configuration.to_string()),
             store: None,
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,

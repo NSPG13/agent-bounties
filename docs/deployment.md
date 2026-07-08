@@ -38,9 +38,12 @@ The Blueprint intentionally starts with live-value mutation disabled:
 
 Render generates `OPERATOR_API_TOKEN`. Stripe secrets, Base RPC URLs, escrow
 contracts, settlement signer, platform fee wallet, and indexer start block are
-Dashboard-provided values. Do not enable public card funding until Stripe
-webhooks are configured and `GET /v1/readiness/live-money?network=base-mainnet`
-reports the expected non-secret readiness gates.
+Dashboard-provided values. `STRIPE_PAYMENT_METHOD_CONFIGURATION` is an optional
+non-secret Stripe Dashboard id for targeting a Checkout payment-method set such
+as a PayPal-enabled configuration. Do not enable public Checkout funding until
+Stripe webhooks are configured and
+`GET /v1/readiness/live-money?network=base-mainnet` reports the expected
+non-secret readiness gates.
 
 Validate the checked-in Blueprint contract without requiring the Render CLI:
 
@@ -133,7 +136,8 @@ The compose file sets:
 - optional Base RPC, escrow address, native USDC token, settlement signer, and
   platform-fee wallet variables
 - optional Stripe live execution, public funder Checkout, API base URL, secret
-  key, webhook secret, and unsigned-webhook simulation variables
+  key, webhook secret, optional Payment Method Configuration id, and
+  unsigned-webhook simulation variables
 - optional `OPERATOR_API_TOKEN` for hosted operator-only mutation surfaces
 - optional `base-indexer` profile variables for automated Base USDC escrow log
   polling
@@ -203,6 +207,9 @@ ready:
   creation disabled.
 - `ENABLE_STRIPE_PUBLIC_CHECKOUT=false` keeps public funder Checkout disabled
   even when operator-only Stripe live execution is configured.
+- `STRIPE_PAYMENT_METHOD_CONFIGURATION` can point Checkout Session creation at
+  a Stripe Dashboard payment-method set. Use it for PayPal-capable Checkout
+  only after Stripe supports and approves PayPal for the platform account.
 - `OPERATOR_API_TOKEN` can require `Authorization: Bearer <token>` or
   `x-operator-token: <token>` on hosted risk review, settlement reconciliation,
   Base broadcast, receipt reconciliation, and live Stripe execution calls. Leave
