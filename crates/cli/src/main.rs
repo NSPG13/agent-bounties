@@ -72,6 +72,16 @@ struct DiscoveryReportArgs {
     markdown_out: Option<String>,
 }
 
+#[derive(Debug, ClapArgs)]
+struct DiscoveryImportArgs {
+    #[arg(long)]
+    repository: String,
+    #[arg(long)]
+    issue_number: u64,
+    #[arg(long, env = "GITHUB_TOKEN")]
+    github_token: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum Command {
     Demo,
@@ -324,6 +334,7 @@ enum Command {
         mcp_base_url: String,
     },
     DiscoveryReport(DiscoveryReportArgs),
+    DiscoveryImport(DiscoveryImportArgs),
     DocsContractCheck {
         #[arg(long, default_value = ".")]
         root: String,
@@ -578,6 +589,7 @@ async fn async_main() -> Result<()> {
         Command::DiscoveryReport(args) => {
             discovery_report(args.input_fixture, args.json_out, args.markdown_out)
         }
+        Command::DiscoveryImport(args) => discovery_import(args).await,
         Command::DocsContractCheck {
             root,
             contract_root,
@@ -1719,6 +1731,57 @@ fn github_proof_comment_plan(
 fn discovery(public_base_url: String, mcp_base_url: String) -> Result<()> {
     let manifest = web_public::discovery_manifest(&public_base_url, &mcp_base_url);
     println!("{}", serde_json::to_string_pretty(&manifest)?);
+    Ok(())
+}
+
+async fn discovery_import(args: DiscoveryImportArgs) -> Result<()> {
+    let client = reqwest::Client::new();
+    let mut issue_req = client.get(format!(
+        "https://api.github.com/repos/{}/issues/{}",
+        args.repository, args.issue_number
+    ))
+    .header("User-Agent", "agent-bounties-cli");
+    if let Some(token) = &args.github_token {
+        issue_req = issue_req.header("Authorization", format!("Bearer {}", token));
+    }
+    let issue_res: serde_json::Value = issue_req.send().await?.json().await?;
+
+    let mut comments_req = client.get(format!(
+        "https://api.github.com/repos/{}/issues/{}/comments",
+        args.repository, args.issue_number
+    ))
+    .header("User-Agent", "agent-bounties-cli");
+    if let Some(token) = &args.github_token {
+        comments_req = comments_req.header("Authorization", format!("Bearer {}", token));
+    }
+    let comments_res: serde_json::Value = comments_req.send().await?.json().await?;
+
+    let mut records = Vec::new();
+
+    if let Some(author) = issue_res.get("user").and_then(|u| u.get("login")).and_then(|l| l.as_str()) {
+        if let Some(body) = issue_res.get("body").and_then(|b| b.as_str()) {
+            let mut record = serde_json::Map::new();
+            record.insert("contributor".to_string(), serde_json::Value::String(author.to_string()));
+            record.insert("body".to_string(), serde_json::Value::String(body.to_string()));
+            records.push(serde_json::Value::Object(record));
+        }
+    }
+
+    if let Some(comments_array) = comments_res.as_array() {
+        for comment in comments_array {
+            if let Some(author) = comment.get("user").and_then(|u| u.get("login")).and_then(|l| l.as_str()) {
+                if let Some(body) = comment.get("body").and_then(|b| b.as_str()) {
+                    let mut record = serde_json::Map::new();
+                    record.insert("contributor".to_string(), serde_json::Value::String(author.to_string()));
+                    record.insert("body".to_string(), serde_json::Value::String(body.to_string()));
+                    records.push(serde_json::Value::Object(record));
+                }
+            }
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&records)?;
+    println!("{}", json);
     Ok(())
 }
 
