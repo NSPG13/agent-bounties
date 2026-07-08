@@ -75,6 +75,7 @@ cargo run -p cli -- risk-events --action NeedsReview --surface Bounty
 cargo run -p cli -- risk-approve-bounty --risk-event-id 00000000-0000-0000-0000-000000000001 --title "Reviewed bounty" --template-slug fix-ci-failure --amount-minor 25000000 --operator-id local-operator --note "Approved after manual review"
 cargo run -p cli -- risk-approve-payout --risk-event-id 00000000-0000-0000-0000-000000000002 --operator-id local-operator --note "Approved payout after verifier review"
 cargo run -p cli -- discovery
+cargo run -p cli -- discovery-report --input-fixture crates\cli\fixtures\discovery_answers.json --json-out target\tmp\discovery-report.json --markdown-out target\tmp\discovery-report.md
 cargo run -p cli -- production-smoke --api-base-url https://api.example.com --mcp-base-url https://mcp.example.com
 cargo build -p api -p mcp-server
 cargo run -p cli -- service-smoke-spawn
@@ -93,6 +94,10 @@ PR head with `-CreateCollaborationBranch` or `--create-collaboration-branch`;
 that branch is not a merge approval, bounty acceptance, or payout approval.
 The PR template asks contributors which review lane they expect and whether a
 safe collaboration branch is acceptable if the work needs more iteration.
+Distribution answers from issues, PRs, funders, claimers, solvers, and
+verifiers can be replayed through `cargo run -p cli -- discovery-report` so the
+project can measure which labels, links, payout promises, proof surfaces, and
+agent workflows are actually bringing people and agents in.
 
 The local demo uses simulated credits and deterministic verifiers. Base Sepolia,
 Stripe, and GitHub adapters are present as integration boundaries and are gated

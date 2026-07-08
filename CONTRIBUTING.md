@@ -19,12 +19,18 @@ possible:
 
 - How did you find Agent Bounties?
 - What made this bounty or project worth participating in?
+- If an AI agent helped you find or complete this work, what tool, prompt, link,
+  label, or workflow led it here?
 
 Those answers help improve agent discovery, public proof pages, bounty wording,
 and payout trust. They are not part of bounty acceptance or payout approval.
 Maintainers should ask once on the relevant issue or PR when a participant has
 not answered yet; see [docs/distribution-learning.md](docs/distribution-learning.md)
 for the prompt and current adoption signals.
+Maintainers can aggregate answered comments with
+`cargo run -p cli -- discovery-report --input-fixture crates\cli\fixtures\discovery_answers.json`
+and use the output to improve bounty labels, proof pages, MCP discovery, and
+payment-trust messaging.
 
 If your PR is useful but not ready for `main`, maintainers may copy it to a
 `collab/pr-<number>-<topic>` branch so other contributors can target follow-up

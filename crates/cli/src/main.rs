@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use app::{
     hash_artifact, AddFundingContributionRequest, BaseReleaseQueueRequest, BountyNetwork,
     ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
@@ -15,7 +15,7 @@ use chain_base::{
     BaseRpcUrlConfig, ChainEventIndexer, EscrowRecipient, EvmLog,
 };
 use chrono::Utc;
-use clap::{Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 use domain::{CapabilityClass, FundingMode, Money, PaymentRail, PrivacyLevel, VerifierKind};
 use eval_harness::{
     bundled_abuse_fixtures, bundled_fixtures, bundled_judge_fixtures, run_eval_loops, AbuseBench,
@@ -29,6 +29,7 @@ use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper,
     StripePlanner, StripeRequestIntent, StripeWebhookEvent, STRIPE_API_BASE_URL,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
@@ -59,6 +60,16 @@ struct GithubFundingCommentPlanCli {
     contributor_login: Option<String>,
     comment_id: Option<String>,
     existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug, ClapArgs)]
+struct DiscoveryReportArgs {
+    #[arg(long)]
+    input_fixture: String,
+    #[arg(long)]
+    json_out: Option<String>,
+    #[arg(long)]
+    markdown_out: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -312,6 +323,7 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:8090")]
         mcp_base_url: String,
     },
+    DiscoveryReport(DiscoveryReportArgs),
     DocsContractCheck {
         #[arg(long, default_value = ".")]
         root: String,
@@ -344,8 +356,23 @@ enum Command {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    thread::Builder::new()
+        .name("agent-bounties-cli".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(run_cli)?
+        .join()
+        .map_err(|_| anyhow!("CLI thread panicked"))?
+}
+
+fn run_cli() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let args = Args::parse();
     match args.command {
         Command::Demo => demo().await,
@@ -548,6 +575,9 @@ async fn main() -> Result<()> {
             public_base_url,
             mcp_base_url,
         } => discovery(public_base_url, mcp_base_url),
+        Command::DiscoveryReport(args) => {
+            discovery_report(args.input_fixture, args.json_out, args.markdown_out)
+        }
         Command::DocsContractCheck {
             root,
             contract_root,
@@ -1690,6 +1720,751 @@ fn discovery(public_base_url: String, mcp_base_url: String) -> Result<()> {
     let manifest = web_public::discovery_manifest(&public_base_url, &mcp_base_url);
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
+}
+
+fn discovery_report(
+    input_fixture: String,
+    json_out: Option<String>,
+    markdown_out: Option<String>,
+) -> Result<()> {
+    let report = build_discovery_report_from_path(Path::new(&input_fixture))?;
+    let json = serde_json::to_string_pretty(&report)?;
+    let markdown = render_discovery_report_markdown(&report);
+
+    match json_out {
+        Some(path) => write_report_file(Path::new(&path), &json)?,
+        None => println!("{json}"),
+    }
+    if let Some(path) = markdown_out {
+        write_report_file(Path::new(&path), &markdown)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ContributorDiscoveryReport {
+    total_records: usize,
+    answered_records: usize,
+    partial_answer_records: usize,
+    missing_answer_records: usize,
+    unique_contributors: usize,
+    duplicate_contributors: Vec<String>,
+    discovery_sources: Vec<ContributorDiscoveryReportBucket>,
+    participation_reasons: Vec<ContributorDiscoveryReportBucket>,
+    useful_labels: Vec<ContributorDiscoveryReportBucket>,
+    trust_payment_signals: Vec<ContributorDiscoveryReportBucket>,
+    friction_points: Vec<ContributorDiscoveryReportBucket>,
+    agent_workflows: Vec<ContributorDiscoveryReportBucket>,
+    records: Vec<ContributorDiscoveryReportRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ContributorDiscoveryReportBucket {
+    name: String,
+    count: usize,
+    contributors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ContributorDiscoveryReportRecord {
+    contributor: String,
+    answered: bool,
+    partial: bool,
+    discovery_answer: Option<String>,
+    participation_answer: Option<String>,
+    discovery_sources: Vec<String>,
+    participation_reasons: Vec<String>,
+    useful_labels: Vec<String>,
+    trust_payment_signals: Vec<String>,
+    friction_points: Vec<String>,
+    agent_workflow: Option<String>,
+}
+
+fn build_discovery_report_from_path(path: &Path) -> Result<ContributorDiscoveryReport> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("failed to read discovery report fixture {}", path.display()))?;
+    build_discovery_report_from_str(&text)
+}
+
+fn build_discovery_report_from_str(text: &str) -> Result<ContributorDiscoveryReport> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).context("discovery report fixture must be valid JSON")?;
+    let raw_records = discovery_fixture_records(&value)?;
+    if raw_records.is_empty() {
+        bail!("discovery report fixture must contain at least one record");
+    }
+
+    let mut records = Vec::new();
+    let mut contributor_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for (index, value) in raw_records.iter().enumerate() {
+        let record = discovery_record_from_value(index, value);
+        *contributor_counts
+            .entry(record.contributor.clone())
+            .or_default() += 1;
+        records.push(record);
+    }
+
+    let duplicate_contributors = contributor_counts
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(contributor, _)| contributor.clone())
+        .collect::<Vec<_>>();
+    let answered_records = records.iter().filter(|record| record.answered).count();
+    let partial_answer_records = records.iter().filter(|record| record.partial).count();
+    let missing_answer_records = records.iter().filter(|record| !record.answered).count();
+
+    Ok(ContributorDiscoveryReport {
+        total_records: records.len(),
+        answered_records,
+        partial_answer_records,
+        missing_answer_records,
+        unique_contributors: contributor_counts.len(),
+        duplicate_contributors,
+        discovery_sources: discovery_buckets(&records, |record| &record.discovery_sources),
+        participation_reasons: discovery_buckets(&records, |record| &record.participation_reasons),
+        useful_labels: discovery_buckets(&records, |record| &record.useful_labels),
+        trust_payment_signals: discovery_buckets(&records, |record| &record.trust_payment_signals),
+        friction_points: discovery_buckets(&records, |record| &record.friction_points),
+        agent_workflows: discovery_buckets_option(&records, |record| {
+            record.agent_workflow.as_ref()
+        }),
+        records,
+    })
+}
+
+fn discovery_fixture_records(value: &serde_json::Value) -> Result<Vec<serde_json::Value>> {
+    if let Some(records) = value.get("records").and_then(serde_json::Value::as_array) {
+        return Ok(records.clone());
+    }
+    if let Some(records) = value.as_array() {
+        return Ok(records.clone());
+    }
+    bail!("discovery report fixture must be an array or an object with records[]")
+}
+
+fn discovery_record_from_value(
+    index: usize,
+    value: &serde_json::Value,
+) -> ContributorDiscoveryReportRecord {
+    let body = first_string_field(value, &["body", "comment", "text"]).unwrap_or_default();
+    let contributor = contributor_from_value(index, value, &body);
+    let discovery_answer = first_string_field(
+        value,
+        &[
+            "discovery_source",
+            "source",
+            "how_found",
+            "how_did_you_find",
+        ],
+    )
+    .or_else(|| extract_answer_after_marker(&body, &["how did you find", "how did you hear"]))
+    .or_else(|| extract_found_through_answer(&body));
+    let participation_answer = first_string_field(
+        value,
+        &[
+            "participation_reason",
+            "reason",
+            "why_participated",
+            "what_made_it_worth",
+        ],
+    )
+    .or_else(|| {
+        extract_answer_after_marker(
+            &body,
+            &[
+                "what made this bounty",
+                "what made this project",
+                "worth participating",
+                "why did you participate",
+            ],
+        )
+    })
+    .or_else(|| extract_because_answer(&body));
+    let agent_workflow = first_string_field(
+        value,
+        &[
+            "agent_workflow",
+            "ai_agent_workflow",
+            "workflow",
+            "tool_prompt_link",
+        ],
+    )
+    .or_else(|| {
+        extract_answer_after_marker(
+            &body,
+            &[
+                "if an ai agent helped",
+                "what tool",
+                "what prompt",
+                "what workflow",
+            ],
+        )
+    })
+    .or_else(|| detect_agent_workflow(&body));
+
+    let useful_labels = unique_sorted(
+        structured_string_list(value, &["useful_labels", "labels"])
+            .into_iter()
+            .chain(detect_labels(&format!(
+                "{} {} {}",
+                body,
+                discovery_answer.as_deref().unwrap_or_default(),
+                participation_answer.as_deref().unwrap_or_default()
+            )))
+            .collect(),
+    );
+    let text = format!(
+        "{} {} {} {}",
+        body,
+        discovery_answer.as_deref().unwrap_or_default(),
+        participation_answer.as_deref().unwrap_or_default(),
+        agent_workflow.as_deref().unwrap_or_default()
+    );
+    let structured_trust_payment_signals = structured_string_list(
+        value,
+        &[
+            "trust_signal",
+            "trust_signals",
+            "payment_signal",
+            "payment_signals",
+        ],
+    );
+    let trust_text = format!("{} {}", text, structured_trust_payment_signals.join(" "));
+    let trust_payment_signals = unique_sorted(
+        structured_trust_payment_signals
+            .into_iter()
+            .chain(detect_trust_payment_signals(&trust_text))
+            .collect(),
+    );
+    let structured_friction_points =
+        structured_string_list(value, &["friction_point", "friction_points"]);
+    let friction_text = format!("{} {}", text, structured_friction_points.join(" "));
+    let friction_points = unique_sorted(
+        structured_friction_points
+            .into_iter()
+            .chain(detect_friction_points(&friction_text))
+            .collect(),
+    );
+    let discovery_sources = unique_sorted(
+        discovery_answer
+            .iter()
+            .flat_map(|answer| classify_discovery_source(answer))
+            .collect(),
+    );
+    let participation_reasons = unique_sorted(
+        participation_answer
+            .iter()
+            .flat_map(|answer| classify_participation_reason(answer))
+            .collect(),
+    );
+    let answered = discovery_answer.is_some() || participation_answer.is_some();
+    let partial = answered && (discovery_answer.is_none() || participation_answer.is_none());
+
+    ContributorDiscoveryReportRecord {
+        contributor,
+        answered,
+        partial,
+        discovery_answer,
+        participation_answer,
+        discovery_sources,
+        participation_reasons,
+        useful_labels,
+        trust_payment_signals,
+        friction_points,
+        agent_workflow,
+    }
+}
+
+fn contributor_from_value(index: usize, value: &serde_json::Value, body: &str) -> String {
+    first_string_field(value, &["contributor", "login", "user", "author"])
+        .or_else(|| {
+            value
+                .get("author")
+                .and_then(|author| author.get("login"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
+        })
+        .or_else(|| {
+            body.split_whitespace()
+                .find(|token| token.starts_with('@') && token.len() > 1)
+                .map(|token| {
+                    token
+                        .trim_matches(|ch: char| {
+                            !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '@')
+                        })
+                        .trim_start_matches('@')
+                        .to_string()
+                })
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("unknown-{index}"))
+}
+
+fn first_string_field(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        let value = value.get(*key)?;
+        match value {
+            serde_json::Value::String(text) => clean_answer(text),
+            serde_json::Value::Number(number) => Some(number.to_string()),
+            serde_json::Value::Object(object) => object
+                .get("login")
+                .and_then(serde_json::Value::as_str)
+                .and_then(clean_answer),
+            _ => None,
+        }
+    })
+}
+
+fn structured_string_list(value: &serde_json::Value, keys: &[&str]) -> Vec<String> {
+    let mut values = Vec::new();
+    for key in keys {
+        match value.get(*key) {
+            Some(serde_json::Value::String(text)) => {
+                values.extend(
+                    split_listish(text)
+                        .into_iter()
+                        .filter_map(|item| clean_answer(&item)),
+                );
+            }
+            Some(serde_json::Value::Array(items)) => {
+                for item in items {
+                    if let Some(text) = item.as_str().and_then(clean_answer) {
+                        values.push(text);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    unique_sorted(values)
+}
+
+fn extract_answer_after_marker(body: &str, markers: &[&str]) -> Option<String> {
+    for line in body.lines() {
+        let lower = line.to_ascii_lowercase();
+        if markers.iter().any(|marker| lower.contains(marker)) {
+            if let Some(answer) = line
+                .split_once('?')
+                .map(|(_, answer)| answer)
+                .or_else(|| line.split_once(':').map(|(_, answer)| answer))
+                .or_else(|| line.split_once(" - ").map(|(_, answer)| answer))
+                .and_then(clean_answer)
+            {
+                return Some(answer);
+            }
+        }
+    }
+    None
+}
+
+fn extract_found_through_answer(body: &str) -> Option<String> {
+    for marker in [
+        "found agent bounties through",
+        "found it through",
+        "found this through",
+        "found this project through",
+        "found agent bounties via",
+        "found it via",
+        "found this via",
+        "found this project via",
+    ] {
+        if let Some(answer) = substring_after_case_insensitive(body, marker).and_then(clean_answer)
+        {
+            return Some(answer);
+        }
+    }
+    None
+}
+
+fn extract_because_answer(body: &str) -> Option<String> {
+    for marker in [
+        "participated because",
+        "worth participating because",
+        "worth participating in because",
+        "joined because",
+    ] {
+        if let Some(answer) = substring_after_case_insensitive(body, marker).and_then(clean_answer)
+        {
+            return Some(answer);
+        }
+    }
+    None
+}
+
+fn substring_after_case_insensitive<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
+    let lower = text.to_ascii_lowercase();
+    let start = lower.find(marker)? + marker.len();
+    Some(&text[start..])
+}
+
+fn clean_answer(text: &str) -> Option<String> {
+    let cleaned = text
+        .trim()
+        .trim_start_matches(['-', ':', '=', ' '])
+        .trim()
+        .trim_matches(['.', ',', ';'])
+        .trim();
+    if cleaned.is_empty() || cleaned.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(cleaned.to_string())
+    }
+}
+
+fn split_listish(text: &str) -> Vec<String> {
+    text.split([',', ';'])
+        .flat_map(|chunk| chunk.split(" and "))
+        .map(|chunk| chunk.trim().trim_matches(['`', '"', '\'']).to_string())
+        .filter(|chunk| !chunk.is_empty())
+        .collect()
+}
+
+fn classify_discovery_source(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    let mut values = Vec::new();
+    if contains_any(&lower, &["github", "issue", "pull request", "pr ", "repo"]) {
+        values.push("github");
+    }
+    if contains_any(
+        &lower,
+        &[
+            "bounty listing",
+            "bounty listings",
+            "twitter",
+            "social",
+            "x.com",
+        ],
+    ) {
+        values.push("bounty-listing-or-social");
+    }
+    if contains_any(
+        &lower,
+        &["mcp", "llms.txt", "discovery manifest", ".well-known"],
+    ) {
+        values.push("machine-discovery");
+    }
+    if contains_any(
+        &lower,
+        &["proof page", "public proof", "reputation profile"],
+    ) {
+        values.push("proof-or-reputation-page");
+    }
+    if contains_any(
+        &lower,
+        &["codex", "claude", "chatgpt", "antigravity", "agent", "bot"],
+    ) {
+        values.push("ai-agent-workflow");
+    }
+    if contains_any(&lower, &["referral", "direct", "maintainer"]) {
+        values.push("direct-referral");
+    }
+    if values.is_empty() {
+        values.push("other");
+    }
+    values.into_iter().map(ToString::to_string).collect()
+}
+
+fn classify_participation_reason(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    let mut values = Vec::new();
+    if contains_any(
+        &lower,
+        &["usdc", "paid", "payout", "bounty", "reward", "amount"],
+    ) {
+        values.push("payout");
+    }
+    if contains_any(
+        &lower,
+        &[
+            "clear",
+            "concrete",
+            "small",
+            "scope",
+            "acceptance criteria",
+            "well scoped",
+        ],
+    ) {
+        values.push("clear-scope");
+    }
+    if contains_any(
+        &lower,
+        &[
+            "test",
+            "deterministic",
+            "local",
+            "fixture",
+            "docs-contract",
+            "ci",
+        ],
+    ) {
+        values.push("testability");
+    }
+    if contains_any(
+        &lower,
+        &[
+            "escrow",
+            "trust",
+            "settlement",
+            "payment rail",
+            "operator reconciliation",
+        ],
+    ) {
+        values.push("payment-trust");
+    }
+    if contains_any(&lower, &["proof", "reputation", "profile", "portfolio"]) {
+        values.push("reputation-or-proof-graph");
+    }
+    if contains_any(&lower, &["agent", "autonomous", "ai workflow", "ai-agent"]) {
+        values.push("agent-fit");
+    }
+    if contains_any(
+        &lower,
+        &["interesting", "technical", "architecture", "workflow"],
+    ) {
+        values.push("technical-interest");
+    }
+    if contains_any(&lower, &["useful", "mission", "platform", "open source"]) {
+        values.push("project-mission");
+    }
+    if values.is_empty() {
+        values.push("other");
+    }
+    values.into_iter().map(ToString::to_string).collect()
+}
+
+fn detect_labels(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    [
+        "bounty",
+        "ai-agent-welcome",
+        "good-first-agent-bounty",
+        "payments",
+        "distribution",
+        "verifier",
+        "good-first",
+    ]
+    .iter()
+    .filter(|label| lower.contains(**label))
+    .map(|label| (*label).to_string())
+    .collect()
+}
+
+fn detect_trust_payment_signals(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    let mut values = Vec::new();
+    if contains_any(&lower, &["base", "usdc", "escrow"]) {
+        values.push("base-usdc-escrow");
+    }
+    if lower.contains("stripe") {
+        values.push("stripe-fiat");
+    }
+    if contains_any(
+        &lower,
+        &["deterministic", "test", "fixture", "docs-contract", "ci"],
+    ) {
+        values.push("deterministic-verification");
+    }
+    if contains_any(&lower, &["proof", "reputation", "template signal"]) {
+        values.push("public-proof-graph");
+    }
+    if contains_any(
+        &lower,
+        &[
+            "operator",
+            "reconciliation",
+            "not settlement",
+            "payment boundary",
+        ],
+    ) {
+        values.push("operator-reconciliation-boundary");
+    }
+    values.into_iter().map(ToString::to_string).collect()
+}
+
+fn detect_friction_points(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    let mut values = Vec::new();
+    if contains_any(
+        &lower,
+        &[
+            "rust not installed",
+            "missing rust",
+            "cargo missing",
+            "toolchain",
+        ],
+    ) {
+        values.push("missing-toolchain");
+    }
+    if contains_any(
+        &lower,
+        &["stale", "rebase", "docs-contract", "contract issue"],
+    ) {
+        values.push("stale-docs-or-contract");
+    }
+    if contains_any(
+        &lower,
+        &["unclear payout", "payment path", "settlement unclear"],
+    ) {
+        values.push("unclear-payment-path");
+    }
+    if contains_any(&lower, &["review", "merge", "approval", "ci approval"]) {
+        values.push("review-uncertainty");
+    }
+    if contains_any(&lower, &["wallet", "onboarding", "connect account"]) {
+        values.push("wallet-or-onboarding");
+    }
+    values.into_iter().map(ToString::to_string).collect()
+}
+
+fn detect_agent_workflow(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    for tool in [
+        "antigravity ai",
+        "codex",
+        "claude",
+        "chatgpt",
+        "bounty hunter",
+        "mcp",
+    ] {
+        if lower.contains(tool) {
+            return Some(tool.to_string());
+        }
+    }
+    None
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+fn discovery_buckets<F>(
+    records: &[ContributorDiscoveryReportRecord],
+    selector: F,
+) -> Vec<ContributorDiscoveryReportBucket>
+where
+    F: Fn(&ContributorDiscoveryReportRecord) -> &Vec<String>,
+{
+    let mut buckets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for record in records {
+        for value in selector(record) {
+            buckets
+                .entry(value.clone())
+                .or_default()
+                .insert(record.contributor.clone());
+        }
+    }
+    sorted_report_buckets(buckets)
+}
+
+fn discovery_buckets_option<F>(
+    records: &[ContributorDiscoveryReportRecord],
+    selector: F,
+) -> Vec<ContributorDiscoveryReportBucket>
+where
+    F: Fn(&ContributorDiscoveryReportRecord) -> Option<&String>,
+{
+    let mut buckets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for record in records {
+        if let Some(value) = selector(record) {
+            buckets
+                .entry(value.clone())
+                .or_default()
+                .insert(record.contributor.clone());
+        }
+    }
+    sorted_report_buckets(buckets)
+}
+
+fn sorted_report_buckets(
+    buckets: BTreeMap<String, BTreeSet<String>>,
+) -> Vec<ContributorDiscoveryReportBucket> {
+    let mut values = buckets
+        .into_iter()
+        .map(|(name, contributors)| ContributorDiscoveryReportBucket {
+            name,
+            count: contributors.len(),
+            contributors: contributors.into_iter().collect(),
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    values
+}
+
+fn unique_sorted(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .filter_map(|value| clean_answer(&value))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn render_discovery_report_markdown(report: &ContributorDiscoveryReport) -> String {
+    format!(
+        "# Contributor Discovery Report\n\n\
+         - Total records: {}\n\
+         - Answered records: {}\n\
+         - Partial answer records: {}\n\
+         - Missing answer records: {}\n\
+         - Unique contributors: {}\n\
+         - Duplicate contributors: {}\n\n\
+         ## Discovery Sources\n{}\n\n\
+         ## Participation Reasons\n{}\n\n\
+         ## Useful Labels\n{}\n\n\
+         ## Trust And Payment Signals\n{}\n\n\
+         ## Friction Points\n{}\n\n\
+         ## Agent Workflows\n{}\n",
+        report.total_records,
+        report.answered_records,
+        report.partial_answer_records,
+        report.missing_answer_records,
+        report.unique_contributors,
+        if report.duplicate_contributors.is_empty() {
+            "none".to_string()
+        } else {
+            report.duplicate_contributors.join(", ")
+        },
+        render_bucket_markdown(&report.discovery_sources),
+        render_bucket_markdown(&report.participation_reasons),
+        render_bucket_markdown(&report.useful_labels),
+        render_bucket_markdown(&report.trust_payment_signals),
+        render_bucket_markdown(&report.friction_points),
+        render_bucket_markdown(&report.agent_workflows),
+    )
+}
+
+fn render_bucket_markdown(buckets: &[ContributorDiscoveryReportBucket]) -> String {
+    if buckets.is_empty() {
+        return "- None".to_string();
+    }
+    buckets
+        .iter()
+        .map(|bucket| {
+            format!(
+                "- {}: {} ({})",
+                bucket.name,
+                bucket.count,
+                bucket.contributors.join(", ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn write_report_file(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create output directory {}", parent.display()))?;
+    }
+    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
 async fn production_smoke(
@@ -4939,4 +5714,68 @@ fn spawn_service(path: &Path, envs: &[(&str, &str)], database_url: Option<&str>)
 fn stop_child(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_report_handles_structured_noisy_partial_and_duplicate_records() {
+        let report =
+            build_discovery_report_from_str(include_str!("../fixtures/discovery_answers.json"))
+                .expect("fixture should build a discovery report");
+
+        assert_eq!(report.total_records, 6);
+        assert_eq!(report.answered_records, 5);
+        assert_eq!(report.partial_answer_records, 1);
+        assert_eq!(report.missing_answer_records, 1);
+        assert_eq!(report.unique_contributors, 5);
+        assert_eq!(report.duplicate_contributors, vec!["codeboost-tr"]);
+        assert!(bucket_count(&report.discovery_sources, "github") >= 3);
+        assert!(bucket_count(&report.discovery_sources, "machine-discovery") >= 1);
+        assert!(bucket_count(&report.participation_reasons, "payout") >= 2);
+        assert!(bucket_count(&report.participation_reasons, "clear-scope") >= 2);
+        assert!(bucket_count(&report.trust_payment_signals, "base-usdc-escrow") >= 1);
+        assert!(bucket_count(&report.trust_payment_signals, "deterministic-verification") >= 2);
+        assert!(bucket_count(&report.friction_points, "stale-docs-or-contract") >= 1);
+    }
+
+    #[test]
+    fn discovery_report_writes_parent_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-bounties-discovery-report-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let fixture = root.join("input").join("answers.json");
+        let json_out = root.join("reports").join("discovery-report.json");
+        let markdown_out = root.join("reports").join("discovery-report.md");
+        fs::create_dir_all(fixture.parent().expect("fixture parent should exist"))
+            .expect("should create temp fixture parent");
+        fs::write(&fixture, include_str!("../fixtures/discovery_answers.json"))
+            .expect("should write temp fixture");
+
+        discovery_report(
+            fixture.to_string_lossy().to_string(),
+            Some(json_out.to_string_lossy().to_string()),
+            Some(markdown_out.to_string_lossy().to_string()),
+        )
+        .expect("report command should write outputs");
+
+        let json = fs::read_to_string(&json_out).expect("json report should exist");
+        let markdown = fs::read_to_string(&markdown_out).expect("markdown report should exist");
+        assert!(json.contains("\"duplicate_contributors\""));
+        assert!(markdown.contains("# Contributor Discovery Report"));
+        assert!(markdown.contains("base-usdc-escrow"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn bucket_count(buckets: &[ContributorDiscoveryReportBucket], name: &str) -> usize {
+        buckets
+            .iter()
+            .find(|bucket| bucket.name == name)
+            .map(|bucket| bucket.count)
+            .unwrap_or_default()
+    }
 }

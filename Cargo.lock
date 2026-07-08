@@ -425,6 +425,7 @@ dependencies = [
  "payments-stripe",
  "reqwest",
  "risk",
+ "serde",
  "serde_json",
  "tokio",
  "uuid",
