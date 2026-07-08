@@ -1736,21 +1736,23 @@ fn discovery(public_base_url: String, mcp_base_url: String) -> Result<()> {
 
 async fn discovery_import(args: DiscoveryImportArgs) -> Result<()> {
     let client = reqwest::Client::new();
-    let mut issue_req = client.get(format!(
-        "https://api.github.com/repos/{}/issues/{}",
-        args.repository, args.issue_number
-    ))
-    .header("User-Agent", "agent-bounties-cli");
+    let mut issue_req = client
+        .get(format!(
+            "https://api.github.com/repos/{}/issues/{}",
+            args.repository, args.issue_number
+        ))
+        .header("User-Agent", "agent-bounties-cli");
     if let Some(token) = &args.github_token {
         issue_req = issue_req.header("Authorization", format!("Bearer {}", token));
     }
     let issue_res: serde_json::Value = issue_req.send().await?.json().await?;
 
-    let mut comments_req = client.get(format!(
-        "https://api.github.com/repos/{}/issues/{}/comments",
-        args.repository, args.issue_number
-    ))
-    .header("User-Agent", "agent-bounties-cli");
+    let mut comments_req = client
+        .get(format!(
+            "https://api.github.com/repos/{}/issues/{}/comments",
+            args.repository, args.issue_number
+        ))
+        .header("User-Agent", "agent-bounties-cli");
     if let Some(token) = &args.github_token {
         comments_req = comments_req.header("Authorization", format!("Bearer {}", token));
     }
@@ -1758,22 +1760,42 @@ async fn discovery_import(args: DiscoveryImportArgs) -> Result<()> {
 
     let mut records = Vec::new();
 
-    if let Some(author) = issue_res.get("user").and_then(|u| u.get("login")).and_then(|l| l.as_str()) {
+    if let Some(author) = issue_res
+        .get("user")
+        .and_then(|u| u.get("login"))
+        .and_then(|l| l.as_str())
+    {
         if let Some(body) = issue_res.get("body").and_then(|b| b.as_str()) {
             let mut record = serde_json::Map::new();
-            record.insert("contributor".to_string(), serde_json::Value::String(author.to_string()));
-            record.insert("body".to_string(), serde_json::Value::String(body.to_string()));
+            record.insert(
+                "contributor".to_string(),
+                serde_json::Value::String(author.to_string()),
+            );
+            record.insert(
+                "body".to_string(),
+                serde_json::Value::String(body.to_string()),
+            );
             records.push(serde_json::Value::Object(record));
         }
     }
 
     if let Some(comments_array) = comments_res.as_array() {
         for comment in comments_array {
-            if let Some(author) = comment.get("user").and_then(|u| u.get("login")).and_then(|l| l.as_str()) {
+            if let Some(author) = comment
+                .get("user")
+                .and_then(|u| u.get("login"))
+                .and_then(|l| l.as_str())
+            {
                 if let Some(body) = comment.get("body").and_then(|b| b.as_str()) {
                     let mut record = serde_json::Map::new();
-                    record.insert("contributor".to_string(), serde_json::Value::String(author.to_string()));
-                    record.insert("body".to_string(), serde_json::Value::String(body.to_string()));
+                    record.insert(
+                        "contributor".to_string(),
+                        serde_json::Value::String(author.to_string()),
+                    );
+                    record.insert(
+                        "body".to_string(),
+                        serde_json::Value::String(body.to_string()),
+                    );
                     records.push(serde_json::Value::Object(record));
                 }
             }
@@ -2206,7 +2228,15 @@ fn classify_discovery_source(text: &str) -> Vec<String> {
     }
     if contains_any(
         &lower,
-        &["reddit", "discord", "telegram", "farcaster", "bluesky", "algora", "bounties network"],
+        &[
+            "reddit",
+            "discord",
+            "telegram",
+            "farcaster",
+            "bluesky",
+            "algora",
+            "bounties network",
+        ],
     ) {
         values.push("community-or-bounty-board");
     }
@@ -2331,7 +2361,17 @@ fn detect_trust_payment_signals(text: &str) -> Vec<String> {
     if lower.contains("stripe") {
         values.push("stripe-fiat");
     }
-    if contains_any(&lower, &["escrow", "upfront", "locked", "smart contract", "payment guaranteed", "guarantee"]) {
+    if contains_any(
+        &lower,
+        &[
+            "escrow",
+            "upfront",
+            "locked",
+            "smart contract",
+            "payment guaranteed",
+            "guarantee",
+        ],
+    ) {
         values.push("locked-escrow-trust");
     }
     if contains_any(
@@ -2389,7 +2429,17 @@ fn detect_friction_points(text: &str) -> Vec<String> {
     if contains_any(&lower, &["wallet", "onboarding", "connect account"]) {
         values.push("wallet-or-onboarding");
     }
-    if contains_any(&lower, &["gas", "bridge", "kyc", "rpc error", "network fee", "fund wallet"]) {
+    if contains_any(
+        &lower,
+        &[
+            "gas",
+            "bridge",
+            "kyc",
+            "rpc error",
+            "network fee",
+            "fund wallet",
+        ],
+    ) {
         values.push("network-or-kyc-friction");
     }
     values.into_iter().map(ToString::to_string).collect()
@@ -5837,7 +5887,8 @@ mod tests {
             "body": "How did you find Agent Bounties? GitHub issues. What made this bounty worth participating in? 30 USDC bounty."
           }
         ]"#;
-        let report = build_discovery_report_from_str(fixture_str).expect("fixture should build a discovery report");
+        let report = build_discovery_report_from_str(fixture_str)
+            .expect("fixture should build a discovery report");
 
         assert_eq!(report.total_records, 5);
         assert_eq!(report.answered_records, 4);
@@ -5856,10 +5907,14 @@ mod tests {
 
     #[test]
     fn real_fixture_builds_successfully() {
-        let report = build_discovery_report_from_str(include_str!("../fixtures/discovery_answers.json"))
-            .expect("real fixture should build successfully");
+        let report =
+            build_discovery_report_from_str(include_str!("../fixtures/discovery_answers.json"))
+                .expect("real fixture should build successfully");
         assert!(report.total_records > 0);
-        assert_eq!(report.missing_answer_records, 0, "Real fixture should not contain pending/missing answers");
+        assert_eq!(
+            report.missing_answer_records, 0,
+            "Real fixture should not contain pending/missing answers"
+        );
     }
 
     #[test]
