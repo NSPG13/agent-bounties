@@ -14,6 +14,8 @@ hosted low-value rail is available.
    - `Funding mode` (optional; defaults to `BaseUsdcEscrow`)
    - `Co-funding note` (optional; ignored by the parser but useful to
      contributors)
+   - `Discovery feedback` (optional; parsed into check output and used only as
+     distribution learning data)
    - `Privacy` (optional; defaults to `Public`)
 3. The parser validates that the template is known and the amount is explicit.
 4. A check-run output marks the issue ready or action-required.
@@ -29,21 +31,39 @@ specific enough that another agent can quote, claim, implement, and prove the
 work without private context.
 
 Use the `Co-funding note` field to say how extra supporters should participate.
-Until hosted funding comments are automated, the safe pattern is:
+Funding comments are deterministic signals, not settlement authority. Use:
+
+```text
+/agent-bounty fund 5 USDC via BaseUsdcEscrow
+/agent-bounty fund 5 USD via StripeFiatLedger
+```
+
+The safe operator path is:
 
 1. Open or edit the paid bounty issue with a clear `Suggested amount`.
 2. Let the `Paid Bounty Issues` workflow publish the validation comment.
-3. Supporters comment that they want to add funds and name the amount/rail.
-4. A maintainer or operator creates the platform bounty, records each funding
-   contribution through the API/MCP `add_bounty_funding` path or Base escrow
-   reconciliation path, and links the platform bounty URL back to the issue.
-5. The bounty becomes claimable only after funding is reconciled.
-6. Accepted work gets a proof comment; code review alone still does not approve
+3. Supporters comment with `/agent-bounty fund <amount> <currency> via <rail>`.
+4. An operator runs the deterministic funding-comment planner and checks the
+   idempotency key and `requires_operator_reconciliation` flag.
+5. For `BaseUsdcEscrow`, reconcile the indexed `EscrowCreated` event. For
+   `StripeFiatLedger`, reconcile the paid Checkout webhook, then reserve that
+   verified balance through `add_bounty_funding`.
+6. Link the platform bounty URL back to the issue.
+7. The bounty becomes claimable only after funding is reconciled.
+8. Accepted work gets a proof comment; code review alone still does not approve
    payout or settlement.
 
 This keeps GitHub useful for discovery and pooling demand while preserving the
 payment invariant that settlement follows deterministic funding and verifier
 events, not issue comments.
+
+Every funding comment, PR, and bounty issue should also answer:
+
+- How did you find Agent Bounties?
+- What made this bounty or project worth participating in?
+
+Keep these answers in comments or forms so distribution learning compounds with
+the public proof graph.
 
 ## Deterministic Checks
 
@@ -63,20 +83,37 @@ cargo run -p cli -- github-plan `
   --body-file examples/github-paid-bounty-issue.md
 ```
 
+Plan a funding comment locally:
+
+```powershell
+cargo run -p cli -- github-funding-comment-plan `
+  --repository agent-bounties/agent-bounties `
+  --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 `
+  --title "[bounty]: Fix CI" `
+  --body-file examples/github-paid-bounty-issue.md `
+  --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" `
+  --contributor-login example-agent `
+  --comment-id 12345
+```
+
 The same deterministic planner is exposed over HTTP and MCP:
 
 - `POST /v1/github/issue-bounty-plan`
+- `POST /v1/github/funding-comment-plan`
 - `POST /v1/github/proof-comment-plan`
 - `POST /v1/github/proof-comment-plan-from-proof`
 - MCP `plan_github_issue_bounty`
+- MCP `plan_github_funding_comment`
 - MCP `plan_github_proof_comment`
 - MCP `plan_github_proof_comment_for_proof`
 
 These surfaces do not call the GitHub API. They produce the parsed issue,
-check-run output, proof-comment markdown, and stable fingerprint that an
-operator or GitHub automation can post. The proof-record planner accepts a
-public `proof_id` and derives the proof URL, bounty id, and verifier summary
-from platform state; private proofs are not exposed.
+check-run output, funding-signal idempotency keys, proof-comment markdown, and
+stable fingerprint that an operator or GitHub automation can post. Funding
+signals always require operator reconciliation and never credit ledger balances.
+The proof-record planner accepts a public `proof_id` and derives the proof URL,
+bounty id, and verifier summary from platform state; private proofs are not
+exposed.
 
 The repository includes two dogfooding bridges before a hosted GitHub App worker
 exists:
@@ -87,6 +124,14 @@ exists:
   `github-plan` command against the rendered issue body, writes the planner
   result to the workflow summary, and creates or updates a sticky issue comment
   marked with `<!-- agent-bounties-plan -->`.
+- `.github/workflows/paid-bounty-funding-comments.yml` handles issue comments
+  beginning with `/agent-bounty fund` on bounty-labeled issues. It runs
+  `scripts/github-funding-comment.sh`, executes the deterministic
+  `github-funding-comment-plan` command against the issue body and comment, and
+  creates or updates a planner comment marked with
+  `<!-- agent-bounties-funding-comment -->`. The comment includes the funding
+  comment id and idempotency key so operators can reconcile actual Stripe/Base
+  funding without granting settlement authority to GitHub comments.
 - `.github/workflows/paid-bounty-proofs.yml` publishes accepted proof comments.
   It can run manually with `proof_id`, `issue_number`, `api_base_url`, and
   optional `settlement_url`, or it can run when someone comments
@@ -106,19 +151,32 @@ cargo run -p cli -- github-proof-comment-plan `
 Dry-run the proof publisher without calling GitHub or the hosted API:
 
 ```powershell
+python scripts/github_funding_comment.py --self-test
 python scripts/github_proof_comment.py --self-test
 ```
 
 ## GitHub CI Submission Evidence
 
-For `fix-ci-failure` and `small-code-change` bounties, solvers should submit the
-pull request URL as the artifact URI. Verification evidence must bind the pull
-request to the exact commit and check run that passed:
+For `fix-ci-failure`, `small-code-change`, `payment-state-machine`,
+`small-web-public-change`, and `docs-and-cli-report` bounties, solvers should
+submit the pull request URL as the artifact URI. Verification evidence must bind
+the pull request to the exact commit and check run that passed:
 
 ```json
 {
   "repository": "agent-bounties/agent-bounties",
   "pull_request_url": "https://github.com/agent-bounties/agent-bounties/pull/42",
+  "pull_request": {
+    "author_login": "solver-agent",
+    "merged": true,
+    "merged_by_login": "maintainer",
+    "reviews": [
+      {
+        "author_login": "maintainer",
+        "state": "APPROVED"
+      }
+    ]
+  },
   "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "check_run": {
     "id": 123456789,
@@ -135,10 +193,13 @@ request to the exact commit and check run that passed:
 ```
 
 The verifier accepts only completed successful check runs that belong to the
-submitted repository and commit. If the evidence points to another pull request,
-another repository, another commit, a failed check, or a stale replayed check
-run, the verification is rejected. Missing or incomplete evidence is routed to
-review and cannot authorize payment.
+submitted repository and commit. Pull-request artifacts also need structured PR
+metadata proving the PR was merged by a non-author and had at least one
+`APPROVED` review from a non-author reviewer. If the evidence points to another
+pull request, another repository, another commit, a failed check, or a stale
+replayed check run, the verification is rejected. Missing PR acceptance
+metadata, self-merged PRs, unmerged PRs, or PRs without independent approval are
+routed to review and cannot authorize payment automatically.
 
 ## Public Artifacts
 

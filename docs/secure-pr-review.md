@@ -42,6 +42,10 @@ executing code from the PR.
   `crates/`, dependency manifests, or lockfiles require manual review.
 - Automation can post review comments or request changes, but it must not merge,
   approve payment, or approve a bounty payout.
+- Successful CI is not enough to authorize bounty settlement for PR artifacts.
+  Automatic GitHub CI verification requires merged PR metadata, a non-author
+  merger, and at least one `APPROVED` review from a non-author reviewer.
+  Self-merged, unmerged, or unreviewed PR evidence must stay in review.
 
 ## Review Lanes
 
