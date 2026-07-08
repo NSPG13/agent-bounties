@@ -3182,20 +3182,7 @@ async fn production_smoke_check(
             .is_some(),
         "Base indexer status must expose an indexer_ready boolean",
     )?;
-    require(
-        base_indexer_status
-            .pointer("/evidence_boundaries")
-            .and_then(|value| value.as_array())
-            .map(|boundaries| {
-                boundaries.iter().any(|boundary| {
-                    boundary
-                        .as_str()
-                        .is_some_and(|text| text.contains("does not fund"))
-                })
-            })
-            .unwrap_or(false),
-        "Base indexer status must state that status evidence is not settlement",
-    )?;
+    require_base_indexer_status_contract(&base_indexer_status, "Base indexer status")?;
 
     let bounty_feed_url =
         value_str(&discovery, "/endpoints/bounty_feed").context("bounty feed url missing")?;
@@ -4062,6 +4049,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .is_some(),
         "API Base indexer status must expose indexer_ready boolean",
     )?;
+    require_base_indexer_status_contract(&api_base_indexer_status, "API Base indexer status")?;
     let mcp_base_indexer_status = mcp_tool_post(
         mcp,
         "get_base_indexer_status",
@@ -4071,20 +4059,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         mcp_base_indexer_status.pointer("/network_chain_id") == Some(&serde_json::json!(8_453)),
         "MCP get_base_indexer_status must expose Base mainnet chain id",
     )?;
-    require(
-        mcp_base_indexer_status
-            .pointer("/evidence_boundaries")
-            .and_then(|value| value.as_array())
-            .map(|boundaries| {
-                boundaries.iter().any(|boundary| {
-                    boundary
-                        .as_str()
-                        .is_some_and(|text| text.contains("does not fund"))
-                })
-            })
-            .unwrap_or(false),
-        "MCP get_base_indexer_status must state that status evidence is not settlement",
-    )?;
+    require_base_indexer_status_contract(&mcp_base_indexer_status, "MCP get_base_indexer_status")?;
 
     let mcp_risk_bounty = post_json(
         &format!("{mcp}/tools/post_bounty"),
@@ -6254,6 +6229,70 @@ fn require(condition: bool, message: &str) -> Result<()> {
         bail!("{message}");
     }
     Ok(())
+}
+
+fn require_base_indexer_status_contract(value: &serde_json::Value, context: &str) -> Result<()> {
+    require(
+        value
+            .pointer("/heartbeat_found")
+            .and_then(|field| field.as_bool())
+            .is_some(),
+        &format!("{context} must expose heartbeat_found boolean"),
+    )?;
+    require(
+        value
+            .pointer("/worker_healthy")
+            .is_some_and(|field| field.is_boolean() || field.is_null()),
+        &format!("{context} must expose nullable worker_healthy boolean"),
+    )?;
+    for field in [
+        "/last_poll_status",
+        "/last_poll_started_at",
+        "/last_poll_completed_at",
+        "/last_poll_skipped_reason",
+        "/last_poll_error_message",
+        "/heartbeat_updated_at",
+    ] {
+        require(
+            value
+                .pointer(field)
+                .is_some_and(|field| field.is_string() || field.is_null()),
+            &format!("{context} must expose nullable string field {field}"),
+        )?;
+    }
+    for field in [
+        "/last_poll_latest_block",
+        "/last_poll_confirmed_to_block",
+        "/last_poll_from_block",
+        "/last_poll_to_block",
+        "/last_poll_fetched_logs",
+        "/last_poll_persisted_cursor_block",
+    ] {
+        require(
+            value
+                .pointer(field)
+                .is_some_and(|field| field.as_u64().is_some() || field.is_null()),
+            &format!("{context} must expose nullable numeric field {field}"),
+        )?;
+    }
+    require(
+        value
+            .pointer("/evidence_boundaries")
+            .and_then(|field| field.as_array())
+            .map(|boundaries| {
+                boundaries.iter().any(|boundary| {
+                    boundary
+                        .as_str()
+                        .is_some_and(|text| text.contains("does not fund"))
+                }) && boundaries.iter().any(|boundary| {
+                    boundary.as_str().is_some_and(|text| {
+                        text.contains("heartbeat proves only the last recorded poll outcome")
+                    })
+                })
+            })
+            .unwrap_or(false),
+        &format!("{context} must state cursor and heartbeat status are not settlement"),
+    )
 }
 
 fn require_agent_paid_status(value: &serde_json::Value, message: &str) -> Result<()> {

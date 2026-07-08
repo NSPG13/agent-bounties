@@ -288,8 +288,50 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "Base indexer status did not expose an indexer_ready boolean",
     )
     _require(
+        isinstance(base_indexer_status.get("heartbeat_found"), bool),
+        "Base indexer status did not expose a heartbeat_found boolean",
+    )
+    _require(
+        base_indexer_status.get("worker_healthy") is None
+        or isinstance(base_indexer_status.get("worker_healthy"), bool),
+        "Base indexer status did not expose nullable worker_healthy",
+    )
+    for field in (
+        "last_poll_status",
+        "last_poll_started_at",
+        "last_poll_completed_at",
+        "last_poll_skipped_reason",
+        "last_poll_error_message",
+        "heartbeat_updated_at",
+    ):
+        value = base_indexer_status.get(field)
+        _require(
+            value is None or isinstance(value, str),
+            f"Base indexer status did not expose nullable string field {field}",
+        )
+    for field in (
+        "last_poll_latest_block",
+        "last_poll_confirmed_to_block",
+        "last_poll_from_block",
+        "last_poll_to_block",
+        "last_poll_fetched_logs",
+        "last_poll_persisted_cursor_block",
+    ):
+        value = base_indexer_status.get(field)
+        _require(
+            value is None or type(value) is int,
+            f"Base indexer status did not expose nullable numeric field {field}",
+        )
+    _require(
         any("does not fund" in boundary for boundary in base_indexer_status["evidence_boundaries"]),
         "Base indexer status did not explain that status evidence is not settlement",
+    )
+    _require(
+        any(
+            "heartbeat proves only the last recorded poll outcome" in boundary
+            for boundary in base_indexer_status["evidence_boundaries"]
+        ),
+        "Base indexer status did not explain the heartbeat evidence boundary",
     )
     try:
         client.post_bounty(
