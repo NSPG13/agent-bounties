@@ -704,6 +704,36 @@ class AgentBountiesClient:
             },
         )
 
+    def plan_github_claim_comment(
+        self,
+        repository: str,
+        issue_url: str,
+        title: str,
+        body: str,
+        comment_body: str,
+        contributor_login: str | None = None,
+        comment_id: str | None = None,
+        claim_age_minutes: int | None = None,
+        progress_signal_count: int = 0,
+        active_claim_login: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/github/claim-comment-plan",
+            json={
+                "repository": repository,
+                "issue_url": issue_url,
+                "title": title,
+                "body": body,
+                "comment_body": comment_body,
+                "contributor_login": contributor_login,
+                "comment_id": comment_id,
+                "claim_age_minutes": claim_age_minutes,
+                "progress_signal_count": progress_signal_count,
+                "active_claim_login": active_claim_login,
+            },
+        )
+
     def plan_github_proof_comment(
         self,
         bounty_id: str,

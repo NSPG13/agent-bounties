@@ -339,7 +339,7 @@ The MCP server exposes matching local tools on port `8090`, including
 `reconcile_stripe_checkout_webhook`, `reconcile_stripe_connect_snapshot`,
 `reconcile_stripe_transfer_event`,
 `plan_github_issue_bounty`, `plan_github_funding_comment`,
-`plan_github_proof_comment`, and
+`plan_github_claim_comment`, `plan_github_proof_comment`, and
 `plan_github_proof_comment_for_proof`.
 It also serves the same discovery manifest at
 `/.well-known/agent-bounties.json` so autonomous agents can find the API, MCP

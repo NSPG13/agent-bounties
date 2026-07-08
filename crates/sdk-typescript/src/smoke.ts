@@ -56,6 +56,17 @@ function githubCiEvidence(): JsonObject {
   return {
     repository: "example/repo",
     pull_request_url: "https://github.com/example/repo/pull/1",
+    pull_request: {
+      author_login: "solver-agent",
+      merged: true,
+      merged_by_login: "maintainer",
+      reviews: [
+        {
+          author_login: "maintainer",
+          state: "APPROVED",
+        },
+      ],
+    },
     commit_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     check_run: {
       id: 123456789,
@@ -161,6 +172,10 @@ async function main(): Promise<void> {
     "discovery schema must require the GitHub funding comment planner endpoint",
   );
   requireCondition(
+    endpointRequired.includes("github_claim_comment_plan"),
+    "discovery schema must require the GitHub claim comment planner endpoint",
+  );
+  requireCondition(
     endpointRequired.includes("base_escrow_events"),
     "discovery schema must require the Base escrow event endpoint",
   );
@@ -223,6 +238,10 @@ async function main(): Promise<void> {
   requireCondition(
     typeof endpoints.github_funding_comment_plan === "string",
     "discovery manifest missing GitHub funding comment planner endpoint",
+  );
+  requireCondition(
+    typeof endpoints.github_claim_comment_plan === "string",
+    "discovery manifest missing GitHub claim comment planner endpoint",
   );
   requireCondition(
     typeof endpoints.github_proof_comment_plan === "string",
@@ -540,6 +559,40 @@ async function main(): Promise<void> {
   requireCondition(
     githubFundingSignal.requires_operator_reconciliation === true,
     "GitHub funding comment planner must require operator reconciliation",
+  );
+  const githubClaimPlan = asObject(
+    await client.planGitHubClaimComment({
+      repository: "agent-bounties/agent-bounties",
+      issue_url: "https://github.com/agent-bounties/agent-bounties/issues/1",
+      title: "[bounty]: Fix CI",
+      body:
+        "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n",
+      comment_body: "/agent-bounty claim\nPlan: open a focused PR and run cargo test -p github-app.",
+      contributor_login: "typescript-sdk-smoke",
+      comment_id: "12346",
+      claim_age_minutes: 5,
+      progress_signal_count: 1,
+    }),
+    "githubClaimPlan",
+  );
+  requireCondition(
+    githubClaimPlan.ready === true,
+    "GitHub claim comment planner rejected progress-backed claim",
+  );
+  const githubClaimSignal = asObject(githubClaimPlan.signal, "githubClaimPlan.signal");
+  requireCondition(
+    githubClaimSignal.decision === "Reserved",
+    "GitHub claim comment planner did not reserve progress-backed claim",
+  );
+  requireCondition(
+    githubClaimSignal.settlement_authority === false,
+    "GitHub claim comment planner must not authorize payment settlement",
+  );
+  requireCondition(
+    stringField(asObject(githubClaimPlan.check, "githubClaimPlan.check"), "text").includes(
+      "How did you find Agent Bounties?",
+    ),
+    "GitHub claim comment planner must carry the distribution feedback prompt",
   );
   const githubProofPlan = asObject(
     await client.planGitHubProofComment({
