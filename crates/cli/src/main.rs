@@ -80,6 +80,25 @@ struct DiscoveryImportArgs {
     issue_number: u64,
     #[arg(long, env = "GITHUB_TOKEN")]
     github_token: Option<String>,
+    #[arg(long, default_value = "https://api.github.com")]
+    api_base_url: String,
+}
+
+fn parse_github_link_next(link_header: &str) -> Option<String> {
+    for part in link_header.split(',') {
+        let mut segments = part.split(';');
+        if let Some(url_part) = segments.next() {
+            if let Some(rel_part) = segments.next() {
+                if rel_part.trim() == "rel=\"next\"" {
+                    let url = url_part.trim();
+                    if url.starts_with('<') && url.ends_with('>') {
+                        return Some(url[1..url.len() - 1].to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 #[derive(Subcommand)]
@@ -1738,25 +1757,19 @@ async fn discovery_import(args: DiscoveryImportArgs) -> Result<()> {
     let client = reqwest::Client::new();
     let mut issue_req = client
         .get(format!(
-            "https://api.github.com/repos/{}/issues/{}",
-            args.repository, args.issue_number
+            "{}/repos/{}/issues/{}",
+            args.api_base_url, args.repository, args.issue_number
         ))
         .header("User-Agent", "agent-bounties-cli");
     if let Some(token) = &args.github_token {
         issue_req = issue_req.header("Authorization", format!("Bearer {}", token));
     }
-    let issue_res: serde_json::Value = issue_req.send().await?.json().await?;
-
-    let mut comments_req = client
-        .get(format!(
-            "https://api.github.com/repos/{}/issues/{}/comments",
-            args.repository, args.issue_number
-        ))
-        .header("User-Agent", "agent-bounties-cli");
-    if let Some(token) = &args.github_token {
-        comments_req = comments_req.header("Authorization", format!("Bearer {}", token));
-    }
-    let comments_res: serde_json::Value = comments_req.send().await?.json().await?;
+    let issue_res_obj = issue_req
+        .send()
+        .await?
+        .error_for_status()
+        .context("Failed to fetch issue. Check token and repository/issue existence.")?;
+    let issue_res: serde_json::Value = issue_res_obj.json().await?;
 
     let mut records = Vec::new();
 
@@ -1779,31 +1792,65 @@ async fn discovery_import(args: DiscoveryImportArgs) -> Result<()> {
         }
     }
 
-    if let Some(comments_array) = comments_res.as_array() {
-        for comment in comments_array {
-            if let Some(author) = comment
-                .get("user")
-                .and_then(|u| u.get("login"))
-                .and_then(|l| l.as_str())
-            {
-                if let Some(body) = comment.get("body").and_then(|b| b.as_str()) {
-                    let mut record = serde_json::Map::new();
-                    record.insert(
-                        "contributor".to_string(),
-                        serde_json::Value::String(author.to_string()),
-                    );
-                    record.insert(
-                        "body".to_string(),
-                        serde_json::Value::String(body.to_string()),
-                    );
-                    records.push(serde_json::Value::Object(record));
+    let mut comments_url = format!(
+        "{}/repos/{}/issues/{}/comments?per_page=100",
+        args.api_base_url, args.repository, args.issue_number
+    );
+
+    loop {
+        let mut comments_req = client
+            .get(&comments_url)
+            .header("User-Agent", "agent-bounties-cli");
+        if let Some(token) = &args.github_token {
+            comments_req = comments_req.header("Authorization", format!("Bearer {}", token));
+        }
+        let comments_res_obj = comments_req
+            .send()
+            .await?
+            .error_for_status()
+            .context("Failed to fetch comments.")?;
+
+        let link_header = comments_res_obj
+            .headers()
+            .get(reqwest::header::LINK)
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+
+        let comments_res: serde_json::Value = comments_res_obj.json().await?;
+
+        if let Some(comments_array) = comments_res.as_array() {
+            for comment in comments_array {
+                if let Some(author) = comment
+                    .get("user")
+                    .and_then(|u| u.get("login"))
+                    .and_then(|l| l.as_str())
+                {
+                    if let Some(body) = comment.get("body").and_then(|b| b.as_str()) {
+                        let mut record = serde_json::Map::new();
+                        record.insert(
+                            "contributor".to_string(),
+                            serde_json::Value::String(author.to_string()),
+                        );
+                        record.insert(
+                            "body".to_string(),
+                            serde_json::Value::String(body.to_string()),
+                        );
+                        records.push(serde_json::Value::Object(record));
+                    }
                 }
             }
         }
+
+        if let Some(link) = link_header {
+            if let Some(next_url) = parse_github_link_next(&link) {
+                comments_url = next_url;
+                continue;
+            }
+        }
+        break;
     }
 
-    let json = serde_json::to_string_pretty(&records)?;
-    println!("{}", json);
+    println!("{}", serde_json::to_string_pretty(&records)?);
     Ok(())
 }
 
@@ -5857,6 +5904,46 @@ fn stop_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_github_link_next_extracts_url_correctly() {
+        let link_header = "<https://api.github.com/repositories/123/issues/1/comments?per_page=100&page=2>; rel=\"next\", <https://api.github.com/repositories/123/issues/1/comments?per_page=100&page=3>; rel=\"last\"";
+        assert_eq!(
+            parse_github_link_next(link_header).unwrap(),
+            "https://api.github.com/repositories/123/issues/1/comments?per_page=100&page=2"
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_import_handles_errors_deterministically() {
+        use axum::{routing::get, Router};
+        use tokio::net::TcpListener;
+
+        let app = Router::new().route(
+            "/repos/test/test/issues/1",
+            get(|| async { (axum::http::StatusCode::NOT_FOUND, "Not Found") }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let args = DiscoveryImportArgs {
+            repository: "test/test".to_string(),
+            issue_number: 1,
+            github_token: None,
+            api_base_url: format!("http://{}", addr),
+        };
+
+        let result = discovery_import(args).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to fetch issue"));
+    }
 
     #[test]
     fn discovery_report_handles_structured_noisy_partial_and_duplicate_records() {

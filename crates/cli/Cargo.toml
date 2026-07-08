@@ -26,3 +26,6 @@ tokio.workspace = true
 uuid.workspace = true
 verifier-sdk = { path = "../verifier-sdk" }
 web-public = { path = "../web-public" }
+
+[dev-dependencies]
+axum.workspace = true
