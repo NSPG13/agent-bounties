@@ -2258,6 +2258,7 @@ fn public_bounty_page_model(
         .filter(|proof| proof.privacy != PrivacyLevel::Private)
         .map(|proof| format!("{api}/public/proofs/{}", proof.id))
         .collect();
+    let public_bounty_url = format!("{api}/public/bounties/{}", bounty.id);
     let funding_partitions = status
         .funding_summary
         .partitions
@@ -2277,16 +2278,30 @@ fn public_bounty_page_model(
         .verifier_results
         .iter()
         .map(|result| web_public::PublicBountyRecordLink {
-            label: format!("{:?} verifier result {}", result.kind, result.id),
-            url: format!("{api}/v1/bounties/{}#verifier-results", bounty.id),
+            label: format!(
+                "{:?} {:?} verifier result {}",
+                result.kind, result.decision, result.id
+            ),
+            url: format!("{public_bounty_url}#verifier-results"),
         })
         .collect();
     let settlement_links = status
         .settlements
         .iter()
-        .map(|settlement| web_public::PublicBountyRecordLink {
-            label: format!("{:?} settlement {}", settlement.rail, settlement.id),
-            url: format!("{api}/v1/bounties/{}#settlements", bounty.id),
+        .map(|settlement| {
+            let paid_payouts = settlement
+                .payout_intents
+                .iter()
+                .filter(|intent| intent.status == PayoutStatus::Paid)
+                .count();
+            let total_payouts = settlement.payout_intents.len();
+            web_public::PublicBountyRecordLink {
+                label: format!(
+                    "{:?} settlement {} ({paid_payouts}/{total_payouts} payouts paid)",
+                    settlement.rail, settlement.id
+                ),
+                url: format!("{public_bounty_url}#settlements"),
+            }
         })
         .collect();
     let template_signal_links = status

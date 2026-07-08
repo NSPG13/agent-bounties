@@ -55,6 +55,8 @@ amounts, funding partitions by rail and currency, contribution and escrow
 counts, co-funding command guidance, machine-readable next actions, public proof
 links, verifier result links, settlement-state links, and reusable template
 signal links.
+Co-funding command guidance is shown only while a public bounty still has
+remaining funding needed and is not paid, refunded, disputed, or expired.
 
 The public page does not expose payer identity, source organization ids,
 contributor agent ids, private proof payloads, Stripe checkout/customer details,

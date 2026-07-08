@@ -846,7 +846,34 @@ pub fn render_bounty_feed_page(items: &[PublicBountyFeedItem]) -> String {
 pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
     let funding_state = public_funding_state_label(item);
     let cofunding_command = public_cofunding_command(item);
+    let cofunding_command_html = cofunding_command
+        .as_deref()
+        .map(|command| {
+            format!(
+                r#"<p>Co-funding command: <code>{}</code></p>"#,
+                escape_html(command)
+            )
+        })
+        .unwrap_or_else(|| "<p>No co-funding action is currently available.</p>".to_string());
     let next_actions = public_bounty_next_actions(item);
+    let payment_link = cofunding_command
+        .as_ref()
+        .map(|_| {
+            format!(
+                r#"<link rel="payment" href="{}">"#,
+                escape_html(&item.funding_contribution_url)
+            )
+        })
+        .unwrap_or_default();
+    let potential_actions = next_actions
+        .iter()
+        .map(|action| {
+            serde_json::json!({
+                "name": action.kind.as_str(),
+                "target": action.href.as_str()
+            })
+        })
+        .collect::<Vec<_>>();
     let partition_rows = render_funding_partition_rows(item);
     let verifier_result_links = render_record_links(
         &item.verifier_result_links,
@@ -907,15 +934,10 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
                 "contribution_count": item.contribution_count,
                 "state": funding_state,
                 "partitions": item.funding_partitions,
-                "cofunding_command": cofunding_command
+                "cofunding_command": cofunding_command.as_deref()
             }
         },
-        "potentialAction": [
-            { "name": "claim", "target": item.claim_url },
-            { "name": "status", "target": item.status_url },
-            { "name": "template", "target": item.template_url },
-            { "name": "funding_contribution", "target": item.funding_contribution_url }
-        ],
+        "potentialAction": potential_actions,
         "proof": item.proof_urls
     });
     let public_status = serde_json::json!({
@@ -929,7 +951,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
             "remaining_minor": item.funding_remaining_minor,
             "contribution_count": item.contribution_count,
             "partitions": item.funding_partitions,
-            "cofunding_command": cofunding_command
+            "cofunding_command": cofunding_command.as_deref()
         },
         "evidence": {
             "proof_urls": item.proof_urls,
@@ -960,7 +982,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
   <meta name="agent-bounty:verification_type" content="{}">
   <link rel="canonical" href="{}">
   <link rel="alternate" type="application/json" href="{}">
-  <link rel="payment" href="{}">
+  {}
   <script type="application/ld+json">{}</script>
   <script type="application/json" id="agent-bounty-public-status">{}</script>
 </head>
@@ -992,7 +1014,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
       <ul>
         {}
       </ul>
-      <p>Co-funding command: <code>{}</code></p>
+      {}
     </section>
     <nav aria-label="Agent actions">
       <ul>
@@ -1000,25 +1022,25 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
         <li><a href="/public/bounties">Back to public bounties</a></li>
       </ul>
     </nav>
-    <section>
+    <section id="proof-links">
       <h2>Proof Links</h2>
       <ul>
         {}
       </ul>
     </section>
-    <section>
+    <section id="verifier-results">
       <h2>Verifier Results</h2>
       <ul>
         {}
       </ul>
     </section>
-    <section>
+    <section id="settlements">
       <h2>Settlement State</h2>
       <ul>
         {}
       </ul>
     </section>
-    <section>
+    <section id="template-signals">
       <h2>Reusable Template Signals</h2>
       <ul>
         {}
@@ -1040,7 +1062,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
         escape_html(&item.verification_type),
         escape_html(&item.public_url),
         escape_html(&item.status_url),
-        escape_html(&item.funding_contribution_url),
+        payment_link,
         metadata_json,
         public_status_json,
         escape_html(&item.title),
@@ -1065,7 +1087,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
         escape_html(&item.currency),
         item.contribution_count,
         partition_rows,
-        escape_html(&cofunding_command),
+        cofunding_command_html,
         next_action_links,
         proof_links,
         verifier_result_links,
@@ -1089,12 +1111,15 @@ pub fn public_funding_state_label(item: &PublicBountyPage) -> String {
     }
 }
 
-pub fn public_cofunding_command(item: &PublicBountyPage) -> String {
+pub fn public_cofunding_command(item: &PublicBountyPage) -> Option<String> {
+    if item.funding_remaining_minor <= 0 || is_terminal_public_status(&item.status) {
+        return None;
+    }
+
     let partition = item
         .funding_partitions
         .iter()
-        .find(|partition| partition.remaining_minor > 0)
-        .or_else(|| item.funding_partitions.first());
+        .find(|partition| partition.remaining_minor > 0);
     let rail = partition
         .map(|partition| partition.rail.as_str())
         .unwrap_or(item.funding_mode.as_str());
@@ -1109,19 +1134,13 @@ pub fn public_cofunding_command(item: &PublicBountyPage) -> String {
                 partition.target_minor
             }
         })
-        .unwrap_or_else(|| {
-            if item.funding_remaining_minor > 0 {
-                item.funding_remaining_minor
-            } else {
-                item.funding_target_minor
-            }
-        });
-    format!(
+        .unwrap_or(item.funding_remaining_minor);
+    Some(format!(
         "/agent-bounty fund {} {} via {}",
         format_command_amount(amount_minor, currency),
         currency.to_ascii_uppercase(),
         rail
-    )
+    ))
 }
 
 pub fn public_bounty_next_actions(item: &PublicBountyPage) -> Vec<PublicBountyNextAction> {
@@ -2010,11 +2029,11 @@ mod tests {
             }],
             verifier_result_links: vec![PublicBountyRecordLink {
                 label: "GitHubCi verifier result".to_string(),
-                url: "https://network.example/v1/bounties/1#verifier-results".to_string(),
+                url: "https://network.example/public/bounties/1#verifier-results".to_string(),
             }],
             settlement_links: vec![PublicBountyRecordLink {
                 label: "BaseUsdc settlement".to_string(),
-                url: "https://network.example/v1/bounties/1#settlements".to_string(),
+                url: "https://network.example/public/bounties/1#settlements".to_string(),
             }],
             template_signal_links: vec![PublicBountyRecordLink {
                 label: "fix-ci-failure template signal".to_string(),
@@ -2040,6 +2059,10 @@ mod tests {
         assert!(html.contains("Reusable Template Signals"));
         assert!(html.contains("https://network.example/public/proofs/1"));
         assert!(html.contains("https://network.example/v1/bounties/1/funding-contributions"));
+        assert!(html.contains("https://network.example/public/bounties/1#verifier-results"));
+        assert!(html.contains("https://network.example/public/bounties/1#settlements"));
+        assert!(!html.contains("https://network.example/v1/bounties/1#verifier-results"));
+        assert!(!html.contains("https://network.example/v1/bounties/1#settlements"));
         assert!(!html.contains("</script><script>"));
         assert!(html.contains("&lt;/script&gt;&lt;script&gt;"));
     }
@@ -2047,14 +2070,23 @@ mod tests {
     #[test]
     fn public_bounty_page_labels_payment_states_without_unsafe_claim_ctas() {
         let cases = [
-            ("Funded", 1_000_000, 0, false, "funded", false),
-            ("Claimable", 1_000_000, 0, true, "claimable", true),
-            ("Paid", 1_000_000, 0, false, "paid", false),
-            ("Refunded", 1_000_000, 0, false, "refunded", false),
-            ("Disputed", 1_000_000, 0, false, "disputed", false),
+            ("Funded", 1_000_000, 0, false, "funded", false, false),
+            (
+                "Unfunded",
+                500_000,
+                500_000,
+                false,
+                "partially funded",
+                false,
+                true,
+            ),
+            ("Claimable", 1_000_000, 0, true, "claimable", true, false),
+            ("Paid", 1_000_000, 0, false, "paid", false, false),
+            ("Refunded", 1_000_000, 0, false, "refunded", false, false),
+            ("Disputed", 1_000_000, 0, false, "disputed", false, false),
         ];
 
-        for (status, applied, remaining, claimable, label, should_claim) in cases {
+        for (status, applied, remaining, claimable, label, should_claim, should_command) in cases {
             let item = public_bounty_page_fixture(status, applied, remaining, claimable);
             let html = render_public_bounty_page(&item);
             let state_markup = format!("<dt>State</dt><dd>{label}</dd>");
@@ -2064,6 +2096,16 @@ mod tests {
                 html.contains(r#"data-agent-action="claim""#),
                 should_claim,
                 "{status} claim CTA mismatch"
+            );
+            assert_eq!(
+                html.contains("Co-funding command:"),
+                should_command,
+                "{status} co-funding command mismatch"
+            );
+            assert_eq!(
+                html.contains(r#"rel="payment""#),
+                should_command,
+                "{status} payment link mismatch"
             );
         }
     }
