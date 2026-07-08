@@ -27,8 +27,8 @@ use chain_base::{
 use chrono::Utc;
 use db::PostgresStore;
 use domain::{
-    Agent, Capability, CapabilityClass, EvalRun, HelpRequest, Money, PayoutStatus, PrivacyLevel,
-    RiskEvent, RiskReviewRecord, VerificationDecision, VerifierKind,
+    Agent, BountyStatus, Capability, CapabilityClass, EvalRun, HelpRequest, Money, PayoutStatus,
+    PrivacyLevel, RiskEvent, RiskReviewRecord, VerificationDecision, VerifierKind,
 };
 use eval_harness::{
     bundled_abuse_fixtures, bundled_fixtures, bundled_judge_fixtures, run_eval_loops, AbuseBench,
@@ -85,6 +85,7 @@ use worker::BaseEscrowLogWorker;
         fund_quote,
         list_claimable_bounties,
         public_bounty_feed,
+        public_funding_feed,
         public_capability_feed,
         reconcile_base_escrow_event,
         reconcile_base_evm_logs,
@@ -462,6 +463,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/bounties/pooled", post(open_pooled_bounty))
         .route("/v1/bounties/claimable", get(list_claimable_bounties))
         .route("/v1/bounties/feed", get(public_bounty_feed))
+        .route("/v1/bounties/funding-feed", get(public_funding_feed))
         .route(
             "/v1/bounties/:id/funding-intents",
             post(create_funding_intent),
@@ -537,6 +539,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/public/capabilities", get(public_capability_feed_page))
         .route("/public/verifiers/:kind", get(public_verifier_profile))
         .route("/public/bounties", get(public_bounty_feed_page))
+        .route("/public/funding", get(public_funding_feed_page))
         .route("/public/bounties/:id", get(public_bounty_page))
         .route("/public/templates", get(public_template_index))
         .route("/public/templates/:slug", get(public_template_page))
@@ -932,6 +935,17 @@ async fn public_bounty_feed(
         &bounties,
         &state.public_base_url,
     ))
+}
+
+#[utoipa::path(get, path = "/v1/bounties/funding-feed", responses((status = 200, description = "Public bounties that still need funding")))]
+async fn public_funding_feed(
+    State(state): State<SharedState>,
+) -> Json<Vec<web_public::PublicFundingFeedItem>> {
+    let items = {
+        let network = state.network.lock().expect("state poisoned");
+        public_funding_feed_items(&network, &state.public_base_url)
+    };
+    Json(items)
 }
 
 #[utoipa::path(get, path = "/v1/capabilities/feed", responses((status = 200, description = "Public solver capability feed")))]
@@ -2218,6 +2232,14 @@ async fn public_bounty_feed_page(State(state): State<SharedState>) -> Html<Strin
     Html(web_public::render_bounty_feed_page(&items))
 }
 
+async fn public_funding_feed_page(State(state): State<SharedState>) -> Html<String> {
+    let items = {
+        let network = state.network.lock().expect("state poisoned");
+        public_funding_feed_items(&network, &state.public_base_url)
+    };
+    Html(web_public::render_funding_feed_page(&items))
+}
+
 async fn public_bounty_page(
     State(state): State<SharedState>,
     Path(id): Path<Uuid>,
@@ -2232,6 +2254,95 @@ async fn public_bounty_page(
     Ok(Html(web_public::render_public_bounty_page(
         &public_bounty_page_model(&status, &state.public_base_url),
     )))
+}
+
+fn public_funding_feed_items(
+    network: &BountyNetwork,
+    public_base_url: &str,
+) -> Vec<web_public::PublicFundingFeedItem> {
+    let mut items = network
+        .bounties
+        .values()
+        .filter_map(|bounty| network.status(bounty.id).ok())
+        .filter(public_status_accepts_funding)
+        .map(|status| public_funding_feed_item(&status, public_base_url))
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        public_remaining_partition_count(right)
+            .cmp(&public_remaining_partition_count(left))
+            .then_with(|| right.created_at.cmp(&left.created_at))
+            .then_with(|| left.bounty_id.cmp(&right.bounty_id))
+    });
+    items
+}
+
+fn public_status_accepts_funding(status: &BountyStatusResponse) -> bool {
+    let public_non_terminal = status.bounty.privacy != PrivacyLevel::Private
+        && !matches!(
+            status.bounty.status,
+            BountyStatus::Paid
+                | BountyStatus::Refunded
+                | BountyStatus::Disputed
+                | BountyStatus::Expired
+        );
+    let partition_remaining = status
+        .funding_summary
+        .partitions
+        .iter()
+        .any(|partition| partition.remaining.amount > 0);
+    public_non_terminal && (partition_remaining || status.funding_summary.remaining.amount > 0)
+}
+
+fn public_remaining_partition_count(item: &web_public::PublicFundingFeedItem) -> usize {
+    item.funding_partitions
+        .iter()
+        .filter(|partition| partition.remaining_minor > 0)
+        .count()
+}
+
+fn public_funding_feed_item(
+    status: &BountyStatusResponse,
+    public_base_url: &str,
+) -> web_public::PublicFundingFeedItem {
+    let api = public_base_url.trim_end_matches('/');
+    let bounty = &status.bounty;
+    web_public::PublicFundingFeedItem {
+        bounty_id: bounty.id.to_string(),
+        title: bounty.title.clone(),
+        template_slug: bounty.template_slug.clone(),
+        amount_minor: bounty.amount.amount,
+        currency: bounty.amount.currency.clone(),
+        funding_mode: format!("{:?}", bounty.funding_mode),
+        status: format!("{:?}", bounty.status),
+        privacy: format!("{:?}", bounty.privacy),
+        terms_hash: bounty.terms_hash.clone(),
+        created_at: bounty.created_at.to_rfc3339(),
+        claimable: status.funding_summary.claimable,
+        funding_target_minor: status.funding_summary.target.amount,
+        funding_applied_minor: status.funding_summary.applied.amount,
+        funding_remaining_minor: status.funding_summary.remaining.amount,
+        contribution_count: status.funding_summary.contribution_count,
+        public_url: format!("{api}/public/bounties/{}", bounty.id),
+        status_url: format!("{api}/v1/bounties/{}", bounty.id),
+        template_url: format!("{api}/public/templates/{}", bounty.template_slug),
+        funding_intent_url: format!("{api}/v1/bounties/{}/funding-intents", bounty.id),
+        funding_contribution_url: format!("{api}/v1/bounties/{}/funding-contributions", bounty.id),
+        funding_partitions: status
+            .funding_summary
+            .partitions
+            .iter()
+            .map(|partition| web_public::PublicFundingPartition {
+                rail: format!("{:?}", partition.rail),
+                target_minor: partition.target.amount,
+                confirmed_minor: partition.confirmed.amount,
+                remaining_minor: partition.remaining.amount,
+                currency: partition.target.currency.clone(),
+                contribution_count: partition.contribution_count,
+                escrow_count: partition.escrow_count,
+                claimable: partition.claimable,
+            })
+            .collect(),
+    }
 }
 
 fn public_bounty_page_model(
@@ -3914,6 +4025,142 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn public_funding_feed_lists_only_public_bounties_with_remaining_funding() {
+        let state = test_state(BountyNetwork::default());
+        let partial = open_pooled_bounty(
+            State(state.clone()),
+            Json(OpenPooledBountyRequest {
+                title: "Fund public docs".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let _partial_funding = add_funding_contribution(
+            State(state.clone()),
+            Path(partial.id),
+            Json(AddFundingContributionRequest {
+                bounty_id: partial.id,
+                contributor_agent_id: None,
+                source_organization_id: None,
+                amount_minor: 400,
+                currency: "usdc".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("public-funding-feed-partial".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let mixed = open_pooled_bounty(
+            State(state.clone()),
+            Json(OpenPooledBountyRequest {
+                title: "Fund mixed public work".to_string(),
+                template_slug: "payment-state-machine".to_string(),
+                target_amount_minor: 500,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::MixedRails,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![
+                    app::FundingPartitionTargetRequest {
+                        rail: PaymentRail::StripeFiat,
+                        amount_minor: 500,
+                        currency: "usd".to_string(),
+                    },
+                    app::FundingPartitionTargetRequest {
+                        rail: PaymentRail::BaseUsdc,
+                        amount_minor: 1_000,
+                        currency: "usdc".to_string(),
+                    },
+                ],
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let private = open_pooled_bounty(
+            State(state.clone()),
+            Json(OpenPooledBountyRequest {
+                title: "Fund private work".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Private,
+                funding_targets: vec![],
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let funded = open_pooled_bounty(
+            State(state.clone()),
+            Json(OpenPooledBountyRequest {
+                title: "Funded public work".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let _funded_contribution = add_funding_contribution(
+            State(state.clone()),
+            Path(funded.id),
+            Json(AddFundingContributionRequest {
+                bounty_id: funded.id,
+                contributor_agent_id: None,
+                source_organization_id: None,
+                amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("public-funding-feed-funded".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        let feed = public_funding_feed(State(state.clone())).await.0;
+        let ids = feed
+            .iter()
+            .map(|item| item.bounty_id.clone())
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&partial.id.to_string()));
+        assert!(ids.contains(&mixed.id.to_string()));
+        assert!(!ids.contains(&private.id.to_string()));
+        assert!(!ids.contains(&funded.id.to_string()));
+        let partial_item = feed
+            .iter()
+            .find(|item| item.bounty_id == partial.id.to_string())
+            .expect("partial public bounty should be in funding feed");
+        assert_eq!(partial_item.funding_remaining_minor, 600);
+        assert!(partial_item
+            .funding_partitions
+            .iter()
+            .any(|partition| partition.remaining_minor == 600));
+
+        let html = public_funding_feed_page(State(state)).await.0;
+        assert!(html.contains("Fundable Agent Bounties"));
+        assert!(html.contains("agent-bounty-funding-feed"));
+        assert!(html.contains(&format!("/public/bounties/{}", partial.id)));
+        assert!(html.contains(&format!("/v1/bounties/{}/funding-intents", partial.id)));
+        assert!(!html.contains(&format!("/public/bounties/{}", private.id)));
+        assert!(!html.contains(&format!("/public/bounties/{}", funded.id)));
+    }
+
+    #[tokio::test]
     async fn public_bounty_detail_exposes_agent_actions() {
         let mut network = BountyNetwork::default();
         let bounty = network
@@ -3992,7 +4239,10 @@ mod tests {
 
         assert!(html.contains("partially funded"));
         assert!(html.contains("Co-funding command:"));
-        assert!(html.contains("/agent-bounty fund 0.6 USDC via Simulated"));
+        assert!(html.contains(&format!(
+            "/agent-bounty fund {} 0.6 USDC via Simulated",
+            bounty.id
+        )));
         assert!(html.contains(r#"rel="payment""#));
         assert!(html.contains(r#"data-agent-action="add_funding""#));
         assert!(html.contains(&format!("/v1/bounties/{}/funding-contributions", bounty.id)));
