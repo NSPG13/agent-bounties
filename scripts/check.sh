@@ -30,7 +30,7 @@ else
 fi
 
 cd "$repo_root"
-"$repo_root/scripts/preflight.sh" full
+bash "$repo_root/scripts/preflight.sh" full
 cargo fmt --all -- --check
 cargo clippy --workspace -- -D warnings
 cargo test --workspace
