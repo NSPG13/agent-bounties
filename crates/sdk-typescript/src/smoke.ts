@@ -197,8 +197,24 @@ async function main(): Promise<void> {
     "discovery manifest missing live Stripe Checkout execution endpoint",
   );
   requireCondition(
+    typeof endpoints.stripe_connect_transfers === "string",
+    "discovery manifest missing Stripe Connect transfer planner endpoint",
+  );
+  requireCondition(
+    typeof endpoints.stripe_connect_snapshots === "string",
+    "discovery manifest missing Stripe Connect snapshot reconciliation endpoint",
+  );
+  requireCondition(
     typeof endpoints.stripe_live_connect_accounts === "string",
     "discovery manifest missing live Stripe Connect execution endpoint",
+  );
+  requireCondition(
+    typeof endpoints.stripe_live_connect_transfers === "string",
+    "discovery manifest missing live Stripe Connect transfer execution endpoint",
+  );
+  requireCondition(
+    typeof endpoints.stripe_transfer_events === "string",
+    "discovery manifest missing Stripe transfer event reconciliation endpoint",
   );
   requireCondition(
     typeof endpoints.github_issue_bounty_plan === "string",
@@ -473,6 +489,19 @@ async function main(): Promise<void> {
   requireCondition(
     stripeConnectRequest.endpoint === "/v2/core/accounts",
     "Stripe Connect account planner used the wrong endpoint",
+  );
+  let unknownTransferRejected = false;
+  try {
+    await client.planStripeConnectTransfer({
+      payout_intent_id: crypto.randomUUID(),
+      connected_account_id: "acct_test_sdk_smoke",
+    });
+  } catch (error) {
+    unknownTransferRejected = error instanceof Error && error.message.includes("400");
+  }
+  requireCondition(
+    unknownTransferRejected,
+    "unknown Stripe transfer payout intent should return 400",
   );
   const githubIssuePlan = asObject(
     await client.planGitHubIssueBounty({

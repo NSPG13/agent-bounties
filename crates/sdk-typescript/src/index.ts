@@ -190,6 +190,11 @@ export interface PlanStripeConnectAccountRequest {
   agent_id: string;
 }
 
+export interface PlanStripeConnectTransferRequest {
+  payout_intent_id: string;
+  connected_account_id: string;
+}
+
 export interface PlanGitHubIssueBountyRequest {
   repository: string;
   issue_url: string;
@@ -650,6 +655,13 @@ export class AgentBountiesClient {
     });
   }
 
+  async planStripeConnectTransfer(request: PlanStripeConnectTransferRequest): Promise<unknown> {
+    return this.request("/v1/stripe/connect-transfers", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
   async executeStripeCheckoutTopUp(request: PlanStripeCheckoutTopUpRequest): Promise<unknown> {
     return this.request("/v1/stripe/live/checkout-top-ups", {
       method: "POST",
@@ -665,6 +677,13 @@ export class AgentBountiesClient {
 
   async executeStripeConnectAccount(request: PlanStripeConnectAccountRequest): Promise<unknown> {
     return this.request("/v1/stripe/live/connect-accounts", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async executeStripeConnectTransfer(request: PlanStripeConnectTransferRequest): Promise<unknown> {
+    return this.request("/v1/stripe/live/connect-transfers", {
       method: "POST",
       body: JSON.stringify(request),
     });
@@ -729,6 +748,17 @@ export class AgentBountiesClient {
     stripeSignature?: string,
   ): Promise<unknown> {
     return this.request("/v1/stripe/checkout-webhooks", {
+      method: "POST",
+      headers: stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
+      body: JSON.stringify(event),
+    });
+  }
+
+  async reconcileStripeTransferEvent(
+    event: StripeWebhookEvent,
+    stripeSignature?: string,
+  ): Promise<unknown> {
+    return this.request("/v1/stripe/transfer-events", {
       method: "POST",
       headers: stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
       body: JSON.stringify(event),
