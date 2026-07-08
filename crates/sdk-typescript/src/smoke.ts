@@ -35,6 +35,63 @@ function stringField(value: JsonObject, field: string): string {
   return result;
 }
 
+function requireBaseIndexerStatusContract(value: JsonObject): void {
+  requireCondition(
+    typeof value.heartbeat_found === "boolean",
+    "Base indexer status did not expose a heartbeat_found boolean",
+  );
+  requireCondition(
+    value.worker_healthy === null || typeof value.worker_healthy === "boolean",
+    "Base indexer status did not expose nullable worker_healthy",
+  );
+  for (const field of [
+    "last_poll_status",
+    "last_poll_started_at",
+    "last_poll_completed_at",
+    "last_poll_skipped_reason",
+    "last_poll_error_message",
+    "heartbeat_updated_at",
+  ]) {
+    const fieldValue = value[field];
+    requireCondition(
+      fieldValue === null || typeof fieldValue === "string",
+      `Base indexer status did not expose nullable string field ${field}`,
+    );
+  }
+  for (const field of [
+    "last_poll_latest_block",
+    "last_poll_confirmed_to_block",
+    "last_poll_from_block",
+    "last_poll_to_block",
+    "last_poll_fetched_logs",
+    "last_poll_persisted_cursor_block",
+  ]) {
+    const fieldValue = value[field];
+    requireCondition(
+      fieldValue === null || (typeof fieldValue === "number" && Number.isInteger(fieldValue)),
+      `Base indexer status did not expose nullable numeric field ${field}`,
+    );
+  }
+  const evidenceBoundaries = asArray(
+    value.evidence_boundaries,
+    "Base indexer evidence boundaries",
+  );
+  requireCondition(
+    evidenceBoundaries.some(
+      (boundary) => typeof boundary === "string" && boundary.includes("does not fund"),
+    ),
+    "Base indexer status did not explain that status evidence is not settlement",
+  );
+  requireCondition(
+    evidenceBoundaries.some(
+      (boundary) =>
+        typeof boundary === "string"
+        && boundary.includes("heartbeat proves only the last recorded poll outcome"),
+    ),
+    "Base indexer status did not explain the heartbeat evidence boundary",
+  );
+}
+
 function baseUrlFromArgs(): string {
   const index = process.argv.indexOf("--base-url");
   if (index >= 0 && process.argv[index + 1]) {
@@ -343,12 +400,7 @@ async function main(): Promise<void> {
     typeof baseIndexerStatus.indexer_ready === "boolean",
     "Base indexer status did not expose an indexer_ready boolean",
   );
-  requireCondition(
-    asArray(baseIndexerStatus.evidence_boundaries, "Base indexer evidence boundaries").some(
-      (boundary) => typeof boundary === "string" && boundary.includes("does not fund"),
-    ),
-    "Base indexer status did not explain that status evidence is not settlement",
-  );
+  requireBaseIndexerStatusContract(baseIndexerStatus);
   let reviewRequired = false;
   try {
     await client.postBounty({
