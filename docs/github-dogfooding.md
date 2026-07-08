@@ -124,6 +124,14 @@ exists:
   `github-plan` command against the rendered issue body, writes the planner
   result to the workflow summary, and creates or updates a sticky issue comment
   marked with `<!-- agent-bounties-plan -->`.
+- `.github/workflows/paid-bounty-funding-comments.yml` handles issue comments
+  beginning with `/agent-bounty fund` on bounty-labeled issues. It runs
+  `scripts/github-funding-comment.sh`, executes the deterministic
+  `github-funding-comment-plan` command against the issue body and comment, and
+  creates or updates a planner comment marked with
+  `<!-- agent-bounties-funding-comment -->`. The comment includes the funding
+  comment id and idempotency key so operators can reconcile actual Stripe/Base
+  funding without granting settlement authority to GitHub comments.
 - `.github/workflows/paid-bounty-proofs.yml` publishes accepted proof comments.
   It can run manually with `proof_id`, `issue_number`, `api_base_url`, and
   optional `settlement_url`, or it can run when someone comments
@@ -143,6 +151,7 @@ cargo run -p cli -- github-proof-comment-plan `
 Dry-run the proof publisher without calling GitHub or the hosted API:
 
 ```powershell
+python scripts/github_funding_comment.py --self-test
 python scripts/github_proof_comment.py --self-test
 ```
 

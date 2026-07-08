@@ -1,0 +1,34 @@
+name: Paid Bounty Funding Comments
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: paid-bounty-funding-comment-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  plan-funding-signal:
+    if: >-
+      contains(github.event.issue.labels.*.name, 'bounty')
+      && startsWith(github.event.comment.body, '/agent-bounty fund')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Publish funding-comment planner result
+        run: bash scripts/github-funding-comment.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
