@@ -1,0 +1,68 @@
+name: Real Funding Rehearsal
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/real-funding-rehearsal.yml"
+      - "crates/domain/**"
+      - "crates/chain-base/**"
+      - "crates/ledger/**"
+      - "crates/payments-stripe/**"
+      - "crates/cli/**"
+      - "scripts/real-funding-rehearsal.*"
+      - "scripts/validate_real_funding_rehearsal.py"
+  pull_request:
+    paths:
+      - ".github/workflows/real-funding-rehearsal.yml"
+      - "crates/domain/**"
+      - "crates/chain-base/**"
+      - "crates/ledger/**"
+      - "crates/payments-stripe/**"
+      - "crates/cli/**"
+      - "scripts/real-funding-rehearsal.*"
+      - "scripts/validate_real_funding_rehearsal.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-funding-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate and validate real-funding rehearsal artifacts
+        run: bash scripts/real-funding-rehearsal.sh target/real-funding-rehearsal
+
+      - name: Add rehearsal summary
+        run: |
+          {
+            echo "## Real Funding Rehearsal"
+            echo
+            echo "- Generated funding-rehearsal-demo.json"
+            echo "- Generated real-funding-readiness.json"
+            echo "- Validated StripeFiat and BaseUsdc settlement after deterministic evidence reconciliation"
+            echo
+            echo "This workflow does not execute live Stripe or Base transactions. It proves the evidence boundary that operators use before testnet or hosted low-value money movement."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: real-funding-rehearsal
+          path: target/real-funding-rehearsal/*.json
+          if-no-files-found: error

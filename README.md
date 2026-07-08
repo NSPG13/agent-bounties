@@ -61,6 +61,7 @@ cargo run -p cli -- demo
 cargo run -p cli -- pooled-funding-demo
 cargo run -p cli -- funding-rehearsal-demo
 cargo run -p cli -- real-funding-readiness --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x3333333333333333333333333333333333333333
+.\scripts\real-funding-rehearsal.ps1
 cargo run -p cli -- base-plan --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333
 cargo run -p cli -- base-decode-demo
 cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0
@@ -115,6 +116,10 @@ For an operator runbook that combines Stripe test-mode Checkout, Base Sepolia
 USDC escrow, pooled funding, mixed funding, deterministic verification, and
 post-evidence distribution, see
 [docs/real-funding-rehearsal.md](docs/real-funding-rehearsal.md).
+The `Real Funding Rehearsal` workflow publishes public JSON artifacts for the
+deterministic StripeFiat plus BaseUsdc mixed-funding path. It does not execute
+live Stripe or Base transactions; it proves the evidence boundary used before
+operators run Stripe test-mode Checkout or Base Sepolia signing/reconciliation.
 `base-fetch-logs`, `base-broadcast-signed-transaction`, and
 `base-transaction-receipt` perform live JSON-RPC calls and require either
 `BASE_SEPOLIA_RPC_URL`/`BASE_MAINNET_RPC_URL` for the selected network or an
@@ -464,11 +469,15 @@ operator planners including the risk-policy descriptor and Base
 release/refund/dispute transaction plans and Stripe Connect transfer plans,
 the GitHub paid-bounty issue workflow dry-run,
 the GitHub funding-comment planner, the mixed Stripe/Base funding rehearsal,
+the real-funding rehearsal artifact validator,
 Python/TypeScript SDK compilation, SDK eval-run history checks, and Foundry
 escrow tests.
 GitHub Actions runs the same `scripts/check.sh` gate on pushes and pull
 requests. The Docker-backed `scripts/check-postgres.*` smoke is separate so the
 default contributor gate remains fast and does not require Docker.
+The separate `Real Funding Rehearsal` workflow publishes the validated
+`funding-rehearsal-demo.json` and `real-funding-readiness.json` artifacts on
+manual runs, scheduled runs, and payment-path changes.
 The separate `Containers` workflow runs `scripts/check-production-compose.sh`
 when production packaging files change or when manually dispatched.
 The optional `scripts/check-containers.*` gate builds production API and MCP

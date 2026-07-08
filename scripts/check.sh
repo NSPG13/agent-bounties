@@ -116,6 +116,7 @@ cargo run -p cli -- real-funding-readiness \
   --network base-sepolia \
   --escrow-contract 0x1111111111111111111111111111111111111111 \
   --usdc-token 0x3333333333333333333333333333333333333333
+bash scripts/real-funding-rehearsal.sh
 "${python_cmd[@]}" -m py_compile \
   crates/sdk-python/agent_bounties/client.py \
   crates/sdk-python/agent_bounties/smoke.py \
@@ -124,7 +125,8 @@ cargo run -p cli -- real-funding-readiness \
   scripts/github_issue_plan_comment.py \
   scripts/github_funding_comment.py \
   scripts/github_claim_comment.py \
-  scripts/github_proof_comment.py
+  scripts/github_proof_comment.py \
+  scripts/validate_real_funding_rehearsal.py
 
 cd "$repo_root/crates/sdk-typescript"
 npm ci
