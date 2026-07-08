@@ -3,6 +3,8 @@ set -euo pipefail
 
 repo="NSPG13/agent-bounties"
 post_review=false
+create_collaboration_branch=false
+collaboration_branch=""
 pr=""
 
 while [[ $# -gt 0 ]]; do
@@ -14,6 +16,14 @@ while [[ $# -gt 0 ]]; do
     --post-review)
       post_review=true
       shift
+      ;;
+    --create-collaboration-branch)
+      create_collaboration_branch=true
+      shift
+      ;;
+    --collaboration-branch)
+      collaboration_branch="$2"
+      shift 2
       ;;
     --pr)
       pr="$2"
@@ -32,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$pr" ]]; then
-  echo "usage: scripts/review-external-pr.sh --pr <number> [--repo owner/name] [--post-review]" >&2
+  echo "usage: scripts/review-external-pr.sh --pr <number> [--repo owner/name] [--post-review] [--create-collaboration-branch] [--collaboration-branch collab/name]" >&2
   exit 64
 fi
 
@@ -100,6 +110,36 @@ json_array() {
   done
 }
 
+slugify_branch_topic() {
+  local topic="$1"
+  local slug
+  slug="$(
+    printf '%s' "$topic" |
+      tr '[:upper:]' '[:lower:]' |
+      sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/^(.{0,48}).*$/\1/; s/-+$//'
+  )"
+  if [[ -z "$slug" ]]; then
+    slug="contribution"
+  fi
+  printf 'collab/pr-%s-%s' "$pr" "$slug"
+}
+
+existing_collaboration_branch() {
+  mapfile -t matches < <(git ls-remote --heads origin "refs/heads/collab/pr-${pr}-*" | awk '{print $2}' | sed 's#^refs/heads/##')
+  if [[ "${#matches[@]}" -eq 1 ]]; then
+    printf '%s' "${matches[0]}"
+  fi
+}
+
+assert_safe_collaboration_branch() {
+  local branch="$1"
+  if [[ -z "$branch" || "$branch" != collab/* ]]; then
+    echo "collaboration branches must be named collab/<topic>: $branch" >&2
+    exit 64
+  fi
+  git check-ref-format --branch "$branch" >/dev/null
+}
+
 mapfile -t changed_files < <(gh pr view "$pr" --repo "$repo" --json files --jq '.files[].path')
 if [[ "${#changed_files[@]}" -eq 0 ]]; then
   echo "PR #$pr has no changed files" >&2
@@ -123,6 +163,7 @@ if [[ "${#non_docs_files[@]}" -ne 0 ]]; then
 fi
 
 head_oid="$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq '.headRefOid')"
+head_ref_name="$(gh pr view "$pr" --repo "$repo" --json headRefName --jq '.headRefName')"
 ref_name="refs/remotes/origin/pr-${pr}-review"
 git fetch origin "+pull/${pr}/head:${ref_name}"
 fetched_oid="$(git rev-parse "$ref_name")"
@@ -166,6 +207,32 @@ elif [[ "$collaboration_branch_candidate" == true ]]; then
   recommended_lane="collaboration-branch-candidate"
 fi
 
+collaboration_branch_status="not_requested"
+if [[ "$create_collaboration_branch" == true ]]; then
+  if [[ "$collaboration_branch_candidate" != true ]]; then
+    echo "refusing to create an upstream collaboration branch for PR #$pr because the changed files require manual security review" >&2
+    exit 1
+  fi
+  if [[ -z "$collaboration_branch" ]]; then
+    collaboration_branch="$(existing_collaboration_branch)"
+  fi
+  if [[ -z "$collaboration_branch" ]]; then
+    collaboration_branch="$(slugify_branch_topic "$head_ref_name")"
+  fi
+  assert_safe_collaboration_branch "$collaboration_branch"
+  existing_oid="$(git ls-remote --heads origin "refs/heads/${collaboration_branch}" | awk '{print $1}')"
+  if [[ -n "$existing_oid" ]]; then
+    if [[ "$existing_oid" == "$fetched_oid" ]]; then
+      collaboration_branch_status="exists_at_pr_head"
+    else
+      collaboration_branch_status="exists_different_head"
+    fi
+  else
+    git push origin "${fetched_oid}:refs/heads/${collaboration_branch}"
+    collaboration_branch_status="created"
+  fi
+fi
+
 feedback_items=()
 if [[ "$docs_only" != true ]]; then
   feedback_items+=("Split docs-only changes from code or infrastructure changes, or wait for manual maintainer review of the non-doc paths.")
@@ -189,6 +256,8 @@ printf '  "docs_only": %s,\n' "$docs_only"
 printf '  "safe_for_maintainer_ci": %s,\n' "$safe_for_maintainer_ci"
 printf '  "main_candidate": %s,\n' "$safe_for_maintainer_ci"
 printf '  "collaboration_branch_candidate": %s,\n' "$collaboration_branch_candidate"
+printf '  "collaboration_branch": "%s",\n' "$collaboration_branch"
+printf '  "collaboration_branch_status": "%s",\n' "$collaboration_branch_status"
 printf '  "recommended_lane": "%s",\n' "$recommended_lane"
 printf '  "docs_contract_check": "%s",\n' "$docs_contract_check"
 printf '  "risky_files": [%s],\n' "$(json_array "${risky_files[@]}")"
@@ -238,7 +307,11 @@ EOF
       printf '```bash\ncargo run -p cli -- docs-contract-check\n```\n\n'
       printf 'Collaboration branch guidance:\n'
       if [[ "$collaboration_branch_candidate" == true ]]; then
-        printf 'This looks suitable for a collaboration branch such as collab/pr-%s-<short-topic> if a maintainer wants others to iterate on it without merging to main yet. That branch would not imply bounty acceptance or payment approval.\n' "$pr"
+        if [[ "$create_collaboration_branch" == true ]]; then
+          printf 'This is suitable for a collaboration branch. Branch %s status: %s. That branch does not imply bounty acceptance, merge approval, or payment approval.\n' "$collaboration_branch" "$collaboration_branch_status"
+        else
+          printf 'This looks suitable for a collaboration branch such as collab/pr-%s-<short-topic> if a maintainer wants others to iterate on it without merging to main yet. That branch would not imply bounty acceptance or payment approval.\n' "$pr"
+        fi
       else
         printf 'Do not move this to an upstream collaboration branch automatically. The risky or non-doc paths need manual maintainer security review first.\n'
       fi

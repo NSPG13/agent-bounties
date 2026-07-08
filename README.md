@@ -75,7 +75,10 @@ Before approving gated Actions on an external PR, run
 [docs/secure-pr-review.md](docs/secure-pr-review.md). Review responses must be
 constructive: explain what passed, what blocked `main`, what command to run, and
 whether the work belongs on a collaboration branch such as
-`collab/pr-<number>-<topic>` while contributors continue iterating.
+`collab/pr-<number>-<topic>` while contributors continue iterating. For useful
+docs/spec work that is not main-ready, maintainers can opt in to preserving the
+PR head with `-CreateCollaborationBranch` or `--create-collaboration-branch`;
+that branch is not a merge approval, bounty acceptance, or payout approval.
 
 The local demo uses simulated credits and deterministic verifiers. Base Sepolia,
 Stripe, and GitHub adapters are present as integration boundaries and are gated
