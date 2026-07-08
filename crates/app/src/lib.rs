@@ -861,16 +861,22 @@ impl BountyNetwork {
             return Err(AppError::AgentNotFound);
         }
 
-        let requires_base_escrow = self
+        let bounty_snapshot = self
             .bounties
             .get(&request.bounty_id)
             .ok_or(AppError::BountyNotFound)?
-            .funding_mode
-            == FundingMode::BaseUsdcEscrow;
+            .clone();
+        let requires_base_escrow = self
+            .effective_funding_targets(&bounty_snapshot)?
+            .iter()
+            .any(|target| target.rail == PaymentRail::BaseUsdc);
         if requires_base_escrow && !self.has_funded_base_escrow(request.bounty_id) {
             return Err(AppError::InvalidBaseEscrowEvent(
                 "Base USDC bounty cannot be claimed before funded escrow is indexed".to_string(),
             ));
+        }
+        if !self.funding_targets_claimable(&bounty_snapshot)? {
+            return Err(domain::DomainError::UnfundedBounty.into());
         }
 
         let bounty = self
@@ -1110,6 +1116,7 @@ impl BountyNetwork {
                     escrow.bounty_id == event.bounty_id
                         && escrow.rail == PaymentRail::BaseUsdc
                         && escrow.id != escrow_id
+                        && escrow.status != EscrowStatus::Refunded
                 }) {
                     return Err(AppError::InvalidBaseEscrowEvent(
                         "bounty already has a different indexed Base USDC escrow".to_string(),
@@ -2330,7 +2337,7 @@ impl BountyNetwork {
             return Ok(None);
         }
 
-        let amount = self
+        let escrow = self
             .escrows
             .values()
             .find(|escrow| {
@@ -2338,20 +2345,19 @@ impl BountyNetwork {
                     && escrow.rail == PaymentRail::BaseUsdc
                     && is_refundable_base_escrow_status(&escrow.status)
             })
-            .map(|escrow| escrow.amount.clone())
-            .or_else(|| {
-                self.bounties
-                    .get(&bounty_id)
-                    .map(|bounty| bounty.amount.clone())
-            })
-            .ok_or(AppError::BountyNotFound)?;
-        let status = self
+            .cloned()
+            .ok_or_else(|| {
+                AppError::InvalidBaseEscrowEvent(
+                    "refunded event has no funded or disputed Base escrow".to_string(),
+                )
+            })?;
+        let amount = escrow.amount.clone();
+        let bounty_snapshot = self
             .bounties
             .get(&bounty_id)
             .ok_or(AppError::BountyNotFound)?
-            .status
             .clone();
-        if status == BountyStatus::Refunded {
+        if bounty_snapshot.status == BountyStatus::Refunded {
             return Ok(None);
         }
 
@@ -2360,8 +2366,35 @@ impl BountyNetwork {
                 .bounties
                 .get_mut(&bounty_id)
                 .ok_or(AppError::BountyNotFound)?;
-            if bounty.status != BountyStatus::Refunding {
-                bounty.refunding()?;
+            if bounty.funding_mode == FundingMode::MixedRails {
+                match bounty.status {
+                    BountyStatus::Unfunded | BountyStatus::Funded | BountyStatus::Claimable => {
+                        bounty.reopen_for_funding()?;
+                    }
+                    BountyStatus::Claimed
+                    | BountyStatus::Submitted
+                    | BountyStatus::Verifying
+                    | BountyStatus::Disputed => {
+                        bounty.mark_payment_disputed()?;
+                    }
+                    BountyStatus::Accepted
+                    | BountyStatus::Payable
+                    | BountyStatus::Paid
+                    | BountyStatus::Refunding
+                    | BountyStatus::Refunded
+                    | BountyStatus::Expired => {
+                        return Err(domain::DomainError::InvalidTransition {
+                            from: format!("{:?}", bounty.status),
+                            to: "Refunded".to_string(),
+                        }
+                        .into());
+                    }
+                }
+            } else {
+                if bounty.status != BountyStatus::Refunding {
+                    bounty.refunding()?;
+                }
+                bounty.mark_refunded()?;
             }
         }
 
@@ -2374,10 +2407,6 @@ impl BountyNetwork {
             ],
         )?;
         self.ledger.append(entry.clone())?;
-        self.bounties
-            .get_mut(&bounty_id)
-            .ok_or(AppError::BountyNotFound)?
-            .mark_refunded()?;
 
         Ok(Some(entry))
     }
@@ -3017,12 +3046,7 @@ impl BountyNetwork {
                         .filter(|escrow| escrow.rail == target.rail)
                         .filter(|escrow| escrow.amount.currency == target.amount.currency)
                         .filter(|escrow| {
-                            matches!(
-                                escrow.status,
-                                EscrowStatus::Funded
-                                    | EscrowStatus::Disputed
-                                    | EscrowStatus::Released
-                            )
+                            matches!(escrow.status, EscrowStatus::Funded | EscrowStatus::Released)
                         })
                         .count(),
                     claimable: confirmed >= target.amount.amount,
@@ -3068,12 +3092,7 @@ impl BountyNetwork {
             .filter(|escrow| escrow.bounty_id == bounty_id)
             .filter(|escrow| escrow.rail == *rail)
             .filter(|escrow| escrow.amount.currency == currency)
-            .filter(|escrow| {
-                matches!(
-                    escrow.status,
-                    EscrowStatus::Funded | EscrowStatus::Disputed | EscrowStatus::Released
-                )
-            })
+            .filter(|escrow| matches!(escrow.status, EscrowStatus::Funded | EscrowStatus::Released))
             .map(|escrow| escrow.amount.amount)
             .sum::<i64>();
         contribution_total + escrow_total
@@ -4370,6 +4389,130 @@ mod tests {
             .iter()
             .flat_map(|settlement| &settlement.payout_intents)
             .all(|intent| intent.status == PayoutStatus::Paid));
+    }
+
+    #[test]
+    fn mixed_base_refund_reopens_base_partition_without_refunding_stripe_partition() {
+        let mut network = BountyNetwork::default();
+        let organization_id = Uuid::new_v4();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "mixed-refund-solver".to_string(),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+        });
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                title: "Recover mixed funding after Base refund".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                target_amount_minor: 500,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::MixedRails,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![
+                    FundingPartitionTargetRequest {
+                        rail: PaymentRail::StripeFiat,
+                        amount_minor: 500,
+                        currency: "usd".to_string(),
+                    },
+                    FundingPartitionTargetRequest {
+                        rail: PaymentRail::BaseUsdc,
+                        amount_minor: 1_000,
+                        currency: "usdc".to_string(),
+                    },
+                ],
+            })
+            .unwrap();
+
+        network
+            .apply_stripe_funding_credit(stripe_funding_credit(
+                organization_id,
+                500,
+                "usd",
+                "evt_mixed_refund_topup",
+            ))
+            .unwrap();
+        network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                source_organization_id: Some(organization_id),
+                amount_minor: 500,
+                currency: "usd".to_string(),
+                rail: PaymentRail::StripeFiat,
+                external_reference: Some("mixed-refund-stripe-500".to_string()),
+            })
+            .unwrap();
+        network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                bounty.id,
+                42,
+                "0x3333333333333333333333333333333333333333",
+                Money::new(1_000, "usdc").unwrap(),
+                bounty.terms_hash.clone().unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            network.status(bounty.id).unwrap().bounty.status,
+            BountyStatus::Claimable
+        );
+        assert_eq!(network.list_claimable_bounties().len(), 1);
+
+        let refunded = network
+            .apply_base_escrow_event(chain_base::simulated_refunded_event(
+                bounty.id,
+                42,
+                format!("0x{}", "ab".repeat(32)),
+            ))
+            .unwrap();
+        assert_eq!(refunded.bounty.status, BountyStatus::Unfunded);
+        assert_eq!(refunded.escrow.status, EscrowStatus::Refunded);
+        assert_eq!(refunded.ledger_entries.len(), 1);
+        assert!(network.list_claimable_bounties().is_empty());
+
+        let status = network.status(bounty.id).unwrap();
+        let stripe_partition = status
+            .funding_summary
+            .partitions
+            .iter()
+            .find(|partition| partition.rail == PaymentRail::StripeFiat)
+            .unwrap();
+        let base_partition = status
+            .funding_summary
+            .partitions
+            .iter()
+            .find(|partition| partition.rail == PaymentRail::BaseUsdc)
+            .unwrap();
+        assert_eq!(stripe_partition.remaining.amount, 0);
+        assert_eq!(base_partition.remaining.amount, 1_000);
+        assert!(!status.funding_summary.claimable);
+        assert_eq!(
+            status.funding_contributions[0].status,
+            FundingContributionStatus::Applied
+        );
+        assert!(status
+            .escrows
+            .iter()
+            .any(|escrow| escrow.status == EscrowStatus::Refunded));
+
+        let err = network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidBaseEscrowEvent(_)));
+
+        let refilled = network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                bounty.id,
+                43,
+                "0x3333333333333333333333333333333333333333",
+                Money::new(1_000, "usdc").unwrap(),
+                bounty.terms_hash.clone().unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(refilled.bounty.status, BountyStatus::Claimable);
+        assert_eq!(network.list_claimable_bounties().len(), 1);
+        assert_eq!(network.status(bounty.id).unwrap().escrows.len(), 2);
     }
 
     #[test]

@@ -296,6 +296,37 @@ impl Bounty {
         self.transition(BountyStatus::Refunded)
     }
 
+    pub fn reopen_for_funding(&mut self) -> DomainResult<()> {
+        if matches!(
+            self.status,
+            BountyStatus::Unfunded | BountyStatus::Funded | BountyStatus::Claimable
+        ) {
+            self.status = BountyStatus::Unfunded;
+            return Ok(());
+        }
+        Err(DomainError::InvalidTransition {
+            from: format!("{:?}", self.status),
+            to: "Unfunded".to_string(),
+        })
+    }
+
+    pub fn mark_payment_disputed(&mut self) -> DomainResult<()> {
+        if matches!(
+            self.status,
+            BountyStatus::Claimed
+                | BountyStatus::Submitted
+                | BountyStatus::Verifying
+                | BountyStatus::Disputed
+        ) {
+            self.status = BountyStatus::Disputed;
+            return Ok(());
+        }
+        Err(DomainError::InvalidTransition {
+            from: format!("{:?}", self.status),
+            to: "Disputed".to_string(),
+        })
+    }
+
     pub fn dispute(&mut self) -> DomainResult<()> {
         if matches!(
             self.status,
@@ -668,5 +699,40 @@ mod tests {
         bounty.mark_refunded().unwrap();
 
         assert_eq!(bounty.status, BountyStatus::Refunded);
+    }
+
+    #[test]
+    fn funded_bounty_can_reopen_after_partition_refund_before_claim() {
+        let mut bounty = Bounty::new(
+            "Fix CI",
+            "fix-ci",
+            Money::new(1_000_000, "usdc").unwrap(),
+            FundingMode::MixedRails,
+            PrivacyLevel::Public,
+        );
+        bounty.mark_funded("terms").unwrap();
+        bounty.make_claimable().unwrap();
+
+        bounty.reopen_for_funding().unwrap();
+
+        assert_eq!(bounty.status, BountyStatus::Unfunded);
+    }
+
+    #[test]
+    fn claimed_bounty_can_be_marked_payment_disputed() {
+        let mut bounty = Bounty::new(
+            "Fix CI",
+            "fix-ci",
+            Money::new(1_000_000, "usdc").unwrap(),
+            FundingMode::MixedRails,
+            PrivacyLevel::Public,
+        );
+        bounty.mark_funded("terms").unwrap();
+        bounty.make_claimable().unwrap();
+        bounty.claim().unwrap();
+
+        bounty.mark_payment_disputed().unwrap();
+
+        assert_eq!(bounty.status, BountyStatus::Disputed);
     }
 }
