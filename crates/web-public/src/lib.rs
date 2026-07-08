@@ -264,6 +264,16 @@ pub struct PublicBountyNextAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublicBountyLifecycleCheckpoint {
+    pub stage: String,
+    pub label: String,
+    pub status: String,
+    pub satisfied: bool,
+    pub evidence: String,
+    pub next_action_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicCapabilityFeedItem {
     pub capability_id: String,
     pub agent_id: String,
@@ -596,6 +606,7 @@ fn distribution_feedback_prompt(endpoints: &DiscoveryEndpoints) -> DistributionF
             "Small acceptance criteria with deterministic local checks.".to_string(),
             "Machine-readable /llms.txt, /.well-known/agent-bounties.json, public funding feeds, and MCP tool schemas.".to_string(),
             "Clear payment-trust language: funding comments are not ledger credits, and AI judges cannot authorize payment.".to_string(),
+            "Public bounty pages separate funding, claimability, proof, settlement, and paid checkpoints for agents.".to_string(),
             "Public proof, reputation, settlement, and template surfaces that compound after accepted work.".to_string(),
         ],
     }
@@ -1195,6 +1206,9 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
     let funding_state = public_funding_state_label(item);
     let cofunding_command = public_cofunding_command(item);
     let next_actions = public_bounty_next_actions(item, cofunding_command.is_some());
+    let payment_lifecycle =
+        public_bounty_payment_lifecycle(item, &funding_state, cofunding_command.is_some());
+    let payment_lifecycle_rows = render_payment_lifecycle_rows(&payment_lifecycle);
     let payment_link = cofunding_command
         .as_ref()
         .map(|_| {
@@ -1283,7 +1297,8 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
                 "state": funding_state,
                 "partitions": item.funding_partitions,
                 "cofunding_command": cofunding_command.as_deref()
-            }
+            },
+            "payment_lifecycle": &payment_lifecycle
         },
         "potentialAction": potential_actions,
         "proof": item.proof_urls,
@@ -1308,6 +1323,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
             "settlements": item.settlement_links,
             "template_signals": item.template_signal_links
         },
+        "payment_lifecycle": &payment_lifecycle,
         "next_actions": next_actions,
         "distribution_feedback": public_distribution_feedback_json()
     });
@@ -1365,6 +1381,13 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
         {}
       </ul>
       {}
+    </section>
+    <section id="payment-lifecycle">
+      <h2>Payment Lifecycle</h2>
+      <p>These checkpoints separate funded, claimable, proof, settlement, and paid state for agents and contributors.</p>
+      <ol>
+        {}
+      </ol>
     </section>
     {}
     <nav aria-label="Agent actions">
@@ -1439,6 +1462,7 @@ pub fn render_public_bounty_page(item: &PublicBountyPage) -> String {
         item.contribution_count,
         partition_rows,
         cofunding_command_html,
+        payment_lifecycle_rows,
         feedback_section,
         next_action_links,
         proof_links,
@@ -1582,6 +1606,142 @@ pub fn public_bounty_next_actions(
     actions
 }
 
+pub fn public_bounty_payment_lifecycle(
+    item: &PublicBountyPage,
+    funding_state: &str,
+    can_add_funding: bool,
+) -> Vec<PublicBountyLifecycleCheckpoint> {
+    let funding_confirmed =
+        matches!(funding_state, "funded" | "claimable" | "paid") || item.status == "Payable";
+    let claim_open_or_past = item.claimable || is_claim_or_later_public_status(&item.status);
+    let proof_recorded = !item.proof_urls.is_empty();
+    let settlement_recorded = !item.settlement_links.is_empty();
+    let paid = item.status == "Paid";
+
+    vec![
+        PublicBountyLifecycleCheckpoint {
+            stage: "funding".to_string(),
+            label: "Funding confirmed".to_string(),
+            status: funding_state.to_string(),
+            satisfied: funding_confirmed,
+            evidence: if funding_confirmed {
+                "Every required funding partition has reconciled evidence.".to_string()
+            } else {
+                "Needs verified Stripe webhook evidence, indexed Base escrow logs, or local simulated funding evidence for every required partition.".to_string()
+            },
+            next_action_url: if funding_confirmed {
+                Some(item.status_url.clone())
+            } else if can_add_funding {
+                Some(item.funding_contribution_url.clone())
+            } else {
+                Some(item.status_url.clone())
+            },
+        },
+        PublicBountyLifecycleCheckpoint {
+            stage: "claimability".to_string(),
+            label: "Claimable work".to_string(),
+            status: if claim_open_or_past {
+                "claimable-or-claimed".to_string()
+            } else {
+                "not-claimable".to_string()
+            },
+            satisfied: claim_open_or_past,
+            evidence: if claim_open_or_past {
+                "The bounty is claimable or has already moved past claim.".to_string()
+            } else {
+                "The bounty cannot be claimed until required funding evidence is reconciled and risk gates clear.".to_string()
+            },
+            next_action_url: if item.claimable && !is_terminal_public_status(&item.status) {
+                Some(item.claim_url.clone())
+            } else {
+                Some(item.status_url.clone())
+            },
+        },
+        PublicBountyLifecycleCheckpoint {
+            stage: "proof".to_string(),
+            label: "Completion proof".to_string(),
+            status: if proof_recorded {
+                "proof-recorded".to_string()
+            } else {
+                "no-public-proof".to_string()
+            },
+            satisfied: proof_recorded,
+            evidence: if proof_recorded {
+                "A public proof record exists for accepted work.".to_string()
+            } else {
+                "No public proof is recorded yet; merged code or submitted artifacts still need verifier acceptance before settlement.".to_string()
+            },
+            next_action_url: item
+                .proof_urls
+                .first()
+                .cloned()
+                .or_else(|| Some(item.status_url.clone())),
+        },
+        PublicBountyLifecycleCheckpoint {
+            stage: "settlement".to_string(),
+            label: "Settlement intent".to_string(),
+            status: if settlement_recorded {
+                "settlement-recorded".to_string()
+            } else {
+                "no-settlement-record".to_string()
+            },
+            satisfied: settlement_recorded,
+            evidence: if settlement_recorded {
+                "A settlement or payout-intent record is visible for the accepted proof."
+                    .to_string()
+            } else {
+                "No settlement record is visible yet; verification, risk review, or rail-specific release evidence may still be pending.".to_string()
+            },
+            next_action_url: Some(item.status_url.clone()),
+        },
+        PublicBountyLifecycleCheckpoint {
+            stage: "paid".to_string(),
+            label: "Paid state".to_string(),
+            status: if paid {
+                "paid".to_string()
+            } else {
+                "not-paid".to_string()
+            },
+            satisfied: paid,
+            evidence: if paid {
+                "All required payout evidence has reconciled and the bounty is terminally paid."
+                    .to_string()
+            } else {
+                "Payment is not final until Base EscrowReleased logs or Stripe transfer.created evidence reconcile against settlement metadata.".to_string()
+            },
+            next_action_url: Some(item.status_url.clone()),
+        },
+    ]
+}
+
+fn render_payment_lifecycle_rows(checkpoints: &[PublicBountyLifecycleCheckpoint]) -> String {
+    checkpoints
+        .iter()
+        .map(|checkpoint| {
+            let action = checkpoint
+                .next_action_url
+                .as_deref()
+                .map(|url| {
+                    format!(
+                        r#"<a href="{}">Inspect</a>"#,
+                        escape_html(url)
+                    )
+                })
+                .unwrap_or_else(|| "<span>No action</span>".to_string());
+            format!(
+                r#"<li data-payment-stage="{}"><strong>{}</strong><span>{}</span><span>satisfied: {}</span><span>{}</span>{}</li>"#,
+                escape_html(&checkpoint.stage),
+                escape_html(&checkpoint.label),
+                escape_html(&checkpoint.status),
+                checkpoint.satisfied,
+                escape_html(&checkpoint.evidence),
+                action
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn render_funding_partition_rows(item: &PublicBountyPage) -> String {
     let partitions = if item.funding_partitions.is_empty() {
         vec![PublicFundingPartition {
@@ -1642,6 +1802,21 @@ fn render_record_links(links: &[PublicBountyRecordLink], empty_label: &str) -> S
 
 fn is_terminal_public_status(status: &str) -> bool {
     matches!(status, "Paid" | "Refunded" | "Disputed" | "Expired")
+}
+
+fn is_claim_or_later_public_status(status: &str) -> bool {
+    matches!(
+        status,
+        "Claimable"
+            | "Claimed"
+            | "Submitted"
+            | "Verifying"
+            | "Accepted"
+            | "Payable"
+            | "Paid"
+            | "Refunded"
+            | "Disputed"
+    )
 }
 
 fn format_command_amount(amount_minor: i64, currency: &str) -> String {
@@ -2546,6 +2721,16 @@ mod tests {
         assert!(html.contains("agent-bounty:verification_type"));
         assert!(html.contains("Funding State"));
         assert!(html.contains("Funding partitions"));
+        assert!(html.contains("Payment Lifecycle"));
+        assert!(html.contains(r#"data-payment-stage="funding""#));
+        assert!(html.contains(r#"data-payment-stage="claimability""#));
+        assert!(html.contains(r#"data-payment-stage="proof""#));
+        assert!(html.contains(r#"data-payment-stage="settlement""#));
+        assert!(html.contains(r#"data-payment-stage="paid""#));
+        assert!(html.contains("payment_lifecycle"));
+        assert!(html.contains("proof-recorded"));
+        assert!(html.contains("settlement-recorded"));
+        assert!(html.contains("not-paid"));
         assert!(html.contains("Machine status"));
         assert!(html.contains(r#"data-agent-action="claim""#));
         assert!(!html.contains("Add funding"));
@@ -2571,6 +2756,8 @@ mod tests {
         let html = render_public_bounty_page(&item);
 
         assert!(html.contains("partially funded"));
+        assert!(html.contains("not-claimable"));
+        assert!(html.contains("Needs verified Stripe webhook evidence"));
         assert!(html.contains("Co-funding command:"));
         assert!(html.contains(&format!(
             "/agent-bounty fund {} 0.5 USDC via BaseUsdc",
@@ -2616,6 +2803,7 @@ mod tests {
         let html = render_public_bounty_page(&item);
 
         assert!(html.contains("partially funded"));
+        assert!(html.contains("Payment Lifecycle"));
         assert!(html.contains(&format!(
             "/agent-bounty fund {} 1 USDC via BaseUsdc",
             item.bounty_id
@@ -2638,6 +2826,29 @@ mod tests {
             );
             assert!(!html.contains(r#"data-agent-action="claim""#), "{status}");
         }
+    }
+
+    #[test]
+    fn payment_lifecycle_marks_paid_only_for_terminal_paid_state() {
+        let item = public_bounty_page_fixture("Payable", 500_000, 0, false);
+        let lifecycle = public_bounty_payment_lifecycle(&item, "funded", false);
+
+        assert!(lifecycle
+            .iter()
+            .any(|checkpoint| checkpoint.stage == "funding" && checkpoint.satisfied));
+        assert!(lifecycle
+            .iter()
+            .any(|checkpoint| checkpoint.stage == "claimability" && checkpoint.satisfied));
+        assert!(lifecycle
+            .iter()
+            .any(|checkpoint| checkpoint.stage == "paid" && !checkpoint.satisfied));
+
+        let paid_item = public_bounty_page_fixture("Paid", 500_000, 0, false);
+        let paid_lifecycle = public_bounty_payment_lifecycle(&paid_item, "paid", false);
+
+        assert!(paid_lifecycle
+            .iter()
+            .any(|checkpoint| checkpoint.stage == "paid" && checkpoint.satisfied));
     }
 
     fn public_bounty_page_fixture(

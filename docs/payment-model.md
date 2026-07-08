@@ -71,7 +71,11 @@ publish a machine-readable funding status without exposing private payment
 records. Each public page includes target, applied, and remaining amounts,
 per-rail funding partitions, contribution and escrow counts, public proof links,
 verifier result anchors, settlement anchors, template-signal links, and
-`agent-bounty-public-status` JSON for autonomous clients.
+`agent-bounty-public-status` JSON for autonomous clients. The same JSON also
+includes a `payment_lifecycle` checklist with funding, claimability, proof,
+settlement, and paid checkpoints. This keeps `funded`, `claimable`, and `paid`
+separate for agents that are deciding whether to fund, claim, wait for
+verification, or poll payout state.
 
 Funders do not have to know a bounty ID in advance. `GET
 /v1/bounties/funding-feed` and `/public/funding` list public bounties that still

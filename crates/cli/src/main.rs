@@ -2687,7 +2687,14 @@ fn detect_friction_points(text: &str) -> Vec<String> {
     }
     if contains_any(
         &lower,
-        &["unclear payout", "payment path", "settlement unclear"],
+        &[
+            "unclear payout",
+            "payment path",
+            "settlement unclear",
+            "funded, claimable",
+            "claimable, and paid",
+            "eligible for settlement",
+        ],
     ) {
         values.push("unclear-payment-path");
     }
@@ -6177,12 +6184,15 @@ mod tests {
             build_discovery_report_from_str(include_str!("../fixtures/discovery_answers.json"))
                 .expect("fixture should build a discovery report");
 
-        assert_eq!(report.total_records, 7);
-        assert_eq!(report.answered_records, 6);
+        assert_eq!(report.total_records, 8);
+        assert_eq!(report.answered_records, 7);
         assert_eq!(report.partial_answer_records, 1);
         assert_eq!(report.missing_answer_records, 1);
         assert_eq!(report.unique_contributors, 6);
-        assert_eq!(report.duplicate_contributors, vec!["codeboost-tr"]);
+        assert_eq!(
+            report.duplicate_contributors,
+            vec!["codeboost-tr", "hyperxiaoerxz-hash"]
+        );
         assert!(bucket_count(&report.discovery_sources, "github") >= 4);
         assert!(bucket_count(&report.discovery_sources, "machine-discovery") >= 1);
         assert!(bucket_count(&report.participation_reasons, "payout") >= 2);
@@ -6191,6 +6201,7 @@ mod tests {
         assert!(bucket_count(&report.trust_payment_signals, "base-usdc-escrow") >= 1);
         assert!(bucket_count(&report.trust_payment_signals, "deterministic-verification") >= 2);
         assert!(bucket_count(&report.friction_points, "stale-docs-or-contract") >= 1);
+        assert!(bucket_count(&report.friction_points, "unclear-payment-path") >= 1);
     }
 
     #[test]
