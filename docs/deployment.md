@@ -95,10 +95,13 @@ The worker uses `DATABASE_URL`, `BASE_INDEXER_NETWORK`, RPC/escrow contract
 configuration, and `BASE_INDEXER_START_BLOCK` on first run. After it scans a
 range, it persists a Postgres cursor keyed by network and escrow contract, so
 later polls continue from the last confirmed scanned block even when no escrow
-events were found. Money state still changes only when decoded escrow logs are
-persisted. Check `GET /v1/base/indexer-status?network=<network>` or MCP
-`get_base_indexer_status` after startup to confirm the cursor is being written;
-the status response is monitoring evidence, not settlement authorization.
+events were found. Each poll also persists a heartbeat with the last Success,
+Skipped, or Failed outcome, block range, fetched log count, skipped reason, and
+error message when present. Money state still changes only when decoded escrow
+logs are persisted. Check `GET /v1/base/indexer-status?network=<network>` or
+MCP `get_base_indexer_status` after startup to confirm the cursor and heartbeat
+are being written; the status response is monitoring evidence, not settlement
+authorization.
 
 `DATABASE_URL` should point at the compose service hostname, for example
 `postgres://agent_bounties:change-me@postgres:5432/agent_bounties`. If

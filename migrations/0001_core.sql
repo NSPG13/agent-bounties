@@ -136,6 +136,24 @@ CREATE TABLE IF NOT EXISTS base_log_cursors (
   PRIMARY KEY (network, escrow_contract)
 );
 
+CREATE TABLE IF NOT EXISTS base_indexer_heartbeats (
+  network TEXT NOT NULL,
+  escrow_contract TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  latest_block BIGINT CHECK (latest_block IS NULL OR latest_block >= 0),
+  confirmed_to_block BIGINT CHECK (confirmed_to_block IS NULL OR confirmed_to_block >= 0),
+  from_block BIGINT CHECK (from_block IS NULL OR from_block >= 0),
+  to_block BIGINT CHECK (to_block IS NULL OR to_block >= 0),
+  fetched_logs BIGINT NOT NULL DEFAULT 0 CHECK (fetched_logs >= 0),
+  persisted_cursor_block BIGINT CHECK (persisted_cursor_block IS NULL OR persisted_cursor_block >= 0),
+  skipped_reason TEXT,
+  error_message TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (network, escrow_contract)
+);
+
 CREATE TABLE IF NOT EXISTS claims (
   id UUID PRIMARY KEY,
   bounty_id UUID NOT NULL REFERENCES bounties(id),

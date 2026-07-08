@@ -1,12 +1,13 @@
 use app::{
     build_base_indexer_status_report, build_live_money_readiness_report,
     stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
-    ApproveRiskPayoutRequest, BaseIndexerScanCursor, BaseIndexerStatusConfig,
-    BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest, CreateFundingIntentRequest,
-    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
-    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest, PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest,
-    RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    ApproveRiskPayoutRequest, BaseIndexerHeartbeatStatus, BaseIndexerScanCursor,
+    BaseIndexerStatusConfig, BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest,
+    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport,
+    LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanBaseDisputeRequest,
+    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
+    PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest, RegisterAgentRequest,
+    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
@@ -2756,12 +2757,25 @@ async fn get_base_indexer_status(
         }
         _ => None,
     };
+    let heartbeat = match (&state.store, escrow_contract.as_deref()) {
+        (Some(store), Some(escrow_contract)) => {
+            match store
+                .get_base_indexer_heartbeat(&network, escrow_contract)
+                .await
+            {
+                Ok(heartbeat) => heartbeat.map(base_indexer_heartbeat_from_db),
+                Err(error) => return mcp_error(error.to_string()),
+            }
+        }
+        _ => None,
+    };
 
     match build_base_indexer_status_report(BaseIndexerStatusConfig {
         network,
         escrow_contract,
         database_configured: state.store.is_some(),
         cursor,
+        heartbeat,
     }) {
         Ok(report) => mcp_json(report),
         Err(error) => mcp_error(error.to_string()),
@@ -2775,6 +2789,27 @@ fn base_indexer_scan_cursor_from_db(cursor: db::BaseLogScanCursor) -> BaseIndexe
         last_scanned_block: cursor.last_scanned_block,
         last_log_key: cursor.last_log_key,
         updated_at: cursor.updated_at,
+    }
+}
+
+fn base_indexer_heartbeat_from_db(
+    heartbeat: db::BaseIndexerHeartbeat,
+) -> BaseIndexerHeartbeatStatus {
+    BaseIndexerHeartbeatStatus {
+        network: heartbeat.network,
+        escrow_contract: heartbeat.escrow_contract,
+        status: heartbeat.status,
+        started_at: heartbeat.started_at,
+        completed_at: heartbeat.completed_at,
+        latest_block: heartbeat.latest_block,
+        confirmed_to_block: heartbeat.confirmed_to_block,
+        from_block: heartbeat.from_block,
+        to_block: heartbeat.to_block,
+        fetched_logs: heartbeat.fetched_logs,
+        persisted_cursor_block: heartbeat.persisted_cursor_block,
+        skipped_reason: heartbeat.skipped_reason,
+        error_message: heartbeat.error_message,
+        updated_at: heartbeat.updated_at,
     }
 }
 
@@ -3615,6 +3650,9 @@ mod tests {
         assert_eq!(body["database_configured"], false);
         assert_eq!(body["network_chain_id"], 8_453);
         assert_eq!(body["last_scanned_block"], serde_json::Value::Null);
+        assert_eq!(body["heartbeat_found"], false);
+        assert_eq!(body["worker_healthy"], serde_json::Value::Null);
+        assert_eq!(body["last_poll_status"], serde_json::Value::Null);
         assert!(body["evidence_boundaries"]
             .as_array()
             .unwrap()

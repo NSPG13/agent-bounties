@@ -5,7 +5,8 @@ use chain_base::{
     BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowLogDecoder, BaseEscrowLogQuery,
     BaseNetworkDescriptor, ChainEventIndexer, EvmLog,
 };
-use db::PostgresStore;
+use chrono::{DateTime, Utc};
+use db::{BaseIndexerHeartbeat, PostgresStore};
 use domain::{Id, Submission, VerifierResult};
 use ledger::{Ledger, LedgerEntry};
 use serde::{Deserialize, Serialize};
@@ -344,6 +345,117 @@ pub struct BaseIndexerPollReport {
     pub reconciliation: Option<BaseLogPipelineReport>,
     pub persisted_cursor_block: Option<u64>,
     pub skipped_reason: Option<String>,
+}
+
+pub const BASE_INDEXER_HEARTBEAT_SUCCESS: &str = "Success";
+pub const BASE_INDEXER_HEARTBEAT_SKIPPED: &str = "Skipped";
+pub const BASE_INDEXER_HEARTBEAT_FAILED: &str = "Failed";
+
+pub async fn poll_base_indexer_once_with_heartbeat(
+    store: &PostgresStore,
+    config: &BaseIndexerConfig,
+) -> anyhow::Result<BaseIndexerPollReport> {
+    let started_at = Utc::now();
+    match poll_base_indexer_once(store, config).await {
+        Ok(report) => {
+            let completed_at = Utc::now();
+            let heartbeat =
+                base_indexer_heartbeat_from_report(config, started_at, completed_at, &report);
+            store.upsert_base_indexer_heartbeat(&heartbeat).await?;
+            Ok(report)
+        }
+        Err(error) => {
+            let completed_at = Utc::now();
+            let error_message = error.to_string();
+            let heartbeat = base_indexer_heartbeat_from_error(
+                config,
+                started_at,
+                completed_at,
+                error_message.as_str(),
+            );
+            if let Err(heartbeat_error) = store.upsert_base_indexer_heartbeat(&heartbeat).await {
+                return Err(error).context(format!(
+                    "failed to persist Base indexer failure heartbeat: {heartbeat_error}"
+                ));
+            }
+            Err(error)
+        }
+    }
+}
+
+pub fn base_indexer_heartbeat_from_report(
+    config: &BaseIndexerConfig,
+    started_at: DateTime<Utc>,
+    completed_at: DateTime<Utc>,
+    report: &BaseIndexerPollReport,
+) -> BaseIndexerHeartbeat {
+    let failure_summary = report.reconciliation.as_ref().and_then(|reconciliation| {
+        if reconciliation.failures.is_empty() {
+            None
+        } else {
+            Some(
+                reconciliation
+                    .failures
+                    .iter()
+                    .map(|failure| {
+                        format!(
+                            "{}:{} {}",
+                            failure.block_number, failure.log_index, failure.reason
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        }
+    });
+    let status = if failure_summary.is_some() {
+        BASE_INDEXER_HEARTBEAT_FAILED
+    } else if report.skipped_reason.is_some() {
+        BASE_INDEXER_HEARTBEAT_SKIPPED
+    } else {
+        BASE_INDEXER_HEARTBEAT_SUCCESS
+    };
+
+    BaseIndexerHeartbeat {
+        network: config.network.clone(),
+        escrow_contract: config.escrow_contract.clone(),
+        status: status.to_string(),
+        started_at,
+        completed_at: Some(completed_at),
+        latest_block: Some(report.latest_block),
+        confirmed_to_block: report.confirmed_to_block,
+        from_block: report.from_block,
+        to_block: report.to_block,
+        fetched_logs: report.fetched_logs as u64,
+        persisted_cursor_block: report.persisted_cursor_block,
+        skipped_reason: report.skipped_reason.clone(),
+        error_message: failure_summary,
+        updated_at: completed_at,
+    }
+}
+
+pub fn base_indexer_heartbeat_from_error(
+    config: &BaseIndexerConfig,
+    started_at: DateTime<Utc>,
+    completed_at: DateTime<Utc>,
+    error_message: &str,
+) -> BaseIndexerHeartbeat {
+    BaseIndexerHeartbeat {
+        network: config.network.clone(),
+        escrow_contract: config.escrow_contract.clone(),
+        status: BASE_INDEXER_HEARTBEAT_FAILED.to_string(),
+        started_at,
+        completed_at: Some(completed_at),
+        latest_block: None,
+        confirmed_to_block: None,
+        from_block: None,
+        to_block: None,
+        fetched_logs: 0,
+        persisted_cursor_block: None,
+        skipped_reason: None,
+        error_message: Some(error_message.to_string()),
+        updated_at: completed_at,
+    }
 }
 
 pub async fn poll_base_indexer_once(
@@ -839,6 +951,85 @@ mod tests {
         assert_eq!(bounded_to_block(100, 500, 50), 149);
         assert_eq!(bounded_to_block(100, 120, 50), 120);
         assert_eq!(bounded_to_block(100, 120, 0), 100);
+    }
+
+    fn test_base_indexer_config() -> BaseIndexerConfig {
+        BaseIndexerConfig {
+            network: "base-sepolia".to_string(),
+            rpc_url: "https://base-sepolia.example".to_string(),
+            escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            start_block: Some(1),
+            poll_seconds: 15,
+            confirmations: 2,
+            max_blocks_per_query: 2_000,
+            request_id: 1,
+        }
+    }
+
+    #[test]
+    fn base_indexer_heartbeat_marks_skipped_poll() {
+        let config = test_base_indexer_config();
+        let now = Utc::now();
+        let report = BaseIndexerPollReport {
+            network: base_network_descriptor("base-sepolia").unwrap(),
+            escrow_contract: config.escrow_contract.clone(),
+            latest_block: 10,
+            confirmations: 2,
+            confirmed_to_block: Some(8),
+            from_block: Some(9),
+            to_block: None,
+            fetched_logs: 0,
+            reconciliation: None,
+            persisted_cursor_block: Some(8),
+            skipped_reason: Some("no confirmed blocks are ready to scan".to_string()),
+        };
+
+        let heartbeat = base_indexer_heartbeat_from_report(&config, now, now, &report);
+
+        assert_eq!(heartbeat.status, BASE_INDEXER_HEARTBEAT_SKIPPED);
+        assert_eq!(
+            heartbeat.skipped_reason.as_deref(),
+            Some("no confirmed blocks are ready to scan")
+        );
+        assert_eq!(heartbeat.latest_block, Some(10));
+        assert_eq!(heartbeat.persisted_cursor_block, Some(8));
+    }
+
+    #[test]
+    fn base_indexer_heartbeat_marks_reconciliation_failure() {
+        let config = test_base_indexer_config();
+        let now = Utc::now();
+        let report = BaseIndexerPollReport {
+            network: base_network_descriptor("base-sepolia").unwrap(),
+            escrow_contract: config.escrow_contract.clone(),
+            latest_block: 10,
+            confirmations: 2,
+            confirmed_to_block: Some(8),
+            from_block: Some(7),
+            to_block: Some(8),
+            fetched_logs: 1,
+            reconciliation: Some(BaseLogPipelineReport {
+                failures: vec![BaseLogFailure {
+                    block_number: 8,
+                    log_index: 0,
+                    log_key: "0xabc:0".to_string(),
+                    reason: "terminal event before create".to_string(),
+                }],
+                ..BaseLogPipelineReport::default()
+            }),
+            persisted_cursor_block: Some(7),
+            skipped_reason: None,
+        };
+
+        let heartbeat = base_indexer_heartbeat_from_report(&config, now, now, &report);
+
+        assert_eq!(heartbeat.status, BASE_INDEXER_HEARTBEAT_FAILED);
+        assert_eq!(heartbeat.fetched_logs, 1);
+        assert!(heartbeat
+            .error_message
+            .as_deref()
+            .unwrap()
+            .contains("terminal event before create"));
     }
 
     async fn payable_base_bounty() -> (BountyNetwork, Bounty, ProofRecord) {
