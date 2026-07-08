@@ -628,8 +628,13 @@ pub fn render_proof_page(proof: &ProofRecord, verifier: &VerifierResult) -> Stri
       <dt>Verifier confidence</dt><dd>{:.2}</dd>
       <dt>Privacy</dt><dd>{:?}</dd>
     </dl>
-    <a href="/public/verifiers/{:?}">Verifier profile</a>
-    <a href="/templates">Post similar bounty</a>
+    <nav aria-label="Next actions">
+      <a href="/public/verifiers/{:?}">Verifier profile</a>
+      <a href="/public/templates">Browse templates</a>
+      <a href="/v1/bounties/feed">Find funded bounties</a>
+      <a href="/public/capabilities">Find solvers</a>
+      <a href="{}">Post similar GitHub bounty</a>
+    </nav>
   </main>
 </body>
 </html>"#,
@@ -639,7 +644,8 @@ pub fn render_proof_page(proof: &ProofRecord, verifier: &VerifierResult) -> Stri
         verifier.decision,
         verifier.confidence,
         proof.privacy,
-        verifier.kind
+        verifier.kind,
+        GITHUB_ISSUE_TEMPLATE_URL
     )
 }
 
@@ -897,6 +903,11 @@ mod tests {
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
         assert!(html.contains("/public/verifiers/Manual"));
+        assert!(html.contains("/public/templates"));
+        assert!(html.contains("/v1/bounties/feed"));
+        assert!(html.contains("/public/capabilities"));
+        assert!(html.contains(GITHUB_ISSUE_TEMPLATE_URL));
+        assert!(!html.contains("href=\"/templates\""));
     }
 
     #[test]
