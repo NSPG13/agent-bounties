@@ -114,6 +114,9 @@ def main() -> int:
         "bountyId",
         "amountMinor",
         "funding_source",
+        "paymentPreference",
+        "Prefer PayPal",
+        "PayPal is selected inside Stripe Checkout",
         "Plan Base USDC escrow",
         "/v1/base/funding-plan",
         "createEscrow",
@@ -125,7 +128,12 @@ def main() -> int:
 
     if "sk_live" in index + funding + main_js:
         fail("site must not include secret-looking Stripe live keys")
-    if "Stripe Checkout funding" not in llms or "PayPal-capable" not in llms:
+    if (
+        "Stripe Checkout funding" not in llms
+        or "PayPal-capable" not in llms
+        or "PayPal-capable human funding handoff" not in llms
+        or "paymentPreference=paypal" not in llms
+    ):
         fail("llms.txt must orient agents to Stripe Checkout and PayPal-capable funding")
     if discovery.get("open_source") is not True:
         fail("static discovery manifest must advertise open_source=true")
@@ -153,8 +161,18 @@ def main() -> int:
         or "apiBaseUrl" not in funding_handoff.get("query_params", [])
         or "bountyId" not in funding_handoff.get("query_params", [])
         or "amountMinor" not in funding_handoff.get("query_params", [])
+        or "paymentPreference" not in funding_handoff.get("query_params", [])
     ):
         fail("static discovery manifest must advertise public funding handoff query params")
+    paypal_checkout_handoff = discovery.get("paypal_checkout_handoff", {})
+    if (
+        paypal_checkout_handoff.get("supported_rail") != "StripeFiat"
+        or paypal_checkout_handoff.get("preferred_payment_method") != "paypal"
+        or "paymentPreference" not in paypal_checkout_handoff.get("query_params", [])
+        or "checkout.session.completed"
+        not in paypal_checkout_handoff.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must advertise PayPal-capable Stripe Checkout handoff")
     base_funding_handoff = discovery.get("base_funding_handoff", {})
     if (
         base_funding_handoff.get("endpoint_template") != "{api_base_url}/v1/base/funding-plan"

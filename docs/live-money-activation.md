@@ -174,6 +174,10 @@ enable PayPal in Stripe Dashboard and optionally set
 Configuration id. This remains Stripe Checkout funding: no direct PayPal API
 calls, no PayPal payout rail, and no funding credit from the redirect success
 page.
+Human-facing funding links can include `paymentPreference=paypal` to make the
+PayPal-capable path explicit on the static funding page. The parameter is a UI
+hint only; Stripe Checkout decides whether PayPal is available for the account,
+customer location, browser, currency, and configured payment-method set.
 
 ## Payout Flow
 

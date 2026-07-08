@@ -18,10 +18,38 @@
       "currency",
       "rail",
       "source",
-      "externalReference"
+      "externalReference",
+      "paymentPreference"
     ],
     "supported_rail": "StripeFiat",
     "settlement_authority": "query parameters are UI defaults only; funding still requires verified Stripe webhook reconciliation"
+  },
+  "paypal_checkout_handoff": {
+    "page": "https://nspg13.github.io/agent-bounties/funding.html",
+    "purpose": "Route human funders to Stripe-hosted Checkout with PayPal preferred where Stripe supports and enables it.",
+    "query_params": [
+      "apiBaseUrl",
+      "bountyId",
+      "organizationId",
+      "amountMinor",
+      "currency",
+      "rail",
+      "source",
+      "externalReference",
+      "paymentPreference"
+    ],
+    "supported_rail": "StripeFiat",
+    "preferred_payment_method": "paypal",
+    "availability": "PayPal is selected inside Stripe Checkout only when eligible for the hosted Stripe account, location, browser, currency, and payment-method configuration.",
+    "setup_required": [
+      "ENABLE_STRIPE_LIVE_EXECUTION=true",
+      "ENABLE_STRIPE_PUBLIC_CHECKOUT=true",
+      "STRIPE_SECRET_KEY",
+      "STRIPE_WEBHOOK_SECRET",
+      "PayPal enabled in Stripe Dashboard where Stripe supports the platform account",
+      "optional STRIPE_PAYMENT_METHOD_CONFIGURATION for a PayPal-capable Stripe Payment Method Configuration"
+    ],
+    "settlement_authority": "PayPal-capable Checkout is not funding by itself; funding still requires verified checkout.session.completed webhook reconciliation"
   },
   "base_funding_handoff": {
     "page": "https://nspg13.github.io/agent-bounties/funding.html",

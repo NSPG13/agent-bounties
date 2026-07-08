@@ -377,9 +377,13 @@ mock provider. The optional `STRIPE_PAYMENT_METHOD_CONFIGURATION` can target a
 Dashboard-managed Checkout method set without changing ledger reconciliation.
 Public bounty pages may link human funders to the static funding page with
 prefilled `apiBaseUrl`, `bountyId`, `amountMinor`, `currency`, `rail`, and
-`source` query parameters. Those links only reduce copy-paste friction for
-StripeFiat Checkout funding. They are not ledger evidence, do not authorize
-settlement, and are not offered for Base-only funding partitions.
+`source` query parameters. Links can also include `paymentPreference=paypal`
+for human funders who prefer PayPal. Those links only reduce copy-paste friction
+for StripeFiat Checkout funding. They are not ledger evidence, do not authorize
+settlement, and are not offered for Base-only funding partitions. The PayPal
+preference is not sent as settlement evidence and does not force a payment
+method; it only tells the static page to explain that PayPal must be selected
+inside Stripe Checkout if Stripe makes it available.
 The live surfaces are:
 
 - `POST /v1/stripe/live/checkout-top-ups`, which creates the planned Checkout

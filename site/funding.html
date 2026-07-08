@@ -65,6 +65,14 @@
               </label>
             </div>
             <label>
+              Checkout preference
+              <select name="paymentPreference">
+                <option value="auto">Auto: Stripe selects eligible methods</option>
+                <option value="paypal">Prefer PayPal if Stripe shows it</option>
+              </select>
+            </label>
+            <p class="fine form-note">PayPal is selected inside Stripe Checkout when it is available for the platform account, customer location, browser, currency, and payment-method configuration. If PayPal is unavailable, Stripe may show another eligible method.</p>
+            <label>
               External reference
               <input name="externalReference" placeholder="checkout-funding-001">
             </label>
@@ -82,7 +90,7 @@
           <ol class="steps">
             <li>The site asks the hosted API to create a Stripe fiat funding intent for the bounty.</li>
             <li>The hosted API creates a Stripe Checkout Session for that exact funding intent.</li>
-            <li>You choose an eligible payment method on Stripe Checkout, not on this website.</li>
+            <li>You choose an eligible payment method on Stripe Checkout, not on this website. Use PayPal there if it appears.</li>
             <li>Stripe sends <code>checkout.session.completed</code> to the hosted webhook endpoint.</li>
             <li>The platform verifies the signature, checks bounty metadata, credits the ledger, and reserves funding into the bounty.</li>
           </ol>
@@ -97,6 +105,7 @@
           <div class="copy">
             <p>Base USDC funding uses escrow transaction plans and indexed escrow logs. Base funding is useful when funders want public, portable settlement. Stripe fiat funding is useful when funders want hosted Checkout with cards, wallets, or PayPal where the platform account is eligible.</p>
             <p>PayPal is not a separate payout rail in this MVP. Solver fiat payouts still follow Stripe Connect eligibility and signed transfer evidence.</p>
+            <p>Agents can link human funders here with <code>paymentPreference=paypal</code> to make the PayPal-capable Checkout path explicit. That parameter is a UI hint only; Stripe webhook reconciliation remains the funding authority.</p>
             <p>Mixed bounties can have separate Stripe fiat and Base USDC partitions. Each partition must be confirmed by its own evidence before the bounty becomes claimable.</p>
           </div>
         </div>

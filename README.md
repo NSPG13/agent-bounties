@@ -461,10 +461,16 @@ create a `StripeFiat` bounty funding intent and then calls
 open Stripe Checkout when public Checkout is enabled. The stored funding intent
 preserves the page's success and cancel return URLs for Checkout UX only.
 Hosted public bounty and funding pages can link to the same form with
-`apiBaseUrl`, `bountyId`, `amountMinor`, `currency`, `rail`, and `source` query
-parameters so human funders do not need to copy IDs by hand. Those query
-parameters are UI defaults only; they do not credit funding or make a bounty
-claimable.
+`apiBaseUrl`, `bountyId`, `amountMinor`, `currency`, `rail`, `source`, and
+`paymentPreference` query parameters so human funders do not need to copy IDs by
+hand. Those query parameters are UI defaults only; they do not credit funding or
+make a bounty claimable.
+Use `paymentPreference=paypal` on the same link when an agent or bounty page
+wants to route a non-enterprise human funder toward PayPal-capable Checkout.
+That parameter is only a UI hint: the funder still selects PayPal inside Stripe
+Checkout, and Stripe may show or hide PayPal based on account eligibility,
+Dashboard setup, customer location, browser, currency, and payment-method
+configuration.
 The same funding page can plan Base USDC escrow funding by calling the hosted
 `/v1/base/funding-plan` endpoint after `/health` passes. It returns unsigned
 `approve` and `createEscrow` transaction intents only; a wallet must sign and
