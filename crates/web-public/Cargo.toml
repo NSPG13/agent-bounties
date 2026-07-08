@@ -11,4 +11,5 @@ chrono.workspace = true
 domain = { path = "../domain" }
 risk = { path = "../risk" }
 serde.workspace = true
+serde_json.workspace = true
 uuid.workspace = true

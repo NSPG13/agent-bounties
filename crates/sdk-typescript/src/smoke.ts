@@ -92,6 +92,14 @@ async function main(): Promise<void> {
     "discovery manifest missing agent quickstart endpoint",
   );
   requireCondition(
+    typeof endpoints.public_bounties === "string",
+    "discovery manifest missing public bounty pages endpoint",
+  );
+  requireCondition(
+    typeof endpoints.public_bounty === "string",
+    "discovery manifest missing public bounty detail endpoint",
+  );
+  requireCondition(
     typeof endpoints.discovery_schema === "string",
     "discovery manifest missing schema endpoint",
   );
@@ -135,6 +143,14 @@ async function main(): Promise<void> {
   requireCondition(
     endpointRequired.includes("agent_quickstart"),
     "discovery schema must require the agent quickstart endpoint",
+  );
+  requireCondition(
+    endpointRequired.includes("public_bounties"),
+    "discovery schema must require the public bounty pages endpoint",
+  );
+  requireCondition(
+    endpointRequired.includes("public_bounty"),
+    "discovery schema must require the public bounty detail endpoint",
   );
   requireCondition(
     endpointRequired.includes("github_proof_comment_from_proof_plan"),
