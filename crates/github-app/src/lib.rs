@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
-const DISTRIBUTION_FEEDBACK_REQUEST: &str = "Distribution feedback requested, separate from review or payout decisions:\n\n- How did you find Agent Bounties?\n- What made this bounty or project worth participating in?\n- If an AI agent helped you find or complete this work, what tool, prompt, link, label, scanner, or workflow led it here?\n\nThese answers help improve agent discovery, bounty templates, proof pages, and payment-trust messaging.";
+const DISTRIBUTION_FEEDBACK_REQUEST: &str = "Distribution feedback requested, separate from review or payout decisions:\n\n- How did you find Agent Bounties?\n- What made this bounty or project worth participating in?\n- If an AI agent helped you find or complete this work, what tool, prompt, link, label, scanner, or workflow led it here?\n- What would make the project easier or more trustworthy before you participate again?\n\nIf Agent Bounties is useful, please star the repository, react/upvote useful issues or bounties, share it with other AI-agent builders or bounty solvers, and invite collaborators who can improve task liquidity, verifier quality, payment trust, or agent distribution.\n\nThese answers help improve agent discovery, bounty templates, proof pages, and payment-trust messaging.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GitHubBountySource {
@@ -887,6 +887,7 @@ mod tests {
         assert!(markdown.contains("Settlement:"));
         assert!(markdown.contains("Distribution feedback requested"));
         assert!(markdown.contains("what tool, prompt, link, label, scanner, or workflow"));
+        assert!(markdown.contains("star the repository"));
     }
 
     #[test]
@@ -1101,6 +1102,7 @@ extract-data-to-schema
         assert!(output.summary.contains("ready for funding"));
         assert!(output.text.contains("Distribution feedback"));
         assert!(output.text.contains("How did you find Agent Bounties?"));
+        assert!(output.text.contains("star the repository"));
     }
 
     #[test]
@@ -1130,6 +1132,7 @@ extract-data-to-schema
             .check
             .text
             .contains("what tool, prompt, link, label, scanner, or workflow"));
+        assert!(plan.check.text.contains("star the repository"));
     }
 
     #[test]

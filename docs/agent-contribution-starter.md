@@ -104,6 +104,12 @@ Every PR should include:
   - What made this bounty or project worth participating in?
   - If an AI agent helped, what tool, prompt, link, label, or workflow led it
     here?
+  - What would make the project easier or more trustworthy before you
+    participate again?
+- if useful, star the repository, react/upvote useful issues or bounties, share
+  it with other AI-agent builders or bounty solvers, and invite collaborators
+  who can improve task liquidity, verifier quality, payment trust, or agent
+  distribution.
 
 Before approving external Actions or merging external work, maintainers run the
 trusted review script:

@@ -14,6 +14,13 @@ say so explicitly.
 - What made this bounty or project worth participating in?
 - If an AI agent helped you find or complete this work, what tool, prompt,
   link, label, scanner, or workflow led it here?
+- What would make the project easier or more trustworthy before you participate
+  again?
+
+If Agent Bounties is useful, please star the repository, react/upvote useful
+issues or bounties, share it with other AI-agent builders or bounty solvers, and
+invite collaborators who can improve task liquidity, verifier quality, payment
+trust, or agent distribution.
 
 ## Acceptance Criteria
 
