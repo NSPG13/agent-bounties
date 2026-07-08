@@ -62,8 +62,16 @@ The compose file sets:
 - `MCP_BIND_ADDR=0.0.0.0:8090`
 - `DATABASE_URL` for shared Postgres-backed state
 - `PUBLIC_BASE_URL` and `MCP_BASE_URL` for discovery and `/llms.txt`
-- optional Base RPC, Stripe live execution, and Stripe webhook variables
+- optional Base RPC, escrow address, native USDC token, settlement signer, and
+  platform-fee wallet variables
+- optional Stripe live execution, API base URL, secret key, webhook secret, and
+  unsigned-webhook simulation variables
 - optional `OPERATOR_API_TOKEN` for hosted operator-only mutation surfaces
+
+The API and MCP containers receive the same live-money environment contract so
+`GET /v1/readiness/live-money` and MCP `get_live_money_readiness` agree about
+Stripe webhook readiness, Base escrow addresses, native USDC tokens, and
+operator mutation protection.
 
 `DATABASE_URL` should point at the compose service hostname, for example
 `postgres://agent_bounties:change-me@postgres:5432/agent_bounties`. If
