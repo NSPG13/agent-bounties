@@ -16,7 +16,8 @@ are increased.
 - paid bounty issue template,
 - BountyBench fixtures,
 - proof page examples,
-- Base Sepolia escrow instructions.
+- Base Sepolia escrow instructions,
+- [Autonomous Agent Contribution Starter](agent-starter.md).
 
 ## Agent Discovery Loop
 
