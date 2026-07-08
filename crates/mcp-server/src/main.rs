@@ -2862,6 +2862,10 @@ fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyR
             state.stripe_secret_key.as_deref(),
         ),
         stripe_live_execution_enabled: state.stripe_live_execution_enabled,
+        stripe_payment_method_configuration_configured: state
+            .stripe_payment_method_configuration
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
         stripe_webhook_secret_configured: env_nonempty_value("STRIPE_WEBHOOK_SECRET").is_some(),
         allow_unsigned_stripe_webhooks: env_flag("ALLOW_UNSIGNED_STRIPE_WEBHOOKS"),
         operator_auth_configured: state.operator_api_token.is_some(),
@@ -3656,6 +3660,10 @@ mod tests {
         assert_eq!(body["network"], "Base");
         assert_eq!(body["network_chain_id"], 8_453);
         assert_eq!(body["stripe_secret_key_mode"], "unset");
+        assert_eq!(
+            body["stripe_payment_method_configuration_configured"],
+            false
+        );
         assert_eq!(body["supplied_usdc_token_matches_native"], true);
         assert_eq!(body["live_money_ready"], false);
         assert!(body["checks"].as_array().unwrap().iter().any(|check| {
@@ -3664,6 +3672,35 @@ mod tests {
                 .unwrap()
                 .contains("Stripe live-money execution")
         }));
+        assert!(body["checks"].as_array().unwrap().iter().any(|check| {
+            check["name"]
+                .as_str()
+                .unwrap()
+                .contains("payment-method configuration")
+        }));
+    }
+
+    #[tokio::test]
+    async fn live_money_readiness_tool_reports_payment_method_configuration_without_id() {
+        let response = get_live_money_readiness(
+            State(test_state_with_stripe_payment_method_configuration(
+                "pmc_paypal_enabled",
+            )),
+            Json(LiveMoneyReadinessArgs {
+                network: Some("base-mainnet".to_string()),
+            }),
+        )
+        .await
+        .0;
+        let body = &response["content"][0]["json"];
+        let text = serde_json::to_string(body).unwrap();
+
+        assert_eq!(body["stripe_payment_method_configuration_configured"], true);
+        assert!(body["checks"].as_array().unwrap().iter().any(|check| {
+            check["name"] == "Stripe Checkout payment-method configuration"
+                && check["configured"] == true
+        }));
+        assert!(!text.contains("pmc_paypal_enabled"));
     }
 
     #[tokio::test]

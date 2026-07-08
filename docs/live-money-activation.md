@@ -96,11 +96,14 @@ curl "$env:MCP_BASE_URL/tools/get_base_indexer_status" `
 ```
 
 These reports intentionally expose only Stripe key mode, configured gates, chain
-metadata, native USDC address, indexer cursor state, last worker heartbeat
+metadata, native USDC address, whether an optional Stripe Payment Method
+Configuration is configured, indexer cursor state, last worker heartbeat
 outcome, warnings, and settlement evidence boundaries. They must not expose
-Stripe secrets, webhook secrets, RPC URLs, or operator tokens. Indexer status is
-monitoring evidence only; it does not fund, release, refund, dispute, or
-authorize settlement.
+Stripe secrets, Payment Method Configuration ids, webhook secrets, RPC URLs, or
+operator tokens. The payment-method configuration indicator is Checkout UX
+readiness only; it does not fund, pay out, or authorize settlement. Indexer
+status is monitoring evidence only; it does not fund, release, refund, dispute,
+or authorize settlement.
 
 ## Automated Base Indexing
 

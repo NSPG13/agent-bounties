@@ -1099,6 +1099,9 @@ fn real_funding_readiness(
         usdc_token,
         stripe_secret_key_mode: stripe_secret_key_mode_from_secret(stripe_secret_key.as_deref()),
         stripe_live_execution_enabled: env_flag("ENABLE_STRIPE_LIVE_EXECUTION"),
+        stripe_payment_method_configuration_configured: env_nonempty(
+            "STRIPE_PAYMENT_METHOD_CONFIGURATION",
+        ),
         stripe_webhook_secret_configured: env_nonempty("STRIPE_WEBHOOK_SECRET"),
         allow_unsigned_stripe_webhooks: env_flag("ALLOW_UNSIGNED_STRIPE_WEBHOOKS"),
         operator_auth_configured: env_nonempty("OPERATOR_API_TOKEN"),
@@ -3156,6 +3159,13 @@ async fn production_smoke_check(
     )?;
     require(
         live_money_readiness
+            .pointer("/stripe_payment_method_configuration_configured")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "live-money readiness must expose a non-secret Stripe payment-method configuration boolean",
+    )?;
+    require(
+        live_money_readiness
             .pointer("/evidence_boundaries")
             .and_then(|value| value.as_array())
             .map(|boundaries| {
@@ -4035,6 +4045,13 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .unwrap_or(false),
         "API live-money readiness must not expose Stripe secret material",
     )?;
+    require(
+        api_live_money_readiness
+            .pointer("/stripe_payment_method_configuration_configured")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "API live-money readiness must expose a non-secret Stripe payment-method configuration boolean",
+    )?;
     let mcp_live_money_readiness = mcp_tool_post(
         mcp,
         "get_live_money_readiness",
@@ -4050,6 +4067,13 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .and_then(|value| value.as_bool())
             .is_some(),
         "MCP get_live_money_readiness must expose live_money_ready boolean",
+    )?;
+    require(
+        mcp_live_money_readiness
+            .pointer("/stripe_payment_method_configuration_configured")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "MCP get_live_money_readiness must expose a non-secret Stripe payment-method configuration boolean",
     )?;
     let api_base_indexer_status = get_json(&format!(
         "{api}/v1/base/indexer-status?network=base-mainnet"

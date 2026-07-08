@@ -89,8 +89,9 @@ cargo run -p cli -- real-funding-readiness `
 
 The readiness report does not call Stripe or Base. It checks whether local
 simulation, Stripe test-mode execution, Stripe webhook evidence, Base Sepolia
-log reconciliation, optional signed transaction broadcast, and hosted operator
-auth are configured. Missing readiness only blocks the external rail step; the
+log reconciliation, optional signed transaction broadcast, the non-secret
+Stripe payment-method configuration indicator, and hosted operator auth are
+configured. Missing readiness only blocks the external rail step; the
 deterministic local rehearsal remains runnable.
 
 Expected evidence boundary in the JSON output:
@@ -141,6 +142,8 @@ It then validates that:
 - Base funding applies only after `EscrowCreated`,
 - Base payout applies only after `EscrowReleased`,
 - Stripe payout applies only after `transfer.created`,
+- readiness reports whether `STRIPE_PAYMENT_METHOD_CONFIGURATION` is configured
+  without exposing the Stripe object id,
 - final settlements contain paid solver payouts and platform fees for both
   rails.
 

@@ -463,9 +463,12 @@ card, credit card, wallet, or PayPal where the hosted Stripe account and
 Dashboard configuration support those methods.
 
 Agents and operators should check them before posting or funding bounties that
-expect live Stripe fiat or Base mainnet USDC movement. Indexer status is
-monitoring evidence only; settlement still requires decoded escrow logs to
-reconcile into platform state.
+expect live Stripe fiat or Base mainnet USDC movement. The live-money readiness
+response includes only whether an optional Stripe Payment Method Configuration
+is configured, not the Stripe object id, so PayPal-capable Checkout setup can be
+checked without leaking Stripe configuration. Indexer status is monitoring
+evidence only; settlement still requires decoded escrow logs to reconcile into
+platform state.
 
 `service-smoke-spawn` starts the compiled API and MCP binaries on local
 high-numbered ports, checks health/discovery/tool listing, posts a Base public

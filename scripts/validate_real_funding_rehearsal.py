@@ -170,6 +170,10 @@ def check_readiness(readiness: dict[str, Any]) -> None:
         readiness["supplied_usdc_token_matches_native"] is True,
         "readiness must validate supplied Base Sepolia USDC token",
     )
+    expect(
+        isinstance(readiness["stripe_payment_method_configuration_configured"], bool),
+        "readiness must expose a boolean Stripe payment-method configuration indicator",
+    )
     checks = {check["name"]: check for check in readiness["checks"]}
     expect(
         checks["local deterministic rehearsal"]["configured"] is True,
@@ -179,9 +183,14 @@ def check_readiness(readiness: dict[str, Any]) -> None:
         checks["Base escrow addresses"]["configured"] is True,
         "Base Sepolia escrow and native token addresses must be accepted for planning",
     )
+    expect(
+        "Stripe Checkout payment-method configuration" in checks,
+        "readiness must include the optional Stripe Checkout payment-method configuration check",
+    )
     boundaries = "\n".join(readiness["evidence_boundaries"])
     for phrase in (
         "Checkout Session creation is not funding",
+        "Payment Method Configuration only changes eligible Checkout methods",
         "approve/createEscrow transaction planning is not funding",
         "verifier acceptance creates settlement intents",
         "EscrowReleased log marks USDC payout paid",

@@ -36,8 +36,10 @@ The gate checks:
 - Discovery fields for Base funding plans and normalized escrow event
   reconciliation, so indexed `EscrowCreated` remains discoverable before claim.
 - Live-money readiness and Base indexer status reporting for Base mainnet USDC
-  and Stripe mode, including the indexer's nullable heartbeat fields, without
-  exposing secret keys, webhook secrets, RPC URLs, or operator tokens.
+  and Stripe mode, including the optional Stripe Checkout payment-method
+  configuration boolean and the indexer's nullable heartbeat fields, without
+  exposing secret keys, Payment Method Configuration ids, webhook secrets, RPC
+  URLs, or operator tokens.
 - MCP tool descriptors, JSON input schemas, and operator auth metadata for
   protected tools.
 - Public bounty, capability, template, and verifier pages.

@@ -831,6 +831,10 @@ fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyR
             state.stripe_secret_key.as_deref(),
         ),
         stripe_live_execution_enabled: state.stripe_live_execution_enabled,
+        stripe_payment_method_configuration_configured: state
+            .stripe_payment_method_configuration
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
         stripe_webhook_secret_configured: state.stripe_webhook_secret.is_some(),
         allow_unsigned_stripe_webhooks: state.allow_unsigned_stripe_webhooks,
         operator_auth_configured: state.operator_api_token.is_some(),
@@ -4267,12 +4271,46 @@ mod tests {
         assert_eq!(report.network, "Base");
         assert_eq!(report.network_chain_id, 8_453);
         assert_eq!(report.stripe_secret_key_mode, "unset");
+        assert!(!report.stripe_payment_method_configuration_configured);
         assert_eq!(report.supplied_usdc_token_matches_native, Some(true));
         assert!(!report.live_money_ready);
         assert!(report
             .checks
             .iter()
             .any(|check| check.name == "Stripe live-money execution gate"));
+        assert!(report
+            .checks
+            .iter()
+            .any(|check| check.name == "Stripe Checkout payment-method configuration"));
+        assert!(!serde_json::to_string(&report)
+            .unwrap()
+            .contains("pmc_paypal_enabled"));
+    }
+
+    #[tokio::test]
+    async fn live_money_readiness_endpoint_reports_payment_method_configuration_without_id() {
+        let state = test_state_with_stripe_payment_method_configuration(
+            BountyNetwork::default(),
+            "pmc_paypal_enabled",
+        );
+        let report = live_money_readiness(
+            State(state),
+            Query(LiveMoneyReadinessQuery {
+                network: Some("base-mainnet".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let json = serde_json::to_string(&report).unwrap();
+
+        assert!(report.stripe_payment_method_configuration_configured);
+        assert!(report.checks.iter().any(|check| {
+            check.name == "Stripe Checkout payment-method configuration"
+                && check.configured
+                && check.env_vars == vec!["STRIPE_PAYMENT_METHOD_CONFIGURATION".to_string()]
+        }));
+        assert!(!json.contains("pmc_paypal_enabled"));
     }
 
     #[tokio::test]
