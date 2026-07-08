@@ -134,6 +134,13 @@ curl -X POST http://127.0.0.1:8090/tools/open_pooled_bounty \
 
 ## 6. Claim, Submit, Verify, Check Payment
 
+SDK examples with deterministic assertions are available for the same flow:
+`crates/sdk-python/examples/cofund_claim.py` and
+`crates/sdk-typescript/examples/cofund-claim.ts`. They read the discovery
+manifest, run a local simulated co-funded bounty through claim, submit,
+verification, and paid-status checks, then plan a Base Sepolia funding
+transaction without treating the plan as settlement.
+
 Find claimable public work:
 
 ```bash

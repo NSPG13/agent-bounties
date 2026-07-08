@@ -92,12 +92,14 @@ cargo run -p cli -- pooled-funding-demo
   crates/sdk-python/agent_bounties/client.py \
   crates/sdk-python/agent_bounties/smoke.py \
   crates/sdk-python/agent_bounties/__init__.py \
+  crates/sdk-python/examples/cofund_claim.py \
   scripts/github_issue_plan_comment.py \
   scripts/github_proof_comment.py
 
 cd "$repo_root/crates/sdk-typescript"
 npm ci
 npm run build
+npm run check:examples
 
 cd "$repo_root/contracts/base-escrow"
 forge test

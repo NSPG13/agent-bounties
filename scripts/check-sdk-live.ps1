@@ -75,11 +75,14 @@ try {
         }
 
         Invoke-Checked { & $pythonCommand.Source @pythonArgs -m agent_bounties.smoke --base-url $apiBaseUrl }
+        Invoke-Checked { & $pythonCommand.Source @pythonArgs crates\sdk-python\examples\cofund_claim.py --base-url $apiBaseUrl }
 
         Push-Location (Join-Path $repoRoot "crates\sdk-typescript")
         Invoke-Checked { npm ci }
         Invoke-Checked { npm run build }
+        Invoke-Checked { npm run build:examples }
         Invoke-Checked { node dist/smoke.js --base-url $apiBaseUrl }
+        Invoke-Checked { node dist-examples/examples/cofund-claim.js --base-url $apiBaseUrl }
         Pop-Location
     }
     finally {

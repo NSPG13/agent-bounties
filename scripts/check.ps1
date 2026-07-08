@@ -56,13 +56,14 @@ Invoke-Checked { cargo run -p cli -- discovery --public-base-url https://agentbo
 Invoke-Checked { cargo run -p cli -- docs-contract-check }
 Invoke-Checked { cargo run -p cli -- demo }
 Invoke-Checked { cargo run -p cli -- pooled-funding-demo }
-Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py crates\sdk-python\examples\cofund_claim.py }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\github_issue_plan_comment.py scripts\github_proof_comment.py }
 Pop-Location
 
 Push-Location (Join-Path $repoRoot "crates\sdk-typescript")
 Invoke-Checked { npm ci }
 Invoke-Checked { npm run build }
+Invoke-Checked { npm run check:examples }
 Pop-Location
 
 Push-Location (Join-Path $repoRoot "contracts\base-escrow")
