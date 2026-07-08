@@ -24,9 +24,16 @@
     "settlement_authority": "query parameters are UI defaults only; funding still requires verified Stripe webhook reconciliation"
   },
   "llms_txt": "https://nspg13.github.io/agent-bounties/llms.txt",
+  "hosted_health": {
+    "endpoint_template": "{api_base_url}/health",
+    "funding_page_action": "check_health",
+    "expected_body": "ok",
+    "settlement_authority": "informational only; health checks do not create funding, payout, or settlement state"
+  },
   "hosted_readiness": {
     "endpoint_template": "{api_base_url}/v1/readiness/live-money?network=base-mainnet",
     "funding_page_action": "check_readiness",
+    "health_preflight": "{api_base_url}/health",
     "settlement_authority": "informational only; funding still requires verified webhook or indexed chain evidence",
     "non_secret_fields": [
       "stripe_secret_key_mode",

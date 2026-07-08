@@ -467,10 +467,11 @@ parameters are UI defaults only; they do not credit funding or make a bounty
 claimable.
 Checkout may show debit card, credit card, wallet, or PayPal where the hosted
 Stripe account and Dashboard configuration support those methods.
-The funding page also includes a read-only hosted readiness check for
-`/v1/readiness/live-money?network=base-mainnet` so funders can see non-secret
-Stripe live, signed-webhook, Base mainnet, and PayPal-capable
-method-configuration signals before creating a funding intent.
+The funding page also includes a read-only hosted health and readiness check for
+`/health` and `/v1/readiness/live-money?network=base-mainnet` so funders can
+confirm the API URL is alive before inspecting non-secret Stripe live,
+signed-webhook, Base mainnet, and PayPal-capable method-configuration signals
+before creating a funding intent.
 For hosted deployments, run the read-only `Production Smoke` GitHub Actions
 workflow or `scripts/check-production-smoke.*` against the API/MCP URLs before
 advertising a hosted API in funding links. Only set repository variable

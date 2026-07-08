@@ -157,6 +157,19 @@
     return value ? "ready" : "needs setup";
   }
 
+  async function checkHostedHealth(apiBaseUrl) {
+    const response = await fetch(`${apiBaseUrl}/health`, {
+      headers: { accept: "text/plain" },
+    });
+    if (!response.ok) {
+      throw new Error(`Hosted API health check failed with ${response.status}`);
+    }
+    const body = (await response.text()).trim();
+    if (body !== "ok") {
+      throw new Error("Hosted API health check did not return ok");
+    }
+  }
+
   function formatReadiness(report) {
     const checks = Array.isArray(report.checks) ? report.checks : [];
     const methodConfig = report.stripe_payment_method_configuration_configured === true;
@@ -169,6 +182,7 @@
       );
 
     return [
+      "Hosted API health: ok",
       `Network: ${report.network || "unknown"} (${report.network_chain_id || "unknown"})`,
       `Live-money gate: ${configuredLabel(report.live_money_ready === true)}`,
       `Stripe live execution: ${configuredLabel(report.stripe_live_mode_ready === true)}`,
@@ -195,8 +209,10 @@
         return;
       }
 
-      readinessOutput.textContent = "Checking hosted live-money readiness...";
+      readinessOutput.textContent = "Checking hosted API health...";
       try {
+        await checkHostedHealth(apiBaseUrl);
+        readinessOutput.textContent = "Hosted API health is ok. Checking live-money readiness...";
         const response = await fetch(`${apiBaseUrl}/v1/readiness/live-money?network=base-mainnet`, {
           headers: { accept: "application/json" },
         });
@@ -205,7 +221,7 @@
         }
         readinessOutput.textContent = formatReadiness(await response.json());
       } catch (error) {
-        readinessOutput.textContent = `${error.message}\n\nNo funding intent or Checkout Session was created. Confirm the hosted API URL, CORS settings, and live-money readiness endpoint.`;
+        readinessOutput.textContent = `${error.message}\n\nNo funding intent or Checkout Session was created. Confirm the hosted API URL, CORS settings, /health endpoint, and live-money readiness endpoint.`;
       }
     });
   }
