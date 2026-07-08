@@ -605,6 +605,20 @@ class AgentBountiesClient:
             json={"agent_id": agent_id},
         )
 
+    def plan_stripe_connect_transfer(
+        self,
+        payout_intent_id: str,
+        connected_account_id: str,
+    ):
+        return self._request(
+            "POST",
+            "/v1/stripe/connect-transfers",
+            json={
+                "payout_intent_id": payout_intent_id,
+                "connected_account_id": connected_account_id,
+            },
+        )
+
     def execute_stripe_checkout_top_up(
         self,
         organization_id: str,
@@ -630,6 +644,20 @@ class AgentBountiesClient:
             "POST",
             "/v1/stripe/live/connect-accounts",
             json={"agent_id": agent_id},
+        )
+
+    def execute_stripe_connect_transfer(
+        self,
+        payout_intent_id: str,
+        connected_account_id: str,
+    ):
+        return self._request(
+            "POST",
+            "/v1/stripe/live/connect-transfers",
+            json={
+                "payout_intent_id": payout_intent_id,
+                "connected_account_id": connected_account_id,
+            },
         )
 
     def plan_github_issue_bounty(
@@ -722,6 +750,24 @@ class AgentBountiesClient:
         response = httpx.request(
             "POST",
             f"{self.base_url}/v1/stripe/checkout-webhooks",
+            json=event,
+            headers=headers or None,
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def reconcile_stripe_transfer_event(
+        self,
+        event: dict,
+        stripe_signature: str | None = None,
+    ):
+        headers = self._headers() or {}
+        if stripe_signature:
+            headers["stripe-signature"] = stripe_signature
+        response = httpx.request(
+            "POST",
+            f"{self.base_url}/v1/stripe/transfer-events",
             json=event,
             headers=headers or None,
             timeout=30,

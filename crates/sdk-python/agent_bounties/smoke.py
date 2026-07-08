@@ -146,8 +146,24 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery manifest missing live Stripe Checkout execution endpoint",
     )
     _require(
+        isinstance(discovery.get("endpoints", {}).get("stripe_connect_transfers"), str),
+        "discovery manifest missing Stripe Connect transfer planner endpoint",
+    )
+    _require(
+        isinstance(discovery.get("endpoints", {}).get("stripe_connect_snapshots"), str),
+        "discovery manifest missing Stripe Connect snapshot reconciliation endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("stripe_live_connect_accounts"), str),
         "discovery manifest missing live Stripe Connect execution endpoint",
+    )
+    _require(
+        isinstance(discovery.get("endpoints", {}).get("stripe_live_connect_transfers"), str),
+        "discovery manifest missing live Stripe Connect transfer execution endpoint",
+    )
+    _require(
+        isinstance(discovery.get("endpoints", {}).get("stripe_transfer_events"), str),
+        "discovery manifest missing Stripe transfer event reconciliation endpoint",
     )
     _require(
         isinstance(discovery.get("endpoints", {}).get("github_issue_bounty_plan"), str),
@@ -378,6 +394,15 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         stripe_connect["request"]["endpoint"] == "/v2/core/accounts",
         "Stripe Connect account planner used the wrong endpoint",
     )
+    try:
+        client.plan_stripe_connect_transfer(str(uuid.uuid4()), "acct_test_sdk_smoke")
+    except httpx.HTTPStatusError as error:
+        _require(
+            error.response.status_code == 400,
+            "unknown Stripe transfer payout intent should return 400",
+        )
+    else:
+        raise AssertionError("unknown Stripe transfer payout intent should fail")
     github_issue_plan = client.plan_github_issue_bounty(
         "agent-bounties/agent-bounties",
         "https://github.com/agent-bounties/agent-bounties/issues/1",
