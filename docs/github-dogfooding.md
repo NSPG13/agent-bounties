@@ -83,6 +83,37 @@ Dry-run the proof publisher without calling GitHub or the hosted API:
 python scripts/github_proof_comment.py --self-test
 ```
 
+## GitHub CI Submission Evidence
+
+For `fix-ci-failure` and `small-code-change` bounties, solvers should submit the
+pull request URL as the artifact URI. Verification evidence must bind the pull
+request to the exact commit and check run that passed:
+
+```json
+{
+  "repository": "agent-bounties/agent-bounties",
+  "pull_request_url": "https://github.com/agent-bounties/agent-bounties/pull/42",
+  "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "check_run": {
+    "id": 123456789,
+    "name": "full-check",
+    "status": "completed",
+    "conclusion": "success",
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "html_url": "https://github.com/agent-bounties/agent-bounties/actions/runs/123456789",
+    "repository": {
+      "full_name": "agent-bounties/agent-bounties"
+    }
+  }
+}
+```
+
+The verifier accepts only completed successful check runs that belong to the
+submitted repository and commit. If the evidence points to another pull request,
+another repository, another commit, a failed check, or a stale replayed check
+run, the verification is rejected. Missing or incomplete evidence is routed to
+review and cannot authorize payment.
+
 ## Public Artifacts
 
 Accepted public bounties should link to:

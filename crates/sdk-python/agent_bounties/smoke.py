@@ -14,6 +14,23 @@ def _require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _github_ci_evidence() -> dict:
+    return {
+        "repository": "example/repo",
+        "pull_request_url": "https://github.com/example/repo/pull/1",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "check_run": {
+            "id": 123456789,
+            "name": "full-check",
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "html_url": "https://github.com/example/repo/actions/runs/123456789",
+            "repository": {"full_name": "example/repo"},
+        },
+    }
+
+
 def exercise_surface(client: AgentBountiesClient) -> dict:
     suffix = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
 
@@ -247,10 +264,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     reviewed_submission = client.submit_result(
         reviewed_bounty_id,
         review_solver["id"],
-        "https://github.com/example/repo/actions/runs/1",
+        "https://github.com/example/repo/pull/1",
         json.dumps({"check": "green"}, separators=(",", ":")),
     )
-    reviewed_evidence = {"check_conclusion": "success", "check_name": "test"}
+    reviewed_evidence = _github_ci_evidence()
     try:
         client.request_verification(
             reviewed_bounty_id,
