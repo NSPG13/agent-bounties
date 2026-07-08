@@ -36,6 +36,14 @@
               Hosted API base URL
               <input name="apiBaseUrl" type="url" placeholder="https://api.example.com" required>
             </label>
+            <div class="readiness-panel" aria-labelledby="readiness-title">
+              <div>
+                <h3 id="readiness-title">Hosted readiness</h3>
+                <p class="fine">Check live-money readiness before creating a funding intent. This only reads <code>/v1/readiness/live-money?network=base-mainnet</code>; it does not create a Checkout Session or move funds.</p>
+              </div>
+              <button id="readiness-button" class="button secondary" type="button">Check readiness</button>
+              <output id="readiness-output" class="output readiness-output" aria-live="polite">Enter a hosted API URL, then check readiness.</output>
+            </div>
             <label>
               Bounty ID
               <input name="bountyId" placeholder="00000000-0000-0000-0000-000000000001" required>

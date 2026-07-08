@@ -8,6 +8,19 @@
   "website": "https://nspg13.github.io/agent-bounties/",
   "funding_guide": "https://nspg13.github.io/agent-bounties/funding.html",
   "llms_txt": "https://nspg13.github.io/agent-bounties/llms.txt",
+  "hosted_readiness": {
+    "endpoint_template": "{api_base_url}/v1/readiness/live-money?network=base-mainnet",
+    "funding_page_action": "check_readiness",
+    "settlement_authority": "informational only; funding still requires verified webhook or indexed chain evidence",
+    "non_secret_fields": [
+      "stripe_secret_key_mode",
+      "stripe_payment_method_configuration_configured",
+      "live_money_ready",
+      "stripe_live_mode_ready",
+      "stripe_webhook_ready",
+      "base_mainnet_ready"
+    ]
+  },
   "payment_invariants": [
     "Stripe Checkout funding can show card, wallet, or PayPal-capable payment methods where the hosted Stripe account supports them.",
     "Funding is credited only after verified webhook or indexed chain evidence.",

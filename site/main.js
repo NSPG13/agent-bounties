@@ -70,6 +70,8 @@
 
   const form = document.getElementById("funding-form");
   const output = document.getElementById("funding-output");
+  const readinessButton = document.getElementById("readiness-button");
+  const readinessOutput = document.getElementById("readiness-output");
   if (!form || !output) return;
 
   function randomUuid() {
@@ -95,6 +97,63 @@
     if (!organizationField.value) {
       organizationField.value = funderId;
     }
+  }
+
+  function configuredLabel(value) {
+    return value ? "ready" : "needs setup";
+  }
+
+  function formatReadiness(report) {
+    const checks = Array.isArray(report.checks) ? report.checks : [];
+    const methodConfig = report.stripe_payment_method_configuration_configured === true;
+    const checkoutMethodCheck = checks.find(
+      (check) => check && check.name === "Stripe Checkout payment-method configuration",
+    );
+    const webhookBoundary = Array.isArray(report.evidence_boundaries)
+      && report.evidence_boundaries.some((boundary) =>
+        String(boundary).includes("checkout.session.completed webhook")
+      );
+
+    return [
+      `Network: ${report.network || "unknown"} (${report.network_chain_id || "unknown"})`,
+      `Live-money gate: ${configuredLabel(report.live_money_ready === true)}`,
+      `Stripe live execution: ${configuredLabel(report.stripe_live_mode_ready === true)}`,
+      `Signed webhook evidence: ${configuredLabel(report.stripe_webhook_ready === true)}`,
+      `Checkout method configuration: ${configuredLabel(methodConfig)}`,
+      `PayPal-capable setup indicator: ${methodConfig ? "configured" : "not configured"}`,
+      `Base mainnet escrow: ${configuredLabel(report.base_mainnet_ready === true)}`,
+      `Webhook settlement boundary: ${webhookBoundary ? "present" : "missing"}`,
+      checkoutMethodCheck && checkoutMethodCheck.detail
+        ? `Method detail: ${checkoutMethodCheck.detail}`
+        : "Method detail: no readiness detail returned",
+      "This readiness check is informational. Funding still requires Stripe Checkout completion and a verified webhook.",
+    ].join("\n");
+  }
+
+  if (readinessButton && readinessOutput) {
+    readinessButton.addEventListener("click", async () => {
+      const apiBaseUrlField = form.elements.namedItem("apiBaseUrl");
+      const apiBaseUrl = apiBaseUrlField instanceof HTMLInputElement
+        ? apiBaseUrlField.value.replace(/\/+$/, "")
+        : "";
+      if (!apiBaseUrl) {
+        readinessOutput.textContent = "Enter a hosted API base URL before checking readiness.";
+        return;
+      }
+
+      readinessOutput.textContent = "Checking hosted live-money readiness...";
+      try {
+        const response = await fetch(`${apiBaseUrl}/v1/readiness/live-money?network=base-mainnet`, {
+          headers: { accept: "application/json" },
+        });
+        if (!response.ok) {
+          throw new Error(`Readiness check failed with ${response.status}`);
+        }
+        readinessOutput.textContent = formatReadiness(await response.json());
+      } catch (error) {
+        readinessOutput.textContent = `${error.message}\n\nNo funding intent or Checkout Session was created. Confirm the hosted API URL, CORS settings, and live-money readiness endpoint.`;
+      }
+    });
   }
 
   form.addEventListener("submit", async (event) => {

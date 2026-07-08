@@ -335,6 +335,23 @@ input {
   gap: 14px;
 }
 
+.readiness-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--wash);
+}
+
+.readiness-panel h3 {
+  margin-bottom: 6px;
+}
+
+.readiness-panel .button {
+  justify-self: start;
+}
+
 .fine {
   color: var(--muted);
   line-height: 1.7;
@@ -349,10 +366,17 @@ input {
   white-space: pre-wrap;
 }
 
+.readiness-output {
+  max-height: 260px;
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.62);
+}
+
 code {
   padding: 0.1em 0.3em;
   border-radius: 4px;
   background: rgba(16, 20, 23, 0.08);
+  overflow-wrap: anywhere;
 }
 
 .reveal {
@@ -402,5 +426,9 @@ code {
 
   .process > div {
     min-height: auto;
+  }
+
+  .readiness-output {
+    max-height: none;
   }
 }
