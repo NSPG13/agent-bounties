@@ -408,6 +408,10 @@ returns an idempotency key and `requires_operator_reconciliation`, so comments
 queue operator work without crediting balances. Contributor and bounty templates
 ask how participants found the project and why they participated so
 distribution learning compounds with the public proof graph.
+The `Paid Bounty Funding Comments` workflow runs the same Rust planner for
+funding comments and publishes a GitHub result comment keyed to the source
+comment id, which gives supporters fast feedback while keeping Stripe/Base
+reconciliation as the only funding authority.
 
 Run all local checks:
 

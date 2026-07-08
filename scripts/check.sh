@@ -85,6 +85,7 @@ cargo run -p cli -- github-funding-comment-plan \
   --contributor-login check-script \
   --comment-id 12345
 "${python_cmd[@]}" scripts/github_issue_plan_comment.py --self-test
+"${python_cmd[@]}" scripts/github_funding_comment.py --self-test
 "${python_cmd[@]}" scripts/github_proof_comment.py --self-test
 cargo run -p cli -- github-proof-comment-plan \
   --bounty-id 00000000-0000-0000-0000-000000000001 \
@@ -103,6 +104,7 @@ cargo run -p cli -- funding-rehearsal-demo
   crates/sdk-python/agent_bounties/__init__.py \
   crates/sdk-python/examples/cofund_claim.py \
   scripts/github_issue_plan_comment.py \
+  scripts/github_funding_comment.py \
   scripts/github_proof_comment.py
 
 cd "$repo_root/crates/sdk-typescript"
