@@ -46,6 +46,7 @@ pub struct GitHubIssueFormBounty {
     pub amount: Money,
     pub funding_mode: FundingMode,
     pub privacy: PrivacyLevel,
+    pub discovery_feedback: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,7 +136,7 @@ pub enum GitHubFundingCommentError {
 impl GitHubProofComment {
     pub fn markdown(&self) -> String {
         format!(
-            "Agent bounty completed.\n\nProof: {}\n\nVerifier: {}\n\nBounty: `{}`{}",
+            "Agent bounty completed.\n\nProof: {}\n\nVerifier: {}\n\nBounty: `{}`{}\n\nDistribution feedback requested: please add how you found Agent Bounties and what made this bounty worth claiming or completing.",
             self.proof_url,
             self.verifier_summary,
             self.bounty_id,
@@ -227,6 +228,7 @@ pub fn parse_issue_form_bounty(
         .map(parse_privacy)
         .transpose()?
         .unwrap_or(PrivacyLevel::Public);
+    let discovery_feedback = optional_section(&sections, "discovery feedback");
 
     Ok(GitHubIssueFormBounty {
         request: GitHubBountyRequest {
@@ -243,6 +245,7 @@ pub fn parse_issue_form_bounty(
         amount,
         funding_mode,
         privacy,
+        discovery_feedback,
     })
 }
 
@@ -257,13 +260,17 @@ pub fn bounty_check_output(
                 bounty.request.title, bounty.template_slug
             ),
             text: format!(
-                "Goal:\n{}\n\nAcceptance criteria:\n{}\n\nAmount: {} {}\n\nFunding: {:?}\n\nPrivacy: {:?}",
+                "Goal:\n{}\n\nAcceptance criteria:\n{}\n\nAmount: {} {}\n\nFunding: {:?}\n\nPrivacy: {:?}\n\nDistribution feedback:\n{}",
                 bounty.goal,
                 bounty.acceptance_criteria,
                 bounty.amount.amount,
                 bounty.amount.currency,
                 bounty.funding_mode,
-                bounty.privacy
+                bounty.privacy,
+                bounty
+                    .discovery_feedback
+                    .as_deref()
+                    .unwrap_or("Not provided yet. Please comment with how you found Agent Bounties and what made this bounty worth posting, funding, claiming, or completing.")
             ),
             conclusion: GitHubCheckConclusion::Success,
         },
@@ -296,7 +303,7 @@ pub fn funding_comment_check_output(
                 signal.amount.amount, signal.amount.currency, signal.rail
             ),
             text: format!(
-                "Issue: {}\nContributor: {}\nAmount: {} {}\nRail: {:?}\nIdempotency key: {}\nRequires operator reconciliation: true\n\nThis GitHub comment is a public funding signal only. It does not credit the ledger, create a Stripe balance, or mark Base escrow funded.",
+                "Issue: {}\nContributor: {}\nAmount: {} {}\nRail: {:?}\nIdempotency key: {}\nRequires operator reconciliation: true\n\nThis GitHub comment is a public funding signal only. It does not credit the ledger, create a Stripe balance, or mark Base escrow funded.\n\nDistribution feedback requested: please add how you found Agent Bounties and what made this bounty worth funding.",
                 signal.issue_url,
                 signal
                     .contributor_login
@@ -501,7 +508,11 @@ fn validate_template(template_slug: &str) -> Result<(), GitHubBountyError> {
     match template_slug.trim() {
         "fix-ci-failure"
         | "small-code-change"
+        | "payment-state-machine"
+        | "small-web-public-change"
+        | "docs-and-cli-report"
         | "extract-data-to-schema"
+        | "primary-source-research"
         | "independent-claim-verification"
         | "write-docs-for-area"
         | "run-browser-workflow" => Ok(()),
@@ -586,6 +597,7 @@ mod tests {
         assert!(markdown.contains("Proof:"));
         assert!(markdown.contains("GitHub CI passed"));
         assert!(markdown.contains("Settlement:"));
+        assert!(markdown.contains("Distribution feedback requested"));
     }
 
     #[test]
@@ -698,6 +710,9 @@ BaseUsdcEscrow
 ### Co-funding note
 Supporters can add funds after the platform bounty URL is linked.
 
+### Discovery feedback
+Found it from a proof page and posted because the payment path is explicit.
+
 ### Privacy
 Public
 "#;
@@ -714,6 +729,45 @@ Public
         assert_eq!(bounty.amount, Money::new(5_000_000, "usdc").unwrap());
         assert_eq!(bounty.funding_mode, FundingMode::BaseUsdcEscrow);
         assert_eq!(bounty.privacy, PrivacyLevel::Public);
+        assert_eq!(
+            bounty.discovery_feedback.as_deref(),
+            Some("Found it from a proof page and posted because the payment path is explicit.")
+        );
+    }
+
+    #[test]
+    fn validates_public_launch_template_slugs() {
+        for slug in [
+            "payment-state-machine",
+            "small-web-public-change",
+            "docs-and-cli-report",
+            "primary-source-research",
+        ] {
+            let body = format!(
+                r#"### Goal
+Complete a focused project task for {slug}.
+
+### Acceptance criteria
+The change has deterministic evidence and a clear proof record.
+
+### Template
+{slug}
+
+### Suggested amount
+5 USDC
+"#
+            );
+
+            let bounty = parse_issue_form_bounty(
+                "agent-bounties/agent-bounties",
+                &format!("https://github.com/agent-bounties/agent-bounties/issues/{slug}"),
+                "[bounty]: Validate template",
+                &body,
+            )
+            .unwrap();
+
+            assert_eq!(bounty.template_slug, slug);
+        }
     }
 
     #[test]
@@ -756,6 +810,7 @@ extract-data-to-schema
 
         assert_eq!(output.conclusion, GitHubCheckConclusion::Success);
         assert!(output.summary.contains("ready for funding"));
+        assert!(output.text.contains("Distribution feedback"));
     }
 
     #[test]
@@ -780,6 +835,7 @@ extract-data-to-schema
         assert!(signal.requires_operator_reconciliation);
         assert!(signal.idempotency_key.ends_with(":comment:123"));
         assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+        assert!(plan.check.text.contains("Distribution feedback requested"));
     }
 
     #[test]

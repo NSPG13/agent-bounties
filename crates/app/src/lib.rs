@@ -3062,6 +3062,7 @@ fn capability_class_for_template(template_slug: &str) -> CapabilityClass {
         "independent-claim-verification" => CapabilityClass::Verification,
         "primary-source-research" => CapabilityClass::Research,
         "write-docs-for-area" => CapabilityClass::Documentation,
+        "docs-and-cli-report" => CapabilityClass::Documentation,
         "fix-ci-failure" => CapabilityClass::Ci,
         "run-browser-workflow" => CapabilityClass::BrowserWorkflow,
         _ => CapabilityClass::Coding,
@@ -3070,7 +3071,11 @@ fn capability_class_for_template(template_slug: &str) -> CapabilityClass {
 
 fn verifier_kind_for_template(template_slug: &str) -> VerifierKind {
     match template_slug {
-        "fix-ci-failure" | "small-code-change" => VerifierKind::GitHubCi,
+        "fix-ci-failure"
+        | "small-code-change"
+        | "payment-state-machine"
+        | "small-web-public-change"
+        | "docs-and-cli-report" => VerifierKind::GitHubCi,
         "extract-data-to-schema" => VerifierKind::JsonSchema,
         "run-browser-workflow" => VerifierKind::DockerCommand,
         "write-docs-for-area" => VerifierKind::AiJudgeFilter,

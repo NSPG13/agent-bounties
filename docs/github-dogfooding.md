@@ -14,6 +14,8 @@ hosted low-value rail is available.
    - `Funding mode` (optional; defaults to `BaseUsdcEscrow`)
    - `Co-funding note` (optional; ignored by the parser but useful to
      contributors)
+   - `Discovery feedback` (optional; parsed into check output and used only as
+     distribution learning data)
    - `Privacy` (optional; defaults to `Public`)
 3. The parser validates that the template is known and the amount is explicit.
 4. A check-run output marks the issue ready or action-required.
@@ -146,9 +148,10 @@ python scripts/github_proof_comment.py --self-test
 
 ## GitHub CI Submission Evidence
 
-For `fix-ci-failure` and `small-code-change` bounties, solvers should submit the
-pull request URL as the artifact URI. Verification evidence must bind the pull
-request to the exact commit and check run that passed:
+For `fix-ci-failure`, `small-code-change`, `payment-state-machine`,
+`small-web-public-change`, and `docs-and-cli-report` bounties, solvers should
+submit the pull request URL as the artifact URI. Verification evidence must bind
+the pull request to the exact commit and check run that passed:
 
 ```json
 {
