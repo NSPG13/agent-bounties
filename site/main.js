@@ -73,6 +73,8 @@
   const prefillOutput = document.getElementById("prefill-output");
   const readinessButton = document.getElementById("readiness-button");
   const readinessOutput = document.getElementById("readiness-output");
+  const baseForm = document.getElementById("base-plan-form");
+  const baseOutput = document.getElementById("base-plan-output");
   if (!form || !output) return;
 
   function randomUuid() {
@@ -106,6 +108,15 @@
     return false;
   }
 
+  function setNamedInputValue(targetForm, name, value) {
+    const field = targetForm && targetForm.elements.namedItem(name);
+    if (field instanceof HTMLInputElement && value) {
+      field.value = value;
+      return true;
+    }
+    return false;
+  }
+
   const organizationField = form.elements.namedItem("organizationId");
   if (organizationField instanceof HTMLInputElement) {
     const storageKey = "agent-bounties-public-funder-id";
@@ -129,6 +140,10 @@
     externalReference: firstQueryParam(query, ["externalReference", "external_reference"]),
     source: firstQueryParam(query, ["source", "funding_source"]),
     rail: firstQueryParam(query, ["rail"]),
+    network: firstQueryParam(query, ["network", "baseNetwork", "base_network"]),
+    escrowContract: firstQueryParam(query, ["escrowContract", "escrow_contract", "baseEscrowContract", "base_escrow_contract"]),
+    payer: firstQueryParam(query, ["payer", "basePayer", "base_payer"]),
+    token: firstQueryParam(query, ["token", "baseToken", "base_token"]),
   };
 
   const prefilledFields = [
@@ -142,6 +157,14 @@
   const fundingSource = prefillValues.source || "funding-page";
   form.dataset.fundingSource = fundingSource;
   form.dataset.fundingRail = prefillValues.rail || "StripeFiat";
+  if (baseForm) {
+    setNamedInputValue(baseForm, "baseApiBaseUrl", prefillValues.apiBaseUrl);
+    setNamedInputValue(baseForm, "baseBountyId", prefillValues.bountyId);
+    setNamedInputValue(baseForm, "baseNetwork", prefillValues.network);
+    setNamedInputValue(baseForm, "baseEscrowContract", prefillValues.escrowContract);
+    setNamedInputValue(baseForm, "basePayer", prefillValues.payer);
+    setNamedInputValue(baseForm, "baseToken", prefillValues.token);
+  }
   if (prefillOutput) {
     if (prefilledFields.length > 0) {
       const railNotice = prefillValues.rail && prefillValues.rail !== "StripeFiat"
@@ -222,6 +245,51 @@
         readinessOutput.textContent = formatReadiness(await response.json());
       } catch (error) {
         readinessOutput.textContent = `${error.message}\n\nNo funding intent or Checkout Session was created. Confirm the hosted API URL, CORS settings, /health endpoint, and live-money readiness endpoint.`;
+      }
+    });
+  }
+
+  if (baseForm && baseOutput) {
+    baseForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(baseForm);
+      const apiBaseUrl = String(data.get("baseApiBaseUrl") || "").replace(/\/+$/, "");
+      const bountyId = String(data.get("baseBountyId") || "").trim();
+      const network = String(data.get("baseNetwork") || "base-sepolia").trim();
+      const escrowContract = String(data.get("baseEscrowContract") || "").trim();
+      const payer = String(data.get("basePayer") || "").trim();
+      const token = String(data.get("baseToken") || "").trim();
+
+      baseOutput.textContent = "Checking hosted API health...";
+      try {
+        await checkHostedHealth(apiBaseUrl);
+        baseOutput.textContent = "Hosted API health is ok. Planning unsigned Base funding transactions...";
+        const response = await fetch(`${apiBaseUrl}/v1/base/funding-plan`, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({
+            bounty_id: bountyId,
+            escrow_contract: escrowContract,
+            payer,
+            token,
+            network,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`Base funding plan failed with ${response.status}`);
+        }
+        const plan = await response.json();
+        const summary = {
+          network: plan.network && plan.network.name,
+          chain_id: plan.network && plan.network.chain_id,
+          bounty_id: plan.bounty && plan.bounty.id,
+          amount: plan.create && plan.create.amount,
+          approve: plan.funding && plan.funding.approve,
+          create_escrow: plan.funding && plan.funding.create_escrow,
+        };
+        baseOutput.textContent = `${JSON.stringify(summary, null, 2)}\n\nSign and broadcast these transactions from the payer wallet outside this site. This plan is not funding; the bounty is funded only after an indexed EscrowCreated log is reconciled.`;
+      } catch (error) {
+        baseOutput.textContent = `${error.message}\n\nNo transaction was signed or broadcast. Confirm the hosted API URL, bounty id, escrow contract, payer wallet, token, network, and that the bounty is Base USDC funding-ready.`;
       }
     });
   }

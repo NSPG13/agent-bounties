@@ -465,6 +465,11 @@ Hosted public bounty and funding pages can link to the same form with
 parameters so human funders do not need to copy IDs by hand. Those query
 parameters are UI defaults only; they do not credit funding or make a bounty
 claimable.
+The same funding page can plan Base USDC escrow funding by calling the hosted
+`/v1/base/funding-plan` endpoint after `/health` passes. It returns unsigned
+`approve` and `createEscrow` transaction intents only; a wallet must sign and
+broadcast them externally, and the bounty is funded only after an indexed
+`EscrowCreated` log is reconciled.
 Checkout may show debit card, credit card, wallet, or PayPal where the hosted
 Stripe account and Dashboard configuration support those methods.
 The funding page also includes a read-only hosted health and readiness check for

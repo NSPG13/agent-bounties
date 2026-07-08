@@ -114,6 +114,10 @@ def main() -> int:
         "bountyId",
         "amountMinor",
         "funding_source",
+        "Plan Base USDC escrow",
+        "/v1/base/funding-plan",
+        "createEscrow",
+        "EscrowCreated",
     ]
     for phrase in required_funding_phrases:
         if phrase not in funding and phrase not in main_js:
@@ -151,6 +155,15 @@ def main() -> int:
         or "amountMinor" not in funding_handoff.get("query_params", [])
     ):
         fail("static discovery manifest must advertise public funding handoff query params")
+    base_funding_handoff = discovery.get("base_funding_handoff", {})
+    if (
+        base_funding_handoff.get("endpoint_template") != "{api_base_url}/v1/base/funding-plan"
+        or base_funding_handoff.get("supported_rail") != "BaseUsdc"
+        or "escrowContract" not in base_funding_handoff.get("query_params", [])
+        or "payer" not in base_funding_handoff.get("query_params", [])
+        or "EscrowCreated" not in base_funding_handoff.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must advertise Base funding plan handoff")
 
     print("site check ok")
     return 0
