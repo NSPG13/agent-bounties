@@ -3179,9 +3179,11 @@ dependencies = [
  "async-trait",
  "chain-base",
  "chrono",
+ "db",
  "domain",
  "ledger",
  "serde",
+ "serde_json",
  "tokio",
  "verifier-sdk",
 ]

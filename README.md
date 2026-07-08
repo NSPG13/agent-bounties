@@ -66,6 +66,7 @@ cargo run -p cli -- base-plan --network base-sepolia --escrow-contract 0x1111111
 cargo run -p cli -- base-decode-demo
 cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0
 cargo run -p cli -- base-fetch-logs --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0
+cargo run -p worker -- --once
 cargo run -p cli -- base-broadcast-signed-transaction --signed-transaction 0x0102
 cargo run -p cli -- base-transaction-receipt --tx-hash 0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 cargo run -p cli -- base-release-queue-demo
@@ -129,6 +130,10 @@ operators run Stripe test-mode Checkout or Base Sepolia signing/reconciliation.
 explicit `--rpc-url`. Hosted API/MCP transaction broadcast is disabled unless
 `ENABLE_BASE_TX_BROADCAST=true`; receipt polling and log reconciliation remain
 available when the Base RPC URL is configured.
+The `worker` binary can run a one-shot or continuous Base USDC indexer against
+Postgres. Set `DATABASE_URL`, `BASE_INDEXER_NETWORK`,
+`BASE_INDEXER_START_BLOCK`, and RPC/escrow contract env vars before running it;
+in production compose, enable the optional `base-indexer` profile.
 
 Hosted API and MCP operator mutation surfaces can require
 `OPERATOR_API_TOKEN`. When set, risk approvals/rejections, Base settlement log

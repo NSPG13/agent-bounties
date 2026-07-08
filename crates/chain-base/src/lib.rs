@@ -375,6 +375,21 @@ pub struct EthGetTransactionReceiptResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EthBlockNumberRequest {
+    pub jsonrpc: String,
+    pub id: u64,
+    pub method: String,
+    pub params: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EthBlockNumberResponse {
+    pub jsonrpc: String,
+    pub id: u64,
+    pub result: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EthGetLogsFilter {
     #[serde(rename = "fromBlock")]
     pub from_block: String,
@@ -425,6 +440,16 @@ pub struct EthGetTransactionReceiptEnvelope {
     pub id: u64,
     #[serde(default)]
     pub result: Option<RpcTransactionReceipt>,
+    #[serde(default)]
+    pub error: Option<EthJsonRpcError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EthBlockNumberEnvelope {
+    pub jsonrpc: String,
+    pub id: u64,
+    #[serde(default)]
+    pub result: Option<String>,
     #[serde(default)]
     pub error: Option<EthJsonRpcError>,
 }
@@ -502,6 +527,28 @@ impl TryFrom<EthGetTransactionReceiptEnvelope> for EthGetTransactionReceiptRespo
             jsonrpc: envelope.jsonrpc,
             id: envelope.id,
             result: envelope.result,
+        })
+    }
+}
+
+impl TryFrom<EthBlockNumberEnvelope> for EthBlockNumberResponse {
+    type Error = ChainBaseError;
+
+    fn try_from(envelope: EthBlockNumberEnvelope) -> Result<Self, Self::Error> {
+        if let Some(error) = envelope.error {
+            return Err(ChainBaseError::RpcProviderError {
+                code: error.code,
+                message: error.message,
+            });
+        }
+        let result = envelope.result.ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse("missing block number result".to_string())
+        })?;
+        parse_rpc_quantity(&result)?;
+        Ok(Self {
+            jsonrpc: envelope.jsonrpc,
+            id: envelope.id,
+            result,
         })
     }
 }
@@ -596,6 +643,14 @@ pub fn parse_eth_get_transaction_receipt_response(
     envelope.try_into()
 }
 
+pub fn parse_eth_block_number_response(
+    value: Value,
+) -> Result<EthBlockNumberResponse, ChainBaseError> {
+    let envelope: EthBlockNumberEnvelope = serde_json::from_value(value)
+        .map_err(|error| ChainBaseError::InvalidRpcResponse(error.to_string()))?;
+    envelope.try_into()
+}
+
 pub fn eth_send_raw_transaction_request(
     signed_transaction: &str,
     request_id: u64,
@@ -619,6 +674,15 @@ pub fn eth_get_transaction_receipt_request(
         params: vec![normalize_hash(tx_hash)
             .map_err(|_| ChainBaseError::InvalidTransactionHash(tx_hash.to_string()))?],
     })
+}
+
+pub fn eth_block_number_request(request_id: u64) -> EthBlockNumberRequest {
+    EthBlockNumberRequest {
+        jsonrpc: "2.0".to_string(),
+        id: request_id,
+        method: "eth_blockNumber".to_string(),
+        params: Vec::new(),
+    }
 }
 
 #[async_trait::async_trait]
@@ -695,6 +759,26 @@ where
     let request_value = serde_json::to_value(&request)
         .map_err(|error| ChainBaseError::InvalidRpcResponse(error.to_string()))?;
     parse_eth_get_logs_response(transport.post_json_value(rpc_url, &request_value).await?)
+}
+
+pub async fn fetch_block_number(rpc_url: &str, request_id: u64) -> Result<u64, ChainBaseError> {
+    fetch_block_number_with_transport(rpc_url, request_id, &ReqwestJsonRpcTransport::default())
+        .await
+}
+
+pub async fn fetch_block_number_with_transport<T>(
+    rpc_url: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<u64, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let request = eth_block_number_request(request_id);
+    let response = parse_eth_block_number_response(
+        transport.post_json_value(rpc_url, &json!(request)).await?,
+    )?;
+    parse_rpc_quantity(&response.result)
 }
 
 pub async fn broadcast_signed_transaction(
@@ -1811,6 +1895,53 @@ mod tests {
         assert_eq!(request["method"], "eth_getLogs");
         assert_eq!(request["params"][0]["fromBlock"], "0xa");
         assert_eq!(request["params"][0]["toBlock"], "0xc");
+    }
+
+    #[test]
+    fn builds_eth_block_number_request() {
+        let request = eth_block_number_request(17);
+
+        assert_eq!(request.jsonrpc, "2.0");
+        assert_eq!(request.id, 17);
+        assert_eq!(request.method, "eth_blockNumber");
+        assert!(request.params.is_empty());
+    }
+
+    #[test]
+    fn rejects_malformed_block_number_response() {
+        let error = parse_eth_block_number_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "not-hex"
+        }))
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            ChainBaseError::InvalidRpcQuantity("quantity must have 0x prefix".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn fetches_block_number_through_mock_transport() {
+        let seen_request = Arc::new(Mutex::new(None));
+        let transport = MockTransport {
+            seen_request: seen_request.clone(),
+            response: serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "result": "0x2a"
+            }),
+        };
+
+        let block_number = fetch_block_number_with_transport("https://rpc.example", 7, &transport)
+            .await
+            .unwrap();
+
+        assert_eq!(block_number, 42);
+        let request = seen_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request["method"], "eth_blockNumber");
+        assert!(request["params"].as_array().unwrap().is_empty());
     }
 
     #[test]

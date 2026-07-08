@@ -12,7 +12,8 @@ secrets in the hosted environment.
   Payout evidence requires a signed `transfer.created` webhook.
 - Base USDC escrow: creates unsigned funding, release, refund, and dispute
   transaction plans. Funding and payout state changes require indexed escrow
-  logs reconciled through the API/MCP operator surfaces.
+  logs reconciled through the API/MCP operator surfaces or the hosted
+  `base-indexer` worker.
 - Pooled and mixed funding: each funding partition is reconciled independently.
   USD and USDC are never netted into a synthetic balance.
 
@@ -32,6 +33,11 @@ $env:BASE_SEPOLIA_ESCROW_CONTRACT = "0x..."
 $env:BASE_MAINNET_ESCROW_CONTRACT = "0x..."
 $env:BASE_SETTLEMENT_SIGNER = "0x..."
 $env:BASE_PLATFORM_FEE_WALLET = "0x..."
+$env:BASE_INDEXER_NETWORK = "base-sepolia" # use base-mainnet after live signoff
+$env:BASE_INDEXER_START_BLOCK = "<escrow-deployment-block>"
+$env:BASE_INDEXER_POLL_SECONDS = "15"
+$env:BASE_INDEXER_CONFIRMATIONS = "2"
+$env:BASE_INDEXER_MAX_BLOCKS_PER_QUERY = "2000"
 ```
 
 Native USDC addresses:
@@ -84,6 +90,32 @@ The report intentionally exposes only Stripe key mode, configured gates, chain
 metadata, native USDC address, warnings, and settlement evidence boundaries. It
 must not expose Stripe secrets, webhook secrets, RPC URLs, or operator tokens.
 
+## Automated Base Indexing
+
+For hosted Base USDC value movement, run the worker from the production compose
+profile after setting the network, RPC URL, escrow contract, and first scan
+block:
+
+```powershell
+$env:COMPOSE_PROFILES = "base-indexer"
+docker compose --env-file .env -f docker-compose.production.yml up -d --build
+```
+
+The first run requires `BASE_INDEXER_START_BLOCK`; use the escrow contract
+deployment block, not block zero. The worker fetches `eth_blockNumber`,
+subtracts `BASE_INDEXER_CONFIRMATIONS`, scans up to
+`BASE_INDEXER_MAX_BLOCKS_PER_QUERY` confirmed blocks, applies decoded escrow
+logs through the same deterministic state machine as the API/MCP reconciliation
+endpoints, and persists a Postgres scan cursor. Empty ranges advance the scan
+cursor; failed ranges do not.
+
+For a one-shot rehearsal without a long-running container, run:
+
+```powershell
+$env:DATABASE_URL = "postgres://..."
+cargo run -p worker -- --once
+```
+
 ## Funding Flow
 
 1. Post or discover a public funding-ready bounty through
@@ -96,7 +128,8 @@ must not expose Stripe secrets, webhook secrets, RPC URLs, or operator tokens.
 5. Reconcile evidence:
    - Stripe: signed `checkout.session.completed` webhook with matching metadata.
    - Base: indexed `EscrowCreated` log matching bounty id, token, amount, and
-     terms hash.
+     terms hash. In hosted deployments, the `base-indexer` worker should pick
+     this up automatically after the configured confirmation depth.
 
 Only after all required partitions are reconciled does the bounty become
 claimable.
@@ -108,7 +141,8 @@ claimable.
 3. For Base payouts, inspect `POST /v1/base/release-queue`, then generate a
    release plan with `POST /v1/base/release-plan`.
 4. Sign and send the release transaction, then reconcile the indexed
-   `EscrowReleased` log. The transaction hash alone is not payout evidence.
+   `EscrowReleased` log. The hosted `base-indexer` worker can reconcile this
+   automatically; the transaction hash alone is not payout evidence.
 5. For Stripe payouts, confirm Connect eligibility, execute the transfer
    request, then reconcile the signed `transfer.created` event. Transfer
    planning alone is not payout evidence.

@@ -1,10 +1,15 @@
+use anyhow::{anyhow, Context};
 use app::{BaseEscrowReconciliation, BountyNetwork};
 use chain_base::{
-    BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowLogDecoder, ChainEventIndexer, EvmLog,
+    base_network_descriptor, fetch_base_escrow_logs, fetch_block_number, rpc_logs_to_evm_logs,
+    BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowLogDecoder, BaseEscrowLogQuery,
+    BaseNetworkDescriptor, ChainEventIndexer, EvmLog,
 };
+use db::PostgresStore;
 use domain::{Id, Submission, VerifierResult};
-use ledger::LedgerEntry;
+use ledger::{Ledger, LedgerEntry};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use verifier_sdk::{VerificationInput, Verifier, VerifierResultType};
 
 pub struct VerificationJob<V: Verifier> {
@@ -234,6 +239,449 @@ fn log_index_from_key(log_key: &str) -> Option<u64> {
     log_key.rsplit_once(':')?.1.parse().ok()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseIndexerConfig {
+    pub network: String,
+    pub rpc_url: String,
+    pub escrow_contract: String,
+    pub start_block: Option<u64>,
+    pub poll_seconds: u64,
+    pub confirmations: u64,
+    pub max_blocks_per_query: u64,
+    pub request_id: u64,
+}
+
+impl BaseIndexerConfig {
+    pub fn from_env() -> anyhow::Result<Self> {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    pub fn from_lookup<F>(lookup: F) -> anyhow::Result<Self>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let requested_network = lookup("BASE_INDEXER_NETWORK")
+            .filter(|value| nonempty(value))
+            .unwrap_or_else(|| "base-sepolia".to_string());
+        let descriptor = base_network_descriptor(&requested_network)?;
+        let network = canonical_base_network(&descriptor);
+        let escrow_contract_env = escrow_contract_env_for_network(&descriptor)?;
+        let escrow_contract = lookup("BASE_INDEXER_ESCROW_CONTRACT")
+            .filter(|value| nonempty(value))
+            .or_else(|| lookup(escrow_contract_env).filter(|value| nonempty(value)))
+            .ok_or_else(|| {
+                anyhow!(
+                    "set BASE_INDEXER_ESCROW_CONTRACT or {escrow_contract_env} before running the Base indexer"
+                )
+            })?;
+        let rpc_url = lookup("BASE_INDEXER_RPC_URL")
+            .filter(|value| nonempty(value))
+            .or_else(|| lookup(&descriptor.rpc_url_env).filter(|value| nonempty(value)))
+            .ok_or_else(|| {
+                anyhow!(
+                    "set BASE_INDEXER_RPC_URL or {} before running the Base indexer",
+                    descriptor.rpc_url_env
+                )
+            })?;
+        let start_block = lookup("BASE_INDEXER_START_BLOCK")
+            .or_else(|| lookup("BASE_INDEXER_FROM_BLOCK"))
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_START_BLOCK", &value))
+            .transpose()?;
+        let poll_seconds = lookup("BASE_INDEXER_POLL_SECONDS")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_POLL_SECONDS", &value))
+            .transpose()?
+            .unwrap_or(15);
+        let confirmations = lookup("BASE_INDEXER_CONFIRMATIONS")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_CONFIRMATIONS", &value))
+            .transpose()?
+            .unwrap_or(2);
+        let max_blocks_per_query = lookup("BASE_INDEXER_MAX_BLOCKS_PER_QUERY")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_MAX_BLOCKS_PER_QUERY", &value))
+            .transpose()?
+            .unwrap_or(2_000)
+            .max(1);
+        let request_id = lookup("BASE_INDEXER_REQUEST_ID")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_REQUEST_ID", &value))
+            .transpose()?
+            .unwrap_or(1);
+
+        let escrow_contract =
+            BaseEscrowLogQuery::new(escrow_contract, start_block.unwrap_or(0), None)?
+                .escrow_contract;
+
+        Ok(Self {
+            network,
+            rpc_url,
+            escrow_contract,
+            start_block,
+            poll_seconds,
+            confirmations,
+            max_blocks_per_query,
+            request_id,
+        })
+    }
+
+    pub fn network_descriptor(&self) -> anyhow::Result<BaseNetworkDescriptor> {
+        Ok(base_network_descriptor(&self.network)?)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseIndexerPollReport {
+    pub network: BaseNetworkDescriptor,
+    pub escrow_contract: String,
+    pub latest_block: u64,
+    pub confirmations: u64,
+    pub confirmed_to_block: Option<u64>,
+    pub from_block: Option<u64>,
+    pub to_block: Option<u64>,
+    pub fetched_logs: usize,
+    pub reconciliation: Option<BaseLogPipelineReport>,
+    pub persisted_cursor_block: Option<u64>,
+    pub skipped_reason: Option<String>,
+}
+
+pub async fn poll_base_indexer_once(
+    store: &PostgresStore,
+    config: &BaseIndexerConfig,
+) -> anyhow::Result<BaseIndexerPollReport> {
+    let descriptor = config.network_descriptor()?;
+    let latest_block = fetch_block_number(&config.rpc_url, config.request_id).await?;
+    let confirmed_to_block = latest_block.checked_sub(config.confirmations);
+    let scan_cursor = store
+        .get_base_log_cursor(&config.network, &config.escrow_contract)
+        .await?;
+    let mut network = hydrate_bounty_network(store).await?;
+    let mut worker = hydrate_base_log_worker(store).await?;
+    let from_block = next_indexer_from_block(
+        scan_cursor.as_ref().map(|cursor| cursor.last_scanned_block),
+        worker.cursor().last_block_number,
+        config.start_block,
+    )?;
+
+    let Some(confirmed_to_block) = confirmed_to_block else {
+        return Ok(BaseIndexerPollReport {
+            network: descriptor,
+            escrow_contract: config.escrow_contract.clone(),
+            latest_block,
+            confirmations: config.confirmations,
+            confirmed_to_block: None,
+            from_block: Some(from_block),
+            to_block: None,
+            fetched_logs: 0,
+            reconciliation: None,
+            persisted_cursor_block: scan_cursor.map(|cursor| cursor.last_scanned_block),
+            skipped_reason: Some("latest block is below configured confirmations".to_string()),
+        });
+    };
+
+    if confirmed_to_block < from_block {
+        return Ok(BaseIndexerPollReport {
+            network: descriptor,
+            escrow_contract: config.escrow_contract.clone(),
+            latest_block,
+            confirmations: config.confirmations,
+            confirmed_to_block: Some(confirmed_to_block),
+            from_block: Some(from_block),
+            to_block: None,
+            fetched_logs: 0,
+            reconciliation: None,
+            persisted_cursor_block: scan_cursor.map(|cursor| cursor.last_scanned_block),
+            skipped_reason: Some("no confirmed blocks are ready to scan".to_string()),
+        });
+    }
+
+    let to_block = bounded_to_block(from_block, confirmed_to_block, config.max_blocks_per_query);
+    let query = BaseEscrowLogQuery::new(&config.escrow_contract, from_block, Some(to_block))?;
+    let response = fetch_base_escrow_logs(&config.rpc_url, &query, config.request_id + 1).await?;
+    let logs = rpc_logs_to_evm_logs(response.result)?;
+    let fetched_logs = logs.len();
+    let reconciliation =
+        process_base_evm_logs_and_persist(store, &mut worker, &mut network, logs).await?;
+    let persisted_cursor_block = if reconciliation.failures.is_empty() {
+        let last_log_key = reconciliation.ending_cursor.last_log_key.as_deref();
+        store
+            .upsert_base_log_cursor(
+                &config.network,
+                &config.escrow_contract,
+                to_block,
+                last_log_key,
+            )
+            .await?;
+        Some(to_block)
+    } else {
+        scan_cursor.map(|cursor| cursor.last_scanned_block)
+    };
+
+    Ok(BaseIndexerPollReport {
+        network: descriptor,
+        escrow_contract: config.escrow_contract.clone(),
+        latest_block,
+        confirmations: config.confirmations,
+        confirmed_to_block: Some(confirmed_to_block),
+        from_block: Some(from_block),
+        to_block: Some(to_block),
+        fetched_logs,
+        reconciliation: Some(reconciliation),
+        persisted_cursor_block,
+        skipped_reason: None,
+    })
+}
+
+pub async fn hydrate_bounty_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork> {
+    Ok(BountyNetwork {
+        agents: store
+            .list_agents()
+            .await?
+            .into_iter()
+            .map(|agent| (agent.id, agent))
+            .collect(),
+        capabilities: store
+            .list_capabilities()
+            .await?
+            .into_iter()
+            .map(|capability| (capability.id, capability))
+            .collect(),
+        help_requests: store
+            .list_help_requests()
+            .await?
+            .into_iter()
+            .map(|request| (request.id, request))
+            .collect(),
+        quotes: store
+            .list_quotes()
+            .await?
+            .into_iter()
+            .map(|quote| (quote.id, quote))
+            .collect(),
+        bounties: store
+            .list_bounties()
+            .await?
+            .into_iter()
+            .map(|bounty| (bounty.id, bounty))
+            .collect(),
+        funding_intents: store
+            .list_funding_intents()
+            .await?
+            .into_iter()
+            .map(|intent| (intent.id, intent))
+            .collect(),
+        funding_contributions: store
+            .list_funding_contributions()
+            .await?
+            .into_iter()
+            .map(|contribution| (contribution.id, contribution))
+            .collect(),
+        escrows: store
+            .list_escrows()
+            .await?
+            .into_iter()
+            .map(|escrow| (escrow.id, escrow))
+            .collect(),
+        claims: store
+            .list_claims()
+            .await?
+            .into_iter()
+            .map(|claim| (claim.id, claim))
+            .collect(),
+        submissions: store
+            .list_submissions()
+            .await?
+            .into_iter()
+            .map(|submission| (submission.id, submission))
+            .collect(),
+        verifier_results: store
+            .list_verifier_results()
+            .await?
+            .into_iter()
+            .map(|result| (result.id, result))
+            .collect(),
+        proofs: store
+            .list_proof_records()
+            .await?
+            .into_iter()
+            .map(|proof| (proof.id, proof))
+            .collect(),
+        settlements: store
+            .list_settlements()
+            .await?
+            .into_iter()
+            .map(|settlement| (settlement.id, settlement))
+            .collect(),
+        reputation_events: store
+            .list_reputation_events()
+            .await?
+            .into_iter()
+            .map(|event| (event.id, event))
+            .collect(),
+        template_signals: store
+            .list_template_signals()
+            .await?
+            .into_iter()
+            .map(|signal| (signal.id, signal))
+            .collect(),
+        risk_events: store
+            .list_risk_events()
+            .await?
+            .into_iter()
+            .map(|event| (event.id, event))
+            .collect(),
+        risk_reviews: store
+            .list_risk_reviews()
+            .await?
+            .into_iter()
+            .map(|review| (review.id, review))
+            .collect(),
+        payment_events: store
+            .list_payment_events()
+            .await?
+            .into_iter()
+            .map(|event| (event.id, event))
+            .collect(),
+        ledger: Ledger::from_entries(store.list_ledger_entries().await?)
+            .context("hydrate ledger from Postgres")?,
+        ..BountyNetwork::default()
+    })
+}
+
+pub async fn hydrate_base_log_worker(store: &PostgresStore) -> anyhow::Result<BaseEscrowLogWorker> {
+    Ok(BaseEscrowLogWorker::from_indexed_events(
+        "usdc",
+        store.list_base_escrow_events().await?,
+    )?)
+}
+
+pub async fn process_base_evm_logs_and_persist(
+    store: &PostgresStore,
+    worker: &mut BaseEscrowLogWorker,
+    network: &mut BountyNetwork,
+    logs: Vec<EvmLog>,
+) -> anyhow::Result<BaseLogPipelineReport> {
+    let report = worker.process_logs(logs, network);
+    let applied_event_ids = report
+        .applied_events
+        .iter()
+        .map(|event| event.event_id)
+        .collect::<HashSet<_>>();
+    let indexed_events = worker
+        .indexed_events()
+        .iter()
+        .filter(|event| applied_event_ids.contains(&event.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let bounty_ids = report
+        .applied_events
+        .iter()
+        .map(|event| event.bounty_id)
+        .collect::<HashSet<_>>();
+    let bounties = bounty_ids
+        .iter()
+        .filter_map(|id| network.bounties.get(id).cloned())
+        .collect::<Vec<_>>();
+    let funding_intents = network
+        .funding_intents
+        .values()
+        .filter(|intent| bounty_ids.contains(&intent.bounty_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let escrows = network
+        .escrows
+        .values()
+        .filter(|escrow| bounty_ids.contains(&escrow.bounty_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let settlements = network
+        .settlements
+        .values()
+        .filter(|settlement| bounty_ids.contains(&settlement.bounty_id))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    for bounty in &bounties {
+        store.upsert_bounty(bounty).await?;
+    }
+    for intent in &funding_intents {
+        store.upsert_funding_intent(intent).await?;
+    }
+    for escrow in &escrows {
+        store.upsert_escrow(escrow).await?;
+    }
+    for settlement in &settlements {
+        store.upsert_settlement(settlement).await?;
+    }
+    for entry in &report.ledger_entries {
+        store.insert_ledger_entry(entry).await?;
+    }
+    for event in &indexed_events {
+        store.upsert_base_escrow_event(event).await?;
+    }
+
+    Ok(report)
+}
+
+pub fn next_indexer_from_block(
+    scan_cursor_block: Option<u64>,
+    event_cursor_block: Option<u64>,
+    configured_start_block: Option<u64>,
+) -> anyhow::Result<u64> {
+    if let Some(block) = scan_cursor_block {
+        return block
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("base indexer cursor overflowed"));
+    }
+    if let Some(block) = event_cursor_block {
+        return Ok(block);
+    }
+    configured_start_block.ok_or_else(|| {
+        anyhow!(
+            "set BASE_INDEXER_START_BLOCK for the first run; it should be the escrow contract deployment block"
+        )
+    })
+}
+
+pub fn bounded_to_block(
+    from_block: u64,
+    confirmed_to_block: u64,
+    max_blocks_per_query: u64,
+) -> u64 {
+    let capped_end = from_block.saturating_add(max_blocks_per_query.saturating_sub(1));
+    capped_end.min(confirmed_to_block)
+}
+
+fn canonical_base_network(descriptor: &BaseNetworkDescriptor) -> String {
+    match descriptor.chain_id {
+        8_453 => "base-mainnet".to_string(),
+        84_532 => "base-sepolia".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn escrow_contract_env_for_network(
+    descriptor: &BaseNetworkDescriptor,
+) -> anyhow::Result<&'static str> {
+    match descriptor.chain_id {
+        8_453 => Ok("BASE_MAINNET_ESCROW_CONTRACT"),
+        84_532 => Ok("BASE_SEPOLIA_ESCROW_CONTRACT"),
+        _ => Err(anyhow!("unsupported Base chain id {}", descriptor.chain_id)),
+    }
+}
+
+fn parse_u64_env(name: &str, value: &str) -> anyhow::Result<u64> {
+    value
+        .trim()
+        .parse::<u64>()
+        .with_context(|| format!("{name} must be a non-negative integer"))
+}
+
+fn nonempty(value: &str) -> bool {
+    !value.trim().is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +696,7 @@ mod tests {
         Bounty, BountyStatus, EscrowStatus, FundingMode, Money, PayoutStatus, PrivacyLevel,
         ProofRecord, VerifierKind,
     };
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn raw_base_logs_mark_payable_bounty_paid_once() {
@@ -321,6 +770,75 @@ mod tests {
         );
         assert_eq!(worker.cursor(), &BaseLogCursor::default());
         assert!(worker.indexed_events().is_empty());
+    }
+
+    #[test]
+    fn base_indexer_config_uses_network_specific_env_defaults() {
+        let values = HashMap::from([
+            ("BASE_INDEXER_NETWORK", "base-mainnet"),
+            ("BASE_MAINNET_RPC_URL", "https://base.example"),
+            (
+                "BASE_MAINNET_ESCROW_CONTRACT",
+                "0x1111111111111111111111111111111111111111",
+            ),
+            ("BASE_INDEXER_START_BLOCK", "123"),
+        ]);
+
+        let config =
+            BaseIndexerConfig::from_lookup(|key| values.get(key).map(|value| value.to_string()))
+                .unwrap();
+
+        assert_eq!(config.network, "base-mainnet");
+        assert_eq!(config.rpc_url, "https://base.example");
+        assert_eq!(
+            config.escrow_contract,
+            "0x1111111111111111111111111111111111111111"
+        );
+        assert_eq!(config.start_block, Some(123));
+        assert_eq!(config.confirmations, 2);
+        assert_eq!(config.max_blocks_per_query, 2_000);
+    }
+
+    #[test]
+    fn base_indexer_config_ignores_blank_override_vars() {
+        let values = HashMap::from([
+            ("BASE_INDEXER_NETWORK", "base-sepolia"),
+            ("BASE_INDEXER_RPC_URL", ""),
+            ("BASE_INDEXER_ESCROW_CONTRACT", ""),
+            ("BASE_SEPOLIA_RPC_URL", "https://sepolia.example"),
+            (
+                "BASE_SEPOLIA_ESCROW_CONTRACT",
+                "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD",
+            ),
+            ("BASE_INDEXER_START_BLOCK", "123"),
+        ]);
+
+        let config =
+            BaseIndexerConfig::from_lookup(|key| values.get(key).map(|value| value.to_string()))
+                .unwrap();
+
+        assert_eq!(config.rpc_url, "https://sepolia.example");
+        assert_eq!(
+            config.escrow_contract,
+            "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+        );
+    }
+
+    #[test]
+    fn base_indexer_requires_start_block_without_existing_cursors() {
+        let err = next_indexer_from_block(None, None, None).unwrap_err();
+
+        assert!(err.to_string().contains("BASE_INDEXER_START_BLOCK"));
+        assert_eq!(next_indexer_from_block(Some(10), None, None).unwrap(), 11);
+        assert_eq!(next_indexer_from_block(None, Some(10), None).unwrap(), 10);
+        assert_eq!(next_indexer_from_block(None, None, Some(5)).unwrap(), 5);
+    }
+
+    #[test]
+    fn base_indexer_caps_scan_ranges() {
+        assert_eq!(bounded_to_block(100, 500, 50), 149);
+        assert_eq!(bounded_to_block(100, 120, 50), 120);
+        assert_eq!(bounded_to_block(100, 120, 0), 100);
     }
 
     async fn payable_base_bounty() -> (BountyNetwork, Bounty, ProofRecord) {

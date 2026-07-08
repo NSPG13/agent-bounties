@@ -1,4 +1,5 @@
 use chain_base::{BaseEscrowEvent, BaseEscrowEventKind};
+use chrono::{DateTime, Utc};
 use domain::{
     Agent, AgentStatus, Bounty, BountyStatus, Capability, CapabilityClass, Claim, Escrow,
     EscrowStatus, EvalRun, FundingContribution, FundingContributionStatus, FundingIntent,
@@ -51,6 +52,15 @@ pub enum DbError {
 }
 
 pub type DbResult<T> = Result<T, DbError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseLogScanCursor {
+    pub network: String,
+    pub escrow_contract: String,
+    pub last_scanned_block: u64,
+    pub last_log_key: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Default)]
 pub struct InMemoryStore {
@@ -690,6 +700,62 @@ impl PostgresStore {
                 })
             })
             .collect()
+    }
+
+    pub async fn get_base_log_cursor(
+        &self,
+        network: &str,
+        escrow_contract: &str,
+    ) -> DbResult<Option<BaseLogScanCursor>> {
+        let row = sqlx::query(
+            r#"
+            SELECT network, escrow_contract, last_scanned_block, last_log_key, updated_at
+            FROM base_log_cursors
+            WHERE network = $1 AND escrow_contract = $2
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(escrow_contract))
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| {
+            Ok(BaseLogScanCursor {
+                network: row.try_get("network")?,
+                escrow_contract: row.try_get("escrow_contract")?,
+                last_scanned_block: u64_from_i64(row.try_get("last_scanned_block")?)?,
+                last_log_key: row.try_get("last_log_key")?,
+                updated_at: row.try_get("updated_at")?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn upsert_base_log_cursor(
+        &self,
+        network: &str,
+        escrow_contract: &str,
+        last_scanned_block: u64,
+        last_log_key: Option<&str>,
+    ) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO base_log_cursors
+              (network, escrow_contract, last_scanned_block, last_log_key, updated_at)
+            VALUES ($1, $2, $3, $4, now())
+            ON CONFLICT (network, escrow_contract) DO UPDATE SET
+              last_scanned_block = GREATEST(base_log_cursors.last_scanned_block, EXCLUDED.last_scanned_block),
+              last_log_key = COALESCE(EXCLUDED.last_log_key, base_log_cursors.last_log_key),
+              updated_at = now()
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(escrow_contract))
+        .bind(i64_from_u64(last_scanned_block)?)
+        .bind(last_log_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn upsert_claim(&self, claim: &Claim) -> DbResult<()> {
@@ -1414,6 +1480,10 @@ fn i64_from_u64(value: u64) -> DbResult<i64> {
 
 fn u64_from_i64(value: i64) -> DbResult<u64> {
     u64::try_from(value).map_err(|_| DbError::IntegerOverflow(value.to_string()))
+}
+
+fn normalize_key_address(address: &str) -> String {
+    address.trim().to_ascii_lowercase()
 }
 
 fn log_index_from_key(log_key: &str) -> Option<u64> {
