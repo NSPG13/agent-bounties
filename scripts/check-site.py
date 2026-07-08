@@ -105,6 +105,8 @@ def main() -> int:
         "No payment credentials were collected here",
         "STRIPE_PAYMENT_METHOD_CONFIGURATION",
         "Check readiness",
+        "/health",
+        "Hosted API health",
         "/v1/readiness/live-money?network=base-mainnet",
         "stripe_payment_method_configuration_configured",
         "Prefilled funding request",
@@ -126,9 +128,17 @@ def main() -> int:
     questions = discovery.get("distribution_feedback", {}).get("questions", [])
     if len(questions) < 4:
         fail("static discovery manifest must include distribution feedback questions")
+    hosted_health = discovery.get("hosted_health", {})
+    if (
+        hosted_health.get("funding_page_action") != "check_health"
+        or hosted_health.get("endpoint_template") != "{api_base_url}/health"
+        or hosted_health.get("expected_body") != "ok"
+    ):
+        fail("static discovery manifest must advertise hosted health preflight")
     hosted_readiness = discovery.get("hosted_readiness", {})
     if (
         hosted_readiness.get("funding_page_action") != "check_readiness"
+        or hosted_readiness.get("health_preflight") != "{api_base_url}/health"
         or "stripe_payment_method_configuration_configured"
         not in hosted_readiness.get("non_secret_fields", [])
     ):
