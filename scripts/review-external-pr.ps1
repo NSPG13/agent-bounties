@@ -57,6 +57,62 @@ function Test-RiskyPath {
     )
 }
 
+function Format-MarkdownList {
+    param(
+        [object[]] $Items,
+        [int] $Limit = 12,
+        [string] $Empty = "- None"
+    )
+
+    $values = @($Items | Where-Object { $_ } | Select-Object -First $Limit)
+    if ($values.Count -eq 0) {
+        return $Empty
+    }
+    return (($values | ForEach-Object { "- $_" }) -join "`n")
+}
+
+function Get-DocsContractIssues {
+    param([string] $Output)
+
+    if ([string]::IsNullOrWhiteSpace($Output)) {
+        return @()
+    }
+    return @(
+        $Output -split "`r?`n" |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -match '^[^\s:][^:]+:\d+:' } |
+            Select-Object -First 20
+    )
+}
+
+function New-ConstructiveFeedback {
+    param(
+        [bool] $DocsOnly,
+        [object[]] $RiskyFiles,
+        [object[]] $NonDocsFiles,
+        [bool] $DocsCheckOk,
+        [object[]] $DocsIssues
+    )
+
+    $items = @()
+    if (-not $DocsOnly) {
+        $items += "Split docs-only changes from code or infrastructure changes, or wait for manual maintainer review of the non-doc paths."
+    }
+    if ($RiskyFiles.Count -gt 0) {
+        $items += "Risky paths need line-by-line maintainer review before CI or any upstream collaboration branch is approved."
+    }
+    if (-not $DocsCheckOk) {
+        $items += "Run `cargo run -p cli -- docs-contract-check` locally and update examples to match the current API routes, MCP tools, discovery manifest shape, and request payloads."
+    }
+    if ($DocsIssues.Count -gt 0) {
+        $items += "Start with the first docs-contract issue listed below, then rerun the checker until it reports `docs_contract_check=ok`."
+    }
+    if ($items.Count -eq 0) {
+        $items += "Perform semantic review before approving merge, and keep payment or bounty acceptance separate from code review."
+    }
+    return $items
+}
+
 Push-Location $repoRoot
 try {
     $prJson = gh pr view $Pr --repo $Repo --json number,title,url,author,headRefOid,files | ConvertFrom-Json
@@ -121,6 +177,23 @@ try {
         Invoke-Checked { git worktree remove --force $worktreeFull }
     }
 
+    $docsIssues = Get-DocsContractIssues $docsCheckOutput
+    $collaborationBranchCandidate = $docsOnly -and $riskyFiles.Count -eq 0
+    $mainCandidate = $safeForMaintainerCi -and $docsCheckOk
+    $recommendedLane = if ($mainCandidate) {
+        "main-candidate"
+    } elseif ($collaborationBranchCandidate) {
+        "collaboration-branch-candidate"
+    } else {
+        "manual-security-review"
+    }
+    $feedbackItems = New-ConstructiveFeedback `
+        -DocsOnly $docsOnly `
+        -RiskyFiles $riskyFiles `
+        -NonDocsFiles $nonDocsFiles `
+        -DocsCheckOk $docsCheckOk `
+        -DocsIssues $docsIssues
+
     $result = [ordered]@{
         pr = $prJson.number
         title = $prJson.title
@@ -128,24 +201,76 @@ try {
         author = $prJson.author.login
         docs_only = $docsOnly
         safe_for_maintainer_ci = ($safeForMaintainerCi -and $docsCheckOk)
-        risky_files = $riskyFiles
-        non_docs_files = $nonDocsFiles
+        main_candidate = $mainCandidate
+        collaboration_branch_candidate = $collaborationBranchCandidate
+        recommended_lane = $recommendedLane
+        risky_files = [string[]]@($riskyFiles)
+        non_docs_files = [string[]]@($nonDocsFiles)
         docs_contract_check = if ($docsCheckOk) { "ok" } else { "failed" }
+        docs_contract_issues = [string[]]@($docsIssues)
+        constructive_feedback = [string[]]@($feedbackItems)
         docs_contract_output = $docsCheckOutput
     }
     $result | ConvertTo-Json -Depth 6
 
     if ($PostReview) {
-        if ($safeForMaintainerCi -and $docsCheckOk) {
-            $body = "Automated external PR intake passed static docs-only review and docs-contract-check. This does not approve merge or payment; a maintainer still needs to review semantics and decide whether to approve CI."
+        if ($mainCandidate) {
+            $body = @"
+Automated external PR intake passed.
+
+What passed:
+- The changed files are docs-only.
+- No risky paths were changed.
+- `docs-contract-check` passed against the trusted maintainer checkout.
+
+Recommended lane: main-candidate.
+
+Next steps:
+- A maintainer should still review the semantics before merging.
+- This review does not approve bounty acceptance, payout, or payment settlement.
+"@
             Invoke-Checked { gh pr review $Pr --repo $Repo --comment --body $body }
         } else {
-            $body = "Automated external PR intake failed. risky_files=$($riskyFiles -join ', ') non_docs_files=$($nonDocsFiles -join ', ') docs_contract_check=$($result.docs_contract_check). Maintainer review required; do not approve CI yet."
+            $blockers = @()
+            if ($nonDocsFiles.Count -gt 0) {
+                $blockers += "Non-doc files changed:`n$(Format-MarkdownList $nonDocsFiles)"
+            }
+            if ($riskyFiles.Count -gt 0) {
+                $blockers += "Risky files changed:`n$(Format-MarkdownList $riskyFiles)"
+            }
+            if (-not $docsCheckOk) {
+                $blockers += "Docs contract check failed:`n$(Format-MarkdownList $docsIssues -Empty '- The checker failed without line-specific issues. Run the command below for full output.')"
+            }
+            $branchGuidance = if ($collaborationBranchCandidate) {
+                "This looks suitable for a collaboration branch such as `collab/pr-$Pr-<short-topic>` if a maintainer wants others to iterate on it without merging to `main` yet. That branch would not imply bounty acceptance or payment approval."
+            } else {
+                "Do not move this to an upstream collaboration branch automatically. The risky or non-doc paths need manual maintainer security review first."
+            }
+            $body = @"
+Thanks for the contribution. I cannot approve this for `main` yet, but the next repair steps are concrete.
+
+Recommended lane: $recommendedLane.
+
+Why it is blocked:
+$(($blockers | ForEach-Object { $_ }) -join "`n`n")
+
+How to fix:
+$(Format-MarkdownList $feedbackItems)
+
+Local command to run before pushing an update:
+
+~~~bash
+cargo run -p cli -- docs-contract-check
+~~~
+
+Collaboration branch guidance:
+$branchGuidance
+"@
             Invoke-Checked { gh pr review $Pr --repo $Repo --request-changes --body $body }
         }
     }
 
-    if (-not ($safeForMaintainerCi -and $docsCheckOk)) {
+    if (-not $mainCandidate) {
         exit 1
     }
 } finally {
