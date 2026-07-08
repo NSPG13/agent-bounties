@@ -83,6 +83,8 @@ whether the work belongs on a collaboration branch such as
 docs/spec work that is not main-ready, maintainers can opt in to preserving the
 PR head with `-CreateCollaborationBranch` or `--create-collaboration-branch`;
 that branch is not a merge approval, bounty acceptance, or payout approval.
+The PR template asks contributors which review lane they expect and whether a
+safe collaboration branch is acceptable if the work needs more iteration.
 
 The local demo uses simulated credits and deterministic verifiers. Base Sepolia,
 Stripe, and GitHub adapters are present as integration boundaries and are gated

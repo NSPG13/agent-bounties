@@ -35,6 +35,9 @@ executing code from the PR.
   next steps. Tell the contributor what passed, what blocked main, the exact
   command to run locally, and whether the work is suitable for a collaboration
   branch.
+- Close or reject a PR only after leaving a public repair path. The repair path
+  should say whether the contributor should update the same PR, open a smaller
+  replacement PR, or continue against a collaboration branch.
 - Changes under `.github/workflows/`, `scripts/`, `contracts/`, `migrations/`,
   `crates/`, dependency manifests, or lockfiles require manual review.
 - Automation can post review comments or request changes, but it must not merge,
@@ -62,10 +65,38 @@ A collaboration branch is not a bounty acceptance, payment approval, or merge
 approval. It is a staging lane for useful work that should remain visible while
 main stays production-safe.
 
+## Reviewer Feedback Standard
+
+Every public PR response must be useful to a future contributor, not just the
+current author. Use this structure for approvals, change requests, declined PRs,
+and collaboration-branch acceptance:
+
+- **Decision**: `main-candidate`, `request-changes`,
+  `collaboration-branch-candidate`, `manual-security-review`, or
+  `declined/superseded`.
+- **What passed**: name the useful contribution, trusted checks, or safe files.
+  If nothing passed, say that directly and keep the explanation factual.
+- **What blocks main**: list the first concrete blocker, stale contract, risky
+  path, missing test, failing check, or product-scope mismatch.
+- **Repair path**: give the exact local command, file, test, or smaller PR split
+  that would make the next submission easier to accept.
+- **Branch path**: say whether the work should stay on the same PR, move to a
+  collaboration branch, or be restarted as a new focused PR.
+- **Payment boundary**: state that code review, branch preservation, and CI
+  approval do not authorize bounty acceptance, settlement, payout, or payment.
+
+Do not leave a contributor with only "not approved" or "closed as stale". If the
+work is useful but not safe for `main`, prefer preserving the idea on a
+collaboration branch when the branch rules allow it. If the work is unsafe or
+out of scope, explain the smallest safe version that could be reconsidered.
+
 ### Collaboration Branch Rules
 
 - Prefer collaboration branches for docs/spec/template work that is valuable but
   fails a contract check, or for larger feature drafts that need multiple PRs.
+- Use collaboration branches to keep useful contribution energy visible without
+  relaxing the `main` gate. They are for continued iteration, not for running
+  privileged automation on unreviewed code.
 - Do not put changes to `.github/workflows/`, release scripts, deployment
   automation, secrets handling, payment settlement, escrow contracts, or
   dependency locks on a collaboration branch unless the maintainer explicitly
@@ -76,6 +107,8 @@ main stays production-safe.
   until the branch has a clean path back through the normal gates.
 - When the branch becomes main-ready, open a maintainer-owned PR from the
   collaboration branch to `main` and run the full gates again.
+- If closing the original PR after creating a collaboration branch, link the
+  branch in the close comment and state what follow-up PR should target.
 
 To post a GitHub review result:
 
@@ -130,12 +163,14 @@ Every review outcome should leave the contributor with a repair path:
   payout approval.
 - **Manual security review**: state which risky paths triggered the lane and ask
   for a smaller split if that would help review.
+- **Decline or close**: state why the PR is being closed, name any superseding
+  PR/issue/branch, and describe the smallest revised PR that would be welcome.
 
 Suggested "not main-ready yet" comment:
 
 ```text
-Thanks for the contribution. I cannot approve this for main yet, but the repair
-path is concrete.
+Thanks for the contribution. Decision: request-changes. I cannot approve this
+for main yet, but the repair path is concrete.
 
 What passed:
 - <docs-only / useful topic / no risky paths, when true>
@@ -154,6 +189,28 @@ Collaboration branch:
 
 This review does not approve bounty acceptance, merge, payout, or payment
 settlement.
+```
+
+Suggested "accepted for collaboration branch" comment:
+
+```text
+Thanks for the contribution. Decision: collaboration-branch-candidate.
+
+What passed:
+- <useful docs/spec/template/feature direction>
+
+What blocks main:
+- <contract mismatch / incomplete acceptance criteria / larger split still in progress>
+
+Collaboration branch:
+- <collab/pr-number-topic>
+- Please target follow-up PRs at that branch until it has a clean path back to main.
+
+Repair path:
+- <exact command or files to update before a maintainer-owned PR back to main>
+
+This branch preserves iteration space. It is not merge approval, bounty
+acceptance, payout approval, or payment settlement.
 ```
 
 ## Docs Contract Check
