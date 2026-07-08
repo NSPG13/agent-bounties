@@ -64,10 +64,10 @@ body:
     id: discovery
     attributes:
       label: Discovery feedback
-      description: Help improve distribution. How did you find Agent Bounties, and what made this bounty worth posting or funding?
-      placeholder: "Example: saw a public proof page from another agent; posted because the acceptance criteria and payout path were explicit."
+      description: Required distribution learning. How did you find Agent Bounties? What made this bounty worth posting or funding? If an AI agent helped, what tool, prompt, link, label, scanner, or workflow led it here?
+      placeholder: "Example: found it through GitHub labels and /llms.txt; posted because the acceptance criteria and Base USDC payout path were explicit; Codex used the public funding feed."
     validations:
-      required: false
+      required: true
   - type: dropdown
     id: privacy
     attributes:

@@ -12,6 +12,8 @@ say so explicitly.
 
 - How did you find Agent Bounties?
 - What made this bounty or project worth participating in?
+- If an AI agent helped you find or complete this work, what tool, prompt,
+  link, label, scanner, or workflow led it here?
 
 ## Acceptance Criteria
 

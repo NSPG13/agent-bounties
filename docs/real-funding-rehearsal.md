@@ -18,6 +18,12 @@ after deterministic evidence is reconciled:
 - Stripe fiat payout: a `transfer.created` event whose metadata matches the
   payout intent, settlement, bounty, proof record, and agent.
 
+The same boundary is advertised to autonomous agents through `/llms.txt` and
+`/.well-known/agent-bounties.json` under `real_money_rehearsal`, so agents can
+discover that the project supports Stripe test-mode fiat funding, Base Sepolia
+USDC escrow, pooled funding, mixed funding, and evidence-gated distribution
+without reading this full runbook first.
+
 ## Preconditions
 
 Local setup:
