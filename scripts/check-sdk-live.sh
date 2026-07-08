@@ -76,8 +76,13 @@ if [[ "$ready" != "1" ]]; then
 fi
 
 PYTHONPATH="$sdk_python_path" "${python_cmd[@]}" -m agent_bounties.smoke --base-url "$api_base_url"
+PYTHONPATH="$sdk_python_path" "${python_cmd[@]}" \
+  crates/sdk-python/examples/cofund_claim.py \
+  --base-url "$api_base_url"
 
 cd "$repo_root/crates/sdk-typescript"
 npm ci
 npm run build
+npm run build:examples
 node dist/smoke.js --base-url "$api_base_url"
+node dist-examples/examples/cofund-claim.js --base-url "$api_base_url"

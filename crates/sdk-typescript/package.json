@@ -6,10 +6,11 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "build:examples": "tsc -p tsconfig.examples.json",
+    "check:examples": "tsc -p tsconfig.examples.json --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.5.0"
   }
 }
-
