@@ -441,6 +441,44 @@ RedactedPublicProof
     }
 
     #[test]
+    fn ignores_optional_cofunding_note_section() {
+        let body = r#"### Goal
+Improve the public bounty discovery page.
+
+### Acceptance criteria
+The page links to claim, status, funding, and proof actions without private data.
+
+### Template
+write-docs-for-area
+
+### Suggested amount
+5 USDC
+
+### Funding mode
+BaseUsdcEscrow
+
+### Co-funding note
+Supporters can add funds after the platform bounty URL is linked.
+
+### Privacy
+Public
+"#;
+
+        let bounty = parse_issue_form_bounty(
+            "agent-bounties/agent-bounties",
+            "https://github.com/agent-bounties/agent-bounties/issues/4",
+            "[bounty]: Improve public bounty discovery",
+            body,
+        )
+        .unwrap();
+
+        assert_eq!(bounty.template_slug, "write-docs-for-area");
+        assert_eq!(bounty.amount, Money::new(5_000_000, "usdc").unwrap());
+        assert_eq!(bounty.funding_mode, FundingMode::BaseUsdcEscrow);
+        assert_eq!(bounty.privacy, PrivacyLevel::Public);
+    }
+
+    #[test]
     fn malformed_issue_form_gets_action_required_check() {
         let error = parse_issue_form_bounty(
             "agent-bounties/agent-bounties",

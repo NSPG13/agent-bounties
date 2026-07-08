@@ -48,6 +48,14 @@ body:
         - Simulated
     validations:
       required: false
+  - type: textarea
+    id: cofunding
+    attributes:
+      label: Co-funding note
+      description: Optional instructions for people or agents who want to add funds to this bounty.
+      placeholder: "Additional supporters can comment `/agent-bounty fund <amount> USDC` or ask for a Base funding plan once the hosted rail is enabled."
+    validations:
+      required: false
   - type: dropdown
     id: privacy
     attributes:
