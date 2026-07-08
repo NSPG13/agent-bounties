@@ -534,6 +534,10 @@ pub struct FundingIntent {
     pub amount: Money,
     pub status: FundingIntentStatus,
     pub external_reference: Option<String>,
+    #[serde(default)]
+    pub stripe_success_url: Option<String>,
+    #[serde(default)]
+    pub stripe_cancel_url: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

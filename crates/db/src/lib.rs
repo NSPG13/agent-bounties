@@ -512,8 +512,8 @@ impl PostgresStore {
         sqlx::query(
             r#"
             INSERT INTO funding_intents
-              (id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, external_reference, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+              (id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, external_reference, stripe_success_url, stripe_cancel_url, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (id) DO UPDATE SET
               contributor_agent_id = EXCLUDED.contributor_agent_id,
               source_organization_id = EXCLUDED.source_organization_id,
@@ -521,7 +521,9 @@ impl PostgresStore {
               amount = EXCLUDED.amount,
               currency = EXCLUDED.currency,
               status = EXCLUDED.status,
-              external_reference = EXCLUDED.external_reference
+              external_reference = EXCLUDED.external_reference,
+              stripe_success_url = EXCLUDED.stripe_success_url,
+              stripe_cancel_url = EXCLUDED.stripe_cancel_url
             "#,
         )
         .bind(intent.id)
@@ -533,6 +535,8 @@ impl PostgresStore {
         .bind(&intent.amount.currency)
         .bind(format!("{:?}", intent.status))
         .bind(&intent.external_reference)
+        .bind(&intent.stripe_success_url)
+        .bind(&intent.stripe_cancel_url)
         .bind(intent.created_at)
         .execute(&self.pool)
         .await?;
@@ -542,7 +546,7 @@ impl PostgresStore {
     pub async fn list_funding_intents(&self) -> DbResult<Vec<FundingIntent>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, external_reference, created_at
+            SELECT id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, external_reference, stripe_success_url, stripe_cancel_url, created_at
             FROM funding_intents
             ORDER BY created_at
             "#,
@@ -564,6 +568,8 @@ impl PostgresStore {
                     )?,
                     status: parse_funding_intent_status(row.try_get::<String, _>("status")?)?,
                     external_reference: row.try_get("external_reference")?,
+                    stripe_success_url: row.try_get("stripe_success_url")?,
+                    stripe_cancel_url: row.try_get("stripe_cancel_url")?,
                     created_at: row.try_get("created_at")?,
                 })
             })
@@ -1707,6 +1713,8 @@ mod tests {
         assert!(CORE_MIGRATION.contains("funding_ledger_entry_id UUID"));
         assert!(CORE_MIGRATION.contains("refund_ledger_entry_id UUID"));
         assert!(CORE_MIGRATION.contains("settlement_id UUID"));
+        assert!(CORE_MIGRATION.contains("stripe_success_url TEXT"));
+        assert!(CORE_MIGRATION.contains("stripe_cancel_url TEXT"));
         assert!(CORE_MIGRATION.contains("fund-contribution:"));
     }
 

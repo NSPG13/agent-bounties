@@ -197,8 +197,9 @@ curl.exe -sS -X POST http://127.0.0.1:8080/v1/stripe/live/funding-intents/{id}/c
 
 The endpoint requires `ENABLE_STRIPE_LIVE_EXECUTION=true`,
 `ENABLE_STRIPE_PUBLIC_CHECKOUT=true`, and Stripe credentials on the hosted API.
-It returns a Stripe Checkout URL for the specific funding intent. The bounty is
-still funded only after the signed webhook is reconciled.
+It returns a Stripe Checkout URL for the specific funding intent and preserves
+the funding intent's optional success/cancel return URLs. The bounty is still
+funded only after the signed webhook is reconciled.
 
 If `STRIPE_PAYMENT_METHOD_CONFIGURATION` is set, the Checkout Session request
 includes that Stripe Dashboard configuration id. This is useful for rehearsing

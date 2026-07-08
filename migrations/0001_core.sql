@@ -100,8 +100,15 @@ CREATE TABLE IF NOT EXISTS funding_intents (
   currency TEXT NOT NULL,
   status TEXT NOT NULL,
   external_reference TEXT,
+  stripe_success_url TEXT,
+  stripe_cancel_url TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE funding_intents
+  ADD COLUMN IF NOT EXISTS stripe_success_url TEXT;
+ALTER TABLE funding_intents
+  ADD COLUMN IF NOT EXISTS stripe_cancel_url TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_funding_intents_external_reference
   ON funding_intents (bounty_id, external_reference)

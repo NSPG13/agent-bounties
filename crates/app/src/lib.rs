@@ -1577,6 +1577,8 @@ impl BountyNetwork {
         }
 
         let intent_id = funding_intent_uuid(bounty.id, &external_reference);
+        let stripe_success_url = request.stripe_success_url.clone();
+        let stripe_cancel_url = request.stripe_cancel_url.clone();
         let mut intent = FundingIntent {
             id: intent_id,
             bounty_id: bounty.id,
@@ -1586,6 +1588,8 @@ impl BountyNetwork {
             amount: amount.clone(),
             status: FundingIntentStatus::AwaitingEvidence,
             external_reference: Some(external_reference.clone()),
+            stripe_success_url,
+            stripe_cancel_url,
             created_at: Utc::now(),
         };
 
@@ -1596,8 +1600,8 @@ impl BountyNetwork {
                     &bounty,
                     &intent,
                     &platform_base_url,
-                    request.stripe_success_url,
-                    request.stripe_cancel_url,
+                    intent.stripe_success_url.clone(),
+                    intent.stripe_cancel_url.clone(),
                 )?;
                 (
                     FundingIntentNextAction::StripeCheckout { request: checkout },
@@ -1667,7 +1671,13 @@ impl BountyNetwork {
             .bounties
             .get(&intent.bounty_id)
             .ok_or(AppError::BountyNotFound)?;
-        stripe_checkout_for_funding_intent(bounty, intent, &platform_base_url.into(), None, None)
+        stripe_checkout_for_funding_intent(
+            bounty,
+            intent,
+            &platform_base_url.into(),
+            intent.stripe_success_url.clone(),
+            intent.stripe_cancel_url.clone(),
+        )
     }
 
     pub fn claim_bounty(&mut self, request: ClaimBountyRequest) -> AppResult<Bounty> {
@@ -4627,8 +4637,12 @@ mod tests {
                     currency: "usd".to_string(),
                     rail: PaymentRail::StripeFiat,
                     external_reference: Some("intent-stripe-500".to_string()),
-                    stripe_success_url: None,
-                    stripe_cancel_url: None,
+                    stripe_success_url: Some(
+                        "https://fund.example/success.html?intent=stripe".to_string(),
+                    ),
+                    stripe_cancel_url: Some(
+                        "https://fund.example/cancel.html?intent=stripe".to_string(),
+                    ),
                     base_escrow_contract: None,
                     base_payer: None,
                     base_token: None,
@@ -4641,6 +4655,14 @@ mod tests {
             stripe_intent.intent.status,
             FundingIntentStatus::AwaitingEvidence
         );
+        assert_eq!(
+            stripe_intent.intent.stripe_success_url.as_deref(),
+            Some("https://fund.example/success.html?intent=stripe")
+        );
+        assert_eq!(
+            stripe_intent.intent.stripe_cancel_url.as_deref(),
+            Some("https://fund.example/cancel.html?intent=stripe")
+        );
         assert!(stripe_intent.requires_reconciliation);
         assert!(!stripe_intent.funding_summary.claimable);
         let checkout = match &stripe_intent.next_action {
@@ -4648,8 +4670,27 @@ mod tests {
             FundingIntentNextAction::BaseEscrowFunding { .. } => panic!("expected Stripe action"),
         };
         assert_eq!(
+            checkout.body["success_url"],
+            "https://fund.example/success.html?intent=stripe"
+        );
+        assert_eq!(
+            checkout.body["cancel_url"],
+            "https://fund.example/cancel.html?intent=stripe"
+        );
+        assert_eq!(
             checkout.idempotency_key,
             format!("bounty_funding_intent:{}", stripe_intent.intent.id)
+        );
+        let executed_checkout = network
+            .stripe_checkout_for_funding_intent(stripe_intent.intent.id, "https://api.example")
+            .unwrap();
+        assert_eq!(
+            executed_checkout.body["success_url"],
+            "https://fund.example/success.html?intent=stripe"
+        );
+        assert_eq!(
+            executed_checkout.body["cancel_url"],
+            "https://fund.example/cancel.html?intent=stripe"
         );
         assert_eq!(
             checkout.body["metadata"]["funding_intent_id"],

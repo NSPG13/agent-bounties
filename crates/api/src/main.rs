@@ -3878,8 +3878,12 @@ mod tests {
                     currency: "usd".to_string(),
                     rail: domain::PaymentRail::StripeFiat,
                     external_reference: Some("card-funding-test".to_string()),
-                    stripe_success_url: None,
-                    stripe_cancel_url: None,
+                    stripe_success_url: Some(
+                        "https://nspg13.github.io/agent-bounties/success.html".to_string(),
+                    ),
+                    stripe_cancel_url: Some(
+                        "https://nspg13.github.io/agent-bounties/cancel.html".to_string(),
+                    ),
                     base_escrow_contract: None,
                     base_payer: None,
                     base_token: None,
@@ -3911,6 +3915,14 @@ mod tests {
         assert_eq!(
             report.request.idempotency_key,
             format!("bounty_funding_intent:{}", funding_intent.id)
+        );
+        assert_eq!(
+            report.request.body["success_url"],
+            "https://nspg13.github.io/agent-bounties/success.html"
+        );
+        assert_eq!(
+            report.request.body["cancel_url"],
+            "https://nspg13.github.io/agent-bounties/cancel.html"
         );
         assert_eq!(
             report.request.body["metadata"]["bounty_id"],
