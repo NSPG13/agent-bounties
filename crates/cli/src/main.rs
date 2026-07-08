@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
 use app::{
     hash_artifact, AddFundingContributionRequest, BaseReleaseQueueRequest, BountyNetwork,
-    ClaimBountyRequest, CreateHelpRequestRequest, FundQuoteRequest, OpenPooledBountyRequest,
-    PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest, RequestQuotesRequest,
-    SubmitResultRequest, VerifySubmissionRequest,
+    ClaimBountyRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingPartitionTargetRequest,
+    OpenPooledBountyRequest, PlanBaseFundingRequest, PlanBaseReleaseRequest, PostBountyRequest,
+    RegisterAgentRequest, RegisterCapabilityRequest, RequestQuotesRequest, SubmitResultRequest,
+    VerifySubmissionRequest,
 };
 use chain_base::{
     base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
@@ -21,10 +22,12 @@ use eval_harness::{
     BountyBench, JudgeBench,
 };
 use github_app::{
-    bounty_check_output, parse_issue_form_bounty, proof_comment_plan, GitHubProofComment,
+    bounty_check_output, funding_comment_plan, parse_issue_form_bounty, proof_comment_plan,
+    GitHubFundingCommentInput, GitHubProofComment,
 };
 use payments_stripe::{
-    execute_stripe_request, CheckoutTopUpRequest, StripePlanner, STRIPE_API_BASE_URL,
+    execute_stripe_request, CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper,
+    StripePlanner, StripeWebhookEvent, STRIPE_API_BASE_URL,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -46,10 +49,23 @@ struct Args {
     command: Command,
 }
 
+#[derive(Debug)]
+struct GithubFundingCommentPlanCli {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body_file: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
+    existing_idempotency_keys: Vec<String>,
+}
+
 #[derive(Subcommand)]
 enum Command {
     Demo,
     PooledFundingDemo,
+    FundingRehearsalDemo,
     Bountybench,
     Abusebench,
     Judgebench,
@@ -254,6 +270,24 @@ enum Command {
         #[arg(long)]
         body_file: String,
     },
+    GithubFundingCommentPlan {
+        #[arg(long)]
+        repository: String,
+        #[arg(long)]
+        issue_url: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body_file: String,
+        #[arg(long)]
+        comment_body: String,
+        #[arg(long)]
+        contributor_login: Option<String>,
+        #[arg(long)]
+        comment_id: Option<String>,
+        #[arg(long = "existing-idempotency-key")]
+        existing_idempotency_keys: Vec<String>,
+    },
     GithubProofCommentPlan {
         #[arg(long)]
         bounty_id: Uuid,
@@ -308,6 +342,7 @@ async fn main() -> Result<()> {
     match args.command {
         Command::Demo => demo().await,
         Command::PooledFundingDemo => pooled_funding_demo(),
+        Command::FundingRehearsalDemo => funding_rehearsal_demo().await,
         Command::Bountybench => bountybench(),
         Command::Abusebench => abusebench(),
         Command::Judgebench => judgebench(),
@@ -471,6 +506,25 @@ async fn main() -> Result<()> {
             title,
             body_file,
         } => github_plan(repository, issue_url, title, body_file),
+        Command::GithubFundingCommentPlan {
+            repository,
+            issue_url,
+            title,
+            body_file,
+            comment_body,
+            contributor_login,
+            comment_id,
+            existing_idempotency_keys,
+        } => github_funding_comment_plan(GithubFundingCommentPlanCli {
+            repository,
+            issue_url,
+            title,
+            body_file,
+            comment_body,
+            contributor_login,
+            comment_id,
+            existing_idempotency_keys,
+        }),
         Command::GithubProofCommentPlan {
             bounty_id,
             proof_url,
@@ -655,6 +709,164 @@ fn pooled_funding_demo() -> Result<()> {
             "final_remaining_minor": second.funding_summary.remaining.amount,
             "claimable": second.funding_summary.claimable,
             "contribution_count": status.funding_contributions.len(),
+            "ledger_entries": network.ledger.entries().len()
+        }))?
+    );
+    Ok(())
+}
+
+async fn funding_rehearsal_demo() -> Result<()> {
+    let mut network = BountyNetwork::default();
+    let organization_id = Uuid::parse_str("00000000-0000-0000-0000-000000000f01")?;
+    let solver = network.register_agent(RegisterAgentRequest {
+        handle: "funding-rehearsal-solver".to_string(),
+        payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+    });
+    let platform_url = "https://agentbounties.local".to_string();
+    let stripe_top_up_intent =
+        StripePlanner::new(platform_url.clone()).checkout_top_up(&CheckoutTopUpRequest {
+            organization_id,
+            amount: Money::new(500, "usd")?,
+            success_url: format!("{platform_url}/stripe/success"),
+            cancel_url: format!("{platform_url}/stripe/cancel"),
+        })?;
+    let stripe_webhook = StripeWebhookEvent {
+        id: "evt_test_funding_rehearsal_topup".to_string(),
+        event_type: "checkout.session.completed".to_string(),
+        payload: serde_json::json!({
+            "id": "cs_test_funding_rehearsal_topup",
+            "payment_status": "paid",
+            "client_reference_id": organization_id.to_string(),
+            "amount_total": 500,
+            "currency": "usd",
+            "payment_intent": "pi_test_funding_rehearsal_topup"
+        }),
+    };
+    let stripe_credit = StripeEventDeduper::default().apply_checkout_top_up(&stripe_webhook)?;
+    let stripe_reconciliation = network.apply_stripe_funding_credit(stripe_credit)?;
+
+    let bounty = network.open_pooled_bounty(OpenPooledBountyRequest {
+        title: "Funding rehearsal mixed Stripe and Base bounty".to_string(),
+        template_slug: "extract-data-to-schema".to_string(),
+        target_amount_minor: 500,
+        currency: "usd".to_string(),
+        funding_mode: FundingMode::MixedRails,
+        privacy: PrivacyLevel::Public,
+        funding_targets: vec![
+            FundingPartitionTargetRequest {
+                rail: PaymentRail::StripeFiat,
+                amount_minor: 500,
+                currency: "usd".to_string(),
+            },
+            FundingPartitionTargetRequest {
+                rail: PaymentRail::BaseUsdc,
+                amount_minor: 1_000,
+                currency: "usdc".to_string(),
+            },
+        ],
+    })?;
+    let stripe_contribution = network.add_funding_contribution(AddFundingContributionRequest {
+        bounty_id: bounty.id,
+        contributor_agent_id: None,
+        source_organization_id: Some(organization_id),
+        amount_minor: 500,
+        currency: "usd".to_string(),
+        rail: PaymentRail::StripeFiat,
+        external_reference: Some("funding-rehearsal-stripe-500".to_string()),
+    })?;
+
+    let escrow_contract = "0x1111111111111111111111111111111111111111".to_string();
+    let usdc_token = "0x3333333333333333333333333333333333333333".to_string();
+    let base_funding_plan = network.plan_base_funding(PlanBaseFundingRequest {
+        bounty_id: bounty.id,
+        escrow_contract: escrow_contract.clone(),
+        payer: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        token: usdc_token.clone(),
+        network: Some("base-sepolia".to_string()),
+    })?;
+    let terms_hash = bounty
+        .terms_hash
+        .clone()
+        .context("rehearsal bounty missing terms hash")?;
+    let base_created = network.apply_base_escrow_event(simulated_created_event(
+        bounty.id,
+        77,
+        usdc_token,
+        Money::new(1_000, "usdc")?,
+        terms_hash,
+    ))?;
+
+    network.claim_bounty(ClaimBountyRequest {
+        bounty_id: bounty.id,
+        solver_agent_id: solver.id,
+    })?;
+    let artifact = r#"{"funding_rehearsal":true}"#;
+    let submission = network.submit_result(SubmitResultRequest {
+        bounty_id: bounty.id,
+        solver_agent_id: solver.id,
+        artifact_uri: "memory://funding-rehearsal-artifact.json".to_string(),
+        artifact_body: artifact.to_string(),
+    })?;
+    let proof = network
+        .verify_submission(VerifySubmissionRequest {
+            bounty_id: bounty.id,
+            submission_id: submission.id,
+            expected_artifact_digest: hash_artifact(artifact),
+            verifier_kind: Some(VerifierKind::JsonSchema),
+            rubric: None,
+            evidence: None,
+            approved_risk_event_id: None,
+        })
+        .await?;
+    let base_release_plan = network.plan_base_release(PlanBaseReleaseRequest {
+        bounty_id: bounty.id,
+        escrow_contract,
+        platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+        network: Some("base-sepolia".to_string()),
+    })?;
+    let base_released = network.apply_base_escrow_event(simulated_released_event(
+        bounty.id,
+        77,
+        proof.proof_hash.clone(),
+    ))?;
+    let stripe_payout = network.apply_stripe_connect_snapshot(ConnectAccountSnapshot {
+        agent_id: solver.id,
+        connected_account_id: Some("acct_test_funding_rehearsal".to_string()),
+        payouts_enabled: true,
+        disabled_reason: None,
+        currently_due: vec![],
+    })?;
+    let final_status = network.status(bounty.id)?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "rehearsal": "stripe-dev-plus-base-sepolia-mixed-funding",
+            "invariants": [
+                "Stripe Checkout Session creation does not credit balances.",
+                "Stripe fiat funding is reserved only after paid webhook reconciliation.",
+                "Base USDC funding is claimable only after indexed EscrowCreated reconciliation.",
+                "Deterministic digest verification creates settlement intents.",
+                "Base payout is paid only after indexed EscrowReleased reconciliation.",
+                "Stripe payout is paid only after Connect eligibility reconciliation."
+            ],
+            "stripe": {
+                "checkout_top_up_intent": stripe_top_up_intent,
+                "webhook_event_id": stripe_webhook.id,
+                "funding_reconciliation": stripe_reconciliation,
+                "funding_contribution": stripe_contribution.contribution,
+                "payout_reconciliation": stripe_payout
+            },
+            "base": {
+                "funding_plan": base_funding_plan,
+                "created_reconciliation": base_created,
+                "release_plan": base_release_plan,
+                "released_reconciliation": base_released
+            },
+            "proof": proof,
+            "final_bounty": final_status.bounty,
+            "funding_summary": final_status.funding_summary,
+            "settlements": final_status.settlements,
             "ledger_entries": network.ledger.entries().len()
         }))?
     );
@@ -1339,6 +1551,22 @@ fn github_plan(
     Ok(())
 }
 
+fn github_funding_comment_plan(args: GithubFundingCommentPlanCli) -> Result<()> {
+    let body = fs::read_to_string(args.body_file)?;
+    let plan = funding_comment_plan(GitHubFundingCommentInput {
+        repository: args.repository,
+        issue_url: args.issue_url,
+        title: args.title,
+        body,
+        comment_body: args.comment_body,
+        contributor_login: args.contributor_login,
+        comment_id: args.comment_id,
+        existing_idempotency_keys: args.existing_idempotency_keys,
+    });
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
 fn github_proof_comment_plan(
     bounty_id: Uuid,
     proof_url: String,
@@ -1670,6 +1898,7 @@ async fn production_smoke_check(
         "/v1/stripe/live/connect-accounts",
         "/v1/stripe/connect-snapshots",
         "/v1/stripe/checkout-webhooks",
+        "/v1/github/funding-comment-plan",
         "/v1/github/proof-comment-plan-from-proof",
     ] {
         require(
@@ -1917,6 +2146,7 @@ async fn production_smoke_check(
         "approve_risk_bounty",
         "approve_risk_payout",
         "reject_risk_event",
+        "plan_github_funding_comment",
         "plan_github_proof_comment_for_proof",
     ] {
         require(
@@ -2141,6 +2371,12 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .pointer("/endpoints/github_issue_bounty_plan")
             .is_some(),
         "discovery manifest must include GitHub issue bounty planning",
+    )?;
+    require(
+        discovery
+            .pointer("/endpoints/github_funding_comment_plan")
+            .is_some(),
+        "discovery manifest must include GitHub funding comment planning",
     )?;
     require(
         discovery
@@ -2481,6 +2717,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "execute_stripe_checkout_top_up",
         "execute_stripe_connect_account",
         "plan_github_issue_bounty",
+        "plan_github_funding_comment",
         "plan_github_proof_comment",
         "plan_github_proof_comment_for_proof",
         "run_eval_loops",
@@ -2941,6 +3178,35 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     require(
         value_str(&mcp_github_issue, "/check/conclusion") == Some("Success"),
         "MCP plan_github_issue_bounty must produce a success check",
+    )?;
+
+    let mcp_github_funding = mcp_tool_post(
+        mcp,
+        "plan_github_funding_comment",
+        serde_json::json!({
+            "repository": "agent-bounties/agent-bounties",
+            "issue_url": "https://github.com/agent-bounties/agent-bounties/issues/1",
+            "title": "[bounty]: Fix CI",
+            "body": "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n",
+            "comment_body": "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+            "contributor_login": "service-smoke",
+            "comment_id": "12345",
+            "existing_idempotency_keys": []
+        }),
+    )?;
+    require(
+        mcp_github_funding
+            .pointer("/ready")
+            .and_then(|value| value.as_bool())
+            == Some(true),
+        "MCP plan_github_funding_comment must accept a valid funding signal",
+    )?;
+    require(
+        mcp_github_funding
+            .pointer("/signal/requires_operator_reconciliation")
+            .and_then(|value| value.as_bool())
+            == Some(true),
+        "MCP plan_github_funding_comment must require operator reconciliation",
     )?;
 
     let mcp_github_proof = mcp_tool_post(

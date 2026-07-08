@@ -25,7 +25,8 @@ use db::PostgresStore;
 use domain::{Agent, CapabilityClass, EvalRun, HelpRequest, Money, PrivacyLevel, RiskReviewRecord};
 use eval_harness::{EvalSuiteResult, LoopSuiteResult};
 use github_app::{
-    bounty_check_output, parse_issue_form_bounty, proof_comment_plan, GitHubProofComment,
+    bounty_check_output, funding_comment_plan, parse_issue_form_bounty, proof_comment_plan,
+    GitHubFundingCommentInput, GitHubProofComment,
 };
 use ledger::Ledger;
 use payments_stripe::{
@@ -165,6 +166,19 @@ struct PlanGitHubIssueBountyArgs {
     issue_url: String,
     title: String,
     body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanGitHubFundingCommentArgs {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
+    #[serde(default)]
+    existing_idempotency_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,6 +334,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_github_issue_bounty",
             post(plan_github_issue_bounty),
+        )
+        .route(
+            "/tools/plan_github_funding_comment",
+            post(plan_github_funding_comment),
         )
         .route(
             "/tools/plan_github_proof_comment",
@@ -753,6 +771,23 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "body": string_property("Rendered issue form markdown body.")
                 }),
                 &["repository", "issue_url", "title", "body"],
+            ),
+        ),
+        tool(
+            "plan_github_funding_comment",
+            "Parse a GitHub public co-funding comment into an operator reconciliation signal without crediting funds.",
+            object_tool_schema(
+                json!({
+                    "repository": string_property("GitHub repository, for example owner/repo."),
+                    "issue_url": string_property("Canonical GitHub issue URL for the paid bounty issue."),
+                    "title": string_property("Issue title."),
+                    "body": string_property("Rendered issue form markdown body."),
+                    "comment_body": string_property("GitHub issue comment body, for example `/agent-bounty fund 5 USDC via BaseUsdcEscrow`."),
+                    "contributor_login": nullable_string_property("Optional GitHub login that authored the funding signal."),
+                    "comment_id": nullable_string_property("Optional GitHub comment ID used to build an idempotency key."),
+                    "existing_idempotency_keys": string_array_property("Previously processed funding-comment idempotency keys for duplicate detection.")
+                }),
+                &["repository", "issue_url", "title", "body", "comment_body"],
             ),
         ),
         tool(
@@ -1901,6 +1936,21 @@ async fn plan_github_issue_bounty(
     }
 }
 
+async fn plan_github_funding_comment(
+    Json(args): Json<PlanGitHubFundingCommentArgs>,
+) -> Json<serde_json::Value> {
+    mcp_json(funding_comment_plan(GitHubFundingCommentInput {
+        repository: args.repository,
+        issue_url: args.issue_url,
+        title: args.title,
+        body: args.body,
+        comment_body: args.comment_body,
+        contributor_login: args.contributor_login,
+        comment_id: args.comment_id,
+        existing_idempotency_keys: args.existing_idempotency_keys,
+    }))
+}
+
 async fn plan_github_proof_comment(
     Json(args): Json<PlanGitHubProofCommentArgs>,
 ) -> Json<serde_json::Value> {
@@ -2579,6 +2629,20 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "body"));
+
+        let plan_github_funding = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_github_funding_comment")
+            .expect("plan_github_funding_comment descriptor exists");
+        assert!(plan_github_funding.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "comment_body"));
+        assert_eq!(
+            plan_github_funding.input_schema["properties"]["existing_idempotency_keys"]["type"],
+            "array"
+        );
 
         let plan_github_proof = descriptors
             .iter()

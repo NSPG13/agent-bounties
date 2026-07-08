@@ -614,6 +614,32 @@ class AgentBountiesClient:
             },
         )
 
+    def plan_github_funding_comment(
+        self,
+        repository: str,
+        issue_url: str,
+        title: str,
+        body: str,
+        comment_body: str,
+        contributor_login: str | None = None,
+        comment_id: str | None = None,
+        existing_idempotency_keys: list[str] | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/github/funding-comment-plan",
+            json={
+                "repository": repository,
+                "issue_url": issue_url,
+                "title": title,
+                "body": body,
+                "comment_body": comment_body,
+                "contributor_login": contributor_login,
+                "comment_id": comment_id,
+                "existing_idempotency_keys": existing_idempotency_keys or [],
+            },
+        )
+
     def plan_github_proof_comment(
         self,
         bounty_id: str,

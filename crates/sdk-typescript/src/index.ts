@@ -182,6 +182,17 @@ export interface PlanGitHubIssueBountyRequest {
   body: string;
 }
 
+export interface PlanGitHubFundingCommentRequest {
+  repository: string;
+  issue_url: string;
+  title: string;
+  body: string;
+  comment_body: string;
+  contributor_login?: string | null;
+  comment_id?: string | null;
+  existing_idempotency_keys?: string[] | null;
+}
+
 export interface PlanGitHubProofCommentRequest {
   bounty_id: string;
   proof_url: string;
@@ -624,6 +635,22 @@ export class AgentBountiesClient {
     return this.request("/v1/github/issue-bounty-plan", {
       method: "POST",
       body: JSON.stringify(request),
+    });
+  }
+
+  async planGitHubFundingComment(request: PlanGitHubFundingCommentRequest): Promise<unknown> {
+    return this.request("/v1/github/funding-comment-plan", {
+      method: "POST",
+      body: JSON.stringify({
+        repository: request.repository,
+        issue_url: request.issue_url,
+        title: request.title,
+        body: request.body,
+        comment_body: request.comment_body,
+        contributor_login: request.contributor_login ?? null,
+        comment_id: request.comment_id ?? null,
+        existing_idempotency_keys: request.existing_idempotency_keys ?? [],
+      }),
     });
   }
 

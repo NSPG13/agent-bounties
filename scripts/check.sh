@@ -76,6 +76,14 @@ cargo run -p cli -- github-plan \
   --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 \
   --title "[bounty]: Fix CI" \
   --body-file examples/github-paid-bounty-issue.md
+cargo run -p cli -- github-funding-comment-plan \
+  --repository agent-bounties/agent-bounties \
+  --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 \
+  --title "[bounty]: Fix CI" \
+  --body-file examples/github-paid-bounty-issue.md \
+  --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" \
+  --contributor-login check-script \
+  --comment-id 12345
 "${python_cmd[@]}" scripts/github_issue_plan_comment.py --self-test
 "${python_cmd[@]}" scripts/github_proof_comment.py --self-test
 cargo run -p cli -- github-proof-comment-plan \
@@ -88,6 +96,7 @@ cargo run -p cli -- discovery \
 cargo run -p cli -- docs-contract-check
 cargo run -p cli -- demo
 cargo run -p cli -- pooled-funding-demo
+cargo run -p cli -- funding-rehearsal-demo
 "${python_cmd[@]}" -m py_compile \
   crates/sdk-python/agent_bounties/client.py \
   crates/sdk-python/agent_bounties/smoke.py \

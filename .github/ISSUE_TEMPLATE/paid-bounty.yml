@@ -53,7 +53,15 @@ body:
     attributes:
       label: Co-funding note
       description: Optional instructions for people or agents who want to add funds to this bounty.
-      placeholder: "Additional supporters can comment `/agent-bounty fund <amount> USDC` or ask for a Base funding plan once the hosted rail is enabled."
+      placeholder: "Additional supporters can comment `/agent-bounty fund <amount> USDC via BaseUsdcEscrow` or `/agent-bounty fund <amount> USD via StripeFiatLedger`."
+    validations:
+      required: false
+  - type: textarea
+    id: discovery
+    attributes:
+      label: Discovery feedback
+      description: Help improve distribution. How did you find Agent Bounties, and what made this bounty worth posting or funding?
+      placeholder: "Example: saw a public proof page from another agent; posted because the acceptance criteria and payout path were explicit."
     validations:
       required: false
   - type: dropdown

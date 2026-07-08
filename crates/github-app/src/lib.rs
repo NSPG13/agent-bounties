@@ -80,6 +80,58 @@ pub struct GitHubProofCommentPlan {
     pub check: GitHubCheckRunOutput,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubFundingCommentInput {
+    pub repository: String,
+    pub issue_url: String,
+    pub title: String,
+    pub body: String,
+    pub comment_body: String,
+    pub contributor_login: Option<String>,
+    pub comment_id: Option<String>,
+    #[serde(default)]
+    pub existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubFundingSignal {
+    pub issue_url: String,
+    pub contributor_login: Option<String>,
+    pub amount: Money,
+    pub rail: FundingMode,
+    pub idempotency_key: String,
+    pub requires_operator_reconciliation: bool,
+    pub operator_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubFundingCommentPlan {
+    pub ready: bool,
+    pub signal: Option<GitHubFundingSignal>,
+    pub error: Option<String>,
+    pub check: GitHubCheckRunOutput,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum GitHubFundingCommentError {
+    #[error("missing GitHub issue context")]
+    MissingIssueContext,
+    #[error("issue is not a valid paid bounty: {0}")]
+    NonBountyIssue(String),
+    #[error("missing funding command; use `/agent-bounty fund <amount> <currency> via <rail>`")]
+    MissingCommand,
+    #[error("invalid funding command; use `/agent-bounty fund <amount> <currency> via <rail>`")]
+    InvalidCommand,
+    #[error("invalid funding amount: {0}")]
+    InvalidAmount(String),
+    #[error("unsupported funding rail for public comments: {0}")]
+    UnsupportedRail(String),
+    #[error("currency {currency} does not match funding rail {rail}")]
+    CurrencyRailMismatch { currency: String, rail: String },
+    #[error("duplicate funding signal idempotency key: {0}")]
+    DuplicateSignal(String),
+}
+
 impl GitHubProofComment {
     pub fn markdown(&self) -> String {
         format!(
@@ -92,6 +144,30 @@ impl GitHubProofComment {
                 .map(|url| format!("\n\nSettlement: {url}"))
                 .unwrap_or_default()
         )
+    }
+}
+
+pub fn funding_comment_plan(input: GitHubFundingCommentInput) -> GitHubFundingCommentPlan {
+    match parse_funding_comment_signal(&input) {
+        Ok(signal) => {
+            let check = funding_comment_check_output(Ok(&signal));
+            GitHubFundingCommentPlan {
+                ready: true,
+                signal: Some(signal),
+                error: None,
+                check,
+            }
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let check = funding_comment_check_output(Err(&error));
+            GitHubFundingCommentPlan {
+                ready: false,
+                signal: None,
+                error: Some(message),
+                check,
+            }
+        }
     }
 }
 
@@ -207,6 +283,168 @@ pub fn proof_check_output(comment: &GitHubProofComment) -> GitHubCheckRunOutput 
         text: comment.markdown(),
         conclusion: GitHubCheckConclusion::Success,
     }
+}
+
+pub fn funding_comment_check_output(
+    signal: Result<&GitHubFundingSignal, &GitHubFundingCommentError>,
+) -> GitHubCheckRunOutput {
+    match signal {
+        Ok(signal) => GitHubCheckRunOutput {
+            title: "Agent bounty funding signal ready".to_string(),
+            summary: format!(
+                "{} {} via {:?} requires operator reconciliation.",
+                signal.amount.amount, signal.amount.currency, signal.rail
+            ),
+            text: format!(
+                "Issue: {}\nContributor: {}\nAmount: {} {}\nRail: {:?}\nIdempotency key: {}\nRequires operator reconciliation: true\n\nThis GitHub comment is a public funding signal only. It does not credit the ledger, create a Stripe balance, or mark Base escrow funded.",
+                signal.issue_url,
+                signal
+                    .contributor_login
+                    .as_deref()
+                    .unwrap_or("unknown"),
+                signal.amount.amount,
+                signal.amount.currency,
+                signal.rail,
+                signal.idempotency_key
+            ),
+            conclusion: GitHubCheckConclusion::Success,
+        },
+        Err(error) => GitHubCheckRunOutput {
+            title: "Agent bounty funding signal needs review".to_string(),
+            summary: error.to_string(),
+            text: "The funding comment was not converted into a funding signal. Edit the comment to use `/agent-bounty fund <amount> <currency> via <rail>` on a valid paid bounty issue, or reconcile funding manually in the platform.".to_string(),
+            conclusion: GitHubCheckConclusion::ActionRequired,
+        },
+    }
+}
+
+fn parse_funding_comment_signal(
+    input: &GitHubFundingCommentInput,
+) -> Result<GitHubFundingSignal, GitHubFundingCommentError> {
+    if input.repository.trim().is_empty()
+        || input.issue_url.trim().is_empty()
+        || input.title.trim().is_empty()
+        || input.body.trim().is_empty()
+    {
+        return Err(GitHubFundingCommentError::MissingIssueContext);
+    }
+    parse_issue_form_bounty(
+        &input.repository,
+        &input.issue_url,
+        &input.title,
+        &input.body,
+    )
+    .map_err(|error| GitHubFundingCommentError::NonBountyIssue(error.to_string()))?;
+
+    let command = funding_command_line(&input.comment_body)
+        .ok_or(GitHubFundingCommentError::MissingCommand)?;
+    let (amount, rail) = parse_funding_command(command)?;
+    validate_comment_funding_rail(&amount, &rail)?;
+    let idempotency_key = funding_signal_idempotency_key(input, command, &amount, &rail);
+    if input
+        .existing_idempotency_keys
+        .iter()
+        .any(|key| key == &idempotency_key)
+    {
+        return Err(GitHubFundingCommentError::DuplicateSignal(idempotency_key));
+    }
+
+    Ok(GitHubFundingSignal {
+        issue_url: input.issue_url.clone(),
+        contributor_login: input
+            .contributor_login
+            .as_ref()
+            .map(|login| login.trim().to_string())
+            .filter(|login| !login.is_empty()),
+        amount,
+        rail,
+        idempotency_key,
+        requires_operator_reconciliation: true,
+        operator_note:
+            "Verify actual Stripe Checkout credit or indexed Base escrow funding before applying this contribution."
+                .to_string(),
+    })
+}
+
+fn funding_command_line(comment_body: &str) -> Option<&str> {
+    comment_body
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("/agent-bounty fund"))
+}
+
+fn parse_funding_command(command: &str) -> Result<(Money, FundingMode), GitHubFundingCommentError> {
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    if parts.len() != 6
+        || parts[0] != "/agent-bounty"
+        || parts[1] != "fund"
+        || !parts[4].eq_ignore_ascii_case("via")
+    {
+        return Err(GitHubFundingCommentError::InvalidCommand);
+    }
+    let amount_text = format!("{} {}", parts[2], parts[3]);
+    let amount = parse_amount(&amount_text)
+        .map_err(|_| GitHubFundingCommentError::InvalidAmount(amount_text))?;
+    let rail = parse_funding_mode(parts[5])
+        .map_err(|_| GitHubFundingCommentError::UnsupportedRail(parts[5].to_string()))?;
+    match rail {
+        FundingMode::BaseUsdcEscrow | FundingMode::StripeFiatLedger => Ok((amount, rail)),
+        FundingMode::Simulated | FundingMode::MixedRails => Err(
+            GitHubFundingCommentError::UnsupportedRail(parts[5].to_string()),
+        ),
+    }
+}
+
+fn validate_comment_funding_rail(
+    amount: &Money,
+    rail: &FundingMode,
+) -> Result<(), GitHubFundingCommentError> {
+    let expected_currency = match rail {
+        FundingMode::BaseUsdcEscrow => "usdc",
+        FundingMode::StripeFiatLedger => "usd",
+        FundingMode::Simulated | FundingMode::MixedRails => {
+            return Err(GitHubFundingCommentError::UnsupportedRail(format!(
+                "{rail:?}"
+            )));
+        }
+    };
+    if amount.currency != expected_currency {
+        return Err(GitHubFundingCommentError::CurrencyRailMismatch {
+            currency: amount.currency.clone(),
+            rail: format!("{rail:?}"),
+        });
+    }
+    Ok(())
+}
+
+fn funding_signal_idempotency_key(
+    input: &GitHubFundingCommentInput,
+    command: &str,
+    amount: &Money,
+    rail: &FundingMode,
+) -> String {
+    if let Some(comment_id) = input
+        .comment_id
+        .as_ref()
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty())
+    {
+        return format!(
+            "github-funding-comment:{}:{}:comment:{}",
+            input.repository, input.issue_url, comment_id
+        );
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(input.repository.as_bytes());
+    hasher.update(input.issue_url.as_bytes());
+    if let Some(login) = input.contributor_login.as_deref() {
+        hasher.update(login.as_bytes());
+    }
+    hasher.update(command.as_bytes());
+    hasher.update(amount.amount.to_string().as_bytes());
+    hasher.update(amount.currency.as_bytes());
+    hasher.update(format!("{rail:?}").as_bytes());
+    format!("github-funding-comment:{}", hex::encode(hasher.finalize()))
 }
 
 fn parse_issue_form_sections(body: &str) -> HashMap<String, String> {
@@ -518,5 +756,137 @@ extract-data-to-schema
 
         assert_eq!(output.conclusion, GitHubCheckConclusion::Success);
         assert!(output.summary.contains("ready for funding"));
+    }
+
+    #[test]
+    fn funding_comment_plan_accepts_base_usdc_signal() {
+        let input = GitHubFundingCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "[bounty]: Add co-funding".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
+            contributor_login: Some("solver-agent".to_string()),
+            comment_id: Some("123".to_string()),
+            existing_idempotency_keys: vec![],
+        };
+
+        let plan = funding_comment_plan(input);
+
+        assert!(plan.ready);
+        let signal = plan.signal.unwrap();
+        assert_eq!(signal.amount, Money::new(5_000_000, "usdc").unwrap());
+        assert_eq!(signal.rail, FundingMode::BaseUsdcEscrow);
+        assert!(signal.requires_operator_reconciliation);
+        assert!(signal.idempotency_key.ends_with(":comment:123"));
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+    }
+
+    #[test]
+    fn funding_comment_plan_rejects_invalid_amount() {
+        let plan = funding_comment_plan(GitHubFundingCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "[bounty]: Add co-funding".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            comment_body: "/agent-bounty fund nope USDC via BaseUsdcEscrow".to_string(),
+            contributor_login: None,
+            comment_id: None,
+            existing_idempotency_keys: vec![],
+        });
+
+        assert!(!plan.ready);
+        assert!(plan.error.unwrap().contains("invalid funding amount"));
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+    }
+
+    #[test]
+    fn funding_comment_plan_rejects_unsupported_rail() {
+        let plan = funding_comment_plan(GitHubFundingCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "[bounty]: Add co-funding".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            comment_body: "/agent-bounty fund 5 USDC via Simulated".to_string(),
+            contributor_login: None,
+            comment_id: None,
+            existing_idempotency_keys: vec![],
+        });
+
+        assert!(!plan.ready);
+        assert!(plan.error.unwrap().contains("unsupported funding rail"));
+    }
+
+    #[test]
+    fn funding_comment_plan_rejects_duplicate_signal() {
+        let existing_key =
+            "github-funding-comment:agent-bounties/agent-bounties:https://github.com/agent-bounties/agent-bounties/issues/20:comment:123";
+        let plan = funding_comment_plan(GitHubFundingCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "[bounty]: Add co-funding".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
+            contributor_login: None,
+            comment_id: Some("123".to_string()),
+            existing_idempotency_keys: vec![existing_key.to_string()],
+        });
+
+        assert!(!plan.ready);
+        assert!(plan.error.unwrap().contains("duplicate funding signal"));
+    }
+
+    #[test]
+    fn funding_comment_plan_rejects_non_bounty_issue() {
+        let plan = funding_comment_plan(GitHubFundingCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "Plain issue".to_string(),
+            body: "not an issue form".to_string(),
+            comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
+            contributor_login: None,
+            comment_id: None,
+            existing_idempotency_keys: vec![],
+        });
+
+        assert!(!plan.ready);
+        assert!(plan.error.unwrap().contains("not a valid paid bounty"));
+    }
+
+    #[test]
+    fn funding_comment_plan_rejects_currency_rail_mismatch() {
+        let plan = funding_comment_plan(GitHubFundingCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "[bounty]: Add co-funding".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            comment_body: "/agent-bounty fund 5 USD via BaseUsdcEscrow".to_string(),
+            contributor_login: None,
+            comment_id: None,
+            existing_idempotency_keys: vec![],
+        });
+
+        assert!(!plan.ready);
+        assert!(plan.error.unwrap().contains("does not match funding rail"));
+    }
+
+    fn valid_issue_body(funding_mode: &str) -> String {
+        format!(
+            r#"### Goal
+Improve co-funding.
+
+### Acceptance criteria
+The public signal is deterministic and cannot credit the ledger directly.
+
+### Template
+write-docs-for-area
+
+### Suggested amount
+5 USDC
+
+### Funding mode
+{funding_mode}
+"#
+        )
     }
 }
