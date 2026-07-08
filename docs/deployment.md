@@ -144,8 +144,10 @@ The compose file sets:
 
 The API and MCP containers receive the same live-money environment contract so
 `GET /v1/readiness/live-money` and MCP `get_live_money_readiness` agree about
-Stripe webhook readiness, Base escrow addresses, native USDC tokens, and
-operator mutation protection.
+Stripe webhook readiness, the non-secret Stripe payment-method configuration
+indicator, Base escrow addresses, native USDC tokens, and operator mutation
+protection. These readiness responses expose only whether
+`STRIPE_PAYMENT_METHOD_CONFIGURATION` is configured, not the Stripe object id.
 
 To run the Base USDC indexer alongside API and MCP, set the indexer variables
 and opt into its compose profile:

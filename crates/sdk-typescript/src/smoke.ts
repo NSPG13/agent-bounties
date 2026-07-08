@@ -388,6 +388,10 @@ async function main(): Promise<void> {
     "live-money readiness did not expose a boolean live_money_ready gate",
   );
   requireCondition(
+    typeof liveMoneyReadiness.stripe_payment_method_configuration_configured === "boolean",
+    "live-money readiness did not expose a boolean Stripe payment-method configuration indicator",
+  );
+  requireCondition(
     !String(liveMoneyReadiness.stripe_secret_key_mode).startsWith("sk_")
       && !String(liveMoneyReadiness.stripe_secret_key_mode).startsWith("rk_"),
     "live-money readiness exposed Stripe secret material",

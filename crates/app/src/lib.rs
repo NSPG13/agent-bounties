@@ -90,6 +90,7 @@ pub struct LiveMoneyReadinessConfig {
     pub usdc_token: Option<String>,
     pub stripe_secret_key_mode: String,
     pub stripe_live_execution_enabled: bool,
+    pub stripe_payment_method_configuration_configured: bool,
     pub stripe_webhook_secret_configured: bool,
     pub allow_unsigned_stripe_webhooks: bool,
     pub operator_auth_configured: bool,
@@ -122,6 +123,7 @@ pub struct LiveMoneyReadinessReport {
     pub network_rpc_url_env: String,
     pub network_native_usdc_token_address: String,
     pub stripe_secret_key_mode: String,
+    pub stripe_payment_method_configuration_configured: bool,
     pub supplied_usdc_token_matches_native: Option<bool>,
     pub checks: Vec<LiveMoneyReadinessCheck>,
     pub evidence_boundaries: Vec<String>,
@@ -422,6 +424,17 @@ pub fn build_live_money_readiness_report(
             },
         ),
         readiness_check(
+            "Stripe Checkout payment-method configuration",
+            config.stripe_payment_method_configuration_configured,
+            "optional Dashboard-managed Checkout payment-method sets such as PayPal-capable configurations",
+            vec!["STRIPE_PAYMENT_METHOD_CONFIGURATION".to_string()],
+            if config.stripe_payment_method_configuration_configured {
+                "Optional Stripe Payment Method Configuration is set; readiness reports only this boolean and not the configuration id."
+            } else {
+                "Optional Stripe Payment Method Configuration is unset; Checkout remains Dashboard-managed by default."
+            },
+        ),
+        readiness_check(
             "Stripe webhook evidence gate",
             stripe_webhook_secret || unsigned_stripe_webhooks,
             "crediting fiat balances and marking fiat transfer evidence in local/test environments",
@@ -536,10 +549,13 @@ pub fn build_live_money_readiness_report(
         network_rpc_url_env: network_descriptor.rpc_url_env,
         network_native_usdc_token_address: network_descriptor.native_usdc_token_address,
         stripe_secret_key_mode,
+        stripe_payment_method_configuration_configured: config
+            .stripe_payment_method_configuration_configured,
         supplied_usdc_token_matches_native,
         checks,
         evidence_boundaries: vec![
             "Stripe Checkout Session creation is not funding; only a verified checkout.session.completed webhook credits balance.".to_string(),
+            "Stripe Payment Method Configuration only changes eligible Checkout methods; it is not funding, payout, or settlement evidence.".to_string(),
             "Base approve/createEscrow transaction planning is not funding; only an indexed EscrowCreated log makes Base funding applied.".to_string(),
             "Deterministic verifier acceptance creates settlement intents; it does not pay by itself.".to_string(),
             "Base release transaction hashes are not payout; only an indexed EscrowReleased log marks USDC payout paid.".to_string(),
@@ -4326,6 +4342,7 @@ mod tests {
             usdc_token: Some(chain_base::BASE_MAINNET_USDC_TOKEN_ADDRESS.to_string()),
             stripe_secret_key_mode: "live".to_string(),
             stripe_live_execution_enabled: true,
+            stripe_payment_method_configuration_configured: true,
             stripe_webhook_secret_configured: true,
             allow_unsigned_stripe_webhooks: false,
             operator_auth_configured: true,
@@ -4338,6 +4355,7 @@ mod tests {
         assert!(report.base_mainnet_ready);
         assert!(report.live_money_ready);
         assert_eq!(report.network_chain_id, 8_453);
+        assert!(report.stripe_payment_method_configuration_configured);
         assert_eq!(
             report.network_native_usdc_token_address,
             chain_base::BASE_MAINNET_USDC_TOKEN_ADDRESS
@@ -4347,6 +4365,15 @@ mod tests {
             .evidence_boundaries
             .iter()
             .any(|boundary| boundary.contains("checkout.session.completed")));
+        assert!(report.evidence_boundaries.iter().any(|boundary| {
+            boundary.contains("Payment Method Configuration")
+                && boundary.contains("not funding, payout, or settlement evidence")
+        }));
+        assert!(report.checks.iter().any(|check| {
+            check.name == "Stripe Checkout payment-method configuration"
+                && check.configured
+                && check.env_vars == vec!["STRIPE_PAYMENT_METHOD_CONFIGURATION".to_string()]
+        }));
     }
 
     #[test]
@@ -4357,6 +4384,7 @@ mod tests {
             usdc_token: Some("0x3333333333333333333333333333333333333333".to_string()),
             stripe_secret_key_mode: "test".to_string(),
             stripe_live_execution_enabled: true,
+            stripe_payment_method_configuration_configured: false,
             stripe_webhook_secret_configured: true,
             allow_unsigned_stripe_webhooks: false,
             operator_auth_configured: true,
@@ -4366,6 +4394,7 @@ mod tests {
         .unwrap();
 
         assert!(!report.base_testnet_ready);
+        assert!(!report.stripe_payment_method_configuration_configured);
         assert_eq!(report.supplied_usdc_token_matches_native, Some(false));
         assert!(report
             .warnings

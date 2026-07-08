@@ -282,6 +282,13 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "live-money readiness did not expose a boolean live_money_ready gate",
     )
     _require(
+        isinstance(
+            live_money_readiness["stripe_payment_method_configuration_configured"],
+            bool,
+        ),
+        "live-money readiness did not expose a boolean Stripe payment-method configuration indicator",
+    )
+    _require(
         not live_money_readiness["stripe_secret_key_mode"].startswith(("sk_", "rk_")),
         "live-money readiness exposed Stripe secret material",
     )
