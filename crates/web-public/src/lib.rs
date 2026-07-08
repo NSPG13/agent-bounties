@@ -72,6 +72,7 @@ pub struct DiscoveryEndpoints {
     pub risk_event_rejections: String,
     pub agent_paid_status: String,
     pub base_log_query: String,
+    pub base_escrow_events: String,
     pub base_rpc_logs: String,
     pub base_fetch_rpc_logs: String,
     pub base_broadcast_signed_transaction: String,
@@ -191,6 +192,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             risk_event_rejections: format!("{api}/v1/risk/events/{{risk_event_id}}/reject"),
             agent_paid_status: format!("{api}/v1/agents/{{agent_id}}/paid-status"),
             base_log_query: format!("{api}/v1/base/log-query"),
+            base_escrow_events: format!("{api}/v1/base/escrow-events"),
             base_rpc_logs: format!("{api}/v1/base/rpc-logs"),
             base_fetch_rpc_logs: format!("{api}/v1/base/fetch-rpc-logs"),
             base_broadcast_signed_transaction: format!(
@@ -253,6 +255,14 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 endpoint: format!("{mcp}/tools/plan_base_funding"),
                 description:
                     "Build unsigned Base USDC approval and escrow creation transactions for a posted bounty."
+                        .to_string(),
+            },
+            AgentEntrypoint {
+                name: "reconcile_base_escrow_event".to_string(),
+                transport: "MCP-compatible HTTP JSON".to_string(),
+                endpoint: format!("{mcp}/tools/reconcile_base_escrow_event"),
+                description:
+                    "Operator/indexer entrypoint for applying a normalized Base escrow event; EscrowCreated is required before Base work becomes claimable."
                         .to_string(),
             },
             AgentEntrypoint {
@@ -364,6 +374,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Risk event rejections: {risk_event_rejections}
 - Agent payout status: {agent_paid_status}
 - Base funding plan: {base_funding_plan}
+- Base escrow event reconciliation: {base_escrow_events}
 
 ## Agent Workflow
 
@@ -376,6 +387,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 ## Payment Trust
 
 - Base USDC work must be funded before claim.
+- A posted Base bounty is only funding-ready until an indexed EscrowCreated event is reconciled.
 - Open Base USDC automatic release is capped at the machine-readable risk policy limit.
 - Release, refund, and dispute plans are unsigned operator transactions.
 - Paid/refunded/disputed state changes only after indexed escrow logs are reconciled.
@@ -386,6 +398,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 ## Useful Payment Endpoints
 
 - Base funding plan: {base_funding_plan}
+- Base escrow event reconciliation: {base_escrow_events}
 - Base release queue: {base_release_queue}
 - Risk policy: {risk_policy}
 - Risk review events: {risk_events}
@@ -424,6 +437,7 @@ The repository is designed for agent contributors. Start with `AGENTS.md`, `READ
         risk_event_rejections = &endpoints.risk_event_rejections,
         agent_paid_status = &endpoints.agent_paid_status,
         base_funding_plan = &endpoints.base_funding_plan,
+        base_escrow_events = &endpoints.base_escrow_events,
         base_release_queue = &endpoints.base_release_queue,
         base_refund_plan = &endpoints.base_refund_plan,
         base_dispute_plan = &endpoints.base_dispute_plan,
@@ -1043,6 +1057,10 @@ mod tests {
             "https://network.example/v1/base/log-query"
         );
         assert_eq!(
+            manifest.endpoints.base_escrow_events,
+            "https://network.example/v1/base/escrow-events"
+        );
+        assert_eq!(
             manifest.endpoints.base_rpc_logs,
             "https://network.example/v1/base/rpc-logs"
         );
@@ -1109,6 +1127,10 @@ mod tests {
         assert!(manifest
             .agent_entrypoints
             .iter()
+            .any(|entrypoint| entrypoint.name == "reconcile_base_escrow_event"));
+        assert!(manifest
+            .agent_entrypoints
+            .iter()
             .any(|entrypoint| entrypoint.name == "list_base_release_queue"));
         assert!(manifest
             .payment_rails
@@ -1148,6 +1170,8 @@ mod tests {
         assert!(text.contains("Risk policy"));
         assert!(text.contains("https://network.example/v1/risk/policy"));
         assert!(text.contains("Risk review events"));
+        assert!(text.contains("Base escrow event reconciliation"));
+        assert!(text.contains("EscrowCreated"));
         assert!(text.contains("https://network.example/v1/risk/events"));
         assert!(text.contains("Risk review records"));
         assert!(text.contains("https://network.example/v1/risk/reviews"));

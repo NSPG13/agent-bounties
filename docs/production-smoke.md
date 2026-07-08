@@ -33,6 +33,8 @@ The gate checks:
 - OpenAPI paths for routing, public feeds, risk review and approval, Base, and Stripe
   live-execution boundaries, including operator security schemes and protected
   operation metadata.
+- Discovery fields for Base funding plans and normalized escrow event
+  reconciliation, so indexed `EscrowCreated` remains discoverable before claim.
 - MCP tool descriptors, JSON input schemas, and operator auth metadata for
   protected tools.
 - Public bounty, capability, template, and verifier pages.

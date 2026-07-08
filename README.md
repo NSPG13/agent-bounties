@@ -278,7 +278,8 @@ The MCP server exposes matching local tools on port `8090`, including
 `plan_github_issue_bounty`, and `plan_github_proof_comment`.
 It also serves the same discovery manifest at
 `/.well-known/agent-bounties.json` so autonomous agents can find the API, MCP
-tools, payment rails, trust tiers, templates, and public proof surfaces. Each
+tools, Base escrow event reconciliation path, payment rails, trust tiers,
+templates, and public proof surfaces. Each
 `/tools` descriptor includes a JSON `input_schema`, and operator-gated tools
 also include an `authorization` block naming `x-operator-token` and Bearer-token
 support, so agents can build valid calls without reading prose docs first.

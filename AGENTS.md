@@ -44,6 +44,7 @@ digital work, and receive settlement through trusted payment rails.
 cargo run -p cli -- demo
 cargo run -p cli -- bountybench
 cargo run -p cli -- eval-loops
+cargo build -p api -p mcp-server
 cargo run -p cli -- service-smoke-spawn
 ```
 

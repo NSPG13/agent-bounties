@@ -1390,6 +1390,7 @@ async fn production_smoke_check(
         "/endpoints/risk_policy",
         "/endpoints/risk_events",
         "/endpoints/risk_reviews",
+        "/endpoints/base_escrow_events",
         "/endpoints/base_release_queue",
         "/endpoints/base_funding_plan",
         "/endpoints/risk_payout_approvals",
@@ -1442,6 +1443,9 @@ async fn production_smoke_check(
                     && required
                         .iter()
                         .any(|value| value.as_str() == Some("discovery_schema"))
+                    && required
+                        .iter()
+                        .any(|value| value.as_str() == Some("base_escrow_events"))
             })
             .unwrap_or(false),
         "discovery schema must require distribution endpoints",
@@ -1454,6 +1458,7 @@ async fn production_smoke_check(
         "claim_bounty",
         "get_paid_status",
         "plan_base_funding",
+        "reconcile_base_escrow_event",
         "list_base_release_queue",
     ] {
         require(
@@ -1529,6 +1534,7 @@ async fn production_smoke_check(
         "/.well-known/agent-bounties.json",
         "route_blocked_goal",
         "get_paid_status",
+        "Base escrow event reconciliation",
         "Risk policy",
         "AI judges",
         "Stripe live execution is gated",
@@ -1991,6 +1997,10 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     require(
         discovery.pointer("/endpoints/base_log_query").is_some(),
         "discovery manifest must include Base log query",
+    )?;
+    require(
+        discovery.pointer("/endpoints/base_escrow_events").is_some(),
+        "discovery manifest must include normalized Base escrow event reconciliation",
     )?;
     require(
         discovery.pointer("/endpoints/base_rpc_logs").is_some(),
