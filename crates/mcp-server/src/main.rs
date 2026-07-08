@@ -1658,11 +1658,13 @@ async fn reconcile_stripe_checkout_webhook(
         }
     };
     if let Some(store) = &state.store {
-        if let Err(error) = store
-            .upsert_payment_event(&reconciliation.funding_credit.payment_event)
-            .await
-        {
-            return mcp_error(error);
+        if !reconciliation.duplicate {
+            if let Err(error) = store
+                .upsert_payment_event(&reconciliation.funding_credit.payment_event)
+                .await
+            {
+                return mcp_error(error);
+            }
         }
         if let Err(error) = persist_ledger_entries(store, &reconciliation.ledger_entries).await {
             return mcp_error(error);
@@ -2513,6 +2515,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stripe_checkout_webhook_replay_preserves_applied_event() {
+        let state = test_state();
+        let organization_id = Uuid::new_v4();
+        let event = stripe_checkout_event("evt_mcp_paid", "cs_mcp_paid", organization_id);
+
+        let first = reconcile_stripe_checkout_webhook(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(event.clone()),
+        )
+        .await
+        .0;
+        let first_body = &first["content"][0]["json"];
+
+        assert_eq!(first_body["duplicate"], false);
+        assert_eq!(first_body["ledger_entries"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            first_body["funding_credit"]["payment_event"]["status"],
+            "Applied"
+        );
+
+        let replay =
+            reconcile_stripe_checkout_webhook(State(state.clone()), HeaderMap::new(), Json(event))
+                .await
+                .0;
+        let replay_body = &replay["content"][0]["json"];
+
+        assert_eq!(replay_body["duplicate"], true);
+        assert!(replay_body["ledger_entries"].as_array().unwrap().is_empty());
+        assert_eq!(
+            replay_body["funding_credit"]["payment_event"]["status"],
+            "IgnoredDuplicate"
+        );
+
+        let network = state.network.lock().expect("state poisoned");
+        assert_eq!(network.payment_events.len(), 1);
+        assert_eq!(network.ledger.entries().len(), 1);
+        assert_eq!(
+            network.payment_events.values().next().unwrap().status,
+            domain::PaymentEventStatus::Applied
+        );
+    }
+
+    #[tokio::test]
     async fn risk_events_tool_lists_review_queue() {
         let state = test_state();
         {
@@ -2818,6 +2864,25 @@ mod tests {
             operator_api_token: Some(token.to_string()),
             store: None,
         })
+    }
+
+    fn stripe_checkout_event(
+        event_id: &str,
+        session_id: &str,
+        organization_id: Uuid,
+    ) -> StripeWebhookEvent {
+        StripeWebhookEvent {
+            id: event_id.to_string(),
+            event_type: "checkout.session.completed".to_string(),
+            payload: json!({
+                "id": session_id,
+                "client_reference_id": organization_id.to_string(),
+                "amount_total": 5_000,
+                "currency": "usd",
+                "payment_status": "paid",
+                "payment_intent": "pi_mcp_paid"
+            }),
+        }
     }
 }
 

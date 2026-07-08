@@ -13,6 +13,27 @@ use thiserror::Error;
 
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
+const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
+            INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (external_id) DO UPDATE SET
+              rail = CASE
+                WHEN payment_events.status = 'Applied' THEN payment_events.rail
+                ELSE EXCLUDED.rail
+              END,
+              status = CASE
+                WHEN payment_events.status = 'Applied' THEN payment_events.status
+                ELSE EXCLUDED.status
+              END,
+              payload_hash = CASE
+                WHEN payment_events.status = 'Applied' THEN payment_events.payload_hash
+                ELSE EXCLUDED.payload_hash
+              END,
+              received_at = CASE
+                WHEN payment_events.status = 'Applied' THEN payment_events.received_at
+                ELSE EXCLUDED.received_at
+              END
+            "#;
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -1042,25 +1063,15 @@ impl PostgresStore {
     }
 
     pub async fn upsert_payment_event(&self, event: &PaymentEvent) -> DbResult<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (external_id) DO UPDATE SET
-              rail = EXCLUDED.rail,
-              status = EXCLUDED.status,
-              payload_hash = EXCLUDED.payload_hash,
-              received_at = EXCLUDED.received_at
-            "#,
-        )
-        .bind(event.id)
-        .bind(format!("{:?}", event.rail))
-        .bind(&event.external_id)
-        .bind(format!("{:?}", event.status))
-        .bind(&event.payload_hash)
-        .bind(event.received_at)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query(UPSERT_PAYMENT_EVENT_SQL)
+            .bind(event.id)
+            .bind(format!("{:?}", event.rail))
+            .bind(&event.external_id)
+            .bind(format!("{:?}", event.status))
+            .bind(&event.payload_hash)
+            .bind(event.received_at)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -1350,5 +1361,14 @@ mod tests {
     #[test]
     fn migration_lock_id_is_stable() {
         assert_eq!(MIGRATION_ADVISORY_LOCK_ID, 4_270_265_017);
+    }
+
+    #[test]
+    fn payment_event_upsert_preserves_applied_events() {
+        assert!(UPSERT_PAYMENT_EVENT_SQL.contains("ON CONFLICT (external_id) DO UPDATE SET"));
+        assert!(UPSERT_PAYMENT_EVENT_SQL.contains("WHEN payment_events.status = 'Applied'"));
+        assert!(UPSERT_PAYMENT_EVENT_SQL.contains("THEN payment_events.status"));
+        assert!(UPSERT_PAYMENT_EVENT_SQL.contains("THEN payment_events.payload_hash"));
+        assert!(UPSERT_PAYMENT_EVENT_SQL.contains("THEN payment_events.received_at"));
     }
 }
