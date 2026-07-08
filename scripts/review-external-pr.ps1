@@ -71,7 +71,15 @@ try {
     $safeForMaintainerCi = $docsOnly -and $riskyFiles.Count -eq 0
 
     $refName = "refs/remotes/origin/pr-$Pr-review"
-    Invoke-Checked { git fetch origin "pull/$Pr/head:$refName" }
+    Invoke-Checked { git fetch origin "+pull/$Pr/head:$refName" }
+    $fetchedOid = (& git rev-parse $refName).Trim()
+    if ($global:LASTEXITCODE -ne 0) {
+        throw "Unable to resolve fetched review ref: $refName"
+    }
+    if ($fetchedOid -ne $prJson.headRefOid) {
+        throw "Fetched PR head $fetchedOid did not match GitHub head $($prJson.headRefOid); rerun review"
+    }
+    $global:LASTEXITCODE = 0
 
     $worktreePath = Join-Path $targetRoot "pr-$Pr"
     $targetRootFull = [System.IO.Path]::GetFullPath($targetRoot)
