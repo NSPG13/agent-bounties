@@ -11,7 +11,9 @@ on:
       - "docker-compose.production.yml"
       - "docs/deployment.md"
       - "migrations/**"
+      - "scripts/check-containers.ps1"
       - "scripts/check-containers.sh"
+      - "scripts/check-production-compose.ps1"
       - "scripts/check-production-compose.sh"
       - "scripts/check-production-smoke.sh"
   push:
@@ -25,7 +27,9 @@ on:
       - "docker-compose.production.yml"
       - "docs/deployment.md"
       - "migrations/**"
+      - "scripts/check-containers.ps1"
       - "scripts/check-containers.sh"
+      - "scripts/check-production-compose.ps1"
       - "scripts/check-production-compose.sh"
       - "scripts/check-production-smoke.sh"
   workflow_dispatch:

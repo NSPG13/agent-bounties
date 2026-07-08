@@ -187,8 +187,8 @@ bash scripts/check-postgres.sh
 ```
 
 For container packaging and deployment, see [docs/deployment.md](docs/deployment.md).
-The optional container gate builds separate API and MCP images from the same
-Dockerfile:
+The optional container gate builds separate API, MCP, and Base indexer worker
+images from the same Dockerfile:
 
 ```powershell
 .\scripts\check-containers.ps1
@@ -501,9 +501,11 @@ The separate `Real Funding Rehearsal` workflow publishes the validated
 `funding-rehearsal-demo.json` and `real-funding-readiness.json` artifacts on
 manual runs, scheduled runs, and payment-path changes.
 The separate `Containers` workflow runs `scripts/check-production-compose.sh`
-when production packaging files change or when manually dispatched.
-The optional `scripts/check-containers.*` gate builds production API and MCP
-images and is separate for the same reason.
+when production packaging files change or when manually dispatched. That gate
+validates and builds the optional Base indexer worker service before starting
+the API/MCP/Postgres smoke topology.
+The optional `scripts/check-containers.*` gate builds production API, MCP, and
+worker images and is separate for the same reason.
 The optional `scripts/check-production-compose.*` gate runs the production
 API/MCP/Postgres topology locally and executes the read-only production smoke
 against the temporary stack.

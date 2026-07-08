@@ -48,6 +48,7 @@ grep -v -E '^(API_PORT|MCP_PORT|PUBLIC_BASE_URL|MCP_BASE_URL)=' "$env_file" > "$
   echo "MCP_BASE_URL=http://127.0.0.1:$mcp_port"
 } >> "$runtime_env_file"
 compose_args=(--env-file "$runtime_env_file" -p "$project_name" -f docker-compose.production.yml)
+base_indexer_compose_args=("${compose_args[@]}" --profile base-indexer)
 
 if ! docker version >/dev/null 2>&1 && command -v docker.exe >/dev/null 2>&1; then
   docker() { docker.exe "$@"; }
@@ -76,6 +77,8 @@ wait_http_ok() {
   return 1
 }
 
+docker compose "${base_indexer_compose_args[@]}" config >/dev/null
+docker compose "${base_indexer_compose_args[@]}" build base-indexer
 docker compose "${compose_args[@]}" up -d --build
 wait_http_ok "http://127.0.0.1:$api_port/health"
 wait_http_ok "http://127.0.0.1:$mcp_port/health"

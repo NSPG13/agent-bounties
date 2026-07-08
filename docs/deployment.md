@@ -1,14 +1,14 @@
 # Deployment
 
 The production package is one Dockerfile with build arguments for the service
-binary. API and MCP containers use the same image recipe and differ only by
-`APP_PACKAGE`, `APP_BINARY`, bind address, and public URL configuration.
+binary. API, MCP, and worker containers use the same image recipe and differ by
+`APP_PACKAGE`, `APP_BINARY`, bind address, and service-specific configuration.
 Rust and Cargo 1.88 or newer are required for local builds because the locked
 dependency graph includes crates with that minimum supported Rust version.
 
 ## Container Images
 
-Build both images locally:
+Build the deployable API, MCP, and Base indexer worker images locally:
 
 ```powershell
 .\scripts\check-containers.ps1
@@ -44,8 +44,9 @@ docker compose --env-file .env -f docker-compose.production.yml up -d --build
 ```
 
 To rehearse the production compose topology locally without leaving containers
-running, use the compose smoke. It binds API/MCP to high local ports, runs the
-read-only production smoke, and tears the stack down:
+running, use the compose smoke. It validates and builds the optional
+`base-indexer` profile, binds API/MCP to high local ports, runs the read-only
+production smoke, and tears the stack down:
 
 ```powershell
 .\scripts\check-production-compose.ps1
