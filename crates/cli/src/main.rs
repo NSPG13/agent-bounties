@@ -2752,6 +2752,7 @@ async fn production_smoke_check(
         "/endpoints/eval_runs",
         "/endpoints/risk_policy",
         "/endpoints/live_money_readiness",
+        "/endpoints/base_indexer_status",
         "/endpoints/risk_events",
         "/endpoints/risk_reviews",
         "/endpoints/base_escrow_events",
@@ -2823,6 +2824,9 @@ async fn production_smoke_check(
                         .any(|value| value.as_str() == Some("base_escrow_events"))
                     && required
                         .iter()
+                        .any(|value| value.as_str() == Some("base_indexer_status"))
+                    && required
+                        .iter()
                         .any(|value| value.as_str() == Some("live_money_readiness"))
                     && required
                         .iter()
@@ -2845,6 +2849,7 @@ async fn production_smoke_check(
         "reconcile_base_escrow_event",
         "list_base_release_queue",
         "check_live_money_readiness",
+        "check_base_indexer_status",
     ] {
         require(
             array_contains_name(&discovery, "/agent_entrypoints", entrypoint),
@@ -3159,6 +3164,38 @@ async fn production_smoke_check(
             .unwrap_or(false),
         "live-money readiness must publish Stripe and Base settlement evidence boundaries",
     )?;
+    let base_indexer_status_url = value_str(&discovery, "/endpoints/base_indexer_status")
+        .context("Base indexer status url missing")?;
+    let base_indexer_status = production_get_json(
+        &client,
+        &format!("{base_indexer_status_url}?network=base-mainnet"),
+    )
+    .await?;
+    require(
+        base_indexer_status.pointer("/network_chain_id") == Some(&serde_json::json!(8_453)),
+        "Base indexer status must expose Base mainnet chain id",
+    )?;
+    require(
+        base_indexer_status
+            .pointer("/indexer_ready")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "Base indexer status must expose an indexer_ready boolean",
+    )?;
+    require(
+        base_indexer_status
+            .pointer("/evidence_boundaries")
+            .and_then(|value| value.as_array())
+            .map(|boundaries| {
+                boundaries.iter().any(|boundary| {
+                    boundary
+                        .as_str()
+                        .is_some_and(|text| text.contains("does not fund"))
+                })
+            })
+            .unwrap_or(false),
+        "Base indexer status must state that status evidence is not settlement",
+    )?;
 
     let bounty_feed_url =
         value_str(&discovery, "/endpoints/bounty_feed").context("bounty feed url missing")?;
@@ -3274,6 +3311,7 @@ async fn production_smoke_check(
         "plan_base_funding",
         "list_base_release_queue",
         "get_live_money_readiness",
+        "get_base_indexer_status",
         "plan_stripe_connect_transfer",
         "execute_stripe_checkout_top_up",
         "execute_stripe_connect_account",
@@ -3431,6 +3469,12 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .pointer("/endpoints/live_money_readiness")
             .is_some(),
         "discovery manifest must include live-money readiness endpoint",
+    )?;
+    require(
+        discovery
+            .pointer("/endpoints/base_indexer_status")
+            .is_some(),
+        "discovery manifest must include Base indexer status endpoint",
     )?;
     require(
         discovery.pointer("/endpoints/risk_reviews").is_some(),
@@ -3915,6 +3959,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "plan_base_refund",
         "plan_base_dispute",
         "get_live_money_readiness",
+        "get_base_indexer_status",
         "plan_stripe_checkout_top_up",
         "plan_stripe_connect_account",
         "plan_stripe_connect_transfer",
@@ -4002,6 +4047,43 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .and_then(|value| value.as_bool())
             .is_some(),
         "MCP get_live_money_readiness must expose live_money_ready boolean",
+    )?;
+    let api_base_indexer_status = get_json(&format!(
+        "{api}/v1/base/indexer-status?network=base-mainnet"
+    ))?;
+    require(
+        api_base_indexer_status.pointer("/network_chain_id") == Some(&serde_json::json!(8_453)),
+        "API Base indexer status must expose Base mainnet chain id",
+    )?;
+    require(
+        api_base_indexer_status
+            .pointer("/indexer_ready")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "API Base indexer status must expose indexer_ready boolean",
+    )?;
+    let mcp_base_indexer_status = mcp_tool_post(
+        mcp,
+        "get_base_indexer_status",
+        serde_json::json!({ "network": "base-mainnet" }),
+    )?;
+    require(
+        mcp_base_indexer_status.pointer("/network_chain_id") == Some(&serde_json::json!(8_453)),
+        "MCP get_base_indexer_status must expose Base mainnet chain id",
+    )?;
+    require(
+        mcp_base_indexer_status
+            .pointer("/evidence_boundaries")
+            .and_then(|value| value.as_array())
+            .map(|boundaries| {
+                boundaries.iter().any(|boundary| {
+                    boundary
+                        .as_str()
+                        .is_some_and(|text| text.contains("does not fund"))
+                })
+            })
+            .unwrap_or(false),
+        "MCP get_base_indexer_status must state that status evidence is not settlement",
     )?;
 
     let mcp_risk_bounty = post_json(

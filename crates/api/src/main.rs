@@ -1,9 +1,10 @@
 use app::{
-    build_live_money_readiness_report, hash_artifact, stripe_secret_key_mode_from_secret,
-    AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
-    BaseEscrowReconciliation, BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse,
-    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
+    build_base_indexer_status_report, build_live_money_readiness_report, hash_artifact,
+    stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
+    ApproveRiskPayoutRequest, BaseEscrowReconciliation, BaseIndexerScanCursor,
+    BaseIndexerStatusConfig, BaseIndexerStatusReport, BaseReleaseQueueRequest, BountyNetwork,
+    BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest,
+    FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
     OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
     PlanBaseReleaseRequest, PlanStripeTransferRequest as AppPlanStripeTransferRequest,
     PooledFundingReport, PostBountyRequest, QuoteSet, RegisterAgentRequest,
@@ -70,6 +71,7 @@ use worker::BaseEscrowLogWorker;
         agent_bounties_discovery,
         risk_policy,
         live_money_readiness,
+        base_indexer_status,
         list_risk_events,
         list_risk_reviews,
         approve_risk_bounty,
@@ -263,6 +265,12 @@ struct RouteRequest {
 #[derive(Debug, Deserialize)]
 struct LiveMoneyReadinessQuery {
     network: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BaseIndexerStatusQuery {
+    network: Option<String>,
+    escrow_contract: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -514,6 +522,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/bounties/:id/submit", post(submit_result))
         .route("/v1/bounties/:id/verify", post(verify_submission))
         .route("/v1/bounties/:id", get(bounty_status))
+        .route("/v1/base/indexer-status", get(base_indexer_status))
         .route("/v1/base/escrow-events", post(reconcile_base_escrow_event))
         .route("/v1/base/evm-logs", post(reconcile_base_evm_logs))
         .route("/v1/base/rpc-logs", post(reconcile_base_rpc_logs))
@@ -692,6 +701,61 @@ async fn live_money_readiness(
     build_live_money_readiness_report(live_money_readiness_config(&state, &network))
         .map(Json)
         .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/base/indexer-status",
+    params(
+        ("network" = Option<String>, Query, description = "Base network, defaults to base-mainnet"),
+        ("escrow_contract" = Option<String>, Query, description = "Base escrow contract address; defaults to the configured contract for the selected network")
+    ),
+    responses(
+        (status = 200, description = "Read-only Base indexer cursor status"),
+        (status = 400, description = "Unknown Base network"),
+        (status = 500, description = "Failed to read persisted indexer cursor")
+    )
+)]
+async fn base_indexer_status(
+    State(state): State<SharedState>,
+    Query(query): Query<BaseIndexerStatusQuery>,
+) -> Result<Json<BaseIndexerStatusReport>, StatusCode> {
+    let network = query
+        .network
+        .and_then(non_empty_secret)
+        .unwrap_or_else(|| "base-mainnet".to_string());
+    let descriptor = base_network_descriptor(&network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let escrow_contract = query
+        .escrow_contract
+        .and_then(non_empty_secret)
+        .or_else(|| base_escrow_contract_for_chain(descriptor.chain_id));
+    let cursor = match (&state.store, escrow_contract.as_deref()) {
+        (Some(store), Some(escrow_contract)) => store
+            .get_base_log_cursor(&network, escrow_contract)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map(base_indexer_scan_cursor_from_db),
+        _ => None,
+    };
+
+    build_base_indexer_status_report(BaseIndexerStatusConfig {
+        network,
+        escrow_contract,
+        database_configured: state.store.is_some(),
+        cursor,
+    })
+    .map(Json)
+    .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn base_indexer_scan_cursor_from_db(cursor: db::BaseLogScanCursor) -> BaseIndexerScanCursor {
+    BaseIndexerScanCursor {
+        network: cursor.network,
+        escrow_contract: cursor.escrow_contract,
+        last_scanned_block: cursor.last_scanned_block,
+        last_log_key: cursor.last_log_key,
+        updated_at: cursor.updated_at,
+    }
 }
 
 fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
@@ -3894,6 +3958,10 @@ mod tests {
             "http://127.0.0.1:8080/v1/readiness/live-money"
         );
         assert_eq!(
+            manifest.endpoints.base_indexer_status,
+            "http://127.0.0.1:8080/v1/base/indexer-status"
+        );
+        assert_eq!(
             manifest.endpoints.risk_events,
             "http://127.0.0.1:8080/v1/risk/events"
         );
@@ -3938,6 +4006,10 @@ mod tests {
             .agent_entrypoints
             .iter()
             .any(|entrypoint| entrypoint.name == "check_live_money_readiness"));
+        assert!(manifest
+            .agent_entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint.name == "check_base_indexer_status"));
         assert!(manifest
             .payment_rails
             .iter()
@@ -3984,6 +4056,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn base_indexer_status_reports_missing_database_without_settlement_side_effects() {
+        let state = test_state(BountyNetwork::default());
+        let report = base_indexer_status(
+            State(state),
+            Query(BaseIndexerStatusQuery {
+                network: Some("base-mainnet".to_string()),
+                escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(report.status, "persistence_unavailable");
+        assert!(!report.indexer_ready);
+        assert!(!report.database_configured);
+        assert!(report.escrow_contract_configured);
+        assert_eq!(report.network_chain_id, 8_453);
+        assert!(report.last_scanned_block.is_none());
+        assert!(report.evidence_boundaries.iter().any(|boundary| {
+            boundary.contains("does not fund, release, refund, dispute, or authorize settlement")
+        }));
+    }
+
+    #[tokio::test]
+    async fn base_indexer_status_rejects_unknown_network() {
+        let state = test_state(BountyNetwork::default());
+        let error = base_indexer_status(
+            State(state),
+            Query(BaseIndexerStatusQuery {
+                network: Some("optimism".to_string()),
+                escrow_contract: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn api_docs_endpoint_points_to_openapi_json() {
         let html = api_docs().await.0;
 
@@ -4011,6 +4124,7 @@ mod tests {
         assert!(paths.contains_key("/v1/risk/events/{id}/reject"));
         assert!(paths.contains_key("/v1/agents/{id}/paid-status"));
         assert!(paths.contains_key("/v1/capabilities/search"));
+        assert!(paths.contains_key("/v1/base/indexer-status"));
         assert!(paths.contains_key("/v1/base/escrow-events"));
         assert!(paths.contains_key("/v1/base/evm-logs"));
         assert!(paths.contains_key("/v1/base/log-query"));

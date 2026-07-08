@@ -74,6 +74,17 @@ class AgentBountiesClient:
             params={"network": network},
         )
 
+    def get_base_indexer_status(
+        self,
+        network: str | None = None,
+        escrow_contract: str | None = None,
+    ):
+        return self._request(
+            "GET",
+            "/v1/base/indexer-status",
+            params={"network": network, "escrow_contract": escrow_contract},
+        )
+
     def get_risk_events(
         self,
         action: str | None = None,

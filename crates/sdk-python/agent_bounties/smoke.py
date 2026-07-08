@@ -130,6 +130,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery schema must require the live-money readiness endpoint",
     )
     _require(
+        "base_indexer_status" in endpoint_required,
+        "discovery schema must require the Base indexer status endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("base_fetch_rpc_logs"), str),
         "discovery manifest missing Base RPC fetch endpoint",
     )
@@ -220,6 +224,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery manifest missing live-money readiness endpoint",
     )
     _require(
+        isinstance(discovery.get("endpoints", {}).get("base_indexer_status"), str),
+        "discovery manifest missing Base indexer status endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("risk_events"), str),
         "discovery manifest missing risk review events endpoint",
     )
@@ -269,6 +277,19 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(
         not live_money_readiness["stripe_secret_key_mode"].startswith(("sk_", "rk_")),
         "live-money readiness exposed Stripe secret material",
+    )
+    base_indexer_status = client.get_base_indexer_status("base-mainnet")
+    _require(
+        base_indexer_status["network_chain_id"] == 8_453,
+        "Base indexer status did not expose Base mainnet chain id",
+    )
+    _require(
+        isinstance(base_indexer_status["indexer_ready"], bool),
+        "Base indexer status did not expose an indexer_ready boolean",
+    )
+    _require(
+        any("does not fund" in boundary for boundary in base_indexer_status["evidence_boundaries"]),
+        "Base indexer status did not explain that status evidence is not settlement",
     )
     try:
         client.post_bounty(

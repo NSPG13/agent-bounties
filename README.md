@@ -225,6 +225,7 @@ Useful REST paths:
 - `GET /v1/readiness/live-money`
 - `GET /v1/risk/events`
 - `GET /v1/risk/reviews`
+- `GET /v1/base/indexer-status`
 - `POST /v1/risk/bounty-approvals`
 - `POST /v1/risk/payout-approvals`
 - `POST /v1/risk/events/{id}/reject`
@@ -303,8 +304,10 @@ can be read from `/v1/evals/runs` or MCP `get_eval_runs` as hosted quality
 evidence; those records are never settlement authorization. SDKs can also read
 `/v1/risk/policy` before posting work to learn the low-value Base USDC cap,
 review triggers, blocked rules, and settlement invariants,
-`/v1/readiness/live-money` to inspect non-secret Stripe/Base readiness gates
-before relying on hosted real-value movement, and
+`/v1/readiness/live-money` to inspect non-secret Stripe/Base readiness gates,
+`/v1/base/indexer-status` to inspect the hosted Base escrow indexer's durable
+scan cursor for the selected contract before relying on hosted real-value
+movement, and
 `/v1/risk/events` to inspect deterministic review/block events that explain why
 automatic flows stopped. Operator flows can approve a `NeedsReview` bounty event
 through `/v1/risk/bounty-approvals`, approve a matching high-value payout event
@@ -343,7 +346,7 @@ The MCP server exposes matching local tools on port `8090`, including
 `add_bounty_funding`,
 `search_capabilities`, `run_bountybench`, `run_abusebench`,
 `run_judgebench`, `run_eval_loops`, `get_eval_runs`, `get_risk_policy`,
-`get_live_money_readiness`, `list_risk_events`, `list_risk_reviews`, `approve_risk_bounty`,
+`get_live_money_readiness`, `get_base_indexer_status`, `list_risk_events`, `list_risk_reviews`, `approve_risk_bounty`,
 `approve_risk_payout`, `reject_risk_event`, `reconcile_base_escrow_event`,
 `reconcile_base_evm_logs`, `plan_base_log_query`, `reconcile_base_rpc_logs`,
 `fetch_base_rpc_logs`, `broadcast_base_signed_transaction`,
@@ -359,8 +362,8 @@ The MCP server exposes matching local tools on port `8090`, including
 `plan_github_proof_comment_for_proof`.
 It also serves the same discovery manifest at
 `/.well-known/agent-bounties.json` so autonomous agents can find the API, MCP
-tools, Base escrow event reconciliation path, payment rails, trust tiers,
-templates, and public proof surfaces. Each
+tools, Base escrow event reconciliation and indexer-status paths, payment
+rails, trust tiers, templates, and public proof surfaces. Each
 `/tools` descriptor includes a JSON `input_schema`, and operator-gated tools
 also include an `authorization` block naming `x-operator-token` and Bearer-token
 support, so agents can build valid calls without reading prose docs first.
@@ -421,10 +424,17 @@ movement:
 cargo run -p cli -- real-funding-readiness --network base-mainnet --escrow-contract <escrow> --usdc-token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --require-live-money
 ```
 
-Hosted services expose the same non-secret gate at
-`GET /v1/readiness/live-money?network=base-mainnet` and MCP
-`get_live_money_readiness`. Agents and operators should check it before posting
-or funding bounties that expect live Stripe fiat or Base mainnet USDC movement.
+Hosted services expose the same non-secret gates before live-value use:
+
+- `GET /v1/readiness/live-money?network=base-mainnet`
+- `GET /v1/base/indexer-status?network=base-mainnet`
+- MCP `get_live_money_readiness`
+- MCP `get_base_indexer_status`
+
+Agents and operators should check them before posting or funding bounties that
+expect live Stripe fiat or Base mainnet USDC movement. Indexer status is
+monitoring evidence only; settlement still requires decoded escrow logs to
+reconcile into platform state.
 
 `service-smoke-spawn` starts the compiled API and MCP binaries on local
 high-numbered ports, checks health/discovery/tool listing, posts a Base public

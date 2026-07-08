@@ -81,14 +81,20 @@ Hosted API and MCP services expose the same non-secret readiness evidence:
 
 ```powershell
 curl "$env:PUBLIC_BASE_URL/v1/readiness/live-money?network=base-mainnet"
+curl "$env:PUBLIC_BASE_URL/v1/base/indexer-status?network=base-mainnet"
 curl "$env:MCP_BASE_URL/tools/get_live_money_readiness" `
+  -H "content-type: application/json" `
+  --data '{"network":"base-mainnet"}'
+curl "$env:MCP_BASE_URL/tools/get_base_indexer_status" `
   -H "content-type: application/json" `
   --data '{"network":"base-mainnet"}'
 ```
 
-The report intentionally exposes only Stripe key mode, configured gates, chain
-metadata, native USDC address, warnings, and settlement evidence boundaries. It
-must not expose Stripe secrets, webhook secrets, RPC URLs, or operator tokens.
+These reports intentionally expose only Stripe key mode, configured gates, chain
+metadata, native USDC address, indexer cursor state, warnings, and settlement
+evidence boundaries. They must not expose Stripe secrets, webhook secrets, RPC
+URLs, or operator tokens. Indexer status is monitoring evidence only; it does
+not fund, release, refund, dispute, or authorize settlement.
 
 ## Automated Base Indexing
 
@@ -108,6 +114,9 @@ subtracts `BASE_INDEXER_CONFIRMATIONS`, scans up to
 logs through the same deterministic state machine as the API/MCP reconciliation
 endpoints, and persists a Postgres scan cursor. Empty ranges advance the scan
 cursor; failed ranges do not.
+Check `GET /v1/base/indexer-status?network=<network>` after startup to confirm
+Postgres persistence is configured and a cursor is being written for the escrow
+contract.
 
 For a one-shot rehearsal without a long-running container, run:
 

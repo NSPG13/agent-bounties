@@ -279,7 +279,10 @@ cargo run -p worker -- --once
 
 Hosted deployments can run the same binary through the production compose
 `base-indexer` profile. The worker does not sign transactions, broadcast
-transactions, or treat transaction hashes as settlement evidence.
+transactions, or treat transaction hashes as settlement evidence. API
+`GET /v1/base/indexer-status` and MCP `get_base_indexer_status` expose the
+non-secret persisted cursor for monitoring, but that status is not settlement
+authorization.
 
 Generate a local sample plan:
 
