@@ -461,6 +461,10 @@ create a `StripeFiat` bounty funding intent and then calls
 open Stripe Checkout when public Checkout is enabled. Checkout may show debit
 card, credit card, wallet, or PayPal where the hosted Stripe account and
 Dashboard configuration support those methods.
+The funding page also includes a read-only hosted readiness check for
+`/v1/readiness/live-money?network=base-mainnet` so funders can see non-secret
+Stripe live, signed-webhook, Base mainnet, and PayPal-capable
+method-configuration signals before creating a funding intent.
 
 Agents and operators should check them before posting or funding bounties that
 expect live Stripe fiat or Base mainnet USDC movement. The live-money readiness

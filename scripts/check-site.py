@@ -104,6 +104,9 @@ def main() -> int:
         "/v1/stripe/live/funding-intents/",
         "No payment credentials were collected here",
         "STRIPE_PAYMENT_METHOD_CONFIGURATION",
+        "Check readiness",
+        "/v1/readiness/live-money?network=base-mainnet",
+        "stripe_payment_method_configuration_configured",
     ]
     for phrase in required_funding_phrases:
         if phrase not in funding and phrase not in main_js:
@@ -118,6 +121,13 @@ def main() -> int:
     questions = discovery.get("distribution_feedback", {}).get("questions", [])
     if len(questions) < 4:
         fail("static discovery manifest must include distribution feedback questions")
+    hosted_readiness = discovery.get("hosted_readiness", {})
+    if (
+        hosted_readiness.get("funding_page_action") != "check_readiness"
+        or "stripe_payment_method_configuration_configured"
+        not in hosted_readiness.get("non_secret_fields", [])
+    ):
+        fail("static discovery manifest must advertise hosted readiness preflight fields")
 
     print("site check ok")
     return 0
