@@ -206,6 +206,10 @@ def run_github_funding_plan(
     for key in idempotency_keys:
         command.extend(["--existing-idempotency-key", key])
 
+    funding_api_base_url = str(env.get("AGENT_BOUNTIES_API_BASE_URL") or "").strip()
+    if funding_api_base_url:
+        command.extend(["--funding-api-base-url", funding_api_base_url])
+
     result = subprocess.run(
         command,
         cwd=workspace,
@@ -359,6 +363,9 @@ def run_self_test() -> int:
     issue_body = (repo_root / "examples" / "github-paid-bounty-issue.md").read_text(
         encoding="utf-8"
     )
+    issue_body = issue_body.replace("10 USDC", "10 USD").replace(
+        "BaseUsdcEscrow", "StripeFiatLedger"
+    )
     event = {
         "repository": {"full_name": "agent-bounties/agent-bounties"},
         "issue": {
@@ -371,7 +378,7 @@ def run_self_test() -> int:
         "comment": {
             "id": 12345,
             "html_url": "https://github.com/agent-bounties/agent-bounties/issues/1#issuecomment-12345",
-            "body": "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+            "body": "/agent-bounty fund 5 USD via StripeFiatLedger",
             "user": {"login": "example-agent"},
         },
     }
@@ -401,6 +408,7 @@ def run_self_test() -> int:
             "GITHUB_WORKSPACE": str(repo_root),
             "RUNNER_TEMP": str(tmp_dir),
             "AGENT_BOUNTIES_FUNDING_COMMENTS_FILE": str(existing_path),
+            "AGENT_BOUNTIES_API_BASE_URL": "https://api.agentbounties.example",
             "DRY_RUN": "1",
         }
     )
@@ -416,6 +424,9 @@ def run_self_test() -> int:
         "Agent bounty funding signal: Success",
         "requires operator reconciliation",
         "Idempotency key: github-funding-comment:agent-bounties/agent-bounties:https://github.com/agent-bounties/agent-bounties/issues/1:comment:12345",
+        "Stripe Checkout funding handoff",
+        "apiBaseUrl=https%3A%2F%2Fapi.agentbounties.example",
+        "rail=StripeFiat",
         "Distribution feedback requested",
     ]
     missing = [needle for needle in required if needle not in output]

@@ -63,6 +63,7 @@ struct GithubFundingCommentPlanCli {
     comment_body: String,
     contributor_login: Option<String>,
     comment_id: Option<String>,
+    funding_api_base_url: Option<String>,
     existing_idempotency_keys: Vec<String>,
 }
 
@@ -332,6 +333,8 @@ enum Command {
         contributor_login: Option<String>,
         #[arg(long)]
         comment_id: Option<String>,
+        #[arg(long)]
+        funding_api_base_url: Option<String>,
         #[arg(long = "existing-idempotency-key")]
         existing_idempotency_keys: Vec<String>,
     },
@@ -610,6 +613,7 @@ async fn async_main() -> Result<()> {
             comment_body,
             contributor_login,
             comment_id,
+            funding_api_base_url,
             existing_idempotency_keys,
         } => github_funding_comment_plan(GithubFundingCommentPlanCli {
             repository,
@@ -619,6 +623,7 @@ async fn async_main() -> Result<()> {
             comment_body,
             contributor_login,
             comment_id,
+            funding_api_base_url,
             existing_idempotency_keys,
         }),
         Command::GithubClaimCommentPlan {
@@ -1858,6 +1863,7 @@ fn github_funding_comment_plan(args: GithubFundingCommentPlanCli) -> Result<()> 
         comment_body: args.comment_body,
         contributor_login: args.contributor_login,
         comment_id: args.comment_id,
+        funding_api_base_url: args.funding_api_base_url,
         existing_idempotency_keys: args.existing_idempotency_keys,
     });
     println!("{}", serde_json::to_string_pretty(&plan)?);

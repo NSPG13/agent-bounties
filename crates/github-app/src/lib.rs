@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
+const STATIC_FUNDING_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/funding.html";
 const DISTRIBUTION_FEEDBACK_REQUEST: &str = "Distribution feedback requested, separate from review or payout decisions:\n\n- How did you find Agent Bounties?\n- What made this bounty or project worth participating in?\n- If an AI agent helped you find or complete this work, what tool, prompt, link, label, scanner, or workflow led it here?\n- What would make the project easier or more trustworthy before you participate again?\n\nIf Agent Bounties is useful, please star the repository, react/upvote useful issues or bounties, share it with other AI-agent builders or bounty solvers, and invite collaborators who can improve task liquidity, verifier quality, payment trust, or agent distribution.\n\nThese answers help improve agent discovery, bounty templates, proof pages, and payment-trust messaging.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +93,7 @@ pub struct GitHubFundingCommentInput {
     pub comment_body: String,
     pub contributor_login: Option<String>,
     pub comment_id: Option<String>,
+    pub funding_api_base_url: Option<String>,
     #[serde(default)]
     pub existing_idempotency_keys: Vec<String>,
 }
@@ -119,6 +121,7 @@ pub struct GitHubFundingSignal {
     pub idempotency_key: String,
     pub requires_operator_reconciliation: bool,
     pub operator_note: String,
+    pub funding_handoff_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -455,27 +458,38 @@ pub fn funding_comment_check_output(
     signal: Result<&GitHubFundingSignal, &GitHubFundingCommentError>,
 ) -> GitHubCheckRunOutput {
     match signal {
-        Ok(signal) => GitHubCheckRunOutput {
-            title: "Agent bounty funding signal ready".to_string(),
-            summary: format!(
-                "{} {} via {:?} requires operator reconciliation.",
-                signal.amount.amount, signal.amount.currency, signal.rail
-            ),
-            text: format!(
-                "Issue: {}\nContributor: {}\nAmount: {} {}\nRail: {:?}\nIdempotency key: {}\nRequires operator reconciliation: true\n\nThis GitHub comment is a public funding signal only. It does not credit the ledger, create a Stripe balance, or mark Base escrow funded.\n\n{}",
-                signal.issue_url,
-                signal
-                    .contributor_login
-                    .as_deref()
-                    .unwrap_or("unknown"),
-                signal.amount.amount,
-                signal.amount.currency,
-                signal.rail,
-                signal.idempotency_key,
-                DISTRIBUTION_FEEDBACK_REQUEST
-            ),
-            conclusion: GitHubCheckConclusion::Success,
-        },
+        Ok(signal) => {
+            let handoff_text = signal
+                .funding_handoff_url
+                .as_ref()
+                .map(|url| {
+                    format!(
+                        "\nStripe Checkout funding handoff: {url}\nHandoff boundary: opens the public funding form with UI defaults only; funding still requires verified Stripe webhook reconciliation.\n"
+                    )
+                })
+                .unwrap_or_default();
+            GitHubCheckRunOutput {
+                title: "Agent bounty funding signal ready".to_string(),
+                summary: format!(
+                    "{} {} via {:?} requires operator reconciliation.",
+                    signal.amount.amount, signal.amount.currency, signal.rail
+                ),
+                text: format!(
+                    "Issue: {}\nContributor: {}\nAmount: {} {}\nRail: {:?}\nIdempotency key: {}\nRequires operator reconciliation: true{handoff_text}\nThis GitHub comment is a public funding signal only. It does not credit the ledger, create a Stripe balance, or mark Base escrow funded.\n\n{}",
+                    signal.issue_url,
+                    signal
+                        .contributor_login
+                        .as_deref()
+                        .unwrap_or("unknown"),
+                    signal.amount.amount,
+                    signal.amount.currency,
+                    signal.rail,
+                    signal.idempotency_key,
+                    DISTRIBUTION_FEEDBACK_REQUEST
+                ),
+                conclusion: GitHubCheckConclusion::Success,
+            }
+        }
         Err(error) => GitHubCheckRunOutput {
             title: "Agent bounty funding signal needs review".to_string(),
             summary: error.to_string(),
@@ -570,7 +584,7 @@ fn parse_funding_comment_signal(
     {
         return Err(GitHubFundingCommentError::MissingIssueContext);
     }
-    parse_issue_form_bounty(
+    let bounty = parse_issue_form_bounty(
         &input.repository,
         &input.issue_url,
         &input.title,
@@ -591,6 +605,8 @@ fn parse_funding_comment_signal(
         return Err(GitHubFundingCommentError::DuplicateSignal(idempotency_key));
     }
 
+    let funding_handoff_url = funding_handoff_url(input, &bounty, &amount, &rail, &idempotency_key);
+
     Ok(GitHubFundingSignal {
         issue_url: input.issue_url.clone(),
         contributor_login: input
@@ -605,7 +621,59 @@ fn parse_funding_comment_signal(
         operator_note:
             "Verify actual Stripe Checkout credit or indexed Base escrow funding before applying this contribution."
                 .to_string(),
+        funding_handoff_url,
     })
+}
+
+fn funding_handoff_url(
+    input: &GitHubFundingCommentInput,
+    bounty: &GitHubIssueFormBounty,
+    amount: &Money,
+    rail: &FundingMode,
+    idempotency_key: &str,
+) -> Option<String> {
+    if !matches!(rail, FundingMode::StripeFiatLedger) {
+        return None;
+    }
+
+    let mut query = Vec::new();
+    if let Some(api_base_url) = input
+        .funding_api_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        query.push(("apiBaseUrl", api_base_url.to_string()));
+    }
+    query.extend([
+        ("bountyId", bounty.request.id.to_string()),
+        ("amountMinor", amount.amount.to_string()),
+        ("currency", amount.currency.clone()),
+        ("rail", "StripeFiat".to_string()),
+        ("source", "github-funding-comment".to_string()),
+        ("externalReference", idempotency_key.to_string()),
+    ]);
+
+    Some(format!(
+        "{STATIC_FUNDING_PAGE_URL}?{}",
+        query
+            .into_iter()
+            .map(|(key, value)| format!("{key}={}", url_query_encode(&value)))
+            .collect::<Vec<_>>()
+            .join("&")
+    ))
+}
+
+fn url_query_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 fn claim_command_line(comment_body: &str) -> Option<&str> {
@@ -1115,6 +1183,7 @@ extract-data-to-schema
             comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
             contributor_login: Some("solver-agent".to_string()),
             comment_id: Some("123".to_string()),
+            funding_api_base_url: None,
             existing_idempotency_keys: vec![],
         };
 
@@ -1125,14 +1194,51 @@ extract-data-to-schema
         assert_eq!(signal.amount, Money::new(5_000_000, "usdc").unwrap());
         assert_eq!(signal.rail, FundingMode::BaseUsdcEscrow);
         assert!(signal.requires_operator_reconciliation);
+        assert!(signal.funding_handoff_url.is_none());
         assert!(signal.idempotency_key.ends_with(":comment:123"));
         assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+        assert!(!plan.check.text.contains("Stripe Checkout funding handoff"));
         assert!(plan.check.text.contains("Distribution feedback requested"));
         assert!(plan
             .check
             .text
             .contains("what tool, prompt, link, label, scanner, or workflow"));
         assert!(plan.check.text.contains("star the repository"));
+    }
+
+    #[test]
+    fn funding_comment_plan_adds_stripe_checkout_handoff_url() {
+        let input = GitHubFundingCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "[bounty]: Add co-funding".to_string(),
+            body: valid_issue_body("StripeFiatLedger"),
+            comment_body: "/agent-bounty fund 5 USD via StripeFiatLedger".to_string(),
+            contributor_login: Some("human-funder".to_string()),
+            comment_id: Some("124".to_string()),
+            funding_api_base_url: Some("https://api.agentbounties.example/".to_string()),
+            existing_idempotency_keys: vec![],
+        };
+
+        let plan = funding_comment_plan(input);
+
+        assert!(plan.ready);
+        let signal = plan.signal.unwrap();
+        let handoff = signal.funding_handoff_url.expect("handoff url");
+        assert_eq!(signal.amount, Money::new(500, "usd").unwrap());
+        assert_eq!(signal.rail, FundingMode::StripeFiatLedger);
+        assert!(handoff.starts_with(STATIC_FUNDING_PAGE_URL));
+        assert!(handoff.contains("apiBaseUrl=https%3A%2F%2Fapi.agentbounties.example"));
+        assert!(handoff.contains("amountMinor=500"));
+        assert!(handoff.contains("currency=usd"));
+        assert!(handoff.contains("rail=StripeFiat"));
+        assert!(handoff.contains("source=github-funding-comment"));
+        assert!(handoff.contains("externalReference=github-funding-comment%3A"));
+        assert!(plan.check.text.contains("Stripe Checkout funding handoff"));
+        assert!(plan
+            .check
+            .text
+            .contains("verified Stripe webhook reconciliation"));
     }
 
     #[test]
@@ -1244,6 +1350,7 @@ extract-data-to-schema
             comment_body: "/agent-bounty fund nope USDC via BaseUsdcEscrow".to_string(),
             contributor_login: None,
             comment_id: None,
+            funding_api_base_url: None,
             existing_idempotency_keys: vec![],
         });
 
@@ -1262,6 +1369,7 @@ extract-data-to-schema
             comment_body: "/agent-bounty fund 5 USDC via Simulated".to_string(),
             contributor_login: None,
             comment_id: None,
+            funding_api_base_url: None,
             existing_idempotency_keys: vec![],
         });
 
@@ -1281,6 +1389,7 @@ extract-data-to-schema
             comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
             contributor_login: None,
             comment_id: Some("123".to_string()),
+            funding_api_base_url: None,
             existing_idempotency_keys: vec![existing_key.to_string()],
         });
 
@@ -1298,6 +1407,7 @@ extract-data-to-schema
             comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
             contributor_login: None,
             comment_id: None,
+            funding_api_base_url: None,
             existing_idempotency_keys: vec![],
         });
 
@@ -1315,6 +1425,7 @@ extract-data-to-schema
             comment_body: "/agent-bounty fund 5 USD via BaseUsdcEscrow".to_string(),
             contributor_login: None,
             comment_id: None,
+            funding_api_base_url: None,
             existing_idempotency_keys: vec![],
         });
 

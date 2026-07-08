@@ -313,6 +313,7 @@ struct PlanGitHubFundingCommentRequest {
     comment_body: String,
     contributor_login: Option<String>,
     comment_id: Option<String>,
+    funding_api_base_url: Option<String>,
     #[serde(default)]
     existing_idempotency_keys: Vec<String>,
 }
@@ -2441,6 +2442,7 @@ async fn plan_github_funding_comment(
         comment_body: request.comment_body,
         contributor_login: request.contributor_login,
         comment_id: request.comment_id,
+        funding_api_base_url: request.funding_api_base_url,
         existing_idempotency_keys: request.existing_idempotency_keys,
     }))
 }
@@ -4019,6 +4021,7 @@ mod tests {
             comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
             contributor_login: Some("solver-agent".to_string()),
             comment_id: Some("123".to_string()),
+            funding_api_base_url: None,
             existing_idempotency_keys: vec![],
         }))
         .await
@@ -4028,8 +4031,39 @@ mod tests {
         let signal = plan.signal.expect("funding signal");
         assert!(signal.requires_operator_reconciliation);
         assert_eq!(signal.amount.currency, "usdc");
+        assert!(signal.funding_handoff_url.is_none());
         assert!(signal.idempotency_key.ends_with(":comment:123"));
         assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+    }
+
+    #[tokio::test]
+    async fn github_funding_comment_plan_returns_stripe_handoff_url() {
+        let plan = plan_github_funding_comment(Json(PlanGitHubFundingCommentRequest {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            title: "[bounty]: Co-funding".to_string(),
+            body: valid_github_issue_body_with_funding_mode("StripeFiatLedger"),
+            comment_body: "/agent-bounty fund 5 USD via StripeFiatLedger".to_string(),
+            contributor_login: Some("human-funder".to_string()),
+            comment_id: Some("124".to_string()),
+            funding_api_base_url: Some("https://api.agentbounties.example".to_string()),
+            existing_idempotency_keys: vec![],
+        }))
+        .await
+        .0;
+
+        assert!(plan.ready);
+        let signal = plan.signal.expect("funding signal");
+        let handoff = signal.funding_handoff_url.expect("handoff url");
+        assert!(handoff.contains("https://nspg13.github.io/agent-bounties/funding.html"));
+        assert!(handoff.contains("apiBaseUrl=https%3A%2F%2Fapi.agentbounties.example"));
+        assert!(handoff.contains("rail=StripeFiat"));
+        assert!(handoff.contains("externalReference=github-funding-comment%3A"));
+        assert!(plan.check.text.contains("Stripe Checkout funding handoff"));
+        assert!(plan
+            .check
+            .text
+            .contains("verified Stripe webhook reconciliation"));
     }
 
     #[tokio::test]
@@ -4044,6 +4078,7 @@ mod tests {
             comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
             contributor_login: None,
             comment_id: Some("123".to_string()),
+            funding_api_base_url: None,
             existing_idempotency_keys: vec![existing_key.to_string()],
         }))
         .await
@@ -5965,7 +6000,12 @@ mod tests {
     }
 
     fn valid_github_issue_body() -> String {
-        r#"### Goal
+        valid_github_issue_body_with_funding_mode("BaseUsdcEscrow")
+    }
+
+    fn valid_github_issue_body_with_funding_mode(funding_mode: &str) -> String {
+        format!(
+            r#"### Goal
 Fix the failing CI check.
 
 ### Acceptance criteria
@@ -5976,7 +6016,10 @@ fix-ci-failure
 
 ### Suggested amount
 10 USDC
+
+### Funding mode
+{funding_mode}
 "#
-        .to_string()
+        )
     }
 }

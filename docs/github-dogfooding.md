@@ -45,12 +45,18 @@ The safe operator path is:
 3. Supporters comment with `/agent-bounty fund <amount> <currency> via <rail>`.
 4. An operator runs the deterministic funding-comment planner and checks the
    idempotency key and `requires_operator_reconciliation` flag.
-5. For `BaseUsdcEscrow`, reconcile the indexed `EscrowCreated` event. For
+5. For `StripeFiatLedger` comments, the planner can include a public funding
+   handoff URL to `https://nspg13.github.io/agent-bounties/funding.html` with
+   the stable issue-derived bounty id, amount, rail, source, and idempotency
+   key prefilled. Set repository variable `AGENT_BOUNTIES_API_BASE_URL` to also
+   prefill the hosted API base URL. This link is only a Checkout UI handoff; it
+   does not create ledger credit.
+6. For `BaseUsdcEscrow`, reconcile the indexed `EscrowCreated` event. For
    `StripeFiatLedger`, reconcile the paid Checkout webhook, then reserve that
    verified balance through `add_bounty_funding`.
-6. Link the platform bounty URL back to the issue.
-7. The bounty becomes claimable only after funding is reconciled.
-8. Accepted work gets a proof comment; code review alone still does not approve
+7. Link the platform bounty URL back to the issue.
+8. The bounty becomes claimable only after funding is reconciled.
+9. Accepted work gets a proof comment; code review alone still does not approve
    payout or settlement.
 
 This keeps GitHub useful for discovery and pooling demand while preserving the
@@ -182,7 +188,11 @@ exists:
   creates or updates a planner comment marked with
   `<!-- agent-bounties-funding-comment -->`. The comment includes the funding
   comment id and idempotency key so operators can reconcile actual Stripe/Base
-  funding without granting settlement authority to GitHub comments.
+  funding without granting settlement authority to GitHub comments. If
+  repository variable `AGENT_BOUNTIES_API_BASE_URL` is set, valid
+  `StripeFiatLedger` comments also include a prefilled public Stripe Checkout
+  funding-page handoff; verified Stripe webhooks remain the only fiat funding
+  credit authority.
 - `.github/workflows/paid-bounty-claim-comments.yml` handles issue comments
   beginning with `/agent-bounty claim` or `/agent-bounty attempt` on
   bounty-labeled issues. It runs `scripts/github-claim-comment.sh`, executes
