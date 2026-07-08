@@ -4027,6 +4027,7 @@ mod tests {
             Json(AddFundingContributionRequest {
                 bounty_id: bounty.id,
                 contributor_agent_id: None,
+                source_organization_id: None,
                 amount_minor: 400,
                 currency: "USDC".to_string(),
                 rail: PaymentRail::Simulated,
@@ -4045,6 +4046,7 @@ mod tests {
             Json(AddFundingContributionRequest {
                 bounty_id: bounty.id,
                 contributor_agent_id: None,
+                source_organization_id: None,
                 amount_minor: 600,
                 currency: "usdc".to_string(),
                 rail: PaymentRail::Simulated,

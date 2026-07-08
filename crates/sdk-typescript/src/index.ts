@@ -49,6 +49,7 @@ export interface OpenPooledBountyRequest {
 
 export interface AddFundingContributionRequest {
   contributor_agent_id?: string | null;
+  source_organization_id?: string | null;
   amount_minor: number;
   currency: string;
   rail: string;
@@ -382,6 +383,7 @@ export class AgentBountiesClient {
       body: JSON.stringify({
         bounty_id: bountyId,
         contributor_agent_id: request.contributor_agent_id ?? null,
+        source_organization_id: request.source_organization_id ?? null,
         amount_minor: request.amount_minor,
         currency: request.currency,
         rail: request.rail,

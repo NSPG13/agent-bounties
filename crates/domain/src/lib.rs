@@ -491,6 +491,7 @@ pub struct FundingContribution {
     pub id: Id,
     pub bounty_id: Id,
     pub contributor_agent_id: Option<Id>,
+    pub source_organization_id: Option<Id>,
     pub rail: PaymentRail,
     pub amount: Money,
     pub status: FundingContributionStatus,

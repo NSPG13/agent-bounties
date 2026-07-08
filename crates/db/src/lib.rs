@@ -410,10 +410,11 @@ impl PostgresStore {
         sqlx::query(
             r#"
             INSERT INTO funding_contributions
-              (id, bounty_id, contributor_agent_id, rail, amount, currency, status, funding_ledger_entry_id, refund_ledger_entry_id, settlement_id, external_reference, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+              (id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, funding_ledger_entry_id, refund_ledger_entry_id, settlement_id, external_reference, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             ON CONFLICT (id) DO UPDATE SET
               contributor_agent_id = EXCLUDED.contributor_agent_id,
+              source_organization_id = EXCLUDED.source_organization_id,
               rail = EXCLUDED.rail,
               amount = EXCLUDED.amount,
               currency = EXCLUDED.currency,
@@ -427,6 +428,7 @@ impl PostgresStore {
         .bind(contribution.id)
         .bind(contribution.bounty_id)
         .bind(contribution.contributor_agent_id)
+        .bind(contribution.source_organization_id)
         .bind(format!("{:?}", contribution.rail))
         .bind(contribution.amount.amount)
         .bind(&contribution.amount.currency)
@@ -444,7 +446,7 @@ impl PostgresStore {
     pub async fn list_funding_contributions(&self) -> DbResult<Vec<FundingContribution>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, bounty_id, contributor_agent_id, rail, amount, currency, status, funding_ledger_entry_id, refund_ledger_entry_id, settlement_id, external_reference, created_at
+            SELECT id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, funding_ledger_entry_id, refund_ledger_entry_id, settlement_id, external_reference, created_at
             FROM funding_contributions
             ORDER BY created_at
             "#,
@@ -458,6 +460,7 @@ impl PostgresStore {
                     id: row.try_get("id")?,
                     bounty_id: row.try_get("bounty_id")?,
                     contributor_agent_id: row.try_get("contributor_agent_id")?,
+                    source_organization_id: row.try_get("source_organization_id")?,
                     rail: parse_payment_rail(row.try_get::<String, _>("rail")?)?,
                     amount: Money::new(
                         row.try_get::<i64, _>("amount")?,
@@ -1438,6 +1441,7 @@ mod tests {
             assert!(CORE_MIGRATION.contains(table), "missing {table}");
         }
         assert!(CORE_MIGRATION.contains("idx_funding_contributions_external_reference"));
+        assert!(CORE_MIGRATION.contains("source_organization_id UUID"));
         assert!(CORE_MIGRATION.contains("funding_ledger_entry_id UUID"));
         assert!(CORE_MIGRATION.contains("refund_ledger_entry_id UUID"));
         assert!(CORE_MIGRATION.contains("settlement_id UUID"));
