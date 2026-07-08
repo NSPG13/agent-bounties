@@ -1,0 +1,9 @@
+{
+  "comment_body": "/agent-bounty fund 25 USDC via base",
+  "comment_author": "alice-contributor",
+  "comment_id": "1001",
+  "issue_number": "42",
+  "issue_labels": ["bounty", "small-code-change"],
+  "repo_full_name": "example-org/agent-bounties",
+  "seen_idempotency_keys": []
+}

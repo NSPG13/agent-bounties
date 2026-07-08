@@ -1,0 +1,9 @@
+{
+  "comment_body": "/agent-bounty fund -10 USDC via base",
+  "comment_author": "carol-tester",
+  "comment_id": "1003",
+  "issue_number": "44",
+  "issue_labels": ["bounty"],
+  "repo_full_name": "example-org/agent-bounties",
+  "seen_idempotency_keys": []
+}

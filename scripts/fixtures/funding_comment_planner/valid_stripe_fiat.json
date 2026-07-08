@@ -1,0 +1,9 @@
+{
+  "comment_body": "/agent-bounty fund 50 USD via stripe",
+  "comment_author": "bob-supporter",
+  "comment_id": "1002",
+  "issue_number": "43",
+  "issue_labels": ["bounty"],
+  "repo_full_name": "example-org/agent-bounties",
+  "seen_idempotency_keys": []
+}
