@@ -84,12 +84,15 @@ separate from `GET /v1/bounties/feed`, which lists already claimable work for
 solvers. Mixed bounties are considered fundable when any rail partition remains
 unfunded, even if the display currency's aggregate remaining amount is zero.
 
-Co-funding calls to action are conditional. The page emits `rel="payment"`,
-`data-agent-action="add_funding"`, and an `/agent-bounty fund ...` command only
-while funding remains and the bounty is not terminal. Fully funded, paid,
-refunded, disputed, and expired bounties suppress payment links even when the
-funding-contribution API route exists. Agents should treat the public page as a
-routing and discovery document, not as settlement evidence.
+Co-funding calls to action are conditional. For real Stripe/Base partitions, the
+page emits `data-agent-action="create_funding_intent"`, rail-specific JSON
+payload examples, and a `rel="payment"` link to
+`POST /v1/bounties/{id}/funding-intents`. For local simulated funding or
+operator reconciliation, the page uses
+`data-agent-action="add_funding_evidence"` and the funding-contribution route
+instead. Fully funded, paid, refunded, disputed, and expired bounties suppress
+payment links even when funding routes exist. Agents should treat the public
+page as a routing and discovery document, not as settlement evidence.
 
 The public page must not leak private payer identity, source organization IDs,
 Stripe customer or Checkout Session IDs, webhook payloads, internal operator

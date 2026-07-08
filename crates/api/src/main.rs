@@ -2491,6 +2491,32 @@ fn public_funding_feed_item(
 ) -> web_public::PublicFundingFeedItem {
     let api = public_base_url.trim_end_matches('/');
     let bounty = &status.bounty;
+    let funding_intent_url = format!("{api}/v1/bounties/{}/funding-intents", bounty.id);
+    let public_url = format!("{api}/public/bounties/{}", bounty.id);
+    let funding_partitions = status
+        .funding_summary
+        .partitions
+        .iter()
+        .map(|partition| web_public::PublicFundingPartition {
+            rail: format!("{:?}", partition.rail),
+            target_minor: partition.target.amount,
+            confirmed_minor: partition.confirmed.amount,
+            remaining_minor: partition.remaining.amount,
+            currency: partition.target.currency.clone(),
+            contribution_count: partition.contribution_count,
+            escrow_count: partition.escrow_count,
+            claimable: partition.claimable,
+        })
+        .collect::<Vec<_>>();
+    let funding_intent_examples = web_public::public_funding_intent_examples(
+        &bounty.id.to_string(),
+        &funding_intent_url,
+        &public_url,
+        &format!("{:?}", bounty.funding_mode),
+        status.funding_summary.remaining.amount,
+        &status.funding_summary.remaining.currency,
+        &funding_partitions,
+    );
     web_public::PublicFundingFeedItem {
         bounty_id: bounty.id.to_string(),
         title: bounty.title.clone(),
@@ -2507,26 +2533,13 @@ fn public_funding_feed_item(
         funding_applied_minor: status.funding_summary.applied.amount,
         funding_remaining_minor: status.funding_summary.remaining.amount,
         contribution_count: status.funding_summary.contribution_count,
-        public_url: format!("{api}/public/bounties/{}", bounty.id),
+        public_url,
         status_url: format!("{api}/v1/bounties/{}", bounty.id),
         template_url: format!("{api}/public/templates/{}", bounty.template_slug),
-        funding_intent_url: format!("{api}/v1/bounties/{}/funding-intents", bounty.id),
+        funding_intent_url,
         funding_contribution_url: format!("{api}/v1/bounties/{}/funding-contributions", bounty.id),
-        funding_partitions: status
-            .funding_summary
-            .partitions
-            .iter()
-            .map(|partition| web_public::PublicFundingPartition {
-                rail: format!("{:?}", partition.rail),
-                target_minor: partition.target.amount,
-                confirmed_minor: partition.confirmed.amount,
-                remaining_minor: partition.remaining.amount,
-                currency: partition.target.currency.clone(),
-                contribution_count: partition.contribution_count,
-                escrow_count: partition.escrow_count,
-                claimable: partition.claimable,
-            })
-            .collect(),
+        funding_partitions,
+        funding_intent_examples,
     }
 }
 
@@ -2569,7 +2582,17 @@ fn public_bounty_page_model(
             escrow_count: partition.escrow_count,
             claimable: partition.claimable,
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let funding_intent_url = format!("{api}/v1/bounties/{}/funding-intents", bounty.id);
+    let funding_intent_examples = web_public::public_funding_intent_examples(
+        &bounty.id.to_string(),
+        &funding_intent_url,
+        &public_url,
+        &format!("{:?}", bounty.funding_mode),
+        status.funding_summary.remaining.amount,
+        &status.funding_summary.remaining.currency,
+        &funding_partitions,
+    );
     let verifier_result_links = status
         .verifier_results
         .iter()
@@ -2629,9 +2652,11 @@ fn public_bounty_page_model(
         claim_url: format!("{api}/v1/bounties/{}/claim", bounty.id),
         status_url: format!("{api}/v1/bounties/{}", bounty.id),
         template_url: format!("{api}/public/templates/{}", bounty.template_slug),
+        funding_intent_url,
         funding_contribution_url: format!("{api}/v1/bounties/{}/funding-contributions", bounty.id),
         proof_urls,
         funding_partitions,
+        funding_intent_examples,
         verifier_result_links,
         settlement_links,
         template_signal_links,
@@ -4483,7 +4508,8 @@ mod tests {
             bounty.id
         )));
         assert!(html.contains(r#"rel="payment""#));
-        assert!(html.contains(r#"data-agent-action="add_funding""#));
+        assert!(html.contains(r#"data-agent-action="add_funding_evidence""#));
+        assert!(!html.contains(r#"data-agent-action="create_funding_intent""#));
         assert!(html.contains(&format!("/v1/bounties/{}/funding-contributions", bounty.id)));
         assert!(!html.contains(r#"data-agent-action="claim""#));
     }
