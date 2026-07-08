@@ -27,6 +27,10 @@ pub struct GitHubBountyRequest {
 pub enum GitHubBountyError {
     #[error("missing required GitHub issue form field: {0}")]
     MissingField(&'static str),
+    #[error("missing GitHub funding comment issue context: {0}")]
+    MissingIssueContext(&'static str),
+    #[error("GitHub funding comments require a bounty issue: {0}")]
+    NonBountyIssue(String),
     #[error("unknown bounty template: {0}")]
     UnknownTemplate(String),
     #[error("unknown funding mode: {0}")]
@@ -35,6 +39,10 @@ pub enum GitHubBountyError {
     UnknownPrivacy(String),
     #[error("invalid suggested amount: {0}")]
     InvalidAmount(String),
+    #[error("invalid GitHub funding comment: {0}")]
+    InvalidFundingComment(String),
+    #[error("duplicate GitHub funding comment signal: {0}")]
+    DuplicateFundingSignal(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +88,33 @@ pub struct GitHubProofCommentPlan {
     pub check: GitHubCheckRunOutput,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubFundingCommentContext {
+    pub repository: String,
+    pub issue_url: String,
+    pub issue_number: u64,
+    pub issue_title: String,
+    pub issue_labels: Vec<String>,
+    pub existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubFundingCommentSignal {
+    pub issue_url: String,
+    pub contributor_login: Option<String>,
+    pub amount: i64,
+    pub currency: String,
+    pub rail: FundingMode,
+    pub idempotency_key: String,
+    pub requires_operator_reconciliation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubFundingCommentPlan {
+    pub signal: Option<GitHubFundingCommentSignal>,
+    pub check: GitHubCheckRunOutput,
+}
+
 impl GitHubProofComment {
     pub fn markdown(&self) -> String {
         format!(
@@ -110,6 +145,46 @@ pub fn proof_comment_plan(comment: GitHubProofComment) -> GitHubProofCommentPlan
         markdown,
         fingerprint,
         check,
+    }
+}
+
+pub fn funding_comment_idempotency_key(
+    context: &GitHubFundingCommentContext,
+    contributor_login: Option<&str>,
+    amount: &Money,
+    rail: &FundingMode,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(context.repository.trim().to_ascii_lowercase());
+    hasher.update(context.issue_url.trim());
+    hasher.update(context.issue_number.to_string());
+    hasher.update(
+        contributor_login
+            .unwrap_or("anonymous")
+            .trim()
+            .to_ascii_lowercase(),
+    );
+    hasher.update(amount.amount.to_string());
+    hasher.update(amount.currency.trim().to_ascii_lowercase());
+    hasher.update(format!("{rail:?}"));
+    hex::encode(hasher.finalize())
+}
+
+pub fn funding_comment_plan(
+    context: GitHubFundingCommentContext,
+    contributor_login: Option<String>,
+    comment_body: &str,
+) -> GitHubFundingCommentPlan {
+    let parsed = parse_funding_comment(&context, contributor_login, comment_body);
+    match parsed {
+        Ok(signal) => GitHubFundingCommentPlan {
+            check: funding_comment_check_output(Ok(&signal)),
+            signal: Some(signal),
+        },
+        Err(error) => GitHubFundingCommentPlan {
+            check: funding_comment_check_output(Err(&error)),
+            signal: None,
+        },
     }
 }
 
@@ -207,6 +282,110 @@ pub fn proof_check_output(comment: &GitHubProofComment) -> GitHubCheckRunOutput 
         text: comment.markdown(),
         conclusion: GitHubCheckConclusion::Success,
     }
+}
+
+pub fn funding_comment_check_output(
+    parsed: Result<&GitHubFundingCommentSignal, &GitHubBountyError>,
+) -> GitHubCheckRunOutput {
+    match parsed {
+        Ok(signal) => GitHubCheckRunOutput {
+            title: "GitHub co-funding signal ready".to_string(),
+            summary: format!(
+                "{} {} via {:?} requires operator reconciliation.",
+                signal.amount, signal.currency, signal.rail
+            ),
+            text: format!(
+                "Issue: {}\nContributor: {}\nAmount: {} {}\nRail: {:?}\nIdempotency key: {}\nRequires operator reconciliation: {}",
+                signal.issue_url,
+                signal.contributor_login.as_deref().unwrap_or("unknown"),
+                signal.amount,
+                signal.currency,
+                signal.rail,
+                signal.idempotency_key,
+                signal.requires_operator_reconciliation
+            ),
+            conclusion: GitHubCheckConclusion::Success,
+        },
+        Err(error) => GitHubCheckRunOutput {
+            title: "GitHub co-funding signal needs action".to_string(),
+            summary: error.to_string(),
+            text: "A co-funding comment is only a public signal. Fix the comment or issue context before an operator reconciles it into platform funding.".to_string(),
+            conclusion: GitHubCheckConclusion::ActionRequired,
+        },
+    }
+}
+
+fn parse_funding_comment(
+    context: &GitHubFundingCommentContext,
+    contributor_login: Option<String>,
+    comment_body: &str,
+) -> Result<GitHubFundingCommentSignal, GitHubBountyError> {
+    validate_funding_comment_context(context)?;
+    let parts = comment_body.split_whitespace().collect::<Vec<_>>();
+    if parts.len() != 6
+        || parts[0] != "/agent-bounty"
+        || parts[1] != "fund"
+        || !parts[4].eq_ignore_ascii_case("via")
+    {
+        return Err(GitHubBountyError::InvalidFundingComment(
+            "expected `/agent-bounty fund <amount> <currency> via <rail>`".to_string(),
+        ));
+    }
+
+    let amount = parse_amount(&format!("{} {}", parts[2], parts[3]))?;
+    let rail = parse_funding_mode(parts[5])?;
+    let idempotency_key =
+        funding_comment_idempotency_key(context, contributor_login.as_deref(), &amount, &rail);
+    if context
+        .existing_idempotency_keys
+        .iter()
+        .any(|key| key == &idempotency_key)
+    {
+        return Err(GitHubBountyError::DuplicateFundingSignal(idempotency_key));
+    }
+
+    Ok(GitHubFundingCommentSignal {
+        issue_url: context.issue_url.clone(),
+        contributor_login: contributor_login.and_then(|login| {
+            let trimmed = login.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }),
+        amount: amount.amount,
+        currency: amount.currency,
+        rail,
+        idempotency_key,
+        requires_operator_reconciliation: true,
+    })
+}
+
+fn validate_funding_comment_context(
+    context: &GitHubFundingCommentContext,
+) -> Result<(), GitHubBountyError> {
+    if context.repository.trim().is_empty() {
+        return Err(GitHubBountyError::MissingIssueContext("repository"));
+    }
+    if context.issue_url.trim().is_empty() {
+        return Err(GitHubBountyError::MissingIssueContext("issue_url"));
+    }
+    if context.issue_number == 0 {
+        return Err(GitHubBountyError::MissingIssueContext("issue_number"));
+    }
+    let has_bounty_label = context
+        .issue_labels
+        .iter()
+        .any(|label| label.eq_ignore_ascii_case("bounty"));
+    let bounty_title = context
+        .issue_title
+        .to_ascii_lowercase()
+        .contains("[bounty]");
+    if !has_bounty_label && !bounty_title {
+        return Err(GitHubBountyError::NonBountyIssue(context.issue_url.clone()));
+    }
+    Ok(())
 }
 
 fn parse_issue_form_sections(body: &str) -> HashMap<String, String> {
@@ -441,44 +620,6 @@ RedactedPublicProof
     }
 
     #[test]
-    fn ignores_optional_cofunding_note_section() {
-        let body = r#"### Goal
-Improve the public bounty discovery page.
-
-### Acceptance criteria
-The page links to claim, status, funding, and proof actions without private data.
-
-### Template
-write-docs-for-area
-
-### Suggested amount
-5 USDC
-
-### Funding mode
-BaseUsdcEscrow
-
-### Co-funding note
-Supporters can add funds after the platform bounty URL is linked.
-
-### Privacy
-Public
-"#;
-
-        let bounty = parse_issue_form_bounty(
-            "agent-bounties/agent-bounties",
-            "https://github.com/agent-bounties/agent-bounties/issues/4",
-            "[bounty]: Improve public bounty discovery",
-            body,
-        )
-        .unwrap();
-
-        assert_eq!(bounty.template_slug, "write-docs-for-area");
-        assert_eq!(bounty.amount, Money::new(5_000_000, "usdc").unwrap());
-        assert_eq!(bounty.funding_mode, FundingMode::BaseUsdcEscrow);
-        assert_eq!(bounty.privacy, PrivacyLevel::Public);
-    }
-
-    #[test]
     fn malformed_issue_form_gets_action_required_check() {
         let error = parse_issue_form_bounty(
             "agent-bounties/agent-bounties",
@@ -518,5 +659,102 @@ extract-data-to-schema
 
         assert_eq!(output.conclusion, GitHubCheckConclusion::Success);
         assert!(output.summary.contains("ready for funding"));
+    }
+
+    #[test]
+    fn valid_funding_comment_gets_operator_reconciliation_plan() {
+        let context = funding_context(Vec::new());
+        let plan = funding_comment_plan(
+            context,
+            Some("octo-agent".to_string()),
+            "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+        );
+
+        let signal = plan.signal.expect("funding signal");
+        assert_eq!(
+            signal.issue_url,
+            "https://github.com/agent-bounties/agent-bounties/issues/20"
+        );
+        assert_eq!(signal.contributor_login.as_deref(), Some("octo-agent"));
+        assert_eq!(signal.amount, 5_000_000);
+        assert_eq!(signal.currency, "usdc");
+        assert_eq!(signal.rail, FundingMode::BaseUsdcEscrow);
+        assert_eq!(signal.idempotency_key.len(), 64);
+        assert!(signal.requires_operator_reconciliation);
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+    }
+
+    #[test]
+    fn invalid_funding_amount_requires_action() {
+        let plan = funding_comment_plan(
+            funding_context(Vec::new()),
+            Some("octo-agent".to_string()),
+            "/agent-bounty fund -5 USDC via BaseUsdcEscrow",
+        );
+
+        assert!(plan.signal.is_none());
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+        assert!(plan.check.summary.contains("invalid suggested amount"));
+    }
+
+    #[test]
+    fn duplicate_funding_signal_requires_action() {
+        let context = funding_context(Vec::new());
+        let amount = Money::new(5_000_000, "usdc").unwrap();
+        let key = funding_comment_idempotency_key(
+            &context,
+            Some("octo-agent"),
+            &amount,
+            &FundingMode::BaseUsdcEscrow,
+        );
+        let plan = funding_comment_plan(
+            funding_context(vec![key.clone()]),
+            Some("octo-agent".to_string()),
+            "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+        );
+
+        assert!(plan.signal.is_none());
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+        assert!(plan.check.summary.contains(&key));
+    }
+
+    #[test]
+    fn unsupported_funding_rail_requires_action() {
+        let plan = funding_comment_plan(
+            funding_context(Vec::new()),
+            Some("octo-agent".to_string()),
+            "/agent-bounty fund 5 USDC via UnknownRail",
+        );
+
+        assert!(plan.signal.is_none());
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+        assert!(plan.check.summary.contains("unknown funding mode"));
+    }
+
+    #[test]
+    fn non_bounty_issue_requires_action() {
+        let mut context = funding_context(Vec::new());
+        context.issue_title = "Add funding comments".to_string();
+        context.issue_labels.clear();
+        let plan = funding_comment_plan(
+            context,
+            Some("octo-agent".to_string()),
+            "/agent-bounty fund 5 USDC via BaseUsdcEscrow",
+        );
+
+        assert!(plan.signal.is_none());
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+        assert!(plan.check.summary.contains("require a bounty issue"));
+    }
+
+    fn funding_context(existing_idempotency_keys: Vec<String>) -> GitHubFundingCommentContext {
+        GitHubFundingCommentContext {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            issue_number: 20,
+            issue_title: "[bounty]: Add GitHub co-funding comment planner".to_string(),
+            issue_labels: vec!["bounty".to_string(), "good-first-agent-bounty".to_string()],
+            existing_idempotency_keys,
+        }
     }
 }

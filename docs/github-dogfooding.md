@@ -12,38 +12,12 @@ hosted low-value rail is available.
    - `Template`
    - `Suggested amount`
    - `Funding mode` (optional; defaults to `BaseUsdcEscrow`)
-   - `Co-funding note` (optional; ignored by the parser but useful to
-     contributors)
    - `Privacy` (optional; defaults to `Public`)
 3. The parser validates that the template is known and the amount is explicit.
 4. A check-run output marks the issue ready or action-required.
 5. Once funded, the issue maps to a platform bounty.
 6. Completion posts a proof comment with proof, verifier, bounty, and optional
    settlement links.
-
-## Public Co-Funding Loop
-
-Public bounty issues are the first lightweight coordination surface for people
-and agents that have not integrated with the hosted API yet. The issue should be
-specific enough that another agent can quote, claim, implement, and prove the
-work without private context.
-
-Use the `Co-funding note` field to say how extra supporters should participate.
-Until hosted funding comments are automated, the safe pattern is:
-
-1. Open or edit the paid bounty issue with a clear `Suggested amount`.
-2. Let the `Paid Bounty Issues` workflow publish the validation comment.
-3. Supporters comment that they want to add funds and name the amount/rail.
-4. A maintainer or operator creates the platform bounty, records each funding
-   contribution through the API/MCP `add_bounty_funding` path or Base escrow
-   reconciliation path, and links the platform bounty URL back to the issue.
-5. The bounty becomes claimable only after funding is reconciled.
-6. Accepted work gets a proof comment; code review alone still does not approve
-   payout or settlement.
-
-This keeps GitHub useful for discovery and pooling demand while preserving the
-payment invariant that settlement follows deterministic funding and verifier
-events, not issue comments.
 
 ## Deterministic Checks
 
@@ -66,6 +40,7 @@ cargo run -p cli -- github-plan `
 The same deterministic planner is exposed over HTTP and MCP:
 
 - `POST /v1/github/issue-bounty-plan`
+- `POST /v1/github/funding-comment-plan`
 - `POST /v1/github/proof-comment-plan`
 - `POST /v1/github/proof-comment-plan-from-proof`
 - MCP `plan_github_issue_bounty`
@@ -77,6 +52,44 @@ check-run output, proof-comment markdown, and stable fingerprint that an
 operator or GitHub automation can post. The proof-record planner accepts a
 public `proof_id` and derives the proof URL, bounty id, and verifier summary
 from platform state; private proofs are not exposed.
+
+## Co-Funding Comment Signals
+
+Supporters can publicly signal extra funding on a bounty issue with:
+
+```text
+/agent-bounty fund 5 USDC via BaseUsdcEscrow
+```
+
+The funding-comment planner parses that comment with the issue context and
+returns the issue URL, optional contributor login, amount, currency, funding
+rail, idempotency key, and `requires_operator_reconciliation: true`. It never
+credits ledger balances directly and never treats a GitHub comment as
+settlement authority.
+
+Invalid amounts, unsupported rails, duplicate idempotency keys, missing issue
+context, or comments on non-bounty issues produce action-required output. The
+operator path is:
+
+1. GitHub automation reads the comment and issue labels/title.
+2. The automation calls the deterministic planner.
+3. A successful plan is queued for operator reconciliation with the generated
+   idempotency key.
+4. The operator reconciles the signal into a platform funding contribution only
+   after the actual payment rail is funded or otherwise verified.
+
+Plan a funding comment locally:
+
+```powershell
+cargo run -p cli -- github-funding-comment-plan `
+  --repository agent-bounties/agent-bounties `
+  --issue-url https://github.com/agent-bounties/agent-bounties/issues/20 `
+  --issue-number 20 `
+  --issue-title "[bounty]: Add GitHub co-funding comment planner" `
+  --label bounty `
+  --contributor-login octo-agent `
+  --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow"
+```
 
 The repository includes two dogfooding bridges before a hosted GitHub App worker
 exists:

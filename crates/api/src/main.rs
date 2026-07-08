@@ -34,7 +34,8 @@ use eval_harness::{
     BountyBench, EvalSuiteResult, JudgeBench, LoopSuiteResult,
 };
 use github_app::{
-    bounty_check_output, parse_issue_form_bounty, proof_comment_plan, GitHubCheckRunOutput,
+    bounty_check_output, funding_comment_plan, parse_issue_form_bounty, proof_comment_plan,
+    GitHubCheckRunOutput, GitHubFundingCommentContext, GitHubFundingCommentPlan,
     GitHubIssueFormBounty, GitHubProofComment, GitHubProofCommentPlan,
 };
 use ledger::Ledger;
@@ -102,6 +103,7 @@ use worker::BaseEscrowLogWorker;
         reconcile_stripe_connect_snapshot,
         reconcile_stripe_checkout_webhook,
         plan_github_issue_bounty,
+        plan_github_funding_comment,
         plan_github_proof_comment,
         plan_github_proof_comment_from_proof,
         post_bounty,
@@ -124,6 +126,7 @@ use worker::BaseEscrowLogWorker;
         PlanStripeCheckoutTopUpRequest,
         PlanStripeConnectAccountRequest,
         PlanGitHubIssueBountyRequest,
+        PlanGitHubFundingCommentRequest,
         PlanGitHubProofCommentRequest,
         PlanGitHubProofCommentFromProofRequest,
         PlanBaseLogQueryRequest,
@@ -263,6 +266,18 @@ struct PlanGitHubIssueBountyRequest {
     issue_url: String,
     title: String,
     body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct PlanGitHubFundingCommentRequest {
+    repository: String,
+    issue_url: String,
+    issue_number: u64,
+    issue_title: String,
+    issue_labels: Vec<String>,
+    contributor_login: Option<String>,
+    comment_body: String,
+    existing_idempotency_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -499,6 +514,10 @@ async fn main() -> anyhow::Result<()> {
             post(plan_github_issue_bounty),
         )
         .route(
+            "/v1/github/funding-comment-plan",
+            post(plan_github_funding_comment),
+        )
+        .route(
             "/v1/github/proof-comment-plan",
             post(plan_github_proof_comment),
         )
@@ -511,7 +530,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/public/capabilities", get(public_capability_feed_page))
         .route("/public/verifiers/:kind", get(public_verifier_profile))
         .route("/public/bounties", get(public_bounty_feed_page))
-        .route("/public/bounties/:id", get(public_bounty_page))
         .route("/public/templates", get(public_template_index))
         .route("/public/templates/:slug", get(public_template_page))
         .route("/api-docs/openapi.json", get(openapi_json))
@@ -1127,7 +1145,6 @@ async fn verify_submission(
         bounty,
         verifier_result,
         settlements,
-        funding_contributions,
         reputation_events,
         template_signals,
         ledger_entries,
@@ -1149,12 +1166,6 @@ async fn verify_submission(
                 .filter(|settlement| settlement.bounty_id == proof.bounty_id)
                 .cloned()
                 .collect::<Vec<_>>();
-            let funding_contributions = network
-                .funding_contributions
-                .values()
-                .filter(|contribution| contribution.bounty_id == proof.bounty_id)
-                .cloned()
-                .collect::<Vec<_>>();
             let reputation_events = network
                 .reputation_events
                 .values()
@@ -1173,7 +1184,6 @@ async fn verify_submission(
                 bounty,
                 verifier_result,
                 settlements,
-                funding_contributions,
                 reputation_events,
                 template_signals,
                 ledger_entries,
@@ -1209,12 +1219,6 @@ async fn verify_submission(
         for settlement in &settlements {
             store
                 .upsert_settlement(settlement)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for contribution in &funding_contributions {
-            store
-                .upsert_funding_contribution(contribution)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
@@ -1914,6 +1918,30 @@ fn github_issue_bounty_plan(request: PlanGitHubIssueBountyRequest) -> GitHubIssu
 
 #[utoipa::path(
     post,
+    path = "/v1/github/funding-comment-plan",
+    request_body = PlanGitHubFundingCommentRequest,
+    responses((status = 200, description = "GitHub co-funding comment signal parse and reconciliation plan"))
+)]
+async fn plan_github_funding_comment(
+    Json(request): Json<PlanGitHubFundingCommentRequest>,
+) -> Json<GitHubFundingCommentPlan> {
+    let context = GitHubFundingCommentContext {
+        repository: request.repository,
+        issue_url: request.issue_url,
+        issue_number: request.issue_number,
+        issue_title: request.issue_title,
+        issue_labels: request.issue_labels,
+        existing_idempotency_keys: request.existing_idempotency_keys,
+    };
+    Json(funding_comment_plan(
+        context,
+        request.contributor_login,
+        &request.comment_body,
+    ))
+}
+
+#[utoipa::path(
+    post,
     path = "/v1/github/proof-comment-plan",
     request_body = PlanGitHubProofCommentRequest,
     responses((status = 200, description = "GitHub proof comment markdown and check-run plan"))
@@ -2112,72 +2140,6 @@ async fn public_bounty_feed_page(State(state): State<SharedState>) -> Html<Strin
     };
     let items = web_public::public_bounty_feed(&bounties, &state.public_base_url);
     Html(web_public::render_bounty_feed_page(&items))
-}
-
-async fn public_bounty_page(
-    State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
-) -> Result<Html<String>, StatusCode> {
-    let status = {
-        let network = state.network.lock().expect("state poisoned");
-        network.status(id).map_err(|_| StatusCode::NOT_FOUND)?
-    };
-    if status.bounty.privacy == PrivacyLevel::Private {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    Ok(Html(web_public::render_public_bounty_page(
-        &public_bounty_page_model(&status, &state.public_base_url),
-    )))
-}
-
-fn public_bounty_page_model(
-    status: &BountyStatusResponse,
-    public_base_url: &str,
-) -> web_public::PublicBountyPage {
-    let api = public_base_url.trim_end_matches('/');
-    let bounty = &status.bounty;
-    let verification_type = status
-        .verifier_results
-        .iter()
-        .max_by_key(|result| result.created_at)
-        .map(|result| format!("{:?}", result.kind))
-        .or_else(|| {
-            web_public::bounty_templates()
-                .into_iter()
-                .find(|template| template.slug == bounty.template_slug)
-                .map(|template| template.verifier.to_string())
-        })
-        .unwrap_or_else(|| "Unknown".to_string());
-    let proof_urls = status
-        .proofs
-        .iter()
-        .filter(|proof| proof.privacy != PrivacyLevel::Private)
-        .map(|proof| format!("{api}/public/proofs/{}", proof.id))
-        .collect();
-    web_public::PublicBountyPage {
-        bounty_id: bounty.id.to_string(),
-        title: bounty.title.clone(),
-        template_slug: bounty.template_slug.clone(),
-        amount_minor: bounty.amount.amount,
-        currency: bounty.amount.currency.clone(),
-        funding_mode: format!("{:?}", bounty.funding_mode),
-        privacy: format!("{:?}", bounty.privacy),
-        status: format!("{:?}", bounty.status),
-        terms_hash: bounty.terms_hash.clone(),
-        created_at: bounty.created_at.to_rfc3339(),
-        verification_type,
-        claimable: status.funding_summary.claimable,
-        funding_target_minor: status.funding_summary.target.amount,
-        funding_applied_minor: status.funding_summary.applied.amount,
-        funding_remaining_minor: status.funding_summary.remaining.amount,
-        contribution_count: status.funding_summary.contribution_count,
-        public_url: format!("{api}/public/bounties/{}", bounty.id),
-        claim_url: format!("{api}/v1/bounties/{}/claim", bounty.id),
-        status_url: format!("{api}/v1/bounties/{}", bounty.id),
-        template_url: format!("{api}/public/templates/{}", bounty.template_slug),
-        funding_contribution_url: format!("{api}/v1/bounties/{}/funding-contributions", bounty.id),
-        proof_urls,
-    }
 }
 
 async fn public_capability_feed_page(State(state): State<SharedState>) -> Html<String> {
@@ -3118,6 +3080,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn github_funding_comment_plan_returns_reconciliation_signal() {
+        let plan = plan_github_funding_comment(Json(PlanGitHubFundingCommentRequest {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/20".to_string(),
+            issue_number: 20,
+            issue_title: "[bounty]: Add GitHub co-funding comment planner".to_string(),
+            issue_labels: vec!["bounty".to_string()],
+            contributor_login: Some("octo-agent".to_string()),
+            comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
+            existing_idempotency_keys: Vec::new(),
+        }))
+        .await
+        .0;
+
+        let signal = plan.signal.expect("funding signal");
+        assert_eq!(signal.amount, 5_000_000);
+        assert_eq!(signal.currency, "usdc");
+        assert!(signal.requires_operator_reconciliation);
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+    }
+
+    #[tokio::test]
+    async fn github_funding_comment_plan_rejects_non_bounty_issue() {
+        let plan = plan_github_funding_comment(Json(PlanGitHubFundingCommentRequest {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/21".to_string(),
+            issue_number: 21,
+            issue_title: "Add GitHub co-funding comment planner".to_string(),
+            issue_labels: Vec::new(),
+            contributor_login: Some("octo-agent".to_string()),
+            comment_body: "/agent-bounty fund 5 USDC via BaseUsdcEscrow".to_string(),
+            existing_idempotency_keys: Vec::new(),
+        }))
+        .await
+        .0;
+
+        assert!(plan.signal.is_none());
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+        assert!(plan.check.summary.contains("require a bounty issue"));
+    }
+
+    #[tokio::test]
     async fn github_proof_comment_plan_returns_markdown_and_fingerprint() {
         let bounty_id = Uuid::new_v4();
         let plan = plan_github_proof_comment(Json(PlanGitHubProofCommentRequest {
@@ -3203,14 +3207,6 @@ mod tests {
             .agent_quickstart
             .contains("docs/agent-quickstart.md"));
         assert_eq!(
-            manifest.endpoints.public_bounties,
-            "http://127.0.0.1:8080/public/bounties"
-        );
-        assert_eq!(
-            manifest.endpoints.public_bounty,
-            "http://127.0.0.1:8080/public/bounties/{bounty_id}"
-        );
-        assert_eq!(
             manifest.endpoints.risk_policy,
             "http://127.0.0.1:8080/v1/risk/policy"
         );
@@ -3294,6 +3290,7 @@ mod tests {
         assert!(paths.contains_key("/v1/stripe/connect-snapshots"));
         assert!(paths.contains_key("/v1/stripe/checkout-webhooks"));
         assert!(paths.contains_key("/v1/github/issue-bounty-plan"));
+        assert!(paths.contains_key("/v1/github/funding-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan-from-proof"));
         assert!(paths.contains_key("/v1/evals/loops"));
@@ -3671,63 +3668,6 @@ mod tests {
             feed[0].claim_url,
             format!("http://127.0.0.1:8080/v1/bounties/{}/claim", public.id)
         );
-        assert_eq!(
-            feed[0].public_url,
-            format!("http://127.0.0.1:8080/public/bounties/{}", public.id)
-        );
-    }
-
-    #[tokio::test]
-    async fn public_bounty_detail_exposes_agent_actions() {
-        let mut network = BountyNetwork::default();
-        let bounty = network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Fix public <CI>".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-            })
-            .unwrap();
-        apply_base_funding_event(&mut network, &bounty, 1);
-        let state = test_state(network);
-
-        let html = public_bounty_page(State(state), Path(bounty.id))
-            .await
-            .unwrap()
-            .0;
-
-        assert!(html.contains("Fix public &lt;CI&gt;"));
-        assert!(html.contains("Funding State"));
-        assert!(html.contains("application/ld+json"));
-        assert!(html.contains("Machine status"));
-        assert!(html.contains("Add funding"));
-        assert!(html.contains(&format!("/public/bounties/{}", bounty.id)));
-        assert!(html.contains(&format!("/v1/bounties/{}/claim", bounty.id)));
-        assert!(html.contains(&format!("/v1/bounties/{}/funding-contributions", bounty.id)));
-    }
-
-    #[tokio::test]
-    async fn public_bounty_detail_hides_private_bounties() {
-        let mut network = BountyNetwork::default();
-        let private = network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Private ledger work".to_string(),
-                template_slug: "write-docs-for-area".to_string(),
-                amount_minor: 2_000_000,
-                currency: "usd".to_string(),
-                funding_mode: FundingMode::StripeFiatLedger,
-                privacy: PrivacyLevel::Private,
-            })
-            .unwrap();
-        let state = test_state(network);
-
-        let error = public_bounty_page(State(state), Path(private.id))
-            .await
-            .unwrap_err();
-
-        assert_eq!(error, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -4027,7 +3967,6 @@ mod tests {
             Json(AddFundingContributionRequest {
                 bounty_id: bounty.id,
                 contributor_agent_id: None,
-                source_organization_id: None,
                 amount_minor: 400,
                 currency: "USDC".to_string(),
                 rail: PaymentRail::Simulated,
@@ -4046,7 +3985,6 @@ mod tests {
             Json(AddFundingContributionRequest {
                 bounty_id: bounty.id,
                 contributor_agent_id: None,
-                source_organization_id: None,
                 amount_minor: 600,
                 currency: "usdc".to_string(),
                 rail: PaymentRail::Simulated,
