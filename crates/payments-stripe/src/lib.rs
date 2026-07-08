@@ -150,6 +150,8 @@ pub struct StripeFundingCredit {
     pub amount: Money,
     pub checkout_session_id: String,
     pub payment_intent_id: Option<String>,
+    pub bounty_id: Option<Id>,
+    pub funding_intent_id: Option<Id>,
     pub payment_event: PaymentEvent,
 }
 
@@ -514,6 +516,8 @@ impl StripeEventDeduper {
             .get("payment_intent")
             .and_then(serde_json::Value::as_str)
             .map(ToString::to_string);
+        let bounty_id = metadata_uuid(&event.payload, "bounty_id")?;
+        let funding_intent_id = metadata_uuid(&event.payload, "funding_intent_id")?;
         let payment_event = self.apply(event)?;
 
         Ok(StripeFundingCredit {
@@ -522,9 +526,29 @@ impl StripeEventDeduper {
                 .map_err(|_| StripeIntegrationError::InvalidField("amount_total".to_string()))?,
             checkout_session_id,
             payment_intent_id,
+            bounty_id,
+            funding_intent_id,
             payment_event,
         })
     }
+}
+
+fn metadata_uuid(
+    payload: &serde_json::Value,
+    key: &str,
+) -> Result<Option<Id>, StripeIntegrationError> {
+    let Some(value) = payload
+        .get("metadata")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|metadata| metadata.get(key))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(None);
+    };
+    value
+        .parse()
+        .map(Some)
+        .map_err(|_| StripeIntegrationError::InvalidField(format!("metadata.{key}")))
 }
 
 pub fn verify_webhook_signature(

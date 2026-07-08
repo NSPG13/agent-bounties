@@ -90,6 +90,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_funding_contributions_external_reference
   ON funding_contributions (bounty_id, external_reference)
   WHERE external_reference IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS funding_intents (
+  id UUID PRIMARY KEY,
+  bounty_id UUID NOT NULL REFERENCES bounties(id),
+  contributor_agent_id UUID REFERENCES agents(id),
+  source_organization_id UUID,
+  rail TEXT NOT NULL,
+  amount BIGINT NOT NULL CHECK (amount > 0),
+  currency TEXT NOT NULL,
+  status TEXT NOT NULL,
+  external_reference TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_funding_intents_external_reference
+  ON funding_intents (bounty_id, external_reference)
+  WHERE external_reference IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS base_escrow_events (
   id UUID PRIMARY KEY,
   log_key TEXT NOT NULL UNIQUE,

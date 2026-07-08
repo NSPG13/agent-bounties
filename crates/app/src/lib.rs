@@ -7,15 +7,16 @@ use chain_base::{
 use chrono::{DateTime, Utc};
 use domain::{
     Agent, Bounty, BountyStatus, Capability, CapabilityClass, Claim, Escrow, EscrowStatus,
-    FundingContribution, FundingContributionStatus, FundingMode, FundingPartitionTarget,
-    HelpRequest, Id, Money, PaymentEvent, PaymentEventStatus, PaymentRail, PayoutIntent,
-    PayoutStatus, PrivacyLevel, ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent,
-    RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal,
-    VerificationDecision, VerifierKind, VerifierResult,
+    FundingContribution, FundingContributionStatus, FundingIntent, FundingIntentStatus,
+    FundingMode, FundingPartitionTarget, HelpRequest, Id, Money, PaymentEvent, PaymentEventStatus,
+    PaymentRail, PayoutIntent, PayoutStatus, PrivacyLevel, ProofRecord, Quote, ReputationEvent,
+    RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement,
+    Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{credit, debit, AccountCode, Ledger, LedgerEntry};
 use payments_stripe::{
-    evaluate_connect_payout, ConnectAccountSnapshot, ConnectPayoutState, StripeFundingCredit,
+    evaluate_connect_payout, CheckoutTopUpRequest, ConnectAccountSnapshot, ConnectPayoutState,
+    StripeFundingCredit, StripePlanner, StripeRequestIntent,
 };
 use risk::{
     BountyRiskInput, HelpRequestRiskInput, PayoutRiskInput, RiskAssessment, RiskPolicy,
@@ -67,6 +68,8 @@ pub enum AppError {
     InvalidBaseEscrowPlan(String),
     #[error("invalid funding contribution: {0}")]
     InvalidFundingContribution(String),
+    #[error("invalid funding intent: {0}")]
+    InvalidFundingIntent(String),
     #[error("invalid Stripe payout reconciliation: {0}")]
     InvalidStripePayout(String),
     #[error(transparent)]
@@ -123,6 +126,24 @@ pub struct FundingPartitionTargetRequest {
     pub rail: PaymentRail,
     pub amount_minor: i64,
     pub currency: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFundingIntentRequest {
+    pub bounty_id: Id,
+    pub contributor_agent_id: Option<Id>,
+    pub source_organization_id: Option<Id>,
+    pub amount_minor: i64,
+    pub currency: String,
+    pub rail: PaymentRail,
+    pub external_reference: Option<String>,
+    pub stripe_success_url: Option<String>,
+    pub stripe_cancel_url: Option<String>,
+    pub base_escrow_contract: Option<String>,
+    pub base_payer: Option<String>,
+    pub base_token: Option<String>,
+    #[serde(default)]
+    pub base_network: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +267,23 @@ pub struct BaseFundingPlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum FundingIntentNextAction {
+    StripeCheckout { request: StripeRequestIntent },
+    BaseEscrowFunding { plan: Box<BaseFundingPlan> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingIntentReport {
+    pub bounty: Bounty,
+    pub intent: FundingIntent,
+    pub funding_summary: PooledFundingSummary,
+    pub next_action: FundingIntentNextAction,
+    pub requires_reconciliation: bool,
+    pub reconciliation_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseReleasePlan {
     pub network: BaseNetworkDescriptor,
     pub bounty: Bounty,
@@ -294,6 +332,7 @@ pub struct BaseReleaseQueueItem {
 pub struct BountyStatusResponse {
     pub bounty: Bounty,
     pub funding_summary: PooledFundingSummary,
+    pub funding_intents: Vec<FundingIntent>,
     pub funding_contributions: Vec<FundingContribution>,
     pub escrows: Vec<Escrow>,
     pub claims: Vec<Claim>,
@@ -383,6 +422,7 @@ pub struct BaseEscrowReconciliation {
     pub event: BaseEscrowEvent,
     pub escrow: Escrow,
     pub bounty: Bounty,
+    pub funding_intents: Vec<FundingIntent>,
     pub settlements: Vec<Settlement>,
     pub ledger_entries: Vec<LedgerEntry>,
 }
@@ -430,6 +470,8 @@ pub struct StripeFundingReconciliation {
     pub funding_credit: StripeFundingCredit,
     pub duplicate: bool,
     pub ledger_entries: Vec<LedgerEntry>,
+    pub funding_intent: Option<FundingIntent>,
+    pub funding_report: Option<PooledFundingReport>,
 }
 
 #[derive(Debug)]
@@ -439,6 +481,7 @@ pub struct BountyNetwork {
     pub help_requests: HashMap<Id, HelpRequest>,
     pub quotes: HashMap<Id, Quote>,
     pub bounties: HashMap<Id, Bounty>,
+    pub funding_intents: HashMap<Id, FundingIntent>,
     pub funding_contributions: HashMap<Id, FundingContribution>,
     pub escrows: HashMap<Id, Escrow>,
     pub claims: HashMap<Id, Claim>,
@@ -463,6 +506,7 @@ impl Default for BountyNetwork {
             help_requests: HashMap::new(),
             quotes: HashMap::new(),
             bounties: HashMap::new(),
+            funding_intents: HashMap::new(),
             funding_contributions: HashMap::new(),
             escrows: HashMap::new(),
             claims: HashMap::new(),
@@ -856,6 +900,178 @@ impl BountyNetwork {
         })
     }
 
+    pub fn create_funding_intent(
+        &mut self,
+        request: CreateFundingIntentRequest,
+        platform_base_url: impl Into<String>,
+    ) -> AppResult<FundingIntentReport> {
+        let bounty = self
+            .bounties
+            .get(&request.bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .clone();
+        if let Some(agent_id) = request.contributor_agent_id {
+            if !self.agents.contains_key(&agent_id) {
+                return Err(AppError::AgentNotFound);
+            }
+        }
+        if bounty.status != BountyStatus::Unfunded && bounty.status != BountyStatus::Funded {
+            return Err(AppError::InvalidFundingIntent(format!(
+                "funding intents are closed after {:?}",
+                bounty.status
+            )));
+        }
+        if request.rail == PaymentRail::Simulated {
+            return Err(AppError::InvalidFundingIntent(
+                "funding intents are only for real payment rails".to_string(),
+            ));
+        }
+
+        let amount = Money::new(request.amount_minor, request.currency.clone())?;
+        let target =
+            self.funding_target_for_contribution(&bounty, &request.rail, &amount.currency)?;
+        let confirmed_before = self.confirmed_funding_for_target(&bounty, &target);
+        let remaining_before = target.amount.amount.saturating_sub(confirmed_before);
+        if remaining_before == 0 {
+            return Err(AppError::InvalidFundingIntent(format!(
+                "{:?} {} partition is already fully funded",
+                target.rail, target.amount.currency
+            )));
+        }
+        if amount.amount > remaining_before {
+            return Err(AppError::InvalidFundingIntent(format!(
+                "funding intent would overfund {:?} {} partition by {} {}",
+                target.rail,
+                target.amount.currency,
+                amount.amount - remaining_before,
+                amount.currency
+            )));
+        }
+
+        let external_reference = request.external_reference.clone().unwrap_or_else(|| {
+            funding_intent_reference(
+                request.bounty_id,
+                &request.rail,
+                request.source_organization_id,
+                request.contributor_agent_id,
+                &amount,
+            )
+        });
+        if self.funding_intents.values().any(|intent| {
+            intent.bounty_id == bounty.id
+                && intent.external_reference.as_deref() == Some(external_reference.as_str())
+                && intent.status != FundingIntentStatus::Rejected
+        }) {
+            return Err(AppError::InvalidFundingIntent(format!(
+                "duplicate funding intent reference: {external_reference}"
+            )));
+        }
+
+        let intent_id = funding_intent_uuid(bounty.id, &external_reference);
+        let mut intent = FundingIntent {
+            id: intent_id,
+            bounty_id: bounty.id,
+            contributor_agent_id: request.contributor_agent_id,
+            source_organization_id: request.source_organization_id,
+            rail: request.rail.clone(),
+            amount: amount.clone(),
+            status: FundingIntentStatus::AwaitingEvidence,
+            external_reference: Some(external_reference.clone()),
+            created_at: Utc::now(),
+        };
+
+        let platform_base_url = platform_base_url.into();
+        let (next_action, reconciliation_hint) = match request.rail {
+            PaymentRail::StripeFiat => {
+                let organization_id = request.source_organization_id.ok_or_else(|| {
+                    AppError::InvalidFundingIntent(
+                        "Stripe fiat funding intents require source_organization_id".to_string(),
+                    )
+                })?;
+                let success_url = request.stripe_success_url.unwrap_or_else(|| {
+                    format!("{}/stripe/success", platform_base_url.trim_end_matches('/'))
+                });
+                let cancel_url = request.stripe_cancel_url.unwrap_or_else(|| {
+                    format!("{}/stripe/cancel", platform_base_url.trim_end_matches('/'))
+                });
+                let mut checkout = StripePlanner::new(platform_base_url.clone())
+                    .checkout_top_up(&CheckoutTopUpRequest {
+                        organization_id,
+                        amount: amount.clone(),
+                        success_url,
+                        cancel_url,
+                    })
+                    .map_err(|error| AppError::InvalidFundingIntent(error.to_string()))?;
+                if let Some(metadata) = checkout
+                    .body
+                    .get_mut("metadata")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    metadata.insert("bounty_id".to_string(), serde_json::json!(bounty.id));
+                    metadata.insert(
+                        "funding_intent_id".to_string(),
+                        serde_json::json!(intent.id),
+                    );
+                    metadata.insert(
+                        "funding_intent_reference".to_string(),
+                        serde_json::json!(external_reference),
+                    );
+                    metadata.insert(
+                        "purpose".to_string(),
+                        serde_json::json!("bounty_funding_intent"),
+                    );
+                }
+                (
+                    FundingIntentNextAction::StripeCheckout { request: checkout },
+                    "Stripe intent remains pending until a verified paid Checkout webhook credits the source organization and reserves the balance into the bounty.".to_string(),
+                )
+            }
+            PaymentRail::BaseUsdc => {
+                if request.source_organization_id.is_some() {
+                    return Err(AppError::InvalidFundingIntent(
+                        "source_organization_id is only valid for Stripe fiat intents".to_string(),
+                    ));
+                }
+                if amount.amount != target.amount.amount || amount.amount != remaining_before {
+                    return Err(AppError::InvalidFundingIntent(
+                        "Base USDC funding intents must cover the full remaining Base partition for the current escrow contract".to_string(),
+                    ));
+                }
+                let plan = self.plan_base_funding(PlanBaseFundingRequest {
+                    bounty_id: bounty.id,
+                    escrow_contract: required_base_field(
+                        request.base_escrow_contract,
+                        "base_escrow_contract",
+                    )?,
+                    payer: required_base_field(request.base_payer, "base_payer")?,
+                    token: required_base_field(request.base_token, "base_token")?,
+                    network: request.base_network,
+                })?;
+                (
+                    FundingIntentNextAction::BaseEscrowFunding {
+                        plan: Box::new(plan),
+                    },
+                    "Base intent remains pending until an indexed EscrowCreated log with matching bounty, amount, and terms hash is reconciled.".to_string(),
+                )
+            }
+            PaymentRail::Simulated => unreachable!("simulated rail rejected above"),
+        };
+
+        self.funding_intents.insert(intent.id, intent.clone());
+        let funding_summary = self.funding_summary_for_bounty(&bounty);
+        Ok(FundingIntentReport {
+            bounty,
+            intent: {
+                intent.status = FundingIntentStatus::AwaitingEvidence;
+                intent
+            },
+            funding_summary,
+            next_action,
+            requires_reconciliation: true,
+            reconciliation_hint,
+        })
+    }
+
     pub fn claim_bounty(&mut self, request: ClaimBountyRequest) -> AppResult<Bounty> {
         if !self.agents.contains_key(&request.solver_agent_id) {
             return Err(AppError::AgentNotFound);
@@ -1154,6 +1370,7 @@ impl BountyNetwork {
                         ledger_entries.push(entry);
                     }
                 }
+                self.mark_matching_base_funding_intent_applied(event.bounty_id)?;
                 self.mark_bounty_claimable_if_fully_funded(event.bounty_id)?;
             }
             BaseEscrowEventKind::Released => {
@@ -1192,6 +1409,12 @@ impl BountyNetwork {
             .get(&event.bounty_id)
             .ok_or(AppError::BountyNotFound)?
             .clone();
+        let funding_intents = self
+            .funding_intents
+            .values()
+            .filter(|intent| intent.bounty_id == event.bounty_id)
+            .cloned()
+            .collect();
         let settlements = self
             .settlements
             .values()
@@ -1203,6 +1426,7 @@ impl BountyNetwork {
             event,
             escrow,
             bounty,
+            funding_intents,
             settlements,
             ledger_entries,
         })
@@ -1291,6 +1515,8 @@ impl BountyNetwork {
                 funding_credit,
                 duplicate: true,
                 ledger_entries: vec![],
+                funding_intent: None,
+                funding_report: None,
             });
         }
 
@@ -1313,11 +1539,63 @@ impl BountyNetwork {
             funding_credit.payment_event.id,
             funding_credit.payment_event.clone(),
         );
+        let mut ledger_entries = vec![entry];
+        let mut funding_intent = None;
+        let funding_report = if let (Some(intent_id), Some(bounty_id)) =
+            (funding_credit.funding_intent_id, funding_credit.bounty_id)
+        {
+            let intent = self
+                .funding_intents
+                .get(&intent_id)
+                .ok_or_else(|| {
+                    AppError::InvalidFundingIntent(format!(
+                        "Stripe webhook references unknown funding intent {intent_id}"
+                    ))
+                })?
+                .clone();
+            if intent.status != FundingIntentStatus::AwaitingEvidence {
+                return Err(AppError::InvalidFundingIntent(format!(
+                    "funding intent {intent_id} is not awaiting evidence"
+                )));
+            }
+            if intent.bounty_id != bounty_id
+                || intent.rail != PaymentRail::StripeFiat
+                || intent.amount != funding_credit.amount
+                || intent.source_organization_id != Some(funding_credit.organization_id)
+            {
+                return Err(AppError::InvalidFundingIntent(
+                    "Stripe webhook funding intent metadata does not match intent state"
+                        .to_string(),
+                ));
+            }
+            let report = self.add_funding_contribution(AddFundingContributionRequest {
+                bounty_id,
+                contributor_agent_id: intent.contributor_agent_id,
+                source_organization_id: Some(funding_credit.organization_id),
+                amount_minor: funding_credit.amount.amount,
+                currency: funding_credit.amount.currency.clone(),
+                rail: PaymentRail::StripeFiat,
+                external_reference: Some(format!(
+                    "stripe-funding-intent:{intent_id}:{}",
+                    funding_credit.checkout_session_id
+                )),
+            })?;
+            ledger_entries.extend(report.ledger_entries.clone());
+            if let Some(intent) = self.funding_intents.get_mut(&intent_id) {
+                intent.status = FundingIntentStatus::Applied;
+                funding_intent = Some(intent.clone());
+            }
+            Some(report)
+        } else {
+            None
+        };
 
         Ok(StripeFundingReconciliation {
             funding_credit,
             duplicate: false,
-            ledger_entries: vec![entry],
+            ledger_entries,
+            funding_intent,
+            funding_report,
         })
     }
 
@@ -1328,6 +1606,12 @@ impl BountyNetwork {
             .ok_or(AppError::BountyNotFound)?
             .clone();
         let funding_summary = self.funding_summary_for_bounty(&bounty);
+        let funding_intents = self
+            .funding_intents
+            .values()
+            .filter(|intent| intent.bounty_id == bounty_id)
+            .cloned()
+            .collect();
         let funding_contributions = self
             .funding_contributions
             .values()
@@ -1392,6 +1676,7 @@ impl BountyNetwork {
         Ok(BountyStatusResponse {
             bounty,
             funding_summary,
+            funding_intents,
             funding_contributions,
             escrows,
             claims,
@@ -2990,6 +3275,27 @@ impl BountyNetwork {
         Ok(())
     }
 
+    fn mark_matching_base_funding_intent_applied(&mut self, bounty_id: Id) -> AppResult<()> {
+        let bounty = self
+            .bounties
+            .get(&bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .clone();
+        let target = self.base_funding_target(&bounty)?;
+        if self.confirmed_funding_for_target(&bounty, &target) < target.amount.amount {
+            return Ok(());
+        }
+        for intent in self.funding_intents.values_mut().filter(|intent| {
+            intent.bounty_id == bounty_id
+                && intent.rail == PaymentRail::BaseUsdc
+                && intent.amount == target.amount
+                && intent.status == FundingIntentStatus::AwaitingEvidence
+        }) {
+            intent.status = FundingIntentStatus::Applied;
+        }
+        Ok(())
+    }
+
     fn mark_bounty_paid_if_all_settlements_paid(&mut self, bounty_id: Id) -> AppResult<()> {
         let all_paid = self
             .settlements
@@ -3130,6 +3436,38 @@ fn stripe_platform_balance_account(organization_id: Id) -> String {
     format!("platform_balance:{organization_id}")
 }
 
+fn funding_intent_uuid(bounty_id: Id, external_reference: &str) -> Id {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("agent-bounties:funding-intent:{bounty_id}:{external_reference}").as_bytes(),
+    )
+}
+
+fn funding_intent_reference(
+    bounty_id: Id,
+    rail: &PaymentRail,
+    source_organization_id: Option<Id>,
+    contributor_agent_id: Option<Id>,
+    amount: &Money,
+) -> String {
+    let contributor = source_organization_id
+        .map(|id| format!("org:{id}"))
+        .or_else(|| contributor_agent_id.map(|id| format!("agent:{id}")))
+        .unwrap_or_else(|| "anonymous".to_string());
+    format!(
+        "funding-intent:{bounty_id}:{rail:?}:{contributor}:{}:{}",
+        amount.currency, amount.amount
+    )
+}
+
+fn required_base_field(value: Option<String>, field: &str) -> AppResult<String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            AppError::InvalidFundingIntent(format!("{field} is required for Base USDC intents"))
+        })
+}
+
 fn parse_base_escrow_reference(reference: &Option<String>) -> AppResult<u128> {
     let value = reference.as_deref().ok_or_else(|| {
         AppError::InvalidBaseEscrowPlan("Base escrow is missing external reference".to_string())
@@ -3233,6 +3571,8 @@ mod tests {
             amount: Money::new(amount_minor, currency).unwrap(),
             checkout_session_id: format!("cs_{event_id}"),
             payment_intent_id: Some(format!("pi_{event_id}")),
+            bounty_id: None,
+            funding_intent_id: None,
             payment_event: PaymentEvent {
                 id: Uuid::new_v4(),
                 rail: PaymentRail::StripeFiat,
@@ -3242,6 +3582,248 @@ mod tests {
                 received_at: Utc::now(),
             },
         }
+    }
+
+    #[tokio::test]
+    async fn funding_intents_assign_stripe_after_webhook_and_base_after_escrow_log() {
+        let mut network = BountyNetwork::default();
+        let organization_id = Uuid::new_v4();
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                title: "Fund mixed intent bounty".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                target_amount_minor: 500,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::MixedRails,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![
+                    FundingPartitionTargetRequest {
+                        rail: PaymentRail::StripeFiat,
+                        amount_minor: 500,
+                        currency: "usd".to_string(),
+                    },
+                    FundingPartitionTargetRequest {
+                        rail: PaymentRail::BaseUsdc,
+                        amount_minor: 1_000,
+                        currency: "usdc".to_string(),
+                    },
+                ],
+            })
+            .unwrap();
+
+        let stripe_intent = network
+            .create_funding_intent(
+                CreateFundingIntentRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    source_organization_id: Some(organization_id),
+                    amount_minor: 500,
+                    currency: "usd".to_string(),
+                    rail: PaymentRail::StripeFiat,
+                    external_reference: Some("intent-stripe-500".to_string()),
+                    stripe_success_url: None,
+                    stripe_cancel_url: None,
+                    base_escrow_contract: None,
+                    base_payer: None,
+                    base_token: None,
+                    base_network: None,
+                },
+                "https://network.example",
+            )
+            .unwrap();
+        assert_eq!(
+            stripe_intent.intent.status,
+            FundingIntentStatus::AwaitingEvidence
+        );
+        assert!(stripe_intent.requires_reconciliation);
+        assert!(!stripe_intent.funding_summary.claimable);
+        let checkout = match &stripe_intent.next_action {
+            FundingIntentNextAction::StripeCheckout { request } => request,
+            FundingIntentNextAction::BaseEscrowFunding { .. } => panic!("expected Stripe action"),
+        };
+        assert_eq!(
+            checkout.body["metadata"]["funding_intent_id"],
+            stripe_intent.intent.id.to_string()
+        );
+        assert_eq!(
+            checkout.body["metadata"]["bounty_id"],
+            bounty.id.to_string()
+        );
+
+        let stripe_event = payments_stripe::StripeWebhookEvent {
+            id: "evt_intent_paid".to_string(),
+            event_type: "checkout.session.completed".to_string(),
+            payload: serde_json::json!({
+                "id": "cs_intent_paid",
+                "client_reference_id": organization_id.to_string(),
+                "amount_total": 500,
+                "currency": "usd",
+                "payment_status": "paid",
+                "payment_intent": "pi_intent_paid",
+                "metadata": {
+                    "bounty_id": bounty.id.to_string(),
+                    "funding_intent_id": stripe_intent.intent.id.to_string()
+                }
+            }),
+        };
+        let stripe_credit = payments_stripe::StripeEventDeduper::default()
+            .apply_checkout_top_up(&stripe_event)
+            .unwrap();
+        let stripe_reconciliation = network.apply_stripe_funding_credit(stripe_credit).unwrap();
+        assert!(!stripe_reconciliation.duplicate);
+        assert!(stripe_reconciliation.funding_report.is_some());
+        assert_eq!(
+            stripe_reconciliation.funding_intent.unwrap().status,
+            FundingIntentStatus::Applied
+        );
+        assert_eq!(stripe_reconciliation.ledger_entries.len(), 2);
+        assert_eq!(
+            network
+                .apply_stripe_funding_credit(stripe_reconciliation.funding_credit.clone())
+                .unwrap()
+                .duplicate,
+            true
+        );
+
+        let after_stripe = network.status(bounty.id).unwrap();
+        assert_eq!(after_stripe.bounty.status, BountyStatus::Unfunded);
+        assert!(!after_stripe.funding_summary.claimable);
+        assert_eq!(after_stripe.funding_contributions.len(), 1);
+        assert_eq!(
+            after_stripe.funding_intents[0].status,
+            FundingIntentStatus::Applied
+        );
+
+        let base_intent = network
+            .create_funding_intent(
+                CreateFundingIntentRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    source_organization_id: None,
+                    amount_minor: 1_000,
+                    currency: "usdc".to_string(),
+                    rail: PaymentRail::BaseUsdc,
+                    external_reference: Some("intent-base-1000".to_string()),
+                    stripe_success_url: None,
+                    stripe_cancel_url: None,
+                    base_escrow_contract: Some(
+                        "0x1111111111111111111111111111111111111111".to_string(),
+                    ),
+                    base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
+                    base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
+                    base_network: Some("base-sepolia".to_string()),
+                },
+                "https://network.example",
+            )
+            .unwrap();
+        assert_eq!(
+            base_intent.intent.status,
+            FundingIntentStatus::AwaitingEvidence
+        );
+        let base_plan = match &base_intent.next_action {
+            FundingIntentNextAction::BaseEscrowFunding { plan } => plan,
+            FundingIntentNextAction::StripeCheckout { .. } => panic!("expected Base action"),
+        };
+        assert_eq!(base_plan.network.chain_id, 84_532);
+        assert_eq!(
+            network.status(bounty.id).unwrap().bounty.status,
+            BountyStatus::Unfunded
+        );
+
+        let base_created = network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                bounty.id,
+                77,
+                "0x3333333333333333333333333333333333333333",
+                Money::new(1_000, "usdc").unwrap(),
+                bounty.terms_hash.clone().unwrap(),
+            ))
+            .unwrap();
+        assert!(base_created
+            .funding_intents
+            .iter()
+            .any(|intent| intent.id == base_intent.intent.id
+                && intent.status == FundingIntentStatus::Applied));
+        let claimable = network.status(bounty.id).unwrap();
+        assert_eq!(claimable.bounty.status, BountyStatus::Claimable);
+        assert!(claimable.funding_summary.claimable);
+    }
+
+    #[test]
+    fn funding_intents_reject_duplicate_reference_and_partial_base_partition() {
+        let mut network = BountyNetwork::default();
+        let organization_id = Uuid::new_v4();
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                title: "Reject bad funding intents".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                target_amount_minor: 500,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::MixedRails,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![
+                    FundingPartitionTargetRequest {
+                        rail: PaymentRail::StripeFiat,
+                        amount_minor: 500,
+                        currency: "usd".to_string(),
+                    },
+                    FundingPartitionTargetRequest {
+                        rail: PaymentRail::BaseUsdc,
+                        amount_minor: 1_000,
+                        currency: "usdc".to_string(),
+                    },
+                ],
+            })
+            .unwrap();
+
+        let stripe_request = CreateFundingIntentRequest {
+            bounty_id: bounty.id,
+            contributor_agent_id: None,
+            source_organization_id: Some(organization_id),
+            amount_minor: 500,
+            currency: "usd".to_string(),
+            rail: PaymentRail::StripeFiat,
+            external_reference: Some("duplicate-reference".to_string()),
+            stripe_success_url: None,
+            stripe_cancel_url: None,
+            base_escrow_contract: None,
+            base_payer: None,
+            base_token: None,
+            base_network: None,
+        };
+        network
+            .create_funding_intent(stripe_request.clone(), "https://network.example")
+            .unwrap();
+        assert!(matches!(
+            network
+                .create_funding_intent(stripe_request, "https://network.example")
+                .unwrap_err(),
+            AppError::InvalidFundingIntent(_)
+        ));
+
+        let err = network
+            .create_funding_intent(
+                CreateFundingIntentRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    source_organization_id: None,
+                    amount_minor: 500,
+                    currency: "usdc".to_string(),
+                    rail: PaymentRail::BaseUsdc,
+                    external_reference: Some("partial-base".to_string()),
+                    stripe_success_url: None,
+                    stripe_cancel_url: None,
+                    base_escrow_contract: Some(
+                        "0x1111111111111111111111111111111111111111".to_string(),
+                    ),
+                    base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
+                    base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
+                    base_network: Some("base-sepolia".to_string()),
+                },
+                "https://network.example",
+            )
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidFundingIntent(_)));
     }
 
     #[tokio::test]

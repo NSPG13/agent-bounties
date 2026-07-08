@@ -244,6 +244,10 @@ async function main(): Promise<void> {
     typeof endpoints.agent_paid_status === "string",
     "discovery manifest missing agent payout status endpoint",
   );
+  requireCondition(
+    typeof endpoints.bounty_funding_intents === "string",
+    "discovery manifest missing bounty funding intent endpoint",
+  );
 
   const riskPolicy = asObject(await client.getRiskPolicy(), "riskPolicy");
   requireCondition(

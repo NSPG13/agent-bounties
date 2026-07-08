@@ -2133,6 +2133,7 @@ async fn production_smoke_check(
         "route_blocked_goal",
         "request_quotes",
         "post_bounty",
+        "create_funding_intent",
         "claim_bounty",
         "submit_result",
         "request_verification",
@@ -2584,6 +2585,52 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .is_some(),
         "pooled funding contribution must link to its funding ledger entry",
     )?;
+
+    let intent_bounty = post_json(
+        &format!("{api}/v1/bounties/pooled"),
+        serde_json::json!({
+            "title": "Service smoke mixed funding intent bounty",
+            "template_slug": "extract-data-to-schema",
+            "target_amount_minor": 500,
+            "currency": "usd",
+            "funding_mode": "MixedRails",
+            "privacy": "Public",
+            "funding_targets": [
+                {"rail": "StripeFiat", "amount_minor": 500, "currency": "usd"},
+                {"rail": "BaseUsdc", "amount_minor": 1000, "currency": "usdc"}
+            ]
+        }),
+    )?;
+    let intent_bounty_id = value_str(&intent_bounty, "/id")
+        .context("funding-intent bounty id missing")?
+        .to_string();
+    let funding_intent = post_json(
+        &format!("{api}/v1/bounties/{intent_bounty_id}/funding-intents"),
+        serde_json::json!({
+            "bounty_id": intent_bounty_id.as_str(),
+            "contributor_agent_id": null,
+            "source_organization_id": smoke_id,
+            "amount_minor": 500,
+            "currency": "usd",
+            "rail": "StripeFiat",
+            "external_reference": format!("service-smoke-intent-{smoke_id}"),
+            "stripe_success_url": null,
+            "stripe_cancel_url": null,
+            "base_escrow_contract": null,
+            "base_payer": null,
+            "base_token": null,
+            "base_network": null
+        }),
+    )?;
+    require(
+        value_str(&funding_intent, "/intent/status") == Some("AwaitingEvidence"),
+        "funding intent must remain pending before payment evidence",
+    )?;
+    require(
+        value_str(&funding_intent, "/next_action/kind") == Some("StripeCheckout"),
+        "Stripe funding intent must return a Checkout next action",
+    )?;
+
     let pooled_claim = post_json(
         &format!("{api}/v1/bounties/{pooled_bounty_id}/claim"),
         serde_json::json!({
@@ -2702,6 +2749,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "route_blocked_goal",
         "search_capabilities",
         "list_claimable_bounties",
+        "create_funding_intent",
         "plan_base_log_query",
         "reconcile_base_escrow_event",
         "reconcile_base_rpc_logs",
@@ -3988,6 +4036,7 @@ fn check_agent_quickstart_contract(root: &Path, issues: &mut Vec<DocsContractIss
         "register_agent",
         "register_capability",
         "open_pooled_bounty",
+        "create_funding_intent",
         "add_bounty_funding",
         "claim_bounty",
         "submit_result",

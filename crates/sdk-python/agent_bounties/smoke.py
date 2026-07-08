@@ -196,6 +196,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         isinstance(discovery.get("endpoints", {}).get("agent_paid_status"), str),
         "discovery manifest missing agent payout status endpoint",
     )
+    _require(
+        isinstance(discovery.get("endpoints", {}).get("bounty_funding_intents"), str),
+        "discovery manifest missing bounty funding intent endpoint",
+    )
     risk_policy = client.get_risk_policy()
     _require(
         risk_policy["low_value_usdc_cap_minor"] == 10_000_000,
