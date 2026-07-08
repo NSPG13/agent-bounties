@@ -62,7 +62,7 @@ Generate the testnet operator commands:
 cargo run -p cli -- base-sepolia-runbook \
   --settlement-signer 0x5555555555555555555555555555555555555555 \
   --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --usdc-token 0x3333333333333333333333333333333333333333
+  --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 ```
 
 Run the read-only hosted smoke after deployment:
@@ -111,7 +111,7 @@ curl -sS "$PUBLIC_BASE_URL/v1/base/funding-plan" \
     "bounty_id": "00000000-0000-0000-0000-000000000001",
     "escrow_contract": "0x1111111111111111111111111111111111111111",
     "payer": "0x2222222222222222222222222222222222222222",
-    "token": "0x3333333333333333333333333333333333333333"
+    "token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
   }'
 ```
 

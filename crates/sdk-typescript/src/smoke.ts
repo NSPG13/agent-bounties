@@ -690,6 +690,30 @@ async function main(): Promise<void> {
   );
   const bountyId = stringField(bounty, "id");
 
+  const fundingFeed = asArray(await client.listPublicFundingFeed(), "fundingFeed").map((item) =>
+    asObject(item, "funding feed item"),
+  );
+  const fundingItem = fundingFeed.find((item) => item.bounty_id === bountyId);
+  requireCondition(
+    fundingItem !== undefined,
+    "unfunded Base SDK bounty missing from funding feed",
+  );
+  const fundingExamples = asArray(
+    asObject(fundingItem, "fundingItem").funding_intent_examples,
+    "fundingIntentExamples",
+  ).map((item) => asObject(item, "funding intent example"));
+  requireCondition(
+    fundingExamples.some((example) => {
+      const requestBody = asObject(example.request_body, "funding intent request body");
+      return (
+        example.rail === "BaseUsdc" &&
+        requestBody.base_network === "base-sepolia" &&
+        example.operator_reconciliation_required === true
+      );
+    }),
+    "funding feed missing Base USDC funding intent example",
+  );
+
   const fundingPlan = asObject(
     await client.planBaseFunding({
       bounty_id: bountyId,

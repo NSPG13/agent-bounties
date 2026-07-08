@@ -548,6 +548,22 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     )
     bounty_id = bounty["id"]
 
+    funding_feed = client.list_public_funding_feed()
+    funding_item = next(
+        (item for item in funding_feed if item["bounty_id"] == bounty_id),
+        None,
+    )
+    _require(funding_item is not None, "unfunded Base SDK bounty missing from funding feed")
+    _require(
+        any(
+            example["rail"] == "BaseUsdc"
+            and example["request_body"]["base_network"] == "base-sepolia"
+            and example["operator_reconciliation_required"] is True
+            for example in funding_item["funding_intent_examples"]
+        ),
+        "funding feed missing Base USDC funding intent example",
+    )
+
     funding_plan = client.plan_base_funding(
         bounty_id,
         "0x1111111111111111111111111111111111111111",

@@ -49,7 +49,9 @@ $env:BASE_SEPOLIA_RPC_URL = "https://..."
 Base Sepolia also needs:
 
 - a deployed `AgentBountyEscrow` contract,
-- a test USDC token address for the same network,
+- a test USDC token address for the same network
+  (`0x036CbD53842c5426634e7929541eC2318f3dCF7e` for native Base Sepolia
+  USDC),
 - a payer wallet with test token balance,
 - a settlement signer wallet that can call `release`, `refund`, and
   `markDisputed`.

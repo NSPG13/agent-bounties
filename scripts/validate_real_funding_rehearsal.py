@@ -14,6 +14,7 @@ from typing import Any
 
 
 EXPECTED_STRIPE_API_VERSION = "2026-02-25.clover"
+EXPECTED_BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 EXPECTED_BASE_CHAIN_ID = 84532
 
 
@@ -160,14 +161,23 @@ def check_final_settlements(report: dict[str, Any]) -> None:
 def check_readiness(readiness: dict[str, Any]) -> None:
     expect(readiness["local_rehearsal_ready"] is True, "local rehearsal must be ready")
     expect(readiness["network"] == "Base Sepolia", "readiness must describe Base Sepolia")
+    expect(readiness["network_chain_id"] == 84532, "readiness must include Base Sepolia chain id")
+    expect(
+        readiness["network_native_usdc_token_address"] == EXPECTED_BASE_SEPOLIA_USDC,
+        "readiness must include Base Sepolia native USDC token",
+    )
+    expect(
+        readiness["supplied_usdc_token_matches_native"] is True,
+        "readiness must validate supplied Base Sepolia USDC token",
+    )
     checks = {check["name"]: check for check in readiness["checks"]}
     expect(
         checks["local deterministic rehearsal"]["configured"] is True,
         "local deterministic rehearsal check must be configured",
     )
     expect(
-        checks["Base Sepolia escrow addresses"]["configured"] is True,
-        "dummy Base Sepolia escrow/token addresses must be accepted for planning",
+        checks["Base escrow addresses"]["configured"] is True,
+        "Base Sepolia escrow and native token addresses must be accepted for planning",
     )
     boundaries = "\n".join(readiness["evidence_boundaries"])
     for phrase in (
