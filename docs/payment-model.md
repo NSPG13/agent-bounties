@@ -52,6 +52,11 @@ Settlement-signing operators later call `release(uint256,address[],uint256[],byt
 checks Solidity function selectors against the contract ABI. Funding plans also
 include Base network metadata and default to `base-sepolia` unless the caller
 passes another supported network such as `base-mainnet`.
+For a posted bounty, `POST /v1/base/funding-plan` and MCP
+`plan_base_funding` return unsigned `approve(...)` and `createEscrow(...)`
+calldata bound to the bounty ID, amount, and terms hash. They do not mutate
+platform state, and they refuse to plan again after indexed Base escrow state
+already exists for that bounty.
 After an accepted Base-funded bounty has a funded escrow and pending settlement,
 operators can call `POST /v1/base/release-queue` with the escrow contract and
 platform fee wallet. The queue returns each payable Base settlement, pending

@@ -73,6 +73,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery manifest missing Base transaction receipt endpoint",
     )
     _require(
+        isinstance(discovery.get("endpoints", {}).get("base_funding_plan"), str),
+        "discovery manifest missing Base funding planning endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("base_refund_plan"), str),
         "discovery manifest missing Base refund planning endpoint",
     )
@@ -361,6 +365,27 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "BaseUsdcEscrow",
     )
     bounty_id = bounty["id"]
+
+    funding_plan = client.plan_base_funding(
+        bounty_id,
+        "0x1111111111111111111111111111111111111111",
+        "0x2222222222222222222222222222222222222222",
+        "0x3333333333333333333333333333333333333333",
+        network="base-mainnet",
+    )
+    _require(
+        funding_plan["network"]["chain_id"] == 8_453,
+        "Base funding plan did not honor explicit Base mainnet network",
+    )
+    _require(
+        funding_plan["create"]["terms_hash"] == bounty["terms_hash"],
+        "Base funding plan did not use bounty terms hash",
+    )
+    _require(
+        funding_plan["funding"]["create_escrow"]["function"]
+        == "createEscrow(bytes32,address,uint256,bytes32)",
+        "Base funding plan used the wrong createEscrow function",
+    )
 
     feed = client.list_public_bounty_feed()
     _require(

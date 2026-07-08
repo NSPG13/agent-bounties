@@ -69,6 +69,14 @@ export interface PlanBaseReleaseRequest {
   network?: string | null;
 }
 
+export interface PlanBaseFundingRequest {
+  bounty_id: string;
+  escrow_contract: string;
+  payer: string;
+  token: string;
+  network?: string | null;
+}
+
 export interface PlanBaseRefundRequest {
   bounty_id: string;
   escrow_contract: string;
@@ -475,6 +483,13 @@ export class AgentBountiesClient {
         network: request.network ?? null,
         reconcile_logs: request.reconcile_logs ?? null,
       }),
+    });
+  }
+
+  async planBaseFunding(request: PlanBaseFundingRequest): Promise<unknown> {
+    return this.request("/v1/base/funding-plan", {
+      method: "POST",
+      body: JSON.stringify(request),
     });
   }
 

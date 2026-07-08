@@ -76,6 +76,7 @@ pub struct DiscoveryEndpoints {
     pub base_fetch_rpc_logs: String,
     pub base_broadcast_signed_transaction: String,
     pub base_transaction_receipt: String,
+    pub base_funding_plan: String,
     pub base_release_queue: String,
     pub base_refund_plan: String,
     pub base_dispute_plan: String,
@@ -196,6 +197,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 "{api}/v1/base/broadcast-signed-transaction"
             ),
             base_transaction_receipt: format!("{api}/v1/base/transaction-receipt"),
+            base_funding_plan: format!("{api}/v1/base/funding-plan"),
             base_release_queue: format!("{api}/v1/base/release-queue"),
             base_refund_plan: format!("{api}/v1/base/refund-plan"),
             base_dispute_plan: format!("{api}/v1/base/dispute-plan"),
@@ -244,6 +246,14 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 endpoint: format!("{mcp}/tools/get_paid_status"),
                 description: "Check whether an accepted bounty has reached a paid settlement state."
                     .to_string(),
+            },
+            AgentEntrypoint {
+                name: "plan_base_funding".to_string(),
+                transport: "MCP-compatible HTTP JSON".to_string(),
+                endpoint: format!("{mcp}/tools/plan_base_funding"),
+                description:
+                    "Build unsigned Base USDC approval and escrow creation transactions for a posted bounty."
+                        .to_string(),
             },
             AgentEntrypoint {
                 name: "list_base_release_queue".to_string(),
@@ -353,6 +363,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Risk payout approvals: {risk_payout_approvals}
 - Risk event rejections: {risk_event_rejections}
 - Agent payout status: {agent_paid_status}
+- Base funding plan: {base_funding_plan}
 
 ## Agent Workflow
 
@@ -374,6 +385,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 
 ## Useful Payment Endpoints
 
+- Base funding plan: {base_funding_plan}
 - Base release queue: {base_release_queue}
 - Risk policy: {risk_policy}
 - Risk review events: {risk_events}
@@ -411,6 +423,7 @@ The repository is designed for agent contributors. Start with `AGENTS.md`, `READ
         risk_payout_approvals = &endpoints.risk_payout_approvals,
         risk_event_rejections = &endpoints.risk_event_rejections,
         agent_paid_status = &endpoints.agent_paid_status,
+        base_funding_plan = &endpoints.base_funding_plan,
         base_release_queue = &endpoints.base_release_queue,
         base_refund_plan = &endpoints.base_refund_plan,
         base_dispute_plan = &endpoints.base_dispute_plan,
@@ -1010,6 +1023,10 @@ mod tests {
             "https://network.example/v1/agents/{agent_id}/paid-status"
         );
         assert_eq!(
+            manifest.endpoints.base_funding_plan,
+            "https://network.example/v1/base/funding-plan"
+        );
+        assert_eq!(
             manifest.endpoints.base_release_queue,
             "https://network.example/v1/base/release-queue"
         );
@@ -1085,6 +1102,10 @@ mod tests {
             .agent_entrypoints
             .iter()
             .any(|entrypoint| entrypoint.name == "claim_bounty"));
+        assert!(manifest
+            .agent_entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint.name == "plan_base_funding"));
         assert!(manifest
             .agent_entrypoints
             .iter()

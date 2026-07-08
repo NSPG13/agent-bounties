@@ -1390,6 +1390,7 @@ async fn production_smoke_check(
         "/endpoints/risk_events",
         "/endpoints/risk_reviews",
         "/endpoints/base_release_queue",
+        "/endpoints/base_funding_plan",
         "/endpoints/risk_payout_approvals",
         "/endpoints/base_broadcast_signed_transaction",
         "/endpoints/base_transaction_receipt",
@@ -1451,6 +1452,7 @@ async fn production_smoke_check(
         "search_capabilities",
         "claim_bounty",
         "get_paid_status",
+        "plan_base_funding",
         "list_base_release_queue",
     ] {
         require(
@@ -1813,6 +1815,7 @@ async fn production_smoke_check(
         "submit_result",
         "request_verification",
         "get_paid_status",
+        "plan_base_funding",
         "list_base_release_queue",
         "execute_stripe_checkout_top_up",
         "execute_stripe_connect_account",
@@ -1970,6 +1973,10 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     require(
         discovery.pointer("/endpoints/base_release_queue").is_some(),
         "discovery manifest must include Base release queue",
+    )?;
+    require(
+        discovery.pointer("/endpoints/base_funding_plan").is_some(),
+        "discovery manifest must include Base funding planning",
     )?;
     require(
         discovery.pointer("/endpoints/base_refund_plan").is_some(),
@@ -2226,6 +2233,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "fetch_base_rpc_logs",
         "broadcast_base_signed_transaction",
         "get_base_transaction_receipt",
+        "plan_base_funding",
         "list_base_release_queue",
         "plan_base_refund",
         "plan_base_dispute",

@@ -1,8 +1,8 @@
 use bounty_router::{template_for_class, BountyRouter};
 use chain_base::{
-    base_network_descriptor, BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowRelease,
-    BaseEscrowReleaseCall, BaseEscrowTxPlanner, BaseNetworkDescriptor, EscrowRecipient,
-    EvmTransactionIntent,
+    base_network_descriptor, BaseEscrowCreate, BaseEscrowEvent, BaseEscrowEventKind,
+    BaseEscrowFundingPlan, BaseEscrowRelease, BaseEscrowReleaseCall, BaseEscrowTxPlanner,
+    BaseNetworkDescriptor, EscrowRecipient, EvmTransactionIntent,
 };
 use chrono::{DateTime, Utc};
 use domain::{
@@ -58,6 +58,8 @@ pub enum AppError {
     InvalidRiskReview(String),
     #[error("invalid base escrow event: {0}")]
     InvalidBaseEscrowEvent(String),
+    #[error("invalid Base funding plan: {0}")]
+    InvalidBaseFundingPlan(String),
     #[error("invalid Base release plan: {0}")]
     InvalidBaseReleasePlan(String),
     #[error("invalid Base escrow plan: {0}")]
@@ -158,6 +160,16 @@ pub struct VerifySubmissionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanBaseFundingRequest {
+    pub bounty_id: Id,
+    pub escrow_contract: String,
+    pub payer: String,
+    pub token: String,
+    #[serde(default)]
+    pub network: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanBaseReleaseRequest {
     pub bounty_id: Id,
     pub escrow_contract: String,
@@ -190,6 +202,14 @@ pub struct BaseReleaseQueueRequest {
     pub platform_fee_wallet: Option<String>,
     #[serde(default)]
     pub network: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseFundingPlan {
+    pub network: BaseNetworkDescriptor,
+    pub bounty: Bounty,
+    pub create: BaseEscrowCreate,
+    pub funding: BaseEscrowFundingPlan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1339,6 +1359,56 @@ impl BountyNetwork {
         Ok(review)
     }
 
+    pub fn plan_base_funding(&self, request: PlanBaseFundingRequest) -> AppResult<BaseFundingPlan> {
+        let bounty = self
+            .bounties
+            .get(&request.bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .clone();
+        if bounty.funding_mode != FundingMode::BaseUsdcEscrow {
+            return Err(AppError::InvalidBaseFundingPlan(
+                "bounty is not funded through Base USDC escrow".to_string(),
+            ));
+        }
+        if bounty.status.is_terminal() {
+            return Err(AppError::InvalidBaseFundingPlan(format!(
+                "terminal bounty cannot be funded on-chain; current status is {:?}",
+                bounty.status
+            )));
+        }
+        if self.escrows.values().any(|escrow| {
+            escrow.bounty_id == request.bounty_id && escrow.rail == PaymentRail::BaseUsdc
+        }) {
+            return Err(AppError::InvalidBaseFundingPlan(
+                "bounty already has indexed Base USDC escrow state".to_string(),
+            ));
+        }
+        let terms_hash = bounty.terms_hash.clone().ok_or_else(|| {
+            AppError::InvalidBaseFundingPlan("bounty is missing a terms hash".to_string())
+        })?;
+        let create = BaseEscrowCreate {
+            bounty_id: bounty.id,
+            payer: request.payer,
+            token: request.token,
+            amount: bounty.amount.clone(),
+            terms_hash,
+        };
+        let funding = BaseEscrowTxPlanner::new(request.escrow_contract)
+            .map_err(|error| AppError::InvalidBaseFundingPlan(error.to_string()))?
+            .plan_funding_for_network(
+                request.network.as_deref().unwrap_or("base-sepolia"),
+                &create,
+            )
+            .map_err(|error| AppError::InvalidBaseFundingPlan(error.to_string()))?;
+
+        Ok(BaseFundingPlan {
+            network: funding.network.clone(),
+            bounty,
+            create,
+            funding,
+        })
+    }
+
     pub fn plan_base_release(&self, request: PlanBaseReleaseRequest) -> AppResult<BaseReleasePlan> {
         let network = base_plan_network(request.network.as_deref(), "release")?;
         let bounty = self
@@ -2386,6 +2456,32 @@ mod tests {
         assert_eq!(status.template_signals[0].amount.amount, 1_000_000);
         assert!(status.template_signals[0].success);
 
+        let funding_plan = network
+            .plan_base_funding(PlanBaseFundingRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                payer: "0x2222222222222222222222222222222222222222".to_string(),
+                token: "0x3333333333333333333333333333333333333333".to_string(),
+                network: Some("base-mainnet".to_string()),
+            })
+            .unwrap();
+        assert_eq!(funding_plan.network.chain_id, 8_453);
+        assert_eq!(funding_plan.bounty.id, bounty.id);
+        assert_eq!(funding_plan.create.bounty_id, bounty.id);
+        assert_eq!(
+            funding_plan.create.terms_hash,
+            bounty.terms_hash.clone().unwrap()
+        );
+        assert_eq!(
+            funding_plan.funding.create_escrow.function,
+            "createEscrow(bytes32,address,uint256,bytes32)"
+        );
+        assert!(funding_plan
+            .funding
+            .create_escrow
+            .data
+            .contains(&bounty.id.simple().to_string()));
+
         let created = chain_base::simulated_created_event(
             bounty.id,
             1,
@@ -2394,6 +2490,18 @@ mod tests {
             bounty.terms_hash.clone().unwrap(),
         );
         network.apply_base_escrow_event(created).unwrap();
+        assert!(matches!(
+            network
+                .plan_base_funding(PlanBaseFundingRequest {
+                    bounty_id: bounty.id,
+                    escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                    payer: "0x2222222222222222222222222222222222222222".to_string(),
+                    token: "0x3333333333333333333333333333333333333333".to_string(),
+                    network: None,
+                })
+                .unwrap_err(),
+            AppError::InvalidBaseFundingPlan(_)
+        ));
         let queue = network.list_base_release_queue(BaseReleaseQueueRequest {
             escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
             platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),

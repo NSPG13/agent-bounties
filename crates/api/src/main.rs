@@ -1,9 +1,9 @@
 use app::{
     hash_artifact, ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseEscrowReconciliation,
     BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
-    CreateHelpRequestRequest, FundQuoteRequest, PlanBaseDisputeRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest, PostBountyRequest, QuoteSet, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest,
+    PlanBaseRefundRequest, PlanBaseReleaseRequest, PostBountyRequest, QuoteSet,
+    RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
@@ -90,6 +90,7 @@ use worker::BaseEscrowLogWorker;
         reconcile_base_rpc_logs,
         broadcast_base_signed_transaction,
         get_base_transaction_receipt,
+        plan_base_funding,
         list_base_release_queue,
         plan_stripe_checkout_top_up,
         plan_stripe_connect_account,
@@ -456,6 +457,7 @@ async fn main() -> anyhow::Result<()> {
             post(get_base_transaction_receipt),
         )
         .route("/v1/base/log-query", post(plan_base_log_query))
+        .route("/v1/base/funding-plan", post(plan_base_funding))
         .route("/v1/base/release-queue", post(list_base_release_queue))
         .route("/v1/base/release-plan", post(plan_base_release))
         .route("/v1/base/refund-plan", post(plan_base_refund))
@@ -1526,6 +1528,18 @@ async fn plan_base_log_query(
     .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[utoipa::path(post, path = "/v1/base/funding-plan", responses((status = 200, description = "Unsigned Base escrow funding transaction plan")))]
+async fn plan_base_funding(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanBaseFundingRequest>,
+) -> Result<Json<app::BaseFundingPlan>, StatusCode> {
+    let network = state.network.lock().expect("state poisoned");
+    network
+        .plan_base_funding(request)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
 #[utoipa::path(post, path = "/v1/base/release-plan", responses((status = 200, description = "Unsigned Base escrow release transaction plan")))]
 async fn plan_base_release(
     State(state): State<SharedState>,
@@ -2336,6 +2350,76 @@ mod tests {
     };
 
     type TestHmacSha256 = Hmac<Sha256>;
+
+    #[tokio::test]
+    async fn base_funding_plan_endpoint_builds_bounty_bound_transactions() {
+        let mut network = BountyNetwork::default();
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Fund API bounty on Base".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        let state = test_state(network);
+
+        let funding_plan = plan_base_funding(
+            State(state.clone()),
+            Json(PlanBaseFundingRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                payer: "0x2222222222222222222222222222222222222222".to_string(),
+                token: "0x3333333333333333333333333333333333333333".to_string(),
+                network: Some("base-mainnet".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(funding_plan.network.chain_id, 8_453);
+        assert_eq!(funding_plan.bounty.id, bounty.id);
+        assert_eq!(
+            funding_plan.create.terms_hash,
+            bounty.terms_hash.clone().unwrap()
+        );
+        assert_eq!(funding_plan.funding.network.chain_id, 8_453);
+        assert_eq!(
+            funding_plan.funding.approve.function,
+            "approve(address,uint256)"
+        );
+        assert_eq!(
+            funding_plan.funding.create_escrow.function,
+            "createEscrow(bytes32,address,uint256,bytes32)"
+        );
+
+        let created = chain_base::simulated_created_event(
+            bounty.id,
+            7,
+            "0x3333333333333333333333333333333333333333",
+            bounty.amount.clone(),
+            bounty.terms_hash.clone().unwrap(),
+        );
+        let _ = reconcile_base_escrow_event(State(state.clone()), HeaderMap::new(), Json(created))
+            .await
+            .unwrap();
+        let rejected = plan_base_funding(
+            State(state),
+            Json(PlanBaseFundingRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                payer: "0x2222222222222222222222222222222222222222".to_string(),
+                token: "0x3333333333333333333333333333333333333333".to_string(),
+                network: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(rejected, StatusCode::BAD_REQUEST);
+    }
 
     #[tokio::test]
     async fn raw_base_evm_log_endpoint_marks_bounty_paid() {

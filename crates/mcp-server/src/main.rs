@@ -1,8 +1,8 @@
 use app::{
     ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseReleaseQueueRequest, BountyNetwork,
     ClaimBountyRequest, CreateHelpRequestRequest, FundQuoteRequest, PlanBaseDisputeRequest,
-    PlanBaseRefundRequest, PlanBaseReleaseRequest, PostBountyRequest, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest, PostBountyRequest,
+    RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
@@ -334,6 +334,7 @@ async fn main() -> anyhow::Result<()> {
             post(get_base_transaction_receipt),
         )
         .route("/tools/plan_base_log_query", post(plan_base_log_query))
+        .route("/tools/plan_base_funding", post(plan_base_funding))
         .route(
             "/tools/list_base_release_queue",
             post(list_base_release_queue),
@@ -769,6 +770,20 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "request_id": nullable_integer_property("Optional JSON-RPC request id.")
                 }),
                 &["escrow_contract", "from_block"],
+            ),
+        ),
+        tool(
+            "plan_base_funding",
+            "Build unsigned Base USDC approve and createEscrow transactions for a posted bounty.",
+            object_tool_schema(
+                json!({
+                    "bounty_id": uuid_property("Base USDC bounty UUID to fund on-chain."),
+                    "escrow_contract": string_property("Escrow contract EVM address."),
+                    "payer": string_property("Payer EVM address that will approve USDC and create escrow."),
+                    "token": string_property("USDC token EVM address on the selected Base network."),
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
+                }),
+                &["bounty_id", "escrow_contract", "payer", "token"],
             ),
         ),
         tool(
@@ -1985,6 +2000,17 @@ async fn list_base_release_queue(
     mcp_json(network.list_base_release_queue(args))
 }
 
+async fn plan_base_funding(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanBaseFundingRequest>,
+) -> Json<serde_json::Value> {
+    let network = state.network.lock().expect("state poisoned");
+    match network.plan_base_funding(args) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn plan_base_release(
     State(state): State<SharedState>,
     Json(args): Json<PlanBaseReleaseRequest>,
@@ -2417,6 +2443,23 @@ mod tests {
             .unwrap()
             .required_when
             .contains("reconcile_logs=true"));
+
+        let plan_base_funding = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_base_funding")
+            .expect("plan_base_funding descriptor exists");
+        assert!(plan_base_funding.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "payer"));
+        assert!(
+            plan_base_funding.input_schema["properties"]["network"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "base-mainnet")
+        );
 
         let plan_base_refund = descriptors
             .iter()

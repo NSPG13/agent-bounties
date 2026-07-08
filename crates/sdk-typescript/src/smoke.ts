@@ -124,6 +124,10 @@ async function main(): Promise<void> {
     "discovery manifest missing Base transaction receipt endpoint",
   );
   requireCondition(
+    typeof endpoints.base_funding_plan === "string",
+    "discovery manifest missing Base funding planning endpoint",
+  );
+  requireCondition(
     typeof endpoints.base_refund_plan === "string",
     "discovery manifest missing Base refund planning endpoint",
   );
@@ -487,6 +491,30 @@ async function main(): Promise<void> {
     "bounty",
   );
   const bountyId = stringField(bounty, "id");
+
+  const fundingPlan = asObject(
+    await client.planBaseFunding({
+      bounty_id: bountyId,
+      escrow_contract: "0x1111111111111111111111111111111111111111",
+      payer: "0x2222222222222222222222222222222222222222",
+      token: "0x3333333333333333333333333333333333333333",
+      network: "base-mainnet",
+    }),
+    "fundingPlan",
+  );
+  requireCondition(
+    asObject(fundingPlan.network, "fundingPlan.network").chain_id === 8_453,
+    "Base funding plan did not honor explicit Base mainnet network",
+  );
+  requireCondition(
+    asObject(fundingPlan.create, "fundingPlan.create").terms_hash === stringField(bounty, "terms_hash"),
+    "Base funding plan did not use bounty terms hash",
+  );
+  requireCondition(
+    asObject(asObject(fundingPlan.funding, "fundingPlan.funding").create_escrow, "fundingPlan.create_escrow")
+      .function === "createEscrow(bytes32,address,uint256,bytes32)",
+    "Base funding plan used the wrong createEscrow function",
+  );
 
   const feed = asArray(await client.listPublicBountyFeed(), "feed").map((item) =>
     asObject(item, "feed item"),

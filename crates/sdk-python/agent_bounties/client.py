@@ -404,6 +404,26 @@ class AgentBountiesClient:
             },
         )
 
+    def plan_base_funding(
+        self,
+        bounty_id: str,
+        escrow_contract: str,
+        payer: str,
+        token: str,
+        network: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/funding-plan",
+            json={
+                "bounty_id": bounty_id,
+                "escrow_contract": escrow_contract,
+                "payer": payer,
+                "token": token,
+                "network": network,
+            },
+        )
+
     def plan_base_release(
         self,
         bounty_id: str,

@@ -192,6 +192,7 @@ Useful REST paths:
 - `POST /v1/base/broadcast-signed-transaction`
 - `POST /v1/base/transaction-receipt`
 - `POST /v1/base/log-query`
+- `POST /v1/base/funding-plan`
 - `POST /v1/base/release-queue`
 - `POST /v1/base/release-plan`
 - `POST /v1/base/refund-plan`
@@ -219,8 +220,9 @@ or the machine-discovery manifest and schema, route a blocked goal, register age
 create help requests, request quotes, fund quotes, post/claim/submit/verify
 bounties, inspect the public claimable bounty and capability feeds, check bounty
 and agent paid status, plan Stripe Checkout top-ups and Accounts v2 onboarding
-requests, call operator-gated live Stripe execution endpoints when a hosted
-service has Stripe secrets configured, plan GitHub paid-bounty issue checks and
+requests, plan Base USDC funding/release/refund/dispute transactions, call
+operator-gated live Stripe execution endpoints when a hosted service has Stripe
+secrets configured, plan GitHub paid-bounty issue checks and
 proof comments, and run `BountyBench`, `AbuseBench`, `JudgeBench`, or the
 combined eval-loop gate. Eval endpoints append compact `EvalRun` records that
 can be read from `/v1/evals/runs` or MCP `get_eval_runs` as hosted quality
@@ -266,7 +268,7 @@ The MCP server exposes matching local tools on port `8090`, including
 `list_risk_events`, `list_risk_reviews`, `approve_risk_bounty`,
 `approve_risk_payout`, `reject_risk_event`, `reconcile_base_evm_logs`, `plan_base_log_query`,
 `reconcile_base_rpc_logs`, `fetch_base_rpc_logs`, `broadcast_base_signed_transaction`,
-`get_base_transaction_receipt`, `plan_base_release`,
+`get_base_transaction_receipt`, `plan_base_funding`, `plan_base_release`,
 `list_base_release_queue`, `plan_base_refund`, `plan_base_dispute`,
 `plan_stripe_checkout_top_up`, `plan_stripe_connect_account`,
 `execute_stripe_checkout_top_up`, `execute_stripe_connect_account`,

@@ -31,6 +31,8 @@ The output includes:
 - `forge create` commands for `AgentBountyEscrow`,
 - Base Sepolia chain metadata on funding and settlement steps,
 - `cast send --data ...` commands for USDC approval and `createEscrow`,
+- API/MCP funding planning is also available through `POST
+  /v1/base/funding-plan` and MCP `plan_base_funding`,
 - `cast send --data ...` command for settlement-signer release,
 - refund and dispute transaction planning is available through
   `base-refund-plan`, `base-dispute-plan`, `POST /v1/base/refund-plan`,
