@@ -2258,6 +2258,60 @@ fn public_bounty_page_model(
         .filter(|proof| proof.privacy != PrivacyLevel::Private)
         .map(|proof| format!("{api}/public/proofs/{}", proof.id))
         .collect();
+    let public_url = format!("{api}/public/bounties/{}", bounty.id);
+    let funding_partitions = status
+        .funding_summary
+        .partitions
+        .iter()
+        .map(|partition| web_public::PublicFundingPartition {
+            rail: format!("{:?}", partition.rail),
+            target_minor: partition.target.amount,
+            confirmed_minor: partition.confirmed.amount,
+            remaining_minor: partition.remaining.amount,
+            currency: partition.target.currency.clone(),
+            contribution_count: partition.contribution_count,
+            escrow_count: partition.escrow_count,
+            claimable: partition.claimable,
+        })
+        .collect();
+    let verifier_result_links = status
+        .verifier_results
+        .iter()
+        .map(|result| web_public::PublicBountyRecordLink {
+            label: format!(
+                "{:?} {:?} verifier result {}",
+                result.kind, result.decision, result.id
+            ),
+            url: format!("{public_url}#verifier-results"),
+        })
+        .collect();
+    let settlement_links = status
+        .settlements
+        .iter()
+        .map(|settlement| {
+            let paid_payouts = settlement
+                .payout_intents
+                .iter()
+                .filter(|intent| intent.status == PayoutStatus::Paid)
+                .count();
+            let total_payouts = settlement.payout_intents.len();
+            web_public::PublicBountyRecordLink {
+                label: format!(
+                    "{:?} settlement {} ({paid_payouts}/{total_payouts} payouts paid)",
+                    settlement.rail, settlement.id
+                ),
+                url: format!("{public_url}#settlements"),
+            }
+        })
+        .collect();
+    let template_signal_links = status
+        .template_signals
+        .iter()
+        .map(|signal| web_public::PublicBountyRecordLink {
+            label: format!("{} template signal {}", signal.template_slug, signal.id),
+            url: format!("{api}/public/templates/{}", signal.template_slug),
+        })
+        .collect();
     web_public::PublicBountyPage {
         bounty_id: bounty.id.to_string(),
         title: bounty.title.clone(),
@@ -2275,12 +2329,16 @@ fn public_bounty_page_model(
         funding_applied_minor: status.funding_summary.applied.amount,
         funding_remaining_minor: status.funding_summary.remaining.amount,
         contribution_count: status.funding_summary.contribution_count,
-        public_url: format!("{api}/public/bounties/{}", bounty.id),
+        public_url,
         claim_url: format!("{api}/v1/bounties/{}/claim", bounty.id),
         status_url: format!("{api}/v1/bounties/{}", bounty.id),
         template_url: format!("{api}/public/templates/{}", bounty.template_slug),
         funding_contribution_url: format!("{api}/v1/bounties/{}/funding-contributions", bounty.id),
         proof_urls,
+        funding_partitions,
+        verifier_result_links,
+        settlement_links,
+        template_signal_links,
     }
 }
 
@@ -3878,12 +3936,67 @@ mod tests {
 
         assert!(html.contains("Fix public &lt;CI&gt;"));
         assert!(html.contains("Funding State"));
+        assert!(html.contains("Funding partitions"));
         assert!(html.contains("application/ld+json"));
+        assert!(html.contains("agent-bounty-public-status"));
         assert!(html.contains("Machine status"));
-        assert!(html.contains("Add funding"));
+        assert!(html.contains(r#"data-agent-action="claim""#));
+        assert!(!html.contains("Add funding"));
+        assert!(!html.contains(r#"rel="payment""#));
         assert!(html.contains(&format!("/public/bounties/{}", bounty.id)));
         assert!(html.contains(&format!("/v1/bounties/{}/claim", bounty.id)));
+        assert!(!html.contains(&format!("/v1/bounties/{}/funding-contributions", bounty.id)));
+    }
+
+    #[tokio::test]
+    async fn public_bounty_detail_exposes_cofunding_while_target_remains() {
+        let state = test_state(BountyNetwork::default());
+        let bounty = open_pooled_bounty(
+            State(state.clone()),
+            Json(OpenPooledBountyRequest {
+                title: "Fund shared public work".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let partial = add_funding_contribution(
+            State(state.clone()),
+            Path(bounty.id),
+            Json(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                source_organization_id: None,
+                amount_minor: 400_000,
+                currency: "USDC".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("partial-public-page".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(partial.bounty.status, BountyStatus::Unfunded);
+        assert_eq!(partial.funding_summary.remaining.amount, 600_000);
+
+        let html = public_bounty_page(State(state), Path(bounty.id))
+            .await
+            .unwrap()
+            .0;
+
+        assert!(html.contains("partially funded"));
+        assert!(html.contains("Co-funding command:"));
+        assert!(html.contains("/agent-bounty fund 0.6 USDC via Simulated"));
+        assert!(html.contains(r#"rel="payment""#));
+        assert!(html.contains(r#"data-agent-action="add_funding""#));
         assert!(html.contains(&format!("/v1/bounties/{}/funding-contributions", bounty.id)));
+        assert!(!html.contains(r#"data-agent-action="claim""#));
     }
 
     #[tokio::test]

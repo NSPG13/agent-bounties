@@ -3599,9 +3599,12 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     require(
         public_bounty_page.contains("Funding State")
             && public_bounty_page.contains("application/ld+json")
+            && public_bounty_page.contains("agent-bounty-public-status")
             && public_bounty_page.contains("Machine status")
-            && public_bounty_page.contains("Add funding"),
-        "public bounty detail page must expose funding state and machine-readable actions",
+            && public_bounty_page.contains(r#"data-agent-action="claim""#)
+            && !public_bounty_page.contains("Add funding")
+            && !public_bounty_page.contains(r#"rel="payment""#),
+        "public funded bounty detail page must expose claim/status actions without unsafe funding links",
     )?;
 
     let mcp_discovery = get_json(&format!("{mcp}/.well-known/agent-bounties.json"))?;
