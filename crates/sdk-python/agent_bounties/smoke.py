@@ -58,8 +58,16 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery schema must require the GitHub bounty issue template endpoint",
     )
     _require(
+        "base_escrow_events" in endpoint_required,
+        "discovery schema must require the Base escrow event endpoint",
+    )
+    _require(
         isinstance(discovery.get("endpoints", {}).get("base_fetch_rpc_logs"), str),
         "discovery manifest missing Base RPC fetch endpoint",
+    )
+    _require(
+        isinstance(discovery.get("endpoints", {}).get("base_escrow_events"), str),
+        "discovery manifest missing Base escrow event reconciliation endpoint",
     )
     _require(
         isinstance(

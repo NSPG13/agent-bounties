@@ -112,8 +112,16 @@ async function main(): Promise<void> {
     "discovery schema must require the GitHub bounty issue template endpoint",
   );
   requireCondition(
+    endpointRequired.includes("base_escrow_events"),
+    "discovery schema must require the Base escrow event endpoint",
+  );
+  requireCondition(
     typeof endpoints.base_fetch_rpc_logs === "string",
     "discovery manifest missing Base RPC fetch endpoint",
+  );
+  requireCondition(
+    typeof endpoints.base_escrow_events === "string",
+    "discovery manifest missing Base escrow event reconciliation endpoint",
   );
   requireCondition(
     typeof endpoints.base_broadcast_signed_transaction === "string",
