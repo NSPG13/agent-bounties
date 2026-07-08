@@ -507,9 +507,10 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 json!({
                     "bounty_id": uuid_property("Pooled bounty UUID."),
                     "contributor_agent_id": nullable_uuid_property("Optional contributor agent UUID."),
+                    "source_organization_id": nullable_uuid_property("Stripe-funded organization balance to reserve from when rail is StripeFiat."),
                     "amount_minor": integer_property("Contribution amount in minor units."),
                     "currency": string_property("Currency code."),
-                    "rail": enum_property(&["Simulated", "StripeFiat"], "Funding rail for this contribution."),
+                    "rail": enum_property(&["Simulated", "StripeFiat"], "Funding rail for this contribution. StripeFiat requires source_organization_id and verified Checkout top-up balance."),
                     "external_reference": nullable_string_property("Optional per-bounty idempotency reference from the funding rail.")
                 }),
                 &["bounty_id", "amount_minor", "currency", "rail"],
@@ -2604,6 +2605,10 @@ mod tests {
             .expect("add_bounty_funding descriptor exists");
         assert_eq!(
             add_funding.input_schema["properties"]["bounty_id"]["format"],
+            "uuid"
+        );
+        assert_eq!(
+            add_funding.input_schema["properties"]["source_organization_id"]["format"],
             "uuid"
         );
         assert!(add_funding.input_schema["required"]

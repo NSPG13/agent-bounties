@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS funding_contributions (
   id UUID PRIMARY KEY,
   bounty_id UUID NOT NULL REFERENCES bounties(id),
   contributor_agent_id UUID REFERENCES agents(id),
+  source_organization_id UUID,
   rail TEXT NOT NULL,
   amount BIGINT NOT NULL CHECK (amount > 0),
   currency TEXT NOT NULL,
@@ -73,6 +74,8 @@ CREATE TABLE IF NOT EXISTS funding_contributions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE funding_contributions
+  ADD COLUMN IF NOT EXISTS source_organization_id UUID;
 ALTER TABLE funding_contributions
   ADD COLUMN IF NOT EXISTS funding_ledger_entry_id UUID;
 ALTER TABLE funding_contributions

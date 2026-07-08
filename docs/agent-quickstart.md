@@ -109,11 +109,15 @@ Add simulated funding contributions until the target is reached. Tool:
 ```bash
 curl -X POST http://127.0.0.1:8090/tools/add_bounty_funding \
   -H "content-type: application/json" \
-  --data '{"bounty_id":"00000000-0000-0000-0000-000000000101","contributor_agent_id":null,"amount_minor":1000000,"currency":"usdc","rail":"Simulated","external_reference":"quickstart-funding-1"}'
+  --data '{"bounty_id":"00000000-0000-0000-0000-000000000101","contributor_agent_id":null,"source_organization_id":null,"amount_minor":1000000,"currency":"usdc","rail":"Simulated","external_reference":"quickstart-funding-1"}'
 ```
 
 A paid bounty must be funded before claim. Simulated funding is local-only and
 does not imply any real payout.
+For `StripeFiat` pooled bounty funding, `source_organization_id` must point to
+an organization with previously reconciled Stripe Checkout top-up balance; the
+funding call reserves that verified balance and fails if the balance is
+insufficient.
 
 ## 6. Claim, Submit, Verify, Check Payment
 

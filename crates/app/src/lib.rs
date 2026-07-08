@@ -13,7 +13,7 @@ use domain::{
     RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal, VerificationDecision,
     VerifierKind, VerifierResult,
 };
-use ledger::{credit, debit, Ledger, LedgerEntry};
+use ledger::{credit, debit, AccountCode, Ledger, LedgerEntry};
 use payments_stripe::{
     evaluate_connect_payout, ConnectAccountSnapshot, ConnectPayoutState, StripeFundingCredit,
 };
@@ -109,6 +109,7 @@ pub struct OpenPooledBountyRequest {
 pub struct AddFundingContributionRequest {
     pub bounty_id: Id,
     pub contributor_agent_id: Option<Id>,
+    pub source_organization_id: Option<Id>,
     pub amount_minor: i64,
     pub currency: String,
     pub rail: PaymentRail,
@@ -644,6 +645,7 @@ impl BountyNetwork {
             id: Uuid::new_v4(),
             bounty_id: bounty.id,
             contributor_agent_id: None,
+            source_organization_id: None,
             rail: payment_rail_for_funding_mode(&funding_mode),
             amount,
             status: FundingContributionStatus::Applied,
@@ -715,6 +717,21 @@ impl BountyNetwork {
                 request.rail, bounty.funding_mode
             )));
         }
+        match (request.rail.clone(), request.source_organization_id) {
+            (PaymentRail::StripeFiat, None) => {
+                return Err(AppError::InvalidFundingContribution(
+                    "Stripe fiat bounty funding must name a source organization with verified platform balance".to_string(),
+                ));
+            }
+            (PaymentRail::StripeFiat, Some(_)) => {}
+            (_, Some(_)) => {
+                return Err(AppError::InvalidFundingContribution(
+                    "source organization balance is only valid for Stripe fiat contributions"
+                        .to_string(),
+                ));
+            }
+            _ => {}
+        }
         let amount = Money::new(request.amount_minor, request.currency)?;
         if amount.currency != bounty.amount.currency {
             return Err(AppError::InvalidFundingContribution(format!(
@@ -753,9 +770,22 @@ impl BountyNetwork {
         let contributor_agent_id = request.contributor_agent_id;
         let rail = request.rail;
         let external_reference = request.external_reference;
-        let contributor_account = contributor_agent_id
-            .map(|id| format!("contributor_funds:{id}"))
-            .unwrap_or_else(|| "external_contributor_funds".to_string());
+        let source_organization_id = request.source_organization_id;
+        let contributor_account = if let Some(organization_id) = source_organization_id {
+            let available =
+                self.stripe_platform_balance_available_minor(organization_id, &amount.currency);
+            if available < amount.amount {
+                return Err(AppError::InvalidFundingContribution(format!(
+                    "insufficient Stripe platform balance for organization {organization_id}: available {} {}, requested {} {}",
+                    available, amount.currency, amount.amount, amount.currency
+                )));
+            }
+            stripe_platform_balance_account(organization_id)
+        } else {
+            contributor_agent_id
+                .map(|id| format!("contributor_funds:{id}"))
+                .unwrap_or_else(|| "external_contributor_funds".to_string())
+        };
         let entry = LedgerEntry::new(
             "pooled bounty funding contribution",
             Some(format!("fund-contribution:{contribution_id}")),
@@ -769,6 +799,7 @@ impl BountyNetwork {
             id: contribution_id,
             bounty_id: bounty.id,
             contributor_agent_id,
+            source_organization_id,
             rail,
             amount: amount.clone(),
             status: FundingContributionStatus::Applied,
@@ -2723,6 +2754,14 @@ impl BountyNetwork {
             .sum()
     }
 
+    fn stripe_platform_balance_available_minor(&self, organization_id: Id, currency: &str) -> i64 {
+        let balance = self.ledger.balance(
+            &AccountCode::new(stripe_platform_balance_account(organization_id)),
+            currency,
+        );
+        (-balance).max(0)
+    }
+
     fn has_funded_base_escrow(&self, bounty_id: Id) -> bool {
         self.escrows.values().any(|escrow| {
             escrow.bounty_id == bounty_id
@@ -2741,6 +2780,10 @@ fn base_escrow_uuid(bounty_id: Id, onchain_escrow_id: u128) -> Id {
 
 fn base_escrow_reference(onchain_escrow_id: u128) -> String {
     format!("base:{onchain_escrow_id}")
+}
+
+fn stripe_platform_balance_account(organization_id: Id) -> String {
+    format!("platform_balance:{organization_id}")
 }
 
 fn parse_base_escrow_reference(reference: &Option<String>) -> AppResult<u128> {
@@ -2833,6 +2876,28 @@ mod tests {
                 bounty.terms_hash.clone().unwrap(),
             ))
             .unwrap()
+    }
+
+    fn stripe_funding_credit(
+        organization_id: Id,
+        amount_minor: i64,
+        currency: &str,
+        event_id: &str,
+    ) -> StripeFundingCredit {
+        StripeFundingCredit {
+            organization_id,
+            amount: Money::new(amount_minor, currency).unwrap(),
+            checkout_session_id: format!("cs_{event_id}"),
+            payment_intent_id: Some(format!("pi_{event_id}")),
+            payment_event: PaymentEvent {
+                id: Uuid::new_v4(),
+                rail: PaymentRail::StripeFiat,
+                external_id: event_id.to_string(),
+                status: PaymentEventStatus::Applied,
+                payload_hash: hash_artifact(event_id),
+                received_at: Utc::now(),
+            },
+        }
     }
 
     #[tokio::test]
@@ -3113,6 +3178,7 @@ mod tests {
             .add_funding_contribution(AddFundingContributionRequest {
                 bounty_id: bounty.id,
                 contributor_agent_id: Some(sponsor_a.id),
+                source_organization_id: None,
                 amount_minor: 400,
                 currency: "USDC".to_string(),
                 rail: PaymentRail::Simulated,
@@ -3135,6 +3201,7 @@ mod tests {
             .add_funding_contribution(AddFundingContributionRequest {
                 bounty_id: bounty.id,
                 contributor_agent_id: Some(sponsor_b.id),
+                source_organization_id: None,
                 amount_minor: 600,
                 currency: "usdc".to_string(),
                 rail: PaymentRail::Simulated,
@@ -3187,6 +3254,7 @@ mod tests {
             .add_funding_contribution(AddFundingContributionRequest {
                 bounty_id: bounty.id,
                 contributor_agent_id: Some(sponsor.id),
+                source_organization_id: None,
                 amount_minor: 1_000,
                 currency: "usdc".to_string(),
                 rail: PaymentRail::Simulated,
@@ -3252,6 +3320,7 @@ mod tests {
             .add_funding_contribution(AddFundingContributionRequest {
                 bounty_id: bounty.id,
                 contributor_agent_id: None,
+                source_organization_id: None,
                 amount_minor: 700,
                 currency: "usdc".to_string(),
                 rail: PaymentRail::Simulated,
@@ -3263,6 +3332,7 @@ mod tests {
                 .add_funding_contribution(AddFundingContributionRequest {
                     bounty_id: bounty.id,
                     contributor_agent_id: None,
+                    source_organization_id: None,
                     amount_minor: 100,
                     currency: "usdc".to_string(),
                     rail: PaymentRail::Simulated,
@@ -3276,6 +3346,7 @@ mod tests {
                 .add_funding_contribution(AddFundingContributionRequest {
                     bounty_id: bounty.id,
                     contributor_agent_id: None,
+                    source_organization_id: None,
                     amount_minor: 400,
                     currency: "usdc".to_string(),
                     rail: PaymentRail::Simulated,
@@ -3290,6 +3361,128 @@ mod tests {
         assert_eq!(status.funding_summary.applied.amount, 700);
         assert_eq!(status.funding_summary.remaining.amount, 300);
         assert!(!status.funding_summary.claimable);
+    }
+
+    #[test]
+    fn stripe_pooled_funding_requires_verified_platform_balance() {
+        let mut network = BountyNetwork::default();
+        let organization_id = Uuid::new_v4();
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                title: "Fund fiat-backed docs work".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::StripeFiatLedger,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+
+        assert!(matches!(
+            network
+                .add_funding_contribution(AddFundingContributionRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    source_organization_id: None,
+                    amount_minor: 500,
+                    currency: "usd".to_string(),
+                    rail: PaymentRail::StripeFiat,
+                    external_reference: Some("unbacked".to_string()),
+                })
+                .unwrap_err(),
+            AppError::InvalidFundingContribution(_)
+        ));
+        assert!(matches!(
+            network
+                .add_funding_contribution(AddFundingContributionRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    source_organization_id: Some(organization_id),
+                    amount_minor: 500,
+                    currency: "usd".to_string(),
+                    rail: PaymentRail::StripeFiat,
+                    external_reference: Some("insufficient".to_string()),
+                })
+                .unwrap_err(),
+            AppError::InvalidFundingContribution(_)
+        ));
+
+        network
+            .apply_stripe_funding_credit(stripe_funding_credit(
+                organization_id,
+                700,
+                "usd",
+                "evt_topup_700",
+            ))
+            .unwrap();
+        assert_eq!(
+            network.stripe_platform_balance_available_minor(organization_id, "usd"),
+            700
+        );
+
+        let partial = network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                source_organization_id: Some(organization_id),
+                amount_minor: 700,
+                currency: "usd".to_string(),
+                rail: PaymentRail::StripeFiat,
+                external_reference: Some("stripe-700".to_string()),
+            })
+            .unwrap();
+        assert_eq!(partial.bounty.status, BountyStatus::Unfunded);
+        assert_eq!(partial.funding_summary.remaining.amount, 300);
+        assert_eq!(
+            partial.contribution.source_organization_id,
+            Some(organization_id)
+        );
+        assert_eq!(
+            network.stripe_platform_balance_available_minor(organization_id, "usd"),
+            0
+        );
+
+        assert!(matches!(
+            network
+                .add_funding_contribution(AddFundingContributionRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    source_organization_id: Some(organization_id),
+                    amount_minor: 300,
+                    currency: "usd".to_string(),
+                    rail: PaymentRail::StripeFiat,
+                    external_reference: Some("stripe-300-before-topup".to_string()),
+                })
+                .unwrap_err(),
+            AppError::InvalidFundingContribution(_)
+        ));
+
+        network
+            .apply_stripe_funding_credit(stripe_funding_credit(
+                organization_id,
+                300,
+                "usd",
+                "evt_topup_300",
+            ))
+            .unwrap();
+        let funded = network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                source_organization_id: Some(organization_id),
+                amount_minor: 300,
+                currency: "usd".to_string(),
+                rail: PaymentRail::StripeFiat,
+                external_reference: Some("stripe-300".to_string()),
+            })
+            .unwrap();
+
+        assert_eq!(funded.bounty.status, BountyStatus::Claimable);
+        assert!(funded.funding_summary.claimable);
+        assert_eq!(
+            network.stripe_platform_balance_available_minor(organization_id, "usd"),
+            0
+        );
     }
 
     #[tokio::test]
@@ -3537,18 +3730,38 @@ mod tests {
     #[tokio::test]
     async fn stripe_fiat_settlement_blocks_payout_until_connect_eligible() {
         let mut network = BountyNetwork::default();
+        let organization_id = Uuid::new_v4();
         let solver = network.register_agent(RegisterAgentRequest {
             handle: "solver".to_string(),
             payout_wallet: None,
         });
         let bounty = network
-            .post_funded_bounty(PostBountyRequest {
+            .open_pooled_bounty(OpenPooledBountyRequest {
                 title: "Summarize private notes".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
-                amount_minor: 5_000,
+                target_amount_minor: 5_000,
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Private,
+            })
+            .unwrap();
+        network
+            .apply_stripe_funding_credit(stripe_funding_credit(
+                organization_id,
+                5_000,
+                "usd",
+                "evt_private_notes_topup",
+            ))
+            .unwrap();
+        network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                source_organization_id: Some(organization_id),
+                amount_minor: 5_000,
+                currency: "usd".to_string(),
+                rail: PaymentRail::StripeFiat,
+                external_reference: Some("stripe-private-notes".to_string()),
             })
             .unwrap();
 
@@ -3587,7 +3800,12 @@ mod tests {
             status.settlements[0].payout_intents[0].status,
             PayoutStatus::Blocked
         );
-        assert_eq!(network.ledger.entries().len(), 1);
+        assert_eq!(status.funding_contributions.len(), 1);
+        assert_eq!(
+            status.funding_contributions[0].source_organization_id,
+            Some(organization_id)
+        );
+        assert_eq!(network.ledger.entries().len(), 2);
 
         let blocked = network
             .apply_stripe_connect_snapshot(ConnectAccountSnapshot {
@@ -3623,7 +3841,7 @@ mod tests {
             status.settlements[0].payout_intents[0].status,
             PayoutStatus::Paid
         );
-        assert_eq!(network.ledger.entries().len(), 3);
+        assert_eq!(network.ledger.entries().len(), 4);
 
         let replay = network
             .apply_stripe_connect_snapshot(ConnectAccountSnapshot {
@@ -3635,7 +3853,7 @@ mod tests {
             })
             .unwrap();
         assert!(replay.ledger_entries.is_empty());
-        assert_eq!(network.ledger.entries().len(), 3);
+        assert_eq!(network.ledger.entries().len(), 4);
     }
 
     #[test]

@@ -266,6 +266,7 @@ class AgentBountiesClient:
         currency: str,
         rail: str,
         contributor_agent_id: str | None = None,
+        source_organization_id: str | None = None,
         external_reference: str | None = None,
     ):
         return self._request(
@@ -274,6 +275,7 @@ class AgentBountiesClient:
             json={
                 "bounty_id": bounty_id,
                 "contributor_agent_id": contributor_agent_id,
+                "source_organization_id": source_organization_id,
                 "amount_minor": amount_minor,
                 "currency": currency,
                 "rail": rail,

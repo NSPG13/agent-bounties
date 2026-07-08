@@ -627,6 +627,7 @@ fn pooled_funding_demo() -> Result<()> {
     let first = network.add_funding_contribution(AddFundingContributionRequest {
         bounty_id: bounty.id,
         contributor_agent_id: Some(sponsor_a.id),
+        source_organization_id: None,
         amount_minor: 400_000,
         currency: "usdc".to_string(),
         rail: PaymentRail::Simulated,
@@ -635,6 +636,7 @@ fn pooled_funding_demo() -> Result<()> {
     let second = network.add_funding_contribution(AddFundingContributionRequest {
         bounty_id: bounty.id,
         contributor_agent_id: Some(sponsor_b.id),
+        source_organization_id: None,
         amount_minor: 600_000,
         currency: "usdc".to_string(),
         rail: PaymentRail::Simulated,
@@ -2327,6 +2329,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         serde_json::json!({
             "bounty_id": pooled_bounty_id.as_str(),
             "contributor_agent_id": null,
+            "source_organization_id": null,
             "amount_minor": 1_000,
             "currency": "usdc",
             "rail": "Simulated",

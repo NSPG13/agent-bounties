@@ -23,6 +23,15 @@ single-escrow rail: Base bounties still become claimable only after an indexed
 `EscrowCreated` event for the full bounty amount. Multi-contributor Base escrow
 support requires a contract and ABI upgrade.
 
+For `StripeFiatLedger` pooled bounties, each `StripeFiat` contribution must
+include `source_organization_id`. The platform accepts the contribution only
+when that organization has enough verified Stripe Checkout top-up balance in the
+ledger. The contribution reserves balance by debiting
+`platform_balance:{organization_id}` and crediting the bounty liability. This
+means a Checkout Session request, issue comment, or funding intention cannot
+make fiat work claimable; only a reconciled paid Checkout webhook can create the
+balance that a later funding contribution reserves.
+
 ## Base USDC
 
 Base USDC escrow is the lowest-friction open payout rail. A bounty must be funded
@@ -270,6 +279,9 @@ is set for local or mock-provider simulation. Paid `checkout.session.completed`
 events create a durable `PaymentEvent` and an idempotent ledger credit from
 Stripe cash to the organization's platform balance. Replayed event IDs return a
 duplicate result and do not create another ledger entry.
+Pooled fiat bounty funding then consumes that verified balance through
+`source_organization_id` on `POST /v1/bounties/{id}/funding-contributions` or
+MCP `add_bounty_funding`; the call fails if the available balance is too low.
 
 Generate a local Stripe request plan without secrets:
 
