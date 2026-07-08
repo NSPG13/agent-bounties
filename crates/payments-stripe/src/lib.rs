@@ -44,6 +44,7 @@ pub const STRIPE_API_VERSION: &str = "2026-02-25.clover";
 pub const STRIPE_API_BASE_URL: &str = "https://api.stripe.com";
 pub const CHECKOUT_SESSIONS_ENDPOINT: &str = "/v1/checkout/sessions";
 pub const CONNECT_ACCOUNTS_V2_ENDPOINT: &str = "/v2/core/accounts";
+pub const CONNECT_TRANSFERS_ENDPOINT: &str = "/v1/transfers";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckoutTopUpRequest {
@@ -182,6 +183,30 @@ pub struct ConnectAccountSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectTransferRequest {
+    pub bounty_id: Id,
+    pub proof_record_id: Id,
+    pub settlement_id: Id,
+    pub payout_intent_id: Id,
+    pub agent_id: Id,
+    pub connected_account_id: String,
+    pub amount: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectTransferEvidence {
+    pub transfer_id: String,
+    pub connected_account_id: String,
+    pub bounty_id: Id,
+    pub proof_record_id: Id,
+    pub settlement_id: Id,
+    pub payout_intent_id: Id,
+    pub agent_id: Id,
+    pub amount: Money,
+    pub payment_event: PaymentEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectAccountV2CreateIntent {
     pub agent_id: Id,
     pub request: StripeRequestIntent,
@@ -282,6 +307,38 @@ impl StripePlanner {
                     }
                 }),
             },
+        })
+    }
+
+    pub fn connect_transfer(
+        &self,
+        request: &ConnectTransferRequest,
+    ) -> Result<StripeRequestIntent, StripeIntegrationError> {
+        validate_minimum_charge(&request.amount)?;
+        if request.connected_account_id.trim().is_empty() {
+            return Err(StripeIntegrationError::MissingField(
+                "connected_account_id".to_string(),
+            ));
+        }
+        Ok(StripeRequestIntent {
+            method: "POST".to_string(),
+            endpoint: CONNECT_TRANSFERS_ENDPOINT.to_string(),
+            api_version: STRIPE_API_VERSION.to_string(),
+            idempotency_key: format!("connect_transfer:{}", request.payout_intent_id),
+            body: serde_json::json!({
+                "amount": request.amount.amount,
+                "currency": request.amount.currency,
+                "destination": request.connected_account_id,
+                "transfer_group": format!("bounty:{}", request.bounty_id),
+                "metadata": {
+                    "purpose": "agent_bounty_fiat_payout",
+                    "bounty_id": request.bounty_id.to_string(),
+                    "proof_record_id": request.proof_record_id.to_string(),
+                    "settlement_id": request.settlement_id.to_string(),
+                    "payout_intent_id": request.payout_intent_id.to_string(),
+                    "agent_id": request.agent_id.to_string()
+                }
+            }),
         })
     }
 }
@@ -470,6 +527,7 @@ impl StripeEventDeduper {
 
         if event.event_type != "checkout.session.completed"
             && event.event_type != "payment_intent.succeeded"
+            && event.event_type != "transfer.created"
         {
             return Err(StripeIntegrationError::UnsupportedEvent(
                 event.event_type.clone(),
@@ -531,6 +589,56 @@ impl StripeEventDeduper {
             payment_event,
         })
     }
+
+    pub fn apply_connect_transfer(
+        &mut self,
+        event: &StripeWebhookEvent,
+    ) -> Result<ConnectTransferEvidence, StripeIntegrationError> {
+        if event.event_type != "transfer.created" {
+            return Err(StripeIntegrationError::UnsupportedEvent(
+                event.event_type.clone(),
+            ));
+        }
+        let object = stripe_event_object(&event.payload);
+        let transfer_id = get_string(object, "id")?;
+        let connected_account_id = get_string(object, "destination")?;
+        let amount = get_i64(object, "amount")?;
+        let currency = get_string(object, "currency")?;
+        let bounty_id = required_metadata_uuid(object, "bounty_id")?;
+        let proof_record_id = required_metadata_uuid(object, "proof_record_id")?;
+        let settlement_id = required_metadata_uuid(object, "settlement_id")?;
+        let payout_intent_id = required_metadata_uuid(object, "payout_intent_id")?;
+        let agent_id = required_metadata_uuid(object, "agent_id")?;
+        let payment_event = self.apply(event)?;
+
+        Ok(ConnectTransferEvidence {
+            transfer_id,
+            connected_account_id,
+            bounty_id,
+            proof_record_id,
+            settlement_id,
+            payout_intent_id,
+            agent_id,
+            amount: Money::new(amount, currency)
+                .map_err(|_| StripeIntegrationError::InvalidField("amount".to_string()))?,
+            payment_event,
+        })
+    }
+}
+
+fn stripe_event_object(payload: &serde_json::Value) -> &serde_json::Value {
+    payload
+        .get("data")
+        .and_then(|data| data.get("object"))
+        .unwrap_or(payload)
+}
+
+fn required_metadata_uuid(
+    payload: &serde_json::Value,
+    key: &str,
+) -> Result<Id, StripeIntegrationError> {
+    metadata_uuid(payload, key)?
+        .ok_or_else(|| StripeIntegrationError::MissingField(format!("metadata.{key}")))
 }
 
 fn metadata_uuid(
@@ -932,6 +1040,83 @@ mod tests {
             agent_id.to_string()
         );
         assert_eq!(intent.request.body["dashboard"]["type"], "express");
+    }
+
+    #[test]
+    fn connect_transfer_intent_carries_payout_metadata() {
+        let bounty_id = Uuid::new_v4();
+        let proof_record_id = Uuid::new_v4();
+        let settlement_id = Uuid::new_v4();
+        let payout_intent_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let planner = StripePlanner::new("https://agentbounties.test");
+
+        let intent = planner
+            .connect_transfer(&ConnectTransferRequest {
+                bounty_id,
+                proof_record_id,
+                settlement_id,
+                payout_intent_id,
+                agent_id,
+                connected_account_id: "acct_test_transfer".to_string(),
+                amount: Money::new(4_500, "usd").unwrap(),
+            })
+            .unwrap();
+
+        assert_eq!(intent.endpoint, CONNECT_TRANSFERS_ENDPOINT);
+        assert_eq!(
+            intent.idempotency_key,
+            format!("connect_transfer:{payout_intent_id}")
+        );
+        assert_eq!(intent.body["amount"], 4_500);
+        assert_eq!(intent.body["destination"], "acct_test_transfer");
+        assert_eq!(intent.body["metadata"]["bounty_id"], bounty_id.to_string());
+        assert_eq!(
+            intent.body["metadata"]["payout_intent_id"],
+            payout_intent_id.to_string()
+        );
+    }
+
+    #[test]
+    fn transfer_event_creates_payout_evidence_once() {
+        let bounty_id = Uuid::new_v4();
+        let proof_record_id = Uuid::new_v4();
+        let settlement_id = Uuid::new_v4();
+        let payout_intent_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let event = StripeWebhookEvent {
+            id: "evt_transfer_created".to_string(),
+            event_type: "transfer.created".to_string(),
+            payload: serde_json::json!({
+                "id": "tr_test_paid",
+                "destination": "acct_test_transfer",
+                "amount": 4_500,
+                "currency": "usd",
+                "metadata": {
+                    "bounty_id": bounty_id.to_string(),
+                    "proof_record_id": proof_record_id.to_string(),
+                    "settlement_id": settlement_id.to_string(),
+                    "payout_intent_id": payout_intent_id.to_string(),
+                    "agent_id": agent_id.to_string()
+                }
+            }),
+        };
+        let mut deduper = StripeEventDeduper::default();
+
+        let evidence = deduper.apply_connect_transfer(&event).unwrap();
+
+        assert_eq!(evidence.transfer_id, "tr_test_paid");
+        assert_eq!(evidence.connected_account_id, "acct_test_transfer");
+        assert_eq!(evidence.bounty_id, bounty_id);
+        assert_eq!(evidence.proof_record_id, proof_record_id);
+        assert_eq!(evidence.settlement_id, settlement_id);
+        assert_eq!(evidence.payout_intent_id, payout_intent_id);
+        assert_eq!(evidence.agent_id, agent_id);
+        assert_eq!(evidence.amount, Money::new(4_500, "usd").unwrap());
+        assert_eq!(
+            deduper.apply_connect_transfer(&event).unwrap_err(),
+            StripeIntegrationError::DuplicateEvent
+        );
     }
 
     #[test]

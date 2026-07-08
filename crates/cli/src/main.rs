@@ -3,8 +3,8 @@ use app::{
     hash_artifact, AddFundingContributionRequest, BaseReleaseQueueRequest, BountyNetwork,
     ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
     FundingIntentNextAction, FundingPartitionTargetRequest, OpenPooledBountyRequest,
-    PlanBaseReleaseRequest, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
-    RequestQuotesRequest, SubmitResultRequest, VerifySubmissionRequest,
+    PlanBaseReleaseRequest, PlanStripeTransferRequest, PostBountyRequest, RegisterAgentRequest,
+    RegisterCapabilityRequest, RequestQuotesRequest, SubmitResultRequest, VerifySubmissionRequest,
 };
 use chain_base::{
     base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
@@ -909,13 +909,54 @@ async fn funding_rehearsal_demo() -> Result<()> {
         77,
         proof.proof_hash.clone(),
     ))?;
-    let stripe_payout = network.apply_stripe_connect_snapshot(ConnectAccountSnapshot {
-        agent_id: solver.id,
-        connected_account_id: Some("acct_test_funding_rehearsal".to_string()),
-        payouts_enabled: true,
-        disabled_reason: None,
-        currently_due: vec![],
-    })?;
+    let stripe_connect_eligibility =
+        network.apply_stripe_connect_snapshot(ConnectAccountSnapshot {
+            agent_id: solver.id,
+            connected_account_id: Some("acct_test_funding_rehearsal".to_string()),
+            payouts_enabled: true,
+            disabled_reason: None,
+            currently_due: vec![],
+        })?;
+    let after_connect_status = network.status(bounty.id)?;
+    let stripe_settlement = after_connect_status
+        .settlements
+        .iter()
+        .find(|settlement| settlement.rail == PaymentRail::StripeFiat)
+        .cloned()
+        .context("missing Stripe settlement after deterministic verification")?;
+    let stripe_payout_intent = stripe_settlement
+        .payout_intents
+        .first()
+        .cloned()
+        .context("missing Stripe payout intent after deterministic verification")?;
+    let stripe_transfer_plan = network.plan_stripe_transfer(
+        PlanStripeTransferRequest {
+            payout_intent_id: stripe_payout_intent.id,
+            connected_account_id: "acct_test_funding_rehearsal".to_string(),
+        },
+        platform_url.clone(),
+    )?;
+    let stripe_transfer_event = StripeWebhookEvent {
+        id: "evt_test_funding_rehearsal_transfer".to_string(),
+        event_type: "transfer.created".to_string(),
+        payload: serde_json::json!({
+            "id": "tr_test_funding_rehearsal_solver",
+            "destination": "acct_test_funding_rehearsal",
+            "amount": stripe_payout_intent.amount.amount,
+            "currency": stripe_payout_intent.amount.currency,
+            "metadata": {
+                "bounty_id": stripe_settlement.bounty_id.to_string(),
+                "proof_record_id": stripe_settlement.proof_record_id.to_string(),
+                "settlement_id": stripe_settlement.id.to_string(),
+                "payout_intent_id": stripe_payout_intent.id.to_string(),
+                "agent_id": stripe_payout_intent.recipient_agent_id.to_string()
+            }
+        }),
+    };
+    let stripe_transfer_evidence =
+        StripeEventDeduper::default().apply_connect_transfer(&stripe_transfer_event)?;
+    let stripe_transfer_reconciliation =
+        network.apply_stripe_transfer_evidence(stripe_transfer_evidence)?;
     let final_status = network.status(bounty.id)?;
 
     println!(
@@ -928,7 +969,8 @@ async fn funding_rehearsal_demo() -> Result<()> {
                 "Base USDC funding is claimable only after indexed EscrowCreated reconciliation.",
                 "Deterministic digest verification creates settlement intents.",
                 "Base payout is paid only after indexed EscrowReleased reconciliation.",
-                "Stripe payout is paid only after Connect eligibility reconciliation."
+                "Stripe Connect eligibility does not pay a bounty.",
+                "Stripe payout is paid only after transfer.created reconciliation."
             ],
             "stripe": {
                 "funding_intent": stripe_intent.intent,
@@ -936,7 +978,10 @@ async fn funding_rehearsal_demo() -> Result<()> {
                 "webhook_event_id": stripe_webhook.id,
                 "funding_reconciliation": stripe_reconciliation,
                 "funding_contribution": stripe_contribution,
-                "payout_reconciliation": stripe_payout
+                "connect_eligibility": stripe_connect_eligibility,
+                "transfer_plan": stripe_transfer_plan,
+                "transfer_event_id": stripe_transfer_event.id,
+                "transfer_reconciliation": stripe_transfer_reconciliation
             },
             "base": {
                 "funding_intent": base_intent.intent,
@@ -950,7 +995,7 @@ async fn funding_rehearsal_demo() -> Result<()> {
                 "Complete the Stripe test Checkout or replay a signed checkout.session.completed webhook carrying bounty_id and funding_intent_id metadata.",
                 "Sign and send the Base Sepolia approve and createEscrow transactions from the Base funding plan, then reconcile indexed EscrowCreated logs.",
                 "After deterministic verification, sign and send the Base release plan, then reconcile the indexed EscrowReleased log.",
-                "Reconcile Stripe Connect eligibility before treating fiat payout intents as paid."
+                "Reconcile Stripe Connect eligibility, execute the transfer_plan with a sk_test key, then reconcile the transfer.created event before treating fiat payout intents as paid."
             ],
             "proof": proof,
             "final_bounty": final_status.bounty,
@@ -2769,7 +2814,10 @@ async fn production_smoke_check(
         "/v1/base/transaction-receipt",
         "/v1/stripe/live/checkout-top-ups",
         "/v1/stripe/live/connect-accounts",
+        "/v1/stripe/live/connect-transfers",
+        "/v1/stripe/connect-transfers",
         "/v1/stripe/connect-snapshots",
+        "/v1/stripe/transfer-events",
         "/v1/stripe/checkout-webhooks",
         "/v1/github/funding-comment-plan",
         "/v1/github/proof-comment-plan-from-proof",
@@ -2808,6 +2856,7 @@ async fn production_smoke_check(
         "/v1/base/broadcast-signed-transaction",
         "/v1/stripe/live/checkout-top-ups",
         "/v1/stripe/live/connect-accounts",
+        "/v1/stripe/live/connect-transfers",
         "/v1/stripe/connect-snapshots",
     ] {
         let operation = paths
@@ -3013,8 +3062,10 @@ async fn production_smoke_check(
         "get_paid_status",
         "plan_base_funding",
         "list_base_release_queue",
+        "plan_stripe_connect_transfer",
         "execute_stripe_checkout_top_up",
         "execute_stripe_connect_account",
+        "execute_stripe_connect_transfer",
         "list_risk_events",
         "list_risk_reviews",
         "approve_risk_bounty",
@@ -3033,7 +3084,9 @@ async fn production_smoke_check(
     for expected in [
         "execute_stripe_checkout_top_up",
         "execute_stripe_connect_account",
+        "execute_stripe_connect_transfer",
         "reconcile_stripe_connect_snapshot",
+        "reconcile_stripe_transfer_event",
         "reconcile_stripe_checkout_webhook",
         "reconcile_base_escrow_event",
         "reconcile_base_evm_logs",
@@ -3638,8 +3691,10 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "plan_base_dispute",
         "plan_stripe_checkout_top_up",
         "plan_stripe_connect_account",
+        "plan_stripe_connect_transfer",
         "execute_stripe_checkout_top_up",
         "execute_stripe_connect_account",
+        "execute_stripe_connect_transfer",
         "plan_github_issue_bounty",
         "plan_github_funding_comment",
         "plan_github_proof_comment",

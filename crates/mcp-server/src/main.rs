@@ -3,9 +3,9 @@ use app::{
     BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest, CreateFundingIntentRequest,
     CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, OpenPooledBountyRequest,
     PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
-    PooledFundingReport, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
-    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
-    SubmitResultRequest, VerifySubmissionRequest,
+    PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest, RegisterAgentRequest,
+    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
     extract::State,
@@ -159,6 +159,12 @@ struct PlanStripeCheckoutTopUpArgs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanStripeConnectAccountArgs {
     agent_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanStripeConnectTransferArgs {
+    payout_intent_id: Uuid,
+    connected_account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,6 +324,10 @@ async fn main() -> anyhow::Result<()> {
             post(plan_stripe_connect_account),
         )
         .route(
+            "/tools/plan_stripe_connect_transfer",
+            post(plan_stripe_connect_transfer),
+        )
+        .route(
             "/tools/execute_stripe_checkout_top_up",
             post(execute_stripe_checkout_top_up),
         )
@@ -326,8 +336,16 @@ async fn main() -> anyhow::Result<()> {
             post(execute_stripe_connect_account),
         )
         .route(
+            "/tools/execute_stripe_connect_transfer",
+            post(execute_stripe_connect_transfer),
+        )
+        .route(
             "/tools/reconcile_stripe_connect_snapshot",
             post(reconcile_stripe_connect_snapshot),
+        )
+        .route(
+            "/tools/reconcile_stripe_transfer_event",
+            post(reconcile_stripe_transfer_event),
         )
         .route(
             "/tools/reconcile_stripe_checkout_webhook",
@@ -726,6 +744,17 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 &["agent_id"],
             ),
         ),
+        tool(
+            "plan_stripe_connect_transfer",
+            "Build a Stripe Connect transfer request intent for a specific fiat payout intent. The transfer must still be executed and reconciled from Stripe evidence before payout is marked paid.",
+            object_tool_schema(
+                json!({
+                    "payout_intent_id": uuid_property("Stripe fiat payout intent UUID from bounty status."),
+                    "connected_account_id": string_property("Stripe connected account ID receiving the transfer.")
+                }),
+                &["payout_intent_id", "connected_account_id"],
+            ),
+        ),
         operator_tool(
             "execute_stripe_checkout_top_up",
             "Create a live Stripe Checkout Session for funding a fiat platform balance when operator-enabled.",
@@ -751,6 +780,18 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
         operator_tool(
+            "execute_stripe_connect_transfer",
+            "Execute a Stripe Connect transfer for a fiat payout intent when operator-enabled. The payout is still marked paid only after transfer event reconciliation.",
+            object_tool_schema(
+                json!({
+                    "payout_intent_id": uuid_property("Stripe fiat payout intent UUID from bounty status."),
+                    "connected_account_id": string_property("Stripe connected account ID receiving the transfer.")
+                }),
+                &["payout_intent_id", "connected_account_id"],
+            ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
+        ),
+        operator_tool(
             "reconcile_stripe_connect_snapshot",
             "Apply Stripe Connect payout eligibility to blocked fiat payout intents.",
             object_tool_schema(
@@ -768,6 +809,19 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "disabled_reason",
                     "currently_due",
                 ],
+            ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
+        ),
+        operator_tool(
+            "reconcile_stripe_transfer_event",
+            "Apply a Stripe transfer.created event as fiat payout evidence for a payout intent.",
+            object_tool_schema(
+                json!({
+                    "id": string_property("Stripe transfer event ID."),
+                    "type": string_property("Stripe event type, usually transfer.created."),
+                    "payload": object_property("Normalized Stripe transfer payload with payout metadata.")
+                }),
+                &["id", "type", "payload"],
             ),
             OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
@@ -1834,6 +1888,32 @@ fn stripe_connect_account_intent(
     StripePlanner::new("http://127.0.0.1:8080").connect_account_v2(args.agent_id)
 }
 
+async fn plan_stripe_connect_transfer(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanStripeConnectTransferArgs>,
+) -> Json<serde_json::Value> {
+    match stripe_connect_transfer_plan(&state, args) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+fn stripe_connect_transfer_plan(
+    state: &SharedState,
+    args: PlanStripeConnectTransferArgs,
+) -> Result<app::StripeTransferPlan, app::AppError> {
+    let platform_base_url =
+        env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+    let network = state.network.lock().expect("state poisoned");
+    network.plan_stripe_transfer(
+        PlanStripeTransferRequest {
+            payout_intent_id: args.payout_intent_id,
+            connected_account_id: args.connected_account_id,
+        },
+        platform_base_url,
+    )
+}
+
 async fn execute_stripe_checkout_top_up(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1862,6 +1942,21 @@ async fn execute_stripe_connect_account(
         Err(error) => return mcp_error(error),
     };
     execute_stripe_intent(&state, intent).await
+}
+
+async fn execute_stripe_connect_transfer(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(args): Json<PlanStripeConnectTransferArgs>,
+) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
+    let plan = match stripe_connect_transfer_plan(&state, args) {
+        Ok(plan) => plan,
+        Err(error) => return mcp_error(error),
+    };
+    execute_stripe_intent(&state, plan.request).await
 }
 
 async fn execute_stripe_intent(
@@ -1908,6 +2003,51 @@ async fn reconcile_stripe_connect_snapshot(
         }
         for settlement in &reconciliation.settlements {
             if let Err(error) = store.upsert_settlement(settlement).await {
+                return mcp_error(error);
+            }
+        }
+        if let Err(error) = persist_ledger_entries(store, &reconciliation.ledger_entries).await {
+            return mcp_error(error);
+        }
+    }
+    mcp_json(reconciliation)
+}
+
+async fn reconcile_stripe_transfer_event(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(args): Json<StripeWebhookEvent>,
+) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
+    let evidence = match StripeEventDeduper::default().apply_connect_transfer(&args) {
+        Ok(evidence) => evidence,
+        Err(error) => return mcp_error(error),
+    };
+    let reconciliation = {
+        let mut network = state.network.lock().expect("state poisoned");
+        match network.apply_stripe_transfer_evidence(evidence) {
+            Ok(reconciliation) => reconciliation,
+            Err(error) => return mcp_error(error),
+        }
+    };
+    if let Some(store) = &state.store {
+        if !reconciliation.duplicate {
+            if let Err(error) = store
+                .upsert_payment_event(&reconciliation.evidence.payment_event)
+                .await
+            {
+                return mcp_error(error);
+            }
+        }
+        if let Some(settlement) = &reconciliation.settlement {
+            if let Err(error) = store.upsert_settlement(settlement).await {
+                return mcp_error(error);
+            }
+        }
+        if let Some(bounty) = &reconciliation.bounty {
+            if let Err(error) = store.upsert_bounty(bounty).await {
                 return mcp_error(error);
             }
         }
@@ -2645,7 +2785,9 @@ mod tests {
         let operator_tools = [
             "execute_stripe_checkout_top_up",
             "execute_stripe_connect_account",
+            "execute_stripe_connect_transfer",
             "reconcile_stripe_connect_snapshot",
+            "reconcile_stripe_transfer_event",
             "reconcile_stripe_checkout_webhook",
             "reconcile_base_evm_logs",
             "reconcile_base_rpc_logs",
@@ -2702,6 +2844,16 @@ mod tests {
             execute_stripe_connect.input_schema["properties"]["agent_id"]["format"],
             "uuid"
         );
+
+        let plan_stripe_transfer = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_stripe_connect_transfer")
+            .expect("plan_stripe_connect_transfer descriptor exists");
+        assert!(plan_stripe_transfer.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "payout_intent_id"));
 
         let plan_github_issue = descriptors
             .iter()
