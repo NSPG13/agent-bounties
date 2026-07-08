@@ -26,8 +26,8 @@ use db::PostgresStore;
 use domain::{Agent, CapabilityClass, EvalRun, HelpRequest, Money, PrivacyLevel, RiskReviewRecord};
 use eval_harness::{EvalSuiteResult, LoopSuiteResult};
 use github_app::{
-    bounty_check_output, funding_comment_plan, parse_issue_form_bounty, proof_comment_plan,
-    GitHubFundingCommentInput, GitHubProofComment,
+    bounty_check_output, claim_comment_plan, funding_comment_plan, parse_issue_form_bounty,
+    proof_comment_plan, GitHubClaimCommentInput, GitHubFundingCommentInput, GitHubProofComment,
 };
 use ledger::Ledger;
 use payments_stripe::{
@@ -186,6 +186,21 @@ struct PlanGitHubFundingCommentArgs {
     comment_id: Option<String>,
     #[serde(default)]
     existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanGitHubClaimCommentArgs {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
+    claim_age_minutes: Option<u64>,
+    #[serde(default)]
+    progress_signal_count: u32,
+    active_claim_login: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -358,6 +373,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_github_funding_comment",
             post(plan_github_funding_comment),
+        )
+        .route(
+            "/tools/plan_github_claim_comment",
+            post(plan_github_claim_comment),
         )
         .route(
             "/tools/plan_github_proof_comment",
@@ -864,6 +883,25 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "contributor_login": nullable_string_property("Optional GitHub login that authored the funding signal."),
                     "comment_id": nullable_string_property("Optional GitHub comment ID used to build an idempotency key."),
                     "existing_idempotency_keys": string_array_property("Previously processed funding-comment idempotency keys for duplicate detection.")
+                }),
+                &["repository", "issue_url", "title", "body", "comment_body"],
+            ),
+        ),
+        tool(
+            "plan_github_claim_comment",
+            "Parse a GitHub public claim or attempt comment into a reservation, stale-release, or review signal without authorizing settlement.",
+            object_tool_schema(
+                json!({
+                    "repository": string_property("GitHub repository, for example owner/repo."),
+                    "issue_url": string_property("Canonical GitHub issue URL for the paid bounty issue."),
+                    "title": string_property("Issue title."),
+                    "body": string_property("Rendered issue form markdown body."),
+                    "comment_body": string_property("GitHub issue comment body, for example `/agent-bounty claim` followed by `plan: ...`."),
+                    "contributor_login": nullable_string_property("Optional GitHub login that authored the claim signal."),
+                    "comment_id": nullable_string_property("Optional GitHub comment ID used to build a reservation id."),
+                    "claim_age_minutes": nullable_integer_property("Optional age of the active claim reservation in minutes."),
+                    "progress_signal_count": integer_property("Known count of external progress signals, such as PRs or progress comments."),
+                    "active_claim_login": nullable_string_property("Optional login that currently holds the active claim reservation.")
                 }),
                 &["repository", "issue_url", "title", "body", "comment_body"],
             ),
@@ -2151,6 +2189,23 @@ async fn plan_github_funding_comment(
     }))
 }
 
+async fn plan_github_claim_comment(
+    Json(args): Json<PlanGitHubClaimCommentArgs>,
+) -> Json<serde_json::Value> {
+    mcp_json(claim_comment_plan(GitHubClaimCommentInput {
+        repository: args.repository,
+        issue_url: args.issue_url,
+        title: args.title,
+        body: args.body,
+        comment_body: args.comment_body,
+        contributor_login: args.contributor_login,
+        comment_id: args.comment_id,
+        claim_age_minutes: args.claim_age_minutes,
+        progress_signal_count: args.progress_signal_count,
+        active_claim_login: args.active_claim_login,
+    }))
+}
+
 async fn plan_github_proof_comment(
     Json(args): Json<PlanGitHubProofCommentArgs>,
 ) -> Json<serde_json::Value> {
@@ -2879,6 +2934,20 @@ mod tests {
             "array"
         );
 
+        let plan_github_claim = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_github_claim_comment")
+            .expect("plan_github_claim_comment descriptor exists");
+        assert!(plan_github_claim.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "comment_body"));
+        assert_eq!(
+            plan_github_claim.input_schema["properties"]["progress_signal_count"]["type"],
+            "integer"
+        );
+
         let plan_github_proof = descriptors
             .iter()
             .find(|descriptor| descriptor.name == "plan_github_proof_comment")
@@ -3197,6 +3266,34 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "note"));
+    }
+
+    #[tokio::test]
+    async fn github_claim_comment_planner_rejects_claim_without_progress() {
+        let response = plan_github_claim_comment(Json(PlanGitHubClaimCommentArgs {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/58".to_string(),
+            title: "[bounty]: Add stale-claim controls".to_string(),
+            body: valid_github_issue_body(),
+            comment_body:
+                "/agent-bounty claim\nI'm reviewing the codebase and will open a PR shortly."
+                    .to_string(),
+            contributor_login: Some("claim-bot".to_string()),
+            comment_id: Some("789".to_string()),
+            claim_age_minutes: Some(1),
+            progress_signal_count: 0,
+            active_claim_login: None,
+        }))
+        .await
+        .0;
+
+        let payload = &response["content"][0]["json"];
+        assert_eq!(payload["ready"], false);
+        assert_eq!(payload["check"]["conclusion"], "ActionRequired");
+        assert!(payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("concrete progress signal"));
     }
 
     #[tokio::test]
@@ -3669,10 +3766,25 @@ mod tests {
         })
     }
 
+    fn valid_github_issue_body() -> String {
+        "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n".to_string()
+    }
+
     fn github_ci_evidence() -> serde_json::Value {
         json!({
             "repository": "example/repo",
             "pull_request_url": "https://github.com/example/repo/pull/1",
+            "pull_request": {
+                "author_login": "solver-agent",
+                "merged": true,
+                "merged_by_login": "maintainer",
+                "reviews": [
+                    {
+                        "author_login": "maintainer",
+                        "state": "APPROVED"
+                    }
+                ]
+            },
             "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "check_run": {
                 "id": 123456789_u64,

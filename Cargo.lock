@@ -618,6 +618,7 @@ dependencies = [
  "bounty-router",
  "chrono",
  "domain",
+ "github-app",
  "risk",
  "serde",
  "serde_json",

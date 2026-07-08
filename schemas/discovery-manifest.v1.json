@@ -94,6 +94,7 @@
         "stripe_transfer_events",
         "github_issue_bounty_plan",
         "github_funding_comment_plan",
+        "github_claim_comment_plan",
         "github_proof_comment_plan",
         "github_proof_comment_from_proof_plan",
         "github_issue_template"
@@ -145,6 +146,7 @@
         "stripe_transfer_events": { "$ref": "#/$defs/uri" },
         "github_issue_bounty_plan": { "$ref": "#/$defs/uri" },
         "github_funding_comment_plan": { "$ref": "#/$defs/uri" },
+        "github_claim_comment_plan": { "$ref": "#/$defs/uri" },
         "github_proof_comment_plan": { "$ref": "#/$defs/uri" },
         "github_proof_comment_from_proof_plan": { "$ref": "#/$defs/uri" },
         "github_issue_template": { "$ref": "#/$defs/uri" }

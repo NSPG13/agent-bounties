@@ -50,8 +50,10 @@ Invoke-Checked { cargo run -p cli -- base-sepolia-runbook --settlement-signer 0x
 Invoke-Checked { cargo run -p cli -- stripe-plan --organization-id 00000000-0000-0000-0000-000000000001 --amount-minor 5000 --platform-url https://agentbounties.local }
 Invoke-Checked { cargo run -p cli -- github-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md }
 Invoke-Checked { cargo run -p cli -- github-funding-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" --contributor-login check-script --comment-id 12345 }
+Invoke-Checked { cargo run -p cli -- github-claim-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty claim`nPlan: inspect CI logs and open a focused PR with local test output." --contributor-login check-script --comment-id 12346 --claim-age-minutes 5 }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_issue_plan_comment.py --self-test }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_funding_comment.py --self-test }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_claim_comment.py --self-test }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_proof_comment.py --self-test }
 Invoke-Checked { cargo run -p cli -- github-proof-comment-plan --bounty-id 00000000-0000-0000-0000-000000000001 --proof-url https://agentbounties.local/public/proofs/example --verifier-summary "GitHub CI passed" }
 Invoke-Checked { cargo run -p cli -- discovery --public-base-url https://agentbounties.local --mcp-base-url https://agentbounties.local/mcp }
@@ -60,8 +62,9 @@ Invoke-Checked { cargo run -p cli -- docs-contract-check }
 Invoke-Checked { cargo run -p cli -- demo }
 Invoke-Checked { cargo run -p cli -- pooled-funding-demo }
 Invoke-Checked { cargo run -p cli -- funding-rehearsal-demo }
+Invoke-Checked { cargo run -p cli -- real-funding-readiness --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x3333333333333333333333333333333333333333 }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py crates\sdk-python\examples\cofund_claim.py }
-Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_proof_comment.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py }
 Pop-Location
 
 Push-Location (Join-Path $repoRoot "crates\sdk-typescript")

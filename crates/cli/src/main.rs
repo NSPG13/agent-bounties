@@ -22,8 +22,8 @@ use eval_harness::{
     BountyBench, JudgeBench,
 };
 use github_app::{
-    bounty_check_output, funding_comment_plan, parse_issue_form_bounty, proof_comment_plan,
-    GitHubFundingCommentInput, GitHubProofComment,
+    bounty_check_output, claim_comment_plan, funding_comment_plan, parse_issue_form_bounty,
+    proof_comment_plan, GitHubClaimCommentInput, GitHubFundingCommentInput, GitHubProofComment,
 };
 use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper,
@@ -62,6 +62,20 @@ struct GithubFundingCommentPlanCli {
     existing_idempotency_keys: Vec<String>,
 }
 
+#[derive(Debug)]
+struct GithubClaimCommentPlanCli {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body_file: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
+    claim_age_minutes: Option<u64>,
+    progress_signal_count: u32,
+    active_claim_login: Option<String>,
+}
+
 #[derive(Debug, ClapArgs)]
 struct DiscoveryReportArgs {
     #[arg(long)]
@@ -72,11 +86,43 @@ struct DiscoveryReportArgs {
     markdown_out: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct RealFundingReadinessCheck {
+    name: String,
+    configured: bool,
+    required_for: String,
+    env_vars: Vec<String>,
+    detail: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RealFundingReadinessReport {
+    local_rehearsal_ready: bool,
+    stripe_test_mode_ready: bool,
+    stripe_webhook_ready: bool,
+    base_testnet_ready: bool,
+    base_broadcast_ready: bool,
+    operator_auth_configured: bool,
+    network: String,
+    checks: Vec<RealFundingReadinessCheck>,
+    evidence_boundaries: Vec<String>,
+    commands: Vec<String>,
+    warnings: Vec<String>,
+}
+
 #[derive(Subcommand)]
 enum Command {
     Demo,
     PooledFundingDemo,
     FundingRehearsalDemo,
+    RealFundingReadiness {
+        #[arg(long, default_value = "base-sepolia")]
+        network: String,
+        #[arg(long)]
+        escrow_contract: Option<String>,
+        #[arg(long)]
+        usdc_token: Option<String>,
+    },
     Bountybench,
     Abusebench,
     Judgebench,
@@ -307,6 +353,28 @@ enum Command {
         #[arg(long = "existing-idempotency-key")]
         existing_idempotency_keys: Vec<String>,
     },
+    GithubClaimCommentPlan {
+        #[arg(long)]
+        repository: String,
+        #[arg(long)]
+        issue_url: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body_file: String,
+        #[arg(long)]
+        comment_body: String,
+        #[arg(long)]
+        contributor_login: Option<String>,
+        #[arg(long)]
+        comment_id: Option<String>,
+        #[arg(long)]
+        claim_age_minutes: Option<u64>,
+        #[arg(long, default_value_t = 0)]
+        progress_signal_count: u32,
+        #[arg(long)]
+        active_claim_login: Option<String>,
+    },
     GithubProofCommentPlan {
         #[arg(long)]
         bounty_id: Uuid,
@@ -378,6 +446,11 @@ async fn async_main() -> Result<()> {
         Command::Demo => demo().await,
         Command::PooledFundingDemo => pooled_funding_demo(),
         Command::FundingRehearsalDemo => funding_rehearsal_demo().await,
+        Command::RealFundingReadiness {
+            network,
+            escrow_contract,
+            usdc_token,
+        } => real_funding_readiness(network, escrow_contract, usdc_token),
         Command::Bountybench => bountybench(),
         Command::Abusebench => abusebench(),
         Command::Judgebench => judgebench(),
@@ -564,6 +637,29 @@ async fn async_main() -> Result<()> {
             contributor_login,
             comment_id,
             existing_idempotency_keys,
+        }),
+        Command::GithubClaimCommentPlan {
+            repository,
+            issue_url,
+            title,
+            body_file,
+            comment_body,
+            contributor_login,
+            comment_id,
+            claim_age_minutes,
+            progress_signal_count,
+            active_claim_login,
+        } => github_claim_comment_plan(GithubClaimCommentPlanCli {
+            repository,
+            issue_url,
+            title,
+            body_file,
+            comment_body,
+            contributor_login,
+            comment_id,
+            claim_age_minutes,
+            progress_signal_count,
+            active_claim_login,
         }),
         Command::GithubProofCommentPlan {
             bounty_id,
@@ -1005,6 +1101,227 @@ async fn funding_rehearsal_demo() -> Result<()> {
         }))?
     );
     Ok(())
+}
+
+fn real_funding_readiness(
+    network: String,
+    escrow_contract: Option<String>,
+    usdc_token: Option<String>,
+) -> Result<()> {
+    let network_descriptor = base_network_descriptor(&network)?;
+    let rpc_env = network_descriptor.rpc_url_env.clone();
+    let stripe_secret = env_nonempty("STRIPE_SECRET_KEY");
+    let stripe_live_enabled = env_flag("ENABLE_STRIPE_LIVE_EXECUTION");
+    let stripe_webhook_secret = env_nonempty("STRIPE_WEBHOOK_SECRET");
+    let unsigned_stripe_webhooks = env_flag("ALLOW_UNSIGNED_STRIPE_WEBHOOKS");
+    let operator_token = env_nonempty("OPERATOR_API_TOKEN");
+    let base_rpc = env_nonempty(&rpc_env);
+    let base_broadcast_enabled = env_flag("ENABLE_BASE_TX_BROADCAST");
+    let escrow_configured = escrow_contract.as_deref().is_some_and(nonempty);
+    let token_configured = usdc_token.as_deref().is_some_and(nonempty);
+
+    let checks = vec![
+        readiness_check(
+            "local deterministic rehearsal",
+            true,
+            "pooled, Stripe, Base, mixed-funding, verification, and payout state-machine simulation",
+            vec![],
+            "Run cargo run -p cli -- funding-rehearsal-demo; no external credentials required.",
+        ),
+        readiness_check(
+            "Stripe test-mode execution gate",
+            stripe_secret && stripe_live_enabled,
+            "creating Stripe test-mode Checkout Sessions and Connect transfers",
+            vec![
+                "STRIPE_SECRET_KEY".to_string(),
+                "ENABLE_STRIPE_LIVE_EXECUTION".to_string(),
+            ],
+            if stripe_secret && stripe_live_enabled {
+                "Stripe test-mode execution is operator-enabled."
+            } else {
+                "Set STRIPE_SECRET_KEY=sk_test_... and ENABLE_STRIPE_LIVE_EXECUTION=true before executing Stripe request intents."
+            },
+        ),
+        readiness_check(
+            "Stripe webhook evidence gate",
+            stripe_webhook_secret || unsigned_stripe_webhooks,
+            "crediting fiat balances and marking fiat transfer evidence in local/test environments",
+            vec![
+                "STRIPE_WEBHOOK_SECRET".to_string(),
+                "ALLOW_UNSIGNED_STRIPE_WEBHOOKS".to_string(),
+            ],
+            if stripe_webhook_secret {
+                "Signed Stripe webhooks are configured."
+            } else if unsigned_stripe_webhooks {
+                "Unsigned Stripe webhook simulation is enabled; use only for local or mock-provider rehearsal."
+            } else {
+                "Set STRIPE_WEBHOOK_SECRET for signed webhooks, or ALLOW_UNSIGNED_STRIPE_WEBHOOKS=true for local-only simulation."
+            },
+        ),
+        readiness_check(
+            "Base RPC log reconciliation",
+            base_rpc,
+            "fetching Base escrow logs and transaction receipts",
+            vec![rpc_env.clone()],
+            if base_rpc {
+                "Base RPC URL is configured for the selected network."
+            } else {
+                "Set the selected network RPC URL before fetching escrow logs or receipts."
+            },
+        ),
+        readiness_check(
+            "Base signed transaction broadcast gate",
+            base_rpc && base_broadcast_enabled,
+            "broadcasting signed Base escrow funding or release transactions through the service",
+            vec![rpc_env.clone(), "ENABLE_BASE_TX_BROADCAST".to_string()],
+            if base_rpc && base_broadcast_enabled {
+                "Base transaction broadcast is enabled for already-signed raw transactions."
+            } else {
+                "Signed transaction broadcast remains disabled; operators can still sign/send externally and reconcile logs."
+            },
+        ),
+        readiness_check(
+            "Base Sepolia escrow addresses",
+            escrow_configured && token_configured,
+            "building bounty-bound approve/createEscrow funding plans",
+            vec![
+                "--escrow-contract".to_string(),
+                "--usdc-token".to_string(),
+            ],
+            if escrow_configured && token_configured {
+                "Escrow contract and token address were supplied to the readiness command."
+            } else {
+                "Pass --escrow-contract and --usdc-token when rehearsing Base funding plans."
+            },
+        ),
+        readiness_check(
+            "operator mutation auth",
+            operator_token,
+            "protecting hosted reconciliation, broadcast, and live Stripe execution endpoints",
+            vec!["OPERATOR_API_TOKEN".to_string()],
+            if operator_token {
+                "Hosted operator token is configured."
+            } else {
+                "OPERATOR_API_TOKEN is optional locally but should be set for hosted mutation surfaces."
+            },
+        ),
+    ];
+
+    let stripe_test_mode_ready = stripe_secret && stripe_live_enabled;
+    let stripe_webhook_ready = stripe_webhook_secret || unsigned_stripe_webhooks;
+    let base_testnet_ready = network_descriptor.name == "Base Sepolia"
+        && base_rpc
+        && escrow_configured
+        && token_configured;
+    let base_broadcast_ready = base_rpc && base_broadcast_enabled;
+    let warnings = readiness_warnings(
+        stripe_test_mode_ready,
+        stripe_webhook_ready,
+        base_testnet_ready,
+        unsigned_stripe_webhooks,
+        operator_token,
+    );
+
+    let report = RealFundingReadinessReport {
+        local_rehearsal_ready: true,
+        stripe_test_mode_ready,
+        stripe_webhook_ready,
+        base_testnet_ready,
+        base_broadcast_ready,
+        operator_auth_configured: operator_token,
+        network: network_descriptor.name,
+        checks,
+        evidence_boundaries: vec![
+            "Stripe Checkout Session creation is not funding; only a verified checkout.session.completed webhook credits balance.".to_string(),
+            "Base approve/createEscrow transaction planning is not funding; only an indexed EscrowCreated log makes Base funding applied.".to_string(),
+            "Deterministic verifier acceptance creates settlement intents; it does not pay by itself.".to_string(),
+            "Base release transaction hashes are not payout; only an indexed EscrowReleased log marks USDC payout paid.".to_string(),
+            "Stripe Connect eligibility and transfer planning are not payout; only transfer.created evidence marks fiat payout intents paid.".to_string(),
+        ],
+        commands: vec![
+            "cargo run -p cli -- funding-rehearsal-demo".to_string(),
+            "cargo run -p cli -- stripe-execute-request-intent --intent-file target\\stripe-funding-intent.json".to_string(),
+            "cargo run -p cli -- base-fetch-logs --network base-sepolia --escrow-contract <escrow-contract> --from-block <block>".to_string(),
+            "cargo run -p cli -- base-transaction-receipt --network base-sepolia --tx-hash <tx-hash>".to_string(),
+            "cargo run -p cli -- discovery --public-base-url <url> --mcp-base-url <url>".to_string(),
+        ],
+        warnings,
+    };
+
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn readiness_check(
+    name: impl Into<String>,
+    configured: bool,
+    required_for: impl Into<String>,
+    env_vars: Vec<String>,
+    detail: impl Into<String>,
+) -> RealFundingReadinessCheck {
+    RealFundingReadinessCheck {
+        name: name.into(),
+        configured,
+        required_for: required_for.into(),
+        env_vars,
+        detail: detail.into(),
+    }
+}
+
+fn readiness_warnings(
+    stripe_test_mode_ready: bool,
+    stripe_webhook_ready: bool,
+    base_testnet_ready: bool,
+    unsigned_stripe_webhooks: bool,
+    operator_token: bool,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if !stripe_test_mode_ready {
+        warnings.push(
+            "Stripe request execution is not ready; use plan-only mode or set test-mode credentials and ENABLE_STRIPE_LIVE_EXECUTION=true."
+                .to_string(),
+        );
+    }
+    if !stripe_webhook_ready {
+        warnings.push(
+            "Stripe fiat ledger credits will be rejected until signed webhooks or local unsigned webhook simulation are configured."
+                .to_string(),
+        );
+    }
+    if !base_testnet_ready {
+        warnings.push(
+            "Base Sepolia funding can be planned locally, but RPC log reconciliation needs RPC URL plus escrow and token addresses."
+                .to_string(),
+        );
+    }
+    if unsigned_stripe_webhooks {
+        warnings.push(
+            "ALLOW_UNSIGNED_STRIPE_WEBHOOKS must not be used for hosted or production money flows."
+                .to_string(),
+        );
+    }
+    if !operator_token {
+        warnings.push(
+            "Set OPERATOR_API_TOKEN before exposing hosted reconciliation, broadcast, or live Stripe execution endpoints."
+                .to_string(),
+        );
+    }
+    warnings
+}
+
+fn env_nonempty(name: &str) -> bool {
+    env::var(name).ok().is_some_and(|value| nonempty(&value))
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(false)
+}
+
+fn nonempty(value: &str) -> bool {
+    !value.trim().is_empty()
 }
 
 fn bountybench() -> Result<()> {
@@ -1731,6 +2048,24 @@ fn github_funding_comment_plan(args: GithubFundingCommentPlanCli) -> Result<()> 
         contributor_login: args.contributor_login,
         comment_id: args.comment_id,
         existing_idempotency_keys: args.existing_idempotency_keys,
+    });
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
+fn github_claim_comment_plan(args: GithubClaimCommentPlanCli) -> Result<()> {
+    let body = fs::read_to_string(args.body_file)?;
+    let plan = claim_comment_plan(GitHubClaimCommentInput {
+        repository: args.repository,
+        issue_url: args.issue_url,
+        title: args.title,
+        body,
+        comment_body: args.comment_body,
+        contributor_login: args.contributor_login,
+        comment_id: args.comment_id,
+        claim_age_minutes: args.claim_age_minutes,
+        progress_signal_count: args.progress_signal_count,
+        active_claim_login: args.active_claim_login,
     });
     println!("{}", serde_json::to_string_pretty(&plan)?);
     Ok(())
@@ -2614,6 +2949,7 @@ async fn production_smoke_check(
         "/endpoints/stripe_live_checkout_top_ups",
         "/endpoints/stripe_live_connect_accounts",
         "/endpoints/github_issue_bounty_plan",
+        "/endpoints/github_claim_comment_plan",
         "/endpoints/github_proof_comment_plan",
         "/endpoints/github_proof_comment_from_proof_plan",
     ] {
@@ -2671,6 +3007,9 @@ async fn production_smoke_check(
                     && required
                         .iter()
                         .any(|value| value.as_str() == Some("base_escrow_events"))
+                    && required
+                        .iter()
+                        .any(|value| value.as_str() == Some("github_claim_comment_plan"))
                     && required
                         .iter()
                         .any(|value| value.as_str() == Some("github_proof_comment_from_proof_plan"))
@@ -3072,6 +3411,7 @@ async fn production_smoke_check(
         "approve_risk_payout",
         "reject_risk_event",
         "plan_github_funding_comment",
+        "plan_github_claim_comment",
         "plan_github_proof_comment_for_proof",
     ] {
         require(
@@ -3304,6 +3644,12 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .pointer("/endpoints/github_funding_comment_plan")
             .is_some(),
         "discovery manifest must include GitHub funding comment planning",
+    )?;
+    require(
+        discovery
+            .pointer("/endpoints/github_claim_comment_plan")
+            .is_some(),
+        "discovery manifest must include GitHub claim comment planning",
     )?;
     require(
         discovery
@@ -3697,6 +4043,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "execute_stripe_connect_transfer",
         "plan_github_issue_bounty",
         "plan_github_funding_comment",
+        "plan_github_claim_comment",
         "plan_github_proof_comment",
         "plan_github_proof_comment_for_proof",
         "run_eval_loops",
@@ -4186,6 +4533,37 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             .and_then(|value| value.as_bool())
             == Some(true),
         "MCP plan_github_funding_comment must require operator reconciliation",
+    )?;
+
+    let mcp_github_claim = mcp_tool_post(
+        mcp,
+        "plan_github_claim_comment",
+        serde_json::json!({
+            "repository": "agent-bounties/agent-bounties",
+            "issue_url": "https://github.com/agent-bounties/agent-bounties/issues/1",
+            "title": "[bounty]: Fix CI",
+            "body": "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n",
+            "comment_body": "/agent-bounty claim\nPlan: inspect CI logs and open a small fix.",
+            "contributor_login": "service-smoke",
+            "comment_id": "12346",
+            "claim_age_minutes": 5,
+            "progress_signal_count": 0,
+            "active_claim_login": null
+        }),
+    )?;
+    require(
+        mcp_github_claim
+            .pointer("/ready")
+            .and_then(|value| value.as_bool())
+            == Some(true),
+        "MCP plan_github_claim_comment must accept a progress-backed claim",
+    )?;
+    require(
+        mcp_github_claim
+            .pointer("/signal/settlement_authority")
+            .and_then(|value| value.as_bool())
+            == Some(false),
+        "MCP plan_github_claim_comment must not authorize settlement",
     )?;
 
     let mcp_github_proof = mcp_tool_post(

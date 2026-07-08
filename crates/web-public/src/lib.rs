@@ -105,6 +105,7 @@ pub struct DiscoveryEndpoints {
     pub stripe_transfer_events: String,
     pub github_issue_bounty_plan: String,
     pub github_funding_comment_plan: String,
+    pub github_claim_comment_plan: String,
     pub github_proof_comment_plan: String,
     pub github_proof_comment_from_proof_plan: String,
     pub github_issue_template: String,
@@ -335,6 +336,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         stripe_transfer_events: format!("{api}/v1/stripe/transfer-events"),
         github_issue_bounty_plan: format!("{api}/v1/github/issue-bounty-plan"),
         github_funding_comment_plan: format!("{api}/v1/github/funding-comment-plan"),
+        github_claim_comment_plan: format!("{api}/v1/github/claim-comment-plan"),
         github_proof_comment_plan: format!("{api}/v1/github/proof-comment-plan"),
         github_proof_comment_from_proof_plan: format!(
             "{api}/v1/github/proof-comment-plan-from-proof"
@@ -716,6 +718,7 @@ Funding and payout state changes require reconciled evidence. Request intents, u
 - Issue template: {github_issue_template}
 - Issue bounty planner: {github_issue_bounty_plan}
 - Funding comment planner: {github_funding_comment_plan}
+- Claim comment planner: {github_claim_comment_plan}
 - Proof comment planner: {github_proof_comment_plan}
 - Proof-record comment planner: {github_proof_comment_from_proof_plan}
 
@@ -775,6 +778,7 @@ The repository is designed for agent contributors. Start with the agent quicksta
         stripe_transfer_events = &endpoints.stripe_transfer_events,
         github_issue_bounty_plan = &endpoints.github_issue_bounty_plan,
         github_funding_comment_plan = &endpoints.github_funding_comment_plan,
+        github_claim_comment_plan = &endpoints.github_claim_comment_plan,
         github_proof_comment_plan = &endpoints.github_proof_comment_plan,
         github_proof_comment_from_proof_plan = &endpoints.github_proof_comment_from_proof_plan,
         feedback_questions = feedback_questions,
@@ -2112,6 +2116,10 @@ mod tests {
             "https://network.example/v1/github/funding-comment-plan"
         );
         assert_eq!(
+            manifest.endpoints.github_claim_comment_plan,
+            "https://network.example/v1/github/claim-comment-plan"
+        );
+        assert_eq!(
             manifest.endpoints.github_proof_comment_plan,
             "https://network.example/v1/github/proof-comment-plan"
         );
@@ -2268,6 +2276,7 @@ mod tests {
         assert!(discovery_manifest_schema_json().contains("\"$id\""));
         assert!(discovery_manifest_schema_json().contains("\"agent_entrypoints\""));
         assert!(discovery_manifest_schema_json().contains("\"github_funding_comment_plan\""));
+        assert!(discovery_manifest_schema_json().contains("\"github_claim_comment_plan\""));
         assert!(
             discovery_manifest_schema_json().contains("\"github_proof_comment_from_proof_plan\"")
         );

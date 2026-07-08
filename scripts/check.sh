@@ -84,8 +84,18 @@ cargo run -p cli -- github-funding-comment-plan \
   --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" \
   --contributor-login check-script \
   --comment-id 12345
+cargo run -p cli -- github-claim-comment-plan \
+  --repository agent-bounties/agent-bounties \
+  --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 \
+  --title "[bounty]: Fix CI" \
+  --body-file examples/github-paid-bounty-issue.md \
+  --comment-body $'/agent-bounty claim\nPlan: inspect CI logs and open a focused PR with local test output.' \
+  --contributor-login check-script \
+  --comment-id 12346 \
+  --claim-age-minutes 5
 "${python_cmd[@]}" scripts/github_issue_plan_comment.py --self-test
 "${python_cmd[@]}" scripts/github_funding_comment.py --self-test
+"${python_cmd[@]}" scripts/github_claim_comment.py --self-test
 "${python_cmd[@]}" scripts/github_proof_comment.py --self-test
 cargo run -p cli -- github-proof-comment-plan \
   --bounty-id 00000000-0000-0000-0000-000000000001 \
@@ -102,6 +112,10 @@ cargo run -p cli -- docs-contract-check
 cargo run -p cli -- demo
 cargo run -p cli -- pooled-funding-demo
 cargo run -p cli -- funding-rehearsal-demo
+cargo run -p cli -- real-funding-readiness \
+  --network base-sepolia \
+  --escrow-contract 0x1111111111111111111111111111111111111111 \
+  --usdc-token 0x3333333333333333333333333333333333333333
 "${python_cmd[@]}" -m py_compile \
   crates/sdk-python/agent_bounties/client.py \
   crates/sdk-python/agent_bounties/smoke.py \
@@ -109,6 +123,7 @@ cargo run -p cli -- funding-rehearsal-demo
   crates/sdk-python/examples/cofund_claim.py \
   scripts/github_issue_plan_comment.py \
   scripts/github_funding_comment.py \
+  scripts/github_claim_comment.py \
   scripts/github_proof_comment.py
 
 cd "$repo_root/crates/sdk-typescript"

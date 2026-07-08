@@ -36,9 +36,10 @@ use eval_harness::{
     BountyBench, EvalSuiteResult, JudgeBench, LoopSuiteResult,
 };
 use github_app::{
-    bounty_check_output, funding_comment_plan, parse_issue_form_bounty, proof_comment_plan,
-    GitHubCheckRunOutput, GitHubFundingCommentInput, GitHubFundingCommentPlan,
-    GitHubIssueFormBounty, GitHubProofComment, GitHubProofCommentPlan,
+    bounty_check_output, claim_comment_plan, funding_comment_plan, parse_issue_form_bounty,
+    proof_comment_plan, GitHubCheckRunOutput, GitHubClaimCommentInput, GitHubClaimCommentPlan,
+    GitHubFundingCommentInput, GitHubFundingCommentPlan, GitHubIssueFormBounty, GitHubProofComment,
+    GitHubProofCommentPlan,
 };
 use ledger::Ledger;
 use payments_stripe::{
@@ -110,6 +111,7 @@ use worker::BaseEscrowLogWorker;
         reconcile_stripe_checkout_webhook,
         plan_github_issue_bounty,
         plan_github_funding_comment,
+        plan_github_claim_comment,
         plan_github_proof_comment,
         plan_github_proof_comment_from_proof,
         post_bounty,
@@ -135,6 +137,7 @@ use worker::BaseEscrowLogWorker;
         PlanStripeConnectTransferRequest,
         PlanGitHubIssueBountyRequest,
         PlanGitHubFundingCommentRequest,
+        PlanGitHubClaimCommentRequest,
         PlanGitHubProofCommentRequest,
         PlanGitHubProofCommentFromProofRequest,
         PlanBaseLogQueryRequest,
@@ -293,6 +296,21 @@ struct PlanGitHubFundingCommentRequest {
     comment_id: Option<String>,
     #[serde(default)]
     existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct PlanGitHubClaimCommentRequest {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
+    claim_age_minutes: Option<u64>,
+    #[serde(default)]
+    progress_signal_count: u32,
+    active_claim_login: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -548,6 +566,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/github/funding-comment-plan",
             post(plan_github_funding_comment),
+        )
+        .route(
+            "/v1/github/claim-comment-plan",
+            post(plan_github_claim_comment),
         )
         .route(
             "/v1/github/proof-comment-plan",
@@ -2172,6 +2194,29 @@ async fn plan_github_funding_comment(
 
 #[utoipa::path(
     post,
+    path = "/v1/github/claim-comment-plan",
+    request_body = PlanGitHubClaimCommentRequest,
+    responses((status = 200, description = "GitHub public claim-comment reservation plan"))
+)]
+async fn plan_github_claim_comment(
+    Json(request): Json<PlanGitHubClaimCommentRequest>,
+) -> Json<GitHubClaimCommentPlan> {
+    Json(claim_comment_plan(GitHubClaimCommentInput {
+        repository: request.repository,
+        issue_url: request.issue_url,
+        title: request.title,
+        body: request.body,
+        comment_body: request.comment_body,
+        contributor_login: request.contributor_login,
+        comment_id: request.comment_id,
+        claim_age_minutes: request.claim_age_minutes,
+        progress_signal_count: request.progress_signal_count,
+        active_claim_login: request.active_claim_login,
+    }))
+}
+
+#[utoipa::path(
+    post,
     path = "/v1/github/proof-comment-plan",
     request_body = PlanGitHubProofCommentRequest,
     responses((status = 200, description = "GitHub proof comment markdown and check-run plan"))
@@ -3599,6 +3644,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn github_claim_comment_plan_reserves_progress_backed_claim() {
+        let plan = plan_github_claim_comment(Json(PlanGitHubClaimCommentRequest {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/58".to_string(),
+            title: "[bounty]: Add stale-claim controls".to_string(),
+            body: valid_github_issue_body(),
+            comment_body: "/agent-bounty claim\nPlan: add deterministic stale claim tests."
+                .to_string(),
+            contributor_login: Some("solver-agent".to_string()),
+            comment_id: Some("456".to_string()),
+            claim_age_minutes: Some(5),
+            progress_signal_count: 0,
+            active_claim_login: None,
+        }))
+        .await
+        .0;
+
+        assert!(plan.ready);
+        let signal = plan.signal.expect("claim signal");
+        assert!(!signal.settlement_authority);
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+    }
+
+    #[tokio::test]
+    async fn github_claim_comment_plan_rejects_templated_claim_without_progress() {
+        let plan = plan_github_claim_comment(Json(PlanGitHubClaimCommentRequest {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/58".to_string(),
+            title: "[bounty]: Add stale-claim controls".to_string(),
+            body: valid_github_issue_body(),
+            comment_body:
+                "/agent-bounty claim\nI'm reviewing the codebase and will open a PR shortly."
+                    .to_string(),
+            contributor_login: Some("claim-bot".to_string()),
+            comment_id: Some("457".to_string()),
+            claim_age_minutes: Some(1),
+            progress_signal_count: 0,
+            active_claim_login: None,
+        }))
+        .await
+        .0;
+
+        assert!(!plan.ready);
+        assert!(plan.signal.is_none());
+        assert!(plan.error.unwrap().contains("concrete progress signal"));
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+    }
+
+    #[tokio::test]
     async fn github_proof_comment_plan_returns_markdown_and_fingerprint() {
         let bounty_id = Uuid::new_v4();
         let plan = plan_github_proof_comment(Json(PlanGitHubProofCommentRequest {
@@ -3727,6 +3821,10 @@ mod tests {
             manifest.endpoints.github_funding_comment_plan,
             "http://127.0.0.1:8080/v1/github/funding-comment-plan"
         );
+        assert_eq!(
+            manifest.endpoints.github_claim_comment_plan,
+            "http://127.0.0.1:8080/v1/github/claim-comment-plan"
+        );
         assert_eq!(manifest.risk_policy.low_value_usdc_cap_minor, 10_000_000);
         assert!(manifest
             .agent_entrypoints
@@ -3781,6 +3879,7 @@ mod tests {
         assert!(paths.contains_key("/v1/bounties/{id}/funding-intents"));
         assert!(paths.contains_key("/v1/github/issue-bounty-plan"));
         assert!(paths.contains_key("/v1/github/funding-comment-plan"));
+        assert!(paths.contains_key("/v1/github/claim-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan-from-proof"));
         assert!(paths.contains_key("/v1/evals/loops"));

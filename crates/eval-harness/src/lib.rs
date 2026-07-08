@@ -4,6 +4,7 @@ use domain::{
     Agent, Capability, CapabilityClass, FundingMode, HelpRequest, Money, PaymentRail, PrivacyLevel,
     RiskAction, RiskSurface, Submission, VerificationDecision, VerifierKind,
 };
+use github_app::{claim_comment_plan, GitHubClaimCommentInput, GitHubClaimDecision};
 use risk::{
     BountyRiskInput, HelpRequestRiskInput, RiskAssessment, RiskPolicy, SubmissionRiskInput,
 };
@@ -273,6 +274,24 @@ impl AbuseBench {
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
             }),
+            "github_claim_without_progress" => github_claim_assessment(
+                fixture.surface,
+                "/agent-bounty claim\nI'm reviewing the codebase and will open a PR shortly.",
+                None,
+                0,
+            ),
+            "github_claim_with_progress" => github_claim_assessment(
+                fixture.surface,
+                "/agent-bounty claim\nPlan: inspect the failing check, patch the narrow failure, and post a PR with local command output.",
+                Some("solver-agent"),
+                0,
+            ),
+            "github_stale_claim_without_progress" => github_claim_assessment(
+                fixture.surface,
+                "/agent-bounty attempt\nPlan: inspect the issue.",
+                Some("stale-agent"),
+                120,
+            ),
             _ if fixture.surface == RiskSurface::Payout => {
                 self.policy.evaluate_payout(&risk::PayoutRiskInput {
                     bounty_id: Uuid::new_v4(),
@@ -282,6 +301,48 @@ impl AbuseBench {
             }
             _ => RiskAssessment::allow(fixture.surface),
         }
+    }
+}
+
+fn github_claim_assessment(
+    surface: RiskSurface,
+    comment_body: &str,
+    contributor_login: Option<&str>,
+    claim_age_minutes: u64,
+) -> RiskAssessment {
+    let plan = claim_comment_plan(GitHubClaimCommentInput {
+        repository: "agent-bounties/agent-bounties".to_string(),
+        issue_url: "https://github.com/agent-bounties/agent-bounties/issues/58".to_string(),
+        title: "[bounty]: Add stale-claim and claim-squatting controls".to_string(),
+        body: include_str!("../fixtures/github_paid_bounty_issue.md").to_string(),
+        comment_body: comment_body.to_string(),
+        contributor_login: contributor_login.map(ToString::to_string),
+        comment_id: Some("12345".to_string()),
+        claim_age_minutes: Some(claim_age_minutes),
+        progress_signal_count: 0,
+        active_claim_login: None,
+    });
+
+    match (plan.ready, plan.signal.as_ref()) {
+        (true, Some(signal)) if signal.decision == GitHubClaimDecision::Reserved => {
+            RiskAssessment::allow(surface)
+        }
+        (true, Some(signal)) if signal.decision == GitHubClaimDecision::StaleReleaseRecommended => {
+            RiskAssessment {
+                surface,
+                action: RiskAction::NeedsReview,
+                score: 45,
+                reasons: vec!["stale GitHub claim needs maintainer release review".to_string()],
+            }
+        }
+        _ => RiskAssessment {
+            surface,
+            action: RiskAction::NeedsReview,
+            score: 60,
+            reasons: vec![plan
+                .error
+                .unwrap_or_else(|| "GitHub claim needs concrete progress signal".to_string())],
+        },
     }
 }
 
