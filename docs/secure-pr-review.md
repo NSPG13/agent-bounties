@@ -3,6 +3,13 @@
 External PRs are untrusted input. Do not approve a gated Actions run until the
 changed files and static contracts have been reviewed.
 
+Before starting non-trivial maintainer changes, follow
+[Contributor-First Maintainer Protocol](contributor-first-maintenance.md):
+inspect the open PR queue, give active collaborator PRs attention first, and
+publish a public maintainer notice describing the planned change and expected
+open PR impact. This prevents maintainer work from silently invalidating
+contributor branches.
+
 ## Intake Command
 
 Run the trusted checker from a clean maintainer checkout:

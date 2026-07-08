@@ -5206,6 +5206,7 @@ fn docs_contract_check(root: PathBuf, contract_root: PathBuf) -> Result<()> {
     let mut issues = Vec::new();
     check_agent_quickstart_contract(&root, &mut issues);
     check_production_env_contract(&root, &mut issues);
+    check_contributor_first_protocol_contract(&root, &mut issues);
     for file in &files {
         let text = fs::read_to_string(file)
             .with_context(|| format!("failed to read docs file {}", file.display()))?;
@@ -5413,6 +5414,89 @@ fn production_live_money_env_vars() -> &'static [&'static str] {
         "STRIPE_WEBHOOK_SECRET",
         "ALLOW_UNSIGNED_STRIPE_WEBHOOKS",
     ]
+}
+
+fn check_contributor_first_protocol_contract(root: &Path, issues: &mut Vec<DocsContractIssue>) {
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from("docs/contributor-first-maintenance.md"),
+        &[
+            "Contributor-First Maintainer Protocol",
+            "public maintainer notice",
+            "open PR queue",
+            "collaboration branch",
+            "Distribution feedback request",
+        ],
+        "contributor-first maintainer protocol",
+    );
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from("AGENTS.md"),
+        &[
+            "docs/contributor-first-maintenance.md",
+            "open PRs first",
+            "public maintainer notice",
+        ],
+        "agent contributor guide",
+    );
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from(".github/PULL_REQUEST_TEMPLATE.md"),
+        &[
+            "Maintainer Change Notice",
+            "Notice issue/comment",
+            "Open PR queue checked before edits",
+            "Active PR impact or repair path",
+        ],
+        "pull request template",
+    );
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from(".github/ISSUE_TEMPLATE/maintainer-change-notice.yml"),
+        &[
+            "Maintainer change notice",
+            "Open PR queue check",
+            "Contributor impact and repair path",
+            "Distribution feedback request",
+        ],
+        "maintainer change notice issue template",
+    );
+}
+
+fn check_required_markers(
+    root: &Path,
+    issues: &mut Vec<DocsContractIssue>,
+    rel_path: &Path,
+    markers: &[&str],
+    label: &str,
+) {
+    let path = root.join(rel_path);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            push_doc_issue(
+                issues,
+                rel_path,
+                1,
+                &format!("failed to read {label}: {error}"),
+            );
+            return;
+        }
+    };
+    for marker in markers {
+        if !text.contains(marker) {
+            push_doc_issue(
+                issues,
+                rel_path,
+                1,
+                &format!("{label} missing required marker `{marker}`"),
+            );
+        }
+    }
 }
 
 fn collect_doc_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -6305,6 +6389,62 @@ mod tests {
             issue
                 .message
                 .contains("production compose mcp service does not pass `STRIPE_WEBHOOK_SECRET`")
+        }));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn contributor_first_protocol_contract_reports_missing_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-bounties-contributor-first-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(root.join(".github").join("ISSUE_TEMPLATE"))
+            .expect("should create temp github template dir");
+        fs::create_dir_all(root.join("docs")).expect("should create temp docs dir");
+        fs::write(
+            root.join("docs").join("contributor-first-maintenance.md"),
+            "# Contributor-First Maintainer Protocol\npublic maintainer notice\nopen PR queue\n",
+        )
+        .expect("should write partial protocol doc");
+        fs::write(root.join("AGENTS.md"), "public maintainer notice\n")
+            .expect("should write partial agents file");
+        fs::write(
+            root.join(".github").join("PULL_REQUEST_TEMPLATE.md"),
+            "## Maintainer Change Notice\nNotice issue/comment\n",
+        )
+        .expect("should write partial PR template");
+        fs::write(
+            root.join(".github")
+                .join("ISSUE_TEMPLATE")
+                .join("maintainer-change-notice.yml"),
+            "name: Maintainer change notice\nOpen PR queue check\n",
+        )
+        .expect("should write partial issue template");
+
+        let mut issues = Vec::new();
+        check_contributor_first_protocol_contract(&root, &mut issues);
+
+        assert!(issues.iter().any(|issue| {
+            issue
+                .message
+                .contains("contributor-first maintainer protocol missing required marker `collaboration branch`")
+        }));
+        assert!(issues.iter().any(|issue| {
+            issue.message.contains(
+                "agent contributor guide missing required marker `docs/contributor-first-maintenance.md`",
+            )
+        }));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .message
+                .contains("pull request template missing required marker `Open PR queue checked before edits`")
+        }));
+        assert!(issues.iter().any(|issue| {
+            issue.message.contains(
+                "maintainer change notice issue template missing required marker `Contributor impact and repair path`",
+            )
         }));
 
         let _ = fs::remove_dir_all(root);
