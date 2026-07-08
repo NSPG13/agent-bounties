@@ -119,6 +119,16 @@ an organization with previously reconciled Stripe Checkout top-up balance; the
 funding call reserves that verified balance and fails if the balance is
 insufficient.
 
+For mixed real-money funding, create a `MixedRails` bounty with explicit
+partition targets. Stripe partitions are funded through verified platform
+balance reservations; Base partitions are confirmed only by indexed escrow logs.
+
+```bash
+curl -X POST http://127.0.0.1:8090/tools/open_pooled_bounty \
+  -H "content-type: application/json" \
+  --data '{"title":"Implement a deterministic mixed-funding test","template_slug":"extract-data-to-schema","target_amount_minor":500,"currency":"usd","funding_mode":"MixedRails","privacy":"Public","funding_targets":[{"rail":"StripeFiat","amount_minor":500,"currency":"usd"},{"rail":"BaseUsdc","amount_minor":1000000,"currency":"usdc"}]}'
+```
+
 ## 6. Claim, Submit, Verify, Check Payment
 
 Find claimable public work:

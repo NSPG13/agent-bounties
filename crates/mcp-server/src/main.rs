@@ -488,7 +488,19 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "target_amount_minor": integer_property("Target amount in minor units before the bounty becomes claimable."),
                     "currency": string_property("Currency code."),
                     "funding_mode": funding_mode_property(),
-                    "privacy": privacy_property()
+                    "privacy": privacy_property(),
+                    "funding_targets": array_property(
+                        json!({
+                            "type": "object",
+                            "properties": {
+                                "rail": enum_property(&["StripeFiat", "BaseUsdc"], "Real payment rail for this target."),
+                                "amount_minor": integer_property("Target amount in minor units for this rail/currency partition."),
+                                "currency": string_property("Currency code for this rail partition.")
+                            },
+                            "required": ["rail", "amount_minor", "currency"]
+                        }),
+                        "Required for MixedRails bounties. Each target is settled separately by rail and currency."
+                    )
                 }),
                 &[
                     "title",
@@ -510,7 +522,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "source_organization_id": nullable_uuid_property("Stripe-funded organization balance to reserve from when rail is StripeFiat."),
                     "amount_minor": integer_property("Contribution amount in minor units."),
                     "currency": string_property("Currency code."),
-                    "rail": enum_property(&["Simulated", "StripeFiat"], "Funding rail for this contribution. StripeFiat requires source_organization_id and verified Checkout top-up balance."),
+                    "rail": enum_property(&["Simulated", "StripeFiat"], "Off-chain contribution rail. BaseUsdc funding must be indexed from escrow events through reconcile_base_escrow_event."),
                     "external_reference": nullable_string_property("Optional per-bounty idempotency reference from the funding rail.")
                 }),
                 &["bounty_id", "amount_minor", "currency", "rail"],
@@ -645,7 +657,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 json!({
                     "quote_id": uuid_property("Quote UUID."),
                     "title": nullable_string_property("Optional bounty title override."),
-                    "funding_mode": nullable_enum_property(&["Simulated", "BaseUsdcEscrow", "StripeFiatLedger"], "Optional funding mode override.")
+                    "funding_mode": nullable_enum_property(&["Simulated", "BaseUsdcEscrow", "StripeFiatLedger", "MixedRails"], "Optional funding mode override.")
                 }),
                 &["quote_id"],
             ),
@@ -1184,8 +1196,13 @@ fn privacy_property() -> Value {
 
 fn funding_mode_property() -> Value {
     enum_property(
-        &["Simulated", "BaseUsdcEscrow", "StripeFiatLedger"],
-        "Funding rail.",
+        &[
+            "Simulated",
+            "BaseUsdcEscrow",
+            "StripeFiatLedger",
+            "MixedRails",
+        ],
+        "Funding mode. MixedRails requires funding_targets.",
     )
 }
 
@@ -2598,6 +2615,17 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "target_amount_minor"));
+        assert_eq!(
+            open_pooled.input_schema["properties"]["funding_targets"]["type"],
+            "array"
+        );
+        assert!(
+            open_pooled.input_schema["properties"]["funding_mode"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "MixedRails")
+        );
 
         let add_funding = descriptors
             .iter()

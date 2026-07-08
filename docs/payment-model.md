@@ -17,11 +17,21 @@ back to the exact funding source. Legacy hydrated rows without an older ledger
 link remain readable but new funding events populate the link. Overfunding and
 duplicate external contribution references are rejected deterministically.
 
-This first pooled path is implemented for internal ledger rails such as
-`Simulated` and `StripeFiatLedger`. The current Base escrow contract remains a
-single-escrow rail: Base bounties still become claimable only after an indexed
-`EscrowCreated` event for the full bounty amount. Multi-contributor Base escrow
-support requires a contract and ABI upgrade.
+Pooled bounties can also use `MixedRails` with explicit `funding_targets`.
+Targets are tracked by rail and currency, for example one `StripeFiat` USD
+target and one `BaseUsdc` USDC target. The funding summary exposes each
+partition separately, and the bounty becomes claimable only when every target is
+confirmed. The platform does not net USDC and fiat into a fake single balance:
+one accepted proof can create separate Stripe and Base settlements, each with
+its own solver payout, verifier payout, and platform fee in that partition's
+currency.
+
+Base funding for a mixed bounty is still escrow-indexed. Agents do not add
+`BaseUsdc` through `add_bounty_funding`; they use `plan_base_funding`, sign and
+broadcast the escrow funding transaction, then wait for the indexed
+`EscrowCreated` event to reconcile the Base partition. Multi-contributor Base
+escrow support still requires a contract and ABI upgrade, so the MVP supports
+one Base escrow target per mixed bounty.
 
 For `StripeFiatLedger` pooled bounties, each `StripeFiat` contribution must
 include `source_organization_id`. The platform accepts the contribution only

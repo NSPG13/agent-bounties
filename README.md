@@ -241,7 +241,8 @@ Useful REST paths:
 The Python and TypeScript SDKs cover the same core agent loop: read `/llms.txt`
 or the machine-discovery manifest and schema, route a blocked goal, register agents/capabilities,
 create help requests, request quotes, fund quotes, open pooled bounty targets,
-add funding contributions, reserve verified Stripe Checkout top-up balance into
+add funding contributions, open mixed Stripe fiat plus Base USDC funding targets,
+reserve verified Stripe Checkout top-up balance into
 pooled fiat bounties, post Base funding-ready bounties, reconcile Base funding events, claim/submit/verify bounties, inspect
 the public claimable bounty and capability feeds, check bounty and agent paid
 status, plan Stripe Checkout top-ups and Accounts v2 onboarding requests, plan

@@ -7,11 +7,11 @@ use chain_base::{
 use chrono::{DateTime, Utc};
 use domain::{
     Agent, Bounty, BountyStatus, Capability, CapabilityClass, Claim, Escrow, EscrowStatus,
-    FundingContribution, FundingContributionStatus, FundingMode, HelpRequest, Id, Money,
-    PaymentEvent, PaymentEventStatus, PaymentRail, PayoutIntent, PayoutStatus, PrivacyLevel,
-    ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome,
-    RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal, VerificationDecision,
-    VerifierKind, VerifierResult,
+    FundingContribution, FundingContributionStatus, FundingMode, FundingPartitionTarget,
+    HelpRequest, Id, Money, PaymentEvent, PaymentEventStatus, PaymentRail, PayoutIntent,
+    PayoutStatus, PrivacyLevel, ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent,
+    RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal,
+    VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{credit, debit, AccountCode, Ledger, LedgerEntry};
 use payments_stripe::{
@@ -103,6 +103,8 @@ pub struct OpenPooledBountyRequest {
     pub currency: String,
     pub funding_mode: FundingMode,
     pub privacy: PrivacyLevel,
+    #[serde(default)]
+    pub funding_targets: Vec<FundingPartitionTargetRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +116,13 @@ pub struct AddFundingContributionRequest {
     pub currency: String,
     pub rail: PaymentRail,
     pub external_reference: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingPartitionTargetRequest {
+    pub rail: PaymentRail,
+    pub amount_minor: i64,
+    pub currency: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,6 +394,18 @@ pub struct PooledFundingSummary {
     pub applied: Money,
     pub remaining: Money,
     pub contribution_count: usize,
+    pub partitions: Vec<FundingPartitionSummary>,
+    pub claimable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingPartitionSummary {
+    pub rail: PaymentRail,
+    pub target: Money,
+    pub confirmed: Money,
+    pub remaining: Money,
+    pub contribution_count: usize,
+    pub escrow_count: usize,
     pub claimable: bool,
 }
 
@@ -628,6 +649,12 @@ impl BountyNetwork {
             self.bounties.insert(bounty.id, bounty.clone());
             return Ok(bounty);
         }
+        if funding_mode == FundingMode::MixedRails {
+            return Err(AppError::InvalidFundingContribution(
+                "mixed rail bounties must be opened as pooled bounties with explicit funding targets"
+                    .to_string(),
+            ));
+        }
 
         bounty.mark_funded(terms_hash)?;
         bounty.make_claimable()?;
@@ -646,7 +673,7 @@ impl BountyNetwork {
             bounty_id: bounty.id,
             contributor_agent_id: None,
             source_organization_id: None,
-            rail: payment_rail_for_funding_mode(&funding_mode),
+            rail: payment_rail_for_funding_mode(&funding_mode)?,
             amount,
             status: FundingContributionStatus::Applied,
             funding_ledger_entry_id: Some(entry.id),
@@ -665,13 +692,16 @@ impl BountyNetwork {
     pub fn open_pooled_bounty(&mut self, request: OpenPooledBountyRequest) -> AppResult<Bounty> {
         let amount = Money::new(request.target_amount_minor, request.currency)?;
         let funding_mode = request.funding_mode.clone();
+        let funding_targets =
+            funding_targets_from_request(&funding_mode, &amount, &request.funding_targets)?;
         let mut bounty = Bounty::new(
             request.title,
             request.template_slug,
             amount.clone(),
             funding_mode.clone(),
             request.privacy.clone(),
-        );
+        )
+        .with_funding_targets(funding_targets);
         let risk = self.risk_policy.evaluate_bounty(&BountyRiskInput {
             title: bounty.title.clone(),
             template_slug: bounty.template_slug.clone(),
@@ -705,17 +735,12 @@ impl BountyNetwork {
                 bounty.status
             )));
         }
-        if bounty.funding_mode == FundingMode::BaseUsdcEscrow {
+        let target =
+            self.funding_target_for_contribution(&bounty, &request.rail, &request.currency)?;
+        if request.rail == PaymentRail::BaseUsdc {
             return Err(AppError::InvalidFundingContribution(
-                "pooled Base USDC contributions require a multi-contributor escrow contract; use plan_base_funding for the current single-escrow rail".to_string(),
+                "Base USDC funding must be indexed from escrow events, not applied as an off-chain contribution".to_string(),
             ));
-        }
-        let expected_rail = payment_rail_for_funding_mode(&bounty.funding_mode);
-        if request.rail != expected_rail {
-            return Err(AppError::InvalidFundingContribution(format!(
-                "contribution rail {:?} does not match bounty funding mode {:?}",
-                request.rail, bounty.funding_mode
-            )));
         }
         match (request.rail.clone(), request.source_organization_id) {
             (PaymentRail::StripeFiat, None) => {
@@ -733,10 +758,10 @@ impl BountyNetwork {
             _ => {}
         }
         let amount = Money::new(request.amount_minor, request.currency)?;
-        if amount.currency != bounty.amount.currency {
+        if amount.currency != target.amount.currency {
             return Err(AppError::InvalidFundingContribution(format!(
-                "contribution currency {} does not match bounty currency {}",
-                amount.currency, bounty.amount.currency
+                "contribution currency {} does not match {:?} target currency {}",
+                amount.currency, target.rail, target.amount.currency
             )));
         }
         if let Some(reference) = request.external_reference.as_deref() {
@@ -751,16 +776,19 @@ impl BountyNetwork {
             }
         }
 
-        let funded_before = self.applied_funding_amount(&bounty);
-        let remaining_before = bounty.amount.amount.saturating_sub(funded_before);
+        let funded_before = self.confirmed_funding_for_target(&bounty, &target);
+        let remaining_before = target.amount.amount.saturating_sub(funded_before);
         if remaining_before == 0 {
-            return Err(AppError::InvalidFundingContribution(
-                "bounty is already fully funded".to_string(),
-            ));
+            return Err(AppError::InvalidFundingContribution(format!(
+                "{:?} {} partition is already fully funded",
+                target.rail, target.amount.currency
+            )));
         }
         if amount.amount > remaining_before {
             return Err(AppError::InvalidFundingContribution(format!(
-                "contribution would overfund bounty by {} {}",
+                "contribution would overfund {:?} {} partition by {} {}",
+                target.rail,
+                target.amount.currency,
                 amount.amount - remaining_before,
                 amount.currency
             )));
@@ -812,20 +840,7 @@ impl BountyNetwork {
         self.funding_contributions
             .insert(contribution.id, contribution.clone());
 
-        let funded_after = funded_before + contribution.amount.amount;
-        if funded_after == bounty.amount.amount {
-            let bounty = self
-                .bounties
-                .get_mut(&bounty.id)
-                .ok_or(AppError::BountyNotFound)?;
-            if bounty.status == BountyStatus::Unfunded {
-                let terms_hash = bounty.terms_hash.clone().unwrap_or_else(|| {
-                    hash_terms(&bounty.title, &bounty.template_slug, &bounty.amount)
-                });
-                bounty.mark_funded(terms_hash)?;
-            }
-            bounty.make_claimable()?;
-        }
+        self.mark_bounty_claimable_if_fully_funded(bounty.id)?;
 
         let bounty = self
             .bounties
@@ -933,18 +948,16 @@ impl BountyNetwork {
             .verifier_kind
             .clone()
             .unwrap_or_else(|| verifier_kind_for_template(&bounty_snapshot.template_slug));
-        let payout_risk = self.risk_policy.evaluate_payout(&PayoutRiskInput {
-            bounty_id: request.bounty_id,
-            rail: payment_rail_for_funding_mode(&bounty_snapshot.funding_mode),
-            amount: bounty_snapshot.amount.clone(),
-        });
-        self.enforce_risk_with_optional_approval(
-            payout_risk,
-            request.bounty_id,
-            None,
-            Some(request.bounty_id),
-            request.approved_risk_event_id,
-        )?;
+        for payout_risk_input in self.payout_risk_inputs_for_bounty(&bounty_snapshot)? {
+            let payout_risk = self.risk_policy.evaluate_payout(&payout_risk_input);
+            self.enforce_risk_with_optional_approval(
+                payout_risk,
+                request.bounty_id,
+                None,
+                Some(request.bounty_id),
+                request.approved_risk_event_id,
+            )?;
+        }
 
         {
             let bounty = self
@@ -998,16 +1011,16 @@ impl BountyNetwork {
                 .ok_or(AppError::BountyNotFound)?;
             bounty.make_payable(&proof)?;
         }
-        let settlement = self.settle_payable_bounty(
+        let settlements = self.settle_payable_bounty(
             request.bounty_id,
             &proof,
             submission.solver_agent_id,
             result.verifier_agent_id,
         )?;
-        self.link_funding_contributions_to_settlement(request.bounty_id, settlement.id);
-        let reputation_reason = if settlement
-            .payout_intents
+        self.link_funding_contributions_to_settlements(request.bounty_id, &settlements);
+        let reputation_reason = if settlements
             .iter()
+            .flat_map(|settlement| &settlement.payout_intents)
             .all(|intent| intent.status == PayoutStatus::Paid)
         {
             "accepted submission settled for payment"
@@ -1041,7 +1054,9 @@ impl BountyNetwork {
 
         self.verifier_results.insert(result.id, result);
         self.proofs.insert(proof.id, proof.clone());
-        self.settlements.insert(settlement.id, settlement);
+        for settlement in settlements {
+            self.settlements.insert(settlement.id, settlement);
+        }
         self.reputation_events
             .insert(reputation_event.id, reputation_event);
         self.template_signals
@@ -1063,7 +1078,10 @@ impl BountyNetwork {
             .get(&event.bounty_id)
             .ok_or(AppError::BountyNotFound)?
             .clone();
-        if bounty.funding_mode != FundingMode::BaseUsdcEscrow {
+        if !matches!(
+            bounty.funding_mode,
+            FundingMode::BaseUsdcEscrow | FundingMode::MixedRails
+        ) {
             return Err(AppError::InvalidBaseEscrowEvent(
                 "event bounty is not funded through Base USDC escrow".to_string(),
             ));
@@ -1086,7 +1104,8 @@ impl BountyNetwork {
                         "created event must include terms hash".to_string(),
                     )
                 })?;
-                validate_created_base_escrow(&bounty, &amount, &terms_hash)?;
+                let target = self.base_funding_target(&bounty)?;
+                validate_created_base_escrow(&bounty, &target, &amount, &terms_hash)?;
                 if self.escrows.values().any(|escrow| {
                     escrow.bounty_id == event.bounty_id
                         && escrow.rail == PaymentRail::BaseUsdc
@@ -1097,18 +1116,18 @@ impl BountyNetwork {
                     ));
                 }
 
+                let already_confirmed = self.escrows.get(&escrow_id).is_some_and(|escrow| {
+                    matches!(
+                        escrow.status,
+                        EscrowStatus::Funded | EscrowStatus::Disputed | EscrowStatus::Released
+                    )
+                });
                 let status = self
                     .escrows
                     .get(&escrow_id)
                     .map(|escrow| escrow.status.clone())
                     .filter(|status| *status != EscrowStatus::Funded)
                     .unwrap_or(EscrowStatus::Funded);
-                if let Some(entry) = self.mark_base_escrow_funded(
-                    event.bounty_id,
-                    format!("base-fund:{}", event.log_key),
-                )? {
-                    ledger_entries.push(entry);
-                }
                 self.escrows.insert(
                     escrow_id,
                     Escrow {
@@ -1116,11 +1135,19 @@ impl BountyNetwork {
                         bounty_id: event.bounty_id,
                         rail: PaymentRail::BaseUsdc,
                         token,
-                        amount,
+                        amount: amount.clone(),
                         status,
                         external_reference: Some(base_escrow_reference(event.onchain_escrow_id)),
                     },
                 );
+                if !already_confirmed {
+                    if let Some(entry) = self
+                        .mark_base_escrow_funded(amount, format!("base-fund:{}", event.log_key))?
+                    {
+                        ledger_entries.push(entry);
+                    }
+                }
+                self.mark_bounty_claimable_if_fully_funded(event.bounty_id)?;
             }
             BaseEscrowEventKind::Released => {
                 if let Some(entry) = self.mark_base_release_paid(
@@ -1670,7 +1697,10 @@ impl BountyNetwork {
             .get(&request.bounty_id)
             .ok_or(AppError::BountyNotFound)?
             .clone();
-        if bounty.funding_mode != FundingMode::BaseUsdcEscrow {
+        if !matches!(
+            bounty.funding_mode,
+            FundingMode::BaseUsdcEscrow | FundingMode::MixedRails
+        ) {
             return Err(AppError::InvalidBaseFundingPlan(
                 "bounty is not funded through Base USDC escrow".to_string(),
             ));
@@ -1691,11 +1721,12 @@ impl BountyNetwork {
         let terms_hash = bounty.terms_hash.clone().ok_or_else(|| {
             AppError::InvalidBaseFundingPlan("bounty is missing a terms hash".to_string())
         })?;
+        let base_target = self.base_funding_target(&bounty)?;
         let create = BaseEscrowCreate {
             bounty_id: bounty.id,
             payer: request.payer,
             token: request.token,
-            amount: bounty.amount.clone(),
+            amount: base_target.amount.clone(),
             terms_hash,
         };
         let funding = BaseEscrowTxPlanner::new(request.escrow_contract)
@@ -1800,7 +1831,7 @@ impl BountyNetwork {
             recipients: recipients.clone(),
             proof_hash: proof.proof_hash.clone(),
         }
-        .validate_split(&bounty.amount)
+        .validate_split(&settlement_total_amount(&settlement)?)
         .map_err(|error| AppError::InvalidBaseReleasePlan(error.to_string()))?;
 
         let release_call = BaseEscrowReleaseCall {
@@ -2056,10 +2087,10 @@ impl BountyNetwork {
         proof: &ProofRecord,
         solver_agent_id: Id,
         verifier_agent_id: Option<Id>,
-    ) -> AppResult<Settlement> {
+    ) -> AppResult<Vec<Settlement>> {
         let bounty = self
             .bounties
-            .get_mut(&bounty_id)
+            .get(&bounty_id)
             .ok_or(AppError::BountyNotFound)?;
         if bounty.status != BountyStatus::Payable {
             return Err(domain::DomainError::InvalidTransition {
@@ -2068,91 +2099,127 @@ impl BountyNetwork {
             }
             .into());
         }
+        let targets = self.settlement_targets_for_bounty(bounty)?;
 
-        let amount = bounty.amount.clone();
-        let solver_amount = Money::new(amount.amount * 90 / 100, amount.currency.clone())?;
-        let verifier_amount = verifier_agent_id
-            .map(|_| Money::new(amount.amount * 5 / 100, amount.currency.clone()))
-            .transpose()?;
-        let platform_amount = Money::new(
-            amount.amount
-                - solver_amount.amount
-                - verifier_amount
-                    .as_ref()
-                    .map(|amount| amount.amount)
-                    .unwrap_or_default(),
-            amount.currency.clone(),
-        )?;
+        let mut settlements = Vec::new();
+        let mut all_payouts_paid = true;
+        for target in targets {
+            let amount = target.amount.clone();
+            let rail = target.rail.clone();
+            let solver_amount = Money::new(amount.amount * 90 / 100, amount.currency.clone())?;
+            let verifier_amount = verifier_agent_id
+                .map(|_| Money::new(amount.amount * 5 / 100, amount.currency.clone()))
+                .transpose()?;
+            let platform_amount = Money::new(
+                amount.amount
+                    - solver_amount.amount
+                    - verifier_amount
+                        .as_ref()
+                        .map(|amount| amount.amount)
+                        .unwrap_or_default(),
+                amount.currency.clone(),
+            )?;
 
-        let rail = payment_rail_for_funding_mode(&bounty.funding_mode);
-        let payout_status = match rail {
-            PaymentRail::StripeFiat => PayoutStatus::Blocked,
-            PaymentRail::BaseUsdc => PayoutStatus::Pending,
-            PaymentRail::Simulated => PayoutStatus::Paid,
-        };
-        let mut payout_intents = vec![PayoutIntent {
-            id: Uuid::new_v4(),
-            bounty_id,
-            recipient_agent_id: solver_agent_id,
-            rail: rail.clone(),
-            amount: solver_amount.clone(),
-            status: payout_status.clone(),
-        }];
-        let mut postings = Vec::new();
-        if payout_status == PayoutStatus::Paid {
-            postings.push(debit("bounty_liability", amount.clone()));
-            postings.push(credit(
-                format!("agent_payable:{solver_agent_id}"),
-                solver_amount,
-            ));
-        }
-        if let (Some(verifier_agent_id), Some(verifier_amount)) =
-            (verifier_agent_id, verifier_amount.clone())
-        {
-            payout_intents.push(PayoutIntent {
+            let payout_status = match rail {
+                PaymentRail::StripeFiat => PayoutStatus::Blocked,
+                PaymentRail::BaseUsdc => PayoutStatus::Pending,
+                PaymentRail::Simulated => PayoutStatus::Paid,
+            };
+            all_payouts_paid &= payout_status == PayoutStatus::Paid;
+
+            let mut payout_intents = vec![PayoutIntent {
                 id: Uuid::new_v4(),
                 bounty_id,
-                recipient_agent_id: verifier_agent_id,
+                recipient_agent_id: solver_agent_id,
                 rail: rail.clone(),
-                amount: verifier_amount.clone(),
+                amount: solver_amount.clone(),
                 status: payout_status.clone(),
-            });
+            }];
+            let mut postings = Vec::new();
             if payout_status == PayoutStatus::Paid {
+                postings.push(debit("bounty_liability", amount.clone()));
                 postings.push(credit(
-                    format!("agent_payable:{verifier_agent_id}"),
-                    verifier_amount,
+                    format!("agent_payable:{solver_agent_id}"),
+                    solver_amount,
                 ));
             }
-        }
-        if payout_status == PayoutStatus::Paid {
-            postings.push(credit("platform_fee", platform_amount.clone()));
+            if let (Some(verifier_agent_id), Some(verifier_amount)) =
+                (verifier_agent_id, verifier_amount.clone())
+            {
+                payout_intents.push(PayoutIntent {
+                    id: Uuid::new_v4(),
+                    bounty_id,
+                    recipient_agent_id: verifier_agent_id,
+                    rail: rail.clone(),
+                    amount: verifier_amount.clone(),
+                    status: payout_status.clone(),
+                });
+                if payout_status == PayoutStatus::Paid {
+                    postings.push(credit(
+                        format!("agent_payable:{verifier_agent_id}"),
+                        verifier_amount,
+                    ));
+                }
+            }
+            if payout_status == PayoutStatus::Paid {
+                postings.push(credit("platform_fee", platform_amount.clone()));
 
-            self.ledger.append(LedgerEntry::new(
-                "settle bounty",
-                Some(format!("settle:{bounty_id}")),
-                postings,
-            )?)?;
-            bounty.mark_paid()?;
+                let external_event = if settlements.is_empty()
+                    && self
+                        .bounties
+                        .get(&bounty_id)
+                        .map(|bounty| bounty.funding_mode != FundingMode::MixedRails)
+                        .unwrap_or(false)
+                {
+                    format!("settle:{bounty_id}")
+                } else {
+                    format!("settle:{bounty_id}:{:?}:{}", rail, amount.currency)
+                };
+                self.ledger.append(LedgerEntry::new(
+                    "settle bounty",
+                    Some(external_event),
+                    postings,
+                )?)?;
+            }
+
+            settlements.push(Settlement {
+                id: Uuid::new_v4(),
+                bounty_id,
+                proof_record_id: proof.id,
+                rail,
+                payout_intents,
+                platform_fee: platform_amount,
+                created_at: Utc::now(),
+            });
         }
-        Ok(Settlement {
-            id: Uuid::new_v4(),
-            bounty_id,
-            proof_record_id: proof.id,
-            rail,
-            payout_intents,
-            platform_fee: platform_amount,
-            created_at: Utc::now(),
-        })
+
+        if all_payouts_paid {
+            self.bounties
+                .get_mut(&bounty_id)
+                .ok_or(AppError::BountyNotFound)?
+                .mark_paid()?;
+        }
+        Ok(settlements)
     }
 
-    fn link_funding_contributions_to_settlement(&mut self, bounty_id: Id, settlement_id: Id) {
+    fn link_funding_contributions_to_settlements(
+        &mut self,
+        bounty_id: Id,
+        settlements: &[Settlement],
+    ) {
         for contribution in self
             .funding_contributions
             .values_mut()
             .filter(|contribution| contribution.bounty_id == bounty_id)
         {
             if contribution.status == FundingContributionStatus::Applied {
-                contribution.settlement_id = Some(settlement_id);
+                contribution.settlement_id = settlements
+                    .iter()
+                    .find(|settlement| {
+                        settlement.rail == contribution.rail
+                            && settlement.platform_fee.currency == contribution.amount.currency
+                    })
+                    .map(|settlement| settlement.id);
             }
         }
     }
@@ -2169,63 +2236,10 @@ impl BountyNetwork {
 
     fn mark_base_escrow_funded(
         &mut self,
-        bounty_id: Id,
+        amount: Money,
         external_event_id: String,
     ) -> AppResult<Option<LedgerEntry>> {
-        let already_has_base_escrow = self
-            .escrows
-            .values()
-            .any(|escrow| escrow.bounty_id == bounty_id && escrow.rail == PaymentRail::BaseUsdc);
-        let amount = self
-            .bounties
-            .get(&bounty_id)
-            .ok_or(AppError::BountyNotFound)?
-            .amount
-            .clone();
-        let terms_hash = self
-            .bounties
-            .get(&bounty_id)
-            .ok_or(AppError::BountyNotFound)?
-            .terms_hash
-            .clone()
-            .ok_or_else(|| {
-                AppError::InvalidBaseEscrowEvent(
-                    "Base bounty is missing terms hash before funding".to_string(),
-                )
-            })?;
-
-        {
-            let bounty = self
-                .bounties
-                .get_mut(&bounty_id)
-                .ok_or(AppError::BountyNotFound)?;
-            match bounty.status {
-                BountyStatus::Unfunded => {
-                    bounty.mark_funded(terms_hash)?;
-                    bounty.make_claimable()?;
-                }
-                BountyStatus::Funded => bounty.make_claimable()?,
-                BountyStatus::Claimable
-                | BountyStatus::Claimed
-                | BountyStatus::Submitted
-                | BountyStatus::Verifying
-                | BountyStatus::Accepted
-                | BountyStatus::Payable => {}
-                BountyStatus::Paid
-                | BountyStatus::Refunding
-                | BountyStatus::Refunded
-                | BountyStatus::Disputed
-                | BountyStatus::Expired => {
-                    return Err(domain::DomainError::InvalidTransition {
-                        from: format!("{:?}", bounty.status),
-                        to: "Claimable".to_string(),
-                    }
-                    .into());
-                }
-            }
-        }
-
-        if self.ledger.has_external_event(&external_event_id) || already_has_base_escrow {
+        if self.ledger.has_external_event(&external_event_id) {
             return Ok(None);
         }
         let entry = LedgerEntry::new(
@@ -2282,7 +2296,8 @@ impl BountyNetwork {
             .get(&settlement_id)
             .expect("settlement id selected from map")
             .clone();
-        let mut postings = vec![debit("bounty_liability", bounty.amount.clone())];
+        let settlement_amount = settlement_total_amount(&settlement)?;
+        let mut postings = vec![debit("bounty_liability", settlement_amount)];
         for intent in &settlement.payout_intents {
             postings.push(credit(
                 format!("agent_payable:{}", intent.recipient_agent_id),
@@ -2301,10 +2316,7 @@ impl BountyNetwork {
         for intent in &mut settlement.payout_intents {
             intent.status = PayoutStatus::Paid;
         }
-        self.bounties
-            .get_mut(&bounty_id)
-            .ok_or(AppError::BountyNotFound)?
-            .mark_paid()?;
+        self.mark_bounty_paid_if_all_settlements_paid(bounty_id)?;
 
         Ok(Some(entry))
     }
@@ -2319,11 +2331,20 @@ impl BountyNetwork {
         }
 
         let amount = self
-            .bounties
-            .get(&bounty_id)
-            .ok_or(AppError::BountyNotFound)?
-            .amount
-            .clone();
+            .escrows
+            .values()
+            .find(|escrow| {
+                escrow.bounty_id == bounty_id
+                    && escrow.rail == PaymentRail::BaseUsdc
+                    && is_refundable_base_escrow_status(&escrow.status)
+            })
+            .map(|escrow| escrow.amount.clone())
+            .or_else(|| {
+                self.bounties
+                    .get(&bounty_id)
+                    .map(|bounty| bounty.amount.clone())
+            })
+            .ok_or(AppError::BountyNotFound)?;
         let status = self
             .bounties
             .get(&bounty_id)
@@ -2476,12 +2497,14 @@ impl BountyNetwork {
             ],
         )?;
         self.ledger.append(entry.clone())?;
-        let bounty = self
+        let should_mark_paid = self
             .bounties
-            .get_mut(&settlement.bounty_id)
-            .ok_or(AppError::BountyNotFound)?;
-        if bounty.status == BountyStatus::Payable {
-            bounty.mark_paid()?;
+            .get(&settlement.bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .status
+            == BountyStatus::Payable;
+        if should_mark_paid {
+            self.mark_bounty_paid_if_all_settlements_paid(settlement.bounty_id)?;
         }
         Ok(Some(entry))
     }
@@ -2630,12 +2653,93 @@ fn hash_proof(artifact_digest: &str, verifier_hash: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn payment_rail_for_funding_mode(funding_mode: &FundingMode) -> PaymentRail {
+fn payment_rail_for_funding_mode(funding_mode: &FundingMode) -> AppResult<PaymentRail> {
     match funding_mode {
-        FundingMode::Simulated => PaymentRail::Simulated,
-        FundingMode::BaseUsdcEscrow => PaymentRail::BaseUsdc,
-        FundingMode::StripeFiatLedger => PaymentRail::StripeFiat,
+        FundingMode::Simulated => Ok(PaymentRail::Simulated),
+        FundingMode::BaseUsdcEscrow => Ok(PaymentRail::BaseUsdc),
+        FundingMode::StripeFiatLedger => Ok(PaymentRail::StripeFiat),
+        FundingMode::MixedRails => Err(AppError::InvalidFundingContribution(
+            "mixed rail bounty requires explicit funding targets".to_string(),
+        )),
     }
+}
+
+fn funding_targets_from_request(
+    funding_mode: &FundingMode,
+    amount: &Money,
+    requested_targets: &[FundingPartitionTargetRequest],
+) -> AppResult<Vec<FundingPartitionTarget>> {
+    if *funding_mode != FundingMode::MixedRails {
+        if !requested_targets.is_empty() {
+            return Err(AppError::InvalidFundingContribution(
+                "funding_targets are only valid for MixedRails pooled bounties".to_string(),
+            ));
+        }
+        return Ok(Vec::new());
+    }
+
+    if requested_targets.is_empty() {
+        return Err(AppError::InvalidFundingContribution(
+            "MixedRails pooled bounties require explicit funding_targets".to_string(),
+        ));
+    }
+
+    let mut targets = Vec::new();
+    for target in requested_targets {
+        if target.rail == PaymentRail::Simulated {
+            return Err(AppError::InvalidFundingContribution(
+                "MixedRails funding targets must use real payment rails".to_string(),
+            ));
+        }
+        let money = Money::new(target.amount_minor, target.currency.clone())?;
+        if targets.iter().any(|existing: &FundingPartitionTarget| {
+            existing.rail == target.rail && existing.amount.currency == money.currency
+        }) {
+            return Err(AppError::InvalidFundingContribution(format!(
+                "duplicate {:?} {} funding target",
+                target.rail, money.currency
+            )));
+        }
+        targets.push(FundingPartitionTarget {
+            rail: target.rail.clone(),
+            amount: money,
+        });
+    }
+
+    if targets
+        .iter()
+        .any(|target| target.amount.currency == amount.currency)
+    {
+        let display_currency_total = targets
+            .iter()
+            .filter(|target| target.amount.currency == amount.currency)
+            .map(|target| target.amount.amount)
+            .sum::<i64>();
+        if display_currency_total != amount.amount {
+            return Err(AppError::InvalidFundingContribution(format!(
+                "MixedRails display target must equal confirmed targets in {}; expected {}, got {}",
+                amount.currency, display_currency_total, amount.amount
+            )));
+        }
+    }
+
+    Ok(targets)
+}
+
+fn settlement_total_amount(settlement: &Settlement) -> AppResult<Money> {
+    let currency = settlement.platform_fee.currency.clone();
+    let payout_total = settlement
+        .payout_intents
+        .iter()
+        .try_fold(0_i64, |total, intent| {
+            if intent.amount.currency != currency {
+                return Err(AppError::InvalidFundingContribution(
+                    "settlement payout currencies do not match platform fee currency".to_string(),
+                ));
+            }
+            Ok(total + intent.amount.amount)
+        })?;
+    Money::new(payout_total + settlement.platform_fee.amount, currency).map_err(AppError::from)
 }
 
 fn capability_class_for_template(template_slug: &str) -> CapabilityClass {
@@ -2663,12 +2767,13 @@ fn verifier_kind_for_template(template_slug: &str) -> VerifierKind {
 
 fn validate_created_base_escrow(
     bounty: &Bounty,
+    target: &FundingPartitionTarget,
     amount: &Money,
     terms_hash: &str,
 ) -> AppResult<()> {
-    if &bounty.amount != amount {
+    if target.rail != PaymentRail::BaseUsdc || &target.amount != amount {
         return Err(AppError::InvalidBaseEscrowEvent(
-            "created event amount does not match bounty amount".to_string(),
+            "created event amount does not match Base USDC funding target".to_string(),
         ));
     }
     if let Some(expected_terms_hash) = &bounty.terms_hash {
@@ -2690,19 +2795,94 @@ impl BountyNetwork {
         Ok(self.funding_summary_for_bounty(bounty))
     }
 
+    fn effective_funding_targets(&self, bounty: &Bounty) -> AppResult<Vec<FundingPartitionTarget>> {
+        if !bounty.funding_targets.is_empty() {
+            return Ok(bounty.funding_targets.clone());
+        }
+        if bounty.funding_mode == FundingMode::MixedRails {
+            return Err(AppError::InvalidFundingContribution(
+                "mixed rail bounty is missing explicit funding targets".to_string(),
+            ));
+        }
+        Ok(vec![FundingPartitionTarget {
+            rail: payment_rail_for_funding_mode(&bounty.funding_mode)?,
+            amount: bounty.amount.clone(),
+        }])
+    }
+
+    fn funding_target_for_contribution(
+        &self,
+        bounty: &Bounty,
+        rail: &PaymentRail,
+        currency: &str,
+    ) -> AppResult<FundingPartitionTarget> {
+        self.effective_funding_targets(bounty)?
+            .into_iter()
+            .find(|target| {
+                target.rail == *rail && target.amount.currency == currency.to_lowercase()
+            })
+            .ok_or_else(|| {
+                AppError::InvalidFundingContribution(format!(
+                    "bounty has no {:?} {} funding target",
+                    rail,
+                    currency.to_lowercase()
+                ))
+            })
+    }
+
+    fn base_funding_target(&self, bounty: &Bounty) -> AppResult<FundingPartitionTarget> {
+        self.effective_funding_targets(bounty)?
+            .into_iter()
+            .find(|target| target.rail == PaymentRail::BaseUsdc)
+            .ok_or_else(|| {
+                AppError::InvalidBaseFundingPlan(
+                    "bounty has no Base USDC funding target".to_string(),
+                )
+            })
+    }
+
+    fn settlement_targets_for_bounty(
+        &self,
+        bounty: &Bounty,
+    ) -> AppResult<Vec<FundingPartitionTarget>> {
+        let targets = self.effective_funding_targets(bounty)?;
+        let funded_targets = targets
+            .into_iter()
+            .filter(|target| {
+                self.confirmed_funding_for_target(bounty, target) >= target.amount.amount
+            })
+            .collect::<Vec<_>>();
+        if funded_targets.is_empty() {
+            return Err(AppError::InvalidFundingContribution(
+                "bounty has no confirmed funding partitions to settle".to_string(),
+            ));
+        }
+        Ok(funded_targets)
+    }
+
+    fn payout_risk_inputs_for_bounty(&self, bounty: &Bounty) -> AppResult<Vec<PayoutRiskInput>> {
+        Ok(self
+            .settlement_targets_for_bounty(bounty)?
+            .into_iter()
+            .map(|target| PayoutRiskInput {
+                bounty_id: bounty.id,
+                rail: target.rail,
+                amount: target.amount,
+            })
+            .collect())
+    }
+
     fn is_claimable_with_confirmed_funding(&self, bounty: &Bounty) -> bool {
         if bounty.status != BountyStatus::Claimable {
             return false;
         }
-        if bounty.funding_mode != FundingMode::BaseUsdcEscrow {
-            return true;
-        }
-        self.has_funded_base_escrow(bounty.id)
+        self.funding_targets_claimable(bounty).unwrap_or(false)
     }
 
     fn funding_summary_for_bounty(&self, bounty: &Bounty) -> PooledFundingSummary {
         let applied_amount = self.applied_funding_amount(bounty);
         let remaining_amount = bounty.amount.amount.saturating_sub(applied_amount);
+        let partitions = self.funding_partition_summaries(bounty);
         PooledFundingSummary {
             bounty_id: bounty.id,
             target: bounty.amount.clone(),
@@ -2720,30 +2900,174 @@ impl BountyNetwork {
                 .filter(|contribution| contribution.bounty_id == bounty.id)
                 .filter(|contribution| contribution.status == FundingContributionStatus::Applied)
                 .count(),
+            partitions,
             claimable: self.is_claimable_with_confirmed_funding(bounty),
         }
     }
 
     fn applied_funding_amount(&self, bounty: &Bounty) -> i64 {
+        self.confirmed_funding_in_currency(bounty, &bounty.amount.currency)
+    }
+
+    fn funding_targets_claimable(&self, bounty: &Bounty) -> AppResult<bool> {
+        Ok(self
+            .effective_funding_targets(bounty)?
+            .iter()
+            .all(|target| {
+                self.confirmed_funding_for_target(bounty, target) >= target.amount.amount
+            }))
+    }
+
+    fn mark_bounty_claimable_if_fully_funded(&mut self, bounty_id: Id) -> AppResult<()> {
+        let bounty_snapshot = self
+            .bounties
+            .get(&bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .clone();
+        if !self.funding_targets_claimable(&bounty_snapshot)? {
+            return Ok(());
+        }
+        let bounty = self
+            .bounties
+            .get_mut(&bounty_id)
+            .ok_or(AppError::BountyNotFound)?;
+        match bounty.status {
+            BountyStatus::Unfunded => {
+                let terms_hash = bounty.terms_hash.clone().unwrap_or_else(|| {
+                    hash_terms(&bounty.title, &bounty.template_slug, &bounty.amount)
+                });
+                bounty.mark_funded(terms_hash)?;
+                bounty.make_claimable()?;
+            }
+            BountyStatus::Funded => bounty.make_claimable()?,
+            BountyStatus::Claimable
+            | BountyStatus::Claimed
+            | BountyStatus::Submitted
+            | BountyStatus::Verifying
+            | BountyStatus::Accepted
+            | BountyStatus::Payable => {}
+            BountyStatus::Paid
+            | BountyStatus::Refunding
+            | BountyStatus::Refunded
+            | BountyStatus::Disputed
+            | BountyStatus::Expired => {
+                return Err(domain::DomainError::InvalidTransition {
+                    from: format!("{:?}", bounty.status),
+                    to: "Claimable".to_string(),
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    fn mark_bounty_paid_if_all_settlements_paid(&mut self, bounty_id: Id) -> AppResult<()> {
+        let all_paid = self
+            .settlements
+            .values()
+            .filter(|settlement| settlement.bounty_id == bounty_id)
+            .flat_map(|settlement| &settlement.payout_intents)
+            .all(|intent| intent.status == PayoutStatus::Paid);
+        if all_paid {
+            let bounty = self
+                .bounties
+                .get_mut(&bounty_id)
+                .ok_or(AppError::BountyNotFound)?;
+            if bounty.status == BountyStatus::Payable {
+                bounty.mark_paid()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn funding_partition_summaries(&self, bounty: &Bounty) -> Vec<FundingPartitionSummary> {
+        self.effective_funding_targets(bounty)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|target| {
+                let confirmed = self.confirmed_funding_for_target(bounty, &target);
+                let remaining = target.amount.amount.saturating_sub(confirmed);
+                FundingPartitionSummary {
+                    rail: target.rail.clone(),
+                    target: target.amount.clone(),
+                    confirmed: Money {
+                        amount: confirmed,
+                        currency: target.amount.currency.clone(),
+                    },
+                    remaining: Money {
+                        amount: remaining,
+                        currency: target.amount.currency.clone(),
+                    },
+                    contribution_count: self
+                        .funding_contributions
+                        .values()
+                        .filter(|contribution| contribution.bounty_id == bounty.id)
+                        .filter(|contribution| {
+                            contribution.status == FundingContributionStatus::Applied
+                        })
+                        .filter(|contribution| contribution.rail == target.rail)
+                        .filter(|contribution| {
+                            contribution.amount.currency == target.amount.currency
+                        })
+                        .count(),
+                    escrow_count: self
+                        .escrows
+                        .values()
+                        .filter(|escrow| escrow.bounty_id == bounty.id)
+                        .filter(|escrow| escrow.rail == target.rail)
+                        .filter(|escrow| escrow.amount.currency == target.amount.currency)
+                        .filter(|escrow| {
+                            matches!(
+                                escrow.status,
+                                EscrowStatus::Funded
+                                    | EscrowStatus::Disputed
+                                    | EscrowStatus::Released
+                            )
+                        })
+                        .count(),
+                    claimable: confirmed >= target.amount.amount,
+                }
+            })
+            .collect()
+    }
+
+    fn confirmed_funding_for_target(
+        &self,
+        bounty: &Bounty,
+        target: &FundingPartitionTarget,
+    ) -> i64 {
+        self.confirmed_funding_for_rail_currency(bounty.id, &target.rail, &target.amount.currency)
+    }
+
+    fn confirmed_funding_in_currency(&self, bounty: &Bounty, currency: &str) -> i64 {
+        self.funding_partition_summaries(bounty)
+            .into_iter()
+            .filter(|partition| partition.target.currency == currency)
+            .map(|partition| partition.confirmed.amount)
+            .sum()
+    }
+
+    fn confirmed_funding_for_rail_currency(
+        &self,
+        bounty_id: Id,
+        rail: &PaymentRail,
+        currency: &str,
+    ) -> i64 {
         let contribution_total = self
             .funding_contributions
             .values()
-            .filter(|contribution| contribution.bounty_id == bounty.id)
+            .filter(|contribution| contribution.bounty_id == bounty_id)
             .filter(|contribution| contribution.status == FundingContributionStatus::Applied)
-            .filter(|contribution| contribution.amount.currency == bounty.amount.currency)
+            .filter(|contribution| contribution.rail == *rail)
+            .filter(|contribution| contribution.amount.currency == currency)
             .map(|contribution| contribution.amount.amount)
             .sum::<i64>();
-        if contribution_total > 0 || bounty.funding_mode != FundingMode::BaseUsdcEscrow {
-            if contribution_total == 0 && bounty.status != BountyStatus::Unfunded {
-                return bounty.amount.amount;
-            }
-            return contribution_total;
-        }
-        self.escrows
+        let escrow_total = self
+            .escrows
             .values()
-            .filter(|escrow| escrow.bounty_id == bounty.id)
-            .filter(|escrow| escrow.rail == PaymentRail::BaseUsdc)
-            .filter(|escrow| escrow.amount.currency == bounty.amount.currency)
+            .filter(|escrow| escrow.bounty_id == bounty_id)
+            .filter(|escrow| escrow.rail == *rail)
+            .filter(|escrow| escrow.amount.currency == currency)
             .filter(|escrow| {
                 matches!(
                     escrow.status,
@@ -2751,7 +3075,8 @@ impl BountyNetwork {
                 )
             })
             .map(|escrow| escrow.amount.amount)
-            .sum()
+            .sum::<i64>();
+        contribution_total + escrow_total
     }
 
     fn stripe_platform_balance_available_minor(&self, organization_id: Id, currency: &str) -> i64 {
@@ -3159,6 +3484,7 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
             })
             .unwrap();
 
@@ -3248,6 +3574,7 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
             })
             .unwrap();
         network
@@ -3313,6 +3640,7 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
             })
             .unwrap();
 
@@ -3375,6 +3703,7 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
             })
             .unwrap();
 
@@ -3743,6 +4072,7 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Private,
+                funding_targets: vec![],
             })
             .unwrap();
         network
@@ -3854,6 +4184,192 @@ mod tests {
             .unwrap();
         assert!(replay.ledger_entries.is_empty());
         assert_eq!(network.ledger.entries().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn mixed_stripe_and_base_partitions_settle_by_rail_after_one_proof() {
+        let mut network = BountyNetwork::default();
+        let organization_id = Uuid::new_v4();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "mixed-solver".to_string(),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+        });
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                title: "Implement mixed funding fixture".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                target_amount_minor: 500,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::MixedRails,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![
+                    FundingPartitionTargetRequest {
+                        rail: PaymentRail::StripeFiat,
+                        amount_minor: 500,
+                        currency: "usd".to_string(),
+                    },
+                    FundingPartitionTargetRequest {
+                        rail: PaymentRail::BaseUsdc,
+                        amount_minor: 1_000,
+                        currency: "usdc".to_string(),
+                    },
+                ],
+            })
+            .unwrap();
+
+        network
+            .apply_stripe_funding_credit(stripe_funding_credit(
+                organization_id,
+                500,
+                "usd",
+                "evt_mixed_topup",
+            ))
+            .unwrap();
+        let stripe = network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                source_organization_id: Some(organization_id),
+                amount_minor: 500,
+                currency: "usd".to_string(),
+                rail: PaymentRail::StripeFiat,
+                external_reference: Some("mixed-stripe-500".to_string()),
+            })
+            .unwrap();
+        assert_eq!(stripe.bounty.status, BountyStatus::Unfunded);
+        assert!(!stripe.funding_summary.claimable);
+        assert_eq!(stripe.funding_summary.partitions.len(), 2);
+        assert_eq!(
+            stripe
+                .funding_summary
+                .partitions
+                .iter()
+                .find(|partition| partition.rail == PaymentRail::StripeFiat)
+                .unwrap()
+                .remaining
+                .amount,
+            0
+        );
+
+        let base_created = network
+            .apply_base_escrow_event(chain_base::simulated_created_event(
+                bounty.id,
+                42,
+                "0x3333333333333333333333333333333333333333",
+                Money::new(1_000, "usdc").unwrap(),
+                bounty.terms_hash.clone().unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(base_created.bounty.status, BountyStatus::Claimable);
+        let status = network.status(bounty.id).unwrap();
+        assert!(status.funding_summary.claimable);
+        assert!(status
+            .funding_summary
+            .partitions
+            .iter()
+            .all(|partition| partition.remaining.amount == 0));
+
+        network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        let artifact = "{\"mixed\":true}";
+        let submission = network
+            .submit_result(SubmitResultRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+                artifact_uri: "memory://mixed-artifact".to_string(),
+                artifact_body: artifact.to_string(),
+            })
+            .unwrap();
+        let proof = network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: hash_artifact(artifact),
+                verifier_kind: Some(VerifierKind::JsonSchema),
+                rubric: None,
+                evidence: None,
+                approved_risk_event_id: None,
+            })
+            .await
+            .unwrap();
+
+        let status = network.status(bounty.id).unwrap();
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
+        assert_eq!(status.settlements.len(), 2);
+        let stripe_settlement = status
+            .settlements
+            .iter()
+            .find(|settlement| settlement.rail == PaymentRail::StripeFiat)
+            .unwrap();
+        let base_settlement = status
+            .settlements
+            .iter()
+            .find(|settlement| settlement.rail == PaymentRail::BaseUsdc)
+            .unwrap();
+        assert_eq!(stripe_settlement.platform_fee.currency, "usd");
+        assert_eq!(base_settlement.platform_fee.currency, "usdc");
+        assert_eq!(
+            status.funding_contributions[0].settlement_id,
+            Some(stripe_settlement.id)
+        );
+        assert_eq!(
+            base_settlement.payout_intents[0].status,
+            PayoutStatus::Pending
+        );
+        assert_eq!(
+            stripe_settlement.payout_intents[0].status,
+            PayoutStatus::Blocked
+        );
+
+        let release_plan = network
+            .plan_base_release(PlanBaseReleaseRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+                network: Some("base-sepolia".to_string()),
+            })
+            .unwrap();
+        assert_eq!(release_plan.release_call.recipients.len(), 2);
+        network
+            .apply_base_escrow_event(chain_base::simulated_released_event(
+                bounty.id,
+                42,
+                proof.proof_hash,
+            ))
+            .unwrap();
+        let after_base = network.status(bounty.id).unwrap();
+        assert_eq!(after_base.bounty.status, BountyStatus::Payable);
+        assert_eq!(
+            after_base
+                .settlements
+                .iter()
+                .find(|settlement| settlement.rail == PaymentRail::BaseUsdc)
+                .unwrap()
+                .payout_intents[0]
+                .status,
+            PayoutStatus::Paid
+        );
+
+        network
+            .apply_stripe_connect_snapshot(ConnectAccountSnapshot {
+                agent_id: solver.id,
+                connected_account_id: Some("acct_mixed".to_string()),
+                payouts_enabled: true,
+                disabled_reason: None,
+                currently_due: vec![],
+            })
+            .unwrap();
+        let paid = network.status(bounty.id).unwrap();
+        assert_eq!(paid.bounty.status, BountyStatus::Paid);
+        assert!(paid
+            .settlements
+            .iter()
+            .flat_map(|settlement| &settlement.payout_intents)
+            .all(|intent| intent.status == PayoutStatus::Paid));
     }
 
     #[test]

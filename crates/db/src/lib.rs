@@ -341,14 +341,15 @@ impl PostgresStore {
         sqlx::query(
             r#"
             INSERT INTO bounties
-              (id, help_request_id, title, template_slug, amount, currency, funding_mode, privacy, status, terms_hash, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              (id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (id) DO UPDATE SET
               help_request_id = EXCLUDED.help_request_id,
               title = EXCLUDED.title,
               template_slug = EXCLUDED.template_slug,
               amount = EXCLUDED.amount,
               currency = EXCLUDED.currency,
+              funding_targets = EXCLUDED.funding_targets,
               funding_mode = EXCLUDED.funding_mode,
               privacy = EXCLUDED.privacy,
               status = EXCLUDED.status,
@@ -361,6 +362,7 @@ impl PostgresStore {
         .bind(&bounty.template_slug)
         .bind(bounty.amount.amount)
         .bind(&bounty.amount.currency)
+        .bind(serde_json::to_value(&bounty.funding_targets)?)
         .bind(format!("{:?}", bounty.funding_mode))
         .bind(format!("{:?}", bounty.privacy))
         .bind(format!("{:?}", bounty.status))
@@ -374,7 +376,7 @@ impl PostgresStore {
     pub async fn list_bounties(&self) -> DbResult<Vec<Bounty>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, help_request_id, title, template_slug, amount, currency, funding_mode, privacy, status, terms_hash, created_at
+            SELECT id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at
             FROM bounties
             ORDER BY created_at
             "#,
@@ -393,6 +395,7 @@ impl PostgresStore {
                         row.try_get::<i64, _>("amount")?,
                         row.try_get::<String, _>("currency")?,
                     )?,
+                    funding_targets: serde_json::from_value(row.try_get("funding_targets")?)?,
                     funding_mode: parse_funding_mode(row.try_get::<String, _>("funding_mode")?)?,
                     privacy: parse_privacy(row.try_get::<String, _>("privacy")?)?,
                     status: parse_bounty_status(row.try_get::<String, _>("status")?)?,
@@ -1269,6 +1272,7 @@ fn parse_funding_mode(value: String) -> DbResult<FundingMode> {
         "Simulated" => Ok(FundingMode::Simulated),
         "BaseUsdcEscrow" => Ok(FundingMode::BaseUsdcEscrow),
         "StripeFiatLedger" => Ok(FundingMode::StripeFiatLedger),
+        "MixedRails" => Ok(FundingMode::MixedRails),
         _ => Err(DbError::InvalidEnum(value)),
     }
 }
@@ -1442,6 +1446,7 @@ mod tests {
         }
         assert!(CORE_MIGRATION.contains("idx_funding_contributions_external_reference"));
         assert!(CORE_MIGRATION.contains("source_organization_id UUID"));
+        assert!(CORE_MIGRATION.contains("funding_targets JSONB"));
         assert!(CORE_MIGRATION.contains("funding_ledger_entry_id UUID"));
         assert!(CORE_MIGRATION.contains("refund_ledger_entry_id UUID"));
         assert!(CORE_MIGRATION.contains("settlement_id UUID"));
