@@ -2012,6 +2012,7 @@ struct ServiceSmokeReport {
     bounty_id: String,
     feed_items: usize,
     mcp_tools: usize,
+    pooled_bounty_id: String,
     mcp_reviewed_bounty_id: String,
     mcp_bounty_id: String,
     mcp_solver_id: String,
@@ -2305,6 +2306,94 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         api_risk_policy.pointer("/ai_judges_can_authorize_payment")
             == Some(&serde_json::json!(false)),
         "API risk policy must state that AI judges cannot authorize payment",
+    )?;
+
+    let pooled_bounty = post_json(
+        &format!("{api}/v1/bounties/pooled"),
+        serde_json::json!({
+            "title": "Service smoke pooled bounty",
+            "template_slug": "extract-data-to-schema",
+            "target_amount_minor": 1_000,
+            "currency": "usdc",
+            "funding_mode": "Simulated",
+            "privacy": "Public"
+        }),
+    )?;
+    let pooled_bounty_id = value_str(&pooled_bounty, "/id")
+        .context("pooled bounty id missing")?
+        .to_string();
+    let pooled_funding = post_json(
+        &format!("{api}/v1/bounties/{pooled_bounty_id}/funding-contributions"),
+        serde_json::json!({
+            "bounty_id": pooled_bounty_id.as_str(),
+            "contributor_agent_id": null,
+            "amount_minor": 1_000,
+            "currency": "usdc",
+            "rail": "Simulated",
+            "external_reference": format!("service-smoke-pooled-{smoke_id}")
+        }),
+    )?;
+    require(
+        value_str(&pooled_funding, "/bounty/status") == Some("Claimable"),
+        "pooled simulated funding must make the bounty claimable at target",
+    )?;
+    require(
+        pooled_funding
+            .pointer("/contribution/funding_ledger_entry_id")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "pooled funding contribution must link to its funding ledger entry",
+    )?;
+    let pooled_claim = post_json(
+        &format!("{api}/v1/bounties/{pooled_bounty_id}/claim"),
+        serde_json::json!({
+            "bounty_id": pooled_bounty_id.as_str(),
+            "solver_agent_id": solver_id.as_str()
+        }),
+    )?;
+    require(
+        value_str(&pooled_claim, "/status") == Some("Claimed"),
+        "pooled bounty claim must move bounty to Claimed",
+    )?;
+    let pooled_artifact_body = "{\"pooled_smoke\":true}";
+    let pooled_submission = post_json(
+        &format!("{api}/v1/bounties/{pooled_bounty_id}/submit"),
+        serde_json::json!({
+            "bounty_id": pooled_bounty_id.as_str(),
+            "solver_agent_id": solver_id.as_str(),
+            "artifact_uri": "memory://service-smoke-pooled-artifact",
+            "artifact_body": pooled_artifact_body
+        }),
+    )?;
+    let pooled_submission_id =
+        value_str(&pooled_submission, "/id").context("pooled submission id missing")?;
+    let pooled_proof = post_json(
+        &format!("{api}/v1/bounties/{pooled_bounty_id}/verify"),
+        serde_json::json!({
+            "bounty_id": pooled_bounty_id.as_str(),
+            "submission_id": pooled_submission_id,
+            "expected_artifact_digest": hash_artifact(pooled_artifact_body),
+            "verifier_kind": "JsonSchema",
+            "rubric": null,
+            "evidence": null,
+            "approved_risk_event_id": null
+        }),
+    )?;
+    require(
+        value_str(&pooled_proof, "/proof_hash").is_some(),
+        "pooled bounty verification must return a proof hash",
+    )?;
+    let pooled_status = get_json(&format!("{api}/v1/bounties/{pooled_bounty_id}"))?;
+    let pooled_settlement_id =
+        value_str(&pooled_status, "/settlements/0/id").context("pooled settlement id missing")?;
+    require(
+        value_str(&pooled_status, "/bounty/status") == Some("Paid"),
+        "pooled simulated bounty must settle to Paid",
+    )?;
+    require(
+        value_str(&pooled_status, "/funding_contributions/0/settlement_id")
+            == Some(pooled_settlement_id),
+        "pooled funding contribution must link to the settlement after verification",
     )?;
 
     let bounty = post_json(
@@ -3042,6 +3131,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         bounty_id,
         feed_items: feed_items.len(),
         mcp_tools: tool_list.len(),
+        pooled_bounty_id,
         mcp_reviewed_bounty_id: mcp_reviewed_bounty_id.to_string(),
         mcp_bounty_id,
         mcp_solver_id: mcp_solver_id.to_string(),
@@ -3061,6 +3151,7 @@ fn print_service_smoke_report(report: &ServiceSmokeReport) -> Result<()> {
             "bounty_id": report.bounty_id,
             "feed_items": report.feed_items,
             "mcp_tools": report.mcp_tools,
+            "pooled_bounty_id": report.pooled_bounty_id,
             "mcp_reviewed_bounty_id": report.mcp_reviewed_bounty_id,
             "mcp_bounty_id": report.mcp_bounty_id,
             "mcp_solver_id": report.mcp_solver_id,
@@ -3200,6 +3291,29 @@ fn verify_service_smoke_restart_persistence(
                 .map(|settlements| !settlements.is_empty())
                 .unwrap_or(false),
             "restarted API must hydrate MCP-created settlement records",
+        )?;
+
+        let pooled_bounty_status =
+            get_json(&format!("{api}/v1/bounties/{}", report.pooled_bounty_id))?;
+        let pooled_settlement_id = value_str(&pooled_bounty_status, "/settlements/0/id")
+            .context("restarted pooled bounty settlement id missing")?;
+        require(
+            value_str(&pooled_bounty_status, "/bounty/status") == Some("Paid"),
+            "restarted API must hydrate paid pooled bounty from Postgres",
+        )?;
+        require(
+            pooled_bounty_status
+                .pointer("/funding_contributions/0/funding_ledger_entry_id")
+                .and_then(|value| value.as_str())
+                .is_some(),
+            "restarted API must hydrate pooled contribution funding ledger linkage",
+        )?;
+        require(
+            value_str(
+                &pooled_bounty_status,
+                "/funding_contributions/0/settlement_id",
+            ) == Some(pooled_settlement_id),
+            "restarted API must hydrate pooled contribution settlement linkage",
         )?;
 
         let reviewed_bounty_status = get_json(&format!(

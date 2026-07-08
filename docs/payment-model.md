@@ -9,9 +9,13 @@ solver can claim it. `POST /v1/bounties/pooled` and MCP
 `open_pooled_bounty` create an unfunded target with a terms hash. Contributors
 then call `POST /v1/bounties/{id}/funding-contributions` or MCP
 `add_bounty_funding`. Each applied contribution writes a balanced ledger entry,
-updates the bounty funding summary, and leaves the bounty unclaimable until the
-applied total exactly reaches the target amount. Overfunding and duplicate
-external contribution references are rejected deterministically.
+stores the funding ledger entry id on new contribution records, updates the
+bounty funding summary, and leaves the bounty unclaimable until the applied
+total exactly reaches the target amount. Contribution records also carry nullable
+refund ledger entry and settlement ids so later payout or refund review can bind
+back to the exact funding source. Legacy hydrated rows without an older ledger
+link remain readable but new funding events populate the link. Overfunding and
+duplicate external contribution references are rejected deterministically.
 
 This first pooled path is implemented for internal ledger rails such as
 `Simulated` and `StripeFiatLedger`. The current Base escrow contract remains a

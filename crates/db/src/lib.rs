@@ -410,14 +410,17 @@ impl PostgresStore {
         sqlx::query(
             r#"
             INSERT INTO funding_contributions
-              (id, bounty_id, contributor_agent_id, rail, amount, currency, status, external_reference, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              (id, bounty_id, contributor_agent_id, rail, amount, currency, status, funding_ledger_entry_id, refund_ledger_entry_id, settlement_id, external_reference, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (id) DO UPDATE SET
               contributor_agent_id = EXCLUDED.contributor_agent_id,
               rail = EXCLUDED.rail,
               amount = EXCLUDED.amount,
               currency = EXCLUDED.currency,
               status = EXCLUDED.status,
+              funding_ledger_entry_id = EXCLUDED.funding_ledger_entry_id,
+              refund_ledger_entry_id = EXCLUDED.refund_ledger_entry_id,
+              settlement_id = EXCLUDED.settlement_id,
               external_reference = EXCLUDED.external_reference
             "#,
         )
@@ -428,6 +431,9 @@ impl PostgresStore {
         .bind(contribution.amount.amount)
         .bind(&contribution.amount.currency)
         .bind(format!("{:?}", contribution.status))
+        .bind(contribution.funding_ledger_entry_id)
+        .bind(contribution.refund_ledger_entry_id)
+        .bind(contribution.settlement_id)
         .bind(&contribution.external_reference)
         .bind(contribution.created_at)
         .execute(&self.pool)
@@ -438,7 +444,7 @@ impl PostgresStore {
     pub async fn list_funding_contributions(&self) -> DbResult<Vec<FundingContribution>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, bounty_id, contributor_agent_id, rail, amount, currency, status, external_reference, created_at
+            SELECT id, bounty_id, contributor_agent_id, rail, amount, currency, status, funding_ledger_entry_id, refund_ledger_entry_id, settlement_id, external_reference, created_at
             FROM funding_contributions
             ORDER BY created_at
             "#,
@@ -458,6 +464,9 @@ impl PostgresStore {
                         row.try_get::<String, _>("currency")?,
                     )?,
                     status: parse_funding_contribution_status(row.try_get::<String, _>("status")?)?,
+                    funding_ledger_entry_id: row.try_get("funding_ledger_entry_id")?,
+                    refund_ledger_entry_id: row.try_get("refund_ledger_entry_id")?,
+                    settlement_id: row.try_get("settlement_id")?,
                     external_reference: row.try_get("external_reference")?,
                     created_at: row.try_get("created_at")?,
                 })
@@ -1429,6 +1438,10 @@ mod tests {
             assert!(CORE_MIGRATION.contains(table), "missing {table}");
         }
         assert!(CORE_MIGRATION.contains("idx_funding_contributions_external_reference"));
+        assert!(CORE_MIGRATION.contains("funding_ledger_entry_id UUID"));
+        assert!(CORE_MIGRATION.contains("refund_ledger_entry_id UUID"));
+        assert!(CORE_MIGRATION.contains("settlement_id UUID"));
+        assert!(CORE_MIGRATION.contains("fund-contribution:"));
     }
 
     #[test]
