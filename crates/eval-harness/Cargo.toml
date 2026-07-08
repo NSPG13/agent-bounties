@@ -10,6 +10,7 @@ rust-version.workspace = true
 bounty-router = { path = "../bounty-router" }
 chrono.workspace = true
 domain = { path = "../domain" }
+github-app = { path = "../github-app" }
 risk = { path = "../risk" }
 serde.workspace = true
 serde_json.workspace = true

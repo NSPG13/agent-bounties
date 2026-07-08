@@ -74,6 +74,21 @@ payout state-machine code used by hosted services.
 cargo run -p cli -- funding-rehearsal-demo
 ```
 
+Before using Stripe test mode or Base Sepolia RPC, inspect operator readiness:
+
+```powershell
+cargo run -p cli -- real-funding-readiness `
+  --network base-sepolia `
+  --escrow-contract <escrow-contract-address> `
+  --usdc-token <base-sepolia-usdc-token-address>
+```
+
+The readiness report does not call Stripe or Base. It checks whether local
+simulation, Stripe test-mode execution, Stripe webhook evidence, Base Sepolia
+log reconciliation, optional signed transaction broadcast, and hosted operator
+auth are configured. Missing readiness only blocks the external rail step; the
+deterministic local rehearsal remains runnable.
+
 Expected evidence boundary in the JSON output:
 
 - `stripe.funding_intent` starts as `AwaitingEvidence`.

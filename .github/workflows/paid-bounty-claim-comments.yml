@@ -1,0 +1,37 @@
+name: Paid Bounty Claim Comments
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: paid-bounty-claim-comment-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  plan-claim-signal:
+    if: >-
+      contains(github.event.issue.labels.*.name, 'bounty')
+      && (
+        startsWith(github.event.comment.body, '/agent-bounty claim')
+        || startsWith(github.event.comment.body, '/agent-bounty attempt')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Publish claim-comment planner result
+        run: bash scripts/github-claim-comment.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

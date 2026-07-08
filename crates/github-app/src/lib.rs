@@ -97,6 +97,20 @@ pub struct GitHubFundingCommentInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubClaimCommentInput {
+    pub repository: String,
+    pub issue_url: String,
+    pub title: String,
+    pub body: String,
+    pub comment_body: String,
+    pub contributor_login: Option<String>,
+    pub comment_id: Option<String>,
+    pub claim_age_minutes: Option<u64>,
+    pub progress_signal_count: u32,
+    pub active_claim_login: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitHubFundingSignal {
     pub issue_url: String,
     pub contributor_login: Option<String>,
@@ -111,6 +125,37 @@ pub struct GitHubFundingSignal {
 pub struct GitHubFundingCommentPlan {
     pub ready: bool,
     pub signal: Option<GitHubFundingSignal>,
+    pub error: Option<String>,
+    pub check: GitHubCheckRunOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GitHubClaimDecision {
+    Reserved,
+    NeedsProgress,
+    StaleReleaseRecommended,
+    BlockedByActiveClaim,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubClaimSignal {
+    pub issue_url: String,
+    pub contributor_login: Option<String>,
+    pub command: String,
+    pub decision: GitHubClaimDecision,
+    pub reservation_id: String,
+    pub reservation_window_minutes: u64,
+    pub progress_required_within_minutes: u64,
+    pub progress_signal_count: u32,
+    pub has_progress_signal: bool,
+    pub settlement_authority: bool,
+    pub operator_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubClaimCommentPlan {
+    pub ready: bool,
+    pub signal: Option<GitHubClaimSignal>,
     pub error: Option<String>,
     pub check: GitHubCheckRunOutput,
 }
@@ -135,6 +180,20 @@ pub enum GitHubFundingCommentError {
     DuplicateSignal(String),
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum GitHubClaimCommentError {
+    #[error("missing GitHub issue context")]
+    MissingIssueContext,
+    #[error("issue is not a valid paid bounty: {0}")]
+    NonBountyIssue(String),
+    #[error("missing claim command; use `/agent-bounty claim` or `/agent-bounty attempt`")]
+    MissingCommand,
+    #[error("active claim is held by {0}; wait for progress, stale release, or maintainer review")]
+    ActiveClaimHeld(String),
+    #[error("claim comment needs a concrete progress signal such as `plan:`, `branch:`, `draft pr:`, `tests:`, or a pull request URL")]
+    MissingProgressSignal,
+}
+
 impl GitHubProofComment {
     pub fn markdown(&self) -> String {
         format!(
@@ -151,6 +210,8 @@ impl GitHubProofComment {
     }
 }
 
+pub const CLAIM_RESERVATION_WINDOW_MINUTES: u64 = 120;
+
 pub fn funding_comment_plan(input: GitHubFundingCommentInput) -> GitHubFundingCommentPlan {
     match parse_funding_comment_signal(&input) {
         Ok(signal) => {
@@ -166,6 +227,33 @@ pub fn funding_comment_plan(input: GitHubFundingCommentInput) -> GitHubFundingCo
             let message = error.to_string();
             let check = funding_comment_check_output(Err(&error));
             GitHubFundingCommentPlan {
+                ready: false,
+                signal: None,
+                error: Some(message),
+                check,
+            }
+        }
+    }
+}
+
+pub fn claim_comment_plan(input: GitHubClaimCommentInput) -> GitHubClaimCommentPlan {
+    match parse_claim_comment_signal(&input) {
+        Ok(signal) => {
+            let check = claim_comment_check_output(Ok(&signal));
+            GitHubClaimCommentPlan {
+                ready: matches!(
+                    signal.decision,
+                    GitHubClaimDecision::Reserved | GitHubClaimDecision::StaleReleaseRecommended
+                ),
+                signal: Some(signal),
+                error: None,
+                check,
+            }
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let check = claim_comment_check_output(Err(&error));
+            GitHubClaimCommentPlan {
                 ready: false,
                 signal: None,
                 error: Some(message),
@@ -295,6 +383,74 @@ pub fn proof_check_output(comment: &GitHubProofComment) -> GitHubCheckRunOutput 
     }
 }
 
+pub fn claim_comment_check_output(
+    signal: Result<&GitHubClaimSignal, &GitHubClaimCommentError>,
+) -> GitHubCheckRunOutput {
+    match signal {
+        Ok(signal) => {
+            let (title, summary) = match signal.decision {
+                GitHubClaimDecision::Reserved => (
+                    "Agent bounty claim reserved",
+                    format!(
+                        "Reserved for {} minutes; progress is required before settlement review.",
+                        signal.reservation_window_minutes
+                    ),
+                ),
+                GitHubClaimDecision::NeedsProgress => (
+                    "Agent bounty claim needs progress",
+                    "Claim comment did not include enough concrete progress evidence.".to_string(),
+                ),
+                GitHubClaimDecision::StaleReleaseRecommended => (
+                    "Agent bounty stale claim release recommended",
+                    "Reservation window expired without progress; maintainers can release the claim."
+                        .to_string(),
+                ),
+                GitHubClaimDecision::BlockedByActiveClaim => (
+                    "Agent bounty claim blocked",
+                    "Another active claim is still inside the reservation window.".to_string(),
+                ),
+            };
+            GitHubCheckRunOutput {
+                title: title.to_string(),
+                summary,
+                text: format!(
+                    "Issue: {}\nContributor: {}\nCommand: {}\nDecision: {:?}\nReservation id: {}\nReservation window minutes: {}\nProgress required within minutes: {}\nProgress signal count: {}\nHas progress signal: {}\nSettlement authority: false\n\nThis GitHub claim signal is coordination evidence only. It does not claim platform funds, approve work, accept a bounty, release escrow, or authorize payment.\n\nOperator note: {}\n\n{}",
+                    signal.issue_url,
+                    signal
+                        .contributor_login
+                        .as_deref()
+                        .unwrap_or("unknown"),
+                    signal.command,
+                    signal.decision,
+                    signal.reservation_id,
+                    signal.reservation_window_minutes,
+                    signal.progress_required_within_minutes,
+                    signal.progress_signal_count,
+                    signal.has_progress_signal,
+                    signal.operator_note,
+                    DISTRIBUTION_FEEDBACK_REQUEST
+                ),
+                conclusion: match signal.decision {
+                    GitHubClaimDecision::Reserved
+                    | GitHubClaimDecision::StaleReleaseRecommended => {
+                        GitHubCheckConclusion::Success
+                    }
+                    GitHubClaimDecision::NeedsProgress
+                    | GitHubClaimDecision::BlockedByActiveClaim => {
+                        GitHubCheckConclusion::ActionRequired
+                    }
+                },
+            }
+        }
+        Err(error) => GitHubCheckRunOutput {
+            title: "Agent bounty claim needs review".to_string(),
+            summary: error.to_string(),
+            text: "The claim comment was not converted into an active claim signal. Use `/agent-bounty claim` or `/agent-bounty attempt` with a concrete `plan:`, `branch:`, `draft pr:`, `tests:`, or pull request URL. Claim comments never authorize payment.".to_string(),
+            conclusion: GitHubCheckConclusion::ActionRequired,
+        },
+    }
+}
+
 pub fn funding_comment_check_output(
     signal: Result<&GitHubFundingSignal, &GitHubFundingCommentError>,
 ) -> GitHubCheckRunOutput {
@@ -327,6 +483,81 @@ pub fn funding_comment_check_output(
             conclusion: GitHubCheckConclusion::ActionRequired,
         },
     }
+}
+
+fn parse_claim_comment_signal(
+    input: &GitHubClaimCommentInput,
+) -> Result<GitHubClaimSignal, GitHubClaimCommentError> {
+    if input.repository.trim().is_empty()
+        || input.issue_url.trim().is_empty()
+        || input.title.trim().is_empty()
+        || input.body.trim().is_empty()
+    {
+        return Err(GitHubClaimCommentError::MissingIssueContext);
+    }
+    parse_issue_form_bounty(
+        &input.repository,
+        &input.issue_url,
+        &input.title,
+        &input.body,
+    )
+    .map_err(|error| GitHubClaimCommentError::NonBountyIssue(error.to_string()))?;
+
+    let command =
+        claim_command_line(&input.comment_body).ok_or(GitHubClaimCommentError::MissingCommand)?;
+    let contributor = input
+        .contributor_login
+        .as_ref()
+        .map(|login| login.trim().to_string())
+        .filter(|login| !login.is_empty());
+    let has_progress_signal =
+        claim_has_progress_signal(&input.comment_body) || input.progress_signal_count > 0;
+    let claim_age = input.claim_age_minutes.unwrap_or(0);
+    let is_stale =
+        claim_age >= CLAIM_RESERVATION_WINDOW_MINUTES && input.progress_signal_count == 0;
+
+    if let Some(active_claim_login) = input
+        .active_claim_login
+        .as_ref()
+        .map(|login| login.trim())
+        .filter(|login| !login.is_empty())
+    {
+        let same_claimant = contributor
+            .as_deref()
+            .map(|login| login.eq_ignore_ascii_case(active_claim_login))
+            .unwrap_or(false);
+        if !same_claimant && !is_stale {
+            return Err(GitHubClaimCommentError::ActiveClaimHeld(
+                active_claim_login.to_string(),
+            ));
+        }
+    }
+
+    let decision = if is_stale {
+        GitHubClaimDecision::StaleReleaseRecommended
+    } else if has_progress_signal {
+        GitHubClaimDecision::Reserved
+    } else if input.active_claim_login.is_some() {
+        GitHubClaimDecision::BlockedByActiveClaim
+    } else {
+        return Err(GitHubClaimCommentError::MissingProgressSignal);
+    };
+
+    Ok(GitHubClaimSignal {
+        issue_url: input.issue_url.clone(),
+        contributor_login: contributor,
+        command: claim_command_name(command).to_string(),
+        decision,
+        reservation_id: claim_reservation_id(input, command),
+        reservation_window_minutes: CLAIM_RESERVATION_WINDOW_MINUTES,
+        progress_required_within_minutes: CLAIM_RESERVATION_WINDOW_MINUTES,
+        progress_signal_count: input.progress_signal_count,
+        has_progress_signal,
+        settlement_authority: false,
+        operator_note:
+            "Use this as a public reservation signal only. Release stale claims manually or through a future operator workflow; payment still requires funding, verification, and settlement evidence."
+                .to_string(),
+    })
 }
 
 fn parse_funding_comment_signal(
@@ -375,6 +606,59 @@ fn parse_funding_comment_signal(
             "Verify actual Stripe Checkout credit or indexed Base escrow funding before applying this contribution."
                 .to_string(),
     })
+}
+
+fn claim_command_line(comment_body: &str) -> Option<&str> {
+    comment_body.lines().map(str::trim).find(|line| {
+        line.starts_with("/agent-bounty claim") || line.starts_with("/agent-bounty attempt")
+    })
+}
+
+fn claim_command_name(command: &str) -> &str {
+    if command.starts_with("/agent-bounty attempt") {
+        "attempt"
+    } else {
+        "claim"
+    }
+}
+
+fn claim_has_progress_signal(comment_body: &str) -> bool {
+    let lower = comment_body.to_ascii_lowercase();
+    if lower.contains("https://github.com/") && lower.contains("/pull/") {
+        return true;
+    }
+    comment_body.lines().any(|line| {
+        let line = line.trim();
+        let Some((key, value)) = line.split_once(':') else {
+            return false;
+        };
+        matches!(
+            key.trim().to_ascii_lowercase().as_str(),
+            "plan" | "approach" | "branch" | "draft pr" | "pr" | "tests" | "progress"
+        ) && value.split_whitespace().count() >= 3
+    })
+}
+
+fn claim_reservation_id(input: &GitHubClaimCommentInput, command: &str) -> String {
+    if let Some(comment_id) = input
+        .comment_id
+        .as_ref()
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty())
+    {
+        return format!(
+            "github-claim-comment:{}:{}:comment:{}",
+            input.repository, input.issue_url, comment_id
+        );
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(input.repository.as_bytes());
+    hasher.update(input.issue_url.as_bytes());
+    if let Some(login) = input.contributor_login.as_deref() {
+        hasher.update(login.as_bytes());
+    }
+    hasher.update(command.as_bytes());
+    format!("github-claim-comment:{}", hex::encode(hasher.finalize()))
 }
 
 fn funding_command_line(comment_body: &str) -> Option<&str> {
@@ -846,6 +1130,105 @@ extract-data-to-schema
             .check
             .text
             .contains("what tool, prompt, link, label, scanner, or workflow"));
+    }
+
+    #[test]
+    fn claim_comment_rejects_instant_templated_no_progress_claim() {
+        let plan = claim_comment_plan(GitHubClaimCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/58".to_string(),
+            title: "[bounty]: Add stale-claim controls".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            comment_body:
+                "/agent-bounty claim\nI'm reviewing the codebase and will open a PR shortly."
+                    .to_string(),
+            contributor_login: Some("claim-bot".to_string()),
+            comment_id: Some("501".to_string()),
+            claim_age_minutes: Some(1),
+            progress_signal_count: 0,
+            active_claim_login: None,
+        });
+
+        assert!(!plan.ready);
+        assert!(plan.signal.is_none());
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+        assert!(plan.error.unwrap().contains("concrete progress signal"));
+    }
+
+    #[test]
+    fn claim_comment_reserves_when_progress_signal_is_present() {
+        let plan = claim_comment_plan(GitHubClaimCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/58".to_string(),
+            title: "[bounty]: Add stale-claim controls".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            comment_body: "/agent-bounty claim\nPlan: add a deterministic planner and tests."
+                .to_string(),
+            contributor_login: Some("solver-agent".to_string()),
+            comment_id: Some("502".to_string()),
+            claim_age_minutes: Some(5),
+            progress_signal_count: 0,
+            active_claim_login: None,
+        });
+
+        assert!(plan.ready);
+        let signal = plan.signal.unwrap();
+        assert_eq!(signal.decision, GitHubClaimDecision::Reserved);
+        assert!(signal.has_progress_signal);
+        assert_eq!(
+            signal.reservation_window_minutes,
+            CLAIM_RESERVATION_WINDOW_MINUTES
+        );
+        assert!(!signal.settlement_authority);
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+        assert!(plan.check.text.contains("Settlement authority: false"));
+    }
+
+    #[test]
+    fn claim_comment_recommends_release_for_stale_claim_without_progress() {
+        let plan = claim_comment_plan(GitHubClaimCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/58".to_string(),
+            title: "[bounty]: Add stale-claim controls".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            comment_body: "/agent-bounty claim\nStill looking.".to_string(),
+            contributor_login: Some("stale-agent".to_string()),
+            comment_id: Some("503".to_string()),
+            claim_age_minutes: Some(CLAIM_RESERVATION_WINDOW_MINUTES + 1),
+            progress_signal_count: 0,
+            active_claim_login: Some("stale-agent".to_string()),
+        });
+
+        assert!(plan.ready);
+        let signal = plan.signal.unwrap();
+        assert_eq!(
+            signal.decision,
+            GitHubClaimDecision::StaleReleaseRecommended
+        );
+        assert!(!signal.settlement_authority);
+        assert!(plan.check.summary.contains("expired without progress"));
+    }
+
+    #[test]
+    fn claim_comment_blocks_other_solver_inside_active_reservation_window() {
+        let plan = claim_comment_plan(GitHubClaimCommentInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/58".to_string(),
+            title: "[bounty]: Add stale-claim controls".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            comment_body: "/agent-bounty attempt\nPlan: open an alternative PR with tests."
+                .to_string(),
+            contributor_login: Some("second-agent".to_string()),
+            comment_id: Some("504".to_string()),
+            claim_age_minutes: Some(30),
+            progress_signal_count: 0,
+            active_claim_login: Some("first-agent".to_string()),
+        });
+
+        assert!(!plan.ready);
+        assert!(plan.signal.is_none());
+        assert!(plan.error.unwrap().contains("active claim is held"));
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
     }
 
     #[test]

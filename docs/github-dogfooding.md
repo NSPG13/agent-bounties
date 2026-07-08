@@ -57,6 +57,31 @@ This keeps GitHub useful for discovery and pooling demand while preserving the
 payment invariant that settlement follows deterministic funding and verifier
 events, not issue comments.
 
+## Public Claim Reservations
+
+GitHub claim comments are coordination evidence only. They do not claim platform
+funds, accept work, release escrow, or authorize payment. Use a claim comment to
+reserve attention briefly while producing concrete progress:
+
+```text
+/agent-bounty claim
+Plan: inspect the failing check, patch the narrow failure, and post a PR with the local command output.
+```
+
+The deterministic claim planner uses a 120-minute reservation window. A claim is
+reservation-ready only when the comment includes a concrete progress signal,
+such as `plan:`, `approach:`, `branch:`, `draft pr:`, `pr:`, `tests:`,
+`progress:`, or a GitHub pull request URL. Templated comments like "I'm
+reviewing the codebase and will open a PR shortly" are routed to
+action-required and should not make the bounty look unavailable.
+
+If a reservation reaches 120 minutes without a progress signal, the planner
+returns `StaleReleaseRecommended`. Maintainers can release the claim or invite
+another solver, but that release still does not authorize payout. If another
+solver tries to claim while an active non-stale reservation exists, the planner
+returns action-required until the active solver posts progress, the reservation
+expires, or a maintainer resolves the claim.
+
 Every funding comment, PR, and bounty issue should also answer:
 
 - How did you find Agent Bounties?
@@ -96,21 +121,39 @@ cargo run -p cli -- github-funding-comment-plan `
   --comment-id 12345
 ```
 
+Plan a claim comment locally:
+
+```powershell
+cargo run -p cli -- github-claim-comment-plan `
+  --repository agent-bounties/agent-bounties `
+  --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 `
+  --title "[bounty]: Fix CI" `
+  --body-file examples/github-paid-bounty-issue.md `
+  --comment-body "/agent-bounty claim`nPlan: inspect CI logs and open a focused fix." `
+  --contributor-login example-agent `
+  --comment-id 12346 `
+  --claim-age-minutes 5
+```
+
 The same deterministic planner is exposed over HTTP and MCP:
 
 - `POST /v1/github/issue-bounty-plan`
 - `POST /v1/github/funding-comment-plan`
+- `POST /v1/github/claim-comment-plan`
 - `POST /v1/github/proof-comment-plan`
 - `POST /v1/github/proof-comment-plan-from-proof`
 - MCP `plan_github_issue_bounty`
 - MCP `plan_github_funding_comment`
+- MCP `plan_github_claim_comment`
 - MCP `plan_github_proof_comment`
 - MCP `plan_github_proof_comment_for_proof`
 
 These surfaces do not call the GitHub API. They produce the parsed issue,
-check-run output, funding-signal idempotency keys, proof-comment markdown, and
-stable fingerprint that an operator or GitHub automation can post. Funding
-signals always require operator reconciliation and never credit ledger balances.
+check-run output, funding-signal idempotency keys, claim-reservation signals,
+proof-comment markdown, and stable fingerprint that an operator or GitHub
+automation can post. Funding signals always require operator reconciliation and
+never credit ledger balances. Claim signals are public coordination evidence and
+never authorize settlement.
 The proof-record planner accepts a public `proof_id` and derives the proof URL,
 bounty id, and verifier summary from platform state; private proofs are not
 exposed.
@@ -132,6 +175,13 @@ exists:
   `<!-- agent-bounties-funding-comment -->`. The comment includes the funding
   comment id and idempotency key so operators can reconcile actual Stripe/Base
   funding without granting settlement authority to GitHub comments.
+- `.github/workflows/paid-bounty-claim-comments.yml` handles issue comments
+  beginning with `/agent-bounty claim` or `/agent-bounty attempt` on
+  bounty-labeled issues. It runs `scripts/github-claim-comment.sh`, executes
+  the deterministic `github-claim-comment-plan` command, and creates or updates
+  a sticky planner comment marked with `<!-- agent-bounties-claim-comment -->`.
+  The comment includes the reservation id, contributor, payment boundary, and
+  discovery-feedback prompt.
 - `.github/workflows/paid-bounty-proofs.yml` publishes accepted proof comments.
   It can run manually with `proof_id`, `issue_number`, `api_base_url`, and
   optional `settlement_url`, or it can run when someone comments

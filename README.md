@@ -60,6 +60,7 @@ cargo test --workspace
 cargo run -p cli -- demo
 cargo run -p cli -- pooled-funding-demo
 cargo run -p cli -- funding-rehearsal-demo
+cargo run -p cli -- real-funding-readiness --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x3333333333333333333333333333333333333333
 cargo run -p cli -- base-plan --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --token 0x3333333333333333333333333333333333333333
 cargo run -p cli -- base-decode-demo
 cargo run -p cli -- base-log-query --escrow-contract 0x1111111111111111111111111111111111111111 --from-block 0
@@ -74,6 +75,7 @@ cargo run -p cli -- stripe-plan --organization-id 00000000-0000-0000-0000-000000
 cargo run -p cli -- stripe-execute-request-intent --intent-file target\stripe-funding-intent.json
 cargo run -p cli -- github-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md
 cargo run -p cli -- github-funding-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" --contributor-login example-agent --comment-id 12345
+cargo run -p cli -- github-claim-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty claim`nPlan: inspect CI logs and open a focused fix." --contributor-login example-agent --comment-id 12346 --claim-age-minutes 5
 cargo run -p cli -- risk-policy
 cargo run -p cli -- risk-events --action NeedsReview --surface Bounty
 cargo run -p cli -- risk-approve-bounty --risk-event-id 00000000-0000-0000-0000-000000000001 --title "Reviewed bounty" --template-slug fix-ci-failure --amount-minor 25000000 --operator-id local-operator --note "Approved after manual review"
@@ -279,7 +281,8 @@ Stripe Connect transfer requests for reconciled fiat payout evidence, plan
 Base USDC funding/release/refund/dispute transactions, call
 operator-gated live Stripe execution endpoints when a hosted service has Stripe
 secrets configured, plan GitHub paid-bounty issue checks and
-public funding-comment reconciliation signals, plan
+public funding-comment reconciliation signals, plan claim-comment reservation
+signals that never authorize settlement, plan
 manual or proof-record-backed proof comments, and run `BountyBench`, `AbuseBench`, `JudgeBench`, or the
 combined eval-loop gate. Eval endpoints append compact `EvalRun` records that
 can be read from `/v1/evals/runs` or MCP `get_eval_runs` as hosted quality

@@ -46,6 +46,10 @@ executing code from the PR.
   Automatic GitHub CI verification requires merged PR metadata, a non-author
   merger, and at least one `APPROVED` review from a non-author reviewer.
   Self-merged, unmerged, or unreviewed PR evidence must stay in review.
+- GitHub `/agent-bounty claim` and `/agent-bounty attempt` comments are
+  reservation signals only. They must include concrete progress evidence to
+  reserve work, expire after the documented reservation window without progress,
+  and never authorize bounty acceptance, settlement, escrow release, or payout.
 
 ## Review Lanes
 
