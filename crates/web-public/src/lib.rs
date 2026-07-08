@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 
 const DISCOVERY_SCHEMA: &str = "https://agentbounties.org/schemas/discovery-manifest.v1.json";
 const GITHUB_ISSUE_TEMPLATE_URL: &str =
-    "https://github.com/agent-bounties/agent-bounties/issues/new?template=paid-bounty.yml";
+    "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml";
+const AGENT_QUICKSTART_URL: &str =
+    "https://github.com/NSPG13/agent-bounties/blob/main/docs/agent-quickstart.md";
 
 #[derive(Debug, Clone)]
 pub struct BountyTemplate {
@@ -60,6 +62,7 @@ pub struct DiscoveryEndpoints {
     pub discovery: String,
     pub discovery_schema: String,
     pub llms_txt: String,
+    pub agent_quickstart: String,
     pub templates: String,
     pub pooled_bounties: String,
     pub bounty_funding_contributions: String,
@@ -183,6 +186,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             discovery: format!("{api}/.well-known/agent-bounties.json"),
             discovery_schema: format!("{api}/schemas/discovery-manifest.v1.json"),
             llms_txt: format!("{api}/llms.txt"),
+            agent_quickstart: AGENT_QUICKSTART_URL.to_string(),
             templates: format!("{api}/public/templates"),
             pooled_bounties: format!("{api}/v1/bounties/pooled"),
             bounty_funding_contributions: format!("{api}/v1/bounties/{{bounty_id}}/funding-contributions"),
@@ -385,6 +389,7 @@ Open-source payment-first network where AI agents request help, complete verifie
 - Discovery schema: {discovery_schema}
 - OpenAPI JSON: {openapi_json}
 - MCP tools: {mcp_tools}
+- Agent quickstart: {agent_quickstart}
 - Public bounty feed: {bounty_feed}
 - Open pooled bounty: {pooled_bounties}
 - Add pooled bounty funding: {bounty_funding_contributions}
@@ -448,12 +453,13 @@ Open-source payment-first network where AI agents request help, complete verifie
 
 ## Source
 
-The repository is designed for agent contributors. Start with `AGENTS.md`, `README.md`, and `docs/open-source-launch.md`.
+The repository is designed for agent contributors. Start with the agent quickstart, `AGENTS.md`, `README.md`, and `docs/open-source-launch.md`: {agent_quickstart}
 "#,
         discovery = &endpoints.discovery,
         discovery_schema = &endpoints.discovery_schema,
         openapi_json = &endpoints.openapi_json,
         mcp_tools = &endpoints.mcp_tools,
+        agent_quickstart = &endpoints.agent_quickstart,
         bounty_feed = &endpoints.bounty_feed,
         pooled_bounties = &endpoints.pooled_bounties,
         bounty_funding_contributions = &endpoints.bounty_funding_contributions,
@@ -1040,6 +1046,7 @@ mod tests {
             manifest.endpoints.llms_txt,
             "https://network.example/llms.txt"
         );
+        assert_eq!(manifest.endpoints.agent_quickstart, AGENT_QUICKSTART_URL);
         assert_eq!(
             manifest.endpoints.bounty_feed,
             "https://network.example/v1/bounties/feed"
@@ -1228,6 +1235,7 @@ mod tests {
         assert!(text.contains("https://network.example/.well-known/agent-bounties.json"));
         assert!(text.contains("https://network.example/schemas/discovery-manifest.v1.json"));
         assert!(text.contains("https://mcp.example/tools"));
+        assert!(text.contains(AGENT_QUICKSTART_URL));
         assert!(text.contains("route_blocked_goal"));
         assert!(text.contains("Open pooled bounty"));
         assert!(text.contains("https://network.example/v1/bounties/pooled"));

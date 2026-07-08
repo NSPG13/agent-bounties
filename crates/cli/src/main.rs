@@ -1446,6 +1446,7 @@ async fn production_smoke_check(
         "/endpoints/discovery",
         "/endpoints/discovery_schema",
         "/endpoints/llms_txt",
+        "/endpoints/agent_quickstart",
         "/endpoints/templates",
         "/endpoints/bounty_feed",
         "/endpoints/capability_feed",
@@ -1504,6 +1505,9 @@ async fn production_smoke_check(
                 required
                     .iter()
                     .any(|value| value.as_str() == Some("github_issue_template"))
+                    && required
+                        .iter()
+                        .any(|value| value.as_str() == Some("agent_quickstart"))
                     && required
                         .iter()
                         .any(|value| value.as_str() == Some("discovery_schema"))
@@ -1838,8 +1842,9 @@ async fn production_smoke_check(
     require(
         template_page.contains("Fix CI Failure")
             && template_page.contains("Verifier")
-            && template_page
-                .contains("https://github.com/agent-bounties/agent-bounties/issues/new?template=paid-bounty.yml"),
+            && template_page.contains(
+                "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml",
+            ),
         "public template page must render verifier details and the paid-bounty issue CTA",
     )?;
     let verifier_page =
@@ -2019,6 +2024,10 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         "discovery manifest must include llms.txt",
     )?;
     require(
+        discovery.pointer("/endpoints/agent_quickstart").is_some(),
+        "discovery manifest must include agent quickstart",
+    )?;
+    require(
         discovery.pointer("/endpoints/capability_feed").is_some(),
         "discovery manifest must include capability feed",
     )?;
@@ -2129,6 +2138,10 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         api_llms.contains("route_blocked_goal")
             && api_llms.contains("/.well-known/agent-bounties.json"),
         "API llms.txt must orient agents to discovery and routing",
+    )?;
+    require(
+        api_llms.contains("docs/agent-quickstart.md"),
+        "API llms.txt must point agents to the quickstart",
     )?;
     require(
         api_llms.contains("Proof-record comment planner"),
@@ -3503,6 +3516,7 @@ fn docs_contract_check(root: PathBuf, contract_root: PathBuf) -> Result<()> {
     collect_doc_files(&root, &mut files)?;
 
     let mut issues = Vec::new();
+    check_agent_quickstart_contract(&root, &mut issues);
     for file in &files {
         let text = fs::read_to_string(file)
             .with_context(|| format!("failed to read docs file {}", file.display()))?;
@@ -3531,6 +3545,62 @@ fn docs_contract_check(root: PathBuf, contract_root: PathBuf) -> Result<()> {
         mcp_tools.len()
     );
     Ok(())
+}
+
+fn check_agent_quickstart_contract(root: &Path, issues: &mut Vec<DocsContractIssue>) {
+    let path = root.join("docs").join("agent-quickstart.md");
+    if !path.exists() {
+        push_doc_issue(
+            issues,
+            &PathBuf::from("docs/agent-quickstart.md"),
+            1,
+            "agent quickstart is required for autonomous contributor onboarding",
+        );
+        return;
+    }
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            push_doc_issue(
+                issues,
+                &PathBuf::from("docs/agent-quickstart.md"),
+                1,
+                &format!("failed to read agent quickstart: {error}"),
+            );
+            return;
+        }
+    };
+    for marker in [
+        "cargo run -p cli -- demo",
+        "cargo run -p cli -- service-smoke-spawn",
+        "/.well-known/agent-bounties.json",
+        "/llms.txt",
+        "route_blocked_goal",
+        "register_agent",
+        "register_capability",
+        "open_pooled_bounty",
+        "add_bounty_funding",
+        "claim_bounty",
+        "submit_result",
+        "request_verification",
+        "get_paid_status",
+        "plan_base_funding",
+        "reconcile_base_escrow_event",
+        "Base Sepolia",
+        "testnet",
+        "simulated",
+        "operator",
+        "Copy-paste prompt",
+    ] {
+        if !text.contains(marker) {
+            push_doc_issue(
+                issues,
+                &PathBuf::from("docs/agent-quickstart.md"),
+                1,
+                &format!("agent quickstart missing required marker `{marker}`"),
+            );
+        }
+    }
 }
 
 fn collect_doc_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {

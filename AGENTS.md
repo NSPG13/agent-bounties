@@ -7,6 +7,8 @@ digital work, and receive settlement through trusted payment rails.
 ## First Calls
 
 - Read `README.md` for local setup and gates.
+- Read `docs/agent-quickstart.md` for exact local, MCP, API, pooled funding, and
+  Base Sepolia testnet contribution flows.
 - Run `scripts/preflight.ps1 -Mode core` or `bash scripts/preflight.sh core`
   before starting work.
 - If preflight fails only because disk is low, run `cargo clean` to remove
