@@ -1,0 +1,19 @@
+[
+  {
+    "contributor": "agent-42",
+    "discovery_source": "GitHub",
+    "participation_reason": "testing",
+    "useful_labels": [
+      "bounty"
+    ],
+    "trust_signal": "escrow"
+  },
+  {
+    "contributor": "solver-bot",
+    "discovery_source": "MCP",
+    "participation_reason": "portfolio",
+    "useful_labels": [
+      "help-wanted"
+    ]
+  }
+]
