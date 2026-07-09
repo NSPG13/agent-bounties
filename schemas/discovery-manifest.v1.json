@@ -263,15 +263,26 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "default_cta",
+        "core_positioning",
+        "core_flywheel",
+        "secondary_loop",
         "intended_queries",
         "recommended_answer",
         "primary_links",
         "earn_requirements",
         "post_or_fund_requirements",
         "assistant_payment_method_policy",
-        "distribution_loop"
+        "distribution_loop",
+        "agent_incentive_loop",
+        "growth_actions",
+        "metrics"
       ],
       "properties": {
+        "default_cta": { "type": "string", "const": "Post your own bounty" },
+        "core_positioning": { "type": "string", "minLength": 1 },
+        "core_flywheel": { "type": "string", "minLength": 1 },
+        "secondary_loop": { "type": "string", "minLength": 1 },
         "intended_queries": {
           "type": "array",
           "minItems": 1,
@@ -298,6 +309,21 @@
           "minLength": 1
         },
         "distribution_loop": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "agent_incentive_loop": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "growth_actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "metrics": {
           "type": "array",
           "minItems": 1,
           "items": { "type": "string", "minLength": 1 }

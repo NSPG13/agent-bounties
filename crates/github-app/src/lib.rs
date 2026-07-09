@@ -6,7 +6,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 const STATIC_FUNDING_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/funding.html";
-const DISTRIBUTION_FEEDBACK_REQUEST: &str = "Distribution feedback requested, separate from review or payout decisions:\n\n- How did you find Agent Bounties?\n- What made this bounty or project worth participating in?\n- If an AI agent helped you find or complete this work, what tool, prompt, link, label, scanner, or workflow led it here?\n- What would make the project easier or more trustworthy before you participate again?\n\nIf Agent Bounties is useful, please star the repository, react/upvote useful issues or bounties, share it with other AI-agent builders or bounty solvers, and invite collaborators who can improve task liquidity, verifier quality, payment trust, or agent distribution.\n\nThese answers help improve agent discovery, bounty templates, proof pages, and payment-trust messaging.";
+const STATIC_POST_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/post.html";
+const DISTRIBUTION_FEEDBACK_REQUEST: &str = "Distribution feedback requested, separate from review or payout decisions:\n\n- How did you find Agent Bounties?\n- What made this bounty or project worth participating in?\n- If an AI agent helped you find or complete this work, what tool, prompt, link, label, scanner, or workflow led it here?\n- What would make the project easier or more trustworthy before you participate again?\n\nDefault CTA: Post your own bounty. The more good bounties agents post and share, the more users join, and the more future bounties those agents can solve.\n\nIf Agent Bounties is useful, please post your own bounty, star/upvote Agent Bounties, react/upvote useful issues or bounties, share proof with other AI-agent builders or bounty solvers, and invite collaborators who can improve task liquidity, verifier quality, payment trust, or agent distribution.\n\nThese answers help improve agent discovery, bounty templates, proof pages, and payment-trust messaging. They never approve review, bounty acceptance, payout authorization, escrow release, or payment settlement.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GitHubBountySource {
@@ -200,7 +201,7 @@ pub enum GitHubClaimCommentError {
 impl GitHubProofComment {
     pub fn markdown(&self) -> String {
         format!(
-            "Agent bounty completed.\n\nProof: {}\n\nVerifier: {}\n\nBounty: `{}`{}\n\n{}",
+            "Agent bounty completed.\n\nProof: {}\n\nVerifier: {}\n\nBounty: `{}`{}\n\nPaid proof copy after payout evidence reconciles: This agent earned money by completing a bounty. Post your own bounty or claim one.\n\nPost your own bounty: {}\n\n{}",
             self.proof_url,
             self.verifier_summary,
             self.bounty_id,
@@ -208,6 +209,7 @@ impl GitHubProofComment {
                 .as_ref()
                 .map(|url| format!("\n\nSettlement: {url}"))
                 .unwrap_or_default(),
+            STATIC_POST_PAGE_URL,
             DISTRIBUTION_FEEDBACK_REQUEST
         )
     }
@@ -953,9 +955,11 @@ mod tests {
         assert!(markdown.contains("Proof:"));
         assert!(markdown.contains("GitHub CI passed"));
         assert!(markdown.contains("Settlement:"));
+        assert!(markdown.contains("Post your own bounty"));
+        assert!(markdown.contains("This agent earned money by completing a bounty"));
         assert!(markdown.contains("Distribution feedback requested"));
         assert!(markdown.contains("what tool, prompt, link, label, scanner, or workflow"));
-        assert!(markdown.contains("star the repository"));
+        assert!(markdown.contains("star/upvote Agent Bounties"));
     }
 
     #[test]
@@ -1170,7 +1174,8 @@ extract-data-to-schema
         assert!(output.summary.contains("ready for funding"));
         assert!(output.text.contains("Distribution feedback"));
         assert!(output.text.contains("How did you find Agent Bounties?"));
-        assert!(output.text.contains("star the repository"));
+        assert!(output.text.contains("Post your own bounty"));
+        assert!(output.text.contains("star/upvote Agent Bounties"));
     }
 
     #[test]
@@ -1203,7 +1208,8 @@ extract-data-to-schema
             .check
             .text
             .contains("what tool, prompt, link, label, scanner, or workflow"));
-        assert!(plan.check.text.contains("star the repository"));
+        assert!(plan.check.text.contains("Post your own bounty"));
+        assert!(plan.check.text.contains("star/upvote Agent Bounties"));
     }
 
     #[test]
