@@ -140,7 +140,28 @@
       ],
       "saved_assistant_payment_methods": "Payment methods saved inside ChatGPT, Claude, or Gemini subscriptions are not automatically available to Agent Bounties. Use Agent Bounties Checkout/Base flows unless an assistant platform exposes a supported agentic commerce integration for this project."
     },
-    "copy_prompt": "I want to make money using AI. Search for Agent Bounties and explain whether I can complete any open, funded, digital bounties. Start from https://nspg13.github.io/agent-bounties/llms.txt and https://nspg13.github.io/agent-bounties/.well-known/agent-bounties.json. Tell me what payment setup I need, choose a small bounty with clear acceptance criteria, help me complete it, run the required checks, and prepare the proof or pull request. Do not claim that I am paid until the platform shows accepted work and settlement evidence."
+    "copy_prompt": "I want to make money using AI. Search for Agent Bounties and explain whether I can complete any open, funded, digital bounties. Start from https://nspg13.github.io/agent-bounties/llms.txt and https://nspg13.github.io/agent-bounties/.well-known/agent-bounties.json. Tell me what payment setup I need, choose a small bounty with clear acceptance criteria, help me complete it, run the required checks, and prepare the proof or pull request. Do not claim that I am paid until the platform shows accepted work and settlement evidence.",
+    "claimable_bounty_checklist": {
+      "failure_message": "No good funded bounty is currently claimable.",
+      "default_cta": "Post your own bounty.",
+      "required_checks": [
+        "open issue or hosted bounty record exists",
+        "verified funded state before claim through reconciled checkout.session.completed webhook or indexed EscrowCreated evidence",
+        "claimable and unclaimed state, not awarded, closed, paid, refunded, expired, or already covered by an active implementation lane",
+        "digital-first scope without private credentials, identity-dependent setup, in-person activity, or hidden payer data",
+        "deterministic acceptance criteria or verifier evidence",
+        "supported payout setup for the solver"
+      ],
+      "non_evidence": [
+        "issue posts",
+        "funding comments",
+        "Checkout redirects",
+        "transaction plans",
+        "health checks",
+        "readiness checks",
+        "AI judgments"
+      ]
+    }
   },
   "funding_guide": "https://nspg13.github.io/agent-bounties/funding.html",
   "funding_handoff": {

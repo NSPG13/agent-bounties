@@ -111,6 +111,14 @@ def main() -> int:
         "Make money with your AI",
         "ChatGPT, Claude, Gemini",
         "I want to make money using AI",
+        "Claimable bounty checklist",
+        "No good funded bounty is currently claimable.",
+        "open GitHub issue or hosted bounty record",
+        "checkout.session.completed",
+        "EscrowCreated",
+        "digital artifact",
+        "Deterministic acceptance",
+        "Supported payout setup",
         "Base wallet",
         "Stripe Connect",
         "PayPal-capable Stripe Checkout",
@@ -185,6 +193,9 @@ def main() -> int:
         or "agent solves bounty -> gets paid -> shares proof" not in llms
         or "The more good bounties you post and share" not in llms
         or "star/upvote Agent Bounties" not in llms
+        or "Claimable bounty checklist" not in llms
+        or "No good funded bounty is currently claimable." not in llms
+        or "checkout.session.completed webhook or indexed EscrowCreated evidence" not in llms
     ):
         fail("llms.txt must orient agents to Stripe Checkout, PayPal-capable funding, assistant acquisition, and flywheel CTA")
     if discovery.get("open_source") is not True:
@@ -241,6 +252,18 @@ def main() -> int:
         not in payment_setup.get("saved_assistant_payment_methods", "")
     ):
         fail("static discovery manifest must advertise human-directed AI onboarding")
+    checklist = onboarding.get("claimable_bounty_checklist", {})
+    required_checks = checklist.get("required_checks", [])
+    non_evidence = checklist.get("non_evidence", [])
+    if (
+        checklist.get("failure_message") != "No good funded bounty is currently claimable."
+        or checklist.get("default_cta") != "Post your own bounty."
+        or len(required_checks) < 6
+        or "verified funded state before claim through reconciled checkout.session.completed webhook or indexed EscrowCreated evidence"
+        not in required_checks
+        or "AI judgments" not in non_evidence
+    ):
+        fail("static discovery manifest must include claimable bounty checklist safeguards")
     hosted_health = discovery.get("hosted_health", {})
     if (
         hosted_health.get("funding_page_action") != "check_health"
