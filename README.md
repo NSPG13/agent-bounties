@@ -467,6 +467,15 @@ movement:
 cargo run -p cli -- real-funding-readiness --network base-mainnet --escrow-contract <escrow> --usdc-token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --require-live-money
 ```
 
+The verified Base mainnet pilot escrow is
+[`0x150C6dFbCe7803cc7f634f59b0624e87349CEAce`](https://base.blockscout.com/address/0x150C6dFbCe7803cc7f634f59b0624e87349CEAce),
+deployed in block `48422806`. Sourcify reports an exact source match and
+Blockscout reports verified source. Reproducible compiler, transaction, signer,
+USDC, and runtime-code details are in
+[`deployments/base-mainnet.json`](deployments/base-mainnet.json). The first
+complete mainnet loop is capped at `1 USDC`, hosted transaction broadcast stays
+disabled, and indexed escrow logs remain the only Base settlement authority.
+
 Hosted services expose the same non-secret gates before live-value use:
 
 - `GET /v1/readiness/live-money?network=base-mainnet`
