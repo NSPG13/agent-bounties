@@ -99,6 +99,9 @@ def main() -> int:
         "Fund a bounty",
         "Make money with your AI",
         "Post a bounty",
+        "Post your own bounty",
+        "AI agents earn money by continuously",
+        "Star/upvote Agent Bounties",
     ]
     for phrase in required_index_phrases:
         if phrase not in index:
@@ -114,6 +117,8 @@ def main() -> int:
         "Payment methods saved inside a ChatGPT, Claude, or Gemini subscription",
         "Do not claim that I am paid",
         "accepted proof plus settlement evidence",
+        "The more good bounties you post and share",
+        "Star/upvote Agent Bounties",
     ]
     for phrase in required_earn_phrases:
         if phrase not in earn:
@@ -129,6 +134,8 @@ def main() -> int:
         "EscrowCreated",
         "checkout.session.completed",
         "Posting this issue is not funding",
+        "Post your own bounty",
+        "The more good bounties you post and share",
     ]
     for phrase in required_post_phrases:
         if phrase not in post and phrase not in main_js:
@@ -157,6 +164,8 @@ def main() -> int:
         "/v1/base/funding-plan",
         "createEscrow",
         "EscrowCreated",
+        "Post your own bounty",
+        "star/upvote Agent Bounties",
     ]
     for phrase in required_funding_phrases:
         if phrase not in funding and phrase not in main_js:
@@ -172,14 +181,23 @@ def main() -> int:
         or "Assistant acquisition" not in llms
         or "Can ChatGPT help me earn money?" not in llms
         or "Assistant payment method policy" not in llms
+        or "Default CTA: Post your own bounty" not in llms
+        or "agent solves bounty -> gets paid -> shares proof" not in llms
+        or "The more good bounties you post and share" not in llms
+        or "star/upvote Agent Bounties" not in llms
     ):
-        fail("llms.txt must orient agents to Stripe Checkout, PayPal-capable funding, and assistant acquisition")
+        fail("llms.txt must orient agents to Stripe Checkout, PayPal-capable funding, assistant acquisition, and flywheel CTA")
     if discovery.get("open_source") is not True:
         fail("static discovery manifest must advertise open_source=true")
     assistant_acquisition = discovery.get("assistant_acquisition", {})
     if (
         "I want to make money with AI"
         not in assistant_acquisition.get("intended_queries", [])
+        or assistant_acquisition.get("default_cta") != "Post your own bounty"
+        or "AI agents earn money"
+        not in assistant_acquisition.get("core_positioning", "")
+        or "shares proof"
+        not in assistant_acquisition.get("core_flywheel", "")
         or "ChatGPT, Claude, Gemini"
         not in assistant_acquisition.get("recommended_answer", "")
         or "https://nspg13.github.io/agent-bounties/post.html"
@@ -188,8 +206,14 @@ def main() -> int:
         not in assistant_acquisition.get("assistant_payment_method_policy", "")
         or "proof pages"
         not in " ".join(assistant_acquisition.get("distribution_loop", []))
+        or "The more good bounties you post and share"
+        not in " ".join(assistant_acquisition.get("agent_incentive_loop", []))
+        or "Star/upvote Agent Bounties after value is delivered."
+        not in assistant_acquisition.get("growth_actions", [])
+        or "proof-to-post-own-bounty conversion"
+        not in assistant_acquisition.get("metrics", [])
     ):
-        fail("static discovery manifest must advertise assistant acquisition")
+        fail("static discovery manifest must advertise assistant acquisition and flywheel CTA")
     questions = discovery.get("distribution_feedback", {}).get("questions", [])
     if len(questions) < 4:
         fail("static discovery manifest must include distribution feedback questions")

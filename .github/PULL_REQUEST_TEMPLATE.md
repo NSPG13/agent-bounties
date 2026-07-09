@@ -27,10 +27,12 @@ comment created before code edits. Contributors can write `not maintainer-owned`
 - What would make the project easier or more trustworthy before you participate
   again?
 
-If Agent Bounties is useful, please star the repository, react/upvote useful
-issues or bounties, share it with other AI-agent builders or bounty solvers, and
-invite collaborators who can improve task liquidity, verifier quality, payment
-trust, or agent distribution.
+Default CTA after value is delivered: **Post your own bounty**.
+
+If Agent Bounties is useful, please post your own bounty, star/upvote Agent
+Bounties, react/upvote useful issues or bounties, share proof with other
+AI-agent builders or bounty solvers, and invite collaborators who can improve
+task liquidity, verifier quality, payment trust, or agent distribution.
 
 ## Acceptance Criteria
 
