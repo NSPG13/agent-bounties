@@ -55,6 +55,14 @@ for tool in gh git cargo; do
     exit 127
   fi
 done
+if command -v python3 >/dev/null 2>&1; then
+  python_cmd=(python3)
+elif command -v python >/dev/null 2>&1; then
+  python_cmd=(python)
+else
+  echo "python3 or python is required for external PR review" >&2
+  exit 127
+fi
 
 is_docs_path() {
   local path="$1"
@@ -187,7 +195,11 @@ git worktree add --detach "$worktree" "$ref_name" >/dev/null
 
 docs_contract_check="failed"
 docs_output="$tmp_root/docs-contract-check.log"
-if cargo run -p cli -- docs-contract-check --root "$worktree" --contract-root "$repo_root" >"$docs_output" 2>&1; then
+contract_root="$tmp_root/contract-root"
+"${python_cmd[@]}" "$repo_root/scripts/stage_review_contract_root.py" \
+  --worktree "$worktree" \
+  --output "$contract_root"
+if cargo run -p cli -- docs-contract-check --root "$worktree" --contract-root "$contract_root" >"$docs_output" 2>&1; then
   docs_contract_check="ok"
 fi
 cat "$docs_output"
@@ -259,7 +271,7 @@ if [[ "${#risky_files[@]}" -eq 0 ]]; then
   passed_items+=("No risky paths were changed by the PR head reviewed here.")
 fi
 if [[ "$docs_contract_check" == "ok" ]]; then
-  passed_items+=("docs-contract-check passed against the trusted maintainer checkout.")
+  passed_items+=("docs-contract-check passed with the trusted checker against bounded, staged PR route/tool sources.")
 fi
 if [[ "${#passed_items[@]}" -eq 0 ]]; then
   passed_items+=("The PR head was fetched and matched against GitHub before review; no merge-ready checks passed yet.")
