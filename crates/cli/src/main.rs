@@ -24,8 +24,9 @@ use eval_harness::{
     BountyBench, JudgeBench,
 };
 use github_app::{
-    bounty_check_output, claim_comment_plan, funding_comment_plan, parse_issue_form_bounty,
-    proof_comment_plan, GitHubClaimCommentInput, GitHubFundingCommentInput, GitHubProofComment,
+    bounty_check_output, claim_comment_plan, funding_comment_plan, issue_api_sync_plan,
+    parse_issue_form_bounty, proof_comment_plan, GitHubClaimCommentInput,
+    GitHubFundingCommentInput, GitHubIssueApiSyncInput, GitHubProofComment,
 };
 use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper,
@@ -318,6 +319,22 @@ enum Command {
         #[arg(long)]
         body_file: String,
     },
+    GithubIssueApiSyncPlan {
+        #[arg(long)]
+        repository: String,
+        #[arg(long)]
+        issue_url: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body_file: String,
+        #[arg(long)]
+        api_base_url: Option<String>,
+        #[arg(long = "existing-bounty-id")]
+        existing_bounty_ids: Vec<Uuid>,
+        #[arg(long)]
+        hosted_api_error: Option<String>,
+    },
     GithubFundingCommentPlan {
         #[arg(long)]
         repository: String,
@@ -605,6 +622,23 @@ async fn async_main() -> Result<()> {
             title,
             body_file,
         } => github_plan(repository, issue_url, title, body_file),
+        Command::GithubIssueApiSyncPlan {
+            repository,
+            issue_url,
+            title,
+            body_file,
+            api_base_url,
+            existing_bounty_ids,
+            hosted_api_error,
+        } => github_issue_api_sync_plan(
+            repository,
+            issue_url,
+            title,
+            body_file,
+            api_base_url,
+            existing_bounty_ids,
+            hosted_api_error,
+        ),
         Command::GithubFundingCommentPlan {
             repository,
             issue_url,
@@ -798,6 +832,8 @@ fn pooled_funding_demo() -> Result<()> {
         payout_wallet: None,
     });
     let bounty = network.open_pooled_bounty(OpenPooledBountyRequest {
+        bounty_id: None,
+        idempotency_key: None,
         title: "Write the first agent quickstart".to_string(),
         template_slug: "write-docs-for-area".to_string(),
         target_amount_minor: 1_000_000,
@@ -852,6 +888,8 @@ async fn funding_rehearsal_demo() -> Result<()> {
     let platform_url = "https://agentbounties.local".to_string();
 
     let bounty = network.open_pooled_bounty(OpenPooledBountyRequest {
+        bounty_id: None,
+        idempotency_key: None,
         title: "Funding rehearsal mixed Stripe and Base bounty".to_string(),
         template_slug: "extract-data-to-schema".to_string(),
         target_amount_minor: 500,
@@ -1850,6 +1888,29 @@ fn github_plan(
             "check": output
         }))?
     );
+    Ok(())
+}
+
+fn github_issue_api_sync_plan(
+    repository: String,
+    issue_url: String,
+    title: String,
+    body_file: String,
+    api_base_url: Option<String>,
+    existing_bounty_ids: Vec<Uuid>,
+    hosted_api_error: Option<String>,
+) -> Result<()> {
+    let body = fs::read_to_string(body_file)?;
+    let plan = issue_api_sync_plan(GitHubIssueApiSyncInput {
+        repository,
+        issue_url,
+        title,
+        body,
+        api_base_url,
+        existing_bounty_ids,
+        hosted_api_error,
+    });
+    println!("{}", serde_json::to_string_pretty(&plan)?);
     Ok(())
 }
 

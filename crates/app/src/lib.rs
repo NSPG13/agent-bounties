@@ -723,6 +723,10 @@ pub struct PostBountyRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenPooledBountyRequest {
+    #[serde(default)]
+    pub bounty_id: Option<Id>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
     pub title: String,
     pub template_slug: String,
     pub target_amount_minor: i64,
@@ -1475,10 +1479,107 @@ impl BountyNetwork {
     }
 
     pub fn open_pooled_bounty(&mut self, request: OpenPooledBountyRequest) -> AppResult<Bounty> {
+        if request.bounty_id.is_some() || request.idempotency_key.is_some() {
+            return Err(AppError::InvalidFundingContribution(
+                "public pooled bounty creation cannot set bounty_id or idempotency_key; use an operator-gated sync endpoint"
+                    .to_string(),
+            ));
+        }
+        self.open_pooled_bounty_internal(request)
+    }
+
+    pub fn upsert_github_issue_pooled_bounty(
+        &mut self,
+        mut request: OpenPooledBountyRequest,
+        bounty_id: Id,
+        idempotency_key: String,
+    ) -> AppResult<Bounty> {
+        if !idempotency_key.starts_with("github-issue-sync:") {
+            return Err(AppError::InvalidFundingContribution(
+                "GitHub issue sync idempotency key must use the github-issue-sync prefix"
+                    .to_string(),
+            ));
+        }
+        request.bounty_id = Some(bounty_id);
+        request.idempotency_key = Some(idempotency_key);
+        self.open_pooled_bounty_internal(request)
+    }
+
+    pub fn build_github_issue_pooled_bounty(
+        &mut self,
+        mut request: OpenPooledBountyRequest,
+        bounty_id: Id,
+        idempotency_key: String,
+    ) -> AppResult<Bounty> {
+        if !idempotency_key.starts_with("github-issue-sync:") {
+            return Err(AppError::InvalidFundingContribution(
+                "GitHub issue sync idempotency key must use the github-issue-sync prefix"
+                    .to_string(),
+            ));
+        }
+        request.bounty_id = Some(bounty_id);
+        request.idempotency_key = Some(idempotency_key);
+        self.build_pooled_bounty(request, None)
+    }
+
+    fn open_pooled_bounty_internal(
+        &mut self,
+        request: OpenPooledBountyRequest,
+    ) -> AppResult<Bounty> {
+        let requested_bounty_id = request.bounty_id;
+        let existing_created_at = if let Some(bounty_id) = requested_bounty_id {
+            if let Some(existing) = self.bounties.get(&bounty_id) {
+                if self.has_pooled_bounty_activity(bounty_id) {
+                    return Err(AppError::InvalidFundingContribution(
+                        "pooled bounty idempotent update is only allowed before funding, claim, or submission activity"
+                            .to_string(),
+                    ));
+                }
+                Some(existing.created_at)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let bounty = self.build_pooled_bounty(request, existing_created_at)?;
+        self.bounties.insert(bounty.id, bounty.clone());
+        Ok(bounty)
+    }
+
+    fn has_pooled_bounty_activity(&self, bounty_id: Id) -> bool {
+        self.bounties
+            .get(&bounty_id)
+            .map(|existing| existing.status != BountyStatus::Unfunded)
+            .unwrap_or(false)
+            || self
+                .funding_intents
+                .values()
+                .any(|intent| intent.bounty_id == bounty_id)
+            || self
+                .funding_contributions
+                .values()
+                .any(|contribution| contribution.bounty_id == bounty_id)
+            || self
+                .claims
+                .values()
+                .any(|claim| claim.bounty_id == bounty_id)
+            || self
+                .submissions
+                .values()
+                .any(|submission| submission.bounty_id == bounty_id)
+    }
+
+    fn build_pooled_bounty(
+        &mut self,
+        request: OpenPooledBountyRequest,
+        existing_created_at: Option<chrono::DateTime<Utc>>,
+    ) -> AppResult<Bounty> {
         let amount = Money::new(request.target_amount_minor, request.currency)?;
         let funding_mode = request.funding_mode.clone();
         let funding_targets =
             funding_targets_from_request(&funding_mode, &amount, &request.funding_targets)?;
+        let requested_bounty_id = request.bounty_id;
         let mut bounty = Bounty::new(
             request.title,
             request.template_slug,
@@ -1487,6 +1588,12 @@ impl BountyNetwork {
             request.privacy.clone(),
         )
         .with_funding_targets(funding_targets);
+        if let Some(bounty_id) = requested_bounty_id {
+            bounty.id = bounty_id;
+        }
+        if let Some(created_at) = existing_created_at {
+            bounty.created_at = created_at;
+        }
         let risk = self.risk_policy.evaluate_bounty(&BountyRiskInput {
             title: bounty.title.clone(),
             template_slug: bounty.template_slug.clone(),
@@ -1496,7 +1603,6 @@ impl BountyNetwork {
         });
         self.enforce_risk(risk, bounty.id, None, Some(bounty.id))?;
         bounty.terms_hash = Some(hash_terms(&bounty.title, &bounty.template_slug, &amount));
-        self.bounties.insert(bounty.id, bounty.clone());
         Ok(bounty)
     }
 
@@ -4476,6 +4582,24 @@ fn normalize_hash(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn github_sync_pooled_request(title: &str, amount_minor: i64) -> OpenPooledBountyRequest {
+        OpenPooledBountyRequest {
+            bounty_id: None,
+            idempotency_key: None,
+            title: title.to_string(),
+            template_slug: "write-docs-for-area".to_string(),
+            target_amount_minor: amount_minor,
+            currency: "usdc".to_string(),
+            funding_mode: FundingMode::Simulated,
+            privacy: PrivacyLevel::Public,
+            funding_targets: vec![],
+        }
+    }
+
+    fn github_sync_idempotency_key(bounty_id: Id) -> String {
+        format!("github-issue-sync:agent-bounties/example:{bounty_id}")
+    }
+
     #[test]
     fn contributor_contact_requires_consent_for_private_fields() {
         let mut network = BountyNetwork::default();
@@ -4824,6 +4948,8 @@ mod tests {
         let organization_id = Uuid::new_v4();
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Fund mixed intent bounty".to_string(),
                 template_slug: "extract-data-to-schema".to_string(),
                 target_amount_minor: 500,
@@ -5027,6 +5153,8 @@ mod tests {
         let organization_id = Uuid::new_v4();
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Reject bad funding intents".to_string(),
                 template_slug: "extract-data-to-schema".to_string(),
                 target_amount_minor: 500,
@@ -5335,6 +5463,100 @@ mod tests {
     }
 
     #[test]
+    fn open_pooled_bounty_rejects_public_caller_supplied_identity() {
+        let mut network = BountyNetwork::default();
+        let existing = network
+            .open_pooled_bounty(github_sync_pooled_request("Public bounty", 1_000))
+            .unwrap();
+        let mut overwrite = github_sync_pooled_request("Overwrite public bounty", 2_000);
+        overwrite.bounty_id = Some(existing.id);
+        overwrite.idempotency_key = Some(github_sync_idempotency_key(existing.id));
+
+        let err = network.open_pooled_bounty(overwrite).unwrap_err();
+
+        assert!(matches!(
+            err,
+            AppError::InvalidFundingContribution(message)
+                if message.contains("public pooled bounty creation cannot set")
+        ));
+        assert_eq!(
+            network.bounties.get(&existing.id).unwrap().title,
+            "Public bounty"
+        );
+    }
+
+    #[test]
+    fn github_issue_sync_replays_stable_unfunded_id_without_duplicate() {
+        let mut network = BountyNetwork::default();
+        let bounty_id = Uuid::new_v4();
+        let first = network
+            .upsert_github_issue_pooled_bounty(
+                github_sync_pooled_request("Sync GitHub issue into API", 1_000),
+                bounty_id,
+                github_sync_idempotency_key(bounty_id),
+            )
+            .unwrap();
+
+        let second = network
+            .upsert_github_issue_pooled_bounty(
+                github_sync_pooled_request("Sync GitHub issue into hosted API", 2_000),
+                bounty_id,
+                github_sync_idempotency_key(bounty_id),
+            )
+            .unwrap();
+
+        assert_eq!(second.id, bounty_id);
+        assert_eq!(second.created_at, first.created_at);
+        assert_eq!(network.bounties.len(), 1);
+        assert_eq!(
+            network.bounties.get(&bounty_id).unwrap().title,
+            "Sync GitHub issue into hosted API"
+        );
+    }
+
+    #[test]
+    fn github_issue_sync_rejects_stable_id_replay_after_funding_activity() {
+        let mut network = BountyNetwork::default();
+        let bounty_id = Uuid::new_v4();
+        let sponsor = network.register_agent(RegisterAgentRequest {
+            handle: "github-sync-sponsor".to_string(),
+            payout_wallet: None,
+        });
+        let bounty = network
+            .upsert_github_issue_pooled_bounty(
+                github_sync_pooled_request("Sync GitHub issue into API", 1_000),
+                bounty_id,
+                github_sync_idempotency_key(bounty_id),
+            )
+            .unwrap();
+        network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: Some(sponsor.id),
+                source_organization_id: None,
+                amount_minor: 100,
+                currency: "usdc".to_string(),
+                rail: PaymentRail::Simulated,
+                external_reference: Some("github-sync-partial".to_string()),
+            })
+            .unwrap();
+
+        let err = network
+            .upsert_github_issue_pooled_bounty(
+                github_sync_pooled_request("Attempt duplicate GitHub issue sync", 1_000),
+                bounty_id,
+                github_sync_idempotency_key(bounty_id),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            AppError::InvalidFundingContribution(message)
+                if message.contains("idempotent update")
+        ));
+    }
+
+    #[test]
     fn pooled_simulated_funding_becomes_claimable_only_at_target() {
         let mut network = BountyNetwork::default();
         let solver = network.register_agent(RegisterAgentRequest {
@@ -5351,6 +5573,8 @@ mod tests {
         });
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Write agent onboarding docs".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
                 target_amount_minor: 1_000,
@@ -5441,6 +5665,8 @@ mod tests {
         });
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Extract public data".to_string(),
                 template_slug: "extract-data-to-schema".to_string(),
                 target_amount_minor: 1_000,
@@ -5507,6 +5733,8 @@ mod tests {
         let mut network = BountyNetwork::default();
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Fix docs typo".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
                 target_amount_minor: 1_000,
@@ -5570,6 +5798,8 @@ mod tests {
         let organization_id = Uuid::new_v4();
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Fund fiat-backed docs work".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
                 target_amount_minor: 1_000,
@@ -6015,6 +6245,8 @@ mod tests {
         });
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Summarize private notes".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
                 target_amount_minor: 5_000,
@@ -6185,6 +6417,8 @@ mod tests {
         });
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Implement mixed funding fixture".to_string(),
                 template_slug: "extract-data-to-schema".to_string(),
                 target_amount_minor: 500,
@@ -6391,6 +6625,8 @@ mod tests {
         });
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Recover mixed funding after Base refund".to_string(),
                 template_slug: "extract-data-to-schema".to_string(),
                 target_amount_minor: 500,
