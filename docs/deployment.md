@@ -61,6 +61,36 @@ On Unix-like shells:
 python3 scripts/check-render-blueprint.py
 ```
 
+## Base mainnet deployment attestation
+
+Replayable read-only checks compare live Base mainnet RPC state against
+[`deployments/base-mainnet.json`](../deployments/base-mainnet.json). The harness
+never signs, broadcasts, funds, releases, or mutates on-chain state.
+
+Offline deterministic replay (default CI path):
+
+```powershell
+python scripts\test_base_deployment_attest.py -v
+python scripts\base_deployment_attest.py --mock-fixture scripts\fixtures\base_attest\success.json
+```
+
+On Unix-like shells:
+
+```bash
+python3 scripts/test_base_deployment_attest.py -v
+python3 scripts/base_deployment_attest.py --mock-fixture scripts/fixtures/base_attest/success.json
+```
+
+Opt-in production smoke against the public manifest RPC:
+
+```powershell
+python scripts\base_deployment_attest.py --live --json-out target\base-mainnet-attest.json
+```
+
+Passing attestation proves deployment coordinates still match the manifest. It does
+**not** prove hosted API health, indexer health, bounty funding, claimability,
+acceptance, payout, or settlement.
+
 To deploy from the Dashboard after the PR is merged:
 
 1. Open
