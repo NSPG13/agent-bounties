@@ -1,0 +1,13 @@
+{
+  "issues": [
+    {"number": 1, "state": "open", "html_url": "https://github.com/example/repo/issues/1", "labels": [{"name": "bounty"}]},
+    {"number": 2, "state": "open", "html_url": "https://github.com/example/repo/issues/2", "labels": [{"name": "bounty"}, {"name": "duplicate"}]},
+    {"number": 3, "state": "closed", "html_url": "https://github.com/example/repo/issues/3", "labels": [{"name": "bounty"}]},
+    {"number": 4, "state": "open", "html_url": "https://github.com/example/repo/issues/4", "labels": [{"name": "enhancement"}]},
+    {"number": 5, "state": "open", "html_url": "https://github.com/example/repo/pull/5", "labels": [{"name": "bounty"}], "pull_request": {}},
+    {"number": 6, "state": "open", "html_url": "https://github.com/example/repo/issues/6", "labels": [{"name": "bounty"}, {"name": "invalid"}]},
+    {"number": 7, "state": "open", "html_url": "https://github.com/example/repo/issues/7", "labels": [{"name": "bounty"}]},
+    {"number": 8, "state": "open", "html_url": "https://github.com/example/repo/issues/8", "labels": [{"name": "bounty"}]},
+    {"number": 9, "state": "open", "html_url": "https://github.com/example/repo/issues/9", "labels": [{"name": "bounty"}]}
+  ]
+}

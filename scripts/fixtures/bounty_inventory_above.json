@@ -1,0 +1,10 @@
+{
+  "issues": [
+    {"number": 1, "state": "open", "html_url": "https://github.com/example/repo/issues/1", "labels": [{"name": "bounty"}]},
+    {"number": 2, "state": "open", "html_url": "https://github.com/example/repo/issues/2", "labels": [{"name": "bounty"}, {"name": "ai-agent-welcome"}]},
+    {"number": 3, "state": "open", "html_url": "https://github.com/example/repo/issues/3", "labels": [{"name": "bounty"}]},
+    {"number": 4, "state": "open", "html_url": "https://github.com/example/repo/issues/4", "labels": [{"name": "bounty"}]},
+    {"number": 5, "state": "open", "html_url": "https://github.com/example/repo/issues/5", "labels": [{"name": "bounty"}]},
+    {"number": 6, "state": "open", "html_url": "https://github.com/example/repo/issues/6", "labels": [{"name": "bounty"}]}
+  ]
+}
