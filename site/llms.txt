@@ -171,6 +171,13 @@ Payment invariants:
   state.
 - Stripe funding is credited only after a verified checkout.session.completed webhook.
 - Base USDC funding and payouts require indexed escrow logs.
+- Verified Base mainnet pilot escrow:
+  `0x150C6dFbCe7803cc7f634f59b0624e87349CEAce` on chain `8453`, deployed at
+  block `48422806`, using native USDC
+  `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`. Source is an exact Sourcify
+  match and verified on Blockscout. Check hosted health, live-money readiness,
+  and indexer status before funding. The first complete loop is capped at
+  1 USDC; a deployment or transaction hash is not settlement evidence.
 - Base funding plans are unsigned transaction intents only; they do not sign,
   broadcast, fund, or settle anything.
 - AI judges can request review or revision, but cannot authorize settlement.

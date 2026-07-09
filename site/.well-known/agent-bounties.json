@@ -225,6 +225,19 @@
     "supported_rail": "BaseUsdc",
     "settlement_authority": "transaction plans are not funding; Base funding requires indexed EscrowCreated log reconciliation"
   },
+  "base_mainnet_escrow": {
+    "network": "base-mainnet",
+    "chain_id": 8453,
+    "contract": "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
+    "native_usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "deployment_block": 48422806,
+    "source_verification": "Sourcify exact match and Blockscout verified",
+    "explorer": "https://base.blockscout.com/address/0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
+    "hosted_status": "Check hosted_health, hosted_readiness, and indexer status before funding; contract deployment alone is not settlement readiness.",
+    "first_loop_cap_minor": 1000000,
+    "automatic_release_cap_minor": 10000000,
+    "settlement_authority": "Only indexed escrow logs reconciled into platform state; wallet prompts, transaction plans, and transaction hashes are not settlement."
+  },
   "llms_txt": "https://nspg13.github.io/agent-bounties/llms.txt",
   "hosted_health": {
     "endpoint_template": "{api_base_url}/health",

@@ -39,6 +39,21 @@ Prepare these values before posting the first beta bounty.
 Keep `ENABLE_STRIPE_LIVE_EXECUTION=false` unless the beta explicitly includes
 Stripe paths. This runbook covers Base USDC only.
 
+The current verified Base mainnet pilot coordinates are:
+
+| Field | Value |
+|---|---|
+| Chain | Base mainnet (`8453`) |
+| Escrow | `0x150C6dFbCe7803cc7f634f59b0624e87349CEAce` |
+| Native USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| Deployment block | `48422806` |
+| Initial settlement signer | `0x884834E884d6e93462655A2820140aD03E6747bC` |
+
+Use [`deployments/base-mainnet.json`](../deployments/base-mainnet.json) as the
+machine-readable source. Check hosted readiness and indexer heartbeat before
+using these coordinates; a deployed contract alone does not make the hosted
+payment loop ready.
+
 ## Risk Limits
 
 Start conservative and raise limits only after successful reconciliation.
@@ -46,6 +61,7 @@ Start conservative and raise limits only after successful reconciliation.
 - Use Base Sepolia for the first full rehearsal.
 - Use one bounty per beta run until release, refund, and dispute paths have all
   been rehearsed.
+- Cap the first complete Base mainnet funding-to-release loop at `1 USDC`.
 - Keep mainnet bounty value low enough that manual operator review is acceptable
   for every payout.
 - Require `OPERATOR_API_TOKEN` before hosted risk approvals, settlement
@@ -99,8 +115,9 @@ Before funding, confirm:
 
 ## 3. Plan and Fund Escrow
 
-Generate the unsigned funding plan. Use Sepolia values for rehearsal and Base
-mainnet values only after rehearsal passes.
+Generate the unsigned funding plan. Use Sepolia values for rehearsal or the
+verified mainnet values above for the capped pilot after hosted readiness and
+indexer checks pass.
 
 ```bash
 curl -sS "$PUBLIC_BASE_URL/v1/base/funding-plan" \
