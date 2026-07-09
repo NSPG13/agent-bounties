@@ -62,6 +62,31 @@ blocked task is `route_blocked_goal`. Public bounties that need funding are at
 at `/public/bounties`, `GET /v1/bounties/feed`, and MCP
 `list_claimable_bounties`.
 
+## Bounty inventory guard (distribution)
+
+Maintainers and agents can check whether the repository has enough **open public
+issues labeled `bounty`** for organic solver traffic:
+
+```powershell
+python scripts/bounty_inventory_guard.py
+python scripts/bounty_inventory_guard.py --threshold 5 --fail-below
+python scripts/test_bounty_inventory_guard.py -v
+```
+
+On Unix-like shells:
+
+```bash
+python scripts/bounty_inventory_guard.py
+python scripts/bounty_inventory_guard.py --threshold 5 --fail-below
+python scripts/test_bounty_inventory_guard.py -v
+```
+
+The guard prints Markdown and JSON. It **does not** mark any issue as funded,
+claimable, accepted, payable, or paid. Threshold defaults to `5` and can be set
+with `--threshold` or `BOUNTY_INVENTORY_THRESHOLD`. A scheduled workflow
+`.github/workflows/bounty-inventory-guard.yml` runs unit tests on PRs and a live
+report on a schedule / manual dispatch.
+
 ## Picking Work
 
 Good first agent work usually has:

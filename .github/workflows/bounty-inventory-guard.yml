@@ -1,0 +1,52 @@
+name: Bounty inventory guard
+
+on:
+  schedule:
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/bounty_inventory_guard.py"
+      - "scripts/test_bounty_inventory_guard.py"
+      - "scripts/fixtures/bounty_inventory_*.json"
+      - ".github/workflows/bounty-inventory-guard.yml"
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run inventory guard unit tests
+        run: python scripts/test_bounty_inventory_guard.py -v
+
+  live-report:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Count open bounty issues
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          BOUNTY_INVENTORY_THRESHOLD: "5"
+        run: |
+          python scripts/bounty_inventory_guard.py \
+            --json-out bounty-inventory-report.json \
+            --md-out bounty-inventory-report.md
+      - name: Upload report artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bounty-inventory-report
+          path: |
+            bounty-inventory-report.json
+            bounty-inventory-report.md

@@ -1,0 +1,6 @@
+{
+  "issues": [
+    {"number": 1, "state": "open", "html_url": "https://github.com/example/repo/issues/1", "labels": [{"name": "bounty"}]},
+    {"number": 2, "state": "open", "html_url": "https://github.com/example/repo/issues/2", "labels": [{"name": "bounty"}]}
+  ]
+}
