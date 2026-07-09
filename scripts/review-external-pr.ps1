@@ -15,6 +15,15 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction Sile
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $targetRoot = Join-Path $repoRoot "target\pr-review"
 New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
+$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+$pythonArgs = @()
+if (-not $pythonCommand) {
+    $pythonCommand = Get-Command py -ErrorAction SilentlyContinue
+    $pythonArgs = @("-3")
+}
+if (-not $pythonCommand) {
+    throw "python or py is required for external PR review"
+}
 
 function Invoke-Checked {
     param(
@@ -207,9 +216,24 @@ try {
     }
     Invoke-Checked { git worktree add --detach $worktreeFull $refName }
 
+    $contractRootPath = Join-Path $targetRoot "pr-$Pr-contract-root"
+    $contractRootFull = [System.IO.Path]::GetFullPath($contractRootPath)
+    if (-not $contractRootFull.StartsWith($targetRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to use unsafe staged contract path: $contractRootFull"
+    }
+    if (Test-Path $contractRootFull) {
+        Remove-Item -LiteralPath $contractRootFull -Recurse -Force
+    }
+
     $docsCheckOk = $false
     $docsCheckOutput = ""
     try {
+        Invoke-Checked {
+            & $pythonCommand.Source @pythonArgs `
+                (Join-Path $repoRoot "scripts\stage_review_contract_root.py") `
+                --worktree $worktreeFull `
+                --output $contractRootFull
+        }
         $docsCheckStdout = Join-Path $targetRoot "pr-$Pr-docs-contract-check.stdout.log"
         $docsCheckStderr = Join-Path $targetRoot "pr-$Pr-docs-contract-check.stderr.log"
         foreach ($path in @($docsCheckStdout, $docsCheckStderr)) {
@@ -219,7 +243,7 @@ try {
         }
         $process = Start-Process `
             -FilePath "cargo" `
-            -ArgumentList @("run", "-p", "cli", "--", "docs-contract-check", "--root", $worktreeFull, "--contract-root", $repoRoot) `
+            -ArgumentList @("run", "-p", "cli", "--", "docs-contract-check", "--root", $worktreeFull, "--contract-root", $contractRootFull) `
             -RedirectStandardOutput $docsCheckStdout `
             -RedirectStandardError $docsCheckStderr `
             -Wait `
@@ -234,6 +258,9 @@ try {
         }
     } finally {
         Invoke-Checked { git worktree remove --force $worktreeFull }
+        if (Test-Path $contractRootFull) {
+            Remove-Item -LiteralPath $contractRootFull -Recurse -Force
+        }
     }
 
     $docsIssues = Get-DocsContractIssues $docsCheckOutput
@@ -326,7 +353,7 @@ try {
             $passedItems += "No risky paths were changed by the PR head reviewed here."
         }
         if ($docsCheckOk) {
-            $passedItems += "`docs-contract-check` passed against the trusted maintainer checkout."
+            $passedItems += "`docs-contract-check` passed with the trusted checker against bounded, staged PR route/tool sources."
         }
         if ($passedItems.Count -eq 0) {
             $passedItems += "The PR head was fetched and matched against GitHub before review; no merge-ready checks passed yet."

@@ -41,6 +41,12 @@ include it in the public notice with a concrete repair path. Useful but
 not-main-ready work should still be eligible for a collaboration branch when the
 security rules allow it.
 
+The external review scripts run the trusted maintainer-built docs checker. They
+stage only bounded, regular UTF-8 API and MCP source files from the fetched PR
+worktree into a clean temporary contract root. This lets the checker recognize
+new routes and tools without compiling or executing contributor code. Missing,
+symlinked, out-of-root, binary, or oversized contract sources fail intake.
+
 ## Public Maintainer Notice
 
 Publish the notice before code edits. Use
