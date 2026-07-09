@@ -3039,6 +3039,7 @@ async fn record_eval_run(state: &SharedState, run: EvalRun) -> Result<(), String
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
@@ -4242,6 +4243,12 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
             .await?
             .into_iter()
             .map(|agent| (agent.id, agent))
+            .collect(),
+        contributor_contacts: store
+            .list_contributor_contacts()
+            .await?
+            .into_iter()
+            .map(|contact| (contact.id, contact))
             .collect(),
         capabilities: store
             .list_capabilities()

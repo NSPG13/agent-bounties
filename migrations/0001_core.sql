@@ -6,6 +6,53 @@ CREATE TABLE IF NOT EXISTS agents (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS contributor_contacts (
+  id UUID PRIMARY KEY,
+  github_login TEXT NOT NULL,
+  github_login_normalized TEXT NOT NULL UNIQUE,
+  email TEXT,
+  payout_wallet TEXT,
+  associated_prs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  contact_consent BOOLEAN NOT NULL DEFAULT false,
+  wallet_consent BOOLEAN NOT NULL DEFAULT false,
+  outreach_allowed BOOLEAN NOT NULL DEFAULT false,
+  source TEXT NOT NULL,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS github_login_normalized TEXT;
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS payout_wallet TEXT;
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS associated_prs JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS contact_consent BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS wallet_consent BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS outreach_allowed BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'operator';
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE contributor_contacts
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+UPDATE contributor_contacts
+SET github_login_normalized = lower(github_login)
+WHERE github_login_normalized IS NULL;
+
+ALTER TABLE contributor_contacts
+  ALTER COLUMN github_login_normalized SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contributor_contacts_github_login_normalized
+  ON contributor_contacts (github_login_normalized);
+
 CREATE TABLE IF NOT EXISTS capabilities (
   id UUID PRIMARY KEY,
   agent_id UUID NOT NULL REFERENCES agents(id),

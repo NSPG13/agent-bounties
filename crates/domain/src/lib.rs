@@ -107,6 +107,42 @@ impl Agent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContributorContact {
+    pub id: Id,
+    pub github_login: String,
+    pub email: Option<String>,
+    pub payout_wallet: Option<String>,
+    pub associated_prs: Vec<String>,
+    pub contact_consent: bool,
+    pub wallet_consent: bool,
+    pub outreach_allowed: bool,
+    pub source: String,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl ContributorContact {
+    pub fn new(github_login: impl Into<String>, source: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            github_login: github_login.into(),
+            email: None,
+            payout_wallet: None,
+            associated_prs: Vec::new(),
+            contact_consent: false,
+            wallet_consent: false,
+            outreach_allowed: false,
+            source: source.into(),
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Capability {
     pub id: Id,
     pub agent_id: Id,

@@ -553,6 +553,12 @@ pub async fn hydrate_bounty_network(store: &PostgresStore) -> anyhow::Result<Bou
             .into_iter()
             .map(|agent| (agent.id, agent))
             .collect(),
+        contributor_contacts: store
+            .list_contributor_contacts()
+            .await?
+            .into_iter()
+            .map(|contact| (contact.id, contact))
+            .collect(),
         capabilities: store
             .list_capabilities()
             .await?

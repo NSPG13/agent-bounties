@@ -1,12 +1,12 @@
 use chain_base::{BaseEscrowEvent, BaseEscrowEventKind};
 use chrono::{DateTime, Utc};
 use domain::{
-    Agent, AgentStatus, Bounty, BountyStatus, Capability, CapabilityClass, Claim, Escrow,
-    EscrowStatus, EvalRun, FundingContribution, FundingContributionStatus, FundingIntent,
-    FundingIntentStatus, FundingMode, HelpRequest, Id, Money, PaymentEvent, PaymentEventStatus,
-    PaymentRail, PrivacyLevel, ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent,
-    RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal,
-    VerificationDecision, VerifierKind, VerifierResult,
+    Agent, AgentStatus, Bounty, BountyStatus, Capability, CapabilityClass, Claim,
+    ContributorContact, Escrow, EscrowStatus, EvalRun, FundingContribution,
+    FundingContributionStatus, FundingIntent, FundingIntentStatus, FundingMode, HelpRequest, Id,
+    Money, PaymentEvent, PaymentEventStatus, PaymentRail, PrivacyLevel, ProofRecord, Quote,
+    ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface,
+    Settlement, Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{LedgerEntry, Posting};
 use sqlx::{PgPool, Row};
@@ -178,6 +178,73 @@ impl PostgresStore {
                     status: parse_agent_status(row.try_get::<String, _>("status")?)?,
                     payout_wallet: row.try_get("payout_wallet")?,
                     created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_contributor_contact(&self, contact: &ContributorContact) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO contributor_contacts
+              (id, github_login, github_login_normalized, email, payout_wallet, associated_prs, contact_consent, wallet_consent, outreach_allowed, source, notes, created_at, updated_at)
+            VALUES ($1, $2, lower($2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ON CONFLICT (github_login_normalized) DO UPDATE SET
+              github_login = EXCLUDED.github_login,
+              email = EXCLUDED.email,
+              payout_wallet = EXCLUDED.payout_wallet,
+              associated_prs = EXCLUDED.associated_prs,
+              contact_consent = EXCLUDED.contact_consent,
+              wallet_consent = EXCLUDED.wallet_consent,
+              outreach_allowed = EXCLUDED.outreach_allowed,
+              source = EXCLUDED.source,
+              notes = EXCLUDED.notes,
+              updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(contact.id)
+        .bind(&contact.github_login)
+        .bind(&contact.email)
+        .bind(&contact.payout_wallet)
+        .bind(serde_json::to_value(&contact.associated_prs)?)
+        .bind(contact.contact_consent)
+        .bind(contact.wallet_consent)
+        .bind(contact.outreach_allowed)
+        .bind(&contact.source)
+        .bind(&contact.notes)
+        .bind(contact.created_at)
+        .bind(contact.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_contributor_contacts(&self) -> DbResult<Vec<ContributorContact>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, github_login, email, payout_wallet, associated_prs, contact_consent, wallet_consent, outreach_allowed, source, notes, created_at, updated_at
+            FROM contributor_contacts
+            ORDER BY created_at, github_login
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(ContributorContact {
+                    id: row.try_get("id")?,
+                    github_login: row.try_get("github_login")?,
+                    email: row.try_get("email")?,
+                    payout_wallet: row.try_get("payout_wallet")?,
+                    associated_prs: serde_json::from_value(row.try_get("associated_prs")?)?,
+                    contact_consent: row.try_get("contact_consent")?,
+                    wallet_consent: row.try_get("wallet_consent")?,
+                    outreach_allowed: row.try_get("outreach_allowed")?,
+                    source: row.try_get("source")?,
+                    notes: row.try_get("notes")?,
+                    created_at: row.try_get("created_at")?,
+                    updated_at: row.try_get("updated_at")?,
                 })
             })
             .collect()
@@ -1683,6 +1750,7 @@ mod tests {
     fn migration_contains_durable_market_tables() {
         for table in [
             "agents",
+            "contributor_contacts",
             "capabilities",
             "help_requests",
             "quotes",
@@ -1715,6 +1783,8 @@ mod tests {
         assert!(CORE_MIGRATION.contains("settlement_id UUID"));
         assert!(CORE_MIGRATION.contains("stripe_success_url TEXT"));
         assert!(CORE_MIGRATION.contains("stripe_cancel_url TEXT"));
+        assert!(CORE_MIGRATION.contains("github_login_normalized TEXT"));
+        assert!(CORE_MIGRATION.contains("outreach_allowed BOOLEAN"));
         assert!(CORE_MIGRATION.contains("fund-contribution:"));
     }
 

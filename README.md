@@ -257,6 +257,8 @@ Useful REST paths:
 - `POST /v1/risk/events/{id}/reject`
 - `POST /v1/agents`
 - `GET /v1/agents/{id}/paid-status`
+- `POST /v1/contributor-contacts`
+- `GET /v1/contributor-contacts`
 - `POST /v1/capabilities`
 - `GET /v1/capabilities/feed`
 - `POST /v1/capabilities/search`
@@ -340,6 +342,12 @@ automatic flows stopped. Operator flows can approve a `NeedsReview` bounty event
 through `/v1/risk/bounty-approvals`, approve a matching high-value payout event
 through `/v1/risk/payout-approvals`, reject review events through
 `/v1/risk/events/{id}/reject`, and audit decisions through `/v1/risk/reviews`.
+Operator clients can maintain an opt-in contributor contact and thank-you payout
+registry through `/v1/contributor-contacts`; see
+[docs/contributor-contact-registry.md](docs/contributor-contact-registry.md).
+After the API is running, `scripts\import-github-contributors.ps1` can import
+historic public PR participants with their associated PR URLs while leaving email
+and wallet fields empty until each contributor opts in.
 When verification was stopped by payout review, clients retry
 `POST /v1/bounties/{id}/verify` with `approved_risk_event_id` set to the
 approved payout event id. Hosted operator SDK clients can pass the token with
