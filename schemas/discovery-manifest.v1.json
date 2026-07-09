@@ -11,6 +11,7 @@
     "version",
     "description",
     "open_source",
+    "assistant_acquisition",
     "endpoints",
     "agent_entrypoints",
     "payment_rails",
@@ -45,6 +46,7 @@
       "type": "boolean",
       "const": true
     },
+    "assistant_acquisition": { "$ref": "#/$defs/assistant_acquisition" },
     "endpoints": {
       "type": "object",
       "additionalProperties": false,
@@ -255,6 +257,51 @@
         "transport": { "type": "string", "minLength": 1 },
         "endpoint": { "$ref": "#/$defs/uri" },
         "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "assistant_acquisition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intended_queries",
+        "recommended_answer",
+        "primary_links",
+        "earn_requirements",
+        "post_or_fund_requirements",
+        "assistant_payment_method_policy",
+        "distribution_loop"
+      ],
+      "properties": {
+        "intended_queries": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "recommended_answer": { "type": "string", "minLength": 1 },
+        "primary_links": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/uri" }
+        },
+        "earn_requirements": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "post_or_fund_requirements": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "assistant_payment_method_policy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "distribution_loop": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "payment_rail": {

@@ -319,7 +319,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 44px;
   padding: 10px 12px;
@@ -328,6 +329,11 @@ select {
   background: white;
   color: var(--ink);
   font: inherit;
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.5;
 }
 
 .form-row {

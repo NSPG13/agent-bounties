@@ -1,4 +1,6 @@
 (function () {
+  const paidBountyIssueTemplateUrl = "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml";
+
   const canvas = document.getElementById("network-canvas");
   if (canvas) {
     const context = canvas.getContext("2d");
@@ -66,6 +68,79 @@
     window.addEventListener("resize", resize);
     resize();
     draw();
+  }
+
+  const postForm = document.getElementById("post-bounty-form");
+  const postOutput = document.getElementById("post-bounty-output");
+  if (postForm && postOutput) {
+    function postFormValue(data, name) {
+      return String(data.get(name) || "").trim();
+    }
+
+    function suggestedFundingCommand(amount, fundingMode) {
+      const normalized = amount || "<amount>";
+      if (fundingMode === "StripeFiatLedger") {
+        return `/agent-bounty fund ${normalized.replace(/USDC/gi, "USD")} via StripeFiatLedger`;
+      }
+      if (fundingMode === "Simulated") {
+        return "Simulated funding is local-only; do not advertise this as real payout.";
+      }
+      return `/agent-bounty fund ${normalized.replace(/USD(?!C)/gi, "USDC")} via BaseUsdcEscrow`;
+    }
+
+    postForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const data = new FormData(postForm);
+      const title = postFormValue(data, "postTitle");
+      const goal = postFormValue(data, "postGoal");
+      const acceptance = postFormValue(data, "postAcceptance");
+      const template = postFormValue(data, "postTemplate") || "small-code-change";
+      const amount = postFormValue(data, "postAmount");
+      const funding = postFormValue(data, "postFunding") || "BaseUsdcEscrow";
+      const privacy = postFormValue(data, "postPrivacy") || "Public";
+      const cofunding = postFormValue(data, "postCofunding")
+        || `Supporters can add funds by commenting \`${suggestedFundingCommand(amount, funding)}\`.`;
+      const discovery = postFormValue(data, "postDiscovery");
+      const issueTitle = title.startsWith("[bounty]:") ? title : `[bounty]: ${title}`;
+      const issueUrl = `${paidBountyIssueTemplateUrl}&title=${encodeURIComponent(issueTitle)}`;
+      const issueBody = [
+        "### Goal",
+        goal,
+        "",
+        "### Acceptance criteria",
+        acceptance,
+        "",
+        "### Template",
+        template,
+        "",
+        "### Suggested amount",
+        amount,
+        "",
+        "### Funding mode",
+        funding,
+        "",
+        "### Co-funding note",
+        cofunding,
+        "",
+        "### Discovery feedback",
+        discovery,
+        "",
+        "### Privacy",
+        privacy,
+      ].join("\n");
+      const fundingCommand = suggestedFundingCommand(amount, funding);
+      const boundary = "Posting this issue is not funding. Real funding still requires verified Stripe webhook reconciliation or indexed Base escrow log reconciliation.";
+      postOutput.textContent = [
+        `Open the paid-bounty issue template: ${issueUrl}`,
+        "",
+        "Paste this draft into the issue fields:",
+        issueBody,
+        "",
+        `Suggested co-funding comment after the issue exists: ${fundingCommand}`,
+        "",
+        boundary,
+      ].join("\n");
+    });
   }
 
   const form = document.getElementById("funding-form");
