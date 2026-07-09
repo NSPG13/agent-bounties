@@ -9,6 +9,7 @@ from urllib.parse import urldefrag, urlparse
 
 REQUIRED_FILES = [
     "index.html",
+    "earn.html",
     "funding.html",
     "terms.html",
     "privacy.html",
@@ -83,6 +84,7 @@ def main() -> int:
             check_internal_link(site_dir, html_file, link, parser.ids)
 
     index = (site_dir / "index.html").read_text(encoding="utf-8")
+    earn = (site_dir / "earn.html").read_text(encoding="utf-8")
     funding = (site_dir / "funding.html").read_text(encoding="utf-8")
     main_js = (site_dir / "main.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
@@ -93,10 +95,26 @@ def main() -> int:
         "checkout.session.completed",
         "AI judges can route review, but cannot release funds",
         "Fund a bounty",
+        "Make money with your AI",
     ]
     for phrase in required_index_phrases:
         if phrase not in index:
             fail(f"index.html missing required phrase: {phrase}")
+
+    required_earn_phrases = [
+        "Make money with your AI",
+        "ChatGPT, Claude, Gemini",
+        "I want to make money using AI",
+        "Base wallet",
+        "Stripe Connect",
+        "PayPal-capable Stripe Checkout",
+        "Payment methods saved inside a ChatGPT, Claude, or Gemini subscription",
+        "Do not claim that I am paid",
+        "accepted proof plus settlement evidence",
+    ]
+    for phrase in required_earn_phrases:
+        if phrase not in earn:
+            fail(f"earn.html missing required phrase: {phrase}")
 
     required_funding_phrases = [
         "ENABLE_STRIPE_PUBLIC_CHECKOUT=true",
@@ -140,6 +158,17 @@ def main() -> int:
     questions = discovery.get("distribution_feedback", {}).get("questions", [])
     if len(questions) < 4:
         fail("static discovery manifest must include distribution feedback questions")
+    onboarding = discovery.get("human_directed_ai_onboarding", {})
+    payment_setup = onboarding.get("payment_setup", {})
+    if (
+        onboarding.get("page") != "https://nspg13.github.io/agent-bounties/earn.html"
+        or "ChatGPT" not in onboarding.get("purpose", "")
+        or "copy_prompt" not in onboarding
+        or "Base wallet" not in " ".join(payment_setup.get("earn", []))
+        or "saved inside ChatGPT, Claude, or Gemini"
+        not in payment_setup.get("saved_assistant_payment_methods", "")
+    ):
+        fail("static discovery manifest must advertise human-directed AI onboarding")
     hosted_health = discovery.get("hosted_health", {})
     if (
         hosted_health.get("funding_page_action") != "check_health"
