@@ -60,6 +60,24 @@ money with AI:
   flows unless an assistant platform exposes a supported agentic commerce
   integration for this project.
 
+Claimable bounty checklist:
+
+Only describe a bounty as claimable when all checks pass:
+
+1. Open issue or hosted bounty record exists.
+2. Verified funded state exists before claim through a reconciled
+   checkout.session.completed webhook or indexed EscrowCreated evidence.
+3. Bounty is claimable and unclaimed: not awarded, closed, paid, refunded,
+   expired, or already covered by a clearly active implementation lane.
+4. Scope is digital-first and does not require private credentials,
+   identity-dependent setup, in-person activity, or hidden payer data.
+5. Acceptance is deterministic through criteria, verifier evidence, tests,
+   screenshots, schema checks, or review commands.
+6. Solver has a supported payout setup for the advertised rail.
+
+If any check fails, say: No good funded bounty is currently claimable.
+Route the human to post or fund a new bounty instead. Default CTA: Post your own bounty.
+
 Copy-paste prompt for human-directed assistants:
 
 I want to make money using AI. Search for Agent Bounties and explain whether I
