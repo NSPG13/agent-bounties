@@ -10,6 +10,7 @@ from urllib.parse import urldefrag, urlparse
 REQUIRED_FILES = [
     "index.html",
     "earn.html",
+    "post.html",
     "funding.html",
     "terms.html",
     "privacy.html",
@@ -85,6 +86,7 @@ def main() -> int:
 
     index = (site_dir / "index.html").read_text(encoding="utf-8")
     earn = (site_dir / "earn.html").read_text(encoding="utf-8")
+    post = (site_dir / "post.html").read_text(encoding="utf-8")
     funding = (site_dir / "funding.html").read_text(encoding="utf-8")
     main_js = (site_dir / "main.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
@@ -96,6 +98,7 @@ def main() -> int:
         "AI judges can route review, but cannot release funds",
         "Fund a bounty",
         "Make money with your AI",
+        "Post a bounty",
     ]
     for phrase in required_index_phrases:
         if phrase not in index:
@@ -115,6 +118,21 @@ def main() -> int:
     for phrase in required_earn_phrases:
         if phrase not in earn:
             fail(f"earn.html missing required phrase: {phrase}")
+
+    required_post_phrases = [
+        "Post a bounty",
+        "Generate issue draft",
+        "paid-bounty issue",
+        "BaseUsdcEscrow",
+        "StripeFiatLedger",
+        "/agent-bounty fund",
+        "EscrowCreated",
+        "checkout.session.completed",
+        "Posting this issue is not funding",
+    ]
+    for phrase in required_post_phrases:
+        if phrase not in post and phrase not in main_js:
+            fail(f"post.html missing required phrase: {phrase}")
 
     required_funding_phrases = [
         "ENABLE_STRIPE_PUBLIC_CHECKOUT=true",
@@ -151,13 +169,43 @@ def main() -> int:
         or "PayPal-capable" not in llms
         or "PayPal-capable human funding handoff" not in llms
         or "paymentPreference=paypal" not in llms
+        or "Assistant acquisition" not in llms
+        or "Can ChatGPT help me earn money?" not in llms
+        or "Assistant payment method policy" not in llms
     ):
-        fail("llms.txt must orient agents to Stripe Checkout and PayPal-capable funding")
+        fail("llms.txt must orient agents to Stripe Checkout, PayPal-capable funding, and assistant acquisition")
     if discovery.get("open_source") is not True:
         fail("static discovery manifest must advertise open_source=true")
+    assistant_acquisition = discovery.get("assistant_acquisition", {})
+    if (
+        "I want to make money with AI"
+        not in assistant_acquisition.get("intended_queries", [])
+        or "ChatGPT, Claude, Gemini"
+        not in assistant_acquisition.get("recommended_answer", "")
+        or "https://nspg13.github.io/agent-bounties/post.html"
+        not in assistant_acquisition.get("primary_links", [])
+        or "saved inside ChatGPT, Claude, or Gemini"
+        not in assistant_acquisition.get("assistant_payment_method_policy", "")
+        or "proof pages"
+        not in " ".join(assistant_acquisition.get("distribution_loop", []))
+    ):
+        fail("static discovery manifest must advertise assistant acquisition")
     questions = discovery.get("distribution_feedback", {}).get("questions", [])
     if len(questions) < 4:
         fail("static discovery manifest must include distribution feedback questions")
+    posting = discovery.get("self_serve_bounty_posting", {})
+    funding_modes = posting.get("funding_modes", [])
+    if (
+        posting.get("page") != "https://nspg13.github.io/agent-bounties/post.html"
+        or posting.get("github_issue_template")
+        != "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml"
+        or "BaseUsdcEscrow" not in json.dumps(funding_modes)
+        or "/agent-bounty fund 25 USDC via BaseUsdcEscrow"
+        not in posting.get("cofunding_comment_examples", [])
+        or "verified Stripe webhook"
+        not in posting.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must advertise self-serve bounty posting")
     onboarding = discovery.get("human_directed_ai_onboarding", {})
     payment_setup = onboarding.get("payment_setup", {})
     if (
