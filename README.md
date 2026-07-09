@@ -460,6 +460,16 @@ create a `StripeFiat` bounty funding intent and then calls
 `POST /v1/stripe/live/funding-intents/{id}/checkout-session` to
 open Stripe Checkout when public Checkout is enabled. The stored funding intent
 preserves the page's success and cancel return URLs for Checkout UX only.
+The static website also includes a human-directed AI onboarding page at
+https://nspg13.github.io/agent-bounties/earn.html. It is written for users who
+ask ChatGPT, Claude, Gemini, or another assistant how to make money with AI. It
+gives assistants a copy-paste prompt, explains how to find funded claimable
+bounties, how to post or fund work, and what payout setup is currently real:
+Base wallet for Base USDC payouts, Stripe Connect-capable account when fiat
+payouts are enabled, and PayPal-capable Stripe Checkout for funding where
+Stripe supports it. Payment methods saved inside assistant subscriptions are
+not automatically available to Agent Bounties unless a supported agentic
+commerce integration is added later.
 Hosted public bounty and funding pages can link to the same form with
 `apiBaseUrl`, `bountyId`, `amountMinor`, `currency`, `rail`, `source`, and
 `paymentPreference` query parameters so human funders do not need to copy IDs by

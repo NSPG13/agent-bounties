@@ -384,6 +384,24 @@ code {
   overflow-wrap: anywhere;
 }
 
+.prompt-block {
+  margin: 0 0 18px;
+  padding: 16px;
+  border-left: 3px solid var(--accent);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.prompt-block code {
+  padding: 0;
+  background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
 .reveal {
   opacity: 0;
   transform: translateY(12px);
