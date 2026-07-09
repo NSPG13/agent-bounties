@@ -6,12 +6,12 @@ use chain_base::{
 };
 use chrono::{DateTime, Utc};
 use domain::{
-    Agent, Bounty, BountyStatus, Capability, CapabilityClass, Claim, Escrow, EscrowStatus,
-    FundingContribution, FundingContributionStatus, FundingIntent, FundingIntentStatus,
-    FundingMode, FundingPartitionTarget, HelpRequest, Id, Money, PaymentEvent, PaymentEventStatus,
-    PaymentRail, PayoutIntent, PayoutStatus, PrivacyLevel, ProofRecord, Quote, ReputationEvent,
-    RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement,
-    Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
+    Agent, Bounty, BountyStatus, Capability, CapabilityClass, Claim, ContributorContact, Escrow,
+    EscrowStatus, FundingContribution, FundingContributionStatus, FundingIntent,
+    FundingIntentStatus, FundingMode, FundingPartitionTarget, HelpRequest, Id, Money, PaymentEvent,
+    PaymentEventStatus, PaymentRail, PayoutIntent, PayoutStatus, PrivacyLevel, ProofRecord, Quote,
+    ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface,
+    Settlement, Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{credit, debit, AccountCode, Ledger, LedgerEntry};
 use payments_stripe::{
@@ -26,7 +26,7 @@ use risk::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 use verifier_sdk::{verify_with_builtin, VerificationInput};
@@ -73,6 +73,8 @@ pub enum AppError {
     InvalidFundingIntent(String),
     #[error("invalid Stripe payout reconciliation: {0}")]
     InvalidStripePayout(String),
+    #[error("invalid contributor contact: {0}")]
+    InvalidContributorContact(String),
     #[error(transparent)]
     Domain(#[from] domain::DomainError),
     #[error(transparent)]
@@ -667,10 +669,46 @@ fn nonempty(value: &str) -> bool {
     !value.trim().is_empty()
 }
 
+fn normalized_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn dedup_nonempty(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value.trim().to_string();
+        if !value.is_empty() && seen.insert(value.to_lowercase()) {
+            normalized.push(value);
+        }
+    }
+    normalized
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterAgentRequest {
     pub handle: String,
     pub payout_wallet: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpsertContributorContactRequest {
+    pub github_login: String,
+    pub email: Option<String>,
+    pub payout_wallet: Option<String>,
+    #[serde(default)]
+    pub associated_prs: Vec<String>,
+    #[serde(default)]
+    pub contact_consent: bool,
+    #[serde(default)]
+    pub wallet_consent: bool,
+    #[serde(default)]
+    pub outreach_allowed: bool,
+    #[serde(default)]
+    pub source: Option<String>,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1086,6 +1124,7 @@ pub struct StripeFundingReconciliation {
 #[derive(Debug)]
 pub struct BountyNetwork {
     pub agents: HashMap<Id, Agent>,
+    pub contributor_contacts: HashMap<Id, ContributorContact>,
     pub capabilities: HashMap<Id, Capability>,
     pub help_requests: HashMap<Id, HelpRequest>,
     pub quotes: HashMap<Id, Quote>,
@@ -1111,6 +1150,7 @@ impl Default for BountyNetwork {
     fn default() -> Self {
         Self {
             agents: HashMap::new(),
+            contributor_contacts: HashMap::new(),
             capabilities: HashMap::new(),
             help_requests: HashMap::new(),
             quotes: HashMap::new(),
@@ -1140,6 +1180,98 @@ impl BountyNetwork {
         agent.payout_wallet = request.payout_wallet;
         self.agents.insert(agent.id, agent.clone());
         agent
+    }
+
+    pub fn upsert_contributor_contact(
+        &mut self,
+        request: UpsertContributorContactRequest,
+    ) -> AppResult<ContributorContact> {
+        let github_login = request
+            .github_login
+            .trim()
+            .trim_start_matches('@')
+            .to_string();
+        if github_login.is_empty() {
+            return Err(AppError::InvalidContributorContact(
+                "github_login is required".to_string(),
+            ));
+        }
+
+        let email = normalized_optional_string(request.email);
+        if email.is_some() && !request.contact_consent {
+            return Err(AppError::InvalidContributorContact(
+                "email requires contact_consent=true".to_string(),
+            ));
+        }
+        let payout_wallet = normalized_optional_string(request.payout_wallet);
+        if payout_wallet.is_some() && !request.wallet_consent {
+            return Err(AppError::InvalidContributorContact(
+                "payout_wallet requires wallet_consent=true".to_string(),
+            ));
+        }
+        if request.outreach_allowed && !request.contact_consent {
+            return Err(AppError::InvalidContributorContact(
+                "outreach_allowed requires contact_consent=true".to_string(),
+            ));
+        }
+
+        let source =
+            normalized_optional_string(request.source).unwrap_or_else(|| "operator".into());
+        let notes = normalized_optional_string(request.notes);
+        let login_key = github_login.to_lowercase();
+        let existing_id = self.contributor_contacts.iter().find_map(|(id, contact)| {
+            (contact.github_login.to_lowercase() == login_key).then_some(*id)
+        });
+        let mut associated_prs = dedup_nonempty(request.associated_prs);
+        let now = Utc::now();
+
+        let contact = if let Some(existing_id) = existing_id {
+            let mut contact = self
+                .contributor_contacts
+                .get(&existing_id)
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::InvalidContributorContact(
+                        "existing contributor contact was not found".to_string(),
+                    )
+                })?;
+            associated_prs.extend(contact.associated_prs.iter().cloned());
+            contact.github_login = github_login;
+            contact.email = email;
+            contact.payout_wallet = payout_wallet;
+            contact.associated_prs = dedup_nonempty(associated_prs);
+            contact.contact_consent = request.contact_consent;
+            contact.wallet_consent = request.wallet_consent;
+            contact.outreach_allowed = request.outreach_allowed;
+            contact.source = source;
+            contact.notes = notes;
+            contact.updated_at = now;
+            contact
+        } else {
+            let mut contact = ContributorContact::new(github_login, source);
+            contact.email = email;
+            contact.payout_wallet = payout_wallet;
+            contact.associated_prs = associated_prs;
+            contact.contact_consent = request.contact_consent;
+            contact.wallet_consent = request.wallet_consent;
+            contact.outreach_allowed = request.outreach_allowed;
+            contact.notes = notes;
+            contact.updated_at = now;
+            contact
+        };
+        self.contributor_contacts
+            .insert(contact.id, contact.clone());
+        Ok(contact)
+    }
+
+    pub fn list_contributor_contacts(&self) -> Vec<ContributorContact> {
+        let mut contacts: Vec<_> = self.contributor_contacts.values().cloned().collect();
+        contacts.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.github_login.cmp(&right.github_login))
+        });
+        contacts
     }
 
     pub fn register_capability(
@@ -4345,6 +4477,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn contributor_contact_requires_consent_for_private_fields() {
+        let mut network = BountyNetwork::default();
+
+        let email_error =
+            network
+                .upsert_contributor_contact(UpsertContributorContactRequest {
+                    github_login: "qilu13".to_string(),
+                    email: Some("qilu13@example.com".to_string()),
+                    payout_wallet: None,
+                    associated_prs: vec![
+                        "https://github.com/NSPG13/agent-bounties/pull/24".to_string()
+                    ],
+                    contact_consent: false,
+                    wallet_consent: false,
+                    outreach_allowed: false,
+                    source: None,
+                    notes: None,
+                })
+                .unwrap_err();
+        assert!(matches!(
+            email_error,
+            AppError::InvalidContributorContact(message)
+                if message.contains("contact_consent")
+        ));
+
+        let wallet_error = network
+            .upsert_contributor_contact(UpsertContributorContactRequest {
+                github_login: "qilu13".to_string(),
+                email: None,
+                payout_wallet: Some("0x1111111111111111111111111111111111111111".to_string()),
+                associated_prs: vec![],
+                contact_consent: false,
+                wallet_consent: false,
+                outreach_allowed: false,
+                source: None,
+                notes: None,
+            })
+            .unwrap_err();
+        assert!(matches!(
+            wallet_error,
+            AppError::InvalidContributorContact(message)
+                if message.contains("wallet_consent")
+        ));
+    }
+
+    #[test]
+    fn contributor_contact_upsert_merges_prs_by_github_login() {
+        let mut network = BountyNetwork::default();
+        let first = network
+            .upsert_contributor_contact(UpsertContributorContactRequest {
+                github_login: "@Qilu13".to_string(),
+                email: None,
+                payout_wallet: None,
+                associated_prs: vec!["#24".to_string()],
+                contact_consent: false,
+                wallet_consent: false,
+                outreach_allowed: false,
+                source: Some("github-pr-history".to_string()),
+                notes: None,
+            })
+            .unwrap();
+        let second = network
+            .upsert_contributor_contact(UpsertContributorContactRequest {
+                github_login: "qilu13".to_string(),
+                email: None,
+                payout_wallet: Some("0x1111111111111111111111111111111111111111".to_string()),
+                associated_prs: vec!["#59".to_string(), "#24".to_string()],
+                contact_consent: false,
+                wallet_consent: true,
+                outreach_allowed: false,
+                source: Some("github-comment-opt-in".to_string()),
+                notes: Some("Base-compatible wallet supplied publicly.".to_string()),
+            })
+            .unwrap();
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(second.github_login, "qilu13");
+        assert_eq!(
+            second.associated_prs,
+            vec!["#59".to_string(), "#24".to_string()]
+        );
+        assert!(second.wallet_consent);
+        assert_eq!(network.list_contributor_contacts().len(), 1);
+    }
+
+    #[test]
     fn live_money_readiness_reports_ready_only_with_live_stripe_and_base_mainnet() {
         let report = build_live_money_readiness_report(LiveMoneyReadinessConfig {
             network: "base-mainnet".to_string(),
@@ -4732,12 +4950,11 @@ mod tests {
             FundingIntentStatus::Applied
         );
         assert_eq!(stripe_reconciliation.ledger_entries.len(), 2);
-        assert_eq!(
+        assert!(
             network
                 .apply_stripe_funding_credit(stripe_reconciliation.funding_credit.clone())
                 .unwrap()
-                .duplicate,
-            true
+                .duplicate
         );
 
         let after_stripe = network.status(bounty.id).unwrap();

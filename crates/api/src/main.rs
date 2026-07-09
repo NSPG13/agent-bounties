@@ -10,7 +10,8 @@ use app::{
     PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
     PostBountyRequest, QuoteSet, RegisterAgentRequest, RegisterCapabilityRequest,
     RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
-    StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest, VerifySubmissionRequest,
+    StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest,
+    UpsertContributorContactRequest, VerifySubmissionRequest,
 };
 use axum::{
     body::Bytes,
@@ -31,8 +32,9 @@ use chain_base::{
 use chrono::Utc;
 use db::PostgresStore;
 use domain::{
-    Agent, BountyStatus, Capability, CapabilityClass, EvalRun, HelpRequest, Money, PayoutStatus,
-    PrivacyLevel, RiskEvent, RiskReviewRecord, VerificationDecision, VerifierKind,
+    Agent, BountyStatus, Capability, CapabilityClass, ContributorContact, EvalRun, HelpRequest,
+    Money, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord, VerificationDecision,
+    VerifierKind,
 };
 use eval_harness::{
     bundled_abuse_fixtures, bundled_fixtures, bundled_judge_fixtures, run_eval_loops, AbuseBench,
@@ -85,6 +87,8 @@ use worker::BaseEscrowLogWorker;
         list_eval_runs,
         register_agent,
         agent_paid_status,
+        upsert_contributor_contact,
+        list_contributor_contacts,
         register_capability,
         search_capabilities,
         create_help_request,
@@ -150,7 +154,8 @@ use worker::BaseEscrowLogWorker;
         FetchBaseRpcLogsRequest,
         BroadcastBaseSignedTransactionRequest,
         GetBaseTransactionReceiptRequest,
-        SearchCapabilitiesRequest
+        SearchCapabilitiesRequest,
+        ContributorContact
     )),
     modifiers(&SecurityAddon)
 )]
@@ -509,6 +514,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/evals/runs", get(list_eval_runs))
         .route("/v1/agents", post(register_agent))
         .route("/v1/agents/:id/paid-status", get(agent_paid_status))
+        .route(
+            "/v1/contributor-contacts",
+            post(upsert_contributor_contact).get(list_contributor_contacts),
+        )
         .route("/v1/capabilities", post(register_capability))
         .route("/v1/capabilities/feed", get(public_capability_feed))
         .route("/v1/capabilities/search", post(search_capabilities))
@@ -1066,6 +1075,54 @@ async fn agent_paid_status(
             app::AppError::AgentNotFound => StatusCode::NOT_FOUND,
             _ => StatusCode::BAD_REQUEST,
         })
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/contributor-contacts",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = ContributorContact),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn upsert_contributor_contact(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<UpsertContributorContactRequest>,
+) -> Result<Json<ContributorContact>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let contact = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network
+            .upsert_contributor_contact(request)
+            .map_err(|_| StatusCode::BAD_REQUEST)?
+    };
+    if let Some(store) = &state.store {
+        store
+            .upsert_contributor_contact(&contact)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    Ok(Json(contact))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/contributor-contacts",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = Vec<ContributorContact>),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn list_contributor_contacts(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ContributorContact>>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let network = state.network.lock().expect("state poisoned");
+    Ok(Json(network.list_contributor_contacts()))
 }
 
 #[utoipa::path(post, path = "/v1/capabilities")]
@@ -3058,6 +3115,12 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
             .into_iter()
             .map(|agent| (agent.id, agent))
             .collect(),
+        contributor_contacts: store
+            .list_contributor_contacts()
+            .await?
+            .into_iter()
+            .map(|contact| (contact.id, contact))
+            .collect(),
         capabilities: store
             .list_capabilities()
             .await?
@@ -4455,6 +4518,7 @@ mod tests {
         assert!(paths.contains_key("/v1/risk/payout-approvals"));
         assert!(paths.contains_key("/v1/risk/events/{id}/reject"));
         assert!(paths.contains_key("/v1/agents/{id}/paid-status"));
+        assert!(paths.contains_key("/v1/contributor-contacts"));
         assert!(paths.contains_key("/v1/capabilities/search"));
         assert!(paths.contains_key("/v1/base/indexer-status"));
         assert!(paths.contains_key("/v1/base/escrow-events"));
@@ -4494,6 +4558,7 @@ mod tests {
             "/v1/risk/bounty-approvals",
             "/v1/risk/payout-approvals",
             "/v1/risk/events/{id}/reject",
+            "/v1/contributor-contacts",
             "/v1/base/escrow-events",
             "/v1/base/evm-logs",
             "/v1/base/rpc-logs",
@@ -4548,6 +4613,59 @@ mod tests {
             "Stripe checkout webhook must remain callable by Stripe without operator auth"
         );
         assert!(paths["/v1/stripe/checkout-webhooks"]["post"]["responses"]["503"].is_object());
+    }
+
+    #[tokio::test]
+    async fn contributor_contacts_are_operator_gated() {
+        let state = test_state_with_operator_token(BountyNetwork::default(), "secret-token");
+        let denied = upsert_contributor_contact(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(UpsertContributorContactRequest {
+                github_login: "qilu13".to_string(),
+                email: None,
+                payout_wallet: Some("0x1111111111111111111111111111111111111111".to_string()),
+                associated_prs: vec!["#24".to_string()],
+                contact_consent: false,
+                wallet_consent: true,
+                outreach_allowed: false,
+                source: Some("github-comment-opt-in".to_string()),
+                notes: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied, StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
+        let contact = upsert_contributor_contact(
+            State(state.clone()),
+            headers.clone(),
+            Json(UpsertContributorContactRequest {
+                github_login: "qilu13".to_string(),
+                email: None,
+                payout_wallet: Some("0x1111111111111111111111111111111111111111".to_string()),
+                associated_prs: vec!["#24".to_string()],
+                contact_consent: false,
+                wallet_consent: true,
+                outreach_allowed: false,
+                source: Some("github-comment-opt-in".to_string()),
+                notes: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(contact.github_login, "qilu13");
+        assert!(contact.wallet_consent);
+        let contacts = list_contributor_contacts(State(state), headers)
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].associated_prs, vec!["#24".to_string()]);
     }
 
     #[tokio::test]
