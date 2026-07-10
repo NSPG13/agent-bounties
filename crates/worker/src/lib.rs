@@ -896,6 +896,9 @@ pub async fn process_base_evm_logs_and_persist_with_release_attestations(
     for bounty in &bounties {
         store.upsert_bounty(bounty).await?;
     }
+    for attestation in &report.release_attestations {
+        store.upsert_base_release_attestation(attestation).await?;
+    }
     for intent in &funding_intents {
         store.upsert_funding_intent(intent).await?;
     }
@@ -907,9 +910,6 @@ pub async fn process_base_evm_logs_and_persist_with_release_attestations(
     }
     for entry in &report.ledger_entries {
         store.insert_ledger_entry(entry).await?;
-    }
-    for attestation in &report.release_attestations {
-        store.upsert_base_release_attestation(attestation).await?;
     }
     for event in &indexed_events {
         store.upsert_base_escrow_event(event).await?;

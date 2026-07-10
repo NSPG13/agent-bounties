@@ -1153,6 +1153,8 @@ pub struct BountyStatusResponse {
     pub escrows: Vec<Escrow>,
     #[serde(default)]
     pub base_escrow_events: Vec<BaseEscrowEvent>,
+    #[serde(default)]
+    pub base_release_attestations: Vec<Value>,
     pub claims: Vec<Claim>,
     pub submissions: Vec<Submission>,
     pub verifier_results: Vec<VerifierResult>,
@@ -2740,13 +2742,6 @@ impl BountyNetwork {
         event: BaseEscrowEvent,
         evidence: BaseReleaseTransactionEvidence,
     ) -> AppResult<BaseEscrowReconciliation> {
-        if event.kind == BaseEscrowEventKind::Released
-            && self
-                .ledger
-                .has_external_event(&format!("base-release:{}", event.log_key))
-        {
-            return self.apply_base_escrow_event_inner(event, None);
-        }
         let attestation = self.attest_base_release_event(&event, &evidence)?;
         self.apply_base_escrow_event_inner(event, Some(attestation))
     }
@@ -2960,7 +2955,7 @@ impl BountyNetwork {
             ));
         }
 
-        let expected_call = self.pending_base_release_call_for_attestation(
+        let expected_call = self.base_release_call_for_attestation(
             event.bounty_id,
             event.onchain_escrow_id,
             evidence.platform_fee_wallet.clone(),
@@ -2992,7 +2987,7 @@ impl BountyNetwork {
         })
     }
 
-    fn pending_base_release_call_for_attestation(
+    fn base_release_call_for_attestation(
         &self,
         bounty_id: Id,
         onchain_escrow_id: u128,
@@ -3004,15 +2999,14 @@ impl BountyNetwork {
             .find(|settlement| {
                 settlement.bounty_id == bounty_id
                     && settlement.rail == PaymentRail::BaseUsdc
-                    && settlement
-                        .payout_intents
-                        .iter()
-                        .any(|intent| intent.status == PayoutStatus::Pending)
+                    && settlement.payout_intents.iter().any(|intent| {
+                        matches!(intent.status, PayoutStatus::Pending | PayoutStatus::Paid)
+                    })
             })
             .cloned()
             .ok_or_else(|| {
                 AppError::InvalidBaseEscrowEvent(
-                    "released event has no pending Base settlement".to_string(),
+                    "released event has no Base settlement to attest".to_string(),
                 )
             })?;
         let proof = self
@@ -3027,7 +3021,7 @@ impl BountyNetwork {
             .payout_intents
             .iter()
             .filter(|intent| intent.rail == PaymentRail::BaseUsdc)
-            .filter(|intent| intent.status == PayoutStatus::Pending)
+            .filter(|intent| matches!(intent.status, PayoutStatus::Pending | PayoutStatus::Paid))
             .map(|intent| {
                 let agent = self.agents.get(&intent.recipient_agent_id).ok_or_else(|| {
                     AppError::InvalidBaseEscrowEvent(format!(
@@ -3442,6 +3436,7 @@ impl BountyNetwork {
             funding_contributions,
             escrows,
             base_escrow_events: Vec::new(),
+            base_release_attestations: Vec::new(),
             claims,
             submissions,
             verifier_results,
@@ -6403,6 +6398,17 @@ mod tests {
         assert_eq!(paid_agent_payouts.totals[0].pending_minor, 0);
         assert_eq!(paid_agent_payouts.totals[0].paid_minor, 1_000_000);
         assert_eq!(paid_status.template_signals.len(), 1);
+        assert_eq!(network.ledger.entries().len(), 2);
+
+        let mut mismatched_replay_evidence = release_evidence.clone();
+        mismatched_replay_evidence.input = "0xdeadbeef".to_string();
+        let mismatched_replay = network
+            .apply_attested_base_release_event(released.clone(), mismatched_replay_evidence)
+            .unwrap_err();
+        assert!(matches!(
+            mismatched_replay,
+            AppError::InvalidBaseEscrowEvent(_)
+        ));
         assert_eq!(network.ledger.entries().len(), 2);
 
         let replay = network

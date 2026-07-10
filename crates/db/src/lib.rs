@@ -81,6 +81,8 @@ pub enum DbError {
     InvalidEnum(String),
     #[error("integer value cannot fit target type: {0}")]
     IntegerOverflow(String),
+    #[error("immutable attestation conflict: {0}")]
+    ImmutableAttestationConflict(String),
     #[error("conflicting audience event replay: {0}")]
     AudienceConflict(String),
 }
@@ -166,6 +168,7 @@ pub struct BountyStatusScope {
     pub funding_contributions: Vec<FundingContribution>,
     pub escrows: Vec<Escrow>,
     pub base_escrow_events: Vec<BaseEscrowEvent>,
+    pub base_release_attestations: Vec<BaseReleaseAttestationRecord>,
     pub claims: Vec<Claim>,
     pub submissions: Vec<Submission>,
     pub verifier_results: Vec<VerifierResult>,
@@ -1079,6 +1082,21 @@ impl PostgresStore {
         .map(base_escrow_event_from_row)
         .collect::<DbResult<Vec<_>>>()?;
 
+        let base_release_attestations = sqlx::query(
+            r#"
+            SELECT id, network, tx_hash, log_key, bounty_id, onchain_escrow_id, calldata_hash, proof_hash, recipients, escrow_contract, settlement_signer, platform_fee_wallet, verdict, reason, created_at
+            FROM base_release_attestations
+            WHERE bounty_id = $1
+            ORDER BY created_at, tx_hash, log_key
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(base_release_attestation_from_row)
+        .collect::<DbResult<Vec<_>>>()?;
+
         let claims = sqlx::query(
             r#"
             SELECT id, bounty_id, solver_agent_id, claimed_at
@@ -1303,6 +1321,7 @@ impl PostgresStore {
             funding_contributions,
             escrows,
             base_escrow_events,
+            base_release_attestations,
             claims,
             submissions,
             verifier_results,
@@ -1599,23 +1618,23 @@ impl PostgresStore {
         &self,
         record: &BaseReleaseAttestationRecord,
     ) -> DbResult<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO base_release_attestations
               (id, network, tx_hash, log_key, bounty_id, onchain_escrow_id, calldata_hash, proof_hash, recipients, escrow_contract, settlement_signer, platform_fee_wallet, verdict, reason, created_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (network, tx_hash, log_key) DO UPDATE SET
-              bounty_id = EXCLUDED.bounty_id,
-              onchain_escrow_id = EXCLUDED.onchain_escrow_id,
-              calldata_hash = EXCLUDED.calldata_hash,
-              proof_hash = EXCLUDED.proof_hash,
-              recipients = EXCLUDED.recipients,
-              escrow_contract = EXCLUDED.escrow_contract,
-              settlement_signer = EXCLUDED.settlement_signer,
-              platform_fee_wallet = EXCLUDED.platform_fee_wallet,
-              verdict = EXCLUDED.verdict,
-              reason = EXCLUDED.reason,
-              created_at = EXCLUDED.created_at
+              id = base_release_attestations.id
+            WHERE base_release_attestations.bounty_id = EXCLUDED.bounty_id
+              AND base_release_attestations.onchain_escrow_id = EXCLUDED.onchain_escrow_id
+              AND base_release_attestations.calldata_hash IS NOT DISTINCT FROM EXCLUDED.calldata_hash
+              AND base_release_attestations.proof_hash IS NOT DISTINCT FROM EXCLUDED.proof_hash
+              AND base_release_attestations.recipients = EXCLUDED.recipients
+              AND base_release_attestations.escrow_contract = EXCLUDED.escrow_contract
+              AND base_release_attestations.settlement_signer = EXCLUDED.settlement_signer
+              AND base_release_attestations.platform_fee_wallet IS NOT DISTINCT FROM EXCLUDED.platform_fee_wallet
+              AND base_release_attestations.verdict = EXCLUDED.verdict
+              AND base_release_attestations.reason = EXCLUDED.reason
             "#,
         )
         .bind(record.id)
@@ -1635,6 +1654,12 @@ impl PostgresStore {
         .bind(record.created_at)
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() == 0 {
+            return Err(DbError::ImmutableAttestationConflict(format!(
+                "{} {} {}",
+                record.network, record.tx_hash, record.log_key
+            )));
+        }
         Ok(())
     }
 

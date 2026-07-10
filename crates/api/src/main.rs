@@ -4,17 +4,16 @@ use app::{
     ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseEscrowReconciliation,
     BaseIndexerHeartbeatStatus, BaseIndexerScanCursor, BaseIndexerStatusConfig,
     BaseIndexerStatusReport, BaseReleaseQueueRequest, BaseReleaseTransactionEvidence,
-    BountyNetwork, BountyStatusResponse,
-    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
-    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest, PlanStripeTransferRequest as AppPlanStripeTransferRequest,
-    PooledFundingReport, PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest,
-    RecordDiscoveryResponseRequest, RecordOutreachAttemptRequest, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
-    ReviewedBountyApproval, RiskEventFilter, StripeTransferPlan, StripeTransferReconciliation,
-    SubmitResultRequest, UpsertAudienceMemberRequest, UpsertContributorContactRequest,
-    VerifySubmissionRequest,
+    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
+    LiveMoneyReadinessReport, OpenPooledBountyRequest, PlanBaseDisputeRequest,
+    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
+    PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
+    PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest, RecordDiscoveryResponseRequest,
+    RecordOutreachAttemptRequest, RegisterAgentRequest, RegisterCapabilityRequest,
+    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
+    StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest,
+    UpsertAudienceMemberRequest, UpsertContributorContactRequest, VerifySubmissionRequest,
 };
 use axum::{
     body::Bytes,
@@ -2399,9 +2398,9 @@ async fn process_base_evm_logs_with_release_attestations(
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
-        for event in &indexed_events {
+        for attestation in &report.release_attestations {
             store
-                .upsert_base_escrow_event(event)
+                .upsert_base_release_attestation(attestation)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
@@ -2423,9 +2422,9 @@ async fn process_base_evm_logs_with_release_attestations(
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
-        for attestation in &report.release_attestations {
+        for event in &indexed_events {
             store
-                .upsert_base_release_attestation(attestation)
+                .upsert_base_escrow_event(event)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
@@ -3231,6 +3230,12 @@ async fn bounty_status_snapshot(
 fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResponse, StatusCode> {
     let bounty_id = scope.bounty.id;
     let base_escrow_events = scope.base_escrow_events;
+    let base_release_attestations = scope
+        .base_release_attestations
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let network = BountyNetwork {
         bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
         funding_intents: scope
@@ -3294,6 +3299,7 @@ fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResp
         .status(bounty_id)
         .map_err(|_| StatusCode::NOT_FOUND)?;
     status.base_escrow_events = base_escrow_events;
+    status.base_release_attestations = base_release_attestations;
     Ok(status)
 }
 

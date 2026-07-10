@@ -5,10 +5,9 @@ use app::{
     BaseIndexerStatusConfig, BaseReleaseQueueRequest, BaseReleaseTransactionEvidence,
     BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
     CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
-    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest,
-    PlanBaseRefundRequest, PlanBaseReleaseRequest,
-    PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
+    PlanBaseReleaseRequest, PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest,
+    RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
@@ -1949,6 +1948,12 @@ async fn bounty_status_snapshot(
 fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResponse, String> {
     let bounty_id = scope.bounty.id;
     let base_escrow_events = scope.base_escrow_events;
+    let base_release_attestations = scope
+        .base_release_attestations
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
     let network = BountyNetwork {
         bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
         funding_intents: scope
@@ -2012,6 +2017,7 @@ fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResp
         .status(bounty_id)
         .map_err(|error| error.to_string())?;
     status.base_escrow_events = base_escrow_events;
+    status.base_release_attestations = base_release_attestations;
     Ok(status)
 }
 
@@ -2877,8 +2883,8 @@ async fn process_base_evm_logs_with_release_attestations(
                 return mcp_error(error);
             }
         }
-        for event in &indexed_events {
-            if let Err(error) = store.upsert_base_escrow_event(event).await {
+        for attestation in &report.release_attestations {
+            if let Err(error) = store.upsert_base_release_attestation(attestation).await {
                 return mcp_error(error);
             }
         }
@@ -2897,8 +2903,8 @@ async fn process_base_evm_logs_with_release_attestations(
                 return mcp_error(error);
             }
         }
-        for attestation in &report.release_attestations {
-            if let Err(error) = store.upsert_base_release_attestation(attestation).await {
+        for event in &indexed_events {
+            if let Err(error) = store.upsert_base_escrow_event(event).await {
                 return mcp_error(error);
             }
         }
