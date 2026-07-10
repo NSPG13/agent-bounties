@@ -3,7 +3,8 @@ use app::{
     hash_artifact, stripe_secret_key_mode_from_secret, AddFundingContributionRequest,
     ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseEscrowReconciliation,
     BaseIndexerHeartbeatStatus, BaseIndexerScanCursor, BaseIndexerStatusConfig,
-    BaseIndexerStatusReport, BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse,
+    BaseIndexerStatusReport, BaseReleaseQueueRequest, BaseReleaseTransactionEvidence,
+    BountyNetwork, BountyStatusResponse,
     ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
     FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
     OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
@@ -25,11 +26,13 @@ use axum::{
 };
 use bounty_router::{BountyRouter, RouteDecision};
 use chain_base::{
-    base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_base_escrow_logs, fetch_transaction_receipt,
+    base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_by_hash_request,
+    eth_get_transaction_receipt_request, eth_send_raw_transaction_request, evm_event_topic,
+    fetch_base_escrow_logs, fetch_transaction_by_hash, fetch_transaction_receipt,
     rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, ChainBaseError, EthGetLogsRequest, EthGetTransactionReceiptRequest,
-    EthSendRawTransactionRequest, RpcLogSubmission, RpcTransactionReceipt,
+    BaseRpcUrlConfig, ChainBaseError, EthGetLogsRequest, EthGetTransactionByHashRequest,
+    EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, RpcLogSubmission,
+    RpcTransaction, RpcTransactionReceipt,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
@@ -58,7 +61,7 @@ use payments_stripe::{
 };
 use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
@@ -431,6 +434,9 @@ struct GetBaseTransactionReceiptRequest {
     request_id: Option<u64>,
     network: Option<String>,
     reconcile_logs: Option<bool>,
+    escrow_contract: Option<String>,
+    settlement_signer: Option<String>,
+    platform_fee_wallet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -453,11 +459,13 @@ struct BaseSignedTransactionBroadcastReport {
 struct BaseTransactionReceiptReport {
     network: BaseNetworkDescriptor,
     request: EthGetTransactionReceiptRequest,
+    transaction_request: Option<EthGetTransactionByHashRequest>,
     receipt_found: bool,
     tx_hash: String,
     block_number: Option<u64>,
     succeeded: Option<bool>,
     log_count: usize,
+    transaction: Option<RpcTransaction>,
     receipt: Option<RpcTransactionReceipt>,
     reconciliation: Option<worker::BaseLogPipelineReport>,
 }
@@ -2195,11 +2203,13 @@ async fn get_base_transaction_receipt(
         return Ok(Json(BaseTransactionReceiptReport {
             network,
             request: rpc_request,
+            transaction_request: None,
             receipt_found: false,
             tx_hash,
             block_number: None,
             succeeded: None,
             log_count: 0,
+            transaction: None,
             receipt: None,
             reconciliation: None,
         }));
@@ -2212,11 +2222,57 @@ async fn get_base_transaction_receipt(
         .succeeded()
         .map_err(|error| base_rpc_fetch_status(&error))?;
     let log_count = receipt.logs.len();
+    let mut transaction_request = None;
+    let mut transaction = None;
     let reconciliation = if request.reconcile_logs.unwrap_or(false) {
         let logs = receipt
             .logs_to_evm_logs()
             .map_err(|error| base_rpc_fetch_status(&error))?;
-        Some(process_base_evm_logs(&state, logs).await?)
+        let release_attestations = if logs_contain_release(&logs) {
+            let tx_request = eth_get_transaction_by_hash_request(&tx_hash, request_id + 1)
+                .map_err(|error| base_rpc_fetch_status(&error))?;
+            let tx_response = fetch_transaction_by_hash(&rpc_url, &tx_hash, request_id + 1)
+                .await
+                .map_err(|error| base_rpc_fetch_status(&error))?;
+            let tx = tx_response.result.ok_or(StatusCode::BAD_REQUEST)?;
+            let escrow_contract = request
+                .escrow_contract
+                .clone()
+                .or_else(|| base_escrow_contract_for_chain(network.chain_id))
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            let settlement_signer = request
+                .settlement_signer
+                .clone()
+                .or_else(|| env::var("BASE_SETTLEMENT_SIGNER").ok())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            let platform_fee_wallet = request
+                .platform_fee_wallet
+                .clone()
+                .or_else(|| env::var("BASE_PLATFORM_FEE_WALLET").ok())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            let to = tx.to.clone().ok_or(StatusCode::BAD_REQUEST)?;
+            let evidence = BaseReleaseTransactionEvidence {
+                tx_hash: tx.hash.clone(),
+                chain_id: network.chain_id,
+                expected_chain_id: network.chain_id,
+                from: tx.from.clone(),
+                settlement_signer,
+                to,
+                escrow_contract,
+                input: tx.input.clone(),
+                receipt_succeeded: succeeded.unwrap_or(false),
+                platform_fee_wallet,
+            };
+            transaction_request = Some(tx_request);
+            transaction = Some(tx);
+            HashMap::from([(tx_hash.to_ascii_lowercase(), evidence)])
+        } else {
+            HashMap::new()
+        };
+        Some(
+            process_base_evm_logs_with_release_attestations(&state, logs, &release_attestations)
+                .await?,
+        )
     } else {
         None
     };
@@ -2224,14 +2280,25 @@ async fn get_base_transaction_receipt(
     Ok(Json(BaseTransactionReceiptReport {
         network,
         request: rpc_request,
+        transaction_request,
         receipt_found: true,
         tx_hash,
         block_number,
         succeeded,
         log_count,
+        transaction,
         receipt: Some(receipt),
         reconciliation,
     }))
+}
+
+fn logs_contain_release(logs: &[chain_base::EvmLog]) -> bool {
+    let released_topic = evm_event_topic("EscrowReleased(uint256,bytes32)");
+    logs.iter().any(|log| {
+        log.topics
+            .first()
+            .is_some_and(|topic| topic.eq_ignore_ascii_case(&released_topic))
+    })
 }
 
 fn base_rpc_fetch_status(error: &ChainBaseError) -> StatusCode {
@@ -2239,6 +2306,9 @@ fn base_rpc_fetch_status(error: &ChainBaseError) -> StatusCode {
         ChainBaseError::UnknownNetwork(_)
         | ChainBaseError::InvalidAddress(_)
         | ChainBaseError::InvalidBlockRange { .. }
+        | ChainBaseError::InvalidReleaseCalldata(_)
+        | ChainBaseError::ReleaseCalldataMismatch(_)
+        | ChainBaseError::DuplicateReleaseRecipient(_)
         | ChainBaseError::InvalidSignedTransaction(_)
         | ChainBaseError::InvalidTransactionHash(_) => StatusCode::BAD_REQUEST,
         ChainBaseError::MissingRpcUrl { .. } => StatusCode::SERVICE_UNAVAILABLE,
@@ -2250,10 +2320,19 @@ async fn process_base_evm_logs(
     state: &SharedState,
     logs: Vec<chain_base::EvmLog>,
 ) -> Result<worker::BaseLogPipelineReport, StatusCode> {
+    process_base_evm_logs_with_release_attestations(state, logs, &HashMap::new()).await
+}
+
+async fn process_base_evm_logs_with_release_attestations(
+    state: &SharedState,
+    logs: Vec<chain_base::EvmLog>,
+    release_attestations: &HashMap<String, BaseReleaseTransactionEvidence>,
+) -> Result<worker::BaseLogPipelineReport, StatusCode> {
     let (report, indexed_events, bounties, funding_intents, escrows, settlements) = {
         let mut network = state.network.lock().expect("state poisoned");
         let mut worker = state.base_log_worker.lock().expect("state poisoned");
-        let report = worker.process_logs(logs, &mut network);
+        let report =
+            worker.process_logs_with_release_attestations(logs, &mut network, release_attestations);
         let applied_event_ids = report
             .applied_events
             .iter()
@@ -4088,7 +4167,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raw_base_evm_log_endpoint_marks_bounty_paid() {
+    async fn raw_base_evm_log_endpoint_requires_release_attestation() {
         let (network, bounty, proof) = payable_base_bounty().await;
         let state = test_state(network);
         let logs = raw_created_and_released_logs(&bounty, &proof);
@@ -4098,15 +4177,18 @@ mod tests {
             .unwrap()
             .0;
 
-        assert!(report.failures.is_empty());
-        assert_eq!(report.applied_events.len(), 2);
-        assert_eq!(report.ledger_entries.len(), 1);
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.failures[0]
+            .reason
+            .contains("requires matching release transaction calldata attestation"));
+        assert_eq!(report.applied_events.len(), 1);
+        assert!(report.ledger_entries.is_empty());
         let network = state.network.lock().expect("state poisoned");
         let status = network.status(bounty.id).unwrap();
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
         assert_eq!(
             status.settlements[0].payout_intents[0].status,
-            PayoutStatus::Paid
+            PayoutStatus::Pending
         );
     }
 
@@ -4150,11 +4232,14 @@ mod tests {
         .unwrap()
         .0;
 
-        assert!(report.failures.is_empty());
-        assert_eq!(report.applied_events.len(), 1);
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.failures[0]
+            .reason
+            .contains("requires matching release transaction calldata attestation"));
+        assert!(report.applied_events.is_empty());
         let network = state.network.lock().expect("state poisoned");
         let status = network.status(bounty.id).unwrap();
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
     }
 
     #[tokio::test]
@@ -6640,7 +6725,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn base_rpc_log_endpoint_normalizes_provider_logs_and_marks_bounty_paid() {
+    async fn base_rpc_log_endpoint_normalizes_provider_logs_and_requires_release_attestation() {
         let (network, bounty, proof) = payable_base_bounty().await;
         let state = test_state(network);
         let logs = raw_created_and_released_logs(&bounty, &proof)
@@ -6663,15 +6748,19 @@ mod tests {
         .unwrap()
         .0;
 
-        assert_eq!(report.applied_events.len(), 2);
+        assert_eq!(report.applied_events.len(), 1);
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.failures[0]
+            .reason
+            .contains("requires matching release transaction calldata attestation"));
         let status = bounty_status(State(state), Path(bounty.id))
             .await
             .unwrap()
             .0;
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
         assert_eq!(
             status.settlements[0].payout_intents[0].status,
-            PayoutStatus::Paid
+            PayoutStatus::Pending
         );
     }
 
@@ -6732,7 +6821,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn base_fetch_rpc_logs_endpoint_fetches_provider_logs_and_marks_bounty_paid() {
+    async fn base_fetch_rpc_logs_endpoint_fetches_provider_logs_and_requires_release_attestation() {
         let (network, bounty, proof) = payable_base_bounty().await;
         let logs = raw_created_and_released_logs(&bounty, &proof)
             .into_iter()
@@ -6764,15 +6853,19 @@ mod tests {
         assert_eq!(report.request.method, "eth_getLogs");
         assert_eq!(report.request.params[0].from_block, "0xa");
         assert_eq!(report.fetched_logs, 2);
-        assert_eq!(report.reconciliation.applied_events.len(), 2);
+        assert_eq!(report.reconciliation.applied_events.len(), 1);
+        assert_eq!(report.reconciliation.failures.len(), 1);
+        assert!(report.reconciliation.failures[0]
+            .reason
+            .contains("requires matching release transaction calldata attestation"));
         let status = bounty_status(State(state), Path(bounty.id))
             .await
             .unwrap()
             .0;
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
         assert_eq!(
             status.settlements[0].payout_intents[0].status,
-            PayoutStatus::Paid
+            PayoutStatus::Pending
         );
     }
 
@@ -6843,16 +6936,38 @@ mod tests {
         let (network, bounty, proof) = payable_base_bounty().await;
         let release_log = raw_released_log(7, &format!("0x{}", proof.proof_hash), 11, 0);
         let receipt_tx_hash = release_log.tx_hash.clone();
-        let rpc_url = spawn_rpc_response(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 14,
-            "result": {
-                "transactionHash": receipt_tx_hash.clone(),
-                "blockNumber": "0xb",
-                "status": "0x1",
-                "logs": [rpc_log_from_evm_log(release_log)]
-            }
-        }));
+        let release_plan = network
+            .plan_base_release(PlanBaseReleaseRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                network: Some("base-sepolia".to_string()),
+            })
+            .unwrap();
+        let rpc_url = spawn_rpc_responses(vec![
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 14,
+                "result": {
+                    "transactionHash": receipt_tx_hash.clone(),
+                    "blockNumber": "0xb",
+                    "status": "0x1",
+                    "logs": [rpc_log_from_evm_log(release_log)]
+                }
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 15,
+                "result": {
+                    "hash": receipt_tx_hash.clone(),
+                    "from": "0x5555555555555555555555555555555555555555",
+                    "to": "0x1111111111111111111111111111111111111111",
+                    "input": release_plan.transaction.data,
+                    "blockNumber": "0xb",
+                    "transactionIndex": "0x0"
+                }
+            }),
+        ]);
         let state = test_state_with_base_rpc(network, rpc_url);
         let created = chain_base::simulated_created_event(
             bounty.id,
@@ -6873,6 +6988,9 @@ mod tests {
                 request_id: Some(14),
                 network: Some("base-sepolia".to_string()),
                 reconcile_logs: Some(true),
+                escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+                settlement_signer: Some("0x5555555555555555555555555555555555555555".to_string()),
+                platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
             }),
         )
         .await
@@ -7351,19 +7469,25 @@ mod tests {
     }
 
     fn spawn_rpc_response(response: serde_json::Value) -> String {
+        spawn_rpc_responses(vec![response])
+    }
+
+    fn spawn_rpc_responses(responses: Vec<serde_json::Value>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0u8; 8192];
-            let _ = stream.read(&mut buffer).unwrap();
-            let body = response.to_string();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream.write_all(response.as_bytes()).unwrap();
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0u8; 8192];
+                let _ = stream.read(&mut buffer).unwrap();
+                let body = response.to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
         });
         format!("http://{address}")
     }

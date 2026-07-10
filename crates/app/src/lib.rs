@@ -1,6 +1,7 @@
 use bounty_router::{template_for_class, BountyRouter};
 use chain_base::{
-    base_network_descriptor, BaseEscrowCreate, BaseEscrowEvent, BaseEscrowEventKind,
+    attest_base_release_calldata, base_network_descriptor, normalize_evm_address,
+    normalize_evm_hash, BaseEscrowCreate, BaseEscrowEvent, BaseEscrowEventKind,
     BaseEscrowFundingPlan, BaseEscrowRelease, BaseEscrowReleaseCall, BaseEscrowTxPlanner,
     BaseNetworkDescriptor, ChainBaseError, EscrowRecipient, EvmTransactionIntent,
 };
@@ -1083,6 +1084,32 @@ pub struct BaseReleasePlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseReleaseTransactionEvidence {
+    pub tx_hash: String,
+    pub chain_id: u64,
+    pub expected_chain_id: u64,
+    pub from: String,
+    pub settlement_signer: String,
+    pub to: String,
+    pub escrow_contract: String,
+    pub input: String,
+    pub receipt_succeeded: bool,
+    pub platform_fee_wallet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseReleaseAttestation {
+    pub tx_hash: String,
+    pub calldata_hash: String,
+    pub chain_id: u64,
+    pub onchain_escrow_id: u128,
+    pub proof_hash: String,
+    pub recipients: Vec<EscrowRecipient>,
+    pub passed: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseRefundPlan {
     pub network: BaseNetworkDescriptor,
     pub bounty: Bounty,
@@ -1216,6 +1243,8 @@ pub struct BaseEscrowReconciliation {
     pub funding_intents: Vec<FundingIntent>,
     pub settlements: Vec<Settlement>,
     pub ledger_entries: Vec<LedgerEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_attestation: Option<BaseReleaseAttestation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2703,6 +2732,30 @@ impl BountyNetwork {
         &mut self,
         event: BaseEscrowEvent,
     ) -> AppResult<BaseEscrowReconciliation> {
+        self.apply_base_escrow_event_inner(event, None)
+    }
+
+    pub fn apply_attested_base_release_event(
+        &mut self,
+        event: BaseEscrowEvent,
+        evidence: BaseReleaseTransactionEvidence,
+    ) -> AppResult<BaseEscrowReconciliation> {
+        if event.kind == BaseEscrowEventKind::Released
+            && self
+                .ledger
+                .has_external_event(&format!("base-release:{}", event.log_key))
+        {
+            return self.apply_base_escrow_event_inner(event, None);
+        }
+        let attestation = self.attest_base_release_event(&event, &evidence)?;
+        self.apply_base_escrow_event_inner(event, Some(attestation))
+    }
+
+    fn apply_base_escrow_event_inner(
+        &mut self,
+        event: BaseEscrowEvent,
+        release_attestation: Option<BaseReleaseAttestation>,
+    ) -> AppResult<BaseEscrowReconciliation> {
         if event.onchain_escrow_id == 0 {
             return Err(AppError::InvalidBaseEscrowEvent(
                 "onchain escrow id must be non-zero".to_string(),
@@ -2787,16 +2840,22 @@ impl BountyNetwork {
                 self.mark_bounty_claimable_if_fully_funded(event.bounty_id)?;
             }
             BaseEscrowEventKind::Released => {
+                let release_event_id = format!("base-release:{}", event.log_key);
+                let already_released = self.ledger.has_external_event(&release_event_id);
+                if release_attestation.is_none() && !already_released {
+                    return Err(AppError::InvalidBaseEscrowEvent(
+                        "released event requires matching release transaction calldata attestation"
+                            .to_string(),
+                    ));
+                }
                 let proof_hash = event.proof_hash.clone().ok_or_else(|| {
                     AppError::InvalidBaseEscrowEvent(
                         "released event must include proof hash".to_string(),
                     )
                 })?;
-                if let Some(entry) = self.mark_base_release_paid(
-                    event.bounty_id,
-                    &proof_hash,
-                    format!("base-release:{}", event.log_key),
-                )? {
+                if let Some(entry) =
+                    self.mark_base_release_paid(event.bounty_id, &proof_hash, release_event_id)?
+                {
                     ledger_entries.push(entry);
                 }
                 self.update_base_escrow_status(escrow_id, EscrowStatus::Released)?;
@@ -2848,6 +2907,164 @@ impl BountyNetwork {
             funding_intents,
             settlements,
             ledger_entries,
+            release_attestation,
+        })
+    }
+
+    fn attest_base_release_event(
+        &self,
+        event: &BaseEscrowEvent,
+        evidence: &BaseReleaseTransactionEvidence,
+    ) -> AppResult<BaseReleaseAttestation> {
+        if event.kind != BaseEscrowEventKind::Released {
+            return Err(AppError::InvalidBaseEscrowEvent(
+                "release attestation can only be applied to released events".to_string(),
+            ));
+        }
+        if !evidence.receipt_succeeded {
+            return Err(AppError::InvalidBaseEscrowEvent(
+                "release transaction receipt did not succeed".to_string(),
+            ));
+        }
+        if evidence.chain_id != evidence.expected_chain_id {
+            return Err(AppError::InvalidBaseEscrowEvent(format!(
+                "release transaction chain {} does not match expected chain {}",
+                evidence.chain_id, evidence.expected_chain_id
+            )));
+        }
+        let event_tx_hash = normalize_evm_hash(&event.tx_hash)
+            .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?;
+        let evidence_tx_hash = normalize_evm_hash(&evidence.tx_hash)
+            .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?;
+        if event_tx_hash != evidence_tx_hash {
+            return Err(AppError::InvalidBaseEscrowEvent(
+                "release log transaction hash does not match transaction evidence".to_string(),
+            ));
+        }
+        let tx_to = normalize_evm_address(&evidence.to)
+            .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?;
+        let expected_to = normalize_evm_address(&evidence.escrow_contract)
+            .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?;
+        if tx_to != expected_to {
+            return Err(AppError::InvalidBaseEscrowEvent(
+                "release transaction target is not the configured escrow contract".to_string(),
+            ));
+        }
+        let tx_from = normalize_evm_address(&evidence.from)
+            .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?;
+        let expected_from = normalize_evm_address(&evidence.settlement_signer)
+            .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?;
+        if tx_from != expected_from {
+            return Err(AppError::InvalidBaseEscrowEvent(
+                "release transaction signer is not the configured settlement signer".to_string(),
+            ));
+        }
+
+        let expected_call = self.pending_base_release_call_for_attestation(
+            event.bounty_id,
+            event.onchain_escrow_id,
+            evidence.platform_fee_wallet.clone(),
+        )?;
+        let proof_hash = event.proof_hash.clone().ok_or_else(|| {
+            AppError::InvalidBaseEscrowEvent("released event must include proof hash".to_string())
+        })?;
+        if normalize_evm_hash(&proof_hash)
+            .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?
+            != normalize_evm_hash(&expected_call.proof_hash)
+                .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?
+        {
+            return Err(AppError::InvalidBaseEscrowEvent(
+                "released event proof hash does not match accepted proof".to_string(),
+            ));
+        }
+
+        let calldata = attest_base_release_calldata(&evidence.input, &expected_call)
+            .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?;
+        Ok(BaseReleaseAttestation {
+            tx_hash: evidence_tx_hash,
+            calldata_hash: calldata.calldata_hash,
+            chain_id: evidence.chain_id,
+            onchain_escrow_id: calldata.onchain_escrow_id,
+            proof_hash: calldata.proof_hash,
+            recipients: calldata.recipients,
+            passed: true,
+            reason: "release calldata matches pending Base settlement plan".to_string(),
+        })
+    }
+
+    fn pending_base_release_call_for_attestation(
+        &self,
+        bounty_id: Id,
+        onchain_escrow_id: u128,
+        platform_fee_wallet: String,
+    ) -> AppResult<BaseEscrowReleaseCall> {
+        let settlement = self
+            .settlements
+            .values()
+            .find(|settlement| {
+                settlement.bounty_id == bounty_id
+                    && settlement.rail == PaymentRail::BaseUsdc
+                    && settlement
+                        .payout_intents
+                        .iter()
+                        .any(|intent| intent.status == PayoutStatus::Pending)
+            })
+            .cloned()
+            .ok_or_else(|| {
+                AppError::InvalidBaseEscrowEvent(
+                    "released event has no pending Base settlement".to_string(),
+                )
+            })?;
+        let proof = self
+            .proofs
+            .get(&settlement.proof_record_id)
+            .ok_or_else(|| {
+                AppError::InvalidBaseEscrowEvent(
+                    "released event has no matching proof record".to_string(),
+                )
+            })?;
+        let mut recipients = settlement
+            .payout_intents
+            .iter()
+            .filter(|intent| intent.rail == PaymentRail::BaseUsdc)
+            .filter(|intent| intent.status == PayoutStatus::Pending)
+            .map(|intent| {
+                let agent = self.agents.get(&intent.recipient_agent_id).ok_or_else(|| {
+                    AppError::InvalidBaseEscrowEvent(format!(
+                        "recipient agent {} is missing",
+                        intent.recipient_agent_id
+                    ))
+                })?;
+                let address = agent.payout_wallet.clone().ok_or_else(|| {
+                    AppError::InvalidBaseEscrowEvent(format!(
+                        "recipient agent {} has no payout wallet",
+                        agent.id
+                    ))
+                })?;
+                Ok(EscrowRecipient {
+                    address,
+                    amount: intent.amount.clone(),
+                })
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        if settlement.platform_fee.amount > 0 {
+            recipients.push(EscrowRecipient {
+                address: platform_fee_wallet,
+                amount: settlement.platform_fee.clone(),
+            });
+        }
+        BaseEscrowRelease {
+            escrow_id: base_escrow_uuid(bounty_id, onchain_escrow_id),
+            recipients: recipients.clone(),
+            proof_hash: proof.proof_hash.clone(),
+        }
+        .validate_split(&settlement_total_amount(&settlement)?)
+        .map_err(|error| AppError::InvalidBaseEscrowEvent(error.to_string()))?;
+
+        Ok(BaseEscrowReleaseCall {
+            onchain_escrow_id,
+            recipients,
+            proof_hash: proof.proof_hash.clone(),
         })
     }
 
@@ -6142,8 +6359,31 @@ mod tests {
         );
         assert!(release_plan.transaction.data.starts_with("0xbfc95334"));
         let released = chain_base::simulated_released_event(bounty.id, 1, proof.proof_hash);
-        let reconciliation = network.apply_base_escrow_event(released.clone()).unwrap();
+        let untrusted_release = network
+            .apply_base_escrow_event(released.clone())
+            .unwrap_err();
+        assert!(matches!(
+            untrusted_release,
+            AppError::InvalidBaseEscrowEvent(message)
+                if message.contains("requires matching release transaction calldata attestation")
+        ));
+        let release_evidence = BaseReleaseTransactionEvidence {
+            tx_hash: released.tx_hash.clone(),
+            chain_id: release_plan.network.chain_id,
+            expected_chain_id: release_plan.network.chain_id,
+            from: "0x5555555555555555555555555555555555555555".to_string(),
+            settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+            to: release_plan.transaction.to.clone(),
+            escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            input: release_plan.transaction.data.clone(),
+            receipt_succeeded: true,
+            platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+        };
+        let reconciliation = network
+            .apply_attested_base_release_event(released.clone(), release_evidence.clone())
+            .unwrap();
         assert_eq!(reconciliation.ledger_entries.len(), 1);
+        assert!(reconciliation.release_attestation.is_some());
 
         let paid_status = network.status(bounty.id).unwrap();
         assert_eq!(paid_status.bounty.status, BountyStatus::Paid);
@@ -6159,7 +6399,9 @@ mod tests {
         assert_eq!(paid_status.template_signals.len(), 1);
         assert_eq!(network.ledger.entries().len(), 2);
 
-        let replay = network.apply_base_escrow_event(released).unwrap();
+        let replay = network
+            .apply_attested_base_release_event(released, release_evidence)
+            .unwrap();
         assert!(replay.ledger_entries.is_empty());
         assert_eq!(network.ledger.entries().len(), 2);
     }
@@ -6811,13 +7053,33 @@ mod tests {
             })
             .await
             .unwrap();
+        let release_plan = network
+            .plan_base_release(PlanBaseReleaseRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                network: Some("base-mainnet".to_string()),
+            })
+            .unwrap();
 
+        let wrong_proof_release =
+            chain_base::simulated_released_event(bounty.id, 9, format!("0x{}", "00".repeat(32)));
         let err = network
-            .apply_base_escrow_event(chain_base::simulated_released_event(
-                bounty.id,
-                9,
-                format!("0x{}", "00".repeat(32)),
-            ))
+            .apply_attested_base_release_event(
+                wrong_proof_release.clone(),
+                BaseReleaseTransactionEvidence {
+                    tx_hash: wrong_proof_release.tx_hash.clone(),
+                    chain_id: release_plan.network.chain_id,
+                    expected_chain_id: release_plan.network.chain_id,
+                    from: "0x5555555555555555555555555555555555555555".to_string(),
+                    settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+                    to: release_plan.transaction.to.clone(),
+                    escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                    input: release_plan.transaction.data.clone(),
+                    receipt_succeeded: true,
+                    platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                },
+            )
             .unwrap_err();
         assert!(matches!(err, AppError::InvalidBaseEscrowEvent(_)));
         let status = network.status(bounty.id).unwrap();
@@ -6827,12 +7089,23 @@ mod tests {
             PayoutStatus::Pending
         );
 
+        let released = chain_base::simulated_released_event(bounty.id, 9, proof.proof_hash);
         network
-            .apply_base_escrow_event(chain_base::simulated_released_event(
-                bounty.id,
-                9,
-                proof.proof_hash,
-            ))
+            .apply_attested_base_release_event(
+                released.clone(),
+                BaseReleaseTransactionEvidence {
+                    tx_hash: released.tx_hash.clone(),
+                    chain_id: release_plan.network.chain_id,
+                    expected_chain_id: release_plan.network.chain_id,
+                    from: "0x5555555555555555555555555555555555555555".to_string(),
+                    settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+                    to: release_plan.transaction.to.clone(),
+                    escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                    input: release_plan.transaction.data.clone(),
+                    receipt_succeeded: true,
+                    platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                },
+            )
             .unwrap();
         let status = network.status(bounty.id).unwrap();
         assert_eq!(status.bounty.status, BountyStatus::Paid);
@@ -7348,12 +7621,24 @@ mod tests {
             })
             .unwrap();
         assert_eq!(release_plan.release_call.recipients.len(), 1);
+        let released =
+            chain_base::simulated_released_event(bounty.id, 42, proof.proof_hash.clone());
         network
-            .apply_base_escrow_event(chain_base::simulated_released_event(
-                bounty.id,
-                42,
-                proof.proof_hash.clone(),
-            ))
+            .apply_attested_base_release_event(
+                released.clone(),
+                BaseReleaseTransactionEvidence {
+                    tx_hash: released.tx_hash.clone(),
+                    chain_id: release_plan.network.chain_id,
+                    expected_chain_id: release_plan.network.chain_id,
+                    from: "0x5555555555555555555555555555555555555555".to_string(),
+                    settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+                    to: release_plan.transaction.to.clone(),
+                    escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                    input: release_plan.transaction.data.clone(),
+                    receipt_succeeded: true,
+                    platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+                },
+            )
             .unwrap();
         let after_base = network.status(bounty.id).unwrap();
         assert_eq!(after_base.bounty.status, BountyStatus::Payable);

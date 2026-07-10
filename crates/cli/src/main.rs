@@ -1,12 +1,12 @@
 use anyhow::{anyhow, bail, Context, Result};
 use app::{
     build_live_money_readiness_report, hash_artifact, stripe_secret_key_mode_from_secret,
-    AddFundingContributionRequest, BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest,
-    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    FundingIntentNextAction, FundingPartitionTargetRequest, LiveMoneyReadinessConfig,
-    OpenPooledBountyRequest, PlanBaseReleaseRequest, PlanStripeTransferRequest, PostBountyRequest,
-    RegisterAgentRequest, RegisterCapabilityRequest, RequestQuotesRequest, SubmitResultRequest,
-    VerifySubmissionRequest,
+    AddFundingContributionRequest, BaseReleaseQueueRequest, BaseReleaseTransactionEvidence,
+    BountyNetwork, ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest,
+    FundQuoteRequest, FundingIntentNextAction, FundingPartitionTargetRequest,
+    LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanBaseReleaseRequest,
+    PlanStripeTransferRequest, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
+    RequestQuotesRequest, SubmitResultRequest, VerifySubmissionRequest,
 };
 use chain_base::{
     base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
@@ -734,7 +734,7 @@ async fn demo() -> Result<()> {
     });
     let solver = network.register_agent(RegisterAgentRequest {
         handle: "solver-agent".to_string(),
-        payout_wallet: Some("0xsolver".to_string()),
+        payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
     });
     network.register_capability(RegisterCapabilityRequest {
         agent_id: solver.id,
@@ -802,9 +802,29 @@ async fn demo() -> Result<()> {
             approved_risk_event_id: None,
         })
         .await?;
+    let release_plan = network.plan_base_release(PlanBaseReleaseRequest {
+        bounty_id: bounty.id,
+        escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+        platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+        network: Some("base-sepolia".to_string()),
+    })?;
     let released = simulated_released_event(bounty.id, 1, proof.proof_hash.clone());
     indexer.ingest(released.clone())?;
-    network.apply_base_escrow_event(released)?;
+    network.apply_attested_base_release_event(
+        released.clone(),
+        BaseReleaseTransactionEvidence {
+            tx_hash: released.tx_hash.clone(),
+            chain_id: release_plan.network.chain_id,
+            expected_chain_id: release_plan.network.chain_id,
+            from: "0x5555555555555555555555555555555555555555".to_string(),
+            settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+            to: release_plan.transaction.to.clone(),
+            escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            input: release_plan.transaction.data.clone(),
+            receipt_succeeded: true,
+            platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+        },
+    )?;
     let status = network.status(bounty.id)?;
 
     println!("demo_status={:?}", status.bounty.status);
@@ -1022,15 +1042,26 @@ async fn funding_rehearsal_demo() -> Result<()> {
         .await?;
     let base_release_plan = network.plan_base_release(PlanBaseReleaseRequest {
         bounty_id: bounty.id,
-        escrow_contract,
+        escrow_contract: escrow_contract.clone(),
         platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
         network: Some("base-sepolia".to_string()),
     })?;
-    let base_released = network.apply_base_escrow_event(simulated_released_event(
-        bounty.id,
-        77,
-        proof.proof_hash.clone(),
-    ))?;
+    let released = simulated_released_event(bounty.id, 77, proof.proof_hash.clone());
+    let base_released = network.apply_attested_base_release_event(
+        released.clone(),
+        BaseReleaseTransactionEvidence {
+            tx_hash: released.tx_hash.clone(),
+            chain_id: base_release_plan.network.chain_id,
+            expected_chain_id: base_release_plan.network.chain_id,
+            from: "0x5555555555555555555555555555555555555555".to_string(),
+            settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+            to: base_release_plan.transaction.to.clone(),
+            escrow_contract,
+            input: base_release_plan.transaction.data.clone(),
+            receipt_succeeded: true,
+            platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+        },
+    )?;
     let stripe_connect_eligibility =
         network.apply_stripe_connect_snapshot(ConnectAccountSnapshot {
             agent_id: solver.id,
@@ -6095,7 +6126,15 @@ fn request_contracts() -> BTreeMap<String, RequestContract> {
         &mut contracts,
         "/v1/base/transaction-receipt",
         &["tx_hash"],
-        &["tx_hash", "request_id", "network", "reconcile_logs"],
+        &[
+            "tx_hash",
+            "request_id",
+            "network",
+            "reconcile_logs",
+            "escrow_contract",
+            "settlement_signer",
+            "platform_fee_wallet",
+        ],
         &["request_id"],
     );
     contracts

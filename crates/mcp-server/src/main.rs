@@ -2,10 +2,11 @@ use app::{
     build_base_indexer_status_report, build_live_money_readiness_report,
     stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
     ApproveRiskPayoutRequest, BaseIndexerHeartbeatStatus, BaseIndexerScanCursor,
-    BaseIndexerStatusConfig, BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse,
-    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    FundingIntentReport, LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanBaseDisputeRequest,
-    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
+    BaseIndexerStatusConfig, BaseReleaseQueueRequest, BaseReleaseTransactionEvidence,
+    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
+    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest,
+    PlanBaseRefundRequest, PlanBaseReleaseRequest,
     PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest, RegisterAgentRequest,
     RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
@@ -19,8 +20,9 @@ use axum::{
 };
 use bounty_router::BountyRouter;
 use chain_base::{
-    base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_base_escrow_logs, fetch_transaction_receipt,
+    base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_by_hash_request,
+    eth_get_transaction_receipt_request, eth_send_raw_transaction_request, evm_event_topic,
+    fetch_base_escrow_logs, fetch_transaction_by_hash, fetch_transaction_receipt,
     rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery, BaseNetworkDescriptor,
     BaseRpcUrlConfig, EvmLog, RpcLogSubmission,
 };
@@ -43,7 +45,7 @@ use payments_stripe::{
 use risk::RiskPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
@@ -268,6 +270,9 @@ struct GetBaseTransactionReceiptArgs {
     request_id: Option<u64>,
     network: Option<String>,
     reconcile_logs: Option<bool>,
+    escrow_contract: Option<String>,
+    settlement_signer: Option<String>,
+    platform_fee_wallet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1083,7 +1088,10 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "tx_hash": string_property("0x-prefixed transaction hash."),
                     "request_id": nullable_integer_property("Optional JSON-RPC request id."),
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia."),
-                    "reconcile_logs": nullable_boolean_property("When true, normalize receipt logs and run the Base escrow indexer.")
+                    "reconcile_logs": nullable_boolean_property("When true, normalize receipt logs and run the Base escrow indexer."),
+                    "escrow_contract": nullable_string_property("Expected Base escrow contract for release calldata attestation; inferred for known deployments when omitted."),
+                    "settlement_signer": nullable_string_property("Expected settlement signer address. Required for EscrowReleased reconciliation unless BASE_SETTLEMENT_SIGNER is configured."),
+                    "platform_fee_wallet": nullable_string_property("Expected platform fee wallet used to rebuild the release plan. Required for EscrowReleased reconciliation unless BASE_PLATFORM_FEE_WALLET is configured.")
                 }),
                 &["tx_hash"],
             ),
@@ -2678,6 +2686,8 @@ async fn get_base_transaction_receipt(
             "block_number": null,
             "succeeded": null,
             "log_count": 0,
+            "transaction_request": null,
+            "transaction": null,
             "receipt": null,
             "reconciliation": null
         }));
@@ -2691,12 +2701,79 @@ async fn get_base_transaction_receipt(
         Err(error) => return mcp_error(error),
     };
     let log_count = receipt.logs.len();
+    let mut transaction_request = None;
+    let mut transaction = None;
     let reconciliation = if args.reconcile_logs.unwrap_or(false) {
         let logs = match receipt.logs_to_evm_logs() {
             Ok(logs) => logs,
             Err(error) => return mcp_error(error),
         };
-        let reconciliation = process_base_evm_logs(&state, logs).await.0;
+        let release_attestations = if logs_contain_release(&logs) {
+            let request = match eth_get_transaction_by_hash_request(&tx_hash, request_id + 1) {
+                Ok(request) => request,
+                Err(error) => return mcp_error(error),
+            };
+            let response = match fetch_transaction_by_hash(&rpc_url, &tx_hash, request_id + 1).await
+            {
+                Ok(response) => response,
+                Err(error) => return mcp_error(error),
+            };
+            let Some(tx) = response.result else {
+                return mcp_error("release log reconciliation requires transaction input");
+            };
+            let Some(to) = tx.to.clone() else {
+                return mcp_error("release transaction is missing target contract");
+            };
+            let escrow_contract = match args
+                .escrow_contract
+                .clone()
+                .or_else(|| base_escrow_contract_for_chain(network.chain_id))
+            {
+                Some(value) => value,
+                None => return mcp_error("escrow_contract is required to attest release calldata"),
+            };
+            let settlement_signer = match args
+                .settlement_signer
+                .clone()
+                .or_else(|| env::var("BASE_SETTLEMENT_SIGNER").ok())
+            {
+                Some(value) => value,
+                None => {
+                    return mcp_error("settlement_signer is required to attest release calldata")
+                }
+            };
+            let platform_fee_wallet = match args
+                .platform_fee_wallet
+                .clone()
+                .or_else(|| env::var("BASE_PLATFORM_FEE_WALLET").ok())
+            {
+                Some(value) => value,
+                None => {
+                    return mcp_error("platform_fee_wallet is required to attest release calldata")
+                }
+            };
+            let evidence = BaseReleaseTransactionEvidence {
+                tx_hash: tx.hash.clone(),
+                chain_id: network.chain_id,
+                expected_chain_id: network.chain_id,
+                from: tx.from.clone(),
+                settlement_signer,
+                to,
+                escrow_contract,
+                input: tx.input.clone(),
+                receipt_succeeded: succeeded.unwrap_or(false),
+                platform_fee_wallet,
+            };
+            transaction_request = Some(request);
+            transaction = Some(tx);
+            HashMap::from([(tx_hash.to_ascii_lowercase(), evidence)])
+        } else {
+            HashMap::new()
+        };
+        let reconciliation =
+            process_base_evm_logs_with_release_attestations(&state, logs, &release_attestations)
+                .await
+                .0;
         if reconciliation.get("error").is_some() {
             return Json(reconciliation);
         }
@@ -2713,16 +2790,36 @@ async fn get_base_transaction_receipt(
         "block_number": block_number,
         "succeeded": succeeded,
         "log_count": log_count,
+        "transaction_request": transaction_request,
+        "transaction": transaction,
         "receipt": receipt,
         "reconciliation": reconciliation
     }))
 }
 
+fn logs_contain_release(logs: &[EvmLog]) -> bool {
+    let released_topic = evm_event_topic("EscrowReleased(uint256,bytes32)");
+    logs.iter().any(|log| {
+        log.topics
+            .first()
+            .is_some_and(|topic| topic.eq_ignore_ascii_case(&released_topic))
+    })
+}
+
 async fn process_base_evm_logs(state: &SharedState, logs: Vec<EvmLog>) -> Json<serde_json::Value> {
+    process_base_evm_logs_with_release_attestations(state, logs, &HashMap::new()).await
+}
+
+async fn process_base_evm_logs_with_release_attestations(
+    state: &SharedState,
+    logs: Vec<EvmLog>,
+    release_attestations: &HashMap<String, BaseReleaseTransactionEvidence>,
+) -> Json<serde_json::Value> {
     let (report, indexed_events, bounties, funding_intents, escrows, settlements) = {
         let mut network = state.network.lock().expect("state poisoned");
         let mut worker = state.base_log_worker.lock().expect("state poisoned");
-        let report = worker.process_logs(logs, &mut network);
+        let report =
+            worker.process_logs_with_release_attestations(logs, &mut network, release_attestations);
         let applied_event_ids = report
             .applied_events
             .iter()

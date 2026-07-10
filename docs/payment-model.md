@@ -228,8 +228,12 @@ transaction hash only; it does not mark the bounty paid. Operators or agents
 then poll `POST /v1/base/transaction-receipt`, MCP
 `get_base_transaction_receipt`, or `cargo run -p cli -- base-transaction-receipt`.
 When the API/MCP receipt request uses `reconcile_logs=true`, the service
-normalizes receipt logs and runs the same Base escrow decoder/indexer. A bounty
-is marked `Paid` only if an indexed `EscrowReleased` log applies.
+normalizes receipt logs and runs the same Base escrow decoder/indexer. For
+`EscrowReleased`, the service also fetches the transaction by hash and requires
+the successful receipt, configured settlement signer, escrow contract, selector,
+escrow id, proof hash, recipient wallets, and per-recipient amounts to match the
+pending release plan. A transaction hash or `EscrowReleased` log alone is not
+recipient-level payout evidence and cannot mark the bounty `Paid`.
 
 Hosted operators should also set `OPERATOR_API_TOKEN`. When configured, API and
 MCP calls that reconcile normalized escrow events, submit settlement logs, fetch

@@ -16,6 +16,12 @@ pub enum ChainBaseError {
     DuplicateLog,
     #[error("invalid escrow release split")]
     InvalidReleaseSplit,
+    #[error("invalid escrow release calldata: {0}")]
+    InvalidReleaseCalldata(String),
+    #[error("escrow release calldata does not match plan: {0}")]
+    ReleaseCalldataMismatch(String),
+    #[error("duplicate escrow release recipient: {0}")]
+    DuplicateReleaseRecipient(String),
     #[error("invalid EVM address: {0}")]
     InvalidAddress(String),
     #[error("invalid bytes32 hex value: {0}")]
@@ -67,7 +73,7 @@ pub struct BaseEscrowCreate {
     pub terms_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EscrowRecipient {
     pub address: String,
     pub amount: Money,
@@ -85,6 +91,21 @@ pub struct BaseEscrowReleaseCall {
     pub onchain_escrow_id: u128,
     pub recipients: Vec<EscrowRecipient>,
     pub proof_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecodedBaseEscrowReleaseCall {
+    pub onchain_escrow_id: u128,
+    pub recipients: Vec<EscrowRecipient>,
+    pub proof_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseReleaseCalldataAttestation {
+    pub calldata_hash: String,
+    pub onchain_escrow_id: u128,
+    pub proof_hash: String,
+    pub recipients: Vec<EscrowRecipient>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +294,130 @@ impl BaseEscrowRelease {
     }
 }
 
+pub fn decode_base_release_calldata(
+    data: &str,
+    currency: impl Into<String>,
+) -> Result<DecodedBaseEscrowReleaseCall, ChainBaseError> {
+    let currency = currency.into();
+    let bytes = calldata_bytes(data)?;
+    let expected_selector = selector("release(uint256,address[],uint256[],bytes32)");
+    if bytes.len() < 4 || bytes[..4] != expected_selector {
+        return Err(ChainBaseError::InvalidReleaseCalldata(
+            "wrong release selector".to_string(),
+        ));
+    }
+    let args = &bytes[4..];
+    if args.len() < 32 * 4 {
+        return Err(ChainBaseError::InvalidReleaseCalldata(
+            "missing release static arguments".to_string(),
+        ));
+    }
+
+    let onchain_escrow_id = word_to_u128(read_calldata_word(args, 0)?)?;
+    let recipients_offset = calldata_offset(read_calldata_word(args, 1)?)?;
+    let amounts_offset = calldata_offset(read_calldata_word(args, 2)?)?;
+    let proof_hash = word_hex(read_calldata_word(args, 3)?);
+    let recipient_words = read_dynamic_words(args, recipients_offset)?;
+    let amount_words = read_dynamic_words(args, amounts_offset)?;
+    if recipient_words.len() != amount_words.len() {
+        return Err(ChainBaseError::InvalidReleaseCalldata(
+            "recipient and amount array lengths differ".to_string(),
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    let mut recipients = Vec::with_capacity(recipient_words.len());
+    for (recipient_word, amount_word) in recipient_words.into_iter().zip(amount_words) {
+        let address = normalize_address(address_from_word(recipient_word))?;
+        if !seen.insert(address.clone()) {
+            return Err(ChainBaseError::DuplicateReleaseRecipient(address));
+        }
+        let amount = word_to_u128(amount_word)?;
+        let amount = i64::try_from(amount).map_err(|_| ChainBaseError::InvalidAmount)?;
+        recipients.push(EscrowRecipient {
+            address,
+            amount: Money::new(amount, currency.clone())
+                .map_err(|_| ChainBaseError::InvalidAmount)?,
+        });
+    }
+    validate_release_recipients(&recipients)?;
+
+    Ok(DecodedBaseEscrowReleaseCall {
+        onchain_escrow_id,
+        recipients,
+        proof_hash,
+    })
+}
+
+pub fn attest_base_release_calldata(
+    data: &str,
+    expected: &BaseEscrowReleaseCall,
+) -> Result<BaseReleaseCalldataAttestation, ChainBaseError> {
+    validate_release_recipients(&expected.recipients)?;
+    let currency = expected.recipients[0].amount.currency.clone();
+    let decoded = decode_base_release_calldata(data, currency)?;
+    if decoded.onchain_escrow_id != expected.onchain_escrow_id {
+        return Err(ChainBaseError::ReleaseCalldataMismatch(
+            "escrow id differs".to_string(),
+        ));
+    }
+    if normalize_hash(&decoded.proof_hash)? != normalize_hash(&expected.proof_hash)? {
+        return Err(ChainBaseError::ReleaseCalldataMismatch(
+            "proof hash differs".to_string(),
+        ));
+    }
+    if decoded.recipients.len() != expected.recipients.len() {
+        return Err(ChainBaseError::ReleaseCalldataMismatch(
+            "recipient count differs".to_string(),
+        ));
+    }
+
+    let mut expected_seen = HashSet::new();
+    for (index, (actual, expected)) in decoded
+        .recipients
+        .iter()
+        .zip(expected.recipients.iter())
+        .enumerate()
+    {
+        let expected_address = normalize_address(&expected.address)?;
+        if !expected_seen.insert(expected_address.clone()) {
+            return Err(ChainBaseError::DuplicateReleaseRecipient(expected_address));
+        }
+        if actual.address != expected_address {
+            return Err(ChainBaseError::ReleaseCalldataMismatch(format!(
+                "recipient {index} address differs"
+            )));
+        }
+        if actual.amount != expected.amount {
+            return Err(ChainBaseError::ReleaseCalldataMismatch(format!(
+                "recipient {index} amount differs"
+            )));
+        }
+    }
+
+    Ok(BaseReleaseCalldataAttestation {
+        calldata_hash: calldata_keccak256(data)?,
+        onchain_escrow_id: decoded.onchain_escrow_id,
+        proof_hash: decoded.proof_hash,
+        recipients: decoded.recipients,
+    })
+}
+
+pub fn normalize_evm_address(address: impl AsRef<str>) -> Result<String, ChainBaseError> {
+    normalize_address(address)
+}
+
+pub fn normalize_evm_hash(hash: &str) -> Result<String, ChainBaseError> {
+    normalize_hash(hash)
+}
+
+pub fn calldata_keccak256(data: &str) -> Result<String, ChainBaseError> {
+    let bytes = calldata_bytes(data)?;
+    let mut hasher = Keccak256::new();
+    hasher.update(&bytes);
+    Ok(format!("0x{}", hex::encode(hasher.finalize())))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BaseEscrowEventKind {
     Created,
@@ -368,10 +513,25 @@ pub struct EthGetTransactionReceiptRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EthGetTransactionByHashRequest {
+    pub jsonrpc: String,
+    pub id: u64,
+    pub method: String,
+    pub params: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EthGetTransactionReceiptResponse {
     pub jsonrpc: String,
     pub id: u64,
     pub result: Option<RpcTransactionReceipt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EthGetTransactionByHashResponse {
+    pub jsonrpc: String,
+    pub id: u64,
+    pub result: Option<RpcTransaction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -440,6 +600,16 @@ pub struct EthGetTransactionReceiptEnvelope {
     pub id: u64,
     #[serde(default)]
     pub result: Option<RpcTransactionReceipt>,
+    #[serde(default)]
+    pub error: Option<EthJsonRpcError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EthGetTransactionByHashEnvelope {
+    pub jsonrpc: String,
+    pub id: u64,
+    #[serde(default)]
+    pub result: Option<RpcTransaction>,
     #[serde(default)]
     pub error: Option<EthJsonRpcError>,
 }
@@ -531,6 +701,24 @@ impl TryFrom<EthGetTransactionReceiptEnvelope> for EthGetTransactionReceiptRespo
     }
 }
 
+impl TryFrom<EthGetTransactionByHashEnvelope> for EthGetTransactionByHashResponse {
+    type Error = ChainBaseError;
+
+    fn try_from(envelope: EthGetTransactionByHashEnvelope) -> Result<Self, Self::Error> {
+        if let Some(error) = envelope.error {
+            return Err(ChainBaseError::RpcProviderError {
+                code: error.code,
+                message: error.message,
+            });
+        }
+        Ok(Self {
+            jsonrpc: envelope.jsonrpc,
+            id: envelope.id,
+            result: envelope.result,
+        })
+    }
+}
+
 impl TryFrom<EthBlockNumberEnvelope> for EthBlockNumberResponse {
     type Error = ChainBaseError;
 
@@ -575,6 +763,18 @@ pub struct RpcTransactionReceipt {
     pub status: Option<String>,
     #[serde(default)]
     pub logs: Vec<RpcEvmLog>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RpcTransaction {
+    pub hash: String,
+    pub from: String,
+    pub to: Option<String>,
+    pub input: String,
+    #[serde(rename = "blockNumber")]
+    pub block_number: Option<String>,
+    #[serde(rename = "transactionIndex")]
+    pub transaction_index: Option<String>,
 }
 
 pub fn base_network_descriptor(network: &str) -> Result<BaseNetworkDescriptor, ChainBaseError> {
@@ -643,6 +843,14 @@ pub fn parse_eth_get_transaction_receipt_response(
     envelope.try_into()
 }
 
+pub fn parse_eth_get_transaction_by_hash_response(
+    value: Value,
+) -> Result<EthGetTransactionByHashResponse, ChainBaseError> {
+    let envelope: EthGetTransactionByHashEnvelope = serde_json::from_value(value)
+        .map_err(|error| ChainBaseError::InvalidRpcResponse(error.to_string()))?;
+    envelope.try_into()
+}
+
 pub fn parse_eth_block_number_response(
     value: Value,
 ) -> Result<EthBlockNumberResponse, ChainBaseError> {
@@ -671,6 +879,19 @@ pub fn eth_get_transaction_receipt_request(
         jsonrpc: "2.0".to_string(),
         id: request_id,
         method: "eth_getTransactionReceipt".to_string(),
+        params: vec![normalize_hash(tx_hash)
+            .map_err(|_| ChainBaseError::InvalidTransactionHash(tx_hash.to_string()))?],
+    })
+}
+
+pub fn eth_get_transaction_by_hash_request(
+    tx_hash: &str,
+    request_id: u64,
+) -> Result<EthGetTransactionByHashRequest, ChainBaseError> {
+    Ok(EthGetTransactionByHashRequest {
+        jsonrpc: "2.0".to_string(),
+        id: request_id,
+        method: "eth_getTransactionByHash".to_string(),
         params: vec![normalize_hash(tx_hash)
             .map_err(|_| ChainBaseError::InvalidTransactionHash(tx_hash.to_string()))?],
     })
@@ -839,6 +1060,35 @@ where
     )
 }
 
+pub async fn fetch_transaction_by_hash(
+    rpc_url: &str,
+    tx_hash: &str,
+    request_id: u64,
+) -> Result<EthGetTransactionByHashResponse, ChainBaseError> {
+    fetch_transaction_by_hash_with_transport(
+        rpc_url,
+        tx_hash,
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_transaction_by_hash_with_transport<T>(
+    rpc_url: &str,
+    tx_hash: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<EthGetTransactionByHashResponse, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let request = eth_get_transaction_by_hash_request(tx_hash, request_id)?;
+    parse_eth_get_transaction_by_hash_response(
+        transport.post_json_value(rpc_url, &json!(request)).await?,
+    )
+}
+
 fn non_empty_env(key: &str) -> Option<String> {
     env::var(key)
         .ok()
@@ -932,6 +1182,21 @@ impl RpcTransactionReceipt {
 
     pub fn logs_to_evm_logs(&self) -> Result<Vec<EvmLog>, ChainBaseError> {
         rpc_logs_to_evm_logs(self.logs.clone())
+    }
+}
+
+impl RpcTransaction {
+    pub fn normalized_hash(&self) -> Result<String, ChainBaseError> {
+        normalize_hash(&self.hash)
+            .map_err(|_| ChainBaseError::InvalidTransactionHash(self.hash.clone()))
+    }
+
+    pub fn normalized_from(&self) -> Result<String, ChainBaseError> {
+        normalize_address(&self.from)
+    }
+
+    pub fn normalized_to(&self) -> Result<Option<String>, ChainBaseError> {
+        self.to.as_deref().map(normalize_address).transpose()
     }
 }
 
@@ -1162,7 +1427,7 @@ pub fn simulated_created_event(
     BaseEscrowEvent {
         id: Uuid::new_v4(),
         log_key: format!("base:{onchain_escrow_id}:created"),
-        tx_hash: format!("0x{}", Uuid::new_v4().simple()),
+        tx_hash: simulated_tx_hash(),
         block_number: 1,
         onchain_escrow_id,
         bounty_id,
@@ -1186,7 +1451,7 @@ pub fn simulated_released_event(
     BaseEscrowEvent {
         id: Uuid::new_v4(),
         log_key: format!("base:{onchain_escrow_id}:released"),
-        tx_hash: format!("0x{}", Uuid::new_v4().simple()),
+        tx_hash: simulated_tx_hash(),
         block_number: 2,
         onchain_escrow_id,
         bounty_id,
@@ -1210,7 +1475,7 @@ pub fn simulated_refunded_event(
     BaseEscrowEvent {
         id: Uuid::new_v4(),
         log_key: format!("base:{onchain_escrow_id}:refunded"),
-        tx_hash: format!("0x{}", Uuid::new_v4().simple()),
+        tx_hash: simulated_tx_hash(),
         block_number: 2,
         onchain_escrow_id,
         bounty_id,
@@ -1234,7 +1499,7 @@ pub fn simulated_disputed_event(
     BaseEscrowEvent {
         id: Uuid::new_v4(),
         log_key: format!("base:{onchain_escrow_id}:disputed"),
-        tx_hash: format!("0x{}", Uuid::new_v4().simple()),
+        tx_hash: simulated_tx_hash(),
         block_number: 2,
         onchain_escrow_id,
         bounty_id,
@@ -1252,6 +1517,11 @@ pub fn simulated_disputed_event(
 
 pub fn base_usdc_rail() -> PaymentRail {
     PaymentRail::BaseUsdc
+}
+
+fn simulated_tx_hash() -> String {
+    let id = Uuid::new_v4().simple().to_string();
+    format!("0x{id}{id}")
 }
 
 pub fn evm_event_topic(signature: &str) -> String {
@@ -1384,6 +1654,81 @@ fn decode_words(
             let start = index * 64;
             parse_bytes32(&trimmed[start..start + 64])
                 .map_err(|_| ChainBaseError::InvalidLogData(event_name.to_string()))
+        })
+        .collect()
+}
+
+fn calldata_bytes(data: &str) -> Result<Vec<u8>, ChainBaseError> {
+    let normalized = normalize_data(data).map_err(|_| {
+        ChainBaseError::InvalidReleaseCalldata("calldata must be 0x-prefixed hex".to_string())
+    })?;
+    hex::decode(&normalized[2..]).map_err(|_| {
+        ChainBaseError::InvalidReleaseCalldata("calldata hex could not be decoded".to_string())
+    })
+}
+
+fn read_calldata_word(args: &[u8], word_index: usize) -> Result<[u8; 32], ChainBaseError> {
+    let start = word_index
+        .checked_mul(32)
+        .ok_or_else(|| ChainBaseError::InvalidReleaseCalldata("word index overflow".to_string()))?;
+    let end = start
+        .checked_add(32)
+        .ok_or_else(|| ChainBaseError::InvalidReleaseCalldata("word index overflow".to_string()))?;
+    let slice = args.get(start..end).ok_or_else(|| {
+        ChainBaseError::InvalidReleaseCalldata("calldata word out of bounds".to_string())
+    })?;
+    slice.try_into().map_err(|_| {
+        ChainBaseError::InvalidReleaseCalldata("calldata word has invalid length".to_string())
+    })
+}
+
+fn calldata_offset(word: [u8; 32]) -> Result<usize, ChainBaseError> {
+    let offset = word_to_u128(word).map_err(|_| {
+        ChainBaseError::InvalidReleaseCalldata("dynamic offset is too large".to_string())
+    })?;
+    let offset = usize::try_from(offset).map_err(|_| {
+        ChainBaseError::InvalidReleaseCalldata("dynamic offset is too large".to_string())
+    })?;
+    if offset % 32 != 0 || offset < 32 * 4 {
+        return Err(ChainBaseError::InvalidReleaseCalldata(
+            "dynamic offset is not a valid ABI word offset".to_string(),
+        ));
+    }
+    Ok(offset)
+}
+
+fn read_dynamic_words(args: &[u8], offset: usize) -> Result<Vec<[u8; 32]>, ChainBaseError> {
+    let length_end = offset.checked_add(32).ok_or_else(|| {
+        ChainBaseError::InvalidReleaseCalldata("dynamic array offset overflow".to_string())
+    })?;
+    let length_word = args.get(offset..length_end).ok_or_else(|| {
+        ChainBaseError::InvalidReleaseCalldata("dynamic array length missing".to_string())
+    })?;
+    let length = word_to_u128(length_word.try_into().map_err(|_| {
+        ChainBaseError::InvalidReleaseCalldata("dynamic array length invalid".to_string())
+    })?)
+    .map_err(|_| ChainBaseError::InvalidReleaseCalldata("array length too large".to_string()))?;
+    let length = usize::try_from(length).map_err(|_| {
+        ChainBaseError::InvalidReleaseCalldata("array length too large".to_string())
+    })?;
+    let byte_len = length.checked_mul(32).ok_or_else(|| {
+        ChainBaseError::InvalidReleaseCalldata("dynamic array byte length overflow".to_string())
+    })?;
+    let start = length_end;
+    let end = start.checked_add(byte_len).ok_or_else(|| {
+        ChainBaseError::InvalidReleaseCalldata("dynamic array byte length overflow".to_string())
+    })?;
+    let values = args.get(start..end).ok_or_else(|| {
+        ChainBaseError::InvalidReleaseCalldata("dynamic array extends past calldata".to_string())
+    })?;
+    values
+        .chunks_exact(32)
+        .map(|chunk| {
+            chunk.try_into().map_err(|_| {
+                ChainBaseError::InvalidReleaseCalldata(
+                    "dynamic array word has invalid length".to_string(),
+                )
+            })
         })
         .collect()
 }
@@ -1687,6 +2032,60 @@ mod tests {
         assert!(tx
             .data
             .contains("00000000000000000000000000000000000000000000000000000000000000e0"));
+
+        let decoded = decode_base_release_calldata(&tx.data, "usdc").unwrap();
+        assert_eq!(decoded.onchain_escrow_id, 7);
+        assert_eq!(decoded.proof_hash, release.proof_hash);
+        assert_eq!(decoded.recipients.len(), 2);
+        assert_eq!(decoded.recipients[0].address, release.recipients[0].address);
+        assert_eq!(decoded.recipients[0].amount, release.recipients[0].amount);
+
+        let attestation = attest_base_release_calldata(&tx.data, &release).unwrap();
+        assert_eq!(attestation.onchain_escrow_id, 7);
+        assert_eq!(attestation.recipients, decoded.recipients);
+        assert!(attestation.calldata_hash.starts_with("0x"));
+    }
+
+    #[test]
+    fn release_calldata_attestation_rejects_wrong_recipient_amount_and_duplicates() {
+        let planner =
+            BaseEscrowTxPlanner::new("0x1111111111111111111111111111111111111111").unwrap();
+        let release = BaseEscrowReleaseCall {
+            onchain_escrow_id: 7,
+            proof_hash: format!("0x{}", "cd".repeat(32)),
+            recipients: vec![
+                EscrowRecipient {
+                    address: "0x2222222222222222222222222222222222222222".to_string(),
+                    amount: Money::new(900, "usdc").unwrap(),
+                },
+                EscrowRecipient {
+                    address: "0x3333333333333333333333333333333333333333".to_string(),
+                    amount: Money::new(100, "usdc").unwrap(),
+                },
+            ],
+        };
+        let tx = planner.release(&release).unwrap();
+
+        let mut wrong_amount = release.clone();
+        wrong_amount.recipients[0].amount = Money::new(899, "usdc").unwrap();
+        assert!(matches!(
+            attest_base_release_calldata(&tx.data, &wrong_amount),
+            Err(ChainBaseError::ReleaseCalldataMismatch(_))
+        ));
+
+        let mut duplicate = release.clone();
+        duplicate.recipients[1].address = duplicate.recipients[0].address.clone();
+        let duplicate_tx = planner.release(&duplicate).unwrap();
+        assert!(matches!(
+            decode_base_release_calldata(&duplicate_tx.data, "usdc"),
+            Err(ChainBaseError::DuplicateReleaseRecipient(_))
+        ));
+
+        let wrong_selector = format!("0xdeadbeef{}", &tx.data[10..]);
+        assert!(matches!(
+            decode_base_release_calldata(&wrong_selector, "usdc"),
+            Err(ChainBaseError::InvalidReleaseCalldata(_))
+        ));
     }
 
     #[test]

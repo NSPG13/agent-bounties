@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use app::{BaseEscrowReconciliation, BountyNetwork};
+use app::{BaseEscrowReconciliation, BaseReleaseTransactionEvidence, BountyNetwork};
 use chain_base::{
     base_network_descriptor, fetch_base_escrow_logs, fetch_block_number, rpc_logs_to_evm_logs,
     BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowLogDecoder, BaseEscrowLogQuery,
@@ -10,7 +10,7 @@ use db::{BaseIndexerHeartbeat, PostgresStore};
 use domain::{Id, Submission, VerifierResult};
 use ledger::{Ledger, LedgerEntry};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use verifier_sdk::{VerificationInput, Verifier, VerifierResultType};
 
 pub struct VerificationJob<V: Verifier> {
@@ -135,6 +135,15 @@ impl BaseEscrowLogWorker {
         logs: impl IntoIterator<Item = EvmLog>,
         network: &mut BountyNetwork,
     ) -> BaseLogPipelineReport {
+        self.process_logs_with_release_attestations(logs, network, &HashMap::new())
+    }
+
+    pub fn process_logs_with_release_attestations(
+        &mut self,
+        logs: impl IntoIterator<Item = EvmLog>,
+        network: &mut BountyNetwork,
+        release_attestations: &HashMap<String, BaseReleaseTransactionEvidence>,
+    ) -> BaseLogPipelineReport {
         let mut logs = logs.into_iter().collect::<Vec<_>>();
         logs.sort_by_key(|log| (log.block_number, log.log_index));
 
@@ -169,7 +178,11 @@ impl BaseEscrowLogWorker {
                 continue;
             }
 
-            let reconciliation = match network.apply_base_escrow_event(event.clone()) {
+            let reconciliation = match apply_event_with_optional_attestation(
+                network,
+                event.clone(),
+                release_attestations,
+            ) {
                 Ok(reconciliation) => reconciliation,
                 Err(error) => {
                     report.failures.push(BaseLogFailure {
@@ -208,6 +221,26 @@ impl BaseEscrowLogWorker {
         self.cursor.last_log_index = Some(log_index);
         self.cursor.last_log_key = Some(log_key);
     }
+}
+
+fn apply_event_with_optional_attestation(
+    network: &mut BountyNetwork,
+    event: BaseEscrowEvent,
+    release_attestations: &HashMap<String, BaseReleaseTransactionEvidence>,
+) -> app::AppResult<BaseEscrowReconciliation> {
+    if event.kind == BaseEscrowEventKind::Released {
+        let evidence = release_attestations
+            .get(&event.tx_hash.to_ascii_lowercase())
+            .cloned()
+            .ok_or_else(|| {
+                app::AppError::InvalidBaseEscrowEvent(
+                    "released event requires matching release transaction calldata attestation"
+                        .to_string(),
+                )
+            })?;
+        return network.apply_attested_base_release_event(event, evidence);
+    }
+    network.apply_base_escrow_event(event)
 }
 
 fn applied_event(
@@ -828,8 +861,8 @@ fn nonempty(value: &str) -> bool {
 mod tests {
     use super::*;
     use app::{
-        hash_artifact, ClaimBountyRequest, PostBountyRequest, RegisterAgentRequest,
-        SubmitResultRequest, VerifySubmissionRequest,
+        hash_artifact, ClaimBountyRequest, PlanBaseReleaseRequest, PostBountyRequest,
+        RegisterAgentRequest, SubmitResultRequest, VerifySubmissionRequest,
     };
     use chain_base::{
         evm_address_word, evm_bytes32_word, evm_event_topic, evm_uint256_word, evm_words_data,
@@ -841,35 +874,47 @@ mod tests {
     use std::collections::HashMap;
 
     #[tokio::test]
-    async fn raw_base_logs_mark_payable_bounty_paid_once() {
+    async fn raw_base_logs_require_release_calldata_attestation() {
         let (mut network, bounty, proof) = payable_base_bounty().await;
         let logs = raw_created_and_released_logs(&bounty, &proof);
         let mut worker = BaseEscrowLogWorker::default();
 
         let report = worker.process_logs(logs.clone(), &mut network);
 
-        assert!(report.failures.is_empty());
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.failures[0]
+            .reason
+            .contains("requires matching release transaction calldata attestation"));
         assert_eq!(report.decoded_events, 2);
-        assert_eq!(report.applied_events.len(), 2);
-        assert_eq!(report.ledger_entries.len(), 1);
-        assert_eq!(worker.indexed_events().len(), 2);
-        assert_eq!(worker.cursor().last_block_number, Some(11));
-        assert_eq!(worker.cursor().last_log_index, Some(0));
+        assert_eq!(report.applied_events.len(), 1);
+        assert!(report.ledger_entries.is_empty());
+        assert_eq!(worker.indexed_events().len(), 1);
+        assert_eq!(worker.cursor().last_block_number, Some(10));
 
+        let status = network.status(bounty.id).unwrap();
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
+        assert_eq!(
+            status.settlements[0].payout_intents[0].status,
+            PayoutStatus::Pending
+        );
+        assert_eq!(network.ledger.entries().len(), 1);
+
+        let release_attestations = release_attestations_for(&network, &bounty, &logs[1]);
+        let mut attested_worker =
+            BaseEscrowLogWorker::from_indexed_events("usdc", worker.indexed_events().to_vec())
+                .unwrap();
+        let attested = attested_worker.process_logs_with_release_attestations(
+            vec![logs[1].clone()],
+            &mut network,
+            &release_attestations,
+        );
+        assert!(attested.failures.is_empty());
+        assert_eq!(attested.applied_events.len(), 1);
+        assert_eq!(attested.ledger_entries.len(), 1);
+        assert_eq!(attested_worker.indexed_events().len(), 2);
         let status = network.status(bounty.id).unwrap();
         assert_eq!(status.bounty.status, BountyStatus::Paid);
         assert_eq!(status.escrows[0].status, EscrowStatus::Released);
-        assert_eq!(
-            status.settlements[0].payout_intents[0].status,
-            PayoutStatus::Paid
-        );
-        assert_eq!(network.ledger.entries().len(), 2);
-
-        let replay = worker.process_logs(logs, &mut network);
-        assert!(replay.failures.is_empty());
-        assert_eq!(replay.applied_events.len(), 0);
-        assert_eq!(replay.skipped_duplicate_logs, 2);
-        assert!(replay.ledger_entries.is_empty());
         assert_eq!(network.ledger.entries().len(), 2);
     }
 
@@ -888,7 +933,12 @@ mod tests {
             BaseEscrowLogWorker::from_indexed_events("usdc", persisted_events).unwrap();
         assert_eq!(restarted_worker.cursor().last_block_number, Some(10));
 
-        let second_report = restarted_worker.process_logs(vec![logs[1].clone()], &mut network);
+        let release_attestations = release_attestations_for(&network, &bounty, &logs[1]);
+        let second_report = restarted_worker.process_logs_with_release_attestations(
+            vec![logs[1].clone()],
+            &mut network,
+            &release_attestations,
+        );
 
         assert!(second_report.failures.is_empty());
         assert_eq!(second_report.applied_events.len(), 1);
@@ -1066,7 +1116,7 @@ mod tests {
         let mut network = BountyNetwork::default();
         let solver = network.register_agent(RegisterAgentRequest {
             handle: "solver".to_string(),
-            payout_wallet: Some("0xsolver".to_string()),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
         });
         let bounty = network
             .post_funded_bounty(PostBountyRequest {
@@ -1133,6 +1183,36 @@ mod tests {
             ),
             raw_released_log(7, &proof_hash, 11, 0),
         ]
+    }
+
+    fn release_attestations_for(
+        network: &BountyNetwork,
+        bounty: &Bounty,
+        release_log: &EvmLog,
+    ) -> HashMap<String, BaseReleaseTransactionEvidence> {
+        let release_plan = network
+            .plan_base_release(PlanBaseReleaseRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                network: Some("base-mainnet".to_string()),
+            })
+            .unwrap();
+        HashMap::from([(
+            release_log.tx_hash.to_ascii_lowercase(),
+            BaseReleaseTransactionEvidence {
+                tx_hash: release_log.tx_hash.clone(),
+                chain_id: release_plan.network.chain_id,
+                expected_chain_id: release_plan.network.chain_id,
+                from: "0x5555555555555555555555555555555555555555".to_string(),
+                settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+                to: release_plan.transaction.to.clone(),
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                input: release_plan.transaction.data,
+                receipt_succeeded: true,
+                platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+            },
+        )])
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -886,7 +886,7 @@ fn real_money_rehearsal_descriptor() -> RealMoneyRehearsalDescriptor {
         ],
         payout_evidence: vec![
             "Deterministic verifier acceptance creates proof records and settlement intents, but does not by itself move money.".to_string(),
-            "Base USDC payout becomes paid only after an indexed EscrowReleased log whose proof hash matches the accepted proof record.".to_string(),
+            "Base USDC payout becomes paid only after an indexed EscrowReleased log is bound to the successful release transaction calldata and that calldata matches the accepted proof, recipients, amounts, and escrow id.".to_string(),
             "Stripe fiat payout becomes paid only after transfer.created evidence matches payout intent, settlement, bounty, proof, and agent metadata.".to_string(),
         ],
         pooled_and_mixed_funding: true,
@@ -2593,7 +2593,7 @@ pub fn public_bounty_payment_lifecycle(
                 "All required payout evidence has reconciled and the bounty is terminally paid."
                     .to_string()
             } else {
-                "Payment is not final until Base EscrowReleased logs or Stripe transfer.created evidence reconcile against settlement metadata.".to_string()
+                "Payment is not final until Base EscrowReleased logs plus matching release calldata, or Stripe transfer.created evidence, reconcile against settlement metadata.".to_string()
             },
             next_action_url: Some(item.status_url.clone()),
         },
