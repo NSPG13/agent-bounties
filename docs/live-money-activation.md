@@ -209,6 +209,21 @@ PayPal-capable path explicit on the static funding page. The parameter is a UI
 hint only; Stripe Checkout decides whether PayPal is available for the account,
 customer location, browser, currency, and configured payment-method set.
 
+After Checkout returns, route funders to the static status page with the hosted
+API URL, bounty id, and external reference:
+
+```text
+https://nspg13.github.io/agent-bounties/success.html?apiBaseUrl=$PUBLIC_BASE_URL&bountyId=<bounty-id>&externalReference=<external-reference>
+```
+
+The page reads `GET /v1/bounties/{id}` and shows `Checkout returned`, `waiting
+for webhook`, `funding reconciled`, or `needs operator review`. It must never
+present the redirect itself as funding evidence. `funding reconciled` is shown
+only when the matching Stripe funding intent reports `Applied` webhook evidence
+for the supplied funding intent id or external reference. Generic bounty
+claimability can come from another rail or contribution and must be shown
+separately, not attributed to the Checkout return.
+
 ## Payout Flow
 
 1. Solver submits an artifact.

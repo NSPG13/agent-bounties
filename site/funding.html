@@ -94,6 +94,7 @@
             <li>The site asks the hosted API to create a Stripe fiat funding intent for the bounty.</li>
             <li>The hosted API creates a Stripe Checkout Session for that exact funding intent.</li>
             <li>You choose an eligible payment method on Stripe Checkout, not on this website. Use PayPal there if it appears.</li>
+            <li>Checkout returns to the status page, which reads the hosted bounty record and may show <code>waiting for webhook</code>, <code>funding reconciled</code>, or <code>needs operator review</code> for the matched Stripe funding intent.</li>
             <li>Stripe sends <code>checkout.session.completed</code> to the hosted webhook endpoint.</li>
             <li>The platform verifies the signature, checks bounty metadata, credits the ledger, and reserves funding into the bounty.</li>
           </ol>

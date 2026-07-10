@@ -181,6 +181,35 @@
     "supported_rail": "StripeFiat",
     "settlement_authority": "query parameters are UI defaults only; funding still requires verified Stripe webhook reconciliation"
   },
+  "checkout_return_status": {
+    "page": "https://nspg13.github.io/agent-bounties/success.html",
+    "purpose": "After Stripe Checkout redirects back, read hosted bounty status and show whether the funding intent is waiting for webhook reconciliation, reconciled, or needs operator review.",
+    "endpoint_template": "{api_base_url}/v1/bounties/{bounty_id}",
+    "query_params": [
+      "apiBaseUrl",
+      "bountyId",
+      "fundingIntentId",
+      "externalReference",
+      "source",
+      "paymentPreference"
+    ],
+    "states": [
+      "Checkout returned",
+      "waiting for webhook",
+      "funding reconciled",
+      "needs operator review"
+    ],
+    "non_secret_fields": [
+      "bounty.status",
+      "funding_summary.applied",
+      "funding_summary.remaining",
+      "funding_summary.claimable",
+      "funding_intents.id",
+      "funding_intents.status",
+      "funding_intents.external_reference"
+    ],
+    "settlement_authority": "Checkout redirect success is not funding; only a hosted status response showing the matched Stripe funding intent in Applied state can show this Checkout as reconciled. Generic bounty claimability must be displayed separately because it can come from another rail or contribution."
+  },
   "paypal_checkout_handoff": {
     "page": "https://nspg13.github.io/agent-bounties/funding.html",
     "purpose": "Route human funders to Stripe-hosted Checkout with PayPal preferred where Stripe supports and enables it.",
