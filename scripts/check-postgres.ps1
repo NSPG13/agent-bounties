@@ -46,10 +46,10 @@ try {
     $env:AGENT_BOUNTIES_TEST_DATABASE_URL = $databaseUrl
     try {
         Invoke-Checked {
-            cargo test -p api bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact
+            cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
         }
         Invoke-Checked {
-            cargo test -p mcp-server mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact
+            cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture
         }
     }
     finally {

@@ -34,8 +34,8 @@ database_url="${DATABASE_URL:-postgres://agent_bounties:agent_bounties@localhost
 
 cargo build -p api -p mcp-server
 export AGENT_BOUNTIES_TEST_DATABASE_URL="$database_url"
-cargo test -p api bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact
-cargo test -p mcp-server mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact
+cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
+cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture
 cargo run -p cli -- service-smoke-spawn \
   --api-base-url http://127.0.0.1:18180 \
   --mcp-base-url http://127.0.0.1:18190 \

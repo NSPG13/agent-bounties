@@ -4353,10 +4353,12 @@ mod tests {
                 external_reference: Some("mcp-base-tx-before-indexer".to_string()),
                 stripe_success_url: None,
                 stripe_cancel_url: None,
-                base_escrow_contract: None,
-                base_payer: None,
-                base_token: None,
-                base_network: None,
+                base_escrow_contract: Some(
+                    "0x1111111111111111111111111111111111111111".to_string(),
+                ),
+                base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
+                base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
+                base_network: Some("base-mainnet".to_string()),
             }),
         )
         .await

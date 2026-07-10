@@ -63,4 +63,7 @@ jobs:
         run: test -n "$AGENT_BOUNTIES_TEST_DATABASE_URL"
 
       - name: Run Postgres sync regressions
-        run: cargo test -p api github_issue_api_sync_postgres -- --ignored --nocapture
+        run: |
+          cargo test -p api github_issue_api_sync_postgres -- --ignored --nocapture
+          cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
+          cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture
