@@ -4618,6 +4618,30 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
             .into_iter()
             .map(|contact| (contact.id, contact))
             .collect(),
+        audience_members: store
+            .list_audience_members()
+            .await?
+            .into_iter()
+            .map(|member| (member.id, member))
+            .collect(),
+        audience_interactions: store
+            .list_audience_interactions()
+            .await?
+            .into_iter()
+            .map(|interaction| (interaction.id, interaction))
+            .collect(),
+        discovery_responses: store
+            .list_discovery_responses()
+            .await?
+            .into_iter()
+            .map(|response| (response.id, response))
+            .collect(),
+        outreach_attempts: store
+            .list_outreach_attempts()
+            .await?
+            .into_iter()
+            .map(|attempt| (attempt.id, attempt))
+            .collect(),
         capabilities: store
             .list_capabilities()
             .await?

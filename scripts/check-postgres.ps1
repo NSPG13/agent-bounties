@@ -46,6 +46,9 @@ try {
     $env:AGENT_BOUNTIES_TEST_DATABASE_URL = $databaseUrl
     try {
         Invoke-Checked {
+            cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
         }
         Invoke-Checked {

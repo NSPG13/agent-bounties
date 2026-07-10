@@ -1,12 +1,14 @@
 use chain_base::{BaseEscrowEvent, BaseEscrowEventKind};
 use chrono::{DateTime, Utc};
 use domain::{
-    Agent, AgentStatus, Bounty, BountyStatus, Capability, CapabilityClass, Claim,
-    ContributorContact, Escrow, EscrowStatus, EvalRun, FundingContribution,
+    Agent, AgentStatus, AudienceInteraction, AudienceInteractionKind, AudienceLifecycleStage,
+    AudienceMember, AudienceProvider, Bounty, BountyStatus, Capability, CapabilityClass, Claim,
+    ContributorContact, DiscoveryResponse, Escrow, EscrowStatus, EvalRun, FundingContribution,
     FundingContributionStatus, FundingIntent, FundingIntentStatus, FundingMode, HelpRequest, Id,
-    Money, PaymentEvent, PaymentEventStatus, PaymentRail, PrivacyLevel, ProofRecord, Quote,
-    ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface,
-    Settlement, Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
+    Money, OutreachAttempt, OutreachChannel, OutreachStatus, PaymentEvent, PaymentEventStatus,
+    PaymentRail, PrivacyLevel, ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent,
+    RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal,
+    VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{LedgerEntry, Posting};
 use sqlx::{postgres::PgRow, PgPool, Row};
@@ -36,6 +38,36 @@ const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
                 ELSE EXCLUDED.received_at
               END
             "#;
+const UPSERT_AUDIENCE_MEMBER_SQL: &str = r#"
+            INSERT INTO audience_members
+              (id, provider, external_id, external_id_normalized, handle, public_profile_url, roles, lifecycle_stage, first_seen_at, last_seen_at)
+            VALUES ($1, $2, $3, lower($3), $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (provider, external_id_normalized) DO UPDATE SET
+              external_id = EXCLUDED.external_id,
+              handle = EXCLUDED.handle,
+              public_profile_url = COALESCE(EXCLUDED.public_profile_url, audience_members.public_profile_url),
+              roles = (
+                SELECT COALESCE(jsonb_agg(role ORDER BY role::text), '[]'::jsonb)
+                FROM (
+                  SELECT DISTINCT role
+                  FROM jsonb_array_elements(audience_members.roles || EXCLUDED.roles) AS merged(role)
+                ) AS unique_roles
+              ),
+              lifecycle_stage = CASE
+                WHEN audience_members.lifecycle_stage = 'Retained' OR EXCLUDED.lifecycle_stage = 'Retained' THEN 'Retained'
+                WHEN audience_members.lifecycle_stage = 'Converted' OR EXCLUDED.lifecycle_stage = 'Converted' THEN 'Converted'
+                WHEN audience_members.lifecycle_stage = 'Engaged' OR EXCLUDED.lifecycle_stage = 'Engaged' THEN 'Engaged'
+                ELSE 'Observed'
+              END,
+              first_seen_at = LEAST(audience_members.first_seen_at, EXCLUDED.first_seen_at),
+              last_seen_at = GREATEST(audience_members.last_seen_at, EXCLUDED.last_seen_at)
+            "#;
+const INSERT_AUDIENCE_INTERACTION_SQL: &str = r#"
+            INSERT INTO audience_interactions
+              (id, audience_member_id, provider_event_id, kind, public_url, occurred_at, referrer_url, campaign, source_interaction_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (audience_member_id, provider_event_id) DO NOTHING
+            "#;
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -49,6 +81,8 @@ pub enum DbError {
     InvalidEnum(String),
     #[error("integer value cannot fit target type: {0}")]
     IntegerOverflow(String),
+    #[error("conflicting audience event replay: {0}")]
+    AudienceConflict(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -307,6 +341,286 @@ impl PostgresStore {
                     notes: row.try_get("notes")?,
                     created_at: row.try_get("created_at")?,
                     updated_at: row.try_get("updated_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_audience_member(&self, member: &AudienceMember) -> DbResult<()> {
+        sqlx::query(UPSERT_AUDIENCE_MEMBER_SQL)
+            .bind(member.id)
+            .bind(format!("{:?}", member.provider))
+            .bind(&member.external_id)
+            .bind(&member.handle)
+            .bind(&member.public_profile_url)
+            .bind(serde_json::to_value(&member.roles)?)
+            .bind(format!("{:?}", member.lifecycle_stage))
+            .bind(member.first_seen_at)
+            .bind(member.last_seen_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_audience_members(&self) -> DbResult<Vec<AudienceMember>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, provider, external_id, handle, public_profile_url, roles, lifecycle_stage, first_seen_at, last_seen_at
+            FROM audience_members
+            ORDER BY first_seen_at, handle
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(AudienceMember {
+                    id: row.try_get("id")?,
+                    provider: parse_audience_provider(row.try_get::<String, _>("provider")?)?,
+                    external_id: row.try_get("external_id")?,
+                    handle: row.try_get("handle")?,
+                    public_profile_url: row.try_get("public_profile_url")?,
+                    roles: serde_json::from_value(row.try_get("roles")?)?,
+                    lifecycle_stage: parse_audience_lifecycle_stage(
+                        row.try_get::<String, _>("lifecycle_stage")?,
+                    )?,
+                    first_seen_at: row.try_get("first_seen_at")?,
+                    last_seen_at: row.try_get("last_seen_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_audience_interaction(
+        &self,
+        interaction: &AudienceInteraction,
+    ) -> DbResult<()> {
+        sqlx::query(INSERT_AUDIENCE_INTERACTION_SQL)
+            .bind(interaction.id)
+            .bind(interaction.audience_member_id)
+            .bind(&interaction.provider_event_id)
+            .bind(format!("{:?}", interaction.kind))
+            .bind(&interaction.public_url)
+            .bind(interaction.occurred_at)
+            .bind(&interaction.referrer_url)
+            .bind(&interaction.campaign)
+            .bind(interaction.source_interaction_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_audience_interaction_with_member(
+        &self,
+        member: &AudienceMember,
+        interaction: &AudienceInteraction,
+    ) -> DbResult<()> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(UPSERT_AUDIENCE_MEMBER_SQL)
+            .bind(member.id)
+            .bind(format!("{:?}", member.provider))
+            .bind(&member.external_id)
+            .bind(&member.handle)
+            .bind(&member.public_profile_url)
+            .bind(serde_json::to_value(&member.roles)?)
+            .bind(format!("{:?}", member.lifecycle_stage))
+            .bind(member.first_seen_at)
+            .bind(member.last_seen_at)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(INSERT_AUDIENCE_INTERACTION_SQL)
+            .bind(interaction.id)
+            .bind(interaction.audience_member_id)
+            .bind(&interaction.provider_event_id)
+            .bind(format!("{:?}", interaction.kind))
+            .bind(&interaction.public_url)
+            .bind(interaction.occurred_at)
+            .bind(&interaction.referrer_url)
+            .bind(&interaction.campaign)
+            .bind(interaction.source_interaction_id)
+            .execute(&mut *transaction)
+            .await?;
+
+        let persisted = sqlx::query(
+            r#"
+            SELECT id, kind, public_url, referrer_url, campaign, source_interaction_id
+            FROM audience_interactions
+            WHERE audience_member_id = $1 AND provider_event_id = $2
+            "#,
+        )
+        .bind(interaction.audience_member_id)
+        .bind(&interaction.provider_event_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let persisted_id: Id = persisted.try_get("id")?;
+        let persisted_kind: String = persisted.try_get("kind")?;
+        let persisted_public_url: Option<String> = persisted.try_get("public_url")?;
+        let persisted_referrer_url: Option<String> = persisted.try_get("referrer_url")?;
+        let persisted_campaign: Option<String> = persisted.try_get("campaign")?;
+        let persisted_source_interaction_id: Option<Id> =
+            persisted.try_get("source_interaction_id")?;
+        if persisted_id != interaction.id
+            || persisted_kind != format!("{:?}", interaction.kind)
+            || persisted_public_url != interaction.public_url
+            || persisted_referrer_url != interaction.referrer_url
+            || persisted_campaign != interaction.campaign
+            || persisted_source_interaction_id != interaction.source_interaction_id
+        {
+            return Err(DbError::AudienceConflict(format!(
+                "member={} provider_event_id={}",
+                interaction.audience_member_id, interaction.provider_event_id
+            )));
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE audience_members
+            SET lifecycle_stage = 'Retained'
+            WHERE id = $1
+              AND (SELECT COUNT(*) FROM audience_interactions WHERE audience_member_id = $1) >= 2
+            "#,
+        )
+        .bind(member.id)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn list_audience_interactions(&self) -> DbResult<Vec<AudienceInteraction>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, audience_member_id, provider_event_id, kind, public_url, occurred_at, referrer_url, campaign, source_interaction_id
+            FROM audience_interactions
+            ORDER BY occurred_at, id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(AudienceInteraction {
+                    id: row.try_get("id")?,
+                    audience_member_id: row.try_get("audience_member_id")?,
+                    provider_event_id: row.try_get("provider_event_id")?,
+                    kind: parse_audience_interaction_kind(row.try_get::<String, _>("kind")?)?,
+                    public_url: row.try_get("public_url")?,
+                    occurred_at: row.try_get("occurred_at")?,
+                    referrer_url: row.try_get("referrer_url")?,
+                    campaign: row.try_get("campaign")?,
+                    source_interaction_id: row.try_get("source_interaction_id")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_discovery_response(&self, response: &DiscoveryResponse) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO discovery_responses
+              (id, audience_member_id, interaction_id, provider_response_id, public_source_url, found_via, motivation, improvement_suggestion, agent_or_tool, private_storage_consent, captured_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (audience_member_id, provider_response_id) DO NOTHING
+            "#,
+        )
+        .bind(response.id)
+        .bind(response.audience_member_id)
+        .bind(response.interaction_id)
+        .bind(&response.provider_response_id)
+        .bind(&response.public_source_url)
+        .bind(&response.found_via)
+        .bind(&response.motivation)
+        .bind(&response.improvement_suggestion)
+        .bind(&response.agent_or_tool)
+        .bind(response.private_storage_consent)
+        .bind(response.captured_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_discovery_responses(&self) -> DbResult<Vec<DiscoveryResponse>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, audience_member_id, interaction_id, provider_response_id, public_source_url, found_via, motivation, improvement_suggestion, agent_or_tool, private_storage_consent, captured_at
+            FROM discovery_responses
+            ORDER BY captured_at, id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(DiscoveryResponse {
+                    id: row.try_get("id")?,
+                    audience_member_id: row.try_get("audience_member_id")?,
+                    interaction_id: row.try_get("interaction_id")?,
+                    provider_response_id: row.try_get("provider_response_id")?,
+                    public_source_url: row.try_get("public_source_url")?,
+                    found_via: row.try_get("found_via")?,
+                    motivation: row.try_get("motivation")?,
+                    improvement_suggestion: row.try_get("improvement_suggestion")?,
+                    agent_or_tool: row.try_get("agent_or_tool")?,
+                    private_storage_consent: row.try_get("private_storage_consent")?,
+                    captured_at: row.try_get("captured_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_outreach_attempt(&self, attempt: &OutreachAttempt) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO outreach_attempts
+              (id, audience_member_id, provider_event_id, channel, public_url, prompt_version, status, consent_contact_id, sent_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (audience_member_id, provider_event_id) DO UPDATE SET
+              status = CASE
+                WHEN outreach_attempts.status IN ('Responded', 'Declined', 'Unreachable') THEN outreach_attempts.status
+                ELSE EXCLUDED.status
+              END
+            "#,
+        )
+        .bind(attempt.id)
+        .bind(attempt.audience_member_id)
+        .bind(&attempt.provider_event_id)
+        .bind(format!("{:?}", attempt.channel))
+        .bind(&attempt.public_url)
+        .bind(&attempt.prompt_version)
+        .bind(format!("{:?}", attempt.status))
+        .bind(attempt.consent_contact_id)
+        .bind(attempt.sent_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_outreach_attempts(&self) -> DbResult<Vec<OutreachAttempt>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, audience_member_id, provider_event_id, channel, public_url, prompt_version, status, consent_contact_id, sent_at
+            FROM outreach_attempts
+            ORDER BY sent_at, id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(OutreachAttempt {
+                    id: row.try_get("id")?,
+                    audience_member_id: row.try_get("audience_member_id")?,
+                    provider_event_id: row.try_get("provider_event_id")?,
+                    channel: parse_outreach_channel(row.try_get::<String, _>("channel")?)?,
+                    public_url: row.try_get("public_url")?,
+                    prompt_version: row.try_get("prompt_version")?,
+                    status: parse_outreach_status(row.try_get::<String, _>("status")?)?,
+                    consent_contact_id: row.try_get("consent_contact_id")?,
+                    sent_at: row.try_get("sent_at")?,
                 })
             })
             .collect()
@@ -2009,6 +2323,70 @@ fn parse_agent_status(value: String) -> DbResult<AgentStatus> {
     }
 }
 
+fn parse_audience_provider(value: String) -> DbResult<AudienceProvider> {
+    match value.as_str() {
+        "Github" => Ok(AudienceProvider::Github),
+        "HostedApi" => Ok(AudienceProvider::HostedApi),
+        "Mcp" => Ok(AudienceProvider::Mcp),
+        "BaseWallet" => Ok(AudienceProvider::BaseWallet),
+        "Stripe" => Ok(AudienceProvider::Stripe),
+        "Other" => Ok(AudienceProvider::Other),
+        _ => Err(DbError::InvalidEnum(value)),
+    }
+}
+
+fn parse_audience_lifecycle_stage(value: String) -> DbResult<AudienceLifecycleStage> {
+    match value.as_str() {
+        "Observed" => Ok(AudienceLifecycleStage::Observed),
+        "Engaged" => Ok(AudienceLifecycleStage::Engaged),
+        "Converted" => Ok(AudienceLifecycleStage::Converted),
+        "Retained" => Ok(AudienceLifecycleStage::Retained),
+        _ => Err(DbError::InvalidEnum(value)),
+    }
+}
+
+fn parse_audience_interaction_kind(value: String) -> DbResult<AudienceInteractionKind> {
+    match value.as_str() {
+        "IssueOpened" => Ok(AudienceInteractionKind::IssueOpened),
+        "PullRequestOpened" => Ok(AudienceInteractionKind::PullRequestOpened),
+        "IssueCommented" => Ok(AudienceInteractionKind::IssueCommented),
+        "PullRequestReviewed" => Ok(AudienceInteractionKind::PullRequestReviewed),
+        "BountyPosted" => Ok(AudienceInteractionKind::BountyPosted),
+        "FundingSignaled" => Ok(AudienceInteractionKind::FundingSignaled),
+        "BountyFunded" => Ok(AudienceInteractionKind::BountyFunded),
+        "ClaimSignaled" => Ok(AudienceInteractionKind::ClaimSignaled),
+        "BountyClaimed" => Ok(AudienceInteractionKind::BountyClaimed),
+        "SubmissionMade" => Ok(AudienceInteractionKind::SubmissionMade),
+        "SubmissionAccepted" => Ok(AudienceInteractionKind::SubmissionAccepted),
+        "VerificationSubmitted" => Ok(AudienceInteractionKind::VerificationSubmitted),
+        "PayoutReceived" => Ok(AudienceInteractionKind::PayoutReceived),
+        "RepoStarred" => Ok(AudienceInteractionKind::RepoStarred),
+        "BountyUpvoted" => Ok(AudienceInteractionKind::BountyUpvoted),
+        "ProofShared" => Ok(AudienceInteractionKind::ProofShared),
+        "ReferralCreated" => Ok(AudienceInteractionKind::ReferralCreated),
+        _ => Err(DbError::InvalidEnum(value)),
+    }
+}
+
+fn parse_outreach_channel(value: String) -> DbResult<OutreachChannel> {
+    match value.as_str() {
+        "GithubPublic" => Ok(OutreachChannel::GithubPublic),
+        "OtherPublic" => Ok(OutreachChannel::OtherPublic),
+        "EmailPrivate" => Ok(OutreachChannel::EmailPrivate),
+        _ => Err(DbError::InvalidEnum(value)),
+    }
+}
+
+fn parse_outreach_status(value: String) -> DbResult<OutreachStatus> {
+    match value.as_str() {
+        "Pending" => Ok(OutreachStatus::Pending),
+        "Responded" => Ok(OutreachStatus::Responded),
+        "Declined" => Ok(OutreachStatus::Declined),
+        "Unreachable" => Ok(OutreachStatus::Unreachable),
+        _ => Err(DbError::InvalidEnum(value)),
+    }
+}
+
 fn persisted_nonnegative_money(amount: i64, currency: String) -> DbResult<Money> {
     if amount == 0 {
         Ok(Money::zero(currency))
@@ -2277,6 +2655,10 @@ mod tests {
         for table in [
             "agents",
             "contributor_contacts",
+            "audience_members",
+            "audience_interactions",
+            "discovery_responses",
+            "outreach_attempts",
             "capabilities",
             "help_requests",
             "quotes",
@@ -2311,6 +2693,10 @@ mod tests {
         assert!(CORE_MIGRATION.contains("stripe_cancel_url TEXT"));
         assert!(CORE_MIGRATION.contains("github_login_normalized TEXT"));
         assert!(CORE_MIGRATION.contains("outreach_allowed BOOLEAN"));
+        assert!(CORE_MIGRATION.contains("private_storage_consent BOOLEAN"));
+        assert!(CORE_MIGRATION.contains("consent_contact_id UUID"));
+        assert!(CORE_MIGRATION.contains("REFERENCES audience_members(id) ON DELETE CASCADE"));
+        assert!(CORE_MIGRATION.contains("idx_audience_interactions_kind_occurred"));
         assert!(CORE_MIGRATION.contains("fund-contribution:"));
         assert!(CORE_MIGRATION.contains("CHECK (platform_fee >= 0)"));
         assert!(CORE_MIGRATION.contains("DROP CONSTRAINT IF EXISTS settlements_platform_fee_check"));

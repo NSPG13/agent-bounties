@@ -6,12 +6,15 @@ use chain_base::{
 };
 use chrono::{DateTime, Utc};
 use domain::{
-    Agent, Bounty, BountyStatus, Capability, CapabilityClass, Claim, ContributorContact, Escrow,
+    Agent, AudienceInteraction, AudienceInteractionKind, AudienceLifecycleStage, AudienceMember,
+    AudienceMetric, AudienceProvider, AudienceReport, AudienceRole, Bounty, BountyStatus,
+    Capability, CapabilityClass, Claim, ContributorContact, DiscoveryResponse, Escrow,
     EscrowStatus, FundingContribution, FundingContributionStatus, FundingIntent,
-    FundingIntentStatus, FundingMode, FundingPartitionTarget, HelpRequest, Id, Money, PaymentEvent,
-    PaymentEventStatus, PaymentRail, PayoutIntent, PayoutStatus, PrivacyLevel, ProofRecord, Quote,
-    ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface,
-    Settlement, Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
+    FundingIntentStatus, FundingMode, FundingPartitionTarget, HelpRequest, Id, Money,
+    OutreachAttempt, OutreachChannel, OutreachStatus, PaymentEvent, PaymentEventStatus,
+    PaymentRail, PayoutIntent, PayoutStatus, PrivacyLevel, ProofRecord, Quote, ReputationEvent,
+    RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement,
+    Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{credit, debit, AccountCode, Ledger, LedgerEntry};
 use payments_stripe::{
@@ -26,7 +29,7 @@ use risk::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 use verifier_sdk::{verify_with_builtin, VerificationInput};
@@ -75,6 +78,10 @@ pub enum AppError {
     InvalidStripePayout(String),
     #[error("invalid contributor contact: {0}")]
     InvalidContributorContact(String),
+    #[error("audience member not found")]
+    AudienceMemberNotFound,
+    #[error("invalid audience record: {0}")]
+    InvalidAudienceRecord(String),
     #[error(transparent)]
     Domain(#[from] domain::DomainError),
     #[error(transparent)]
@@ -687,6 +694,112 @@ fn dedup_nonempty(values: impl IntoIterator<Item = String>) -> Vec<String> {
     normalized
 }
 
+fn required_audience_string(value: String, field: &str) -> AppResult<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(AppError::InvalidAudienceRecord(format!(
+            "{field} is required"
+        )));
+    }
+    Ok(value)
+}
+
+fn normalized_public_url(value: Option<String>, field: &str) -> AppResult<Option<String>> {
+    let Some(value) = normalized_optional_string(value) else {
+        return Ok(None);
+    };
+    if !(value.starts_with("https://") || value.starts_with("http://")) {
+        return Err(AppError::InvalidAudienceRecord(format!(
+            "{field} must be an http(s) URL"
+        )));
+    }
+    Ok(Some(value))
+}
+
+fn deterministic_audience_id(record_kind: &str, key: &str) -> Id {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("agent-bounties:{record_kind}:{key}").as_bytes(),
+    )
+}
+
+fn dedup_audience_roles(values: impl IntoIterator<Item = AudienceRole>) -> Vec<AudienceRole> {
+    let mut roles = Vec::new();
+    for role in values {
+        if !roles.contains(&role) {
+            roles.push(role);
+        }
+    }
+    if roles.is_empty() {
+        roles.push(AudienceRole::Observer);
+    }
+    roles
+}
+
+fn role_for_interaction(kind: AudienceInteractionKind) -> AudienceRole {
+    match kind {
+        AudienceInteractionKind::IssueOpened
+        | AudienceInteractionKind::PullRequestOpened
+        | AudienceInteractionKind::IssueCommented
+        | AudienceInteractionKind::PullRequestReviewed => AudienceRole::Contributor,
+        AudienceInteractionKind::BountyPosted => AudienceRole::BountyPoster,
+        AudienceInteractionKind::FundingSignaled => AudienceRole::ProspectiveFunder,
+        AudienceInteractionKind::BountyFunded => AudienceRole::Funder,
+        AudienceInteractionKind::ClaimSignaled => AudienceRole::ProspectiveSolver,
+        AudienceInteractionKind::BountyClaimed => AudienceRole::Claimer,
+        AudienceInteractionKind::SubmissionMade | AudienceInteractionKind::SubmissionAccepted => {
+            AudienceRole::Solver
+        }
+        AudienceInteractionKind::VerificationSubmitted => AudienceRole::Verifier,
+        AudienceInteractionKind::PayoutReceived => AudienceRole::Recipient,
+        AudienceInteractionKind::RepoStarred
+        | AudienceInteractionKind::BountyUpvoted
+        | AudienceInteractionKind::ProofShared
+        | AudienceInteractionKind::ReferralCreated => AudienceRole::Promoter,
+    }
+}
+
+fn lifecycle_for_roles(roles: &[AudienceRole]) -> AudienceLifecycleStage {
+    if roles.iter().any(|role| {
+        matches!(
+            role,
+            AudienceRole::BountyPoster
+                | AudienceRole::Funder
+                | AudienceRole::Solver
+                | AudienceRole::Verifier
+                | AudienceRole::Recipient
+        )
+    }) {
+        AudienceLifecycleStage::Converted
+    } else if roles.iter().any(|role| *role != AudienceRole::Observer) {
+        AudienceLifecycleStage::Engaged
+    } else {
+        AudienceLifecycleStage::Observed
+    }
+}
+
+fn interaction_kind_key(kind: AudienceInteractionKind) -> &'static str {
+    match kind {
+        AudienceInteractionKind::IssueOpened => "issue_opened",
+        AudienceInteractionKind::PullRequestOpened => "pull_request_opened",
+        AudienceInteractionKind::IssueCommented => "issue_commented",
+        AudienceInteractionKind::PullRequestReviewed => "pull_request_reviewed",
+        AudienceInteractionKind::BountyPosted => "bounty_posted",
+        AudienceInteractionKind::FundingSignaled => "funding_signaled",
+        AudienceInteractionKind::BountyFunded => "bounty_funded",
+        AudienceInteractionKind::ClaimSignaled => "claim_signaled",
+        AudienceInteractionKind::BountyClaimed => "bounty_claimed",
+        AudienceInteractionKind::SubmissionMade => "submission_made",
+        AudienceInteractionKind::SubmissionAccepted => "submission_accepted",
+        AudienceInteractionKind::VerificationSubmitted => "verification_submitted",
+        AudienceInteractionKind::PayoutReceived => "payout_received",
+        AudienceInteractionKind::RepoStarred => "repo_starred",
+        AudienceInteractionKind::BountyUpvoted => "bounty_upvoted",
+        AudienceInteractionKind::ProofShared => "proof_shared",
+        AudienceInteractionKind::ReferralCreated => "referral_created",
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterAgentRequest {
     pub handle: String,
@@ -709,6 +822,55 @@ pub struct UpsertContributorContactRequest {
     #[serde(default)]
     pub source: Option<String>,
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpsertAudienceMemberRequest {
+    pub provider: AudienceProvider,
+    pub external_id: String,
+    pub handle: String,
+    pub public_profile_url: Option<String>,
+    #[serde(default)]
+    pub roles: Vec<AudienceRole>,
+    pub observed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordAudienceInteractionRequest {
+    pub audience_member_id: Id,
+    pub provider_event_id: String,
+    pub kind: AudienceInteractionKind,
+    pub public_url: Option<String>,
+    pub occurred_at: Option<DateTime<Utc>>,
+    pub referrer_url: Option<String>,
+    pub campaign: Option<String>,
+    pub source_interaction_id: Option<Id>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordDiscoveryResponseRequest {
+    pub audience_member_id: Id,
+    pub interaction_id: Option<Id>,
+    pub provider_response_id: String,
+    pub public_source_url: Option<String>,
+    pub found_via: String,
+    pub motivation: String,
+    pub improvement_suggestion: String,
+    pub agent_or_tool: Option<String>,
+    #[serde(default)]
+    pub private_storage_consent: bool,
+    pub captured_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordOutreachAttemptRequest {
+    pub audience_member_id: Id,
+    pub provider_event_id: String,
+    pub channel: OutreachChannel,
+    pub public_url: Option<String>,
+    pub prompt_version: String,
+    pub status: OutreachStatus,
+    pub sent_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1131,6 +1293,10 @@ pub struct StripeFundingReconciliation {
 pub struct BountyNetwork {
     pub agents: HashMap<Id, Agent>,
     pub contributor_contacts: HashMap<Id, ContributorContact>,
+    pub audience_members: HashMap<Id, AudienceMember>,
+    pub audience_interactions: HashMap<Id, AudienceInteraction>,
+    pub discovery_responses: HashMap<Id, DiscoveryResponse>,
+    pub outreach_attempts: HashMap<Id, OutreachAttempt>,
     pub capabilities: HashMap<Id, Capability>,
     pub help_requests: HashMap<Id, HelpRequest>,
     pub quotes: HashMap<Id, Quote>,
@@ -1157,6 +1323,10 @@ impl Default for BountyNetwork {
         Self {
             agents: HashMap::new(),
             contributor_contacts: HashMap::new(),
+            audience_members: HashMap::new(),
+            audience_interactions: HashMap::new(),
+            discovery_responses: HashMap::new(),
+            outreach_attempts: HashMap::new(),
             capabilities: HashMap::new(),
             help_requests: HashMap::new(),
             quotes: HashMap::new(),
@@ -1177,6 +1347,100 @@ impl Default for BountyNetwork {
             ledger: Ledger::new(),
             risk_policy: RiskPolicy::default(),
         }
+    }
+}
+
+pub fn build_audience_report(
+    members: &[AudienceMember],
+    interactions: &[AudienceInteraction],
+    discovery_responses: &[DiscoveryResponse],
+    outreach_attempts: &[OutreachAttempt],
+) -> AudienceReport {
+    let asked_member_ids: HashSet<_> = outreach_attempts
+        .iter()
+        .map(|attempt| attempt.audience_member_id)
+        .collect();
+    let answered_member_ids: HashSet<_> = discovery_responses
+        .iter()
+        .map(|response| response.audience_member_id)
+        .collect();
+    let mut interaction_counts_by_member = HashMap::<Id, u64>::new();
+    let mut posters = HashSet::new();
+    let mut funders = HashSet::new();
+    let mut solvers = HashSet::new();
+    let mut paid = HashSet::new();
+    let mut interactions_by_kind = BTreeMap::<String, u64>::new();
+    let mut repo_stars = 0_u64;
+    let mut shares = 0_u64;
+
+    for interaction in interactions {
+        *interaction_counts_by_member
+            .entry(interaction.audience_member_id)
+            .or_default() += 1;
+        *interactions_by_kind
+            .entry(interaction_kind_key(interaction.kind).to_string())
+            .or_default() += 1;
+        match interaction.kind {
+            AudienceInteractionKind::BountyPosted => {
+                posters.insert(interaction.audience_member_id);
+            }
+            AudienceInteractionKind::BountyFunded => {
+                funders.insert(interaction.audience_member_id);
+            }
+            AudienceInteractionKind::SubmissionMade
+            | AudienceInteractionKind::SubmissionAccepted => {
+                solvers.insert(interaction.audience_member_id);
+            }
+            AudienceInteractionKind::PayoutReceived => {
+                paid.insert(interaction.audience_member_id);
+            }
+            AudienceInteractionKind::RepoStarred => repo_stars += 1,
+            AudienceInteractionKind::ProofShared | AudienceInteractionKind::ReferralCreated => {
+                shares += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let mut not_asked_or_answered_handles = members
+        .iter()
+        .filter(|member| {
+            !asked_member_ids.contains(&member.id) && !answered_member_ids.contains(&member.id)
+        })
+        .map(|member| member.handle.clone())
+        .collect::<Vec<_>>();
+    let mut asked_without_response_handles = members
+        .iter()
+        .filter(|member| {
+            asked_member_ids.contains(&member.id) && !answered_member_ids.contains(&member.id)
+        })
+        .map(|member| member.handle.clone())
+        .collect::<Vec<_>>();
+    not_asked_or_answered_handles.sort_by_key(|handle| handle.to_lowercase());
+    asked_without_response_handles.sort_by_key(|handle| handle.to_lowercase());
+
+    AudienceReport {
+        total_members: members.len() as u64,
+        total_interactions: interactions.len() as u64,
+        members_asked_for_discovery_feedback: asked_member_ids.len() as u64,
+        members_with_discovery_responses: answered_member_ids.len() as u64,
+        repeat_participants: interaction_counts_by_member
+            .values()
+            .filter(|count| **count >= 2)
+            .count() as u64,
+        external_bounty_posters: posters.len() as u64,
+        external_funders: funders.len() as u64,
+        external_solvers: solvers.len() as u64,
+        paid_participants: paid.len() as u64,
+        repo_stars_attributed: repo_stars,
+        shares_attributed: shares,
+        not_asked_or_answered_handles,
+        asked_without_response_handles,
+        interactions_by_kind: interactions_by_kind
+            .into_iter()
+            .map(|(key, count)| AudienceMetric { key, count })
+            .collect(),
+        generated_at: Utc::now(),
     }
 }
 
@@ -1278,6 +1542,307 @@ impl BountyNetwork {
                 .then_with(|| left.github_login.cmp(&right.github_login))
         });
         contacts
+    }
+
+    pub fn upsert_audience_member(
+        &mut self,
+        request: UpsertAudienceMemberRequest,
+    ) -> AppResult<AudienceMember> {
+        let external_id = required_audience_string(request.external_id, "external_id")?;
+        let handle = required_audience_string(request.handle, "handle")?;
+        let public_profile_url =
+            normalized_public_url(request.public_profile_url, "public_profile_url")?;
+        let observed_at = request.observed_at.unwrap_or_else(Utc::now);
+        let external_id_key = external_id.to_lowercase();
+        let existing_id = self.audience_members.iter().find_map(|(id, member)| {
+            (member.provider == request.provider
+                && member.external_id.to_lowercase() == external_id_key)
+                .then_some(*id)
+        });
+
+        let member = if let Some(existing_id) = existing_id {
+            let mut member = self
+                .audience_members
+                .get(&existing_id)
+                .cloned()
+                .ok_or(AppError::AudienceMemberNotFound)?;
+            let mut roles = member.roles.clone();
+            roles.extend(request.roles);
+            member.external_id = external_id;
+            member.handle = handle;
+            if public_profile_url.is_some() {
+                member.public_profile_url = public_profile_url;
+            }
+            member.roles = dedup_audience_roles(roles);
+            member.lifecycle_stage = member
+                .lifecycle_stage
+                .max(lifecycle_for_roles(&member.roles));
+            member.first_seen_at = member.first_seen_at.min(observed_at);
+            member.last_seen_at = member.last_seen_at.max(observed_at);
+            member
+        } else {
+            let roles = dedup_audience_roles(request.roles);
+            let provider_key = format!("{:?}", request.provider).to_lowercase();
+            AudienceMember {
+                id: deterministic_audience_id(
+                    "member",
+                    &format!("{provider_key}:{external_id_key}"),
+                ),
+                provider: request.provider,
+                external_id,
+                handle,
+                public_profile_url,
+                lifecycle_stage: lifecycle_for_roles(&roles),
+                roles,
+                first_seen_at: observed_at,
+                last_seen_at: observed_at,
+            }
+        };
+        self.audience_members.insert(member.id, member.clone());
+        Ok(member)
+    }
+
+    pub fn list_audience_members(&self) -> Vec<AudienceMember> {
+        let mut members: Vec<_> = self.audience_members.values().cloned().collect();
+        members.sort_by(|left, right| {
+            left.first_seen_at
+                .cmp(&right.first_seen_at)
+                .then_with(|| left.handle.cmp(&right.handle))
+        });
+        members
+    }
+
+    pub fn record_audience_interaction(
+        &mut self,
+        request: RecordAudienceInteractionRequest,
+    ) -> AppResult<AudienceInteraction> {
+        if !self
+            .audience_members
+            .contains_key(&request.audience_member_id)
+        {
+            return Err(AppError::AudienceMemberNotFound);
+        }
+        let provider_event_id =
+            required_audience_string(request.provider_event_id, "provider_event_id")?;
+        if let Some(existing) = self.audience_interactions.values().find(|interaction| {
+            interaction.audience_member_id == request.audience_member_id
+                && interaction.provider_event_id == provider_event_id
+        }) {
+            return Ok(existing.clone());
+        }
+        if let Some(source_interaction_id) = request.source_interaction_id {
+            if !self
+                .audience_interactions
+                .contains_key(&source_interaction_id)
+            {
+                return Err(AppError::InvalidAudienceRecord(
+                    "source_interaction_id was not found".to_string(),
+                ));
+            }
+        }
+
+        let public_url = normalized_public_url(request.public_url, "public_url")?;
+        let referrer_url = normalized_public_url(request.referrer_url, "referrer_url")?;
+        let occurred_at = request.occurred_at.unwrap_or_else(Utc::now);
+        let interaction = AudienceInteraction {
+            id: deterministic_audience_id(
+                "interaction",
+                &format!("{}:{provider_event_id}", request.audience_member_id),
+            ),
+            audience_member_id: request.audience_member_id,
+            provider_event_id,
+            kind: request.kind,
+            public_url,
+            occurred_at,
+            referrer_url,
+            campaign: normalized_optional_string(request.campaign),
+            source_interaction_id: request.source_interaction_id,
+        };
+        self.audience_interactions
+            .insert(interaction.id, interaction.clone());
+
+        let interaction_count = self
+            .audience_interactions
+            .values()
+            .filter(|candidate| candidate.audience_member_id == request.audience_member_id)
+            .count();
+        if let Some(member) = self.audience_members.get_mut(&request.audience_member_id) {
+            let mut roles = member.roles.clone();
+            roles.push(role_for_interaction(request.kind));
+            member.roles = dedup_audience_roles(roles);
+            member.last_seen_at = member.last_seen_at.max(occurred_at);
+            member.lifecycle_stage = if interaction_count >= 2 {
+                AudienceLifecycleStage::Retained
+            } else {
+                member
+                    .lifecycle_stage
+                    .max(lifecycle_for_roles(&member.roles))
+            };
+        }
+        Ok(interaction)
+    }
+
+    pub fn list_audience_interactions(&self) -> Vec<AudienceInteraction> {
+        let mut interactions: Vec<_> = self.audience_interactions.values().cloned().collect();
+        interactions.sort_by(|left, right| {
+            left.occurred_at
+                .cmp(&right.occurred_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        interactions
+    }
+
+    pub fn record_discovery_response(
+        &mut self,
+        request: RecordDiscoveryResponseRequest,
+    ) -> AppResult<DiscoveryResponse> {
+        if !self
+            .audience_members
+            .contains_key(&request.audience_member_id)
+        {
+            return Err(AppError::AudienceMemberNotFound);
+        }
+        if let Some(interaction_id) = request.interaction_id {
+            let interaction = self
+                .audience_interactions
+                .get(&interaction_id)
+                .ok_or_else(|| {
+                    AppError::InvalidAudienceRecord("interaction_id was not found".to_string())
+                })?;
+            if interaction.audience_member_id != request.audience_member_id {
+                return Err(AppError::InvalidAudienceRecord(
+                    "interaction_id belongs to another audience member".to_string(),
+                ));
+            }
+        }
+        let provider_response_id =
+            required_audience_string(request.provider_response_id, "provider_response_id")?;
+        if let Some(existing) = self.discovery_responses.values().find(|response| {
+            response.audience_member_id == request.audience_member_id
+                && response.provider_response_id == provider_response_id
+        }) {
+            return Ok(existing.clone());
+        }
+        let public_source_url =
+            normalized_public_url(request.public_source_url, "public_source_url")?;
+        if public_source_url.is_none() && !request.private_storage_consent {
+            return Err(AppError::InvalidAudienceRecord(
+                "a discovery response requires a public source URL or private_storage_consent=true"
+                    .to_string(),
+            ));
+        }
+
+        let response = DiscoveryResponse {
+            id: deterministic_audience_id(
+                "discovery-response",
+                &format!("{}:{provider_response_id}", request.audience_member_id),
+            ),
+            audience_member_id: request.audience_member_id,
+            interaction_id: request.interaction_id,
+            provider_response_id,
+            public_source_url,
+            found_via: required_audience_string(request.found_via, "found_via")?,
+            motivation: required_audience_string(request.motivation, "motivation")?,
+            improvement_suggestion: required_audience_string(
+                request.improvement_suggestion,
+                "improvement_suggestion",
+            )?,
+            agent_or_tool: normalized_optional_string(request.agent_or_tool),
+            private_storage_consent: request.private_storage_consent,
+            captured_at: request.captured_at.unwrap_or_else(Utc::now),
+        };
+        self.discovery_responses
+            .insert(response.id, response.clone());
+        Ok(response)
+    }
+
+    pub fn list_discovery_responses(&self) -> Vec<DiscoveryResponse> {
+        let mut responses: Vec<_> = self.discovery_responses.values().cloned().collect();
+        responses.sort_by(|left, right| {
+            left.captured_at
+                .cmp(&right.captured_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        responses
+    }
+
+    pub fn record_outreach_attempt(
+        &mut self,
+        request: RecordOutreachAttemptRequest,
+    ) -> AppResult<OutreachAttempt> {
+        let member = self
+            .audience_members
+            .get(&request.audience_member_id)
+            .ok_or(AppError::AudienceMemberNotFound)?;
+        let provider_event_id =
+            required_audience_string(request.provider_event_id, "provider_event_id")?;
+        if let Some(existing) = self.outreach_attempts.values().find(|attempt| {
+            attempt.audience_member_id == request.audience_member_id
+                && attempt.provider_event_id == provider_event_id
+        }) {
+            return Ok(existing.clone());
+        }
+
+        let public_url = normalized_public_url(request.public_url, "public_url")?;
+        let consent_contact_id = if request.channel == OutreachChannel::EmailPrivate {
+            let contact = self
+                .contributor_contacts
+                .values()
+                .find(|contact| {
+                    contact.github_login.eq_ignore_ascii_case(&member.handle)
+                        && contact.contact_consent
+                        && contact.outreach_allowed
+                })
+                .ok_or_else(|| {
+                    AppError::InvalidAudienceRecord(
+                        "private outreach requires an opted-in contributor contact".to_string(),
+                    )
+                })?;
+            Some(contact.id)
+        } else {
+            if public_url.is_none() {
+                return Err(AppError::InvalidAudienceRecord(
+                    "public outreach requires public_url".to_string(),
+                ));
+            }
+            None
+        };
+
+        let attempt = OutreachAttempt {
+            id: deterministic_audience_id(
+                "outreach",
+                &format!("{}:{provider_event_id}", request.audience_member_id),
+            ),
+            audience_member_id: request.audience_member_id,
+            provider_event_id,
+            channel: request.channel,
+            public_url,
+            prompt_version: required_audience_string(request.prompt_version, "prompt_version")?,
+            status: request.status,
+            consent_contact_id,
+            sent_at: request.sent_at.unwrap_or_else(Utc::now),
+        };
+        self.outreach_attempts.insert(attempt.id, attempt.clone());
+        Ok(attempt)
+    }
+
+    pub fn list_outreach_attempts(&self) -> Vec<OutreachAttempt> {
+        let mut attempts: Vec<_> = self.outreach_attempts.values().cloned().collect();
+        attempts.sort_by(|left, right| {
+            left.sent_at
+                .cmp(&right.sent_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        attempts
+    }
+
+    pub fn audience_report(&self) -> AudienceReport {
+        build_audience_report(
+            &self.list_audience_members(),
+            &self.list_audience_interactions(),
+            &self.list_discovery_responses(),
+            &self.list_outreach_attempts(),
+        )
     }
 
     pub fn register_capability(
@@ -4680,6 +5245,176 @@ mod tests {
         );
         assert!(second.wallet_consent);
         assert_eq!(network.list_contributor_contacts().len(), 1);
+    }
+
+    #[test]
+    fn audience_registry_is_idempotent_and_reports_conversion_gaps() {
+        let mut network = BountyNetwork::default();
+        let member = network
+            .upsert_audience_member(UpsertAudienceMemberRequest {
+                provider: AudienceProvider::Github,
+                external_id: "U_123".to_string(),
+                handle: "nexicturbo".to_string(),
+                public_profile_url: Some("https://github.com/nexicturbo".to_string()),
+                roles: vec![],
+                observed_at: None,
+            })
+            .unwrap();
+        let same_member = network
+            .upsert_audience_member(UpsertAudienceMemberRequest {
+                provider: AudienceProvider::Github,
+                external_id: "u_123".to_string(),
+                handle: "NexicTurbo".to_string(),
+                public_profile_url: None,
+                roles: vec![AudienceRole::Contributor],
+                observed_at: None,
+            })
+            .unwrap();
+        assert_eq!(member.id, same_member.id);
+
+        let interaction_request = RecordAudienceInteractionRequest {
+            audience_member_id: member.id,
+            provider_event_id: "pull-request:128".to_string(),
+            kind: AudienceInteractionKind::PullRequestOpened,
+            public_url: Some("https://github.com/NSPG13/agent-bounties/pull/128".to_string()),
+            occurred_at: None,
+            referrer_url: None,
+            campaign: Some("github-bounty-label".to_string()),
+            source_interaction_id: None,
+        };
+        let first = network
+            .record_audience_interaction(interaction_request.clone())
+            .unwrap();
+        let duplicate = network
+            .record_audience_interaction(interaction_request)
+            .unwrap();
+        assert_eq!(first.id, duplicate.id);
+        assert_eq!(network.list_audience_interactions().len(), 1);
+
+        network
+            .record_audience_interaction(RecordAudienceInteractionRequest {
+                audience_member_id: member.id,
+                provider_event_id: "payout:escrow:1".to_string(),
+                kind: AudienceInteractionKind::PayoutReceived,
+                public_url: Some("https://basescan.org/tx/0xabc".to_string()),
+                occurred_at: None,
+                referrer_url: None,
+                campaign: None,
+                source_interaction_id: Some(first.id),
+            })
+            .unwrap();
+        network
+            .record_outreach_attempt(RecordOutreachAttemptRequest {
+                audience_member_id: member.id,
+                provider_event_id: "issue-comment:feedback:128".to_string(),
+                channel: OutreachChannel::GithubPublic,
+                public_url: Some(
+                    "https://github.com/NSPG13/agent-bounties/issues/127#issuecomment-1"
+                        .to_string(),
+                ),
+                prompt_version: "distribution-v1".to_string(),
+                status: OutreachStatus::Responded,
+                sent_at: None,
+            })
+            .unwrap();
+        network
+            .record_discovery_response(RecordDiscoveryResponseRequest {
+                audience_member_id: member.id,
+                interaction_id: Some(first.id),
+                provider_response_id: "issue-comment:answer:128".to_string(),
+                public_source_url: Some(
+                    "https://github.com/NSPG13/agent-bounties/pull/138".to_string(),
+                ),
+                found_via: "GitHub bounty issue search".to_string(),
+                motivation: "Small scope and deterministic checks".to_string(),
+                improvement_suggestion: "Show exact settlement status".to_string(),
+                agent_or_tool: Some("autonomous coding agent".to_string()),
+                private_storage_consent: false,
+                captured_at: None,
+            })
+            .unwrap();
+
+        let report = network.audience_report();
+        assert_eq!(report.total_members, 1);
+        assert_eq!(report.total_interactions, 2);
+        assert_eq!(report.repeat_participants, 1);
+        assert_eq!(report.paid_participants, 1);
+        assert_eq!(report.members_asked_for_discovery_feedback, 1);
+        assert_eq!(report.members_with_discovery_responses, 1);
+        assert!(report.not_asked_or_answered_handles.is_empty());
+        assert!(report.asked_without_response_handles.is_empty());
+        assert_eq!(
+            network.audience_members[&member.id].lifecycle_stage,
+            AudienceLifecycleStage::Retained
+        );
+    }
+
+    #[test]
+    fn private_audience_data_and_outreach_require_explicit_consent() {
+        let mut network = BountyNetwork::default();
+        let member = network
+            .upsert_audience_member(UpsertAudienceMemberRequest {
+                provider: AudienceProvider::Github,
+                external_id: "U_456".to_string(),
+                handle: "private-user".to_string(),
+                public_profile_url: Some("https://github.com/private-user".to_string()),
+                roles: vec![],
+                observed_at: None,
+            })
+            .unwrap();
+
+        let response_error = network
+            .record_discovery_response(RecordDiscoveryResponseRequest {
+                audience_member_id: member.id,
+                interaction_id: None,
+                provider_response_id: "private-form:1".to_string(),
+                public_source_url: None,
+                found_via: "private referral".to_string(),
+                motivation: "payment trust".to_string(),
+                improvement_suggestion: "simpler funding".to_string(),
+                agent_or_tool: None,
+                private_storage_consent: false,
+                captured_at: None,
+            })
+            .unwrap_err();
+        assert!(matches!(
+            response_error,
+            AppError::InvalidAudienceRecord(message)
+                if message.contains("private_storage_consent")
+        ));
+
+        let outreach_request = RecordOutreachAttemptRequest {
+            audience_member_id: member.id,
+            provider_event_id: "email:distribution-v1".to_string(),
+            channel: OutreachChannel::EmailPrivate,
+            public_url: None,
+            prompt_version: "distribution-v1".to_string(),
+            status: OutreachStatus::Pending,
+            sent_at: None,
+        };
+        let outreach_error = network
+            .record_outreach_attempt(outreach_request.clone())
+            .unwrap_err();
+        assert!(matches!(
+            outreach_error,
+            AppError::InvalidAudienceRecord(message) if message.contains("opted-in")
+        ));
+
+        let contact = network
+            .upsert_contributor_contact(UpsertContributorContactRequest {
+                github_login: "private-user".to_string(),
+                email: Some("private@example.com".to_string()),
+                payout_wallet: None,
+                associated_prs: vec![],
+                contact_consent: true,
+                wallet_consent: false,
+                outreach_allowed: true,
+                source: Some("private-opt-in".to_string()),
+                notes: None,
+            })
+            .unwrap();
+        let attempt = network.record_outreach_attempt(outreach_request).unwrap();
+        assert_eq!(attempt.consent_contact_id, Some(contact.id));
     }
 
     #[test]

@@ -139,3 +139,9 @@ Use the report to decide which labels, public proof pages, funding language,
 MCP discovery affordances, bounty listings, and agent workflows deserve more
 distribution effort. Do not use it to approve PRs, accept bounty work, or settle
 funds.
+
+For the live public GitHub audit and consent-aware operator persistence, use
+`scripts/github_audience_audit.py` and `GET /v1/audience/report` as documented in
+`docs/audience-attribution.md`. The audit treats funding and claim comments as
+signals, not completed financial or work events, and leaves natural-language
+answer interpretation to a maintainer.
