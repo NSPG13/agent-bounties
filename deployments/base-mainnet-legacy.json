@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "rpc_url": "https://mainnet.base.org",
+  "native_usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "status": "retired_refunded",
+  "retirement": {
+    "refund_transaction": "0xf35041282cdafb312fa7d282ee80fb9ee0ec7171a73905573a84bc703c74f84e",
+    "refund_block": 48454534,
+    "escrow_id": 1,
+    "refunded_amount_minor": 1000000,
+    "post_refund_contract_usdc_minor": 0,
+    "reason_hash": "0x873d3a94bf0fdd1558047622ae135f2d5df2241cfa3bb048a38d49bb88887218",
+    "evidence_url": "https://base.blockscout.com/tx/0xf35041282cdafb312fa7d282ee80fb9ee0ec7171a73905573a84bc703c74f84e"
+  },
+  "escrow": {
+    "contract": "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
+    "deployment_transaction": "0xede8896af324658d7da6fc08589cc5d02cc344ef934087a1c147f6c9617b865d",
+    "deployment_block": 48422806,
+    "deployer": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "owner_at_deployment": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "settlement_signer_at_deployment": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "runtime_code_hash": "0x8726789773ebdb4ea81642eb6f95b91965b93ce8341f356e0f8513188b72ffea",
+    "source": "historical:AgentBountyEscrow.sol",
+    "compiler": {
+      "version": "0.8.26+commit.8a97fa7a",
+      "optimizer_enabled": true,
+      "optimizer_runs": 200,
+      "evm_version": "cancun"
+    },
+    "verification": {
+      "sourcify_match": "exact_match",
+      "blockscout_verified": true,
+      "sourcify_url": "https://sourcify.dev/server/v2/contract/8453/0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
+      "blockscout_url": "https://base.blockscout.com/address/0x150C6dFbCe7803cc7f634f59b0624e87349CEAce"
+    }
+  }
+}

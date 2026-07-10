@@ -1,5 +1,11 @@
 # Live Money Activation
 
+> [!WARNING]
+> Historical V1 material only. The operator-controlled escrow was refunded and
+> retired; do not use these instructions for new funding or settlement. New
+> bounties use `agent-bounties/autonomous-v1` as described in
+> [the autonomous protocol](autonomous-protocol.md).
+
 This runbook turns the existing payment rails from local rehearsal into guarded
 real-value movement. It does not require secrets in the repository. Operators
 provide Stripe keys, Base RPC URLs, deployed escrow addresses, and webhook

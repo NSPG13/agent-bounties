@@ -43,30 +43,6 @@ cargo run -p cli -- abusebench
 cargo run -p cli -- judgebench
 cargo run -p cli -- eval-loops
 cargo run -p cli -- risk-policy
-cargo run -p cli -- base-plan \
-  --network base-mainnet \
-  --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
-  --amount-minor 1000000
-cargo run -p cli -- base-decode-demo
-cargo run -p cli -- base-log-query \
-  --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --from-block 0
-cargo run -p cli -- base-release-queue-demo \
-  --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --platform-fee-wallet 0x4444444444444444444444444444444444444444
-cargo run -p cli -- base-refund-plan \
-  --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --onchain-escrow-id 1 \
-  --reason-hash 0x5555555555555555555555555555555555555555555555555555555555555555
-cargo run -p cli -- base-dispute-plan \
-  --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --onchain-escrow-id 1 \
-  --dispute-hash 0x6666666666666666666666666666666666666666666666666666666666666666
-cargo run -p cli -- base-sepolia-runbook \
-  --settlement-signer 0x5555555555555555555555555555555555555555 \
-  --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 cargo run -p cli -- stripe-plan \
   --organization-id 00000000-0000-0000-0000-000000000001 \
   --amount-minor 5000 \
@@ -114,7 +90,7 @@ cargo run -p cli -- discovery-report \
 "${python_cmd[@]}" scripts/check-site.py
 node --check skills/agent-bounties/scripts/check-in.mjs
 node --test scripts/test_agent_bounties_openclaw_skill.mjs
-node scripts/test-base-wallet-flow.js
+node scripts/test-autonomous-wallet-flow.js
 "${python_cmd[@]}" -m pip install -r scripts/requirements-attest.txt
 "${python_cmd[@]}" scripts/test_base_deployment_attest.py -v
 "${python_cmd[@]}" scripts/check-render-blueprint.py
@@ -122,17 +98,10 @@ node scripts/test-base-wallet-flow.js
 cargo run -p cli -- docs-contract-check
 cargo run -p cli -- demo
 cargo run -p cli -- pooled-funding-demo
-cargo run -p cli -- funding-rehearsal-demo
-cargo run -p cli -- real-funding-readiness \
-  --network base-sepolia \
-  --escrow-contract 0x1111111111111111111111111111111111111111 \
-  --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
-bash scripts/real-funding-rehearsal.sh
 "${python_cmd[@]}" -m py_compile \
   crates/sdk-python/agent_bounties/client.py \
   crates/sdk-python/agent_bounties/smoke.py \
   crates/sdk-python/agent_bounties/__init__.py \
-  crates/sdk-python/examples/cofund_claim.py \
   scripts/github_issue_plan_comment.py \
   scripts/github_funding_comment.py \
   scripts/github_claim_comment.py \
@@ -158,4 +127,4 @@ npm run build
 npm run check:examples
 
 cd "$repo_root/contracts/base-escrow"
-forge test
+forge test --fuzz-runs 1000

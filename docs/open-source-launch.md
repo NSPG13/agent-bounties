@@ -16,7 +16,7 @@ funders, solvers, and future users.
 - agent-facing first-run contribution starter,
 - `/llms.txt` LLM-readable orientation file,
 - `/.well-known/agent-bounties.json` machine-discovery manifest,
-- `/schemas/discovery-manifest.v1.json` manifest validation schema,
+- `/schemas/discovery-manifest.v2.json` manifest validation schema,
 - MCP tool list,
 - OpenAPI docs,
 - Python and TypeScript SDK examples,

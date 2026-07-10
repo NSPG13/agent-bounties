@@ -13,29 +13,39 @@ async function fixture(name) {
   );
 }
 
-test("only reconciled real-value scoped status is claimable", async () => {
+test("only active canonical autonomous inventory is claimable", async () => {
   const report = await collectInventory({
     apiBaseUrl: "https://api.example.test",
     fixture: await fixture("verified-claimable.json"),
   });
 
   assert.equal(report.hosted_api_healthy, true);
+  assert.equal(report.protocol_status, "active");
   assert.equal(report.verified_claimable_bounties.length, 1);
-  assert.equal(report.verified_claimable_bounties[0].id, "base-valid");
-  assert.equal(report.verified_claimable_bounties[0].evidence, "indexed_base_funding");
   assert.equal(
-    report.verified_claimable_bounties[0].status_url,
-    "https://api.example.test/v1/bounties/base-valid",
+    report.verified_claimable_bounties[0].id,
+    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  );
+  assert.equal(
+    report.verified_claimable_bounties[0].evidence,
+    "confirmed_canonical_autonomous_bounty",
+  );
+  assert.equal(
+    report.verified_claimable_bounties[0].claim_plan_url,
+    "https://api.example.test/v1/base/autonomous-bounties/claim-plan",
   );
   assert.deepEqual(
     report.excluded_claimable_candidates.map((item) => [item.id, item.reason]),
     [
-      ["base-hash-only", "missing_indexed_base_funding"],
-      ["simulated-demo", "simulated_value_is_not_earnable_money"],
+      [
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "terms_or_contract_commitments_invalid",
+      ],
     ],
   );
   assert.equal(report.recommended_action, "claim_verified_bounty");
   assert.equal(report.funding_candidates.length, 1);
+  assert.equal(report.live_verification_jobs.length, 1);
 });
 
 test("unavailable hosted API cannot create imaginary inventory", async () => {
@@ -48,7 +58,8 @@ test("unavailable hosted API cannot create imaginary inventory", async () => {
   assert.deepEqual(report.verified_claimable_bounties, []);
   assert.equal(report.recommended_action, "post_own_bounty");
   assert.ok(report.warnings.includes("hosted_api_health_not_confirmed"));
-  assert.ok(report.warnings.includes("claimable_feed_unavailable"));
+  assert.ok(report.warnings.includes("autonomous_feed_unavailable"));
+  assert.ok(report.warnings.includes("autonomous_protocol_not_active"));
 });
 
 test("API URL rejects credentials and insecure remote HTTP", () => {

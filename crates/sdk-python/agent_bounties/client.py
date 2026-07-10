@@ -496,7 +496,6 @@ class AgentBountiesClient:
         tx_hash: str,
         request_id: int | None = None,
         network: str | None = None,
-        reconcile_logs: bool | None = None,
     ):
         return self._request(
             "POST",
@@ -505,7 +504,6 @@ class AgentBountiesClient:
                 "tx_hash": tx_hash,
                 "request_id": request_id,
                 "network": network,
-                "reconcile_logs": reconcile_logs,
             },
         )
 

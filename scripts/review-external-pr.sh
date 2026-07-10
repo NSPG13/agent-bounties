@@ -172,6 +172,7 @@ if [[ "${#non_docs_files[@]}" -ne 0 ]]; then
 fi
 
 head_oid="$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq '.headRefOid')"
+base_oid="$(gh pr view "$pr" --repo "$repo" --json baseRefOid --jq '.baseRefOid')"
 head_ref_name="$(gh pr view "$pr" --repo "$repo" --json headRefName --jq '.headRefName')"
 ref_name="refs/remotes/origin/pr-${pr}-review"
 git fetch origin "+pull/${pr}/head:${ref_name}"
@@ -183,23 +184,33 @@ fi
 
 tmp_root="$(mktemp -d)"
 worktree="$tmp_root/worktree"
+base_worktree="$tmp_root/base-worktree"
 cleanup() {
   if git worktree list --porcelain | grep -Fqx "worktree $worktree"; then
     git worktree remove --force "$worktree" >/dev/null 2>&1 || true
+  fi
+  if git worktree list --porcelain | grep -Fqx "worktree $base_worktree"; then
+    git worktree remove --force "$base_worktree" >/dev/null 2>&1 || true
   fi
   rm -rf "$tmp_root"
 }
 trap cleanup EXIT
 
 git worktree add --detach "$worktree" "$ref_name" >/dev/null
+git cat-file -e "${base_oid}^{commit}"
+git worktree add --detach "$base_worktree" "$base_oid" >/dev/null
 
 docs_contract_check="failed"
 docs_output="$tmp_root/docs-contract-check.log"
 contract_root="$tmp_root/contract-root"
 "${python_cmd[@]}" "$repo_root/scripts/stage_review_contract_root.py" \
-  --worktree "$worktree" \
+  --worktree "$base_worktree" \
   --output "$contract_root"
-if cargo run -p cli -- docs-contract-check --root "$worktree" --contract-root "$contract_root" >"$docs_output" 2>&1; then
+if cargo run \
+  --manifest-path "$base_worktree/Cargo.toml" \
+  --target-dir "$repo_root/target" \
+  -p cli -- \
+  docs-contract-check --root "$worktree" --contract-root "$contract_root" >"$docs_output" 2>&1; then
   docs_contract_check="ok"
 fi
 cat "$docs_output"
@@ -279,6 +290,8 @@ fi
 
 printf '{\n'
 printf '  "pr": %s,\n' "$pr"
+printf '  "contract_basis": "pull_request_base_commit",\n'
+printf '  "contract_base_oid": "%s",\n' "$base_oid"
 printf '  "docs_only": %s,\n' "$docs_only"
 printf '  "safe_for_maintainer_ci": %s,\n' "$safe_for_maintainer_ci"
 printf '  "main_candidate": %s,\n' "$safe_for_maintainer_ci"

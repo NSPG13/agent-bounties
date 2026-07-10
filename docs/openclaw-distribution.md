@@ -21,10 +21,12 @@ inventory helper directly when debugging:
 node skills/agent-bounties/scripts/check-in.mjs
 ```
 
-The helper re-reads scoped status for every item returned by the claimable
-feed. It excludes simulated value, already-claimed work, Base transaction
-hashes without indexed escrow evidence, and Stripe intent/Checkout state
-without verified reconciliation.
+The helper reads protocol status, the canonical autonomous feed, and live
+verification jobs. It accepts earnable inventory only when the active factory,
+all creation events, content-addressed terms, economics, positive verifier
+reward, equal solver bond, and confirmed claimable state agree. A pending
+deployment, transaction hash, stale state, or mismatched terms produces no
+earnable inventory.
 
 ## ClawHub Release
 

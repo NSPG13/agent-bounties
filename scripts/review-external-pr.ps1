@@ -183,7 +183,7 @@ function New-ConstructiveFeedback {
 
 Push-Location $repoRoot
 try {
-    $prJson = gh pr view $Pr --repo $Repo --json number,title,url,author,headRefName,headRefOid,files | ConvertFrom-Json
+    $prJson = gh pr view $Pr --repo $Repo --json number,title,url,author,headRefName,headRefOid,baseRefOid,files | ConvertFrom-Json
     $changedFiles = @($prJson.files | ForEach-Object { $_.path })
     if ($changedFiles.Count -eq 0) {
         throw "PR #$Pr has no changed files"
@@ -216,6 +216,17 @@ try {
     }
     Invoke-Checked { git worktree add --detach $worktreeFull $refName }
 
+    $baseWorktreePath = Join-Path $targetRoot "pr-$Pr-base"
+    $baseWorktreeFull = [System.IO.Path]::GetFullPath($baseWorktreePath)
+    if (-not $baseWorktreeFull.StartsWith($targetRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to use unsafe base worktree path: $baseWorktreeFull"
+    }
+    if (Test-Path $baseWorktreeFull) {
+        Invoke-Checked { git worktree remove --force $baseWorktreeFull }
+    }
+    Invoke-Checked { git cat-file -e "$($prJson.baseRefOid)^{commit}" }
+    Invoke-Checked { git worktree add --detach $baseWorktreeFull $prJson.baseRefOid }
+
     $contractRootPath = Join-Path $targetRoot "pr-$Pr-contract-root"
     $contractRootFull = [System.IO.Path]::GetFullPath($contractRootPath)
     if (-not $contractRootFull.StartsWith($targetRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -231,7 +242,7 @@ try {
         Invoke-Checked {
             & $pythonCommand.Source @pythonArgs `
                 (Join-Path $repoRoot "scripts\stage_review_contract_root.py") `
-                --worktree $worktreeFull `
+                --worktree $baseWorktreeFull `
                 --output $contractRootFull
         }
         $docsCheckStdout = Join-Path $targetRoot "pr-$Pr-docs-contract-check.stdout.log"
@@ -243,7 +254,16 @@ try {
         }
         $process = Start-Process `
             -FilePath "cargo" `
-            -ArgumentList @("run", "-p", "cli", "--", "docs-contract-check", "--root", $worktreeFull, "--contract-root", $contractRootFull) `
+            -ArgumentList @(
+                "run",
+                "--manifest-path", (Join-Path $baseWorktreeFull "Cargo.toml"),
+                "--target-dir", (Join-Path $repoRoot "target"),
+                "-p", "cli",
+                "--",
+                "docs-contract-check",
+                "--root", $worktreeFull,
+                "--contract-root", $contractRootFull
+            ) `
             -RedirectStandardOutput $docsCheckStdout `
             -RedirectStandardError $docsCheckStderr `
             -Wait `
@@ -258,6 +278,7 @@ try {
         }
     } finally {
         Invoke-Checked { git worktree remove --force $worktreeFull }
+        Invoke-Checked { git worktree remove --force $baseWorktreeFull }
         if (Test-Path $contractRootFull) {
             Remove-Item -LiteralPath $contractRootFull -Recurse -Force
         }
@@ -328,6 +349,8 @@ try {
         title = $prJson.title
         url = $prJson.url
         author = $prJson.author.login
+        contract_basis = "pull_request_base_commit"
+        contract_base_oid = $prJson.baseRefOid
         docs_only = $docsOnly
         safe_for_maintainer_ci = ($safeForMaintainerCi -and $docsCheckOk)
         main_candidate = $mainCandidate

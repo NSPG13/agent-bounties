@@ -1,9 +1,11 @@
 use anyhow::{anyhow, Context};
 use app::{BaseEscrowReconciliation, BountyNetwork};
 use chain_base::{
-    base_network_descriptor, fetch_base_escrow_logs, fetch_block_number, rpc_logs_to_evm_logs,
+    autonomous_bounty_event_topics, base_network_descriptor, decode_autonomous_bounty_logs,
+    fetch_base_contract_logs, fetch_base_escrow_logs, fetch_base_multi_contract_logs,
+    fetch_block_number, rpc_logs_to_evm_logs, AutonomousBountyEventKind, BaseContractLogQuery,
     BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowLogDecoder, BaseEscrowLogQuery,
-    BaseNetworkDescriptor, ChainEventIndexer, EvmLog,
+    BaseMultiContractLogQuery, BaseNetworkDescriptor, ChainEventIndexer, EvmLog,
 };
 use chrono::{DateTime, Utc};
 use db::{BaseIndexerHeartbeat, PostgresStore};
@@ -12,6 +14,8 @@ use ledger::{Ledger, LedgerEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use verifier_sdk::{VerificationInput, Verifier, VerifierResultType};
+
+const AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE: usize = 500;
 
 pub struct VerificationJob<V: Verifier> {
     pub verifier: V,
@@ -250,6 +254,116 @@ pub struct BaseIndexerConfig {
     pub confirmations: u64,
     pub max_blocks_per_query: u64,
     pub request_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutonomousIndexerConfig {
+    pub network: String,
+    pub rpc_url: String,
+    pub factory_contract: String,
+    pub start_block: Option<u64>,
+    pub poll_seconds: u64,
+    pub confirmations: u64,
+    pub max_blocks_per_query: u64,
+    pub request_id: u64,
+}
+
+impl AutonomousIndexerConfig {
+    pub fn from_env() -> anyhow::Result<Self> {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    pub fn from_lookup<F>(lookup: F) -> anyhow::Result<Self>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let requested_network = lookup("BASE_INDEXER_NETWORK")
+            .filter(|value| nonempty(value))
+            .unwrap_or_else(|| "base-mainnet".to_string());
+        let descriptor = base_network_descriptor(&requested_network)?;
+        let network = canonical_base_network(&descriptor);
+        let factory_contract_env = factory_contract_env_for_network(&descriptor)?;
+        let factory_contract = lookup("BASE_INDEXER_FACTORY_CONTRACT")
+            .filter(|value| nonempty(value))
+            .or_else(|| lookup(factory_contract_env).filter(|value| nonempty(value)))
+            .ok_or_else(|| {
+                anyhow!(
+                    "set BASE_INDEXER_FACTORY_CONTRACT or {factory_contract_env} before running the autonomous Base indexer"
+                )
+            })?;
+        let rpc_url = lookup("BASE_INDEXER_RPC_URL")
+            .filter(|value| nonempty(value))
+            .or_else(|| lookup(&descriptor.rpc_url_env).filter(|value| nonempty(value)))
+            .ok_or_else(|| {
+                anyhow!(
+                    "set BASE_INDEXER_RPC_URL or {} before running the Base indexer",
+                    descriptor.rpc_url_env
+                )
+            })?;
+        let start_block = lookup("BASE_INDEXER_START_BLOCK")
+            .or_else(|| lookup("BASE_INDEXER_FROM_BLOCK"))
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_START_BLOCK", &value))
+            .transpose()?;
+        let poll_seconds = lookup("BASE_INDEXER_POLL_SECONDS")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_POLL_SECONDS", &value))
+            .transpose()?
+            .unwrap_or(15);
+        let confirmations = lookup("BASE_INDEXER_CONFIRMATIONS")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_CONFIRMATIONS", &value))
+            .transpose()?
+            .unwrap_or(2);
+        let max_blocks_per_query = lookup("BASE_INDEXER_MAX_BLOCKS_PER_QUERY")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_MAX_BLOCKS_PER_QUERY", &value))
+            .transpose()?
+            .unwrap_or(2_000)
+            .max(1);
+        let request_id = lookup("BASE_INDEXER_REQUEST_ID")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("BASE_INDEXER_REQUEST_ID", &value))
+            .transpose()?
+            .unwrap_or(1);
+        let factory_contract = BaseContractLogQuery::new(
+            factory_contract,
+            start_block.unwrap_or(0),
+            None,
+            autonomous_bounty_event_topics(),
+        )?
+        .contract;
+        Ok(Self {
+            network,
+            rpc_url,
+            factory_contract,
+            start_block,
+            poll_seconds,
+            confirmations,
+            max_blocks_per_query,
+            request_id,
+        })
+    }
+
+    pub fn network_descriptor(&self) -> anyhow::Result<BaseNetworkDescriptor> {
+        Ok(base_network_descriptor(&self.network)?)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomousIndexerPollReport {
+    pub network: BaseNetworkDescriptor,
+    pub factory_contract: String,
+    pub latest_block: u64,
+    pub confirmations: u64,
+    pub confirmed_to_block: Option<u64>,
+    pub from_block: Option<u64>,
+    pub to_block: Option<u64>,
+    pub canonical_bounty_contracts: usize,
+    pub fetched_logs: usize,
+    pub persisted_events: usize,
+    pub persisted_cursor_block: Option<u64>,
+    pub skipped_reason: Option<String>,
 }
 
 impl BaseIndexerConfig {
@@ -545,6 +659,237 @@ pub async fn poll_base_indexer_once(
     })
 }
 
+pub async fn poll_autonomous_indexer_once_with_heartbeat(
+    store: &PostgresStore,
+    config: &AutonomousIndexerConfig,
+) -> anyhow::Result<AutonomousIndexerPollReport> {
+    let started_at = Utc::now();
+    match poll_autonomous_indexer_once(store, config).await {
+        Ok(report) => {
+            let completed_at = Utc::now();
+            let status = if report.skipped_reason.is_some() {
+                BASE_INDEXER_HEARTBEAT_SKIPPED
+            } else {
+                BASE_INDEXER_HEARTBEAT_SUCCESS
+            };
+            store
+                .upsert_base_indexer_heartbeat(&BaseIndexerHeartbeat {
+                    network: config.network.clone(),
+                    escrow_contract: config.factory_contract.clone(),
+                    status: status.to_string(),
+                    started_at,
+                    completed_at: Some(completed_at),
+                    latest_block: Some(report.latest_block),
+                    confirmed_to_block: report.confirmed_to_block,
+                    from_block: report.from_block,
+                    to_block: report.to_block,
+                    fetched_logs: report.fetched_logs as u64,
+                    persisted_cursor_block: report.persisted_cursor_block,
+                    skipped_reason: report.skipped_reason.clone(),
+                    error_message: None,
+                    updated_at: completed_at,
+                })
+                .await?;
+            Ok(report)
+        }
+        Err(error) => {
+            let completed_at = Utc::now();
+            let error_message = error.to_string();
+            let heartbeat = BaseIndexerHeartbeat {
+                network: config.network.clone(),
+                escrow_contract: config.factory_contract.clone(),
+                status: BASE_INDEXER_HEARTBEAT_FAILED.to_string(),
+                started_at,
+                completed_at: Some(completed_at),
+                latest_block: None,
+                confirmed_to_block: None,
+                from_block: None,
+                to_block: None,
+                fetched_logs: 0,
+                persisted_cursor_block: None,
+                skipped_reason: None,
+                error_message: Some(error_message),
+                updated_at: completed_at,
+            };
+            if let Err(heartbeat_error) = store.upsert_base_indexer_heartbeat(&heartbeat).await {
+                return Err(error).context(format!(
+                    "failed to persist autonomous Base indexer failure heartbeat: {heartbeat_error}"
+                ));
+            }
+            Err(error)
+        }
+    }
+}
+
+pub async fn poll_autonomous_indexer_once(
+    store: &PostgresStore,
+    config: &AutonomousIndexerConfig,
+) -> anyhow::Result<AutonomousIndexerPollReport> {
+    let descriptor = config.network_descriptor()?;
+    let latest_block = fetch_block_number(&config.rpc_url, config.request_id).await?;
+    let confirmed_to_block = latest_block.checked_sub(config.confirmations);
+    let scan_cursor = store
+        .get_base_log_cursor(&config.network, &config.factory_contract)
+        .await?;
+    let from_block = next_indexer_from_block(
+        scan_cursor.as_ref().map(|cursor| cursor.last_scanned_block),
+        None,
+        config.start_block,
+    )?;
+
+    let skipped_report =
+        |confirmed_to_block: Option<u64>, reason: &str| AutonomousIndexerPollReport {
+            network: descriptor.clone(),
+            factory_contract: config.factory_contract.clone(),
+            latest_block,
+            confirmations: config.confirmations,
+            confirmed_to_block,
+            from_block: Some(from_block),
+            to_block: None,
+            canonical_bounty_contracts: 0,
+            fetched_logs: 0,
+            persisted_events: 0,
+            persisted_cursor_block: scan_cursor.as_ref().map(|cursor| cursor.last_scanned_block),
+            skipped_reason: Some(reason.to_string()),
+        };
+    let Some(confirmed_to_block) = confirmed_to_block else {
+        return Ok(skipped_report(
+            None,
+            "latest block is below configured confirmations",
+        ));
+    };
+    if confirmed_to_block < from_block {
+        return Ok(skipped_report(
+            Some(confirmed_to_block),
+            "no confirmed blocks are ready to scan",
+        ));
+    }
+
+    let to_block = bounded_to_block(from_block, confirmed_to_block, config.max_blocks_per_query);
+    let topics = autonomous_bounty_event_topics();
+    let factory_query = BaseContractLogQuery::new(
+        &config.factory_contract,
+        from_block,
+        Some(to_block),
+        topics.clone(),
+    )?;
+    let factory_response = fetch_base_contract_logs(
+        &config.rpc_url,
+        &factory_query,
+        config.request_id.saturating_add(1),
+    )
+    .await?;
+    let factory_logs = rpc_logs_to_evm_logs(factory_response.result)?;
+    let mut events = decode_autonomous_bounty_logs(factory_logs.clone())?;
+    if events.iter().any(|event| {
+        !event
+            .contract_address
+            .eq_ignore_ascii_case(&config.factory_contract)
+            || !matches!(
+                event.kind,
+                AutonomousBountyEventKind::CanonicalBountyCreated
+                    | AutonomousBountyEventKind::CanonicalBountyTermsCommitted
+                    | AutonomousBountyEventKind::CanonicalBountyEconomicsConfigured
+                    | AutonomousBountyEventKind::CanonicalBountyVerificationConfigured
+                    | AutonomousBountyEventKind::ExternalBountySubmitted
+            )
+    }) {
+        return Err(anyhow!(
+            "factory query returned a non-factory autonomous event"
+        ));
+    }
+
+    let mut bounty_contracts = store
+        .list_canonical_autonomous_bounty_contracts(&config.network, &config.factory_contract)
+        .await?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    for event in &events {
+        if event.kind == AutonomousBountyEventKind::CanonicalBountyCreated {
+            let address = event.data["bounty_contract"]
+                .as_str()
+                .ok_or_else(|| anyhow!("canonical creation event is missing bounty_contract"))?;
+            let normalized =
+                BaseContractLogQuery::new(address, from_block, Some(to_block), topics.clone())?
+                    .contract;
+            bounty_contracts.insert(normalized);
+        }
+    }
+
+    let mut fetched_logs = factory_logs.len();
+    let mut ordered_contracts = bounty_contracts.iter().cloned().collect::<Vec<_>>();
+    ordered_contracts.sort();
+    for (index, bounty_contract_batch) in ordered_contracts
+        .chunks(AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE)
+        .enumerate()
+    {
+        let query = BaseMultiContractLogQuery::new(
+            bounty_contract_batch.iter().cloned(),
+            from_block,
+            Some(to_block),
+            topics.clone(),
+        )?;
+        let request_id = config
+            .request_id
+            .checked_add(2 + index as u64)
+            .ok_or_else(|| anyhow!("autonomous indexer request id overflowed"))?;
+        let response = fetch_base_multi_contract_logs(&config.rpc_url, &query, request_id).await?;
+        let logs = rpc_logs_to_evm_logs(response.result)?;
+        fetched_logs += logs.len();
+        let bounty_events = decode_autonomous_bounty_logs(logs)?;
+        let expected_emitters = bounty_contract_batch
+            .iter()
+            .map(|address| address.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        if bounty_events.iter().any(|event| {
+            !expected_emitters.contains(&event.contract_address.to_ascii_lowercase())
+                || matches!(
+                    event.kind,
+                    AutonomousBountyEventKind::CanonicalBountyCreated
+                        | AutonomousBountyEventKind::ExternalBountySubmitted
+                )
+        }) {
+            return Err(anyhow!(
+                "canonical bounty batch query returned an invalid emitter or factory event"
+            ));
+        }
+        events.extend(bounty_events);
+    }
+
+    events.sort_by_key(|event| (event.block_number, event.log_index));
+    let mut seen = HashSet::new();
+    events.retain(|event| seen.insert(event.log_key.clone()));
+    for event in &events {
+        store
+            .upsert_autonomous_bounty_event(&config.network, event)
+            .await?;
+    }
+    let last_log_key = events.last().map(|event| event.log_key.as_str());
+    store
+        .upsert_base_log_cursor(
+            &config.network,
+            &config.factory_contract,
+            to_block,
+            last_log_key,
+        )
+        .await?;
+
+    Ok(AutonomousIndexerPollReport {
+        network: descriptor,
+        factory_contract: config.factory_contract.clone(),
+        latest_block,
+        confirmations: config.confirmations,
+        confirmed_to_block: Some(confirmed_to_block),
+        from_block: Some(from_block),
+        to_block: Some(to_block),
+        canonical_bounty_contracts: bounty_contracts.len(),
+        fetched_logs,
+        persisted_events: events.len(),
+        persisted_cursor_block: Some(to_block),
+        skipped_reason: None,
+    })
+}
+
 pub async fn hydrate_bounty_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork> {
     Ok(BountyNetwork {
         agents: store
@@ -813,6 +1158,16 @@ fn escrow_contract_env_for_network(
     }
 }
 
+fn factory_contract_env_for_network(
+    descriptor: &BaseNetworkDescriptor,
+) -> anyhow::Result<&'static str> {
+    match descriptor.chain_id {
+        8_453 => Ok("BASE_MAINNET_BOUNTY_FACTORY"),
+        84_532 => Ok("BASE_SEPOLIA_BOUNTY_FACTORY"),
+        _ => Err(anyhow!("unsupported Base chain id {}", descriptor.chain_id)),
+    }
+}
+
 fn parse_u64_env(name: &str, value: &str) -> anyhow::Result<u64> {
     value
         .trim()
@@ -939,6 +1294,31 @@ mod tests {
         assert_eq!(config.start_block, Some(123));
         assert_eq!(config.confirmations, 2);
         assert_eq!(config.max_blocks_per_query, 2_000);
+    }
+
+    #[test]
+    fn autonomous_indexer_requires_factory_and_defaults_to_mainnet() {
+        let values = HashMap::from([
+            ("BASE_MAINNET_RPC_URL", "https://base.example"),
+            (
+                "BASE_INDEXER_FACTORY_CONTRACT",
+                "0x1111111111111111111111111111111111111111",
+            ),
+            ("BASE_INDEXER_START_BLOCK", "456"),
+        ]);
+
+        let config = AutonomousIndexerConfig::from_lookup(|key| {
+            values.get(key).map(|value| value.to_string())
+        })
+        .unwrap();
+
+        assert_eq!(config.network, "base-mainnet");
+        assert_eq!(config.rpc_url, "https://base.example");
+        assert_eq!(
+            config.factory_contract,
+            "0x1111111111111111111111111111111111111111"
+        );
+        assert_eq!(config.start_block, Some(456));
     }
 
     #[test]

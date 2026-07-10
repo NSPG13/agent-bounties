@@ -1,403 +1,154 @@
 # Deployment
 
-The production package is one Dockerfile with build arguments for the service
-binary. API, MCP, and worker containers use the same image recipe and differ by
-`APP_PACKAGE`, `APP_BINARY`, bind address, and service-specific configuration.
-Rust and Cargo 1.88 or newer are required for local builds because the locked
-dependency graph includes crates with that minimum supported Rust version.
+The hosted topology is API, MCP, Postgres, and one autonomous Base event-indexer
+worker. The Base contracts are deployed separately and configured only after
+review and verification.
+
+## Current State
+
+`site/protocol.json` and `deployments/base-mainnet.json` are authoritative.
+They must remain `pending_external_review_and_deployment` with null contract
+addresses until all deployment gates pass.
+
+The retired operator-signed escrow is recorded only in
+`deployments/base-mainnet-legacy.json`. Do not configure it in API, MCP, worker,
+website, or wallet flows.
 
 ## Render Blueprint
 
-The root [render.yaml](../render.yaml) is the lowest-friction hosted deployment
-path for connecting the public website and Stripe funding page to a durable API.
-It defines:
+The root `render.yaml` creates:
 
-- `agent-bounties-api`: public API web service.
-- `agent-bounties-mcp`: public MCP-compatible tool service.
-- `agent-bounties-base-indexer`: background worker for Base escrow log polling.
-- `agent-bounties-postgres`: shared Postgres database for API, MCP, and worker
-  persistence.
+- `agent-bounties-postgres`,
+- `agent-bounties-api`,
+- `agent-bounties-mcp`,
+- `agent-bounties-base-indexer`.
 
-The API and MCP binaries now fall back to Render's `PORT` environment variable
-when `API_BIND_ADDR` or `MCP_BIND_ADDR` is unset, so hosted web services bind to
-`0.0.0.0:$PORT` while local defaults remain `127.0.0.1:8080` and
-`127.0.0.1:8090`.
-
-Before applying the Blueprint, inspect and adjust these non-secret URL defaults
-if you rename services or attach custom domains:
-
-- `PUBLIC_BASE_URL=https://agent-bounties-api.onrender.com`
-- `MCP_BASE_URL=https://agent-bounties-mcp.onrender.com`
-
-The Blueprint intentionally starts with live-value mutation disabled:
-
-- `ENABLE_STRIPE_LIVE_EXECUTION=false`
-- `ENABLE_STRIPE_PUBLIC_CHECKOUT=false`
-- `ENABLE_BASE_TX_BROADCAST=false`
-- `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false`
-
-Render generates `OPERATOR_API_TOKEN`. Stripe secrets remain
-Dashboard-provided. The verified Base mainnet escrow address, public signer and
-fee-wallet addresses, official bootstrap RPC, and deployment start block come
-from [`deployments/base-mainnet.json`](../deployments/base-mainnet.json) and are
-checked into the Blueprint. Replace the public RPC with a managed provider at
-higher volume, but do not replace the escrow coordinates without a reviewed
-deployment-manifest change. `STRIPE_PAYMENT_METHOD_CONFIGURATION` is an optional
-non-secret Stripe Dashboard id for targeting a Checkout payment-method set such
-as a PayPal-enabled configuration. Do not enable public Checkout funding until
-Stripe webhooks are configured and
-`GET /v1/readiness/live-money?network=base-mainnet` reports the expected
-non-secret readiness gates.
-
-Validate the checked-in Blueprint contract without requiring the Render CLI:
+Validate before synchronizing:
 
 ```powershell
 python scripts\check-render-blueprint.py
 ```
 
-On Unix-like shells:
+The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
+implementation, and Base RPC configuration. Canonical planners fail closed
+without Postgres and the active protocol addresses.
 
-```bash
-python3 scripts/check-render-blueprint.py
+## Environment
+
+Non-secret protocol settings:
+
+```text
+BASE_INDEXER_PROTOCOL=autonomous-v1
+BASE_INDEXER_NETWORK=base-mainnet
+BASE_INDEXER_START_BLOCK=<factory deployment block>
+BASE_MAINNET_BOUNTY_FACTORY=<verified factory>
+BASE_MAINNET_BOUNTY_IMPLEMENTATION=<verified implementation>
+BASE_MAINNET_RPC_URL=<managed HTTPS RPC>
+BASE_INDEXER_RPC_URL=<managed HTTPS RPC>
+ENABLE_BASE_TX_BROADCAST=false
 ```
 
-### Hosted API returns 404 (repair path)
+Use the corresponding `BASE_SEPOLIA_*` values for testnet. The worker accepts
+`BASE_INDEXER_FACTORY_CONTRACT` as an explicit override.
 
-If `https://agent-bounties-api.onrender.com/health` (or your `PUBLIC_BASE_URL`)
-returns **404** for `/health`, `/v1/readiness/live-money`, and
-`/v1/bounties/funding-feed`, run:
+Secrets belong in Render environment groups, never in Git:
+
+- `DATABASE_URL`,
+- managed RPC credentials,
+- optional `OPERATOR_API_TOKEN` for non-protocol administrative surfaces,
+- future Stripe secrets and verified webhook secret.
+
+The autonomous contracts do not need a hosted private key, settlement signer,
+or owner key. Agents and relayers submit their own wallet transactions.
+
+## Contract Gates
+
+Before any deployment:
+
+1. Run `forge fmt --check`, build, unit tests, 1,000+ fuzz runs, Slither or an
+   equivalent static analyzer, and the Rust ABI/event suites.
+2. Deploy to Base Sepolia and execute funded pass, funded fail, claim timeout,
+   verification timeout, pooled cancellation, refund, EOA authorization,
+   ERC-1271 claim, and quorum settlement paths.
+3. Compare every Rust planner payload against independent Foundry `cast`
+   vectors.
+4. Run the indexer from the deployment block and verify all four creation
+   events and same-block funding are discovered.
+5. Obtain external smart-contract review. Resolve all critical/high findings
+   and document accepted residual risks.
+6. Publish the exact source commit and deployment intent before mainnet signing.
+7. Ask for explicit action-time approval before broadcasting the mainnet
+   deployment.
+
+## Testnet Deployment
+
+Use a dedicated deployer wallet with only testnet funds. Do not paste a seed
+phrase or private key into chat, Git, shell history, or committed files.
 
 ```powershell
-python scripts\diagnose_hosted_api.py
-python scripts\diagnose_hosted_api.py --base-url https://agent-bounties-api.onrender.com --json-out target/hosted-api-diagnosis.json
+$env:Path = "$PWD\.tools\foundry;$env:Path"
+cd contracts\base-escrow
+forge test --fuzz-runs 1000
+forge create `
+  --broadcast `
+  --chain 84532 `
+  --rpc-url $env:BASE_SEPOLIA_RPC_URL `
+  --private-key $env:BASE_DEPLOYER_PRIVATE_KEY `
+  src/AgentBountyFactory.sol:AgentBountyFactory `
+  --constructor-args 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 ```
 
-```bash
-python3 scripts/diagnose_hosted_api.py
-python3 scripts/diagnose_hosted_api.py --base-url https://agent-bounties-api.onrender.com --json-out target/hosted-api-diagnosis.json
-```
+After confirmation, read `implementation()` from the factory, verify both
+contracts on a Base-compatible explorer, record runtime code hashes and the
+deployment block, then set the Sepolia environment variables.
 
-Typical causes when **all** paths are HTTP **404** (at least one non-null status)
-and DNS still resolves:
+## Mainnet Activation
 
-1. The Render Blueprint was never applied (no live `agent-bounties-api` service).
-2. Docs still advertise `agent-bounties-api.onrender.com` but Render assigned a
-   different hostname after rename/recreate.
-3. The service is running the wrong binary (`worker` instead of `api`) so
-   HTTP routes are missing.
-4. All paths return connection errors with no HTTP status (`connection_failure`) —
-   service suspended or not listening (distinct from 404).
+Mainnet uses native USDC
+`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`. The factory constructor has no
+other argument.
 
-Repair sequence:
+After a confirmed, verified deployment:
 
-1. Open
-   `https://dashboard.render.com/blueprint/new?repo=https://github.com/NSPG13/agent-bounties`
-   and apply [render.yaml](../render.yaml) on `main`.
-2. Confirm web service **`agent-bounties-api`**: Docker runtime,
-   `healthCheckPath: /health`, env `APP_PACKAGE=api`, `APP_BINARY=api`.
-3. Confirm the process listens on `0.0.0.0:$PORT` (API already falls back to
-   Render `PORT` when `API_BIND_ADDR` is unset).
-4. Wait until deploy is **Live**, then re-run `diagnose_hosted_api.py` until
-   `/health` is HTTP 200.
-5. If the hostname differs, update `PUBLIC_BASE_URL` / `MCP_BASE_URL` on the
-   service and in operator docs/vars.
-6. Only after production smoke passes, set `PRODUCTION_API_BASE_URL` and
-   `AGENT_BOUNTIES_API_BASE_URL` so funding pages do not advertise a dead API.
+1. Update `deployments/base-mainnet.json` with factory, implementation,
+   transaction, block, deployer, and runtime hashes.
+2. Update `site/protocol.json` and the static discovery manifest from null to
+   the same addresses and set status to `active`.
+3. Configure API, MCP, and worker environments.
+4. Set `BASE_INDEXER_START_BLOCK` to the factory deployment block on the first
+   run.
+5. Deploy services and confirm indexer cursor/heartbeat progress.
+6. Run production smoke, post one low-value bounty, exercise pass and fail
+   paths, and confirm the public feed never reports payment before
+   `BountySettled`.
 
-**Payment boundary:** a healthy `/health` response does **not** create funding,
-credit balances, enable Checkout, or authorize payout. Stripe/Base rails still
-require secrets + readiness gates in
-[live-money-activation.md](live-money-activation.md).
+The worker scans the factory once per block range and canonical bounty clones
+in bounded multi-address batches. Cursor advancement happens only after event
+persistence.
 
-## Base mainnet deployment attestation
-
-Replayable read-only checks compare live Base mainnet RPC state against
-[`deployments/base-mainnet.json`](../deployments/base-mainnet.json). The harness
-never signs, broadcasts, funds, releases, or mutates on-chain state.
-
-Offline deterministic replay (default CI path):
+## Post-Deploy Checks
 
 ```powershell
-python -m pip install -r scripts\requirements-attest.txt
-python scripts\test_base_deployment_attest.py -v
-python scripts\base_deployment_attest.py --mock-fixture scripts\fixtures\base_attest\success.json
-```
-
-On Unix-like shells:
-
-```bash
-python3 -m pip install -r scripts/requirements-attest.txt
-python3 scripts/test_base_deployment_attest.py -v
-python3 scripts/base_deployment_attest.py --mock-fixture scripts/fixtures/base_attest/success.json
-```
-
-Opt-in production smoke against the public manifest RPC:
-
-```powershell
-python scripts\base_deployment_attest.py --live --json-out target\base-mainnet-attest.json
-```
-
-Passing attestation proves deployment coordinates still match the manifest. It does
-**not** prove hosted API health, indexer health, bounty funding, claimability,
-acceptance, payout, or settlement.
-
-To deploy from the Dashboard after the PR is merged:
-
-1. Open
-   `https://dashboard.render.com/blueprint/new?repo=https://github.com/NSPG13/agent-bounties`.
-2. Connect GitHub if prompted and select the merged `main` branch.
-3. Review the API, MCP, worker, and Postgres resources.
-4. Leave optional Base Sepolia values blank unless running a testnet rehearsal;
-   fill Stripe secrets only when you are ready to run the fiat rail.
-5. Apply the Blueprint and wait for all services to deploy.
-6. Update `PUBLIC_BASE_URL` and `MCP_BASE_URL` if Render assigned different
-   hostnames or you attached custom domains.
-7. Run the read-only production smoke against the deployed URLs.
-8. After production smoke passes, set repository variables
-   `PRODUCTION_API_BASE_URL` and `PRODUCTION_MCP_BASE_URL` so the scheduled
-   `Production Smoke` workflow can keep checking the hosted API/MCP surfaces.
-9. Only after the same API URL passes production smoke, set
-   `AGENT_BOUNTIES_API_BASE_URL` so GitHub funding-comment handoffs can prefill
-   the public Stripe Checkout funding page. A dead or unverified API URL should
-   not be advertised to funders.
-10. Verify a post-Checkout return URL in the browser:
-   `https://nspg13.github.io/agent-bounties/success.html?apiBaseUrl=<api>&bountyId=<bounty-id>&externalReference=<external-reference>`.
-   The page may show `waiting for webhook`, `funding reconciled`, or `needs
-   operator review` from `GET /v1/bounties/{id}`, but the Checkout redirect
-   itself is not funding evidence. It should show `funding reconciled` only
-   when the matched Stripe funding intent is `Applied`; generic bounty
-   claimability is displayed separately.
-
-## Hosted Inventory Reconstruction
-
-Use the checked reconstruction harness when public GitHub bounty issues are
-missing from a new or repaired hosted database. It defaults to a no-write dry
-run, derives each stable bounty id through the Rust sync planner, probes the
-target API for an existing record, and emits an auditable JSON plan.
-
-If the hosted API is older than the planner route, run the reviewed current API
-locally as the planner while keeping the real hosted API as the target:
-
-```powershell
-$env:API_BIND_ADDR = "127.0.0.1:18180"
-$env:PUBLIC_BASE_URL = "https://agent-bounties-api.onrender.com"
-$env:MCP_BASE_URL = "https://agent-bounties-mcp.onrender.com"
-cargo run -p api
-```
-
-In a second terminal, generate the production-bound dry run:
-
-```powershell
-python scripts\sync_hosted_bounty_inventory.py `
+python scripts\check-site.py
+python scripts\check-render-blueprint.py
+cargo run -p cli -- production-smoke `
   --api-base-url https://agent-bounties-api.onrender.com `
-  --planner-base-url http://127.0.0.1:18180 `
-  --issue 113 --issue 132 --issue 136 --issue 141 --issue 142 `
-  --output target\hosted-inventory-dry-run.json
+  --mcp-base-url https://agent-bounties-mcp.onrender.com
 ```
 
-The planner URL may differ from the target, but every returned write call must
-still target `--api-base-url` and explicitly have no settlement authority. The
-target server preflight remains authoritative. Execution is blocked until its
-health response is exactly `ok` and its `/llms.txt` contains the current sync
-and agent-earning contract markers.
+Check:
 
-Only after the exact reviewed commit is deployed to API, MCP, and indexer, the
-production smoke passes, and the dry-run diff is approved, execute the same
-issue set:
+- `/health`, `/llms.txt`, OpenAPI, and discovery manifest,
+- protocol status and exact factory/implementation agreement,
+- canonical feed and verification-job feed,
+- terms and evidence persistence across restarts,
+- worker heartbeat and confirmed cursor,
+- no active legacy escrow endpoints or addresses,
+- no secret material in responses or logs.
 
-```powershell
-$env:AGENT_BOUNTIES_OPERATOR_TOKEN = "<read from the Render secret in a private terminal>"
-python scripts\sync_hosted_bounty_inventory.py `
-  --api-base-url https://agent-bounties-api.onrender.com `
-  --issue 113 --issue 132 --issue 136 --issue 141 --issue 142 `
-  --execute `
-  --confirm-api-base-url https://agent-bounties-api.onrender.com `
-  --confirm-issue-count 5 `
-  --output target\hosted-inventory-execution.json
-```
+## Fiat Services
 
-Never pass the operator token as a command-line argument or commit an output
-containing secrets. Execution always reloads live GitHub issues, requires the
-planner and target to be the same deployed service, and refuses fixture input.
-The tool stops on the first failed write, verifies every
-successful record through `GET /v1/bounties/{id}`, and is safe to replay through
-the existing issue-derived idempotency key. The server refuses to overwrite a
-record that already has funding or lifecycle activity.
-
-This reconstruction creates unfunded bounty metadata only. It does not fund a
-bounty, make work claimable, reconcile an escrow, reserve a claim, accept work,
-authorize payout, release escrow, or prove settlement.
-
-The checked-in Base worker starts at block `48422806` for escrow
-`0x150C6dFbCe7803cc7f634f59b0624e87349CEAce`. It is read-only with respect to
-wallet signing: `ENABLE_BASE_TX_BROADCAST=false`, and no private key belongs in
-Render. Source and deployment links are recorded in the deployment manifest.
-
-The Blueprint uses low paid service/database plans because the Base indexer is a
-background worker and real-money webhooks should not depend on sleeping
-instances. For no-money experiments, use local Docker Compose or the local
-service smoke instead.
-
-## Container Images
-
-Build the deployable API, MCP, and Base indexer worker images locally:
-
-```powershell
-.\scripts\check-containers.ps1
-```
-
-On Unix-like shells:
-
-```bash
-bash scripts/check-containers.sh
-```
-
-Manual builds:
-
-```bash
-docker build --build-arg APP_PACKAGE=api --build-arg APP_BINARY=api -t agent-bounties-api:local .
-docker build --build-arg APP_PACKAGE=mcp-server --build-arg APP_BINARY=mcp-server -t agent-bounties-mcp:local .
-docker build --build-arg APP_PACKAGE=worker --build-arg APP_BINARY=worker -t agent-bounties-worker:local .
-```
-
-## Production Compose
-
-Use `docker-compose.production.yml` for a durable API/MCP/Postgres topology.
-Start from `.env.example`, replace secrets and public URLs, then run:
-
-```powershell
-docker compose --env-file .env -f docker-compose.production.yml up -d --build
-```
-
-On Unix-like shells:
-
-```bash
-docker compose --env-file .env -f docker-compose.production.yml up -d --build
-```
-
-To rehearse the production compose topology locally without leaving containers
-running, use the compose smoke. It validates and builds the optional
-`base-indexer` profile, binds API/MCP to high local ports, runs the read-only
-production smoke, and tears the stack down:
-
-```powershell
-.\scripts\check-production-compose.ps1
-```
-
-On Unix-like shells:
-
-```bash
-bash scripts/check-production-compose.sh
-```
-
-The compose file sets:
-
-- `API_BIND_ADDR=0.0.0.0:8080`
-- `MCP_BIND_ADDR=0.0.0.0:8090`
-- `DATABASE_URL` for shared Postgres-backed state
-- `PUBLIC_BASE_URL` and `MCP_BASE_URL` for discovery and `/llms.txt`
-- optional Base RPC, escrow address, native USDC token, settlement signer, and
-  platform-fee wallet variables
-- optional Stripe live execution, public funder Checkout, API base URL, secret
-  key, webhook secret, optional Payment Method Configuration id, and
-  unsigned-webhook simulation variables
-- optional `OPERATOR_API_TOKEN` for hosted operator-only mutation surfaces
-- optional `base-indexer` profile variables for automated Base USDC escrow log
-  polling
-
-The API and MCP containers receive the same live-money environment contract so
-`GET /v1/readiness/live-money` and MCP `get_live_money_readiness` agree about
-Stripe webhook readiness, the non-secret Stripe payment-method configuration
-indicator, Base escrow addresses, native USDC tokens, and operator mutation
-protection. These readiness responses expose only whether
-`STRIPE_PAYMENT_METHOD_CONFIGURATION` is configured, not the Stripe object id.
-
-To run the Base USDC indexer alongside API and MCP, set the indexer variables
-and opt into its compose profile:
-
-```powershell
-$env:COMPOSE_PROFILES = "base-indexer"
-docker compose --env-file .env -f docker-compose.production.yml up -d --build
-```
-
-On Unix-like shells:
-
-```bash
-COMPOSE_PROFILES=base-indexer docker compose --env-file .env -f docker-compose.production.yml up -d --build
-```
-
-The worker uses `DATABASE_URL`, `BASE_INDEXER_NETWORK`, RPC/escrow contract
-configuration, and `BASE_INDEXER_START_BLOCK` on first run. After it scans a
-range, it persists a Postgres cursor keyed by network and escrow contract, so
-later polls continue from the last confirmed scanned block even when no escrow
-events were found. Each poll also persists a heartbeat with the last Success,
-Skipped, or Failed outcome, block range, fetched log count, skipped reason, and
-error message when present. Money state still changes only when decoded escrow
-logs are persisted. Check `GET /v1/base/indexer-status?network=<network>` or
-MCP `get_base_indexer_status` after startup to confirm the cursor and heartbeat
-are being written; the status response is monitoring evidence, not settlement
-authorization.
-
-`DATABASE_URL` should point at the compose service hostname, for example
-`postgres://agent_bounties:change-me@postgres:5432/agent_bounties`. If
-`POSTGRES_PASSWORD` contains special characters, URL-encode it inside
-`DATABASE_URL`.
-API and MCP services can start concurrently; the shared Postgres migration path
-uses an advisory lock so only one service applies migrations at a time.
-
-## Release Smoke
-
-After deploy, run the read-only production smoke against the public URLs:
-
-```powershell
-.\scripts\check-production-smoke.ps1 -ApiBaseUrl https://api.example.com -McpBaseUrl https://mcp.example.com
-```
-
-On Unix-like shells:
-
-```bash
-bash scripts/check-production-smoke.sh --api-base-url https://api.example.com --mcp-base-url https://mcp.example.com
-```
-
-Use `-RequireEvalHistory` or `--require-eval-history` after the environment has
-run and persisted at least one eval suite.
-
-The same gate is available as the `Production Smoke` GitHub Actions workflow.
-Use manual dispatch for one-off URL checks, or set repository variables
-`PRODUCTION_API_BASE_URL` and `PRODUCTION_MCP_BASE_URL` for scheduled/push
-checks. The workflow skips when URLs are absent and fails when configured hosted
-endpoints are unhealthy. Treat a passing run as the prerequisite for configuring
-`AGENT_BOUNTIES_API_BASE_URL` in the GitHub repository.
-
-## Payment Controls
-
-Keep live payment mutation disabled until operator controls and secrets are
-ready:
-
-- `ENABLE_BASE_TX_BROADCAST=false` keeps Base transaction broadcasting disabled.
-- `ENABLE_STRIPE_LIVE_EXECUTION=false` keeps Stripe Checkout and Connect live
-  creation disabled.
-- `ENABLE_STRIPE_PUBLIC_CHECKOUT=false` keeps public funder Checkout disabled
-  even when operator-only Stripe live execution is configured.
-- `STRIPE_PAYMENT_METHOD_CONFIGURATION` can point Checkout Session creation at
-  a Stripe Dashboard payment-method set. Use it for PayPal-capable Checkout
-  only after Stripe supports and approves PayPal for the platform account.
-- `OPERATOR_API_TOKEN` can require `Authorization: Bearer <token>` or
-  `x-operator-token: <token>` on hosted risk review, settlement reconciliation,
-  Base broadcast, receipt reconciliation, and live Stripe execution calls. Leave
-  it unset for local open-source demos.
-- Base receipt polling and log reconciliation still require configured RPC URLs
-  and do not mark funds paid without indexed escrow logs.
-- The optional `base-indexer` worker automates Base escrow log polling, but it
-  does not sign or broadcast transactions and does not bypass deterministic log
-  reconciliation.
-- Stripe ledger credits require `STRIPE_WEBHOOK_SECRET` and verified Checkout
-  webhooks. Keep `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false` outside local
-  mock-provider simulations.
-
-Do not put live private keys in compose files or committed env templates.
-
-For a step-by-step low-value Base USDC beta process, including operator roles,
-environment variables, funding, release, refund, dispute, and read-only
-post-deploy checks, see
-[Hosted Low-Value Base USDC Beta Runbook](hosted-base-usdc-beta-runbook.md).
+Stripe and PayPal are not autonomous-v1 settlement rails. Keep live execution
+disabled unless a separately reviewed fiat-to-USDC onramp is implemented with
+verified webhooks, compliance controls, idempotency, and exact canonical bounty
+funding reconciliation.

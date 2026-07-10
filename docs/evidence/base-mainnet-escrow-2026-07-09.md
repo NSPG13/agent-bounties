@@ -1,5 +1,11 @@
 # Base Mainnet Escrow Evidence Report - 2026-07-09
 
+> [!WARNING]
+> Historical V1 material only. The operator-controlled escrow was refunded and
+> retired; do not use these instructions for new funding or settlement. New
+> bounties use `agent-bounties/autonomous-v1` as described in
+> [the autonomous protocol](../autonomous-protocol.md).
+
 Issue: https://github.com/NSPG13/agent-bounties/issues/127
 
 Observation timestamp: `2026-07-09T23:38:03Z`

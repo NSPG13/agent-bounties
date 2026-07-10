@@ -1,36 +1,39 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "protocol_version": "agent-bounties/autonomous-v1",
   "network": "base-mainnet",
   "chain_id": 8453,
   "rpc_url": "https://mainnet.base.org",
   "native_usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-  "escrow": {
-    "contract": "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
-    "deployment_transaction": "0xede8896af324658d7da6fc08589cc5d02cc344ef934087a1c147f6c9617b865d",
-    "deployment_block": 48422806,
-    "deployer": "0x884834E884d6e93462655A2820140aD03E6747bC",
-    "owner_at_deployment": "0x884834E884d6e93462655A2820140aD03E6747bC",
-    "settlement_signer_at_deployment": "0x884834E884d6e93462655A2820140aD03E6747bC",
-    "runtime_code_hash": "0x8726789773ebdb4ea81642eb6f95b91965b93ce8341f356e0f8513188b72ffea",
-    "source": "contracts/base-escrow/src/AgentBountyEscrow.sol:AgentBountyEscrow",
-    "compiler": {
-      "version": "0.8.26+commit.8a97fa7a",
-      "optimizer_enabled": true,
-      "optimizer_runs": 200,
-      "evm_version": "cancun"
-    },
-    "verification": {
-      "sourcify_match": "exact_match",
-      "blockscout_verified": true,
-      "sourcify_url": "https://sourcify.dev/server/v2/contract/8453/0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
-      "blockscout_url": "https://base.blockscout.com/address/0x150C6dFbCe7803cc7f634f59b0624e87349CEAce"
+  "status": "pending_external_review_and_deployment",
+  "factory": {
+    "contract": null,
+    "implementation": null,
+    "deployment_transaction": null,
+    "deployment_block": null,
+    "deployer": null,
+    "runtime_code_hash": null,
+    "implementation_runtime_code_hash": null,
+    "source": "contracts/base-escrow/src/AgentBountyFactory.sol:AgentBountyFactory",
+    "constructor_args": {
+      "settlement_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     }
   },
-  "pilot_policy": {
-    "currency": "USDC",
-    "automatic_release_cap_minor": 10000000,
-    "first_end_to_end_bounty_cap_minor": 1000000,
-    "hosted_transaction_broadcast": false,
-    "manual_settlement_review": true
-  }
+  "policy": {
+    "operator_settlement_signer": false,
+    "upgradeable": false,
+    "canonical_bounty_instances": "deterministic_eip1167",
+    "default_creation_funding": "full_target",
+    "crowdfunding_allowed": true,
+    "claim_requires_verifier_reward_bond": true,
+    "pass_and_fail_pay_equal_verifier_reward": true,
+    "rejection_reopens_fully_funded": true,
+    "claim_timeout_funds_completion_bonus": true,
+    "verification_timeout_refunds_solver_bond": true,
+    "deterministic_verification_atomic_settlement": true,
+    "ai_judge_minimum_signature_threshold": 2,
+    "hosted_paid_state_requires_confirmed_bounty_settled_event": true,
+    "indexer_uses_batched_canonical_addresses": true
+  },
+  "legacy_manifest": "deployments/base-mainnet-legacy.json"
 }

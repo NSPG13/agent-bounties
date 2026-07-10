@@ -3,28 +3,21 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Checkout submitted | Agent Bounties</title>
-    <meta name="description" content="Stripe Checkout returned successfully. Agent Bounties waits for signed webhook evidence before crediting bounty funding.">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <title>Fiat on-ramp unavailable | Agent Bounties</title>
+    <meta name="description" content="The retired Checkout return page cannot fund an autonomous bounty.">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <main class="policy">
-      <p class="eyebrow">Checkout</p>
-      <h1>Checkout submitted</h1>
-      <p>Stripe accepted the Checkout session. The bounty is not funded until the hosted API verifies the signed Stripe webhook and reconciles it to the funding intent.</p>
-      <section class="readiness-panel" id="checkout-status-panel" aria-labelledby="checkout-status-title">
-        <div>
-          <h2 id="checkout-status-title">Funding status</h2>
-          <p class="fine">This status reads the hosted bounty record after Checkout return. A redirect is not payment evidence; only the matched Stripe funding intent in Applied state can show this Checkout as reconciled. Bounty claimability is displayed separately.</p>
-        </div>
-        <button id="checkout-status-refresh" class="button secondary" type="button">Refresh status</button>
-        <output id="checkout-status-output" class="output readiness-output" aria-live="polite">Checkout returned. Waiting for status details.</output>
-      </section>
+      <p class="eyebrow">Retired flow</p>
+      <h1>No autonomous bounty was funded</h1>
+      <p>This URL belonged to the retired hosted-ledger Checkout flow. Autonomous bounties are funded in native USDC at their canonical contract. A redirect or payment receipt is not protocol funding evidence.</p>
+      <p>Use the canonical bounty page and wait for its confirmed <code>FundingAdded</code> event. Stripe and PayPal may return later only as convenience on-ramps that deliver USDC into the same contract.</p>
       <p class="actions">
-        <a class="button primary" href="funding.html">Back to funding</a>
+        <a class="button primary" href="funding.html">Fund a canonical bounty</a>
         <a class="button secondary" href="post.html">Post your own bounty</a>
       </p>
     </main>
-    <script src="main.js"></script>
   </body>
 </html>

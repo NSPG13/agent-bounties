@@ -265,11 +265,11 @@ pub fn build_base_indexer_status_report(
     let status = if !config.database_configured {
         "persistence_unavailable"
     } else if !escrow_contract_configured {
-        "escrow_contract_missing"
+        "factory_contract_missing"
     } else if !cursor_found {
         "cursor_missing"
     } else if !cursor_matches_request {
-        "cursor_contract_mismatch"
+        "cursor_factory_mismatch"
     } else {
         "cursor_persisted"
     };
@@ -283,7 +283,7 @@ pub fn build_base_indexer_status_report(
     }
     if !escrow_contract_configured {
         warnings.push(
-            "No Base escrow contract was supplied or configured for this network.".to_string(),
+            "No autonomous bounty factory was supplied or configured for this network.".to_string(),
         );
     }
     if config.database_configured && escrow_contract_configured && !cursor_found {
@@ -294,7 +294,7 @@ pub fn build_base_indexer_status_report(
     }
     if !cursor_matches_request {
         warnings.push(
-            "The persisted cursor does not match the requested network and escrow contract."
+            "The persisted cursor does not match the requested network and autonomous factory."
                 .to_string(),
         );
     }
@@ -307,7 +307,7 @@ pub fn build_base_indexer_status_report(
     }
     if !heartbeat_matches_request {
         warnings.push(
-            "The persisted worker heartbeat does not match the requested network and escrow contract."
+            "The persisted worker heartbeat does not match the requested network and autonomous factory."
                 .to_string(),
         );
     }
@@ -348,13 +348,13 @@ pub fn build_base_indexer_status_report(
         heartbeat_updated_at: heartbeat.map(|heartbeat| heartbeat.updated_at),
         warnings,
         evidence_boundaries: vec![
-            "Indexer status is operational evidence only; it does not fund, release, refund, dispute, or authorize settlement.".to_string(),
-            "Base USDC state changes still require decoded escrow logs to be reconciled into platform state.".to_string(),
-            "A cursor proves the worker persisted scan progress for this contract; heartbeat proves only the last recorded poll outcome, not current liveness.".to_string(),
+            "Indexer status is operational evidence only; it does not fund, verify, cancel, refund, or authorize settlement.".to_string(),
+            "Base USDC state changes require confirmed canonical factory and bounty-contract events.".to_string(),
+            "A cursor proves only persisted scan progress for the factory; a heartbeat proves the last recorded poll outcome, not current liveness.".to_string(),
         ],
         commands: vec![
             "cargo run -p worker -- --once".to_string(),
-            "cargo run -p cli -- base-log-query --escrow-contract <escrow> --from-block <block>".to_string(),
+            "GET /v1/base/autonomous-bounties/events?network=base-mainnet".to_string(),
         ],
     })
 }
@@ -370,7 +370,8 @@ pub fn build_live_money_readiness_report(
     let operator_token = config.operator_auth_configured;
     let base_rpc = config.base_rpc_url_configured;
     let base_broadcast_enabled = config.base_broadcast_enabled;
-    let escrow_configured = config.escrow_contract.as_deref().is_some_and(nonempty);
+    // This compatibility field now carries the canonical autonomous factory address.
+    let factory_configured = config.escrow_contract.as_deref().is_some_and(nonempty);
     let token_configured = config.usdc_token.as_deref().is_some_and(nonempty);
     let supplied_usdc_token_matches_native = config
         .usdc_token
@@ -387,9 +388,9 @@ pub fn build_live_money_readiness_report(
         readiness_check(
             "local deterministic rehearsal",
             true,
-            "pooled, Stripe, Base, mixed-funding, verification, and payout state-machine simulation",
+            "autonomous bounty creation, pooled funding, claims, verification, and settlement",
             vec![],
-            "Run cargo run -p cli -- funding-rehearsal-demo; no external credentials required.",
+            "Run Foundry and chain-base tests; no external credentials required.",
         ),
         readiness_check(
             "Stripe test-mode execution gate",
@@ -460,52 +461,52 @@ pub fn build_live_money_readiness_report(
             },
         ),
         readiness_check(
-            "Base RPC log reconciliation",
+            "Autonomous Base event indexing",
             base_rpc,
-            "fetching Base escrow logs and transaction receipts",
+            "indexing canonical factory and per-bounty contract events",
             vec![rpc_env.clone()],
             if base_rpc {
                 "Base RPC URL is configured for the selected network."
             } else {
-                "Set the selected network RPC URL before fetching escrow logs or receipts."
+                "Set the selected network RPC URL before indexing autonomous bounty events."
             },
         ),
         readiness_check(
             "Base signed transaction broadcast gate",
             base_rpc && base_broadcast_enabled,
-            "broadcasting signed Base escrow funding or release transactions through the service",
+            "relaying already-signed autonomous protocol transactions through the service",
             vec![rpc_env.clone(), "ENABLE_BASE_TX_BROADCAST".to_string()],
             if base_rpc && base_broadcast_enabled {
                 "Base transaction broadcast is enabled for already-signed raw transactions."
             } else {
-                "Signed transaction broadcast remains disabled; operators can still sign/send externally and reconcile logs."
+                "Signed transaction broadcast remains disabled; agents can submit through their wallet or another relayer."
             },
         ),
         readiness_check(
-            "Base escrow addresses",
-            escrow_configured && token_configured && token_matches_native,
-            "building bounty-bound approve/createEscrow funding plans",
+            "Autonomous bounty factory",
+            factory_configured && token_configured && token_matches_native,
+            "planning canonical bounty creation, pooled funding, claims, and settlement",
             vec![
-                "--escrow-contract".to_string(),
-                "--usdc-token".to_string(),
+                "BASE_MAINNET_BOUNTY_FACTORY".to_string(),
+                "BASE_MAINNET_BOUNTY_IMPLEMENTATION".to_string(),
             ],
-            if escrow_configured && token_configured && token_matches_native {
-                "Escrow contract and the selected network's native USDC token address were supplied."
-            } else if escrow_configured && token_configured {
-                "Escrow contract and token address were supplied, but the token does not match the selected network's native USDC address."
+            if factory_configured && token_configured && token_matches_native {
+                "Canonical factory and the selected network's native USDC address are configured."
+            } else if factory_configured && token_configured {
+                "Factory and token are configured, but the token is not native USDC for the selected network."
             } else {
-                "Pass --escrow-contract and --usdc-token when rehearsing Base funding plans."
+                "Configure the reviewed autonomous factory and implementation before enabling live bounty actions."
             },
         ),
         readiness_check(
             "operator mutation auth",
             operator_token,
-            "protecting hosted reconciliation, broadcast, and live Stripe execution endpoints",
+            "protecting optional hosted broadcast and live Stripe on-ramp endpoints",
             vec!["OPERATOR_API_TOKEN".to_string()],
             if operator_token {
                 "Hosted operator token is configured."
             } else {
-                "OPERATOR_API_TOKEN is optional locally but should be set for hosted mutation surfaces."
+                "OPERATOR_API_TOKEN is optional for the protocol and required only for protected hosted operations."
             },
         ),
     ];
@@ -520,17 +521,16 @@ pub fn build_live_money_readiness_report(
     let stripe_webhook_ready = stripe_webhook_secret || unsigned_stripe_webhooks;
     let base_testnet_ready = network_descriptor.name == "Base Sepolia"
         && base_rpc
-        && escrow_configured
+        && factory_configured
         && token_configured
         && token_matches_native;
     let base_mainnet_ready = network_descriptor.chain_id == 8_453
         && base_rpc
-        && escrow_configured
+        && factory_configured
         && token_configured
-        && token_matches_native
-        && operator_token;
+        && token_matches_native;
     let base_broadcast_ready = base_rpc && base_broadcast_enabled;
-    let live_money_ready = stripe_live_mode_ready && base_mainnet_ready;
+    let live_money_ready = base_mainnet_ready;
     let warnings = readiness_warnings(ReadinessWarningInputs {
         stripe_test_mode_ready,
         stripe_live_mode_ready,
@@ -565,19 +565,14 @@ pub fn build_live_money_readiness_report(
         evidence_boundaries: vec![
             "Stripe Checkout Session creation is not funding; only a verified checkout.session.completed webhook credits balance.".to_string(),
             "Stripe Payment Method Configuration only changes eligible Checkout methods; it is not funding, payout, or settlement evidence.".to_string(),
-            "Base approve/createEscrow transaction planning is not funding; only an indexed EscrowCreated log makes Base funding applied.".to_string(),
-            "Deterministic verifier acceptance creates settlement intents; it does not pay by itself.".to_string(),
-            "Base release transaction hashes are not payout; only an indexed EscrowReleased log marks USDC payout paid.".to_string(),
-            "Stripe Connect eligibility and transfer planning are not payout; only transfer.created evidence marks fiat payout intents paid.".to_string(),
+            "A signature or transaction hash is not funding evidence; only confirmed canonical FundingAdded events count.".to_string(),
+            "Verification output is not payout evidence; only a confirmed BountySettled event from the canonical bounty contract proves payment.".to_string(),
+            "Stripe and PayPal are optional convenience on-ramps and must deliver native USDC into the exact canonical bounty contract before funding is recognized.".to_string(),
         ],
         commands: vec![
-            "cargo run -p cli -- funding-rehearsal-demo".to_string(),
-            "cargo run -p cli -- stripe-execute-request-intent --intent-file target\\stripe-funding-intent.json".to_string(),
-            "cargo run -p cli -- base-fetch-logs --network base-sepolia --escrow-contract <escrow-contract> --from-block <block>".to_string(),
-            "cargo run -p cli -- base-fetch-logs --network base-mainnet --escrow-contract <escrow-contract> --from-block <block>".to_string(),
-            "cargo run -p cli -- base-transaction-receipt --network base-sepolia --tx-hash <tx-hash>".to_string(),
-            "cargo run -p cli -- base-transaction-receipt --network base-mainnet --tx-hash <tx-hash>".to_string(),
-            "cargo run -p cli -- discovery --public-base-url <url> --mcp-base-url <url>".to_string(),
+            "forge test --fuzz-runs 1000".to_string(),
+            "cargo test -p chain-base -p worker".to_string(),
+            "GET /v1/base/autonomous-bounties/feed?network=base-mainnet".to_string(),
         ],
         warnings,
     })
@@ -641,13 +636,13 @@ fn readiness_warnings(input: ReadinessWarningInputs<'_>) -> Vec<String> {
     }
     if !input.base_testnet_ready {
         warnings.push(
-            "Base Sepolia funding can be planned locally, but RPC log reconciliation needs RPC URL plus escrow and token addresses."
+            "Base Sepolia autonomous indexing needs an RPC URL, reviewed factory, and native USDC configuration."
                 .to_string(),
         );
     }
     if !input.base_mainnet_ready {
         warnings.push(
-            "Base mainnet USDC is not live-ready; set BASE_MAINNET_RPC_URL, pass the deployed escrow contract, pass the native Base USDC token, and configure OPERATOR_API_TOKEN."
+            "Base mainnet autonomous USDC is not live-ready; configure the RPC URL, reviewed bounty factory and implementation, and native USDC."
                 .to_string(),
         );
     }
@@ -665,7 +660,7 @@ fn readiness_warnings(input: ReadinessWarningInputs<'_>) -> Vec<String> {
     }
     if !input.operator_token {
         warnings.push(
-            "Set OPERATOR_API_TOKEN before exposing hosted reconciliation, broadcast, or live Stripe execution endpoints."
+            "Set OPERATOR_API_TOKEN before exposing optional hosted broadcast or live Stripe on-ramp endpoints; autonomous contract settlement does not require it."
                 .to_string(),
         );
     }
@@ -5418,23 +5413,23 @@ mod tests {
     }
 
     #[test]
-    fn live_money_readiness_reports_ready_only_with_live_stripe_and_base_mainnet() {
+    fn live_money_readiness_uses_autonomous_base_without_stripe_or_operator() {
         let report = build_live_money_readiness_report(LiveMoneyReadinessConfig {
             network: "base-mainnet".to_string(),
             escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
             usdc_token: Some(chain_base::BASE_MAINNET_USDC_TOKEN_ADDRESS.to_string()),
-            stripe_secret_key_mode: "live".to_string(),
-            stripe_live_execution_enabled: true,
+            stripe_secret_key_mode: "unset".to_string(),
+            stripe_live_execution_enabled: false,
             stripe_payment_method_configuration_configured: true,
-            stripe_webhook_secret_configured: true,
+            stripe_webhook_secret_configured: false,
             allow_unsigned_stripe_webhooks: false,
-            operator_auth_configured: true,
+            operator_auth_configured: false,
             base_rpc_url_configured: true,
             base_broadcast_enabled: false,
         })
         .unwrap();
 
-        assert!(report.stripe_live_mode_ready);
+        assert!(!report.stripe_live_mode_ready);
         assert!(report.base_mainnet_ready);
         assert!(report.live_money_ready);
         assert_eq!(report.network_chain_id, 8_453);
@@ -5508,7 +5503,7 @@ mod tests {
             .iter()
             .any(|warning| warning.contains("DATABASE_URL")));
         assert!(report.evidence_boundaries.iter().any(|boundary| {
-            boundary.contains("does not fund, release, refund, dispute, or authorize settlement")
+            boundary.contains("does not fund, verify, cancel, refund, or authorize settlement")
         }));
     }
 

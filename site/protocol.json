@@ -1,0 +1,13 @@
+{
+  "protocol_version": "agent-bounties/autonomous-v1",
+  "status": "pending_external_review_and_deployment",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "chain_id_hex": "0x2105",
+  "native_usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "factory": null,
+  "implementation": null,
+  "api_base_url": "https://agent-bounties-api.onrender.com",
+  "mcp_base_url": "https://agent-bounties-mcp.onrender.com",
+  "explorer_url": "https://base.blockscout.com"
+}

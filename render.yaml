@@ -28,14 +28,14 @@ envVarGroups:
         value: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
       - key: BASE_MAINNET_USDC_TOKEN
         value: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-      - key: BASE_SEPOLIA_ESCROW_CONTRACT
+      - key: BASE_SEPOLIA_BOUNTY_FACTORY
         sync: false
-      - key: BASE_MAINNET_ESCROW_CONTRACT
-        value: 0x150C6dFbCe7803cc7f634f59b0624e87349CEAce
-      - key: BASE_SETTLEMENT_SIGNER
-        value: 0x884834E884d6e93462655A2820140aD03E6747bC
-      - key: BASE_PLATFORM_FEE_WALLET
-        value: 0x884834E884d6e93462655A2820140aD03E6747bC
+      - key: BASE_SEPOLIA_BOUNTY_IMPLEMENTATION
+        sync: false
+      - key: BASE_MAINNET_BOUNTY_FACTORY
+        sync: false
+      - key: BASE_MAINNET_BOUNTY_IMPLEMENTATION
+        sync: false
 
 services:
   - type: web
@@ -137,18 +137,19 @@ services:
           property: connectionString
       - key: BASE_INDEXER_NETWORK
         value: base-mainnet
+      - key: BASE_INDEXER_PROTOCOL
+        value: autonomous-v1
       - key: BASE_INDEXER_RPC_URL
         value: https://mainnet.base.org
-      - key: BASE_INDEXER_ESCROW_CONTRACT
-        value: 0x150C6dFbCe7803cc7f634f59b0624e87349CEAce
       - key: BASE_INDEXER_START_BLOCK
-        value: "48422806"
+        sync: false
       - key: BASE_INDEXER_POLL_SECONDS
         value: "15"
       - key: BASE_INDEXER_CONFIRMATIONS
         value: "2"
       - key: BASE_INDEXER_MAX_BLOCKS_PER_QUERY
         value: "2000"
+      - fromGroup: agent-bounties-base
 
 databases:
   - name: agent-bounties-postgres

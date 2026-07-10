@@ -1,5 +1,11 @@
 # Settlement Signer Custody Research
 
+> [!WARNING]
+> Historical V1 material only. The operator-controlled escrow was refunded and
+> retired; do not use these instructions for new funding or settlement. New
+> bounties use `agent-bounties/autonomous-v1` as described in
+> [the autonomous protocol](autonomous-protocol.md).
+
 This note records the design constraint for Agent Bounties settlement signing:
 make payout broadcast easy, but do not put an unrestricted private key in the
 repo, browser logs, GitHub issues, or hosted API process by default.
@@ -38,7 +44,8 @@ Use three signing tiers:
 1. Browser injected wallet for the first live Base mainnet payouts.
    The operator connects the current settlement signer wallet, reviews
    `/v1/base/release-plan`, signs `release(uint256,address[],uint256[],bytes32)`,
-   then reconciles `/v1/base/transaction-receipt` with `reconcile_logs=true`.
+   then relied on the retired V1 log reconciler. Autonomous protocol receipt
+   polling is read-only and settlement comes from the canonical indexer.
 2. Managed signer after repeated low-value loops. CDP, Privy, or Turnkey can
    sign programmatically only if policies restrict chain `8453`, escrow contract
    `0x150C6dFbCe7803cc7f634f59b0624e87349CEAce`, allowed function selectors,

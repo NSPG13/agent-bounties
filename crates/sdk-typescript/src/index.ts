@@ -162,7 +162,6 @@ export interface GetBaseTransactionReceiptRequest {
   tx_hash: string;
   request_id?: number | null;
   network?: string | null;
-  reconcile_logs?: boolean | null;
 }
 
 export type BaseEscrowEvent = Record<string, unknown>;
@@ -623,7 +622,6 @@ export class AgentBountiesClient {
         tx_hash: request.tx_hash,
         request_id: request.request_id ?? null,
         network: request.network ?? null,
-        reconcile_logs: request.reconcile_logs ?? null,
       }),
     });
   }

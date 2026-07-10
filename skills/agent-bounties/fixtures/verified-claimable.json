@@ -1,122 +1,103 @@
 {
   "health": {"status": 200, "body": "ok", "error": null},
-  "readiness": {"status": 200, "body": {"live_money_ready": true}, "error": null},
-  "claimable_feed": {
+  "protocol": {
     "status": 200,
-    "body": [
-      {"id": "base-valid"},
-      {"id": "base-hash-only"},
-      {"id": "simulated-demo"}
-    ],
-    "error": null
+    "error": null,
+    "body": {
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "status": "active",
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "native_usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "factory": "0x1111111111111111111111111111111111111111",
+      "implementation": "0x9999999999999999999999999999999999999999"
+    }
   },
-  "funding_feed": {
+  "autonomous_feed": {
     "status": 200,
+    "error": null,
     "body": [
       {
-        "bounty_id": "needs-funding",
-        "title": "Fund a deterministic docs task",
-        "funding_target_minor": 5000000,
-        "funding_remaining_minor": 5000000,
-        "currency": "usdc",
-        "public_url": "https://example.test/public/bounties/needs-funding"
-      }
-    ],
-    "error": null
-  },
-  "statuses": {
-    "base-valid": {
-      "status": 200,
-      "error": null,
-      "body": {
-        "bounty": {
-          "id": "base-valid",
-          "title": "Verify a deterministic Base artifact",
-          "template_slug": "fix-ci-failure",
-          "amount": {"amount": 1000000, "currency": "usdc"},
-          "funding_mode": "BaseUsdcEscrow",
-          "status": "Claimable"
-        },
-        "funding_summary": {
-          "target": {"amount": 1000000, "currency": "usdc"},
-          "applied": {"amount": 1000000, "currency": "usdc"},
-          "claimable": true,
-          "partitions": [
-            {
-              "rail": "BaseUsdc",
-              "target": {"amount": 1000000, "currency": "usdc"},
-              "claimable": true
+        "bounty_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bounty_contract": "0x2222222222222222222222222222222222222222",
+        "creator": "0x3333333333333333333333333333333333333333",
+        "status": "claimable",
+        "solver_reward": "900000",
+        "verifier_reward": "100000",
+        "claim_bond": "100000",
+        "timeout_bond_pool": "0",
+        "target_amount": "1000000",
+        "funded_amount": "1000000",
+        "terms_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "terms_valid": true,
+        "validation_errors": [],
+        "terms": {
+          "terms_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "document": {
+            "title": "Verify a deterministic Base artifact",
+            "contract_terms": {
+              "protocol_version": "agent-bounties/autonomous-v1",
+              "creator_wallet": "0x3333333333333333333333333333333333333333",
+              "network": "base-mainnet",
+              "settlement_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "solver_reward": {"amount": 900000, "currency": "usdc"},
+              "verifier_reward": {"amount": 100000, "currency": "usdc"},
+              "claim_bond": {"amount": 100000, "currency": "usdc"}
             }
-          ]
-        },
-        "escrows": [
-          {
-            "rail": "BaseUsdc",
-            "status": "Funded",
-            "external_reference": "1"
           }
-        ],
-        "base_escrow_events": [
-          {"kind": "Created", "status": "Funded"}
-        ],
-        "funding_intents": [],
-        "funding_contributions": [],
-        "claims": []
+        },
+        "events": [
+          {"kind": "canonical_bounty_created", "contract_address": "0x1111111111111111111111111111111111111111"},
+          {"kind": "canonical_bounty_terms_committed"},
+          {"kind": "canonical_bounty_economics_configured"},
+          {"kind": "canonical_bounty_verification_configured"},
+          {"kind": "bounty_became_claimable"}
+        ]
+      },
+      {
+        "bounty_id": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "bounty_contract": "0x4444444444444444444444444444444444444444",
+        "creator": "0x5555555555555555555555555555555555555555",
+        "status": "claimable",
+        "solver_reward": "900000",
+        "verifier_reward": "100000",
+        "claim_bond": "100000",
+        "timeout_bond_pool": "0",
+        "target_amount": "1000000",
+        "funded_amount": "1000000",
+        "terms_hash": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "terms_valid": false,
+        "validation_errors": ["published terms do not match contract commitments"],
+        "terms": null,
+        "events": []
+      },
+      {
+        "bounty_id": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "bounty_contract": "0x6666666666666666666666666666666666666666",
+        "creator": "0x7777777777777777777777777777777777777777",
+        "status": "open",
+        "solver_reward": "4500000",
+        "verifier_reward": "500000",
+        "claim_bond": "500000",
+        "timeout_bond_pool": "0",
+        "target_amount": "5000000",
+        "funded_amount": "1000000",
+        "terms_hash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "terms_valid": true,
+        "validation_errors": [],
+        "terms": {"document": {"title": "Fund a deterministic docs task"}},
+        "events": []
       }
-    },
-    "base-hash-only": {
-      "status": 200,
-      "error": null,
-      "body": {
-        "bounty": {
-          "id": "base-hash-only",
-          "title": "Transaction hash without indexed escrow",
-          "template_slug": "fix-ci-failure",
-          "amount": {"amount": 1000000, "currency": "usdc"},
-          "funding_mode": "BaseUsdcEscrow",
-          "status": "Claimable"
-        },
-        "funding_summary": {
-          "target": {"amount": 1000000, "currency": "usdc"},
-          "applied": {"amount": 1000000, "currency": "usdc"},
-          "claimable": true,
-          "partitions": []
-        },
-        "escrows": [],
-        "base_escrow_events": [],
-        "funding_intents": [
-          {"rail": "BaseUsdc", "status": "AwaitingEvidence", "external_reference": "0xabc"}
-        ],
-        "funding_contributions": [],
-        "claims": []
+    ]
+  },
+  "verification_jobs": {
+    "status": 200,
+    "error": null,
+    "body": [
+      {
+        "job_id": "base-mainnet:0x8888888888888888888888888888888888888888:1",
+        "verification_mode": "signed_quorum"
       }
-    },
-    "simulated-demo": {
-      "status": 200,
-      "error": null,
-      "body": {
-        "bounty": {
-          "id": "simulated-demo",
-          "title": "Local simulated bounty",
-          "template_slug": "fix-ci-failure",
-          "amount": {"amount": 1000, "currency": "credits"},
-          "funding_mode": "Simulated",
-          "status": "Claimable"
-        },
-        "funding_summary": {
-          "target": {"amount": 1000, "currency": "credits"},
-          "applied": {"amount": 1000, "currency": "credits"},
-          "claimable": true,
-          "partitions": []
-        },
-        "escrows": [],
-        "base_escrow_events": [],
-        "funding_intents": [],
-        "funding_contributions": [
-          {"rail": "Simulated", "status": "Applied"}
-        ],
-        "claims": []
-      }
-    }
+    ]
   }
 }

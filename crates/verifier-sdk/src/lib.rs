@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use domain::{Id, Submission, VerificationDecision, VerifierKind, VerifierResult};
+use domain::{
+    AutomaticVerificationPolicy, Id, Submission, VerificationDecision, VerificationMechanism,
+    VerifierKind, VerifierResult,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -24,6 +27,159 @@ pub struct VerificationInput {
     pub expected_artifact_digest: Option<String>,
     pub rubric: Option<String>,
     pub evidence: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractAttestationEnvelope {
+    pub chain_id: u64,
+    pub contract_address: String,
+    pub bounty_id: Id,
+    pub round: u64,
+    pub verifier_wallet: String,
+    pub submission_hash: String,
+    pub evidence_hash: String,
+    pub policy_hash: String,
+    pub decision: VerificationDecision,
+    pub response_hash: String,
+    pub deadline_unix: u64,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContractAttestationScope {
+    pub chain_id: u64,
+    pub contract_address: String,
+    pub bounty_id: Id,
+    pub round: u64,
+    pub submission_hash: String,
+    pub evidence_hash: String,
+    pub policy_hash: String,
+    pub verifier_set_hash: String,
+    pub allowed_verifiers: Vec<String>,
+    pub observed_at_unix: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttestationEnvelopeQuorum {
+    pub decision: VerificationDecision,
+    pub verifier_wallets: Vec<String>,
+    pub response_hashes: Vec<String>,
+}
+
+/// Validates the deterministic envelope scope before relay. EIP-712/ERC-1271
+/// signature validity and settlement authority remain contract responsibilities.
+pub fn validate_contract_attestation_envelopes(
+    policy: &AutomaticVerificationPolicy,
+    scope: &ContractAttestationScope,
+    attestations: &[ContractAttestationEnvelope],
+) -> VerifierResultType<AttestationEnvelopeQuorum> {
+    policy
+        .validate()
+        .map_err(|error| VerifierError::InvalidInput(error.to_string()))?;
+    if policy.mechanism == VerificationMechanism::DeterministicModule {
+        return Err(VerifierError::InvalidInput(
+            "deterministic module policies do not accept signed quorum envelopes".to_string(),
+        ));
+    }
+    if attestations.len() != usize::from(policy.threshold) {
+        return Err(VerifierError::InvalidInput(
+            "attestation count does not equal the committed threshold".to_string(),
+        ));
+    }
+    if scope.allowed_verifiers.len() != usize::from(policy.verifier_count)
+        || policy.verifier_set_hash.as_deref() != Some(scope.verifier_set_hash.as_str())
+        || !is_evm_address(&scope.contract_address)
+        || !is_bytes32_hash(&scope.submission_hash)
+        || !is_bytes32_hash(&scope.evidence_hash)
+        || !is_bytes32_hash(&scope.policy_hash)
+    {
+        return Err(VerifierError::InvalidInput(
+            "attestation scope does not match the committed contract policy".to_string(),
+        ));
+    }
+    let expected_decision = attestations
+        .first()
+        .map(|attestation| attestation.decision.clone())
+        .ok_or_else(|| VerifierError::InvalidInput("attestation quorum is empty".to_string()))?;
+    if expected_decision == VerificationDecision::NeedsReview {
+        return Err(VerifierError::InvalidInput(
+            "needs-review attestations cannot settle a bounty".to_string(),
+        ));
+    }
+
+    let allowed_verifiers = scope
+        .allowed_verifiers
+        .iter()
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let mut verifier_wallets = Vec::with_capacity(attestations.len());
+    let mut response_hashes = Vec::with_capacity(attestations.len());
+    for attestation in attestations {
+        let verifier = attestation.verifier_wallet.to_ascii_lowercase();
+        if attestation.chain_id != scope.chain_id
+            || !attestation
+                .contract_address
+                .eq_ignore_ascii_case(&scope.contract_address)
+            || attestation.bounty_id != scope.bounty_id
+            || attestation.round != scope.round
+            || !attestation
+                .submission_hash
+                .eq_ignore_ascii_case(&scope.submission_hash)
+            || !attestation
+                .evidence_hash
+                .eq_ignore_ascii_case(&scope.evidence_hash)
+            || !attestation
+                .policy_hash
+                .eq_ignore_ascii_case(&scope.policy_hash)
+            || attestation.decision != expected_decision
+            || attestation.deadline_unix < scope.observed_at_unix
+            || !is_evm_address(&attestation.verifier_wallet)
+            || !is_bytes32_hash(&attestation.response_hash)
+            || !is_hex_bytes(&attestation.signature)
+        {
+            return Err(VerifierError::InvalidInput(
+                "attestation is expired, malformed, or bound to a different bounty scope"
+                    .to_string(),
+            ));
+        }
+        if !allowed_verifiers.contains(&verifier) {
+            return Err(VerifierError::InvalidInput(
+                "attestation signer is outside the committed verifier set".to_string(),
+            ));
+        }
+        if verifier_wallets.contains(&verifier) {
+            return Err(VerifierError::InvalidInput(
+                "duplicate verifier cannot satisfy quorum".to_string(),
+            ));
+        }
+        verifier_wallets.push(verifier);
+        response_hashes.push(attestation.response_hash.to_ascii_lowercase());
+    }
+
+    Ok(AttestationEnvelopeQuorum {
+        decision: expected_decision,
+        verifier_wallets,
+        response_hashes,
+    })
+}
+
+fn is_bytes32_hash(value: &str) -> bool {
+    value.len() == 66
+        && value.starts_with("0x")
+        && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_evm_address(value: &str) -> bool {
+    value.len() == 42
+        && value.starts_with("0x")
+        && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_hex_bytes(value: &str) -> bool {
+    value.len() > 2
+        && value.len().is_multiple_of(2)
+        && value.starts_with("0x")
+        && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[async_trait]
@@ -1167,6 +1323,51 @@ mod tests {
         assert_eq!(result.decision, VerificationDecision::Accepted);
     }
 
+    #[test]
+    fn ai_quorum_envelopes_must_match_exact_contract_scope() {
+        let bounty_id = Uuid::new_v4();
+        let policy = ai_quorum_policy();
+        let scope = attestation_scope(bounty_id);
+        let attestations = vec![
+            attestation(bounty_id, &scope.allowed_verifiers[0], "6"),
+            attestation(bounty_id, &scope.allowed_verifiers[1], "7"),
+        ];
+
+        let quorum = validate_contract_attestation_envelopes(&policy, &scope, &attestations)
+            .expect("valid quorum envelope");
+
+        assert_eq!(quorum.decision, VerificationDecision::Accepted);
+        assert_eq!(quorum.verifier_wallets.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_or_cross_bounty_attestations_cannot_satisfy_quorum() {
+        let bounty_id = Uuid::new_v4();
+        let policy = ai_quorum_policy();
+        let scope = attestation_scope(bounty_id);
+        let duplicate = attestation(bounty_id, &scope.allowed_verifiers[0], "6");
+        let error = validate_contract_attestation_envelopes(
+            &policy,
+            &scope,
+            &[duplicate.clone(), duplicate],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("duplicate verifier"));
+
+        let mut wrong_bounty = attestation(Uuid::new_v4(), &scope.allowed_verifiers[1], "7");
+        wrong_bounty.bounty_id = Uuid::new_v4();
+        let error = validate_contract_attestation_envelopes(
+            &policy,
+            &scope,
+            &[
+                attestation(bounty_id, &scope.allowed_verifiers[0], "6"),
+                wrong_bounty,
+            ],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("different bounty scope"));
+    }
+
     fn submission_for(bounty_id: Uuid, digest: &str) -> Submission {
         Submission {
             id: Uuid::new_v4(),
@@ -1206,5 +1407,75 @@ mod tests {
                 }
             }
         })
+    }
+
+    fn ai_quorum_policy() -> AutomaticVerificationPolicy {
+        AutomaticVerificationPolicy {
+            protocol_version: domain::AUTONOMOUS_BOUNTY_PROTOCOL_VERSION.to_string(),
+            mechanism: VerificationMechanism::AiJudgeQuorum,
+            engine: domain::VerificationEngine::AiJudge,
+            terms_hash: hash("1"),
+            policy_hash: hash("2"),
+            acceptance_criteria_hash: hash("3"),
+            benchmark_hash: hash("a"),
+            evidence_schema_hash: hash("4"),
+            verifier_set_hash: Some(hash("5")),
+            verifier_count: 3,
+            threshold: 2,
+            max_automatic_payout: domain::Money::new(1_000_000, "usdc").unwrap(),
+            ai_judge: Some(domain::AiJudgePolicyCommitment {
+                provider: "provider".to_string(),
+                model: "judge".to_string(),
+                model_version: "2026-07-10".to_string(),
+                system_prompt_hash: hash("8"),
+                rubric_hash: hash("9"),
+                benchmark_hash: hash("a"),
+                decoding_parameters_hash: hash("b"),
+            }),
+        }
+    }
+
+    fn attestation_scope(bounty_id: Id) -> ContractAttestationScope {
+        ContractAttestationScope {
+            chain_id: 8453,
+            contract_address: address("1"),
+            bounty_id,
+            round: 1,
+            submission_hash: hash("c"),
+            evidence_hash: hash("d"),
+            policy_hash: hash("2"),
+            verifier_set_hash: hash("5"),
+            allowed_verifiers: vec![address("2"), address("3"), address("4")],
+            observed_at_unix: 100,
+        }
+    }
+
+    fn attestation(
+        bounty_id: Id,
+        verifier_wallet: &str,
+        response_character: &str,
+    ) -> ContractAttestationEnvelope {
+        ContractAttestationEnvelope {
+            chain_id: 8453,
+            contract_address: address("1"),
+            bounty_id,
+            round: 1,
+            verifier_wallet: verifier_wallet.to_string(),
+            submission_hash: hash("c"),
+            evidence_hash: hash("d"),
+            policy_hash: hash("2"),
+            decision: VerificationDecision::Accepted,
+            response_hash: hash(response_character),
+            deadline_unix: 200,
+            signature: "0x0102".to_string(),
+        }
+    }
+
+    fn hash(character: &str) -> String {
+        format!("0x{}", character.repeat(64))
+    }
+
+    fn address(character: &str) -> String {
+        format!("0x{}", character.repeat(40))
     }
 }

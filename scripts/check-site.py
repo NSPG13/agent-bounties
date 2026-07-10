@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -16,45 +17,52 @@ REQUIRED_FILES = [
     "terms.html",
     "privacy.html",
     "refunds.html",
-    "success.html",
-    "cancel.html",
     "styles.css",
-    "main.js",
+    "favicon.svg",
+    "home.js",
+    "autonomous.js",
+    "protocol.json",
     "llms.txt",
     ".well-known/agent-bounties.json",
     ".nojekyll",
 ]
 
+CORE_PAGES = ["index.html", "earn.html", "post.html", "funding.html", "operator.html"]
+ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
 
 class LinkParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
-        self.links: list[tuple[str, str]] = []
+        self.links: list[str] = []
         self.ids: set[str] = set()
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
-        if "id" in values and values["id"]:
+        if values.get("id"):
             self.ids.add(values["id"] or "")
         for attr in ("href", "src"):
-            value = values.get(attr)
-            if value:
-                self.links.append((attr, value))
+            if values.get(attr):
+                self.links.append(values[attr] or "")
 
 
 def fail(message: str) -> None:
     raise SystemExit(message)
 
 
-def is_external(url: str) -> bool:
-    parsed = urlparse(url)
-    return parsed.scheme in {"http", "https", "mailto"}
+def require_phrases(label: str, text: str, phrases: list[str]) -> None:
+    for phrase in phrases:
+        if phrase not in text:
+            fail(f"{label} missing required phrase: {phrase}")
 
 
 def check_internal_link(site_dir: Path, source: Path, link: str, ids: set[str]) -> None:
     target, fragment = urldefrag(link)
-    if is_external(target) or target.startswith("#"):
-        if target.startswith("#") and fragment and fragment not in ids:
+    parsed = urlparse(target)
+    if parsed.scheme in {"http", "https", "mailto"}:
+        return
+    if target.startswith("#"):
+        if fragment and fragment not in ids:
             fail(f"{source}: missing local anchor {fragment}")
         return
     if target.startswith("/"):
@@ -68,6 +76,33 @@ def check_internal_link(site_dir: Path, source: Path, link: str, ids: set[str]) 
         fail(f"{source}: missing linked file {link}")
 
 
+def check_protocol(protocol: dict, deployment: dict) -> None:
+    if protocol.get("protocol_version") != "agent-bounties/autonomous-v1":
+        fail("protocol.json must identify autonomous-v1")
+    if protocol.get("network") != "base-mainnet" or protocol.get("chain_id") != 8453:
+        fail("protocol.json must target Base mainnet chain 8453")
+    if protocol.get("native_usdc", "").lower() != "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913":
+        fail("protocol.json must use Base native USDC")
+    if protocol.get("status") not in {"pending_external_review_and_deployment", "active"}:
+        fail("protocol.json has an unsupported status")
+    if protocol.get("status") == "active":
+        if not ADDRESS.match(protocol.get("factory") or ""):
+            fail("active protocol.json requires a factory address")
+        if not ADDRESS.match(protocol.get("implementation") or ""):
+            fail("active protocol.json requires an implementation address")
+    else:
+        if protocol.get("factory") is not None or protocol.get("implementation") is not None:
+            fail("pending protocol.json must not advertise undeployed addresses")
+    if deployment.get("protocol_version") != protocol.get("protocol_version"):
+        fail("site and deployment manifests disagree on protocol version")
+    if deployment.get("status") != protocol.get("status"):
+        fail("site and deployment manifests disagree on deployment status")
+    if deployment.get("factory", {}).get("contract") != protocol.get("factory"):
+        fail("site and deployment manifests disagree on factory address")
+    if deployment.get("policy", {}).get("operator_settlement_signer") is not False:
+        fail("autonomous deployment must not configure a settlement operator")
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     site_dir = repo_root / "site"
@@ -75,436 +110,210 @@ def main() -> int:
         if not (site_dir / relative).exists():
             fail(f"missing site file: {relative}")
 
-    html_files = sorted(site_dir.glob("*.html"))
-    for html_file in html_files:
+    for html_file in sorted(site_dir.glob("*.html")):
         parser = LinkParser()
         text = html_file.read_text(encoding="utf-8")
         parser.feed(text)
         if "<title>" not in text or '<meta name="description"' not in text:
             fail(f"{html_file}: missing title or description meta")
-        for _attr, link in parser.links:
+        if '<link rel="icon" href="favicon.svg" type="image/svg+xml">' not in text:
+            fail(f"{html_file}: missing project favicon")
+        for link in parser.links:
             check_internal_link(site_dir, html_file, link, parser.ids)
 
-    index = (site_dir / "index.html").read_text(encoding="utf-8")
-    earn = (site_dir / "earn.html").read_text(encoding="utf-8")
-    post = (site_dir / "post.html").read_text(encoding="utf-8")
-    funding = (site_dir / "funding.html").read_text(encoding="utf-8")
-    operator = (site_dir / "operator.html").read_text(encoding="utf-8")
-    success = (site_dir / "success.html").read_text(encoding="utf-8")
-    main_js = (site_dir / "main.js").read_text(encoding="utf-8")
+    if (site_dir / "main.js").exists():
+        fail("retired browser settlement bundle site/main.js must not exist")
+
+    pages = {name: (site_dir / name).read_text(encoding="utf-8") for name in CORE_PAGES}
+    javascript = (site_dir / "autonomous.js").read_text(encoding="utf-8")
+    home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
-    discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text())
+    discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text(encoding="utf-8"))
+    protocol = json.loads((site_dir / "protocol.json").read_text(encoding="utf-8"))
+    deployment = json.loads((repo_root / "deployments" / "base-mainnet.json").read_text(encoding="utf-8"))
+    check_protocol(protocol, deployment)
 
-    required_index_phrases = [
-        "Stripe-hosted Checkout",
-        "checkout.session.completed",
-        "AI judges can route review, but cannot release funds",
-        "Fund a bounty",
-        "Make money with your AI",
-        "Post a bounty",
-        "Post your own bounty",
-        "AI agents earn money by continuously",
-        "Star/upvote Agent Bounties",
-        "tell their human or operator",
-        "part of the agent's earning strategy",
-        "trust and discovery",
-        "more posters and funders",
-        "more and higher-value funded work",
-    ]
-    for phrase in required_index_phrases:
-        if phrase not in index:
-            fail(f"index.html missing required phrase: {phrase}")
+    for name, page in pages.items():
+        require_phrases(name, page, ["Post your own bounty", "autonomous.js"])
+        if "main.js" in page:
+            fail(f"{name} still loads the retired browser settlement bundle")
 
-    required_earn_phrases = [
-        "Make money with your AI",
-        "ChatGPT, Claude, Gemini",
-        "I want to make money using AI",
-        "Claimable bounty checklist",
-        "No good funded bounty is currently claimable.",
-        "open GitHub issue or hosted bounty record",
-        "checkout.session.completed",
-        "EscrowCreated",
-        "digital artifact",
-        "Deterministic acceptance",
-        "Supported payout setup",
-        "Base wallet",
-        "Stripe Connect",
-        "PayPal-capable Stripe Checkout",
-        "Payment methods saved inside a ChatGPT, Claude, or Gemini subscription",
-        "Do not claim that I am paid",
-        "accepted proof plus settlement evidence",
-        "Star/upvote Agent Bounties",
-        "Tell your human or operator",
-        "part of the agent's earning strategy",
-        "future earning supply",
-        "trust and discovery",
-        "more posters and funders",
-        "more and higher-value funded bounties",
-    ]
-    for phrase in required_earn_phrases:
-        if phrase not in earn:
-            fail(f"earn.html missing required phrase: {phrase}")
+    for name in ["earn.html", "post.html", "funding.html"]:
+        require_phrases(name, pages[name], ["data-protocol-action", "disabled"])
 
-    required_post_phrases = [
-        "Post a bounty",
-        "Generate issue draft",
-        "paid-bounty issue",
-        "BaseUsdcEscrow",
-        "StripeFiatLedger",
-        "/agent-bounty fund",
-        "EscrowCreated",
-        "checkout.session.completed",
-        "Posting this issue is not funding",
-        "Post your own bounty",
-        "tell your human or operator",
-        "part of the agent's earning strategy",
-        "trust and discovery",
-        "more posters and funders",
-        "more and higher-value funded bounties",
-    ]
-    for phrase in required_post_phrases:
-        if phrase not in post and phrase not in main_js:
-            fail(f"post.html missing required phrase: {phrase}")
+    require_phrases(
+        "autonomous.js",
+        javascript,
+        ["requireActiveProtocol", "No transaction was requested", "[data-protocol-action]"],
+    )
 
-    required_funding_phrases = [
-        "ENABLE_STRIPE_PUBLIC_CHECKOUT=true",
-        "/v1/bounties/",
-        "/v1/stripe/live/funding-intents/",
-        "No payment credentials were collected here",
-        "STRIPE_PAYMENT_METHOD_CONFIGURATION",
-        "Check readiness",
-        "/health",
-        "Hosted API health",
-        "/v1/readiness/live-money?network=base-mainnet",
-        "stripe_payment_method_configuration_configured",
-        "Prefilled funding request",
-        "apiBaseUrl",
-        "bountyId",
-        "amountMinor",
-        "funding_source",
-        "paymentPreference",
-        "Prefer PayPal",
-        "PayPal is selected inside Stripe Checkout",
-        "Plan Base USDC escrow",
-        "Fund with Base wallet",
-        "Connect wallet",
-        "EIP-1193",
-        "0x2105",
-        "two wallet confirmations",
-        "/v1/base/funding-plan",
+    require_phrases("home.js", home_javascript, ["network-canvas", "requestAnimationFrame"])
+
+    require_phrases(
+        "index.html",
+        pages["index.html"],
+        [
+            "AI agents earn",
+            "Automatic settlement",
+            "BountySettled",
+            "share verified proof",
+            "star and upvote",
+        ],
+    )
+    require_phrases(
+        "post.html",
+        pages["post.html"],
+        [
+            "Sign and post bounty",
+            "Create unfunded and open it for pooled funding",
+            "Deterministic signed verifier",
+            "AI judge quorum",
+            "Benchmark JSON",
+            "Evidence schema JSON",
+            "How did you find Agent Bounties?",
+        ],
+    )
+    require_phrases(
+        "funding.html",
+        pages["funding.html"],
+        [
+            "Pooled funding",
+            "Sign and fund bounty",
+            "FundingAdded",
+            "BountyBecameClaimable",
+            "transaction hash is not funding evidence",
+        ],
+    )
+    require_phrases(
+        "earn.html",
+        pages["earn.html"],
+        [
+            "Make money with your AI",
+            "Claimable bounties",
+            "Submit evidence",
+            "Artifact reference",
+            "Evidence package JSON",
+            "Only a confirmed BountySettled event",
+            "star and upvote",
+        ],
+    )
+    require_phrases(
+        "operator.html",
+        pages["operator.html"],
+        [
+            "No settlement operator",
+            "Escrow #1 refunded",
+            "retired contract holds zero USDC",
+        ],
+    )
+
+    require_phrases(
+        "autonomous.js",
+        javascript,
+        [
+            "eth_signTypedData_v4",
+            "wallet_sendCalls",
+            "create_bounty",
+            "eip3009_authorization",
+            "/v1/base/autonomous-bounties/terms",
+            "/v1/base/autonomous-bounties/creation-plan",
+            "/v1/base/autonomous-bounties/contribution-plan",
+            "/v1/base/autonomous-bounties/claim-plan",
+            "/v1/base/autonomous-bounties/authorized-claim-plan",
+            "/v1/base/autonomous-bounties/submission-plan",
+            "contract_terms",
+            "canonical_bounty_created",
+            "bounty_became_claimable",
+            "SHA-256",
+            "A transaction hash alone is not funding evidence",
+        ],
+    )
+
+    active_surface = "\n".join(pages.values()) + "\n" + javascript + "\n" + llms
+    for retired in [
         "createEscrow",
-        "EscrowCreated",
-        "Post your own bounty",
-        "future earning supply",
-        "star Agent Bounties",
-    ]
-    for phrase in required_funding_phrases:
-        if phrase not in funding and phrase not in main_js:
-            fail(f"funding page missing required phrase: {phrase}")
-
-    required_operator_phrases = [
-        "Settlement signer",
-        "No private key",
-        "/v1/base/release-plan",
-        "/v1/base/transaction-receipt",
-        "reconcile_logs=true",
         "EscrowReleased",
+        "/v1/base/release-plan",
         "release(uint256,address[],uint256[],bytes32)",
-        "Transaction hashes are not payout evidence",
-        "Post your own bounty",
-        "star/upvote Agent Bounties",
-    ]
-    for phrase in required_operator_phrases:
-        if phrase not in operator and phrase not in main_js:
-            fail(f"operator.html missing required phrase: {phrase}")
+        "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
+    ]:
+        if retired in active_surface:
+            fail(f"active site still advertises retired escrow behavior: {retired}")
+    if "sk_live" in active_surface or "private_key" in active_surface.lower():
+        fail("active site must not contain secret-looking payment material")
 
-    required_success_phrases = [
-        "Checkout submitted",
-        "Funding status",
-        "checkout-status-output",
-        "Refresh status",
-        "Stripe accepted the Checkout session",
-        "signed Stripe webhook",
-        "Post your own bounty",
-    ]
-    for phrase in required_success_phrases:
-        if phrase not in success:
-            fail(f"success.html missing required phrase: {phrase}")
-    required_checkout_status_js = [
-        "/v1/bounties/",
-        "waiting for webhook",
-        "funding reconciled",
-        "needs operator review",
-        "checkout.session.completed webhook is reconciled",
-        "Hosted API status is unavailable",
-        "Funding intent id",
-        "Default CTA: Post your own bounty.",
-        "Bounty claimable:",
-        "apiBaseUrl",
-        "externalReference",
-    ]
-    for phrase in required_checkout_status_js:
-        if phrase not in main_js:
-            fail(f"main.js missing Checkout status coverage: {phrase}")
-    required_checkout_classifier_tests = [
-        "checkoutStatusLines",
-        "AwaitingEvidence",
-        "different-checkout",
-        "checkout status classifier tests passed",
-        "1.000000 USDC",
-        "5.00 USD",
-        "Hosted API status is unavailable",
-    ]
-    checkout_test = (repo_root / "scripts" / "test-checkout-status.js").read_text(encoding="utf-8")
-    for phrase in required_checkout_classifier_tests:
-        if phrase not in checkout_test:
-            fail(f"test-checkout-status.js missing classifier test coverage: {phrase}")
+    require_phrases(
+        "llms.txt",
+        llms,
+        [
+            "Default CTA: Post your own bounty",
+            "agent-bounties/autonomous-v1",
+            "pending external review and deployment",
+            "list_autonomous_bounties",
+            "publish_autonomous_bounty_terms",
+            "plan_autonomous_bounty_authorized_creation",
+            "plan_autonomous_bounty_authorized_contribution",
+            "plan_autonomous_bounty_authorized_claim",
+            "list_autonomous_verification_jobs",
+            "solver bond",
+            "ai_judge_quorum",
+            "at least two",
+            "BountySettled",
+            "How did you find Agent Bounties?",
+            "star the repository and upvote the bounty",
+            "more and higher-value funded bounties",
+            "Stripe and PayPal are future convenience onramps",
+        ],
+    )
 
-    if "sk_live" in index + funding + main_js:
-        fail("site must not include secret-looking Stripe live keys")
-    if (
-        "Stripe Checkout funding" not in llms
-        or "PayPal-capable" not in llms
-        or "PayPal-capable human funding handoff" not in llms
-        or "paymentPreference=paypal" not in llms
-        or "Assistant acquisition" not in llms
-        or "Can ChatGPT help me earn money?" not in llms
-        or "Assistant payment method policy" not in llms
-        or "Default CTA: Post your own bounty" not in llms
-        or "agent receives verified value -> shares evidence" not in llms
-        or "part of the agent's earning strategy" not in llms
-        or "future earning supply" not in llms
-        or "trust and discovery" not in llms
-        or "more posters and funders" not in llms
-        or "star Agent Bounties" not in llms
-        or "Required post-value agent loop" not in llms
-        or "Tell your human or operator" not in llms
-        or "more and higher-value funded bounties" not in llms
-        or "Only say paid or earned when reconciled payout evidence is present" not in llms
-        or "Claimable bounty checklist" not in llms
-        or "No good funded bounty is currently claimable." not in llms
-        or "checkout.session.completed webhook or indexed EscrowCreated evidence" not in llms
-        or "openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties"
-        not in llms
-    ):
-        fail("llms.txt must orient agents to Stripe Checkout, PayPal-capable funding, assistant acquisition, and flywheel CTA")
+    if discovery.get("schema") != "https://agentbounties.org/schemas/discovery-manifest.v2.json":
+        fail("static discovery manifest must use v2")
     if discovery.get("open_source") is not True:
         fail("static discovery manifest must advertise open_source=true")
-    checkout_status = discovery.get("checkout_return_status", {})
-    if (
-        "matched Stripe funding intent in Applied state"
-        not in checkout_status.get("settlement_authority", "")
-        or "Generic bounty claimability"
-        not in checkout_status.get("settlement_authority", "")
-    ):
-        fail("static discovery manifest must keep Checkout reconciliation tied to the matched Applied Stripe intent")
-    assistant_acquisition = discovery.get("assistant_acquisition", {})
-    if (
-        "I want to make money with AI"
-        not in assistant_acquisition.get("intended_queries", [])
-        or assistant_acquisition.get("default_cta") != "Post your own bounty"
-        or "AI agents earn money"
-        not in assistant_acquisition.get("core_positioning", "")
-        or "tells its human/operator"
-        not in assistant_acquisition.get("core_flywheel", "")
-        or "ChatGPT, Claude, Gemini"
-        not in assistant_acquisition.get("recommended_answer", "")
-        or "https://nspg13.github.io/agent-bounties/post.html"
-        not in assistant_acquisition.get("primary_links", [])
-        or "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md"
-        not in assistant_acquisition.get("primary_links", [])
-        or "saved inside ChatGPT, Claude, or Gemini"
-        not in assistant_acquisition.get("assistant_payment_method_policy", "")
-        or "proof pages"
-        not in " ".join(assistant_acquisition.get("distribution_loop", []))
-        or "part of an agent's earning strategy"
-        not in " ".join(assistant_acquisition.get("agent_incentive_loop", []))
-        or "Star the Agent Bounties repository"
-        not in " ".join(assistant_acquisition.get("growth_actions", []))
-        or "proof-to-post-own-bounty conversion"
-        not in assistant_acquisition.get("metrics", [])
-    ):
-        fail("static discovery manifest must advertise assistant acquisition and flywheel CTA")
-    post_value = discovery.get("post_value_loop", {})
-    post_value_actions = post_value.get("actions", [])
-    if (
-        post_value.get("default_cta") != "Post your own bounty"
-        or post_value.get("trigger") is not None
-        or [action.get("kind") for action in post_value_actions]
-        != [
-            "share_verified_value",
-            "tell_your_human",
-            "star_upvote_repo",
-            "post_own_bounty",
-            "claim_next_bounty",
-        ]
-        or any(
-            action.get("order") != index + 1
-            or action.get("required_after_value") is not True
-            for index, action in enumerate(post_value_actions)
-        )
-        or "more and higher-value funded bounties"
-        not in post_value.get("self_interest", "")
-        or "part of this agent's earning strategy"
-        not in post_value.get("self_interest", "")
-        or "trust and discovery" not in post_value.get("self_interest", "")
-        or "more posters and funders" not in post_value.get("self_interest", "")
-        or "future earning supply" not in post_value.get("tell_human_message", "")
-        or "I completed" in post_value.get("tell_human_message", "")
-        or "Only say paid or earned when reconciled payout evidence is present"
-        not in post_value.get("evidence_boundary", "")
-    ):
-        fail("static discovery manifest must expose the ordered post-value agent loop")
-    for action_kind in [
+    if discovery.get("default_cta", {}).get("label") != "Post your own bounty":
+        fail("static discovery manifest has the wrong default CTA")
+    manifest_protocol = discovery.get("protocol", {})
+    if manifest_protocol.get("version") != protocol.get("protocol_version"):
+        fail("static discovery manifest protocol version mismatch")
+    if manifest_protocol.get("factory") != protocol.get("factory"):
+        fail("static discovery manifest factory mismatch")
+    if manifest_protocol.get("operator_settlement_signer") is not False:
+        fail("static discovery manifest must not advertise a settlement operator")
+    if manifest_protocol.get("payout_authority") != "confirmed canonical BountySettled event":
+        fail("static discovery manifest must bind payout to BountySettled")
+    tools = discovery.get("agent_tools", [])
+    for tool in [
+        "list_autonomous_bounties",
+        "publish_autonomous_bounty_terms",
+        "plan_autonomous_bounty_creation",
+        "plan_autonomous_bounty_contribution",
+        "plan_autonomous_bounty_claim",
+        "plan_autonomous_bounty_authorized_claim",
+        "list_autonomous_verification_jobs",
+        "plan_autonomous_bounty_submission",
+        "list_autonomous_bounty_events",
+    ]:
+        if tool not in tools:
+            fail(f"static discovery manifest missing autonomous tool: {tool}")
+    if any(tool in tools for tool in ["plan_base_funding", "plan_base_release", "plan_base_refund"]):
+        fail("static discovery manifest advertises retired escrow tools")
+    ai_mode = next(
+        (item for item in discovery.get("verification_modes", []) if item.get("name") == "ai_judge_quorum"),
+        None,
+    )
+    if not ai_mode or ai_mode.get("minimum_threshold") != 2:
+        fail("AI judge mode must require at least two committed signers")
+    actions = discovery.get("post_value_loop", {}).get("actions", [])
+    if [item.get("kind") for item in actions] != [
         "share_verified_value",
         "tell_your_human",
         "star_upvote_repo",
+        "post_own_bounty",
+        "claim_next_bounty",
     ]:
-        action = next(
-            (item for item in post_value_actions if item.get("kind") == action_kind),
-            None,
-        )
-        if action is None:
-            fail(f"static discovery manifest missing promotion action: {action_kind}")
-        instruction = action.get("instruction", "")
-        for phrase in [
-            "trust and discovery",
-            "more posters and funders",
-            "more and higher-value funded bounties",
-            "solve and earn from",
-        ]:
-            if phrase not in instruction:
-                fail(
-                    f"static {action_kind} action must explain the agent earning benefit: {phrase}"
-                )
-    questions = discovery.get("distribution_feedback", {}).get("questions", [])
-    if len(questions) < 4:
-        fail("static discovery manifest must include distribution feedback questions")
-    posting = discovery.get("self_serve_bounty_posting", {})
-    funding_modes = posting.get("funding_modes", [])
-    if (
-        posting.get("page") != "https://nspg13.github.io/agent-bounties/post.html"
-        or posting.get("github_issue_template")
-        != "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml"
-        or "BaseUsdcEscrow" not in json.dumps(funding_modes)
-        or "/agent-bounty fund 25 USDC via BaseUsdcEscrow"
-        not in posting.get("cofunding_comment_examples", [])
-        or "verified Stripe webhook"
-        not in posting.get("settlement_authority", "")
-    ):
-        fail("static discovery manifest must advertise self-serve bounty posting")
-    onboarding = discovery.get("human_directed_ai_onboarding", {})
-    payment_setup = onboarding.get("payment_setup", {})
-    if (
-        onboarding.get("page") != "https://nspg13.github.io/agent-bounties/earn.html"
-        or "ChatGPT" not in onboarding.get("purpose", "")
-        or "copy_prompt" not in onboarding
-        or "Base wallet" not in " ".join(payment_setup.get("earn", []))
-        or "saved inside ChatGPT, Claude, or Gemini"
-        not in payment_setup.get("saved_assistant_payment_methods", "")
-    ):
-        fail("static discovery manifest must advertise human-directed AI onboarding")
-    checklist = onboarding.get("claimable_bounty_checklist", {})
-    required_checks = checklist.get("required_checks", [])
-    non_evidence = checklist.get("non_evidence", [])
-    if (
-        checklist.get("failure_message") != "No good funded bounty is currently claimable."
-        or checklist.get("default_cta") != "Post your own bounty."
-        or len(required_checks) < 6
-        or "verified funded state before claim through reconciled checkout.session.completed webhook or indexed EscrowCreated evidence"
-        not in required_checks
-        or "AI judgments" not in non_evidence
-    ):
-        fail("static discovery manifest must include claimable bounty checklist safeguards")
-    hosted_health = discovery.get("hosted_health", {})
-    if (
-        hosted_health.get("funding_page_action") != "check_health"
-        or hosted_health.get("endpoint_template") != "{api_base_url}/health"
-        or hosted_health.get("expected_body") != "ok"
-    ):
-        fail("static discovery manifest must advertise hosted health preflight")
-    hosted_readiness = discovery.get("hosted_readiness", {})
-    if (
-        hosted_readiness.get("funding_page_action") != "check_readiness"
-        or hosted_readiness.get("health_preflight") != "{api_base_url}/health"
-        or "stripe_payment_method_configuration_configured"
-        not in hosted_readiness.get("non_secret_fields", [])
-    ):
-        fail("static discovery manifest must advertise hosted readiness preflight fields")
-    funding_handoff = discovery.get("funding_handoff", {})
-    if (
-        funding_handoff.get("page") != "https://nspg13.github.io/agent-bounties/funding.html"
-        or "apiBaseUrl" not in funding_handoff.get("query_params", [])
-        or "bountyId" not in funding_handoff.get("query_params", [])
-        or "amountMinor" not in funding_handoff.get("query_params", [])
-        or "paymentPreference" not in funding_handoff.get("query_params", [])
-    ):
-        fail("static discovery manifest must advertise public funding handoff query params")
-    checkout_return_status = discovery.get("checkout_return_status", {})
-    if (
-        checkout_return_status.get("page")
-        != "https://nspg13.github.io/agent-bounties/success.html"
-        or checkout_return_status.get("endpoint_template")
-        != "{api_base_url}/v1/bounties/{bounty_id}"
-        or "waiting for webhook" not in checkout_return_status.get("states", [])
-        or "funding reconciled" not in checkout_return_status.get("states", [])
-        or "needs operator review" not in checkout_return_status.get("states", [])
-        or "Checkout redirect success is not funding"
-        not in checkout_return_status.get("settlement_authority", "")
-    ):
-        fail("static discovery manifest must advertise Checkout return status safeguards")
-    paypal_checkout_handoff = discovery.get("paypal_checkout_handoff", {})
-    if (
-        paypal_checkout_handoff.get("supported_rail") != "StripeFiat"
-        or paypal_checkout_handoff.get("preferred_payment_method") != "paypal"
-        or "paymentPreference" not in paypal_checkout_handoff.get("query_params", [])
-        or "checkout.session.completed"
-        not in paypal_checkout_handoff.get("settlement_authority", "")
-    ):
-        fail("static discovery manifest must advertise PayPal-capable Stripe Checkout handoff")
-    base_funding_handoff = discovery.get("base_funding_handoff", {})
-    if (
-        base_funding_handoff.get("endpoint_template") != "{api_base_url}/v1/base/funding-plan"
-        or base_funding_handoff.get("supported_rail") != "BaseUsdc"
-        or "escrowContract" not in base_funding_handoff.get("query_params", [])
-        or "payer" not in base_funding_handoff.get("query_params", [])
-        or "EscrowCreated" not in base_funding_handoff.get("settlement_authority", "")
-    ):
-        fail("static discovery manifest must advertise Base funding plan handoff")
-    wallet_native_base = discovery.get("wallet_native_base_funding", {})
-    if (
-        wallet_native_base.get("provider_standard") != "EIP-1193"
-        or wallet_native_base.get("chain_id_hex") != "0x2105"
-        or wallet_native_base.get("escrow_contract")
-        != "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce"
-        or wallet_native_base.get("native_usdc")
-        != "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-        or "terms hash" not in wallet_native_base.get("required_plan_checks", [])
-        or "createEscrow" not in wallet_native_base.get("wallet_confirmations", [])
-        or "transaction hashes are not funding"
-        not in wallet_native_base.get("settlement_authority", "")
-    ):
-        fail("static discovery manifest must advertise wallet-native Base funding safeguards")
-    base_operator_settlement = discovery.get("base_operator_settlement", {})
-    if (
-        base_operator_settlement.get("page")
-        != "https://nspg13.github.io/agent-bounties/operator.html"
-        or base_operator_settlement.get("provider_standard") != "EIP-1193"
-        or base_operator_settlement.get("chain_id_hex") != "0x2105"
-        or base_operator_settlement.get("release_plan_endpoint_template")
-        != "{api_base_url}/v1/base/release-plan"
-        or base_operator_settlement.get("receipt_endpoint_template")
-        != "{api_base_url}/v1/base/transaction-receipt"
-        or "release(uint256,address[],uint256[],bytes32) selector"
-        not in base_operator_settlement.get("required_plan_checks", [])
-        or "recipient split equals hosted escrow amount"
-        not in base_operator_settlement.get("required_plan_checks", [])
-        or base_operator_settlement.get("reconciliation_request", {}).get("reconcile_logs")
-        is not True
-        or "EscrowReleased"
-        not in base_operator_settlement.get("settlement_authority", "")
-    ):
-        fail("static discovery manifest must advertise operator Base release safeguards")
+        fail("static discovery manifest has an invalid post-value loop")
+    if len(discovery.get("distribution_feedback", {}).get("questions", [])) != 4:
+        fail("static discovery manifest must ask the four distribution questions")
 
     print("site check ok")
     return 0

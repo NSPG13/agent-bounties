@@ -1,19 +1,22 @@
 use app::{
-    build_audience_report, build_base_indexer_status_report, build_live_money_readiness_report,
-    hash_artifact, stripe_secret_key_mode_from_secret, AddFundingContributionRequest,
-    ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseEscrowReconciliation,
-    BaseIndexerHeartbeatStatus, BaseIndexerScanCursor, BaseIndexerStatusConfig,
-    BaseIndexerStatusReport, BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse,
-    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
-    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest, PlanStripeTransferRequest as AppPlanStripeTransferRequest,
-    PooledFundingReport, PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest,
-    RecordDiscoveryResponseRequest, RecordOutreachAttemptRequest, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
-    ReviewedBountyApproval, RiskEventFilter, StripeTransferPlan, StripeTransferReconciliation,
-    SubmitResultRequest, UpsertAudienceMemberRequest, UpsertContributorContactRequest,
-    VerifySubmissionRequest,
+    build_audience_report, build_live_money_readiness_report, hash_artifact,
+    stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
+    ApproveRiskPayoutRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
+    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport,
+    LiveMoneyReadinessConfig, LiveMoneyReadinessReport, OpenPooledBountyRequest,
+    PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
+    PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest, RecordDiscoveryResponseRequest,
+    RecordOutreachAttemptRequest, RegisterAgentRequest, RegisterCapabilityRequest,
+    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
+    StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest,
+    UpsertAudienceMemberRequest, UpsertContributorContactRequest, VerifySubmissionRequest,
+};
+#[cfg(test)]
+use app::{
+    build_base_indexer_status_report, BaseEscrowReconciliation, BaseIndexerHeartbeatStatus,
+    BaseIndexerScanCursor, BaseIndexerStatusConfig, BaseIndexerStatusReport,
+    BaseReleaseQueueRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
+    PlanBaseReleaseRequest,
 };
 use axum::{
     body::Bytes,
@@ -25,16 +28,32 @@ use axum::{
 };
 use bounty_router::{BountyRouter, RouteDecision};
 use chain_base::{
-    base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_base_escrow_logs, fetch_transaction_receipt,
-    rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, ChainBaseError, EthGetLogsRequest, EthGetTransactionReceiptRequest,
-    EthSendRawTransactionRequest, RpcLogSubmission, RpcTransactionReceipt,
+    base_network_descriptor, broadcast_signed_transaction, build_autonomous_bounty_feed,
+    build_autonomous_bounty_terms_record, build_autonomous_submission_evidence_record,
+    build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
+    eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
+    fetch_transaction_receipt, normalize_evm_address, validate_attestation_request_against_feed,
+    validate_autonomous_creation_against_terms, AutonomousBountyAuthorizationSignature,
+    AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
+    AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
+    AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
+    AutonomousBountyCreationPlan, AutonomousBountyEvent, AutonomousBountyFeedItem,
+    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
+    AutonomousVerificationAttestationRequest, AutonomousVerificationAttestationTypedData,
+    AutonomousVerificationJob, BaseNetworkDescriptor, BaseRpcUrlConfig, ChainBaseError,
+    EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent,
+    RpcTransactionReceipt,
+};
+#[cfg(test)]
+use chain_base::{
+    fetch_base_escrow_logs, rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery,
+    EthGetLogsRequest, RpcLogSubmission,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
 use domain::{
-    Agent, AudienceInteraction, AudienceMember, AudienceReport, BountyStatus, Capability,
+    Agent, AudienceInteraction, AudienceMember, AudienceReport, AutonomousBountyTermsDocument,
+    AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord, BountyStatus, Capability,
     CapabilityClass, ContributorContact, DiscoveryResponse, EvalRun, HelpRequest, Money,
     OutreachAttempt, PaymentRail, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord,
     VerificationDecision, VerifierKind,
@@ -58,6 +77,7 @@ use payments_stripe::{
 };
 use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use std::collections::HashSet;
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -77,7 +97,6 @@ use worker::BaseEscrowLogWorker;
         agent_bounties_discovery,
         risk_policy,
         live_money_readiness,
-        base_indexer_status,
         list_risk_events,
         list_risk_reviews,
         approve_risk_bounty,
@@ -111,21 +130,34 @@ use worker::BaseEscrowLogWorker;
         public_bounty_feed,
         public_funding_feed,
         public_capability_feed,
-        reconcile_base_escrow_event,
-        reconcile_base_evm_logs,
-        plan_base_log_query,
-        fetch_base_rpc_logs,
-        reconcile_base_rpc_logs,
         broadcast_base_signed_transaction,
         get_base_transaction_receipt,
-        plan_base_funding,
-        list_base_release_queue,
+        plan_autonomous_bounty_creation,
+        plan_autonomous_bounty_authorized_creation,
+        plan_autonomous_bounty_contribution,
+        plan_autonomous_bounty_authorized_contribution,
+        plan_autonomous_bounty_claim,
+        plan_autonomous_bounty_authorized_claim,
+        plan_autonomous_bounty_submission,
+        plan_autonomous_verification_attestation,
+        plan_autonomous_module_settlement,
+        plan_autonomous_attestation_settlement,
+        plan_autonomous_expire_claim,
+        plan_autonomous_expire_submission,
+        plan_autonomous_cancel,
+        plan_autonomous_refund_withdrawal,
+        decode_autonomous_bounty_events,
+        list_autonomous_bounty_events,
+        publish_autonomous_bounty_terms,
+        get_autonomous_bounty_terms,
+        publish_autonomous_submission_evidence,
+        get_autonomous_submission_evidence,
+        autonomous_bounty_feed,
+        autonomous_verification_jobs,
         plan_stripe_checkout_top_up,
         plan_stripe_connect_account,
         plan_stripe_connect_transfer,
         execute_stripe_funding_intent_checkout,
-        plan_base_refund,
-        plan_base_dispute,
         execute_stripe_checkout_top_up,
         execute_stripe_connect_account,
         execute_stripe_connect_transfer,
@@ -166,8 +198,6 @@ use worker::BaseEscrowLogWorker;
         PlanGitHubClaimCommentRequest,
         PlanGitHubProofCommentRequest,
         PlanGitHubProofCommentFromProofRequest,
-        PlanBaseLogQueryRequest,
-        FetchBaseRpcLogsRequest,
         BroadcastBaseSignedTransactionRequest,
         GetBaseTransactionReceiptRequest,
         SearchCapabilitiesRequest,
@@ -296,6 +326,7 @@ struct LiveMoneyReadinessQuery {
     network: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct BaseIndexerStatusQuery {
     network: Option<String>,
@@ -401,6 +432,7 @@ struct SearchCapabilitiesRequest {
     max_price_minor: Option<i64>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct PlanBaseLogQueryRequest {
     escrow_contract: String,
@@ -409,6 +441,138 @@ struct PlanBaseLogQueryRequest {
     request_id: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyCreationRequest {
+    network: Option<String>,
+    create: AutonomousBountyCreate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyContributionRequest {
+    network: Option<String>,
+    contribution: AutonomousBountyContribution,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyAuthorizedCreationRequest {
+    network: Option<String>,
+    create: AutonomousBountyCreate,
+    signature: AutonomousBountyAuthorizationSignature,
+    relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyAuthorizedContributionRequest {
+    network: Option<String>,
+    contribution: AutonomousBountyContribution,
+    signature: AutonomousBountyAuthorizationSignature,
+    relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyClaimRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    solver: String,
+    authorization_nonce: Option<String>,
+    authorization_valid_before: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyAuthorizedClaimRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    solver: String,
+    authorization_nonce: String,
+    authorization_valid_before: u64,
+    signature: AutonomousBountyAuthorizationSignature,
+    relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountySubmissionRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    solver: String,
+    submission_hash: String,
+    evidence_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousVerificationAttestationRequest {
+    network: Option<String>,
+    attestation: AutonomousVerificationAttestationRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousModuleSettlementRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    caller: Option<String>,
+    proof: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousAttestationSettlementRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    caller: Option<String>,
+    attestations: Vec<AutonomousSignedAttestation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousLifecycleRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    caller: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DecodeAutonomousBountyEventsRequest {
+    logs: Vec<EvmLog>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AutonomousBountyEventsQuery {
+    network: Option<String>,
+    bounty_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PublishAutonomousBountyTermsRequest {
+    creator_wallet: String,
+    document: AutonomousBountyTermsDocument,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PublishAutonomousSubmissionEvidenceRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    bounty_id: String,
+    round: u64,
+    solver_wallet: String,
+    artifact_reference: String,
+    evidence: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AutonomousSubmissionEvidenceQuery {
+    network: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AutonomousBountyFeedQuery {
+    network: Option<String>,
+    claimable_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AutonomousVerificationJobsQuery {
+    network: Option<String>,
+    verifier: Option<String>,
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct FetchBaseRpcLogsRequest {
     escrow_contract: String,
@@ -430,9 +594,9 @@ struct GetBaseTransactionReceiptRequest {
     tx_hash: String,
     request_id: Option<u64>,
     network: Option<String>,
-    reconcile_logs: Option<bool>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BaseRpcLogFetchReport {
     network: BaseNetworkDescriptor,
@@ -459,7 +623,6 @@ struct BaseTransactionReceiptReport {
     succeeded: Option<bool>,
     log_count: usize,
     receipt: Option<RpcTransactionReceipt>,
-    reconciliation: Option<worker::BaseLogPipelineReport>,
 }
 
 #[tokio::main]
@@ -524,7 +687,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/llms.txt", get(llms_txt))
         .route(
-            "/schemas/discovery-manifest.v1.json",
+            "/schemas/discovery-manifest.v2.json",
             get(discovery_manifest_schema),
         )
         .route(
@@ -591,11 +754,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/bounties/:id/submit", post(submit_result))
         .route("/v1/bounties/:id/verify", post(verify_submission))
         .route("/v1/bounties/:id", get(bounty_status))
-        .route("/v1/base/indexer-status", get(base_indexer_status))
-        .route("/v1/base/escrow-events", post(reconcile_base_escrow_event))
-        .route("/v1/base/evm-logs", post(reconcile_base_evm_logs))
-        .route("/v1/base/rpc-logs", post(reconcile_base_rpc_logs))
-        .route("/v1/base/fetch-rpc-logs", post(fetch_base_rpc_logs))
         .route(
             "/v1/base/broadcast-signed-transaction",
             post(broadcast_base_signed_transaction),
@@ -604,12 +762,94 @@ async fn main() -> anyhow::Result<()> {
             "/v1/base/transaction-receipt",
             post(get_base_transaction_receipt),
         )
-        .route("/v1/base/log-query", post(plan_base_log_query))
-        .route("/v1/base/funding-plan", post(plan_base_funding))
-        .route("/v1/base/release-queue", post(list_base_release_queue))
-        .route("/v1/base/release-plan", post(plan_base_release))
-        .route("/v1/base/refund-plan", post(plan_base_refund))
-        .route("/v1/base/dispute-plan", post(plan_base_dispute))
+        .route(
+            "/v1/base/autonomous-bounties/creation-plan",
+            post(plan_autonomous_bounty_creation),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/authorized-creation-plan",
+            post(plan_autonomous_bounty_authorized_creation),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/contribution-plan",
+            post(plan_autonomous_bounty_contribution),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/authorized-contribution-plan",
+            post(plan_autonomous_bounty_authorized_contribution),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/claim-plan",
+            post(plan_autonomous_bounty_claim),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/authorized-claim-plan",
+            post(plan_autonomous_bounty_authorized_claim),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/submission-plan",
+            post(plan_autonomous_bounty_submission),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/verification-attestation-plan",
+            post(plan_autonomous_verification_attestation),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/module-settlement-plan",
+            post(plan_autonomous_module_settlement),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/attestation-settlement-plan",
+            post(plan_autonomous_attestation_settlement),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/expire-claim-plan",
+            post(plan_autonomous_expire_claim),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/expire-submission-plan",
+            post(plan_autonomous_expire_submission),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/cancel-plan",
+            post(plan_autonomous_cancel),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/refund-withdrawal-plan",
+            post(plan_autonomous_refund_withdrawal),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/decode-events",
+            post(decode_autonomous_bounty_events),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/events",
+            get(list_autonomous_bounty_events),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/terms",
+            post(publish_autonomous_bounty_terms),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/terms/:terms_hash",
+            get(get_autonomous_bounty_terms),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/submission-evidence",
+            post(publish_autonomous_submission_evidence),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/submission-evidence/:bounty_contract/:round",
+            get(get_autonomous_submission_evidence),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/feed",
+            get(autonomous_bounty_feed),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/verification-jobs",
+            get(autonomous_verification_jobs),
+        )
         .route(
             "/v1/stripe/checkout-top-ups",
             post(plan_stripe_checkout_top_up),
@@ -723,7 +963,7 @@ async fn llms_txt(State(state): State<SharedState>) -> String {
     web_public::render_llms_txt(&state.public_base_url, &state.mcp_base_url)
 }
 
-#[utoipa::path(get, path = "/schemas/discovery-manifest.v1.json", responses((status = 200, body = String)))]
+#[utoipa::path(get, path = "/schemas/discovery-manifest.v2.json", responses((status = 200, body = String)))]
 async fn discovery_manifest_schema() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/schema+json")],
@@ -755,7 +995,7 @@ pre { overflow-x: auto; padding: 1rem; }
 <h1>Agent Bounty Network API</h1>
 <p>The machine-readable OpenAPI document is available at <a href="/api-docs/openapi.json">/api-docs/openapi.json</a>.</p>
 <p>Agent orientation is available at <a href="/llms.txt">/llms.txt</a>.</p>
-<p>The discovery manifest schema is available at <a href="/schemas/discovery-manifest.v1.json">/schemas/discovery-manifest.v1.json</a>.</p>
+<p>The autonomous discovery schema is available at <a href="/schemas/discovery-manifest.v2.json">/schemas/discovery-manifest.v2.json</a>.</p>
 <pre><code>curl http://127.0.0.1:8080/.well-known/agent-bounties.json</code></pre>
 </body>
 </html>"#,
@@ -799,6 +1039,7 @@ async fn live_money_readiness(
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[cfg(test)]
 #[utoipa::path(
     get,
     path = "/v1/base/indexer-status",
@@ -824,7 +1065,7 @@ async fn base_indexer_status(
     let escrow_contract = query
         .escrow_contract
         .and_then(non_empty_secret)
-        .or_else(|| base_escrow_contract_for_chain(descriptor.chain_id));
+        .or_else(|| autonomous_factory_for_chain(descriptor.chain_id));
     let cursor = match (&state.store, escrow_contract.as_deref()) {
         (Some(store), Some(escrow_contract)) => store
             .get_base_log_cursor(&network, escrow_contract)
@@ -853,6 +1094,7 @@ async fn base_indexer_status(
     .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[cfg(test)]
 fn base_indexer_scan_cursor_from_db(cursor: db::BaseLogScanCursor) -> BaseIndexerScanCursor {
     BaseIndexerScanCursor {
         network: cursor.network,
@@ -863,6 +1105,7 @@ fn base_indexer_scan_cursor_from_db(cursor: db::BaseLogScanCursor) -> BaseIndexe
     }
 }
 
+#[cfg(test)]
 fn base_indexer_heartbeat_from_db(
     heartbeat: db::BaseIndexerHeartbeat,
 ) -> BaseIndexerHeartbeatStatus {
@@ -890,7 +1133,7 @@ fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyR
         network: network.to_string(),
         escrow_contract: descriptor
             .as_ref()
-            .and_then(|descriptor| base_escrow_contract_for_chain(descriptor.chain_id)),
+            .and_then(|descriptor| autonomous_factory_for_chain(descriptor.chain_id)),
         usdc_token: descriptor
             .as_ref()
             .and_then(base_usdc_token_for_chain)
@@ -911,10 +1154,10 @@ fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyR
     }
 }
 
-fn base_escrow_contract_for_chain(chain_id: u64) -> Option<String> {
+fn autonomous_factory_for_chain(chain_id: u64) -> Option<String> {
     match chain_id {
-        84_532 => env_nonempty_value("BASE_SEPOLIA_ESCROW_CONTRACT"),
-        8_453 => env_nonempty_value("BASE_MAINNET_ESCROW_CONTRACT"),
+        84_532 => env_nonempty_value("BASE_SEPOLIA_BOUNTY_FACTORY"),
+        8_453 => env_nonempty_value("BASE_MAINNET_BOUNTY_FACTORY"),
         _ => None,
     }
 }
@@ -1971,6 +2214,7 @@ async fn verify_submission(
     Ok(Json(proof))
 }
 
+#[cfg(test)]
 #[utoipa::path(
     post,
     path = "/v1/base/escrow-events",
@@ -2031,6 +2275,7 @@ async fn reconcile_base_escrow_event(
     Ok(Json(reconciliation))
 }
 
+#[cfg(test)]
 #[utoipa::path(
     post,
     path = "/v1/base/evm-logs",
@@ -2050,6 +2295,7 @@ async fn reconcile_base_evm_logs(
     process_base_evm_logs(&state, logs).await.map(Json)
 }
 
+#[cfg(test)]
 #[utoipa::path(
     post,
     path = "/v1/base/rpc-logs",
@@ -2070,6 +2316,7 @@ async fn reconcile_base_rpc_logs(
     process_base_evm_logs(&state, logs).await.map(Json)
 }
 
+#[cfg(test)]
 #[utoipa::path(
     post,
     path = "/v1/base/fetch-rpc-logs",
@@ -2154,7 +2401,7 @@ async fn broadcast_base_signed_transaction(
         request: rpc_request,
         tx_hash: response.result,
         next_step:
-            "Poll POST /v1/base/transaction-receipt with reconcile_logs=true; payment state changes only after escrow logs are indexed."
+            "Poll POST /v1/base/transaction-receipt for inclusion. The autonomous indexer independently reconciles canonical factory and bounty logs; a receipt alone never proves settlement."
                 .to_string(),
     }))
 }
@@ -2164,21 +2411,15 @@ async fn broadcast_base_signed_transaction(
     path = "/v1/base/transaction-receipt",
     request_body = GetBaseTransactionReceiptRequest,
     responses(
-        (status = 200, description = "Fetch Base transaction receipt and optionally reconcile escrow logs"),
+        (status = 200, description = "Fetch a Base transaction receipt without mutating settlement state"),
         (status = 400, description = "Invalid receipt request"),
-        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured and reconcile_logs=true"),
         (status = 503, description = "Requested Base RPC URL is not configured")
-    ),
-    security((), ("operator_api_token" = []), ("operator_bearer" = []))
+    )
 )]
 async fn get_base_transaction_receipt(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Json(request): Json<GetBaseTransactionReceiptRequest>,
 ) -> Result<Json<BaseTransactionReceiptReport>, StatusCode> {
-    if request.reconcile_logs.unwrap_or(false) {
-        require_operator(&state, &headers)?;
-    }
     let request_id = request.request_id.unwrap_or(1);
     let network_name = request.network.as_deref().unwrap_or("base-sepolia");
     let (network, rpc_url) = state
@@ -2201,7 +2442,6 @@ async fn get_base_transaction_receipt(
             succeeded: None,
             log_count: 0,
             receipt: None,
-            reconciliation: None,
         }));
     };
 
@@ -2212,14 +2452,6 @@ async fn get_base_transaction_receipt(
         .succeeded()
         .map_err(|error| base_rpc_fetch_status(&error))?;
     let log_count = receipt.logs.len();
-    let reconciliation = if request.reconcile_logs.unwrap_or(false) {
-        let logs = receipt
-            .logs_to_evm_logs()
-            .map_err(|error| base_rpc_fetch_status(&error))?;
-        Some(process_base_evm_logs(&state, logs).await?)
-    } else {
-        None
-    };
 
     Ok(Json(BaseTransactionReceiptReport {
         network,
@@ -2230,7 +2462,6 @@ async fn get_base_transaction_receipt(
         succeeded,
         log_count,
         receipt: Some(receipt),
-        reconciliation,
     }))
 }
 
@@ -2246,6 +2477,7 @@ fn base_rpc_fetch_status(error: &ChainBaseError) -> StatusCode {
     }
 }
 
+#[cfg(test)]
 async fn process_base_evm_logs(
     state: &SharedState,
     logs: Vec<chain_base::EvmLog>,
@@ -2339,6 +2571,7 @@ async fn process_base_evm_logs(
     Ok(report)
 }
 
+#[cfg(test)]
 #[utoipa::path(post, path = "/v1/base/log-query", request_body = PlanBaseLogQueryRequest, responses((status = 200, description = "Base eth_getLogs request for escrow events")))]
 async fn plan_base_log_query(
     Json(request): Json<PlanBaseLogQueryRequest>,
@@ -2352,6 +2585,603 @@ async fn plan_base_log_query(
     .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlanner, StatusCode> {
+    let descriptor = base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let (factory_env, implementation_env) = match descriptor.chain_id {
+        8_453 => (
+            "BASE_MAINNET_BOUNTY_FACTORY",
+            "BASE_MAINNET_BOUNTY_IMPLEMENTATION",
+        ),
+        84_532 => (
+            "BASE_SEPOLIA_BOUNTY_FACTORY",
+            "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION",
+        ),
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let required = |key: &str| {
+        env::var(key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)
+    };
+    AutonomousBountyTxPlanner::new(required(factory_env)?, required(implementation_env)?)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn require_indexed_canonical_bounty(
+    state: &SharedState,
+    network: &str,
+    bounty_contract: &str,
+) -> Result<(), StatusCode> {
+    let item = indexed_autonomous_bounty(state, network, bounty_contract).await?;
+    if item.terms_valid {
+        Ok(())
+    } else {
+        Err(StatusCode::CONFLICT)
+    }
+}
+
+async fn indexed_autonomous_bounty(
+    state: &SharedState,
+    network: &str,
+    bounty_contract: &str,
+) -> Result<AutonomousBountyFeedItem, StatusCode> {
+    let Some(store) = &state.store else {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    let planner = configured_autonomous_planner(network)?;
+    let events = store
+        .list_autonomous_bounty_events(network)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let canonical_contracts = store
+        .list_canonical_autonomous_bounty_contracts(network, &planner.factory_contract)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !canonical_contracts
+        .iter()
+        .any(|contract| contract.eq_ignore_ascii_case(bounty_contract))
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let terms = store
+        .list_autonomous_bounty_terms()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    build_autonomous_bounty_feed(events, terms, false)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .find(|item| item.bounty_contract.eq_ignore_ascii_case(bounty_contract))
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/creation-plan", responses((status = 200, description = "Unsigned canonical autonomous bounty creation and initial-funding plan")))]
+async fn plan_autonomous_bounty_creation(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousBountyCreationRequest>,
+) -> Result<Json<AutonomousBountyCreationPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    require_autonomous_creation_terms(&state, network, &request.create).await?;
+    configured_autonomous_planner(network)?
+        .plan_creation(network, &request.create)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/authorized-creation-plan", responses((status = 200, description = "Relayer transaction plan after the creator signs Circle USDC EIP-3009 authorization")))]
+async fn plan_autonomous_bounty_authorized_creation(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousBountyAuthorizedCreationRequest>,
+) -> Result<Json<AutonomousBountyAuthorizedCreationPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    require_autonomous_creation_terms(&state, network, &request.create).await?;
+    configured_autonomous_planner(network)?
+        .plan_authorized_creation(
+            network,
+            &request.create,
+            &request.signature,
+            request.relayer.as_deref(),
+        )
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+async fn require_autonomous_creation_terms(
+    state: &SharedState,
+    network: &str,
+    create: &AutonomousBountyCreate,
+) -> Result<(), StatusCode> {
+    let terms = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
+        .get_autonomous_bounty_terms(&create.terms_hash)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    validate_autonomous_creation_against_terms(network, create, &terms)
+        .map_err(|_| StatusCode::CONFLICT)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/contribution-plan", responses((status = 200, description = "Unsigned permissionless pooled USDC contribution plan")))]
+async fn plan_autonomous_bounty_contribution(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousBountyContributionRequest>,
+) -> Result<Json<AutonomousBountyContributionPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    require_indexed_canonical_bounty(&state, network, &request.contribution.bounty_contract)
+        .await?;
+    configured_autonomous_planner(network)?
+        .plan_contribution(network, &request.contribution)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/authorized-contribution-plan", responses((status = 200, description = "Single relayer transaction after a funder signs bounded Circle USDC authorization")))]
+async fn plan_autonomous_bounty_authorized_contribution(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousBountyAuthorizedContributionRequest>,
+) -> Result<Json<AutonomousBountyAuthorizedContributionPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    require_indexed_canonical_bounty(&state, network, &request.contribution.bounty_contract)
+        .await?;
+    configured_autonomous_planner(network)?
+        .plan_authorized_contribution(
+            network,
+            &request.contribution,
+            &request.signature,
+            request.relayer.as_deref(),
+        )
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/claim-plan", responses((status = 200, description = "Wallet-batched USDC bond approval and direct claim plan")))]
+async fn plan_autonomous_bounty_claim(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousBountyClaimRequest>,
+) -> Result<Json<AutonomousBountyClaimPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    require_claimable_autonomous_item(&item)?;
+    let claim_bond = item
+        .claim_bond
+        .parse::<u128>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    configured_autonomous_planner(network)?
+        .plan_claim(
+            network,
+            &request.bounty_contract,
+            &request.solver,
+            claim_bond,
+            request.authorization_nonce.as_deref(),
+            request.authorization_valid_before,
+        )
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/authorized-claim-plan", responses((status = 200, description = "Single relayer transaction after the solver signs the exact USDC claim bond authorization")))]
+async fn plan_autonomous_bounty_authorized_claim(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousBountyAuthorizedClaimRequest>,
+) -> Result<Json<AutonomousBountyAuthorizedClaimPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    require_claimable_autonomous_item(&item)?;
+    let claim_bond = item
+        .claim_bond
+        .parse::<u128>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    configured_autonomous_planner(network)?
+        .plan_authorized_claim(
+            network,
+            &request.bounty_contract,
+            &request.solver,
+            claim_bond,
+            &request.authorization_nonce,
+            request.authorization_valid_before,
+            &request.signature,
+            request.relayer.as_deref(),
+        )
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn require_claimable_autonomous_item(item: &AutonomousBountyFeedItem) -> Result<(), StatusCode> {
+    if !item.terms_valid || item.status != "claimable" {
+        return Err(StatusCode::CONFLICT);
+    }
+    Ok(())
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/submission-plan", responses((status = 200, description = "Unsigned submission commitment plan for autonomous verification")))]
+async fn plan_autonomous_bounty_submission(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousBountySubmissionRequest>,
+) -> Result<Json<EvmTransactionIntent>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    require_indexed_canonical_bounty(&state, network, &request.bounty_contract).await?;
+    configured_autonomous_planner(network)?
+        .plan_submission(
+            &request.bounty_contract,
+            &request.solver,
+            &request.submission_hash,
+            &request.evidence_hash,
+        )
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/verification-attestation-plan", responses((status = 200, description = "Exact EIP-712 payload for one committed verifier to sign")))]
+async fn plan_autonomous_verification_attestation(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousVerificationAttestationRequest>,
+) -> Result<Json<AutonomousVerificationAttestationTypedData>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item =
+        indexed_autonomous_bounty(&state, network, &request.attestation.bounty_contract).await?;
+    let observed_at = u64::try_from(Utc::now().timestamp()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_attestation_request_against_feed(&item, &request.attestation, observed_at)
+        .map_err(|_| StatusCode::CONFLICT)?;
+    configured_autonomous_planner(network)?
+        .plan_verification_attestation(network, &request.attestation)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/module-settlement-plan", responses((status = 200, description = "Permissionless deterministic verifier call that atomically settles on pass")))]
+async fn plan_autonomous_module_settlement(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousModuleSettlementRequest>,
+) -> Result<Json<EvmTransactionIntent>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    require_autonomous_item_mode(&item, "deterministic_module")?;
+    configured_autonomous_planner(network)?
+        .plan_module_settlement(
+            &request.bounty_contract,
+            request.caller.as_deref(),
+            &request.proof,
+        )
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/attestation-settlement-plan", responses((status = 200, description = "Permissionless committed verifier quorum relay that settles or reopens atomically")))]
+async fn plan_autonomous_attestation_settlement(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousAttestationSettlementRequest>,
+) -> Result<Json<EvmTransactionIntent>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    if !item.terms_valid {
+        return Err(StatusCode::CONFLICT);
+    }
+    let mode = autonomous_item_mode(&item)?;
+    if mode != "signed_quorum" && mode != "ai_judge_quorum" {
+        return Err(StatusCode::CONFLICT);
+    }
+    let policy = item
+        .terms
+        .as_ref()
+        .map(|terms| &terms.document.verification_policy)
+        .ok_or(StatusCode::CONFLICT)?;
+    let threshold = policy
+        .get("threshold")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or(StatusCode::CONFLICT)?;
+    if request.attestations.len() != threshold {
+        return Err(StatusCode::CONFLICT);
+    }
+    let allowed = policy
+        .get("verifiers")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(StatusCode::CONFLICT)?;
+    if request.attestations.iter().any(|attestation| {
+        !allowed.iter().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|verifier| verifier.eq_ignore_ascii_case(&attestation.verifier))
+        })
+    }) {
+        return Err(StatusCode::CONFLICT);
+    }
+    configured_autonomous_planner(network)?
+        .plan_attestation_settlement(
+            &request.bounty_contract,
+            request.caller.as_deref(),
+            &request.attestations,
+        )
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/expire-claim-plan", responses((status = 200, description = "Permissionless expired-claim release plan")))]
+async fn plan_autonomous_expire_claim(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousLifecycleRequest>,
+) -> Result<Json<EvmTransactionIntent>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    if item.status != "claimed" {
+        return Err(StatusCode::CONFLICT);
+    }
+    configured_autonomous_planner(network)?
+        .plan_expire_claim(&request.bounty_contract, request.caller.as_deref())
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/expire-submission-plan", responses((status = 200, description = "Permissionless expired-submission release plan")))]
+async fn plan_autonomous_expire_submission(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousLifecycleRequest>,
+) -> Result<Json<EvmTransactionIntent>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    if item.status != "submitted" {
+        return Err(StatusCode::CONFLICT);
+    }
+    configured_autonomous_planner(network)?
+        .plan_expire_submission(&request.bounty_contract, request.caller.as_deref())
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/cancel-plan", responses((status = 200, description = "Creator or post-deadline cancellation plan")))]
+async fn plan_autonomous_cancel(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousLifecycleRequest>,
+) -> Result<Json<EvmTransactionIntent>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    if item.status != "open" && item.status != "claimable" {
+        return Err(StatusCode::CONFLICT);
+    }
+    configured_autonomous_planner(network)?
+        .plan_cancel(&request.bounty_contract, request.caller.as_deref())
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/refund-withdrawal-plan", responses((status = 200, description = "Contributor pull-refund transaction plan after cancellation")))]
+async fn plan_autonomous_refund_withdrawal(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousLifecycleRequest>,
+) -> Result<Json<EvmTransactionIntent>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    if item.status != "cancelled" {
+        return Err(StatusCode::CONFLICT);
+    }
+    let contributor = request.caller.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
+    configured_autonomous_planner(network)?
+        .plan_refund_withdrawal(&request.bounty_contract, contributor)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn autonomous_item_mode(item: &AutonomousBountyFeedItem) -> Result<&str, StatusCode> {
+    item.terms
+        .as_ref()
+        .and_then(|terms| terms.document.verification_policy.get("mechanism"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or(StatusCode::CONFLICT)
+}
+
+fn require_autonomous_item_mode(
+    item: &AutonomousBountyFeedItem,
+    expected: &str,
+) -> Result<(), StatusCode> {
+    if item.terms_valid && item.status == "submitted" && autonomous_item_mode(item)? == expected {
+        Ok(())
+    } else {
+        Err(StatusCode::CONFLICT)
+    }
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/decode-events", responses((status = 200, description = "Decoded autonomous factory, funding, claim, submission, settlement, and refund evidence")))]
+async fn decode_autonomous_bounty_events(
+    Json(request): Json<DecodeAutonomousBountyEventsRequest>,
+) -> Result<Json<Vec<AutonomousBountyEvent>>, StatusCode> {
+    decode_autonomous_bounty_logs(request.logs)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(get, path = "/v1/base/autonomous-bounties/events", responses((status = 200, description = "Persisted confirmed autonomous bounty events")))]
+async fn list_autonomous_bounty_events(
+    State(state): State<SharedState>,
+    Query(query): Query<AutonomousBountyEventsQuery>,
+) -> Result<Json<Vec<AutonomousBountyEvent>>, StatusCode> {
+    let Some(store) = &state.store else {
+        return Ok(Json(Vec::new()));
+    };
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let mut events = store
+        .list_autonomous_bounty_events(network)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(bounty_id) = query.bounty_id {
+        events.retain(|event| event.bounty_id.eq_ignore_ascii_case(&bounty_id));
+    }
+    Ok(Json(events))
+}
+
+fn autonomous_terms_record(
+    request: PublishAutonomousBountyTermsRequest,
+) -> Result<AutonomousBountyTermsRecord, StatusCode> {
+    build_autonomous_bounty_terms_record(&request.creator_wallet, request.document, Utc::now())
+        .map_err(|error| match error {
+            ChainBaseError::TermsDocumentTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            _ => StatusCode::BAD_REQUEST,
+        })
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/terms", responses((status = 200, description = "Content-addressed public bounty terms and contract hash commitments")))]
+async fn publish_autonomous_bounty_terms(
+    State(state): State<SharedState>,
+    Json(request): Json<PublishAutonomousBountyTermsRequest>,
+) -> Result<Json<AutonomousBountyTermsRecord>, StatusCode> {
+    let record = autonomous_terms_record(request)?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    store
+        .upsert_autonomous_bounty_terms(&record)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(record))
+}
+
+#[utoipa::path(get, path = "/v1/base/autonomous-bounties/terms/{terms_hash}", params(("terms_hash" = String, Path, description = "0x-prefixed Keccak hash returned by terms publication and committed on-chain")), responses((status = 200, description = "Canonical public bounty terms"), (status = 404, description = "Unknown terms hash")))]
+async fn get_autonomous_bounty_terms(
+    State(state): State<SharedState>,
+    Path(terms_hash): Path<String>,
+) -> Result<Json<AutonomousBountyTermsRecord>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    store
+        .get_autonomous_bounty_terms(&terms_hash)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/submission-evidence", responses((status = 200, description = "Immutable public preimages matching the current canonical SubmissionAdded hashes")))]
+async fn publish_autonomous_submission_evidence(
+    State(state): State<SharedState>,
+    Json(request): Json<PublishAutonomousSubmissionEvidenceRequest>,
+) -> Result<Json<AutonomousSubmissionEvidenceRecord>, StatusCode> {
+    let network = request
+        .network
+        .clone()
+        .unwrap_or_else(|| "base-mainnet".to_string());
+    let item = indexed_autonomous_bounty(&state, &network, &request.bounty_contract).await?;
+    let record = autonomous_submission_evidence_record(&network, &item, request)?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    store
+        .upsert_autonomous_submission_evidence(&record)
+        .await
+        .map(Json)
+        .map_err(|error| match error {
+            DbError::AutonomousEvidenceConflict(_) => StatusCode::CONFLICT,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })
+}
+
+#[utoipa::path(get, path = "/v1/base/autonomous-bounties/submission-evidence/{bounty_contract}/{round}", params(("bounty_contract" = String, Path, description = "Canonical bounty contract"), ("round" = u64, Path, description = "Positive submission round")), responses((status = 200, description = "Hash-checked public submission evidence"), (status = 404, description = "Evidence not published")))]
+async fn get_autonomous_submission_evidence(
+    State(state): State<SharedState>,
+    Path((bounty_contract, round)): Path<(String, u64)>,
+    Query(query): Query<AutonomousSubmissionEvidenceQuery>,
+) -> Result<Json<AutonomousSubmissionEvidenceRecord>, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    indexed_autonomous_bounty(&state, network, &bounty_contract).await?;
+    state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
+        .get_autonomous_submission_evidence(network, &bounty_contract, round)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+fn autonomous_submission_evidence_record(
+    network: &str,
+    item: &AutonomousBountyFeedItem,
+    request: PublishAutonomousSubmissionEvidenceRequest,
+) -> Result<AutonomousSubmissionEvidenceRecord, StatusCode> {
+    build_autonomous_submission_evidence_record(
+        network,
+        item,
+        &request.bounty_contract,
+        &request.bounty_id,
+        request.round,
+        &request.solver_wallet,
+        &request.artifact_reference,
+        request.evidence,
+        Utc::now(),
+    )
+    .map_err(|_| StatusCode::CONFLICT)
+}
+
+#[utoipa::path(get, path = "/v1/base/autonomous-bounties/feed", responses((status = 200, description = "Canonical on-chain bounties joined to content-addressed public terms")))]
+async fn autonomous_bounty_feed(
+    State(state): State<SharedState>,
+    Query(query): Query<AutonomousBountyFeedQuery>,
+) -> Result<Json<Vec<AutonomousBountyFeedItem>>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let events = store
+        .list_autonomous_bounty_events(network)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let terms = store
+        .list_autonomous_bounty_terms()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    build_autonomous_bounty_feed(events, terms, query.claimable_only.unwrap_or(false))
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[utoipa::path(get, path = "/v1/base/autonomous-bounties/verification-jobs", responses((status = 200, description = "Live verifier jobs joined to immutable terms and hash-matched evidence preimages")))]
+async fn autonomous_verification_jobs(
+    State(state): State<SharedState>,
+    Query(query): Query<AutonomousVerificationJobsQuery>,
+) -> Result<Json<Vec<AutonomousVerificationJob>>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let events = store
+        .list_autonomous_bounty_events(network)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let terms = store
+        .list_autonomous_bounty_terms()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let evidence = store
+        .list_autonomous_submission_evidence(network)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let feed = build_autonomous_bounty_feed(events, terms, false)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let observed_at = u64::try_from(Utc::now().timestamp()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mut jobs = build_autonomous_verification_jobs(network, feed, evidence, observed_at)
+        .map_err(|_| StatusCode::CONFLICT)?;
+    if let Some(verifier) = query.verifier {
+        let verifier = normalize_evm_address(verifier).map_err(|_| StatusCode::BAD_REQUEST)?;
+        jobs.retain(|job| {
+            job.verification_mode == "deterministic_module"
+                || job
+                    .eligible_verifiers
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(&verifier))
+        });
+    }
+    Ok(Json(jobs))
+}
+
+#[cfg(test)]
 #[utoipa::path(post, path = "/v1/base/funding-plan", responses((status = 200, description = "Unsigned Base escrow funding transaction plan")))]
 async fn plan_base_funding(
     State(state): State<SharedState>,
@@ -2364,6 +3194,7 @@ async fn plan_base_funding(
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[cfg(test)]
 #[utoipa::path(post, path = "/v1/base/release-plan", responses((status = 200, description = "Unsigned Base escrow release transaction plan")))]
 async fn plan_base_release(
     State(state): State<SharedState>,
@@ -2376,6 +3207,7 @@ async fn plan_base_release(
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[cfg(test)]
 #[utoipa::path(post, path = "/v1/base/refund-plan", responses((status = 200, description = "Unsigned Base escrow refund transaction plan")))]
 async fn plan_base_refund(
     State(state): State<SharedState>,
@@ -2388,6 +3220,7 @@ async fn plan_base_refund(
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[cfg(test)]
 #[utoipa::path(post, path = "/v1/base/dispute-plan", responses((status = 200, description = "Unsigned Base escrow dispute transaction plan")))]
 async fn plan_base_dispute(
     State(state): State<SharedState>,
@@ -2400,6 +3233,7 @@ async fn plan_base_dispute(
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[cfg(test)]
 #[utoipa::path(post, path = "/v1/base/release-queue", responses((status = 200, description = "Pending Base release queue")))]
 async fn list_base_release_queue(
     State(state): State<SharedState>,
@@ -5548,6 +6382,7 @@ mod tests {
         assert_eq!(public_error, StatusCode::NOT_FOUND);
     }
 
+    #[cfg(any())]
     #[tokio::test]
     async fn discovery_endpoint_advertises_mcp_and_payment_entrypoints() {
         let state = test_state(BountyNetwork::default());
@@ -5654,6 +6489,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discovery_endpoint_advertises_autonomous_protocol_only() {
+        let state = test_state(BountyNetwork::default());
+        let manifest = agent_bounties_discovery(State(state)).await.0;
+
+        assert_eq!(
+            manifest.schema,
+            "https://agentbounties.org/schemas/discovery-manifest.v2.json"
+        );
+        assert_eq!(manifest.protocol["version"], "agent-bounties/autonomous-v1");
+        assert_eq!(manifest.protocol["operator_settlement_signer"], false);
+        assert_eq!(
+            manifest.endpoints.autonomous_creation_plan,
+            "http://127.0.0.1:8080/v1/base/autonomous-bounties/creation-plan"
+        );
+        assert_eq!(
+            manifest.endpoints.autonomous_bounty_feed,
+            "http://127.0.0.1:8080/v1/base/autonomous-bounties/feed"
+        );
+        assert!(manifest
+            .agent_tools
+            .iter()
+            .any(|tool| tool == "plan_autonomous_bounty_submission"));
+        assert!(manifest
+            .agent_tools
+            .iter()
+            .all(|tool| !tool.starts_with("plan_base_")));
+    }
+
+    #[tokio::test]
     async fn live_money_readiness_endpoint_reports_non_secret_defaults() {
         let state = test_state(BountyNetwork::default());
         let report = live_money_readiness(
@@ -5750,7 +6614,7 @@ mod tests {
         assert_eq!(report.worker_healthy, None);
         assert_eq!(report.last_poll_status, None);
         assert!(report.evidence_boundaries.iter().any(|boundary| {
-            boundary.contains("does not fund, release, refund, dispute, or authorize settlement")
+            boundary.contains("does not fund, verify, cancel, refund, or authorize settlement")
         }));
     }
 
@@ -5776,7 +6640,7 @@ mod tests {
 
         assert!(html.contains("/api-docs/openapi.json"));
         assert!(html.contains("/llms.txt"));
-        assert!(html.contains("/schemas/discovery-manifest.v1.json"));
+        assert!(html.contains("/schemas/discovery-manifest.v2.json"));
         assert!(html.contains("/.well-known/agent-bounties.json"));
     }
 
@@ -5788,7 +6652,7 @@ mod tests {
 
         assert!(paths.contains_key("/v1/route-blocked-goal"));
         assert!(paths.contains_key("/llms.txt"));
-        assert!(paths.contains_key("/schemas/discovery-manifest.v1.json"));
+        assert!(paths.contains_key("/schemas/discovery-manifest.v2.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
         assert!(paths.contains_key("/v1/risk/events"));
@@ -5804,16 +6668,43 @@ mod tests {
         assert!(paths.contains_key("/v1/audience/outreach-attempts"));
         assert!(paths.contains_key("/v1/audience/report"));
         assert!(paths.contains_key("/v1/capabilities/search"));
-        assert!(paths.contains_key("/v1/base/indexer-status"));
-        assert!(paths.contains_key("/v1/base/escrow-events"));
-        assert!(paths.contains_key("/v1/base/evm-logs"));
-        assert!(paths.contains_key("/v1/base/log-query"));
-        assert!(paths.contains_key("/v1/base/rpc-logs"));
-        assert!(paths.contains_key("/v1/base/fetch-rpc-logs"));
         assert!(paths.contains_key("/v1/base/broadcast-signed-transaction"));
         assert!(paths.contains_key("/v1/base/transaction-receipt"));
-        assert!(paths.contains_key("/v1/base/refund-plan"));
-        assert!(paths.contains_key("/v1/base/dispute-plan"));
+        for autonomous in [
+            "/v1/base/autonomous-bounties/creation-plan",
+            "/v1/base/autonomous-bounties/authorized-creation-plan",
+            "/v1/base/autonomous-bounties/contribution-plan",
+            "/v1/base/autonomous-bounties/authorized-contribution-plan",
+            "/v1/base/autonomous-bounties/claim-plan",
+            "/v1/base/autonomous-bounties/authorized-claim-plan",
+            "/v1/base/autonomous-bounties/submission-plan",
+            "/v1/base/autonomous-bounties/verification-jobs",
+            "/v1/base/autonomous-bounties/decode-events",
+            "/v1/base/autonomous-bounties/events",
+            "/v1/base/autonomous-bounties/terms",
+            "/v1/base/autonomous-bounties/terms/{terms_hash}",
+            "/v1/base/autonomous-bounties/feed",
+        ] {
+            assert!(paths.contains_key(autonomous), "missing {autonomous}");
+        }
+        for retired in [
+            "/v1/base/indexer-status",
+            "/v1/base/escrow-events",
+            "/v1/base/evm-logs",
+            "/v1/base/log-query",
+            "/v1/base/rpc-logs",
+            "/v1/base/fetch-rpc-logs",
+            "/v1/base/funding-plan",
+            "/v1/base/release-queue",
+            "/v1/base/release-plan",
+            "/v1/base/refund-plan",
+            "/v1/base/dispute-plan",
+        ] {
+            assert!(
+                !paths.contains_key(retired),
+                "retired path leaked: {retired}"
+            );
+        }
         assert!(paths.contains_key("/v1/stripe/live/checkout-top-ups"));
         assert!(paths.contains_key("/v1/stripe/live/funding-intents/{id}/checkout-session"));
         assert!(paths.contains_key("/v1/stripe/live/connect-accounts"));
@@ -5845,10 +6736,6 @@ mod tests {
             "/v1/risk/payout-approvals",
             "/v1/risk/events/{id}/reject",
             "/v1/contributor-contacts",
-            "/v1/base/escrow-events",
-            "/v1/base/evm-logs",
-            "/v1/base/rpc-logs",
-            "/v1/base/fetch-rpc-logs",
             "/v1/base/broadcast-signed-transaction",
             "/v1/stripe/live/checkout-top-ups",
             "/v1/stripe/live/connect-accounts",
@@ -5871,16 +6758,12 @@ mod tests {
             assert!(paths[path]["post"]["responses"]["401"].is_object());
         }
 
-        let receipt_security = paths["/v1/base/transaction-receipt"]["post"]["security"]
-            .as_array()
-            .unwrap();
-        assert!(receipt_security
-            .iter()
-            .any(|requirement| requirement.as_object().unwrap().is_empty()));
-        assert!(receipt_security
-            .iter()
-            .any(|requirement| requirement.get("operator_api_token").is_some()));
-        assert!(paths["/v1/base/transaction-receipt"]["post"]["responses"]["401"].is_object());
+        assert!(paths["/v1/base/transaction-receipt"]["post"]
+            .get("security")
+            .is_none());
+        assert!(paths["/v1/base/transaction-receipt"]["post"]["responses"]
+            .get("401")
+            .is_none());
 
         assert!(
             paths["/v1/stripe/live/funding-intents/{id}/checkout-session"]["post"]
@@ -6318,7 +7201,10 @@ mod tests {
         assert!(text.contains("docs/agent-quickstart.md"));
         assert!(text.contains("http://127.0.0.1:8090/tools"));
         assert!(text.contains("route_blocked_goal"));
-        assert!(text.contains("Prefilled Stripe funding handoff"));
+        assert!(text.contains("agent-bounties/autonomous-v1"));
+        assert!(text.contains("list_autonomous_bounties"));
+        assert!(text.contains("BountySettled"));
+        assert!(!text.contains("createEscrow"));
     }
 
     #[tokio::test]
@@ -6839,7 +7725,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn base_transaction_receipt_endpoint_reconciles_release_logs() {
+    async fn base_transaction_receipt_endpoint_is_read_only() {
         let (network, bounty, proof) = payable_base_bounty().await;
         let release_log = raw_released_log(7, &format!("0x{}", proof.proof_hash), 11, 0);
         let receipt_tx_hash = release_log.tx_hash.clone();
@@ -6854,25 +7740,12 @@ mod tests {
             }
         }));
         let state = test_state_with_base_rpc(network, rpc_url);
-        let created = chain_base::simulated_created_event(
-            bounty.id,
-            7,
-            "0x3333333333333333333333333333333333333333",
-            bounty.amount.clone(),
-            bounty.terms_hash.clone().unwrap(),
-        );
-        let _ = reconcile_base_escrow_event(State(state.clone()), HeaderMap::new(), Json(created))
-            .await
-            .unwrap();
-
         let report = get_base_transaction_receipt(
             State(state.clone()),
-            HeaderMap::new(),
             Json(GetBaseTransactionReceiptRequest {
                 tx_hash: receipt_tx_hash,
                 request_id: Some(14),
                 network: Some("base-sepolia".to_string()),
-                reconcile_logs: Some(true),
             }),
         )
         .await
@@ -6883,23 +7756,14 @@ mod tests {
         assert_eq!(report.block_number, Some(11));
         assert_eq!(report.succeeded, Some(true));
         assert_eq!(report.log_count, 1);
-        assert_eq!(
-            report
-                .reconciliation
-                .as_ref()
-                .expect("reconciliation")
-                .applied_events
-                .len(),
-            1
-        );
         let status = bounty_status(State(state), Path(bounty.id))
             .await
             .unwrap()
             .0;
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
         assert_eq!(
             status.settlements[0].payout_intents[0].status,
-            PayoutStatus::Paid
+            PayoutStatus::Pending
         );
     }
 

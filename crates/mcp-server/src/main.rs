@@ -1,13 +1,10 @@
 use app::{
-    build_base_indexer_status_report, build_live_money_readiness_report,
-    stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
-    ApproveRiskPayoutRequest, BaseIndexerHeartbeatStatus, BaseIndexerScanCursor,
-    BaseIndexerStatusConfig, BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse,
-    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    FundingIntentReport, LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanBaseDisputeRequest,
-    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
-    PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    build_live_money_readiness_report, stripe_secret_key_mode_from_secret,
+    AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
+    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
+    OpenPooledBountyRequest, PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest,
+    RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
@@ -19,16 +16,21 @@ use axum::{
 };
 use bounty_router::BountyRouter;
 use chain_base::{
-    base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_base_escrow_logs, fetch_transaction_receipt,
-    rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, EvmLog, RpcLogSubmission,
+    base_network_descriptor, broadcast_signed_transaction, build_autonomous_bounty_feed,
+    build_autonomous_bounty_terms_record, build_autonomous_submission_evidence_record,
+    build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
+    eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
+    fetch_transaction_receipt, normalize_evm_address, validate_attestation_request_against_feed,
+    validate_autonomous_creation_against_terms, AutonomousBountyAuthorizationSignature,
+    AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
+    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
+    AutonomousVerificationAttestationRequest, BaseNetworkDescriptor, BaseRpcUrlConfig, EvmLog,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
 use domain::{
-    Agent, BountyStatus, CapabilityClass, EvalRun, HelpRequest, Money, PaymentRail, PayoutStatus,
-    PrivacyLevel, RiskReviewRecord,
+    Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass, EvalRun, HelpRequest,
+    Money, PaymentRail, PayoutStatus, PrivacyLevel, RiskReviewRecord,
 };
 use eval_harness::{EvalSuiteResult, LoopSuiteResult};
 use github_app::{
@@ -43,7 +45,6 @@ use payments_stripe::{
 use risk::RiskPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
@@ -239,20 +240,141 @@ struct SearchCapabilitiesArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanBaseLogQueryArgs {
-    escrow_contract: String,
-    from_block: u64,
-    to_block: Option<u64>,
-    request_id: Option<u64>,
+struct PlanAutonomousBountyCreationArgs {
+    network: Option<String>,
+    create: AutonomousBountyCreate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct FetchBaseRpcLogsArgs {
-    escrow_contract: String,
-    from_block: u64,
-    to_block: Option<u64>,
-    request_id: Option<u64>,
+struct PlanAutonomousBountyContributionArgs {
     network: Option<String>,
+    contribution: AutonomousBountyContribution,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyAuthorizedCreationArgs {
+    network: Option<String>,
+    create: AutonomousBountyCreate,
+    signature: AutonomousBountyAuthorizationSignature,
+    relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyAuthorizedContributionArgs {
+    network: Option<String>,
+    contribution: AutonomousBountyContribution,
+    signature: AutonomousBountyAuthorizationSignature,
+    relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyClaimArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    solver: String,
+    authorization_nonce: Option<String>,
+    authorization_valid_before: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountyAuthorizedClaimArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    solver: String,
+    authorization_nonce: String,
+    authorization_valid_before: u64,
+    signature: AutonomousBountyAuthorizationSignature,
+    relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountySubmissionArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    solver: String,
+    submission_hash: String,
+    evidence_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousVerificationAttestationArgs {
+    network: Option<String>,
+    attestation: AutonomousVerificationAttestationRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousModuleSettlementArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    caller: Option<String>,
+    proof: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousAttestationSettlementArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    caller: Option<String>,
+    attestations: Vec<AutonomousSignedAttestation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousLifecycleArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    caller: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DecodeAutonomousBountyEventsArgs {
+    logs: Vec<EvmLog>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ListAutonomousBountyEventsArgs {
+    network: Option<String>,
+    bounty_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PublishAutonomousBountyTermsArgs {
+    creator_wallet: String,
+    document: AutonomousBountyTermsDocument,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GetAutonomousBountyTermsArgs {
+    terms_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PublishAutonomousSubmissionEvidenceArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    bounty_id: String,
+    round: u64,
+    solver_wallet: String,
+    artifact_reference: String,
+    evidence: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GetAutonomousSubmissionEvidenceArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    round: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct AutonomousBountyFeedArgs {
+    network: Option<String>,
+    claimable_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct AutonomousVerificationJobsArgs {
+    network: Option<String>,
+    verifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,13 +389,6 @@ struct GetBaseTransactionReceiptArgs {
     tx_hash: String,
     request_id: Option<u64>,
     network: Option<String>,
-    reconcile_logs: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BaseIndexerStatusArgs {
-    network: Option<String>,
-    escrow_contract: Option<String>,
 }
 
 #[tokio::main]
@@ -325,7 +440,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(|| async { "ok" }))
         .route("/llms.txt", get(llms_txt))
         .route(
-            "/schemas/discovery-manifest.v1.json",
+            "/schemas/discovery-manifest.v2.json",
             get(discovery_manifest_schema),
         )
         .route(
@@ -409,19 +524,6 @@ async fn main() -> anyhow::Result<()> {
             post(plan_github_proof_comment_for_proof),
         )
         .route(
-            "/tools/reconcile_base_evm_logs",
-            post(reconcile_base_evm_logs),
-        )
-        .route(
-            "/tools/reconcile_base_escrow_event",
-            post(reconcile_base_escrow_event),
-        )
-        .route(
-            "/tools/reconcile_base_rpc_logs",
-            post(reconcile_base_rpc_logs),
-        )
-        .route("/tools/fetch_base_rpc_logs", post(fetch_base_rpc_logs))
-        .route(
             "/tools/broadcast_base_signed_transaction",
             post(broadcast_base_signed_transaction),
         )
@@ -430,18 +532,93 @@ async fn main() -> anyhow::Result<()> {
             post(get_base_transaction_receipt),
         )
         .route(
-            "/tools/get_base_indexer_status",
-            post(get_base_indexer_status),
+            "/tools/plan_autonomous_bounty_creation",
+            post(plan_autonomous_bounty_creation),
         )
-        .route("/tools/plan_base_log_query", post(plan_base_log_query))
-        .route("/tools/plan_base_funding", post(plan_base_funding))
         .route(
-            "/tools/list_base_release_queue",
-            post(list_base_release_queue),
+            "/tools/plan_autonomous_bounty_authorized_creation",
+            post(plan_autonomous_bounty_authorized_creation),
         )
-        .route("/tools/plan_base_release", post(plan_base_release))
-        .route("/tools/plan_base_refund", post(plan_base_refund))
-        .route("/tools/plan_base_dispute", post(plan_base_dispute))
+        .route(
+            "/tools/plan_autonomous_bounty_contribution",
+            post(plan_autonomous_bounty_contribution),
+        )
+        .route(
+            "/tools/plan_autonomous_bounty_authorized_contribution",
+            post(plan_autonomous_bounty_authorized_contribution),
+        )
+        .route(
+            "/tools/plan_autonomous_bounty_claim",
+            post(plan_autonomous_bounty_claim),
+        )
+        .route(
+            "/tools/plan_autonomous_bounty_authorized_claim",
+            post(plan_autonomous_bounty_authorized_claim),
+        )
+        .route(
+            "/tools/plan_autonomous_bounty_submission",
+            post(plan_autonomous_bounty_submission),
+        )
+        .route(
+            "/tools/plan_autonomous_verification_attestation",
+            post(plan_autonomous_verification_attestation),
+        )
+        .route(
+            "/tools/plan_autonomous_module_settlement",
+            post(plan_autonomous_module_settlement),
+        )
+        .route(
+            "/tools/plan_autonomous_attestation_settlement",
+            post(plan_autonomous_attestation_settlement),
+        )
+        .route(
+            "/tools/plan_autonomous_expire_claim",
+            post(plan_autonomous_expire_claim),
+        )
+        .route(
+            "/tools/plan_autonomous_expire_submission",
+            post(plan_autonomous_expire_submission),
+        )
+        .route(
+            "/tools/plan_autonomous_cancel",
+            post(plan_autonomous_cancel),
+        )
+        .route(
+            "/tools/plan_autonomous_refund_withdrawal",
+            post(plan_autonomous_refund_withdrawal),
+        )
+        .route(
+            "/tools/decode_autonomous_bounty_events",
+            post(decode_autonomous_bounty_events),
+        )
+        .route(
+            "/tools/list_autonomous_bounty_events",
+            post(list_autonomous_bounty_events),
+        )
+        .route(
+            "/tools/publish_autonomous_bounty_terms",
+            post(publish_autonomous_bounty_terms),
+        )
+        .route(
+            "/tools/get_autonomous_bounty_terms",
+            post(get_autonomous_bounty_terms),
+        )
+        .route(
+            "/tools/publish_autonomous_submission_evidence",
+            post(publish_autonomous_submission_evidence),
+        )
+        .route(
+            "/tools/get_autonomous_submission_evidence",
+            post(get_autonomous_submission_evidence),
+        )
+        .route(
+            "/tools/list_autonomous_bounties",
+            post(list_autonomous_bounties),
+        )
+        .route(
+            "/tools/list_autonomous_verification_jobs",
+            post(list_autonomous_verification_jobs),
+        )
         .route("/tools/run_bountybench", get(run_bountybench))
         .route("/tools/run_abusebench", get(run_abusebench))
         .route("/tools/run_judgebench", get(run_judgebench))
@@ -646,7 +823,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "source_organization_id": nullable_uuid_property("Stripe-funded organization balance to reserve from when rail is StripeFiat."),
                     "amount_minor": integer_property("Contribution amount in minor units."),
                     "currency": string_property("Currency code."),
-                    "rail": enum_property(&["Simulated", "StripeFiat"], "Off-chain contribution rail. BaseUsdc funding must be indexed from escrow events through reconcile_base_escrow_event."),
+                    "rail": enum_property(&["Simulated", "StripeFiat"], "Legacy off-chain contribution rail. Base USDC uses the autonomous bounty contribution tools and canonical FundingAdded events."),
                     "external_reference": nullable_string_property("Optional per-bounty idempotency reference from the funding rail.")
                 }),
                 &["bounty_id", "amount_minor", "currency", "rail"],
@@ -987,82 +1164,6 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
         ),
         operator_tool(
-            "reconcile_base_escrow_event",
-            "Apply one normalized Base escrow event after it has been indexed.",
-            object_tool_schema(
-                json!({
-                    "id": uuid_property("Stable indexed event UUID."),
-                    "log_key": string_property("Idempotency key for the indexed escrow log."),
-                    "tx_hash": string_property("Base transaction hash."),
-                    "block_number": integer_property("Base block number."),
-                    "onchain_escrow_id": integer_property("On-chain escrow id from the contract."),
-                    "bounty_id": uuid_property("Platform bounty UUID."),
-                    "kind": enum_property(&["Created", "Released", "Refunded", "Disputed", "Paused"], "Escrow event kind."),
-                    "status": enum_property(&["Created", "Funded", "Disputed", "Released", "Refunded"], "Escrow status after the event."),
-                    "token": nullable_string_property("Token address for Created events."),
-                    "amount": {
-                        "type": ["object", "null"],
-                        "properties": {
-                            "amount": {"type": "integer"},
-                            "currency": {"type": "string"}
-                        }
-                    },
-                    "terms_hash": nullable_string_property("Terms hash for Created events."),
-                    "proof_hash": nullable_string_property("Proof hash for Released events."),
-                    "reason_hash": nullable_string_property("Reason hash for Refunded events."),
-                    "dispute_hash": nullable_string_property("Dispute hash for Disputed events."),
-                    "occurred_at": string_property("RFC3339 timestamp for the indexed event.")
-                }),
-                &[
-                    "id",
-                    "log_key",
-                    "tx_hash",
-                    "block_number",
-                    "onchain_escrow_id",
-                    "bounty_id",
-                    "kind",
-                    "status",
-                    "occurred_at",
-                ],
-            ),
-            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
-        ),
-        operator_tool(
-            "reconcile_base_evm_logs",
-            "Decode and apply raw Base escrow EVM logs with duplicate protection.",
-            json!({
-                "type": "array",
-                "items": object_property("chain_base::EvmLog payload."),
-                "description": "Array of raw EVM logs from the Base escrow contract."
-            }),
-            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
-        ),
-        operator_tool(
-            "reconcile_base_rpc_logs",
-            "Normalize provider-shaped eth_getLogs results or a full JSON-RPC response and reconcile Base escrow events.",
-            json!({
-                "type": ["array", "object"],
-                "items": object_property("chain_base::RpcEvmLog payload with address, topics, data, transactionHash, blockNumber, and logIndex."),
-                "description": "Either an array of raw eth_getLogs result objects or the full JSON-RPC response with a result array."
-            }),
-            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
-        ),
-        operator_tool(
-            "fetch_base_rpc_logs",
-            "Fetch Base escrow logs from the configured RPC URL and reconcile the resulting escrow events.",
-            object_tool_schema(
-                json!({
-                    "escrow_contract": string_property("Escrow contract EVM address."),
-                    "from_block": integer_property("Inclusive starting block number."),
-                    "to_block": nullable_integer_property("Optional inclusive ending block number; null uses latest."),
-                    "request_id": nullable_integer_property("Optional JSON-RPC request id."),
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
-                }),
-                &["escrow_contract", "from_block"],
-            ),
-            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
-        ),
-        operator_tool(
             "broadcast_base_signed_transaction",
             "Broadcast a signed Base transaction through the configured RPC URL when operator-enabled.",
             object_tool_schema(
@@ -1075,105 +1176,325 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
             OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        operator_tool(
+        tool(
             "get_base_transaction_receipt",
-            "Fetch a Base transaction receipt and optionally reconcile escrow logs from that receipt.",
+            "Fetch a Base transaction receipt. Canonical bounty state still comes from the autonomous indexer, not from this receipt alone.",
             object_tool_schema(
                 json!({
                     "tx_hash": string_property("0x-prefixed transaction hash."),
                     "request_id": nullable_integer_property("Optional JSON-RPC request id."),
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia."),
-                    "reconcile_logs": nullable_boolean_property("When true, normalize receipt logs and run the Base escrow indexer.")
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet.")
                 }),
                 &["tx_hash"],
             ),
-            "OPERATOR_API_TOKEN is configured and reconcile_logs=true.",
         ),
         tool(
-            "get_base_indexer_status",
-            "Read the hosted Base indexer persistence and scan-cursor status for a network escrow contract.",
+            "plan_autonomous_bounty_creation",
+            "Build a canonical Base USDC autonomous bounty creation plan. The plan supports a wallet-batched approve/create path and returns the predictable bounty address plus Circle USDC EIP-3009 authorization data for a gas-sponsored relayer path.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "escrow_contract": nullable_string_property("Optional Base escrow contract address; defaults to the configured contract for the selected network.")
+                    "create": autonomous_bounty_create_property()
+                }),
+                &["create"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_bounty_authorized_creation",
+            "After the creator signs the exact EIP-3009 typed data returned by plan_autonomous_bounty_creation, build the single gas-sponsorable factory transaction that creates and funds the predictable bounty contract.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "create": autonomous_bounty_create_property(),
+                    "signature": {
+                        "type": "object",
+                        "properties": {
+                            "v": integer_property("EIP-3009 recovery id: 0, 1, 27, or 28."),
+                            "r": string_property("0x-prefixed bytes32 signature r."),
+                            "s": string_property("0x-prefixed bytes32 signature s.")
+                        },
+                        "required": ["v", "r", "s"],
+                        "additionalProperties": false
+                    },
+                    "relayer": nullable_string_property("Optional wallet that will sponsor and submit the factory transaction.")
+                }),
+                &["create", "signature"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_bounty_contribution",
+            "Build wallet-batchable approve/fund calls for a permissionless pooled USDC contribution to an existing canonical bounty contract.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "contribution": {
+                        "type": "object",
+                        "properties": {
+                            "bounty_contract": string_property("Canonical bounty contract receiving USDC."),
+                            "contributor": string_property("Funding agent or human wallet."),
+                            "amount": money_property("Exact USDC contribution; it must not exceed remaining target funding.", false),
+                            "authorization_nonce": nullable_string_property("Optional unique bytes32 for the one-signature EIP-3009 path."),
+                            "authorization_valid_before": nullable_integer_property("Optional Unix expiry paired with authorization_nonce.")
+                        },
+                        "required": ["bounty_contract", "contributor", "amount"],
+                        "additionalProperties": false
+                    }
+                }),
+                &["contribution"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_bounty_authorized_contribution",
+            "After a funder signs the EIP-3009 typed data returned by plan_autonomous_bounty_contribution, build the single gas-sponsorable transaction that transfers USDC into the bounty and records the contribution.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "contribution": {
+                        "type": "object",
+                        "properties": {
+                            "bounty_contract": string_property("Indexed canonical bounty contract."),
+                            "contributor": string_property("Wallet that signed the authorization."),
+                            "amount": money_property("Exact USDC amount authorized.", false),
+                            "authorization_nonce": string_property("Unique bytes32 signed in the authorization."),
+                            "authorization_valid_before": integer_property("Unix expiry signed in the authorization.")
+                        },
+                        "required": ["bounty_contract", "contributor", "amount", "authorization_nonce", "authorization_valid_before"],
+                        "additionalProperties": false
+                    },
+                    "signature": {
+                        "type": "object",
+                        "properties": {
+                            "v": integer_property("EIP-3009 recovery id: 0, 1, 27, or 28."),
+                            "r": string_property("0x-prefixed bytes32 signature r."),
+                            "s": string_property("0x-prefixed bytes32 signature s.")
+                        },
+                        "required": ["v", "r", "s"],
+                        "additionalProperties": false
+                    },
+                    "relayer": nullable_string_property("Optional wallet sponsoring the transaction.")
+                }),
+                &["contribution", "signature"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_bounty_claim",
+            "Build a wallet-batched USDC bond approval and claim. The indexed bond equals one verifier reward: acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout adds it to the completion bonus.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Fully funded canonical bounty contract."),
+                    "solver": string_property("Solver wallet that will receive payout if verification passes."),
+                    "authorization_nonce": nullable_string_property("Optional unique bytes32 for a one-signature EIP-3009 bond authorization."),
+                    "authorization_valid_before": nullable_integer_property("Optional Unix expiry for the bond authorization.")
+                }),
+                &["bounty_contract", "solver"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_bounty_authorized_claim",
+            "After the solver signs the exact EIP-3009 bond returned by plan_autonomous_bounty_claim, build one gas-sponsorable transaction that deposits the bond and activates the claim.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Fully funded canonical bounty contract."),
+                    "solver": string_property("Wallet that signed the claim-bond authorization."),
+                    "authorization_nonce": string_property("Unique bytes32 signed in the authorization."),
+                    "authorization_valid_before": integer_property("Unix expiry signed in the authorization."),
+                    "signature": {
+                        "type": "object",
+                        "properties": {
+                            "v": integer_property("EIP-3009 recovery id: 0, 1, 27, or 28."),
+                            "r": string_property("0x-prefixed bytes32 signature r."),
+                            "s": string_property("0x-prefixed bytes32 signature s.")
+                        },
+                        "required": ["v", "r", "s"],
+                        "additionalProperties": false
+                    },
+                    "relayer": nullable_string_property("Optional wallet sponsoring the transaction.")
+                }),
+                &["bounty_contract", "solver", "authorization_nonce", "authorization_valid_before", "signature"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_bounty_submission",
+            "Build the solver's submission commitment call. The hashes must identify the artifact and evidence evaluated by the immutable verifier policy.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Claimed canonical bounty contract."),
+                    "solver": string_property("Wallet holding the current claim."),
+                    "submission_hash": string_property("0x-prefixed bytes32 artifact commitment."),
+                    "evidence_hash": string_property("0x-prefixed bytes32 evidence-package commitment.")
+                }),
+                &["bounty_contract", "solver", "submission_hash", "evidence_hash"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_verification_attestation",
+            "Build the exact EIP-712 payload a committed verifier signs for the current indexed submission. The planner rejects stale rounds, changed hashes, unauthorized verifiers, and deadlines beyond verification expiry.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "attestation": autonomous_verification_attestation_property()
+                }),
+                &["attestation"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_module_settlement",
+            "Build the permissionless deterministic verifier transaction. A passing verifier call transfers solver and verifier rewards atomically; a plan or transaction hash is not payout evidence.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Submitted canonical deterministic-module bounty."),
+                    "caller": nullable_string_property("Optional wallet sponsoring the permissionless call."),
+                    "proof": string_property("0x-prefixed proof bytes consumed by the committed verifier module.")
+                }),
+                &["bounty_contract", "proof"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_attestation_settlement",
+            "Build the permissionless quorum relay. The canonical contract validates each committed verifier signature and atomically pays on pass or reopens on reject.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Submitted canonical quorum bounty."),
+                    "caller": nullable_string_property("Optional wallet sponsoring the relay."),
+                    "attestations": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "items": autonomous_signed_attestation_property()
+                    }
+                }),
+                &["bounty_contract", "attestations"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_expire_claim",
+            "Build the permissionless transaction that reopens an expired claim.",
+            autonomous_lifecycle_schema("Claimed canonical bounty contract."),
+        ),
+        tool(
+            "plan_autonomous_expire_submission",
+            "Build the permissionless transaction that reopens an expired submission.",
+            autonomous_lifecycle_schema("Submitted canonical bounty contract."),
+        ),
+        tool(
+            "plan_autonomous_cancel",
+            "Build cancellation for the creator or any caller after the immutable funding deadline. Contributors then withdraw their own refunds.",
+            autonomous_lifecycle_schema("Open or claimable canonical bounty contract."),
+        ),
+        tool(
+            "plan_autonomous_refund_withdrawal",
+            "Build a contributor's pull-refund transaction after cancellation.",
+            autonomous_lifecycle_schema("Cancelled canonical bounty contract."),
+        ),
+        tool(
+            "decode_autonomous_bounty_events",
+            "Decode raw EVM logs into evidence-bound autonomous bounty events. Unknown token-transfer logs are ignored; malformed recognized protocol logs fail closed.",
+            object_tool_schema(
+                json!({
+                    "logs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "address": string_property("Event-emitting factory or bounty contract."),
+                                "topics": string_array_property("0x-prefixed 32-byte EVM log topics."),
+                                "data": string_property("0x-prefixed ABI-encoded event data."),
+                                "tx_hash": string_property("Confirmed transaction hash."),
+                                "block_number": integer_property("Confirmed block number."),
+                                "log_index": integer_property("Transaction log index."),
+                                "occurred_at": nullable_string_property("Optional RFC3339 event timestamp.")
+                            },
+                            "required": ["address", "topics", "data", "tx_hash", "block_number", "log_index"],
+                            "additionalProperties": false
+                        }
+                    }
+                }),
+                &["logs"],
+            ),
+        ),
+        tool(
+            "list_autonomous_bounty_events",
+            "Read persisted confirmed canonical factory and bounty events. Use BountySettled as payout evidence; a signature, plan, or transaction hash alone is not settlement.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_id": nullable_string_property("Optional 0x-prefixed bytes32 autonomous bounty id filter.")
                 }),
                 &[],
             ),
         ),
         tool(
-            "plan_base_log_query",
-            "Build an eth_getLogs JSON-RPC request for Base escrow events.",
+            "publish_autonomous_bounty_terms",
+            "Publish a bounded public task document and receive deterministic Keccak commitments for the factory call. Publication is not funding or canonical listing; only a matching canonical factory event creates the bounty.",
             object_tool_schema(
                 json!({
-                    "escrow_contract": string_property("Escrow contract EVM address."),
-                    "from_block": integer_property("Inclusive starting block number."),
-                    "to_block": nullable_integer_property("Optional inclusive ending block number; null uses latest."),
-                    "request_id": nullable_integer_property("Optional JSON-RPC request id.")
+                    "creator_wallet": string_property("Wallet expected to create the canonical bounty."),
+                    "document": autonomous_bounty_terms_property()
                 }),
-                &["escrow_contract", "from_block"],
+                &["creator_wallet", "document"],
             ),
         ),
         tool(
-            "plan_base_funding",
-            "Build unsigned Base USDC approve and createEscrow transactions for a posted bounty.",
+            "get_autonomous_bounty_terms",
+            "Resolve and independently hash-check the exact public task specification committed by an on-chain termsHash.",
             object_tool_schema(
                 json!({
-                    "bounty_id": uuid_property("Base USDC bounty UUID to fund on-chain."),
-                    "escrow_contract": string_property("Escrow contract EVM address."),
-                    "payer": string_property("Payer EVM address that will approve USDC and create escrow."),
-                    "token": string_property("USDC token EVM address on the selected Base network."),
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
+                    "terms_hash": string_property("0x-prefixed Keccak hash from a canonical bounty contract.")
                 }),
-                &["bounty_id", "escrow_contract", "payer", "token"],
+                &["terms_hash"],
             ),
         ),
         tool(
-            "plan_base_release",
-            "Build an unsigned Base escrow release transaction for a payable bounty.",
+            "publish_autonomous_submission_evidence",
+            "After SubmissionAdded is indexed, publish the exact public artifact reference and evidence object whose SHA-256 commitments match the current canonical submission. Conflicting replays fail closed.",
             object_tool_schema(
                 json!({
-                    "bounty_id": uuid_property("Payable bounty UUID."),
-                    "escrow_contract": string_property("Escrow contract EVM address."),
-                    "platform_fee_wallet": string_property("Compatibility field for a future pre-disclosed platform fee. Open-beta zero-fee plans omit this address from release recipients."),
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Indexed canonical submitted bounty contract."),
+                    "bounty_id": string_property("0x-prefixed canonical bounty id."),
+                    "round": integer_property("Current submission round."),
+                    "solver_wallet": string_property("Wallet that holds the indexed claim."),
+                    "artifact_reference": string_property("Public repository, commit, artifact URI, or canonical result string."),
+                    "evidence": object_property("Public evidence object evaluated under the immutable evidence schema.")
                 }),
-                &["bounty_id", "escrow_contract", "platform_fee_wallet"],
+                &["bounty_contract", "bounty_id", "round", "solver_wallet", "artifact_reference", "evidence"],
             ),
         ),
         tool(
-            "plan_base_refund",
-            "Build an unsigned Base escrow refund transaction for a refundable bounty.",
+            "get_autonomous_submission_evidence",
+            "Retrieve hash-checked public evidence for a canonical bounty round so deterministic or AI verifier agents can evaluate it.",
             object_tool_schema(
                 json!({
-                    "bounty_id": uuid_property("Funded, claimed, submitted, disputed, or refunding bounty UUID."),
-                    "escrow_contract": string_property("Escrow contract EVM address."),
-                    "reason_hash": string_property("0x-prefixed bytes32 refund reason hash."),
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Indexed canonical bounty contract."),
+                    "round": integer_property("Positive submission round.")
                 }),
-                &["bounty_id", "escrow_contract", "reason_hash"],
+                &["bounty_contract", "round"],
             ),
         ),
         tool(
-            "plan_base_dispute",
-            "Build an unsigned Base escrow dispute marker transaction for a submitted or verifying bounty.",
+            "list_autonomous_bounties",
+            "Discover canonical autonomous bounties joined to their hash-verified public terms and complete event history. Set claimable_only=true to find work an agent can claim and earn from now.",
             object_tool_schema(
                 json!({
-                    "bounty_id": uuid_property("Submitted or verifying bounty UUID."),
-                    "escrow_contract": string_property("Escrow contract EVM address."),
-                    "dispute_hash": string_property("0x-prefixed bytes32 dispute evidence hash."),
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "claimable_only": nullable_boolean_property("When true, return only fully funded unclaimed bounties.")
                 }),
-                &["bounty_id", "escrow_contract", "dispute_hash"],
+                &[],
             ),
         ),
         tool(
-            "list_base_release_queue",
-            "List payable Base settlements and release-planning readiness errors.",
+            "list_autonomous_verification_jobs",
+            "List live canonical submissions whose immutable terms and hash-matched evidence preimages are ready for deterministic, signed, or AI-judge verification. Optionally filter quorum jobs to one verifier wallet.",
             object_tool_schema(
                 json!({
-                    "escrow_contract": nullable_string_property("Optional escrow contract address for release planning."),
-                    "platform_fee_wallet": nullable_string_property("Optional recipient for a future pre-disclosed fee. Not required when the open-beta platform fee is zero."),
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network for embedded release plans; defaults to base-sepolia.")
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "verifier": nullable_string_property("Optional committed verifier wallet; deterministic module jobs remain visible to any relayer.")
                 }),
                 &[],
             ),
@@ -1383,6 +1704,130 @@ fn nullable_boolean_property(description: &str) -> Value {
 
 fn object_property(description: &str) -> Value {
     json!({ "type": "object", "description": description })
+}
+
+fn money_property(description: &str, allow_zero: bool) -> Value {
+    json!({
+        "type": "object",
+        "description": description,
+        "properties": {
+            "amount": {
+                "type": "integer",
+                "minimum": if allow_zero { 0 } else { 1 },
+                "description": "USDC base units; native USDC uses six decimal places."
+            },
+            "currency": {
+                "type": "string",
+                "const": "usdc"
+            }
+        },
+        "required": ["amount", "currency"],
+        "additionalProperties": false
+    })
+}
+
+fn autonomous_bounty_create_property() -> Value {
+    json!({
+        "type": "object",
+        "description": "Complete immutable autonomous bounty policy. Hashes must commit to public or retrievable canonical terms before any wallet signs.",
+        "properties": {
+            "creator": string_property("Creator or posting agent wallet address."),
+            "solver_reward": money_property("Amount paid atomically to the successful solver.", false),
+            "verifier_reward": money_property("Amount split across successful precommitted verifiers; may be zero.", true),
+            "terms_hash": string_property("0x-prefixed bytes32 canonical terms hash."),
+            "policy_hash": string_property("0x-prefixed bytes32 full verification-policy hash."),
+            "acceptance_criteria_hash": string_property("0x-prefixed bytes32 explicit acceptance-criteria hash."),
+            "benchmark_hash": string_property("0x-prefixed bytes32 deterministic benchmark or judge benchmark hash."),
+            "evidence_schema_hash": string_property("0x-prefixed bytes32 evidence-package schema hash."),
+            "funding_deadline": integer_property("Unix timestamp after which an incomplete crowdfund can be cancelled."),
+            "claim_window_seconds": integer_property("Seconds a solver has to submit after claiming."),
+            "verification_window_seconds": integer_property("Seconds committed verifiers have to settle after submission."),
+            "verification_mode": enum_property(&["deterministic_module", "signed_quorum", "ai_judge_quorum"], "Immutable on-chain verification mechanism."),
+            "verifier_module": nullable_string_property("Deterministic verifier contract; null for quorum modes."),
+            "verifier_reward_recipient": nullable_string_property("Deterministic verifier reward wallet; null for quorum modes."),
+            "verifiers": string_array_property("One to eight precommitted verifier wallets for quorum modes; empty for deterministic mode."),
+            "threshold": integer_property("Number of matching verifier signatures required; AI judge mode requires at least two."),
+            "initial_funding": money_property("Creation-time funding. Zero creates a crowdfundable bounty; target funding makes it immediately claimable.", true),
+            "creation_nonce": string_property("Unique nonzero random bytes32. It binds the CREATE2 bounty id and address.")
+        },
+        "required": [
+            "creator", "solver_reward", "verifier_reward", "terms_hash", "policy_hash",
+            "acceptance_criteria_hash", "benchmark_hash", "evidence_schema_hash",
+            "funding_deadline", "claim_window_seconds", "verification_window_seconds",
+            "verification_mode", "verifiers", "threshold", "initial_funding", "creation_nonce"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn autonomous_verification_attestation_property() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "bounty_contract": string_property("Indexed canonical submitted bounty contract."),
+            "bounty_id": string_property("0x-prefixed canonical bounty id."),
+            "round": integer_property("Current positive submission round."),
+            "verifier": string_property("Wallet in the immutable verifier set."),
+            "submission_hash": string_property("Current indexed artifact commitment."),
+            "evidence_hash": string_property("Current indexed evidence commitment."),
+            "policy_hash": string_property("Immutable policy commitment."),
+            "passed": boolean_property("Verifier decision."),
+            "response_hash": string_property("0x-prefixed hash of the verifier response and reproducibility record."),
+            "deadline": integer_property("Unix signature expiry no later than the submission verification deadline.")
+        },
+        "required": [
+            "bounty_contract", "bounty_id", "round", "verifier", "submission_hash",
+            "evidence_hash", "policy_hash", "passed", "response_hash", "deadline"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn autonomous_signed_attestation_property() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "verifier": string_property("Committed verifier wallet that signed the exact EIP-712 payload."),
+            "passed": boolean_property("Signed verifier decision; every quorum member must agree."),
+            "response_hash": string_property("Signed 0x-prefixed verifier response hash."),
+            "deadline": integer_property("Signed Unix expiry."),
+            "signature": string_property("0x-prefixed EOA or ERC-1271-compatible signature bytes.")
+        },
+        "required": ["verifier", "passed", "response_hash", "deadline", "signature"],
+        "additionalProperties": false
+    })
+}
+
+fn autonomous_lifecycle_schema(contract_description: &str) -> Value {
+    object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property(contract_description),
+            "caller": nullable_string_property("Optional wallet that will send the transaction; refund withdrawal requires it.")
+        }),
+        &["bounty_contract"],
+    )
+}
+
+fn autonomous_bounty_terms_property() -> Value {
+    json!({
+        "type": "object",
+        "description": "Public content-addressed task specification. On-chain creation commits the returned hashes.",
+        "properties": {
+            "schema_version": { "type": "string", "const": "agent-bounties/terms-v1" },
+            "contract_terms": object_property("Immutable protocol version, creator, Base network, native USDC token, solver/verifier rewards, equal claim bond, initial funding, deadlines, work windows, and creation nonce."),
+            "title": string_property("Short digital-work bounty title."),
+            "goal": string_property("Complete outcome the solver must produce."),
+            "acceptance_criteria": string_array_property("Explicit binary or measurable acceptance criteria."),
+            "benchmark": object_property("Deterministic benchmark or AI-judge benchmark definition."),
+            "evidence_schema": object_property("Required submission evidence fields and formats."),
+            "verification_policy": object_property("Complete immutable verifier mechanism, engines, wallets, thresholds, model versions, prompts, rubrics, and decoding parameters."),
+            "source_url": nullable_string_property("Optional public issue, repository, or task source URL."),
+            "discovery_source": nullable_string_property("Optional answer describing how the poster found Agent Bounties.")
+        },
+        "required": ["schema_version", "contract_terms", "title", "goal", "acceptance_criteria", "benchmark", "evidence_schema", "verification_policy"],
+        "additionalProperties": false
+    })
 }
 
 fn nullable_object_property(description: &str) -> Value {
@@ -2487,126 +2932,6 @@ async fn plan_github_proof_comment_for_proof(
     mcp_json(proof_comment_plan(comment))
 }
 
-async fn reconcile_base_escrow_event(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Json(event): Json<BaseEscrowEvent>,
-) -> Json<serde_json::Value> {
-    if let Err(error) = require_operator(&state, &headers) {
-        return error;
-    }
-    let indexed_event = event.clone();
-    let reconciliation = {
-        let mut network = state.network.lock().expect("state poisoned");
-        let reconciliation = match network.apply_base_escrow_event(event) {
-            Ok(reconciliation) => reconciliation,
-            Err(error) => return mcp_error(error),
-        };
-        if let Err(error) = state
-            .base_log_worker
-            .lock()
-            .expect("state poisoned")
-            .ingest_indexed_event(indexed_event.clone())
-        {
-            return mcp_error(error);
-        }
-        reconciliation
-    };
-    if let Some(store) = &state.store {
-        if let Err(error) = store.upsert_bounty(&reconciliation.bounty).await {
-            return mcp_error(error);
-        }
-        if let Err(error) = store.upsert_base_escrow_event(&indexed_event).await {
-            return mcp_error(error);
-        }
-        if let Err(error) = store.upsert_escrow(&reconciliation.escrow).await {
-            return mcp_error(error);
-        }
-        for intent in &reconciliation.funding_intents {
-            if let Err(error) = store.upsert_funding_intent(intent).await {
-                return mcp_error(error);
-            }
-        }
-        for settlement in &reconciliation.settlements {
-            if let Err(error) = store.upsert_settlement(settlement).await {
-                return mcp_error(error);
-            }
-        }
-        if let Err(error) = persist_ledger_entries(store, &reconciliation.ledger_entries).await {
-            return mcp_error(error);
-        }
-    }
-    mcp_json(reconciliation)
-}
-
-async fn reconcile_base_evm_logs(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Json(logs): Json<Vec<EvmLog>>,
-) -> Json<serde_json::Value> {
-    if let Err(error) = require_operator(&state, &headers) {
-        return error;
-    }
-    process_base_evm_logs(&state, logs).await
-}
-
-async fn reconcile_base_rpc_logs(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Json(submission): Json<RpcLogSubmission>,
-) -> Json<serde_json::Value> {
-    if let Err(error) = require_operator(&state, &headers) {
-        return error;
-    }
-    let logs = match rpc_logs_to_evm_logs(submission.into_logs()) {
-        Ok(logs) => logs,
-        Err(error) => return mcp_error(error),
-    };
-    process_base_evm_logs(&state, logs).await
-}
-
-async fn fetch_base_rpc_logs(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Json(args): Json<FetchBaseRpcLogsArgs>,
-) -> Json<serde_json::Value> {
-    if let Err(error) = require_operator(&state, &headers) {
-        return error;
-    }
-    let query = match BaseEscrowLogQuery::new(args.escrow_contract, args.from_block, args.to_block)
-    {
-        Ok(query) => query,
-        Err(error) => return mcp_error(error),
-    };
-    let request_id = args.request_id.unwrap_or(1);
-    let network_name = args.network.as_deref().unwrap_or("base-sepolia");
-    let (network, rpc_url) = match state.base_rpc_urls.resolve(network_name) {
-        Ok(resolved) => resolved,
-        Err(error) => return mcp_error(error),
-    };
-    let request = query.rpc_request(request_id);
-    let response = match fetch_base_escrow_logs(&rpc_url, &query, request_id).await {
-        Ok(response) => response,
-        Err(error) => return mcp_error(error),
-    };
-    let logs = match rpc_logs_to_evm_logs(response.result) {
-        Ok(logs) => logs,
-        Err(error) => return mcp_error(error),
-    };
-    let fetched_logs = logs.len();
-    let reconciliation = process_base_evm_logs(&state, logs).await.0;
-    if reconciliation.get("error").is_some() {
-        return Json(reconciliation);
-    }
-
-    mcp_json(serde_json::json!({
-        "network": network,
-        "request": request,
-        "fetched_logs": fetched_logs,
-        "reconciliation": reconciliation["content"][0]["json"].clone()
-    }))
-}
-
 async fn broadcast_base_signed_transaction(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -2640,20 +2965,14 @@ async fn broadcast_base_signed_transaction(
         "network": network,
         "request": request,
         "tx_hash": response.result,
-        "next_step": "Poll get_base_transaction_receipt with reconcile_logs=true; payment state changes only after escrow logs are indexed."
+        "next_step": "Poll get_base_transaction_receipt for inclusion. The autonomous indexer independently reconciles canonical factory and bounty logs; a receipt alone never proves settlement."
     }))
 }
 
 async fn get_base_transaction_receipt(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Json(args): Json<GetBaseTransactionReceiptArgs>,
 ) -> Json<serde_json::Value> {
-    if args.reconcile_logs.unwrap_or(false) {
-        if let Err(error) = require_operator(&state, &headers) {
-            return error;
-        }
-    }
     let request_id = args.request_id.unwrap_or(1);
     let network_name = args.network.as_deref().unwrap_or("base-sepolia");
     let (network, rpc_url) = match state.base_rpc_urls.resolve(network_name) {
@@ -2678,8 +2997,7 @@ async fn get_base_transaction_receipt(
             "block_number": null,
             "succeeded": null,
             "log_count": 0,
-            "receipt": null,
-            "reconciliation": null
+            "receipt": null
         }));
     };
     let block_number = match receipt.block_number() {
@@ -2691,19 +3009,6 @@ async fn get_base_transaction_receipt(
         Err(error) => return mcp_error(error),
     };
     let log_count = receipt.logs.len();
-    let reconciliation = if args.reconcile_logs.unwrap_or(false) {
-        let logs = match receipt.logs_to_evm_logs() {
-            Ok(logs) => logs,
-            Err(error) => return mcp_error(error),
-        };
-        let reconciliation = process_base_evm_logs(&state, logs).await.0;
-        if reconciliation.get("error").is_some() {
-            return Json(reconciliation);
-        }
-        Some(reconciliation["content"][0]["json"].clone())
-    } else {
-        None
-    };
 
     mcp_json(serde_json::json!({
         "network": network,
@@ -2713,153 +3018,694 @@ async fn get_base_transaction_receipt(
         "block_number": block_number,
         "succeeded": succeeded,
         "log_count": log_count,
-        "receipt": receipt,
-        "reconciliation": reconciliation
+        "receipt": receipt
     }))
 }
 
-async fn process_base_evm_logs(state: &SharedState, logs: Vec<EvmLog>) -> Json<serde_json::Value> {
-    let (report, indexed_events, bounties, funding_intents, escrows, settlements) = {
-        let mut network = state.network.lock().expect("state poisoned");
-        let mut worker = state.base_log_worker.lock().expect("state poisoned");
-        let report = worker.process_logs(logs, &mut network);
-        let applied_event_ids = report
-            .applied_events
-            .iter()
-            .map(|event| event.event_id)
-            .collect::<HashSet<_>>();
-        let indexed_events = worker
-            .indexed_events()
-            .iter()
-            .filter(|event| applied_event_ids.contains(&event.id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let bounty_ids = report
-            .applied_events
-            .iter()
-            .map(|event| event.bounty_id)
-            .collect::<HashSet<_>>();
-        let bounties = bounty_ids
-            .iter()
-            .filter_map(|id| network.bounties.get(id).cloned())
-            .collect::<Vec<_>>();
-        let funding_intents = network
-            .funding_intents
-            .values()
-            .filter(|intent| bounty_ids.contains(&intent.bounty_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let escrows = network
-            .escrows
-            .values()
-            .filter(|escrow| bounty_ids.contains(&escrow.bounty_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let settlements = network
-            .settlements
-            .values()
-            .filter(|settlement| bounty_ids.contains(&settlement.bounty_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        (
-            report,
-            indexed_events,
-            bounties,
-            funding_intents,
-            escrows,
-            settlements,
-        )
+fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlanner, String> {
+    let descriptor = base_network_descriptor(network).map_err(|error| error.to_string())?;
+    let (factory_env, implementation_env) = match descriptor.chain_id {
+        8_453 => (
+            "BASE_MAINNET_BOUNTY_FACTORY",
+            "BASE_MAINNET_BOUNTY_IMPLEMENTATION",
+        ),
+        84_532 => (
+            "BASE_SEPOLIA_BOUNTY_FACTORY",
+            "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION",
+        ),
+        _ => return Err("unsupported Base network".to_string()),
     };
-    if let Some(store) = &state.store {
-        for bounty in &bounties {
-            if let Err(error) = store.upsert_bounty(bounty).await {
-                return mcp_error(error);
-            }
-        }
-        for event in &indexed_events {
-            if let Err(error) = store.upsert_base_escrow_event(event).await {
-                return mcp_error(error);
-            }
-        }
-        for intent in &funding_intents {
-            if let Err(error) = store.upsert_funding_intent(intent).await {
-                return mcp_error(error);
-            }
-        }
-        for escrow in &escrows {
-            if let Err(error) = store.upsert_escrow(escrow).await {
-                return mcp_error(error);
-            }
-        }
-        for settlement in &settlements {
-            if let Err(error) = store.upsert_settlement(settlement).await {
-                return mcp_error(error);
-            }
-        }
-        if let Err(error) = persist_ledger_entries(store, &report.ledger_entries).await {
-            return mcp_error(error);
-        }
-    }
-    mcp_json(report)
+    let required = |key: &str| {
+        env::var(key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("hosted autonomous protocol is not configured: set {key}"))
+    };
+    AutonomousBountyTxPlanner::new(required(factory_env)?, required(implementation_env)?)
+        .map_err(|error| error.to_string())
 }
 
-async fn plan_base_log_query(Json(args): Json<PlanBaseLogQueryArgs>) -> Json<serde_json::Value> {
-    match BaseEscrowLogQuery::new(args.escrow_contract, args.from_block, args.to_block) {
-        Ok(query) => mcp_json(query.rpc_request(args.request_id.unwrap_or(1))),
-        Err(error) => mcp_error(error),
+async fn require_indexed_canonical_bounty(
+    state: &SharedState,
+    network: &str,
+    bounty_contract: &str,
+) -> Result<(), String> {
+    let item = indexed_autonomous_bounty(state, network, bounty_contract).await?;
+    if item.terms_valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "canonical bounty terms do not match contract commitments: {}",
+            item.validation_errors.join("; ")
+        ))
     }
 }
 
-async fn list_base_release_queue(
-    State(state): State<SharedState>,
-    Json(args): Json<BaseReleaseQueueRequest>,
-) -> Json<serde_json::Value> {
-    let network = state.network.lock().expect("state poisoned");
-    mcp_json(network.list_base_release_queue(args))
+async fn indexed_autonomous_bounty(
+    state: &SharedState,
+    network: &str,
+    bounty_contract: &str,
+) -> Result<AutonomousBountyFeedItem, String> {
+    let Some(store) = &state.store else {
+        return Err(
+            "DATABASE_URL is required before planning actions against a canonical bounty"
+                .to_string(),
+        );
+    };
+    let planner = configured_autonomous_planner(network)?;
+    let events = store
+        .list_autonomous_bounty_events(network)
+        .await
+        .map_err(|error| error.to_string())?;
+    let contracts = store
+        .list_canonical_autonomous_bounty_contracts(network, &planner.factory_contract)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !contracts
+        .iter()
+        .any(|contract| contract.eq_ignore_ascii_case(bounty_contract))
+    {
+        return Err("bounty contract is not indexed as canonical for this network".to_string());
+    }
+    let terms = store
+        .list_autonomous_bounty_terms()
+        .await
+        .map_err(|error| error.to_string())?;
+    build_autonomous_bounty_feed(events, terms, false)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|item| item.bounty_contract.eq_ignore_ascii_case(bounty_contract))
+        .ok_or_else(|| "canonical bounty has no indexed feed state".to_string())
 }
 
-async fn plan_base_funding(
+async fn plan_autonomous_bounty_creation(
     State(state): State<SharedState>,
-    Json(args): Json<PlanBaseFundingRequest>,
+    Json(args): Json<PlanAutonomousBountyCreationArgs>,
 ) -> Json<serde_json::Value> {
-    let network = state.network.lock().expect("state poisoned");
-    match network.plan_base_funding(args) {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    if let Err(error) = require_autonomous_creation_terms(&state, network, &args.create).await {
+        return mcp_error(error);
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_creation(network, &args.create)
+            .map_err(|e| e.to_string())
+    }) {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
 }
 
-async fn plan_base_release(
+async fn plan_autonomous_bounty_authorized_creation(
     State(state): State<SharedState>,
-    Json(args): Json<PlanBaseReleaseRequest>,
+    Json(args): Json<PlanAutonomousBountyAuthorizedCreationArgs>,
 ) -> Json<serde_json::Value> {
-    let network = state.network.lock().expect("state poisoned");
-    match network.plan_base_release(args) {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    if let Err(error) = require_autonomous_creation_terms(&state, network, &args.create).await {
+        return mcp_error(error);
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_authorized_creation(
+                network,
+                &args.create,
+                &args.signature,
+                args.relayer.as_deref(),
+            )
+            .map_err(|error| error.to_string())
+    }) {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
 }
 
-async fn plan_base_refund(
+async fn require_autonomous_creation_terms(
+    state: &SharedState,
+    network: &str,
+    create: &AutonomousBountyCreate,
+) -> Result<(), String> {
+    let Some(store) = &state.store else {
+        return Err("DATABASE_URL is required before planning canonical creation".to_string());
+    };
+    let terms = store
+        .get_autonomous_bounty_terms(&create.terms_hash)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "published autonomous bounty terms are unavailable".to_string())?;
+    validate_autonomous_creation_against_terms(network, create, &terms)
+        .map_err(|error| error.to_string())
+}
+
+async fn plan_autonomous_bounty_contribution(
     State(state): State<SharedState>,
-    Json(args): Json<PlanBaseRefundRequest>,
+    Json(args): Json<PlanAutonomousBountyContributionArgs>,
 ) -> Json<serde_json::Value> {
-    let network = state.network.lock().expect("state poisoned");
-    match network.plan_base_refund(args) {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    if let Err(error) =
+        require_indexed_canonical_bounty(&state, network, &args.contribution.bounty_contract).await
+    {
+        return mcp_error(error);
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_contribution(network, &args.contribution)
+            .map_err(|error| error.to_string())
+    }) {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
 }
 
-async fn plan_base_dispute(
+async fn plan_autonomous_bounty_authorized_contribution(
     State(state): State<SharedState>,
-    Json(args): Json<PlanBaseDisputeRequest>,
+    Json(args): Json<PlanAutonomousBountyAuthorizedContributionArgs>,
 ) -> Json<serde_json::Value> {
-    let network = state.network.lock().expect("state poisoned");
-    match network.plan_base_dispute(args) {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    if let Err(error) =
+        require_indexed_canonical_bounty(&state, network, &args.contribution.bounty_contract).await
+    {
+        return mcp_error(error);
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_authorized_contribution(
+                network,
+                &args.contribution,
+                &args.signature,
+                args.relayer.as_deref(),
+            )
+            .map_err(|error| error.to_string())
+    }) {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
+}
+
+async fn plan_autonomous_bounty_claim(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousBountyClaimArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if let Err(error) = require_claimable_autonomous_item(&item) {
+        return mcp_error(error);
+    }
+    let claim_bond = match item.claim_bond.parse::<u128>() {
+        Ok(value) => value,
+        Err(_) => return mcp_error("indexed claim bond is invalid"),
+    };
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_claim(
+                network,
+                &args.bounty_contract,
+                &args.solver,
+                claim_bond,
+                args.authorization_nonce.as_deref(),
+                args.authorization_valid_before,
+            )
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_autonomous_bounty_authorized_claim(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousBountyAuthorizedClaimArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if let Err(error) = require_claimable_autonomous_item(&item) {
+        return mcp_error(error);
+    }
+    let claim_bond = match item.claim_bond.parse::<u128>() {
+        Ok(value) => value,
+        Err(_) => return mcp_error("indexed claim bond is invalid"),
+    };
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_authorized_claim(
+                network,
+                &args.bounty_contract,
+                &args.solver,
+                claim_bond,
+                &args.authorization_nonce,
+                args.authorization_valid_before,
+                &args.signature,
+                args.relayer.as_deref(),
+            )
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+fn require_claimable_autonomous_item(item: &AutonomousBountyFeedItem) -> Result<(), String> {
+    if !item.terms_valid {
+        return Err(format!(
+            "canonical bounty terms do not match contract commitments: {}",
+            item.validation_errors.join("; ")
+        ));
+    }
+    if item.status != "claimable" {
+        return Err("canonical bounty is not currently fully funded and claimable".to_string());
+    }
+    Ok(())
+}
+
+async fn plan_autonomous_bounty_submission(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousBountySubmissionArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    if let Err(error) =
+        require_indexed_canonical_bounty(&state, network, &args.bounty_contract).await
+    {
+        return mcp_error(error);
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_submission(
+                &args.bounty_contract,
+                &args.solver,
+                &args.submission_hash,
+                &args.evidence_hash,
+            )
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_autonomous_verification_attestation(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousVerificationAttestationArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item =
+        match indexed_autonomous_bounty(&state, network, &args.attestation.bounty_contract).await {
+            Ok(item) => item,
+            Err(error) => return mcp_error(error),
+        };
+    let observed_at = match u64::try_from(Utc::now().timestamp()) {
+        Ok(value) => value,
+        Err(_) => return mcp_error("system clock is before Unix epoch"),
+    };
+    if let Err(error) =
+        validate_attestation_request_against_feed(&item, &args.attestation, observed_at)
+    {
+        return mcp_error(error);
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_verification_attestation(network, &args.attestation)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_autonomous_module_settlement(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousModuleSettlementArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if !item.terms_valid
+        || item.status != "submitted"
+        || autonomous_item_mode(&item).as_deref() != Some("deterministic_module")
+    {
+        return mcp_error("bounty is not a submitted deterministic-module bounty");
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_module_settlement(&args.bounty_contract, args.caller.as_deref(), &args.proof)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_autonomous_attestation_settlement(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousAttestationSettlementArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if !item.terms_valid {
+        return mcp_error(format!(
+            "canonical bounty terms do not match contract commitments: {}",
+            item.validation_errors.join("; ")
+        ));
+    }
+    let Some(policy) = item
+        .terms
+        .as_ref()
+        .map(|terms| &terms.document.verification_policy)
+    else {
+        return mcp_error("canonical bounty terms are unavailable");
+    };
+    let mechanism = policy
+        .get("mechanism")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let threshold = policy
+        .get("threshold")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok());
+    let allowed = policy.get("verifiers").and_then(Value::as_array);
+    if item.status != "submitted"
+        || !matches!(mechanism, "signed_quorum" | "ai_judge_quorum")
+        || threshold != Some(args.attestations.len())
+        || allowed.is_none_or(|verifiers| {
+            args.attestations.iter().any(|attestation| {
+                !verifiers.iter().any(|value| {
+                    value.as_str().is_some_and(|verifier| {
+                        verifier.eq_ignore_ascii_case(&attestation.verifier)
+                    })
+                })
+            })
+        })
+    {
+        return mcp_error("attestation quorum does not match the current immutable policy");
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_attestation_settlement(
+                &args.bounty_contract,
+                args.caller.as_deref(),
+                &args.attestations,
+            )
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_autonomous_expire_claim(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousLifecycleArgs>,
+) -> Json<serde_json::Value> {
+    plan_autonomous_lifecycle(state, args, "claimed", "expireClaim()").await
+}
+
+async fn plan_autonomous_expire_submission(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousLifecycleArgs>,
+) -> Json<serde_json::Value> {
+    plan_autonomous_lifecycle(state, args, "submitted", "expireSubmission()").await
+}
+
+async fn plan_autonomous_cancel(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousLifecycleArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if !matches!(item.status.as_str(), "open" | "claimable") {
+        return mcp_error("bounty is not cancellable");
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_cancel(&args.bounty_contract, args.caller.as_deref())
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_autonomous_refund_withdrawal(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousLifecycleArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if item.status != "cancelled" {
+        return mcp_error("bounty is not cancelled");
+    }
+    let Some(contributor) = args.caller.as_deref() else {
+        return mcp_error("caller is required for refund withdrawal");
+    };
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_refund_withdrawal(&args.bounty_contract, contributor)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_autonomous_lifecycle(
+    state: SharedState,
+    args: PlanAutonomousLifecycleArgs,
+    expected_status: &str,
+    function: &str,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if item.status != expected_status {
+        return mcp_error("bounty lifecycle state does not allow this call");
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        match function {
+            "expireClaim()" => {
+                planner.plan_expire_claim(&args.bounty_contract, args.caller.as_deref())
+            }
+            "expireSubmission()" => {
+                planner.plan_expire_submission(&args.bounty_contract, args.caller.as_deref())
+            }
+            _ => unreachable!("known autonomous lifecycle function"),
+        }
+        .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+fn autonomous_item_mode(item: &AutonomousBountyFeedItem) -> Option<String> {
+    item.terms
+        .as_ref()
+        .and_then(|terms| terms.document.verification_policy.get("mechanism"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+async fn decode_autonomous_bounty_events(
+    Json(args): Json<DecodeAutonomousBountyEventsArgs>,
+) -> Json<serde_json::Value> {
+    match decode_autonomous_bounty_logs(args.logs) {
+        Ok(events) => mcp_json(events),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn list_autonomous_bounty_events(
+    State(state): State<SharedState>,
+    Json(args): Json<ListAutonomousBountyEventsArgs>,
+) -> Json<serde_json::Value> {
+    let Some(store) = &state.store else {
+        return mcp_json(Vec::<serde_json::Value>::new());
+    };
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    match store.list_autonomous_bounty_events(network).await {
+        Ok(mut events) => {
+            if let Some(bounty_id) = args.bounty_id {
+                events.retain(|event| event.bounty_id.eq_ignore_ascii_case(&bounty_id));
+            }
+            mcp_json(events)
+        }
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn publish_autonomous_bounty_terms(
+    State(state): State<SharedState>,
+    Json(args): Json<PublishAutonomousBountyTermsArgs>,
+) -> Json<serde_json::Value> {
+    let record =
+        match build_autonomous_bounty_terms_record(&args.creator_wallet, args.document, Utc::now())
+        {
+            Ok(record) => record,
+            Err(error) => return mcp_error(error),
+        };
+    let Some(store) = &state.store else {
+        return mcp_error("DATABASE_URL is required to publish public bounty terms");
+    };
+    match store.upsert_autonomous_bounty_terms(&record).await {
+        Ok(()) => mcp_json(record),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn get_autonomous_bounty_terms(
+    State(state): State<SharedState>,
+    Json(args): Json<GetAutonomousBountyTermsArgs>,
+) -> Json<serde_json::Value> {
+    let Some(store) = &state.store else {
+        return mcp_error("DATABASE_URL is required to resolve public bounty terms");
+    };
+    match store.get_autonomous_bounty_terms(&args.terms_hash).await {
+        Ok(Some(record)) => mcp_json(record),
+        Ok(None) => mcp_error("unknown autonomous bounty terms hash"),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn publish_autonomous_submission_evidence(
+    State(state): State<SharedState>,
+    Json(args): Json<PublishAutonomousSubmissionEvidenceArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    let record = match build_autonomous_submission_evidence_record(
+        network,
+        &item,
+        &args.bounty_contract,
+        &args.bounty_id,
+        args.round,
+        &args.solver_wallet,
+        &args.artifact_reference,
+        args.evidence,
+        Utc::now(),
+    ) {
+        Ok(record) => record,
+        Err(error) => return mcp_error(error),
+    };
+    let Some(store) = &state.store else {
+        return mcp_error("DATABASE_URL is required to publish submission evidence");
+    };
+    match store.upsert_autonomous_submission_evidence(&record).await {
+        Ok(persisted) => mcp_json(persisted),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn get_autonomous_submission_evidence(
+    State(state): State<SharedState>,
+    Json(args): Json<GetAutonomousSubmissionEvidenceArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    if let Err(error) =
+        require_indexed_canonical_bounty(&state, network, &args.bounty_contract).await
+    {
+        return mcp_error(error);
+    }
+    let Some(store) = &state.store else {
+        return mcp_error("DATABASE_URL is required to resolve submission evidence");
+    };
+    match store
+        .get_autonomous_submission_evidence(network, &args.bounty_contract, args.round)
+        .await
+    {
+        Ok(Some(record)) => mcp_json(record),
+        Ok(None) => mcp_error("submission evidence has not been published"),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn list_autonomous_bounties(
+    State(state): State<SharedState>,
+    Json(args): Json<AutonomousBountyFeedArgs>,
+) -> Json<serde_json::Value> {
+    let Some(store) = &state.store else {
+        return mcp_error("DATABASE_URL is required to discover indexed autonomous bounties");
+    };
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let events = match store.list_autonomous_bounty_events(network).await {
+        Ok(events) => events,
+        Err(error) => return mcp_error(error),
+    };
+    let terms = match store.list_autonomous_bounty_terms().await {
+        Ok(terms) => terms,
+        Err(error) => return mcp_error(error),
+    };
+    match build_autonomous_bounty_feed(events, terms, args.claimable_only.unwrap_or(false)) {
+        Ok(feed) => mcp_json(feed),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn list_autonomous_verification_jobs(
+    State(state): State<SharedState>,
+    Json(args): Json<AutonomousVerificationJobsArgs>,
+) -> Json<serde_json::Value> {
+    let Some(store) = &state.store else {
+        return mcp_error("DATABASE_URL is required to discover verification jobs");
+    };
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let events = match store.list_autonomous_bounty_events(network).await {
+        Ok(events) => events,
+        Err(error) => return mcp_error(error),
+    };
+    let terms = match store.list_autonomous_bounty_terms().await {
+        Ok(terms) => terms,
+        Err(error) => return mcp_error(error),
+    };
+    let evidence = match store.list_autonomous_submission_evidence(network).await {
+        Ok(evidence) => evidence,
+        Err(error) => return mcp_error(error),
+    };
+    let feed = match build_autonomous_bounty_feed(events, terms, false) {
+        Ok(feed) => feed,
+        Err(error) => return mcp_error(error),
+    };
+    let observed_at = match u64::try_from(Utc::now().timestamp()) {
+        Ok(value) => value,
+        Err(_) => return mcp_error("system clock is before Unix epoch"),
+    };
+    let mut jobs = match build_autonomous_verification_jobs(network, feed, evidence, observed_at) {
+        Ok(jobs) => jobs,
+        Err(error) => return mcp_error(error),
+    };
+    if let Some(verifier) = args.verifier {
+        let verifier = match normalize_evm_address(verifier) {
+            Ok(verifier) => verifier,
+            Err(error) => return mcp_error(error),
+        };
+        jobs.retain(|job| {
+            job.verification_mode == "deterministic_module"
+                || job
+                    .eligible_verifiers
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(&verifier))
+        });
+    }
+    mcp_json(jobs)
 }
 
 async fn run_bountybench(State(state): State<SharedState>) -> Json<serde_json::Value> {
@@ -2925,94 +3771,13 @@ async fn get_live_money_readiness(
     }
 }
 
-async fn get_base_indexer_status(
-    State(state): State<SharedState>,
-    Json(args): Json<BaseIndexerStatusArgs>,
-) -> Json<serde_json::Value> {
-    let network = args
-        .network
-        .and_then(non_empty_secret)
-        .unwrap_or_else(|| "base-mainnet".to_string());
-    let descriptor = match base_network_descriptor(&network) {
-        Ok(descriptor) => descriptor,
-        Err(error) => return mcp_error(error.to_string()),
-    };
-    let escrow_contract = args
-        .escrow_contract
-        .and_then(non_empty_secret)
-        .or_else(|| base_escrow_contract_for_chain(descriptor.chain_id));
-    let cursor = match (&state.store, escrow_contract.as_deref()) {
-        (Some(store), Some(escrow_contract)) => {
-            match store.get_base_log_cursor(&network, escrow_contract).await {
-                Ok(cursor) => cursor.map(base_indexer_scan_cursor_from_db),
-                Err(error) => return mcp_error(error.to_string()),
-            }
-        }
-        _ => None,
-    };
-    let heartbeat = match (&state.store, escrow_contract.as_deref()) {
-        (Some(store), Some(escrow_contract)) => {
-            match store
-                .get_base_indexer_heartbeat(&network, escrow_contract)
-                .await
-            {
-                Ok(heartbeat) => heartbeat.map(base_indexer_heartbeat_from_db),
-                Err(error) => return mcp_error(error.to_string()),
-            }
-        }
-        _ => None,
-    };
-
-    match build_base_indexer_status_report(BaseIndexerStatusConfig {
-        network,
-        escrow_contract,
-        database_configured: state.store.is_some(),
-        cursor,
-        heartbeat,
-    }) {
-        Ok(report) => mcp_json(report),
-        Err(error) => mcp_error(error.to_string()),
-    }
-}
-
-fn base_indexer_scan_cursor_from_db(cursor: db::BaseLogScanCursor) -> BaseIndexerScanCursor {
-    BaseIndexerScanCursor {
-        network: cursor.network,
-        escrow_contract: cursor.escrow_contract,
-        last_scanned_block: cursor.last_scanned_block,
-        last_log_key: cursor.last_log_key,
-        updated_at: cursor.updated_at,
-    }
-}
-
-fn base_indexer_heartbeat_from_db(
-    heartbeat: db::BaseIndexerHeartbeat,
-) -> BaseIndexerHeartbeatStatus {
-    BaseIndexerHeartbeatStatus {
-        network: heartbeat.network,
-        escrow_contract: heartbeat.escrow_contract,
-        status: heartbeat.status,
-        started_at: heartbeat.started_at,
-        completed_at: heartbeat.completed_at,
-        latest_block: heartbeat.latest_block,
-        confirmed_to_block: heartbeat.confirmed_to_block,
-        from_block: heartbeat.from_block,
-        to_block: heartbeat.to_block,
-        fetched_logs: heartbeat.fetched_logs,
-        persisted_cursor_block: heartbeat.persisted_cursor_block,
-        skipped_reason: heartbeat.skipped_reason,
-        error_message: heartbeat.error_message,
-        updated_at: heartbeat.updated_at,
-    }
-}
-
 fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
     let descriptor = base_network_descriptor(network).ok();
     LiveMoneyReadinessConfig {
         network: network.to_string(),
         escrow_contract: descriptor
             .as_ref()
-            .and_then(|descriptor| base_escrow_contract_for_chain(descriptor.chain_id)),
+            .and_then(|descriptor| autonomous_factory_for_chain(descriptor.chain_id)),
         usdc_token: descriptor
             .as_ref()
             .and_then(base_usdc_token_for_chain)
@@ -3033,10 +3798,10 @@ fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyR
     }
 }
 
-fn base_escrow_contract_for_chain(chain_id: u64) -> Option<String> {
+fn autonomous_factory_for_chain(chain_id: u64) -> Option<String> {
     match chain_id {
-        84_532 => env_nonempty_value("BASE_SEPOLIA_ESCROW_CONTRACT"),
-        8_453 => env_nonempty_value("BASE_MAINNET_ESCROW_CONTRACT"),
+        84_532 => env_nonempty_value("BASE_SEPOLIA_BOUNTY_FACTORY"),
+        8_453 => env_nonempty_value("BASE_MAINNET_BOUNTY_FACTORY"),
         _ => None,
     }
 }
@@ -3231,11 +3996,7 @@ mod tests {
             "reconcile_stripe_connect_snapshot",
             "reconcile_stripe_transfer_event",
             "reconcile_stripe_checkout_webhook",
-            "reconcile_base_evm_logs",
-            "reconcile_base_rpc_logs",
-            "fetch_base_rpc_logs",
             "broadcast_base_signed_transaction",
-            "get_base_transaction_receipt",
             "approve_risk_bounty",
             "approve_risk_payout",
             "reject_risk_event",
@@ -3448,47 +4209,6 @@ mod tests {
                 .any(|value| value == "Coding")
         );
 
-        let plan_base_log_query = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "plan_base_log_query")
-            .expect("plan_base_log_query descriptor exists");
-        assert!(plan_base_log_query.input_schema["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "from_block"));
-        assert_eq!(
-            plan_base_log_query.input_schema["properties"]["to_block"]["type"][0],
-            "integer"
-        );
-
-        let reconcile_base_rpc_logs = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "reconcile_base_rpc_logs")
-            .expect("reconcile_base_rpc_logs descriptor exists");
-        assert!(reconcile_base_rpc_logs.input_schema["type"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "object"));
-
-        let fetch_base_rpc_logs = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "fetch_base_rpc_logs")
-            .expect("fetch_base_rpc_logs descriptor exists");
-        assert!(fetch_base_rpc_logs.input_schema["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "escrow_contract"));
-        assert!(
-            fetch_base_rpc_logs.input_schema["properties"]["network"]["enum"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == "base-sepolia")
-        );
-
         let broadcast_base_signed_transaction = descriptors
             .iter()
             .find(|descriptor| descriptor.name == "broadcast_base_signed_transaction")
@@ -3508,50 +4228,54 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "tx_hash"));
-        assert_eq!(
-            get_base_transaction_receipt.input_schema["properties"]["reconcile_logs"]["type"][0],
-            "boolean"
-        );
-        assert!(get_base_transaction_receipt
-            .authorization
-            .as_ref()
-            .unwrap()
-            .required_when
-            .contains("reconcile_logs=true"));
+        assert!(get_base_transaction_receipt.input_schema["properties"]
+            .get("reconcile_logs")
+            .is_none());
+        assert!(get_base_transaction_receipt.authorization.is_none());
 
-        let get_base_indexer_status = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "get_base_indexer_status")
-            .expect("get_base_indexer_status descriptor exists");
-        assert!(get_base_indexer_status.authorization.is_none());
-        assert!(
-            get_base_indexer_status.input_schema["properties"]["network"]["enum"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == "base-mainnet")
-        );
-        assert!(get_base_indexer_status.input_schema["required"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        for retired in [
+            "plan_base_log_query",
+            "reconcile_base_escrow_event",
+            "reconcile_base_evm_logs",
+            "reconcile_base_rpc_logs",
+            "fetch_base_rpc_logs",
+            "get_base_indexer_status",
+            "plan_base_funding",
+            "plan_base_release",
+            "plan_base_refund",
+            "plan_base_dispute",
+            "list_base_release_queue",
+        ] {
+            assert!(
+                descriptors
+                    .iter()
+                    .all(|descriptor| descriptor.name != retired),
+                "retired escrow tool {retired} must not be discoverable"
+            );
+        }
 
-        let plan_base_funding = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "plan_base_funding")
-            .expect("plan_base_funding descriptor exists");
-        assert!(plan_base_funding.input_schema["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "payer"));
-        assert!(
-            plan_base_funding.input_schema["properties"]["network"]["enum"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == "base-mainnet")
-        );
+        for autonomous in [
+            "plan_autonomous_bounty_creation",
+            "plan_autonomous_bounty_authorized_creation",
+            "plan_autonomous_bounty_contribution",
+            "plan_autonomous_bounty_authorized_contribution",
+            "plan_autonomous_bounty_claim",
+            "plan_autonomous_bounty_authorized_claim",
+            "plan_autonomous_bounty_submission",
+            "list_autonomous_verification_jobs",
+            "decode_autonomous_bounty_events",
+            "list_autonomous_bounty_events",
+            "publish_autonomous_bounty_terms",
+            "get_autonomous_bounty_terms",
+            "list_autonomous_bounties",
+        ] {
+            assert!(
+                descriptors
+                    .iter()
+                    .any(|descriptor| descriptor.name == autonomous),
+                "autonomous tool {autonomous} must be discoverable"
+            );
+        }
 
         let get_live_money_readiness = descriptors
             .iter()
@@ -3559,64 +4283,6 @@ mod tests {
             .expect("get_live_money_readiness descriptor exists");
         assert!(
             get_live_money_readiness.input_schema["properties"]["network"]["enum"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == "base-mainnet")
-        );
-
-        let plan_base_refund = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "plan_base_refund")
-            .expect("plan_base_refund descriptor exists");
-        assert!(plan_base_refund.input_schema["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "reason_hash"));
-        assert!(
-            plan_base_refund.input_schema["properties"]["network"]["enum"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == "base-mainnet")
-        );
-
-        let plan_base_dispute = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "plan_base_dispute")
-            .expect("plan_base_dispute descriptor exists");
-        assert!(plan_base_dispute.input_schema["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "dispute_hash"));
-        assert!(
-            plan_base_dispute.input_schema["properties"]["network"]["enum"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == "base-mainnet")
-        );
-
-        let plan_base_release = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "plan_base_release")
-            .expect("plan_base_release descriptor exists");
-        assert!(
-            plan_base_release.input_schema["properties"]["network"]["enum"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == "base-mainnet")
-        );
-
-        let list_base_release_queue = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "list_base_release_queue")
-            .expect("list_base_release_queue descriptor exists");
-        assert!(
-            list_base_release_queue.input_schema["properties"]["network"]["enum"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -3896,37 +4562,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn base_indexer_status_tool_reports_missing_database() {
-        let response = get_base_indexer_status(
-            State(test_state()),
-            Json(BaseIndexerStatusArgs {
-                network: Some("base-mainnet".to_string()),
-                escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
-            }),
-        )
-        .await
-        .0;
-        let body = &response["content"][0]["json"];
-
-        assert_eq!(body["status"], "persistence_unavailable");
-        assert_eq!(body["indexer_ready"], false);
-        assert_eq!(body["database_configured"], false);
-        assert_eq!(body["network_chain_id"], 8_453);
-        assert_eq!(body["last_scanned_block"], serde_json::Value::Null);
-        assert_eq!(body["heartbeat_found"], false);
-        assert_eq!(body["worker_healthy"], serde_json::Value::Null);
-        assert_eq!(body["last_poll_status"], serde_json::Value::Null);
-        assert!(body["evidence_boundaries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|boundary| boundary
-                .as_str()
-                .unwrap()
-                .contains("does not fund, release, refund, dispute, or authorize settlement")));
-    }
-
-    #[tokio::test]
     async fn stripe_checkout_webhook_replay_preserves_applied_event() {
         let state = test_state();
         let organization_id = Uuid::new_v4();
@@ -4051,23 +4686,19 @@ mod tests {
             "Approved"
         );
         let bounty = &approval["content"][0]["json"]["bounty"];
-        let funded = reconcile_base_escrow_event(
-            State(state.clone()),
-            HeaderMap::new(),
-            Json(chain_base::simulated_created_event(
-                Uuid::parse_str(bounty["id"].as_str().unwrap()).unwrap(),
-                99,
-                "0x3333333333333333333333333333333333333333",
-                domain::Money::new(25_000_000, "usdc").unwrap(),
-                bounty["terms_hash"].as_str().unwrap(),
-            )),
-        )
-        .await
-        .0;
-        assert_eq!(
-            funded["content"][0]["json"]["bounty"]["status"],
-            "Claimable"
-        );
+        {
+            let mut network = state.network.lock().expect("state poisoned");
+            let funded = network
+                .apply_base_escrow_event(chain_base::simulated_created_event(
+                    Uuid::parse_str(bounty["id"].as_str().unwrap()).unwrap(),
+                    99,
+                    "0x3333333333333333333333333333333333333333",
+                    domain::Money::new(25_000_000, "usdc").unwrap(),
+                    bounty["terms_hash"].as_str().unwrap(),
+                ))
+                .unwrap();
+            assert_eq!(funded.bounty.status, BountyStatus::Claimable);
+        }
 
         let reviews = list_risk_reviews(State(state)).await.0;
         let review_items = reviews["content"][0]["json"].as_array().unwrap();
@@ -4267,7 +4898,10 @@ mod tests {
         assert!(text.contains("route_blocked_goal"));
         assert!(text.contains("/.well-known/agent-bounties.json"));
         assert!(text.contains("docs/agent-quickstart.md"));
-        assert!(text.contains("Prefilled Stripe funding handoff"));
+        assert!(text.contains("agent-bounties/autonomous-v1"));
+        assert!(text.contains("list_autonomous_bounties"));
+        assert!(text.contains("BountySettled"));
+        assert!(!text.contains("createEscrow"));
     }
 
     #[tokio::test]
@@ -4373,8 +5007,6 @@ mod tests {
             "secret-token",
             indexer_store,
         );
-        let mut headers = HeaderMap::new();
-        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
         let onchain_escrow_id = bounty.id.as_u128() % 1_000_000_000_000 + 20_000;
         let event = chain_base::simulated_created_event(
             bounty.id,
@@ -4391,18 +5023,12 @@ mod tests {
             other_bounty.amount.clone(),
             other_bounty.terms_hash.clone().unwrap(),
         );
-        let reconciled =
-            reconcile_base_escrow_event(State(indexer_state.clone()), headers.clone(), Json(event))
-                .await
-                .0;
-        assert!(reconciled.get("error").is_none(), "{reconciled}");
-        let other_reconciled =
-            reconcile_base_escrow_event(State(indexer_state), headers, Json(other_event)).await;
-        assert!(
-            other_reconciled.0.get("error").is_none(),
-            "{}",
-            other_reconciled.0
-        );
+        persist_historical_escrow_event_for_migration_test(&indexer_state, event)
+            .await
+            .unwrap();
+        persist_historical_escrow_event_for_migration_test(&indexer_state, other_event)
+            .await
+            .unwrap();
 
         let status = get_bounty_status(
             State(reader_state.clone()),
@@ -4452,6 +5078,55 @@ mod tests {
 
     fn test_state() -> SharedState {
         test_state_with_network(BountyNetwork::default())
+    }
+
+    async fn persist_historical_escrow_event_for_migration_test(
+        state: &SharedState,
+        event: chain_base::BaseEscrowEvent,
+    ) -> Result<(), String> {
+        let indexed_event = event.clone();
+        let reconciliation = {
+            let mut network = state.network.lock().expect("state poisoned");
+            let reconciliation = network
+                .apply_base_escrow_event(event)
+                .map_err(|error| error.to_string())?;
+            state
+                .base_log_worker
+                .lock()
+                .expect("state poisoned")
+                .ingest_indexed_event(indexed_event.clone())
+                .map_err(|error| error.to_string())?;
+            reconciliation
+        };
+        let store = state
+            .store
+            .as_ref()
+            .ok_or_else(|| "migration test store unavailable".to_string())?;
+        store
+            .upsert_bounty(&reconciliation.bounty)
+            .await
+            .map_err(|error| error.to_string())?;
+        store
+            .upsert_base_escrow_event(&indexed_event)
+            .await
+            .map_err(|error| error.to_string())?;
+        store
+            .upsert_escrow(&reconciliation.escrow)
+            .await
+            .map_err(|error| error.to_string())?;
+        for intent in &reconciliation.funding_intents {
+            store
+                .upsert_funding_intent(intent)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        for settlement in &reconciliation.settlements {
+            store
+                .upsert_settlement(settlement)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        persist_ledger_entries(store, &reconciliation.ledger_entries).await
     }
 
     fn test_state_with_network(network: BountyNetwork) -> SharedState {

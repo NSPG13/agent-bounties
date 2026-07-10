@@ -26,11 +26,13 @@ The wrapper fetches the PR into a temporary worktree, classifies changed files,
 and runs:
 
 ```bash
-cargo run -p cli -- docs-contract-check --root <pr-worktree> --contract-root <trusted-checkout>
+cargo run -p cli -- docs-contract-check --root <pr-worktree> --contract-root <pr-base-contract-snapshot>
 ```
 
-The checker validates docs against the trusted API and MCP contracts without
-executing code from the PR.
+The wrapper compiles the checker and stages API/MCP contracts from the PR's
+exact trusted base commit without executing code from the PR. Unpublished
+maintainer code or schema changes therefore cannot create false failures or
+force contributors to repair unrelated files.
 
 ## Decision Rules
 

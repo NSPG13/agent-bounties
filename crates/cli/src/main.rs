@@ -16,6 +16,7 @@ use chain_base::{
     BaseEscrowLogDecoder, BaseEscrowLogQuery, BaseEscrowReleaseCall, BaseEscrowTxPlanner,
     BaseRpcUrlConfig, ChainEventIndexer, EscrowRecipient, EvmLog,
 };
+#[cfg(any())]
 use chrono::Utc;
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use domain::{CapabilityClass, FundingMode, Money, PaymentRail, PrivacyLevel, VerifierKind};
@@ -45,6 +46,7 @@ use std::{
 };
 use uuid::Uuid;
 
+#[cfg(any())]
 const STATIC_FUNDING_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/funding.html";
 
 #[derive(Parser)]
@@ -1644,7 +1646,7 @@ async fn base_transaction_receipt(
             "succeeded": succeeded,
             "log_count": log_count,
             "normalized_logs": normalized_logs,
-            "next_step": "If normalized_logs includes escrow events, submit them to POST /v1/base/evm-logs or call POST /v1/base/transaction-receipt with reconcile_logs=true on a configured service."
+            "next_step": "Use the receipt only to confirm inclusion. The autonomous indexer independently reconciles canonical factory and bounty logs; a receipt alone never proves settlement."
         }))?
     );
     Ok(())
@@ -2751,15 +2753,11 @@ async fn production_smoke(
 struct ProductionSmokeReport {
     api_base_url: String,
     mcp_base_url: String,
-    templates: usize,
+    verification_modes: usize,
     payment_rails: usize,
-    trust_tiers: usize,
-    proof_surfaces: usize,
-    bounty_feed_items: usize,
-    capability_feed_items: usize,
+    claimable_requirements: usize,
+    evidence_boundaries: usize,
     eval_runs: usize,
-    risk_events: usize,
-    risk_reviews: usize,
     mcp_tools: usize,
     require_eval_history: bool,
 }
@@ -2795,9 +2793,431 @@ async fn production_smoke_check(
     )?;
     require(
         value_str(&discovery, "/schema")
-            .map(|schema| schema.ends_with("discovery-manifest.v1.json"))
+            .is_some_and(|schema| schema.ends_with("discovery-manifest.v2.json")),
+        "discovery manifest must expose the v2 schema",
+    )?;
+    require(
+        value_str(&discovery, "/protocol/version") == Some("agent-bounties/autonomous-v1"),
+        "discovery manifest must advertise autonomous-v1",
+    )?;
+    require(
+        discovery
+            .pointer("/protocol/operator_settlement_signer")
+            .and_then(|value| value.as_bool())
+            == Some(false),
+        "autonomous-v1 must not advertise an operator settlement signer",
+    )?;
+    require(
+        value_str(&discovery, "/protocol/payout_authority")
+            .is_some_and(|authority| authority.contains("BountySettled")),
+        "discovery manifest must bind payout evidence to BountySettled",
+    )?;
+    require(
+        value_str(&discovery, "/endpoints/api_base") == Some(api),
+        "discovery manifest api_base must match the checked API URL",
+    )?;
+    require(
+        value_str(&discovery, "/endpoints/mcp_tools").is_some_and(|url| url.starts_with(mcp)),
+        "discovery manifest must point MCP tools at the checked MCP URL",
+    )?;
+
+    let autonomous_endpoints = [
+        "protocol_status",
+        "autonomous_terms_publish",
+        "autonomous_terms_get",
+        "autonomous_submission_evidence_publish",
+        "autonomous_submission_evidence_get",
+        "autonomous_bounty_feed",
+        "autonomous_verification_jobs",
+        "autonomous_events",
+        "autonomous_creation_plan",
+        "autonomous_authorized_creation_plan",
+        "autonomous_contribution_plan",
+        "autonomous_authorized_contribution_plan",
+        "autonomous_claim_plan",
+        "autonomous_authorized_claim_plan",
+        "autonomous_submission_plan",
+        "autonomous_verification_attestation_plan",
+        "autonomous_module_settlement_plan",
+        "autonomous_attestation_settlement_plan",
+        "autonomous_expire_claim_plan",
+        "autonomous_expire_submission_plan",
+        "autonomous_cancel_plan",
+        "autonomous_refund_withdrawal_plan",
+    ];
+    for endpoint in autonomous_endpoints {
+        require(
+            value_str(&discovery, &format!("/endpoints/{endpoint}")).is_some(),
+            &format!("discovery manifest missing autonomous endpoint {endpoint}"),
+        )?;
+    }
+    for retired in [
+        "base_escrow_events",
+        "base_indexer_status",
+        "base_funding_plan",
+        "base_release_queue",
+        "base_refund_plan",
+        "base_dispute_plan",
+    ] {
+        require(
+            discovery
+                .pointer(&format!("/endpoints/{retired}"))
+                .is_none(),
+            &format!("retired V1 endpoint leaked into discovery: {retired}"),
+        )?;
+    }
+
+    let agent_tools = discovery
+        .pointer("/agent_tools")
+        .and_then(|value| value.as_array())
+        .context("discovery manifest agent_tools must be an array")?;
+    for expected in [
+        "list_autonomous_bounties",
+        "list_autonomous_verification_jobs",
+        "publish_autonomous_bounty_terms",
+        "plan_autonomous_bounty_creation",
+        "plan_autonomous_bounty_contribution",
+        "plan_autonomous_bounty_claim",
+        "plan_autonomous_bounty_submission",
+        "plan_autonomous_module_settlement",
+        "plan_autonomous_attestation_settlement",
+        "list_autonomous_bounty_events",
+    ] {
+        require(
+            agent_tools
+                .iter()
+                .any(|tool| tool.as_str() == Some(expected)),
+            &format!("discovery manifest missing autonomous agent tool {expected}"),
+        )?;
+    }
+    require(
+        agent_tools.iter().all(|tool| {
+            tool.as_str().is_none_or(|name| {
+                !name.starts_with("plan_base_") && !name.starts_with("reconcile_base_")
+            })
+        }),
+        "retired V1 Base tools must not be advertised",
+    )?;
+
+    let verification_modes = discovery
+        .pointer("/verification_modes")
+        .and_then(|value| value.as_array())
+        .context("discovery manifest verification_modes must be an array")?;
+    for mode in ["deterministic_module", "signed_quorum", "ai_judge_quorum"] {
+        require(
+            verification_modes
+                .iter()
+                .any(|value| value_str(value, "/name") == Some(mode)),
+            &format!("discovery manifest missing verification mode {mode}"),
+        )?;
+    }
+    let payment_rails = discovery
+        .pointer("/payment_rails")
+        .and_then(|value| value.as_array())
+        .context("discovery manifest payment_rails must be an array")?;
+    require(
+        payment_rails
+            .iter()
+            .any(|rail| value_str(rail, "/name") == Some("Base native USDC")),
+        "discovery manifest must advertise Base native USDC",
+    )?;
+    require(
+        payment_rails.iter().all(|rail| {
+            rail.pointer("/funding_required_before_claim")
+                .and_then(|value| value.as_bool())
+                == Some(true)
+        }),
+        "all advertised payment rails must require funding before claim",
+    )?;
+    let claimable_requirements = discovery
+        .pointer("/claimable_requirements")
+        .and_then(|value| value.as_array())
+        .context("discovery manifest claimable_requirements must be an array")?;
+    require(
+        claimable_requirements.len() >= 5,
+        "discovery manifest must expose autonomous claim safety requirements",
+    )?;
+    let evidence_boundaries = discovery
+        .pointer("/evidence_boundaries")
+        .and_then(|value| value.as_array())
+        .context("discovery manifest evidence_boundaries must be an array")?;
+    require(
+        evidence_boundaries.iter().any(|boundary| {
+            boundary
+                .as_str()
+                .is_some_and(|text| text.contains("BountySettled"))
+        }),
+        "discovery manifest must identify canonical payout evidence",
+    )?;
+    require(
+        value_str(&discovery, "/post_value_loop/default_cta") == Some("Post your own bounty"),
+        "post-value loop must default to Post your own bounty",
+    )?;
+    let post_value_actions = discovery
+        .pointer("/post_value_loop/actions")
+        .and_then(|value| value.as_array())
+        .context("post-value loop actions must be an array")?;
+    for kind in [
+        "share_verified_value",
+        "tell_your_human",
+        "star_upvote_repo",
+        "post_own_bounty",
+    ] {
+        require(
+            post_value_actions
+                .iter()
+                .any(|action| value_str(action, "/kind") == Some(kind)),
+            &format!("post-value loop missing action {kind}"),
+        )?;
+    }
+
+    let discovery_schema_url = value_str(&discovery, "/endpoints/discovery_schema")
+        .context("discovery schema url missing")?;
+    let discovery_schema = production_get_json(&client, discovery_schema_url).await?;
+    require(
+        value_str(&discovery_schema, "/$id") == value_str(&discovery, "/schema"),
+        "discovery schema $id must match manifest schema id",
+    )?;
+    let schema_endpoint_requirements = discovery_schema
+        .pointer("/properties/endpoints/required")
+        .and_then(|value| value.as_array())
+        .context("discovery schema must require autonomous endpoints")?;
+    for endpoint in autonomous_endpoints {
+        require(
+            schema_endpoint_requirements
+                .iter()
+                .any(|value| value.as_str() == Some(endpoint)),
+            &format!("discovery schema must require {endpoint}"),
+        )?;
+    }
+
+    let mcp_schema = production_get_json(
+        &client,
+        &format!("{mcp}/schemas/discovery-manifest.v2.json"),
+    )
+    .await?;
+    require(
+        value_str(&mcp_schema, "/$id") == value_str(&discovery_schema, "/$id"),
+        "MCP discovery schema endpoint must serve the v2 manifest schema",
+    )?;
+    let mcp_discovery =
+        production_get_json(&client, &format!("{mcp}/.well-known/agent-bounties.json")).await?;
+    require(
+        value_str(&mcp_discovery, "/protocol/version") == Some("agent-bounties/autonomous-v1"),
+        "MCP discovery must expose autonomous-v1",
+    )?;
+
+    let openapi_url =
+        value_str(&discovery, "/endpoints/openapi_json").context("openapi url missing")?;
+    let openapi = production_get_json(&client, openapi_url).await?;
+    let paths = openapi
+        .pointer("/paths")
+        .and_then(|value| value.as_object())
+        .context("OpenAPI must include paths")?;
+    for path in [
+        "/v1/base/autonomous-bounties/creation-plan",
+        "/v1/base/autonomous-bounties/authorized-creation-plan",
+        "/v1/base/autonomous-bounties/contribution-plan",
+        "/v1/base/autonomous-bounties/authorized-contribution-plan",
+        "/v1/base/autonomous-bounties/claim-plan",
+        "/v1/base/autonomous-bounties/authorized-claim-plan",
+        "/v1/base/autonomous-bounties/submission-plan",
+        "/v1/base/autonomous-bounties/verification-attestation-plan",
+        "/v1/base/autonomous-bounties/module-settlement-plan",
+        "/v1/base/autonomous-bounties/attestation-settlement-plan",
+        "/v1/base/autonomous-bounties/expire-claim-plan",
+        "/v1/base/autonomous-bounties/expire-submission-plan",
+        "/v1/base/autonomous-bounties/cancel-plan",
+        "/v1/base/autonomous-bounties/refund-withdrawal-plan",
+        "/v1/base/autonomous-bounties/decode-events",
+        "/v1/base/autonomous-bounties/events",
+        "/v1/base/autonomous-bounties/terms",
+        "/v1/base/autonomous-bounties/submission-evidence",
+        "/v1/base/autonomous-bounties/feed",
+        "/v1/base/autonomous-bounties/verification-jobs",
+        "/v1/base/transaction-receipt",
+    ] {
+        require(
+            paths.contains_key(path),
+            &format!("OpenAPI missing autonomous path {path}"),
+        )?;
+    }
+    for retired in [
+        "/v1/base/indexer-status",
+        "/v1/base/escrow-events",
+        "/v1/base/evm-logs",
+        "/v1/base/log-query",
+        "/v1/base/rpc-logs",
+        "/v1/base/fetch-rpc-logs",
+        "/v1/base/funding-plan",
+        "/v1/base/release-queue",
+        "/v1/base/release-plan",
+        "/v1/base/refund-plan",
+        "/v1/base/dispute-plan",
+    ] {
+        require(
+            !paths.contains_key(retired),
+            &format!("retired V1 path leaked into OpenAPI: {retired}"),
+        )?;
+    }
+    let receipt_operation = paths
+        .get("/v1/base/transaction-receipt")
+        .and_then(|path| path.get("post"))
+        .context("OpenAPI receipt operation missing")?;
+    require(
+        receipt_operation.get("security").is_none(),
+        "transaction receipt reads must not advertise operator authorization",
+    )?;
+
+    let api_llms = production_get_text(&client, &format!("{api}/llms.txt")).await?;
+    for expected in [
+        "agent-bounties/autonomous-v1",
+        "list_autonomous_bounties",
+        "plan_autonomous_bounty_creation",
+        "BountySettled",
+        "Post your own bounty",
+    ] {
+        require(
+            api_llms.contains(expected),
+            &format!("API llms.txt missing {expected}"),
+        )?;
+    }
+    let mcp_llms = production_get_text(&client, &format!("{mcp}/llms.txt")).await?;
+    require(
+        mcp_llms.contains("MCP tools") && mcp_llms.contains("list_autonomous_bounties"),
+        "MCP llms.txt must orient agents to autonomous tools",
+    )?;
+
+    let mcp_tools_url =
+        value_str(&discovery, "/endpoints/mcp_tools").context("MCP tools url missing")?;
+    let tools = production_get_json(&client, mcp_tools_url).await?;
+    let tool_list = tools.as_array().context("MCP tools must be an array")?;
+    for tool in tool_list {
+        let name = value_str(tool, "/name").unwrap_or("<unnamed>");
+        require(
+            tool.pointer("/input_schema/type").is_some(),
+            &format!("MCP tool {name} missing input_schema.type"),
+        )?;
+    }
+    for expected in [
+        "plan_autonomous_bounty_creation",
+        "plan_autonomous_bounty_authorized_creation",
+        "plan_autonomous_bounty_contribution",
+        "plan_autonomous_bounty_authorized_contribution",
+        "plan_autonomous_bounty_claim",
+        "plan_autonomous_bounty_authorized_claim",
+        "plan_autonomous_bounty_submission",
+        "plan_autonomous_verification_attestation",
+        "plan_autonomous_module_settlement",
+        "plan_autonomous_attestation_settlement",
+        "decode_autonomous_bounty_events",
+        "list_autonomous_bounty_events",
+        "publish_autonomous_bounty_terms",
+        "get_autonomous_bounty_terms",
+        "publish_autonomous_submission_evidence",
+        "get_autonomous_submission_evidence",
+        "list_autonomous_bounties",
+        "list_autonomous_verification_jobs",
+    ] {
+        require(
+            tool_list
+                .iter()
+                .any(|tool| value_str(tool, "/name") == Some(expected)),
+            &format!("MCP tool list missing {expected}"),
+        )?;
+    }
+    for retired in [
+        "plan_base_log_query",
+        "reconcile_base_escrow_event",
+        "reconcile_base_evm_logs",
+        "reconcile_base_rpc_logs",
+        "fetch_base_rpc_logs",
+        "get_base_indexer_status",
+        "plan_base_funding",
+        "plan_base_release",
+        "plan_base_refund",
+        "plan_base_dispute",
+        "list_base_release_queue",
+    ] {
+        require(
+            tool_list
+                .iter()
+                .all(|tool| value_str(tool, "/name") != Some(retired)),
+            &format!("retired V1 MCP tool leaked: {retired}"),
+        )?;
+    }
+    let receipt_tool = tool_list
+        .iter()
+        .find(|tool| value_str(tool, "/name") == Some("get_base_transaction_receipt"))
+        .context("MCP receipt tool missing")?;
+    require(
+        receipt_tool
+            .pointer("/input_schema/properties/reconcile_logs")
+            .is_none()
+            && receipt_tool.pointer("/authorization").is_none(),
+        "MCP receipt tool must be read-only and unauthenticated",
+    )?;
+
+    let eval_runs = production_get_json(&client, &format!("{api}/v1/evals/runs")).await?;
+    let eval_run_count = eval_runs
+        .as_array()
+        .context("eval run history must be an array")?
+        .len();
+    if require_eval_history {
+        require(
+            eval_run_count > 0,
+            "production smoke requires at least one persisted eval run",
+        )?;
+    }
+
+    Ok(ProductionSmokeReport {
+        api_base_url: api.to_string(),
+        mcp_base_url: mcp.to_string(),
+        verification_modes: verification_modes.len(),
+        payment_rails: payment_rails.len(),
+        claimable_requirements: claimable_requirements.len(),
+        evidence_boundaries: evidence_boundaries.len(),
+        eval_runs: eval_run_count,
+        mcp_tools: tool_list.len(),
+        require_eval_history,
+    })
+}
+
+#[cfg(any())]
+async fn legacy_production_smoke_check(
+    api: &str,
+    mcp: &str,
+    require_eval_history: bool,
+) -> Result<ProductionSmokeReport> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
+    let api_health = production_get_text(&client, &format!("{api}/health")).await?;
+    require(
+        api_health.trim() == "ok",
+        "API health endpoint must return ok",
+    )?;
+    let mcp_health = production_get_text(&client, &format!("{mcp}/health")).await?;
+    require(
+        mcp_health.trim() == "ok",
+        "MCP health endpoint must return ok",
+    )?;
+
+    let discovery =
+        production_get_json(&client, &format!("{api}/.well-known/agent-bounties.json")).await?;
+    require(
+        discovery
+            .pointer("/open_source")
+            .and_then(|value| value.as_bool())
+            == Some(true),
+        "discovery manifest must advertise open_source=true",
+    )?;
+    require(
+        value_str(&discovery, "/schema")
+            .map(|schema| schema.ends_with("discovery-manifest.v2.json"))
             .unwrap_or(false),
-        "discovery manifest must expose the v1 schema",
+        "discovery manifest must expose the v2 schema",
     )?;
     require(
         value_str(&discovery, "/endpoints/api_base") == Some(api),
@@ -3468,7 +3888,6 @@ async fn production_smoke_check(
         "reconcile_base_rpc_logs",
         "fetch_base_rpc_logs",
         "broadcast_base_signed_transaction",
-        "get_base_transaction_receipt",
         "approve_risk_bounty",
         "approve_risk_payout",
         "reject_risk_event",
@@ -3517,15 +3936,11 @@ fn print_production_smoke_report(report: &ProductionSmokeReport) -> Result<()> {
             "production_smoke": "ok",
             "api_base_url": report.api_base_url,
             "mcp_base_url": report.mcp_base_url,
-            "templates": report.templates,
+            "verification_modes": report.verification_modes,
             "payment_rails": report.payment_rails,
-            "trust_tiers": report.trust_tiers,
-            "proof_surfaces": report.proof_surfaces,
-            "bounty_feed_items": report.bounty_feed_items,
-            "capability_feed_items": report.capability_feed_items,
+            "claimable_requirements": report.claimable_requirements,
+            "evidence_boundaries": report.evidence_boundaries,
             "eval_runs": report.eval_runs,
-            "risk_events": report.risk_events,
-            "risk_reviews": report.risk_reviews,
             "mcp_tools": report.mcp_tools,
             "require_eval_history": report.require_eval_history
         }))?
@@ -3544,20 +3959,215 @@ async fn service_smoke(api_base_url: String, mcp_base_url: String) -> Result<()>
 struct ServiceSmokeReport {
     api_base_url: String,
     mcp_base_url: String,
-    bounty_id: String,
-    feed_items: usize,
+    paid_bounty_id: String,
+    solver_id: String,
+    final_status: String,
+    autonomous_events: usize,
     mcp_tools: usize,
-    pooled_bounty_id: String,
-    mcp_reviewed_bounty_id: String,
-    mcp_bounty_id: String,
-    mcp_solver_id: String,
-    mcp_final_status: String,
 }
 
 async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport> {
     wait_for_health(&format!("{api}/health"))?;
     wait_for_health(&format!("{mcp}/health"))?;
     let _production_contract = production_smoke_check(api, mcp, false).await?;
+
+    let discovery = get_json(&format!("{api}/.well-known/agent-bounties.json"))?;
+    require(
+        value_str(&discovery, "/protocol/version") == Some("agent-bounties/autonomous-v1"),
+        "service discovery must expose autonomous-v1",
+    )?;
+    require(
+        discovery
+            .pointer("/endpoints/autonomous_creation_plan")
+            .is_some()
+            && discovery
+                .pointer("/endpoints/autonomous_verification_jobs")
+                .is_some()
+            && discovery.pointer("/endpoints/autonomous_events").is_some(),
+        "service discovery must expose autonomous creation, verification, and event surfaces",
+    )?;
+
+    let route = post_json(
+        &format!("{api}/v1/route-blocked-goal"),
+        serde_json::json!({
+            "goal": "Fix the failing autonomous protocol smoke check",
+            "context": "The task has deterministic acceptance criteria and should route to a coding bounty.",
+            "budget_minor": 1_000_000,
+            "currency": "usdc",
+            "privacy": "Public"
+        }),
+    )?;
+    require(
+        route.pointer("/capability_class").is_some(),
+        "route response must include capability_class",
+    )?;
+
+    let decoded_events = post_json(
+        &format!("{api}/v1/base/autonomous-bounties/decode-events"),
+        serde_json::json!({ "logs": [] }),
+    )?;
+    require(
+        decoded_events.as_array().is_some_and(Vec::is_empty),
+        "autonomous event decoder must accept an empty confirmed-log batch",
+    )?;
+    let indexed_events = get_json(&format!(
+        "{api}/v1/base/autonomous-bounties/events?network=base-mainnet"
+    ))?;
+    let autonomous_event_count = indexed_events
+        .as_array()
+        .context("autonomous event feed must be an array")?
+        .len();
+
+    let smoke_id = Uuid::new_v4();
+    let solver = post_json(
+        &format!("{api}/v1/agents"),
+        serde_json::json!({
+            "handle": format!("autonomous-service-smoke-solver-{smoke_id}"),
+            "payout_wallet": "0x2222222222222222222222222222222222222222"
+        }),
+    )?;
+    let solver_id = value_str(&solver, "/id")
+        .context("service smoke solver id missing")?
+        .to_string();
+
+    let bounty = post_json(
+        &format!("{api}/v1/bounties/pooled"),
+        serde_json::json!({
+            "title": "Autonomous protocol local paid-loop smoke",
+            "template_slug": "extract-data-to-schema",
+            "target_amount_minor": 1_000,
+            "currency": "usdc",
+            "funding_mode": "Simulated",
+            "privacy": "Public"
+        }),
+    )?;
+    let bounty_id = value_str(&bounty, "/id")
+        .context("service smoke bounty id missing")?
+        .to_string();
+    let funding = post_json(
+        &format!("{api}/v1/bounties/{bounty_id}/funding-contributions"),
+        serde_json::json!({
+            "bounty_id": bounty_id,
+            "contributor_agent_id": null,
+            "source_organization_id": null,
+            "amount_minor": 1_000,
+            "currency": "usdc",
+            "rail": "Simulated",
+            "external_reference": format!("autonomous-service-smoke-{smoke_id}")
+        }),
+    )?;
+    require(
+        value_str(&funding, "/bounty/status") == Some("Claimable"),
+        "simulated funding must make the local smoke bounty claimable",
+    )?;
+    let claim = post_json(
+        &format!("{api}/v1/bounties/{bounty_id}/claim"),
+        serde_json::json!({
+            "bounty_id": bounty_id,
+            "solver_agent_id": solver_id
+        }),
+    )?;
+    require(
+        value_str(&claim, "/status") == Some("Claimed"),
+        "local smoke bounty must become claimed",
+    )?;
+    let artifact_body = "{\"autonomous_service_smoke\":true}";
+    let submission = post_json(
+        &format!("{api}/v1/bounties/{bounty_id}/submit"),
+        serde_json::json!({
+            "bounty_id": bounty_id,
+            "solver_agent_id": solver_id,
+            "artifact_uri": "memory://autonomous-service-smoke/artifact.json",
+            "artifact_body": artifact_body
+        }),
+    )?;
+    let submission_id =
+        value_str(&submission, "/id").context("service smoke submission id missing")?;
+    let proof = post_json(
+        &format!("{api}/v1/bounties/{bounty_id}/verify"),
+        serde_json::json!({
+            "bounty_id": bounty_id,
+            "submission_id": submission_id,
+            "expected_artifact_digest": hash_artifact(artifact_body),
+            "verifier_kind": "JsonSchema",
+            "rubric": null,
+            "evidence": null,
+            "approved_risk_event_id": null
+        }),
+    )?;
+    require(
+        value_str(&proof, "/proof_hash").is_some(),
+        "local smoke verification must return a proof hash",
+    )?;
+    let status = get_json(&format!("{api}/v1/bounties/{bounty_id}"))?;
+    let final_status = value_str(&status, "/bounty/status")
+        .context("service smoke final bounty status missing")?
+        .to_string();
+    require(
+        final_status == "Paid",
+        "simulated local bounty loop must finish Paid",
+    )?;
+
+    let tools = get_json(&format!("{mcp}/tools"))?;
+    let tool_list = tools.as_array().context("MCP tools must be an array")?;
+    let mcp_route = mcp_tool_post(
+        mcp,
+        "route_blocked_goal",
+        serde_json::json!({
+            "goal": "Fix an autonomous MCP lifecycle failure",
+            "context": "A deterministic digital task needs a funded bounty.",
+            "budget_minor": 1_000_000,
+            "currency": "usdc",
+            "privacy": "Public"
+        }),
+    )?;
+    require(
+        mcp_route.pointer("/capability_class").is_some(),
+        "MCP route_blocked_goal must return capability_class",
+    )?;
+    let mcp_decoded = mcp_tool_post(
+        mcp,
+        "decode_autonomous_bounty_events",
+        serde_json::json!({ "logs": [] }),
+    )?;
+    require(
+        mcp_decoded.as_array().is_some_and(Vec::is_empty),
+        "MCP autonomous event decoder must accept an empty log batch",
+    )?;
+    let mcp_events = mcp_tool_post(
+        mcp,
+        "list_autonomous_bounty_events",
+        serde_json::json!({ "network": "base-mainnet", "bounty_id": null }),
+    )?;
+    require(
+        mcp_events.as_array().is_some(),
+        "MCP autonomous event listing must return an array",
+    )?;
+    let eval_loops = mcp_tool_get(mcp, "run_eval_loops")?;
+    require(
+        eval_loops
+            .pointer("/passed")
+            .and_then(|value| value.as_bool())
+            == Some(true),
+        "MCP eval loops must pass during service smoke",
+    )?;
+
+    Ok(ServiceSmokeReport {
+        api_base_url: api.to_string(),
+        mcp_base_url: mcp.to_string(),
+        paid_bounty_id: bounty_id,
+        solver_id,
+        final_status,
+        autonomous_events: autonomous_event_count,
+        mcp_tools: tool_list.len(),
+    })
+}
+
+#[cfg(any())]
+async fn legacy_service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport> {
+    wait_for_health(&format!("{api}/health"))?;
+    wait_for_health(&format!("{mcp}/health"))?;
+    let _production_contract = legacy_production_smoke_check(api, mcp, false).await?;
 
     let discovery = get_json(&format!("{api}/.well-known/agent-bounties.json"))?;
     require(
@@ -4905,14 +5515,11 @@ fn print_service_smoke_report(report: &ServiceSmokeReport) -> Result<()> {
             "service_smoke": "ok",
             "api_base_url": report.api_base_url,
             "mcp_base_url": report.mcp_base_url,
-            "bounty_id": report.bounty_id,
-            "feed_items": report.feed_items,
-            "mcp_tools": report.mcp_tools,
-            "pooled_bounty_id": report.pooled_bounty_id,
-            "mcp_reviewed_bounty_id": report.mcp_reviewed_bounty_id,
-            "mcp_bounty_id": report.mcp_bounty_id,
-            "mcp_solver_id": report.mcp_solver_id,
-            "mcp_final_status": report.mcp_final_status
+            "paid_bounty_id": report.paid_bounty_id,
+            "solver_id": report.solver_id,
+            "final_status": report.final_status,
+            "autonomous_events": report.autonomous_events,
+            "mcp_tools": report.mcp_tools
         }))?
     );
     Ok(())
@@ -5030,115 +5637,47 @@ fn verify_service_smoke_restart_persistence(
             "restarted MCP must hydrate persisted EvalLoops/all-v0 run history",
         )?;
 
-        let api_bounty_status = get_json(&format!("{api}/v1/bounties/{}", report.bounty_id))?;
+        let api_bounty_status = get_json(&format!("{api}/v1/bounties/{}", report.paid_bounty_id))?;
         require(
-            value_str(&api_bounty_status, "/bounty/status") == Some("Claimable"),
-            "restarted API must hydrate API-posted claimable bounty from Postgres",
-        )?;
-
-        let mcp_bounty_status = get_json(&format!("{api}/v1/bounties/{}", report.mcp_bounty_id))?;
-        require(
-            value_str(&mcp_bounty_status, "/bounty/status") == Some("Payable"),
-            "restarted API must hydrate MCP-created payable bounty from Postgres",
+            value_str(&api_bounty_status, "/bounty/status") == Some("Paid"),
+            "restarted API must hydrate the paid local-loop bounty from Postgres",
         )?;
         require(
-            mcp_bounty_status
+            api_bounty_status
                 .pointer("/settlements")
                 .and_then(|settlements| settlements.as_array())
                 .map(|settlements| !settlements.is_empty())
                 .unwrap_or(false),
-            "restarted API must hydrate MCP-created settlement records",
-        )?;
-
-        let pooled_bounty_status =
-            get_json(&format!("{api}/v1/bounties/{}", report.pooled_bounty_id))?;
-        let pooled_settlement_id = value_str(&pooled_bounty_status, "/settlements/0/id")
-            .context("restarted pooled bounty settlement id missing")?;
-        require(
-            value_str(&pooled_bounty_status, "/bounty/status") == Some("Paid"),
-            "restarted API must hydrate paid pooled bounty from Postgres",
+            "restarted API must hydrate settlement records for the paid local loop",
         )?;
         require(
-            pooled_bounty_status
+            api_bounty_status
                 .pointer("/funding_contributions/0/funding_ledger_entry_id")
                 .and_then(|value| value.as_str())
                 .is_some(),
-            "restarted API must hydrate pooled contribution funding ledger linkage",
-        )?;
-        require(
-            value_str(
-                &pooled_bounty_status,
-                "/funding_contributions/0/settlement_id",
-            ) == Some(pooled_settlement_id),
-            "restarted API must hydrate pooled contribution settlement linkage",
-        )?;
-
-        let reviewed_bounty_status = get_json(&format!(
-            "{api}/v1/bounties/{}",
-            report.mcp_reviewed_bounty_id
-        ))?;
-        require(
-            value_str(&reviewed_bounty_status, "/bounty/status") == Some("Payable"),
-            "restarted API must hydrate MCP-approved reviewed payout bounty from Postgres",
-        )?;
-        require(
-            reviewed_bounty_status
-                .pointer("/settlements")
-                .and_then(|settlements| settlements.as_array())
-                .map(|settlements| !settlements.is_empty())
-                .unwrap_or(false),
-            "restarted API must hydrate reviewed payout settlement records",
-        )?;
-        let risk_reviews = get_json(&format!("{api}/v1/risk/reviews"))?;
-        require(
-            risk_reviews
-                .as_array()
-                .map(|reviews| {
-                    reviews.iter().any(|review| {
-                        value_str(review, "/outcome") == Some("Approved")
-                            && value_str(review, "/bounty_id")
-                                == Some(report.mcp_reviewed_bounty_id.as_str())
-                    })
-                })
-                .unwrap_or(false),
-            "restarted API must hydrate risk review records from Postgres",
-        )?;
-
-        let feed = get_json(&format!("{api}/v1/bounties/feed"))?;
-        let feed_items = feed
-            .as_array()
-            .context("restarted API bounty feed must be an array")?;
-        require(
-            feed_items.iter().any(|item| {
-                value_str(item, "/bounty_id")
-                    .map(|id| id == report.bounty_id.as_str())
-                    .unwrap_or(false)
-            }),
-            "restarted API public feed must include persisted claimable bounty",
+            "restarted API must hydrate the contribution ledger linkage",
         )?;
 
         let mcp_paid_status = mcp_tool_post(
             mcp,
             "get_paid_status",
-            serde_json::json!({ "bounty_id": report.mcp_bounty_id.as_str() }),
+            serde_json::json!({ "bounty_id": report.paid_bounty_id.as_str() }),
         )?;
         require(
-            value_str(&mcp_paid_status, "/bounty_status") == Some("Payable"),
-            "restarted MCP must hydrate payable status from Postgres",
+            value_str(&mcp_paid_status, "/bounty_status") == Some("Paid"),
+            "restarted MCP must hydrate paid status from Postgres",
         )?;
-        let api_agent_paid_status = get_json(&format!(
-            "{api}/v1/agents/{}/paid-status",
-            report.mcp_solver_id
-        ))?;
+        let api_agent_paid_status =
+            get_json(&format!("{api}/v1/agents/{}/paid-status", report.solver_id))?;
         require_agent_paid_status(
             &api_agent_paid_status,
-            "restarted API must hydrate MCP solver payout summary from Postgres",
+            "restarted API must hydrate solver payout summary from Postgres",
         )?;
 
         let mcp_agent_paid_status = mcp_tool_post(
             mcp,
             "get_paid_status",
-            serde_json::json!({ "agent_id": report.mcp_solver_id.as_str() }),
+            serde_json::json!({ "agent_id": report.solver_id.as_str() }),
         )?;
         require(
             value_str(&mcp_agent_paid_status, "/scope") == Some("agent"),
@@ -5146,7 +5685,7 @@ fn verify_service_smoke_restart_persistence(
         )?;
         require_agent_paid_status(
             &mcp_agent_paid_status,
-            "restarted MCP must hydrate MCP solver payout summary from Postgres",
+            "restarted MCP must hydrate solver payout summary from Postgres",
         )?;
         Ok(())
     })();
@@ -5178,6 +5717,7 @@ fn post_json(url: &str, body: serde_json::Value) -> Result<serde_json::Value> {
     )?)?)
 }
 
+#[cfg(any())]
 fn github_ci_evidence() -> serde_json::Value {
     serde_json::json!({
         "repository": "example/repo",
@@ -5232,6 +5772,7 @@ fn mcp_tool_result(response: serde_json::Value, tool_name: &str) -> Result<serde
         .with_context(|| format!("MCP tool {tool_name} response missing content[0].json"))
 }
 
+#[cfg(any())]
 fn mcp_reconcile_base_created(
     mcp_base_url: &str,
     bounty_id: &str,
@@ -5246,6 +5787,7 @@ fn mcp_reconcile_base_created(
     )
 }
 
+#[cfg(any())]
 fn base_created_event_json(
     bounty_id: &str,
     amount_minor: i64,
@@ -5482,25 +6024,28 @@ fn check_agent_quickstart_contract(root: &Path, issues: &mut Vec<DocsContractIss
     for marker in [
         "cargo run -p cli -- demo",
         "cargo run -p cli -- service-smoke-spawn",
+        "/protocol.json",
         "/.well-known/agent-bounties.json",
         "/llms.txt",
         "route_blocked_goal",
-        "register_agent",
-        "register_capability",
-        "open_pooled_bounty",
-        "create_funding_intent",
-        "add_bounty_funding",
-        "claim_bounty",
-        "submit_result",
-        "request_verification",
-        "get_paid_status",
-        "plan_base_funding",
-        "reconcile_base_escrow_event",
+        "list_autonomous_bounties",
+        "publish_autonomous_bounty_terms",
+        "plan_autonomous_bounty_creation",
+        "plan_autonomous_bounty_contribution",
+        "plan_autonomous_bounty_claim",
+        "plan_autonomous_bounty_submission",
+        "publish_autonomous_submission_evidence",
+        "list_autonomous_verification_jobs",
+        "plan_autonomous_module_settlement",
+        "plan_autonomous_attestation_settlement",
+        "list_autonomous_bounty_events",
+        "FundingAdded",
+        "BountyBecameClaimable",
+        "BountySettled",
         "Base Sepolia",
         "testnet",
-        "simulated",
         "operator",
-        "Copy-paste prompt",
+        "Local demo credits are not money",
     ] {
         if !text.contains(marker) {
             push_doc_issue(
@@ -5621,10 +6166,10 @@ fn production_live_money_env_vars() -> &'static [&'static str] {
         "BASE_MAINNET_RPC_URL",
         "BASE_SEPOLIA_USDC_TOKEN",
         "BASE_MAINNET_USDC_TOKEN",
-        "BASE_SEPOLIA_ESCROW_CONTRACT",
-        "BASE_MAINNET_ESCROW_CONTRACT",
-        "BASE_SETTLEMENT_SIGNER",
-        "BASE_PLATFORM_FEE_WALLET",
+        "BASE_SEPOLIA_BOUNTY_FACTORY",
+        "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION",
+        "BASE_MAINNET_BOUNTY_FACTORY",
+        "BASE_MAINNET_BOUNTY_IMPLEMENTATION",
         "ENABLE_BASE_TX_BROADCAST",
         "ENABLE_STRIPE_LIVE_EXECUTION",
         "OPERATOR_API_TOKEN",
@@ -5816,6 +6361,9 @@ fn check_doc_text(
     request_contracts: &BTreeMap<String, RequestContract>,
     issues: &mut Vec<DocsContractIssue>,
 ) {
+    if is_historical_v1_document(text) {
+        return;
+    }
     for (line_index, line) in text.lines().enumerate() {
         let line_number = line_index + 1;
         if line_mentions_mcp_port_for_api(line) {
@@ -5867,6 +6415,13 @@ fn check_doc_text(
     for (start_line, block) in markdown_code_blocks(text) {
         check_curl_payload_block(file, start_line, &block, request_contracts, issues);
     }
+}
+
+fn is_historical_v1_document(text: &str) -> bool {
+    text.lines().take(8).any(|line| {
+        line.trim()
+            == "> Historical V1 material only. The operator-controlled escrow was refunded and"
+    })
 }
 
 fn check_curl_payload_block(
@@ -6033,56 +6588,154 @@ fn request_contracts() -> BTreeMap<String, RequestContract> {
     );
     insert_request_contract(
         &mut contracts,
-        "/v1/base/funding-plan",
-        &["bounty_id", "escrow_contract", "payer", "token"],
-        &["bounty_id", "escrow_contract", "payer", "token", "network"],
+        "/v1/base/autonomous-bounties/creation-plan",
+        &["create"],
+        &["network", "create"],
         &[],
     );
     insert_request_contract(
         &mut contracts,
-        "/v1/base/fetch-rpc-logs",
-        &["escrow_contract", "from_block"],
+        "/v1/base/autonomous-bounties/authorized-creation-plan",
+        &["create", "signature"],
+        &["network", "create", "signature", "relayer"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/contribution-plan",
+        &["contribution"],
+        &["network", "contribution"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/authorized-contribution-plan",
+        &["contribution", "signature"],
+        &["network", "contribution", "signature", "relayer"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/claim-plan",
+        &["bounty_contract", "solver"],
         &[
-            "escrow_contract",
-            "from_block",
-            "to_block",
-            "request_id",
             "network",
+            "bounty_contract",
+            "solver",
+            "authorization_nonce",
+            "authorization_valid_before",
         ],
-        &["from_block", "to_block", "request_id"],
+        &["authorization_valid_before"],
     );
     insert_request_contract(
         &mut contracts,
-        "/v1/base/release-queue",
-        &[],
-        &["escrow_contract", "platform_fee_wallet", "network"],
-        &[],
-    );
-    insert_request_contract(
-        &mut contracts,
-        "/v1/base/release-plan",
-        &["bounty_id", "escrow_contract", "platform_fee_wallet"],
+        "/v1/base/autonomous-bounties/authorized-claim-plan",
         &[
+            "bounty_contract",
+            "solver",
+            "authorization_nonce",
+            "authorization_valid_before",
+            "signature",
+        ],
+        &[
+            "network",
+            "bounty_contract",
+            "solver",
+            "authorization_nonce",
+            "authorization_valid_before",
+            "signature",
+            "relayer",
+        ],
+        &["authorization_valid_before"],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/submission-plan",
+        &[
+            "bounty_contract",
+            "solver",
+            "submission_hash",
+            "evidence_hash",
+        ],
+        &[
+            "network",
+            "bounty_contract",
+            "solver",
+            "submission_hash",
+            "evidence_hash",
+        ],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/verification-attestation-plan",
+        &["attestation"],
+        &["network", "attestation"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/module-settlement-plan",
+        &["bounty_contract", "proof"],
+        &["network", "bounty_contract", "caller", "proof"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/attestation-settlement-plan",
+        &["bounty_contract", "attestations"],
+        &["network", "bounty_contract", "caller", "attestations"],
+        &[],
+    );
+    for path in [
+        "/v1/base/autonomous-bounties/expire-claim-plan",
+        "/v1/base/autonomous-bounties/expire-submission-plan",
+        "/v1/base/autonomous-bounties/cancel-plan",
+        "/v1/base/autonomous-bounties/refund-withdrawal-plan",
+    ] {
+        insert_request_contract(
+            &mut contracts,
+            path,
+            &["bounty_contract"],
+            &["network", "bounty_contract", "caller"],
+            &[],
+        );
+    }
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/decode-events",
+        &["logs"],
+        &["logs"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/terms",
+        &["creator_wallet", "document"],
+        &["creator_wallet", "document"],
+        &[],
+    );
+    insert_request_contract(
+        &mut contracts,
+        "/v1/base/autonomous-bounties/submission-evidence",
+        &[
+            "bounty_contract",
             "bounty_id",
-            "escrow_contract",
-            "platform_fee_wallet",
-            "network",
+            "round",
+            "solver_wallet",
+            "artifact_reference",
+            "evidence",
         ],
-        &[],
-    );
-    insert_request_contract(
-        &mut contracts,
-        "/v1/base/refund-plan",
-        &["bounty_id", "escrow_contract", "reason_hash"],
-        &["bounty_id", "escrow_contract", "reason_hash", "network"],
-        &[],
-    );
-    insert_request_contract(
-        &mut contracts,
-        "/v1/base/dispute-plan",
-        &["bounty_id", "escrow_contract", "dispute_hash"],
-        &["bounty_id", "escrow_contract", "dispute_hash", "network"],
-        &[],
+        &[
+            "network",
+            "bounty_contract",
+            "bounty_id",
+            "round",
+            "solver_wallet",
+            "artifact_reference",
+            "evidence",
+        ],
+        &["round"],
     );
     insert_request_contract(
         &mut contracts,
@@ -6095,7 +6748,7 @@ fn request_contracts() -> BTreeMap<String, RequestContract> {
         &mut contracts,
         "/v1/base/transaction-receipt",
         &["tx_hash"],
-        &["tx_hash", "request_id", "network", "reconcile_logs"],
+        &["tx_hash", "request_id", "network"],
         &["request_id"],
     );
     contracts
@@ -6393,6 +7046,7 @@ fn require(condition: bool, message: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any())]
 fn require_base_indexer_status_contract(value: &serde_json::Value, context: &str) -> Result<()> {
     require(
         value
@@ -6480,6 +7134,7 @@ fn value_str<'a>(value: &'a serde_json::Value, pointer: &str) -> Option<&'a str>
     value.pointer(pointer).and_then(serde_json::Value::as_str)
 }
 
+#[cfg(any())]
 fn array_contains_name(value: &serde_json::Value, pointer: &str, expected: &str) -> bool {
     value
         .pointer(pointer)
@@ -6578,11 +7233,11 @@ mod tests {
             build_discovery_report_from_str(include_str!("../fixtures/discovery_answers.json"))
                 .expect("fixture should build a discovery report");
 
-        assert_eq!(report.total_records, 8);
-        assert_eq!(report.answered_records, 7);
+        assert_eq!(report.total_records, 10);
+        assert_eq!(report.answered_records, 9);
         assert_eq!(report.partial_answer_records, 1);
         assert_eq!(report.missing_answer_records, 1);
-        assert_eq!(report.unique_contributors, 6);
+        assert_eq!(report.unique_contributors, 8);
         assert_eq!(
             report.duplicate_contributors,
             vec!["codeboost-tr", "hyperxiaoerxz-hash"]
@@ -6592,6 +7247,8 @@ mod tests {
         assert!(bucket_count(&report.participation_reasons, "payout") >= 2);
         assert!(bucket_count(&report.participation_reasons, "clear-scope") >= 3);
         assert!(bucket_count(&report.agent_workflows, "codex") >= 1);
+        assert!(bucket_count(&report.agent_workflows, "Hermes Agent") >= 1);
+        assert!(bucket_count(&report.agent_workflows, "BountyScout") >= 1);
         assert!(bucket_count(&report.trust_payment_signals, "base-usdc-escrow") >= 1);
         assert!(bucket_count(&report.trust_payment_signals, "deterministic-verification") >= 2);
         assert!(bucket_count(&report.friction_points, "stale-docs-or-contract") >= 1);
@@ -6665,7 +7322,7 @@ mod tests {
 
         assert!(issues.iter().any(|issue| {
             issue.message.contains(
-                "production compose api service does not pass `BASE_SEPOLIA_ESCROW_CONTRACT`",
+                "production compose api service does not pass `BASE_SEPOLIA_BOUNTY_FACTORY`",
             )
         }));
         assert!(issues.iter().any(|issue| {
@@ -6675,6 +7332,39 @@ mod tests {
         }));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn docs_contract_exempts_only_explicit_historical_v1_documents() {
+        let retired = "> Historical V1 material only. The operator-controlled escrow was refunded and\n\n`POST /v1/base/release-plan`\n";
+        let active = "# Active runbook\n\n`POST /v1/base/release-plan`\n";
+        let api_routes = BTreeSet::new();
+        let mcp_tools = BTreeSet::new();
+        let request_contracts = request_contracts();
+
+        let mut historical_issues = Vec::new();
+        check_doc_text(
+            Path::new("docs/historical.md"),
+            retired,
+            &api_routes,
+            &mcp_tools,
+            &request_contracts,
+            &mut historical_issues,
+        );
+        assert!(historical_issues.is_empty());
+
+        let mut active_issues = Vec::new();
+        check_doc_text(
+            Path::new("docs/active.md"),
+            active,
+            &api_routes,
+            &mcp_tools,
+            &request_contracts,
+            &mut active_issues,
+        );
+        assert!(active_issues.iter().any(|issue| issue
+            .message
+            .contains("unknown API route `/v1/base/release-plan`")));
     }
 
     #[test]
