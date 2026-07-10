@@ -2,9 +2,9 @@ use app::{
     build_base_indexer_status_report, build_live_money_readiness_report,
     stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
     ApproveRiskPayoutRequest, BaseIndexerHeartbeatStatus, BaseIndexerScanCursor,
-    BaseIndexerStatusConfig, BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest,
-    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport,
-    LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanBaseDisputeRequest,
+    BaseIndexerStatusConfig, BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse,
+    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
+    FundingIntentReport, LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanBaseDisputeRequest,
     PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
     PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest, RegisterAgentRequest,
     RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
@@ -25,7 +25,7 @@ use chain_base::{
     BaseRpcUrlConfig, EvmLog, RpcLogSubmission,
 };
 use chrono::Utc;
-use db::PostgresStore;
+use db::{BountyStatusScope, PostgresStore};
 use domain::{
     Agent, BountyStatus, CapabilityClass, EvalRun, HelpRequest, Money, PaymentRail, PayoutStatus,
     PrivacyLevel, RiskReviewRecord,
@@ -1907,20 +1907,118 @@ async fn get_bounty_status(
     State(state): State<SharedState>,
     Json(args): Json<BountyIdArgs>,
 ) -> Json<serde_json::Value> {
-    let network = state.network.lock().expect("state poisoned");
-    match network.status(args.bounty_id) {
+    match bounty_status_snapshot(&state, args.bounty_id).await {
         Ok(status) => mcp_json(status),
         Err(error) => mcp_error(error),
     }
+}
+
+async fn bounty_status_snapshot(
+    state: &SharedState,
+    bounty_id: Uuid,
+) -> Result<BountyStatusResponse, String> {
+    if let Some(store) = &state.store {
+        let scope = store
+            .load_bounty_status_scope(bounty_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "bounty not found".to_string())?;
+        return bounty_status_from_scope(scope);
+    }
+
+    let mut status = {
+        let network = state.network.lock().expect("state poisoned");
+        network
+            .status(bounty_id)
+            .map_err(|error| error.to_string())?
+    };
+    status.base_escrow_events = state
+        .base_log_worker
+        .lock()
+        .expect("state poisoned")
+        .indexed_events()
+        .iter()
+        .filter(|event| event.bounty_id == bounty_id)
+        .cloned()
+        .collect();
+    Ok(status)
+}
+
+fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResponse, String> {
+    let bounty_id = scope.bounty.id;
+    let base_escrow_events = scope.base_escrow_events;
+    let network = BountyNetwork {
+        bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
+        funding_intents: scope
+            .funding_intents
+            .into_iter()
+            .map(|intent| (intent.id, intent))
+            .collect(),
+        funding_contributions: scope
+            .funding_contributions
+            .into_iter()
+            .map(|contribution| (contribution.id, contribution))
+            .collect(),
+        escrows: scope
+            .escrows
+            .into_iter()
+            .map(|escrow| (escrow.id, escrow))
+            .collect(),
+        claims: scope
+            .claims
+            .into_iter()
+            .map(|claim| (claim.id, claim))
+            .collect(),
+        submissions: scope
+            .submissions
+            .into_iter()
+            .map(|submission| (submission.id, submission))
+            .collect(),
+        verifier_results: scope
+            .verifier_results
+            .into_iter()
+            .map(|result| (result.id, result))
+            .collect(),
+        proofs: scope
+            .proofs
+            .into_iter()
+            .map(|proof| (proof.id, proof))
+            .collect(),
+        settlements: scope
+            .settlements
+            .into_iter()
+            .map(|settlement| (settlement.id, settlement))
+            .collect(),
+        reputation_events: scope
+            .reputation_events
+            .into_iter()
+            .map(|event| (event.id, event))
+            .collect(),
+        template_signals: scope
+            .template_signals
+            .into_iter()
+            .map(|signal| (signal.id, signal))
+            .collect(),
+        risk_events: scope
+            .risk_events
+            .into_iter()
+            .map(|event| (event.id, event))
+            .collect(),
+        ..BountyNetwork::default()
+    };
+    let mut status = network
+        .status(bounty_id)
+        .map_err(|error| error.to_string())?;
+    status.base_escrow_events = base_escrow_events;
+    Ok(status)
 }
 
 async fn get_paid_status(
     State(state): State<SharedState>,
     Json(args): Json<PaidStatusArgs>,
 ) -> Json<serde_json::Value> {
-    let network = state.network.lock().expect("state poisoned");
     match (args.bounty_id, args.agent_id) {
-        (Some(bounty_id), None) => match network.status(bounty_id) {
+        (Some(bounty_id), None) => match bounty_status_snapshot(&state, bounty_id).await {
             Ok(status) => {
                 let api = public_base_url_from_env();
                 let proof_url = status.proofs.first().map(|proof| {
@@ -1954,45 +2052,49 @@ async fn get_paid_status(
             }
             Err(error) => mcp_error(error),
         },
-        (None, Some(agent_id)) => match network.agent_payout_status(agent_id) {
-            Ok(status) => {
-                let paid = status.payouts.iter().find(|payout| {
-                    payout.status == PayoutStatus::Paid && payout.rail != PaymentRail::Simulated
-                });
-                let evidence_payout = paid.or_else(|| status.payouts.first());
-                let trigger = if paid.is_some() {
-                    Some(web_public::PostValueTrigger::ReconciledPayout)
-                } else if evidence_payout.is_some() || !status.reputation_events.is_empty() {
-                    Some(web_public::PostValueTrigger::VerifiedCompletion)
-                } else {
-                    None
-                };
-                let api = public_base_url_from_env();
-                let share_url = evidence_payout
-                    .map(|payout| {
-                        format!(
-                            "{}/public/proofs/{}",
-                            api.trim_end_matches('/'),
-                            payout.proof_record_id
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        format!("{}/public/agents/{agent_id}", api.trim_end_matches('/'))
+        (None, Some(agent_id)) => {
+            let network = state.network.lock().expect("state poisoned");
+            match network.agent_payout_status(agent_id) {
+                Ok(status) => {
+                    let paid = status.payouts.iter().find(|payout| {
+                        payout.status == PayoutStatus::Paid && payout.rail != PaymentRail::Simulated
                     });
-                let post_value_loop = trigger
-                    .map(|trigger| web_public::post_value_loop(Some(trigger), Some(&share_url)));
-                mcp_json(serde_json::json!({
-                    "scope": "agent",
-                    "agent_id": agent_id,
-                    "agent": status.agent,
-                    "payouts": status.payouts,
-                    "totals": status.totals,
-                    "reputation_events": status.reputation_events,
-                    "post_value_loop": post_value_loop
-                }))
+                    let evidence_payout = paid.or_else(|| status.payouts.first());
+                    let trigger = if paid.is_some() {
+                        Some(web_public::PostValueTrigger::ReconciledPayout)
+                    } else if evidence_payout.is_some() || !status.reputation_events.is_empty() {
+                        Some(web_public::PostValueTrigger::VerifiedCompletion)
+                    } else {
+                        None
+                    };
+                    let api = public_base_url_from_env();
+                    let share_url = evidence_payout
+                        .map(|payout| {
+                            format!(
+                                "{}/public/proofs/{}",
+                                api.trim_end_matches('/'),
+                                payout.proof_record_id
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            format!("{}/public/agents/{agent_id}", api.trim_end_matches('/'))
+                        });
+                    let post_value_loop = trigger.map(|trigger| {
+                        web_public::post_value_loop(Some(trigger), Some(&share_url))
+                    });
+                    mcp_json(serde_json::json!({
+                        "scope": "agent",
+                        "agent_id": agent_id,
+                        "agent": status.agent,
+                        "payouts": status.payouts,
+                        "totals": status.totals,
+                        "reputation_events": status.reputation_events,
+                        "post_value_loop": post_value_loop
+                    }))
+                }
+                Err(error) => mcp_error(error),
             }
-            Err(error) => mcp_error(error),
-        },
+        }
         (None, None) => mcp_error("get_paid_status requires bounty_id or agent_id"),
         (Some(_), Some(_)) => {
             mcp_error("get_paid_status accepts either bounty_id or agent_id, not both")
@@ -4190,6 +4292,164 @@ mod tests {
         assert!(body.get("payment_method_types").is_none());
     }
 
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding() {
+        let database_url = postgres_test_database_url();
+        let reader_store = PostgresStore::connect(&database_url).await.unwrap();
+        reader_store.migrate().await.unwrap();
+
+        let mut reader_network = BountyNetwork::default();
+        let bounty = reader_network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Expose MCP scoped Base evidence".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: domain::FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        let other_bounty = reader_network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Filter unrelated MCP Base evidence".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: domain::FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        reader_store.upsert_bounty(&bounty).await.unwrap();
+        reader_store.upsert_bounty(&other_bounty).await.unwrap();
+        let reader_state =
+            test_state_with_operator_token_and_store(reader_network, "secret-token", reader_store);
+
+        let initial_status = get_bounty_status(
+            State(reader_state.clone()),
+            Json(BountyIdArgs {
+                bounty_id: bounty.id,
+            }),
+        )
+        .await
+        .0;
+        let initial_json = &initial_status["content"][0]["json"];
+        assert_eq!(initial_json["bounty"]["status"], "Unfunded");
+        assert_eq!(initial_json["funding_summary"]["claimable"], false);
+        assert_eq!(
+            initial_json["base_escrow_events"].as_array().unwrap().len(),
+            0
+        );
+
+        let funding_intent = create_funding_intent(
+            State(reader_state.clone()),
+            Json(CreateFundingIntentRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                source_organization_id: None,
+                amount_minor: bounty.amount.amount,
+                currency: bounty.amount.currency.clone(),
+                rail: PaymentRail::BaseUsdc,
+                external_reference: Some("mcp-base-tx-before-indexer".to_string()),
+                stripe_success_url: None,
+                stripe_cancel_url: None,
+                base_escrow_contract: Some(
+                    "0x1111111111111111111111111111111111111111".to_string(),
+                ),
+                base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
+                base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
+                base_network: Some("base-mainnet".to_string()),
+            }),
+        )
+        .await
+        .0;
+        let funding_json = &funding_intent["content"][0]["json"]["intent"];
+        assert_eq!(funding_json["status"], "AwaitingEvidence");
+
+        let indexer_store = PostgresStore::connect(&database_url).await.unwrap();
+        let indexer_network = hydrate_network(&indexer_store).await.unwrap();
+        let indexer_state = test_state_with_operator_token_and_store(
+            indexer_network,
+            "secret-token",
+            indexer_store,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
+        let onchain_escrow_id = bounty.id.as_u128() % 1_000_000_000_000 + 20_000;
+        let event = chain_base::simulated_created_event(
+            bounty.id,
+            onchain_escrow_id,
+            "0x3333333333333333333333333333333333333333",
+            bounty.amount.clone(),
+            bounty.terms_hash.clone().unwrap(),
+        );
+        let event_tx_hash = event.tx_hash.clone();
+        let other_event = chain_base::simulated_created_event(
+            other_bounty.id,
+            onchain_escrow_id + 1,
+            "0x3333333333333333333333333333333333333333",
+            other_bounty.amount.clone(),
+            other_bounty.terms_hash.clone().unwrap(),
+        );
+        let reconciled =
+            reconcile_base_escrow_event(State(indexer_state.clone()), headers.clone(), Json(event))
+                .await
+                .0;
+        assert!(reconciled.get("error").is_none(), "{reconciled}");
+        let other_reconciled =
+            reconcile_base_escrow_event(State(indexer_state), headers, Json(other_event)).await;
+        assert!(
+            other_reconciled.0.get("error").is_none(),
+            "{}",
+            other_reconciled.0
+        );
+
+        let status = get_bounty_status(
+            State(reader_state.clone()),
+            Json(BountyIdArgs {
+                bounty_id: bounty.id,
+            }),
+        )
+        .await
+        .0;
+        let status_json = &status["content"][0]["json"];
+        assert_eq!(status_json["bounty"]["status"], "Claimable");
+        assert_eq!(status_json["funding_summary"]["claimable"], true);
+        assert_eq!(status_json["funding_intents"].as_array().unwrap().len(), 1);
+        assert_eq!(status_json["funding_intents"][0]["status"], "Applied");
+        assert_eq!(status_json["escrows"].as_array().unwrap().len(), 1);
+        assert_eq!(status_json["escrows"][0]["status"], "Funded");
+        assert_eq!(
+            status_json["base_escrow_events"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            status_json["base_escrow_events"][0]["bounty_id"]
+                .as_str()
+                .unwrap(),
+            bounty.id.to_string().as_str()
+        );
+        assert_eq!(
+            status_json["base_escrow_events"][0]["tx_hash"]
+                .as_str()
+                .unwrap(),
+            event_tx_hash.as_str()
+        );
+
+        let paid_status = get_paid_status(
+            State(reader_state),
+            Json(PaidStatusArgs {
+                bounty_id: Some(bounty.id),
+                agent_id: None,
+            }),
+        )
+        .await
+        .0;
+        let paid_json = &paid_status["content"][0]["json"];
+        assert_eq!(paid_json["bounty_status"], "Claimable");
+        assert_eq!(paid_json["post_value_loop"]["trigger"], "funded_bounty");
+    }
+
     fn test_state() -> SharedState {
         test_state_with_network(BountyNetwork::default())
     }
@@ -4242,6 +4502,32 @@ mod tests {
             operator_api_token: Some(token.to_string()),
             store: None,
         })
+    }
+
+    fn test_state_with_operator_token_and_store(
+        network: BountyNetwork,
+        token: &str,
+        store: PostgresStore,
+    ) -> SharedState {
+        Arc::new(AppState {
+            network: Mutex::new(network),
+            base_log_worker: Mutex::new(BaseEscrowLogWorker::default()),
+            eval_runs: Mutex::new(Vec::new()),
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            stripe_secret_key: None,
+            stripe_live_execution_enabled: false,
+            stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            stripe_payment_method_configuration: None,
+            operator_api_token: Some(token.to_string()),
+            store: Some(store),
+        })
+    }
+
+    fn postgres_test_database_url() -> String {
+        std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .expect("set AGENT_BOUNTIES_TEST_DATABASE_URL or DATABASE_URL")
     }
 
     fn valid_github_issue_body() -> String {

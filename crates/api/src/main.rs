@@ -30,7 +30,7 @@ use chain_base::{
     EthSendRawTransactionRequest, RpcLogSubmission, RpcTransactionReceipt,
 };
 use chrono::Utc;
-use db::{GitHubIssueSyncBountyUpsert, PostgresStore};
+use db::{BountyStatusScope, GitHubIssueSyncBountyUpsert, PostgresStore};
 use domain::{
     Agent, BountyStatus, Capability, CapabilityClass, ContributorContact, EvalRun, HelpRequest,
     Money, PaymentRail, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord,
@@ -2790,27 +2790,105 @@ async fn bounty_status(
     State(state): State<SharedState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<BountyStatusResponse>, StatusCode> {
+    bounty_status_snapshot(&state, id).await.map(Json)
+}
+
+async fn bounty_status_snapshot(
+    state: &SharedState,
+    id: Uuid,
+) -> Result<BountyStatusResponse, StatusCode> {
+    if let Some(store) = &state.store {
+        let scope = store
+            .load_bounty_status_scope(id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        return bounty_status_from_scope(scope);
+    }
+
     let mut status = {
         let network = state.network.lock().expect("state poisoned");
         network.status(id).map_err(|_| StatusCode::NOT_FOUND)?
     };
-    status.base_escrow_events = if let Some(store) = &state.store {
-        store
-            .list_base_escrow_events_for_bounty(id)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    } else {
-        state
-            .base_log_worker
-            .lock()
-            .expect("state poisoned")
-            .indexed_events()
-            .iter()
-            .filter(|event| event.bounty_id == id)
-            .cloned()
-            .collect()
+    status.base_escrow_events = state
+        .base_log_worker
+        .lock()
+        .expect("state poisoned")
+        .indexed_events()
+        .iter()
+        .filter(|event| event.bounty_id == id)
+        .cloned()
+        .collect();
+    Ok(status)
+}
+
+fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResponse, StatusCode> {
+    let bounty_id = scope.bounty.id;
+    let base_escrow_events = scope.base_escrow_events;
+    let network = BountyNetwork {
+        bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
+        funding_intents: scope
+            .funding_intents
+            .into_iter()
+            .map(|intent| (intent.id, intent))
+            .collect(),
+        funding_contributions: scope
+            .funding_contributions
+            .into_iter()
+            .map(|contribution| (contribution.id, contribution))
+            .collect(),
+        escrows: scope
+            .escrows
+            .into_iter()
+            .map(|escrow| (escrow.id, escrow))
+            .collect(),
+        claims: scope
+            .claims
+            .into_iter()
+            .map(|claim| (claim.id, claim))
+            .collect(),
+        submissions: scope
+            .submissions
+            .into_iter()
+            .map(|submission| (submission.id, submission))
+            .collect(),
+        verifier_results: scope
+            .verifier_results
+            .into_iter()
+            .map(|result| (result.id, result))
+            .collect(),
+        proofs: scope
+            .proofs
+            .into_iter()
+            .map(|proof| (proof.id, proof))
+            .collect(),
+        settlements: scope
+            .settlements
+            .into_iter()
+            .map(|settlement| (settlement.id, settlement))
+            .collect(),
+        reputation_events: scope
+            .reputation_events
+            .into_iter()
+            .map(|event| (event.id, event))
+            .collect(),
+        template_signals: scope
+            .template_signals
+            .into_iter()
+            .map(|signal| (signal.id, signal))
+            .collect(),
+        risk_events: scope
+            .risk_events
+            .into_iter()
+            .map(|event| (event.id, event))
+            .collect(),
+        ..BountyNetwork::default()
     };
-    Ok(Json(status))
+    let mut status = network
+        .status(bounty_id)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    status.base_escrow_events = base_escrow_events;
+    Ok(status)
 }
 
 async fn public_proof_page(
@@ -4639,7 +4717,35 @@ mod tests {
             .await
             .unwrap()
             .0;
+        assert_eq!(initial_status.bounty.status, BountyStatus::Unfunded);
+        assert!(!initial_status.funding_summary.claimable);
         assert!(initial_status.base_escrow_events.is_empty());
+        let funding_intent = create_funding_intent(
+            State(api_state.clone()),
+            Path(bounty.id),
+            Json(CreateFundingIntentRequest {
+                bounty_id: bounty.id,
+                contributor_agent_id: None,
+                source_organization_id: None,
+                amount_minor: bounty.amount.amount,
+                currency: bounty.amount.currency.clone(),
+                rail: PaymentRail::BaseUsdc,
+                external_reference: Some("base-tx-before-indexer".to_string()),
+                stripe_success_url: None,
+                stripe_cancel_url: None,
+                base_escrow_contract: Some(
+                    "0x1111111111111111111111111111111111111111".to_string(),
+                ),
+                base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
+                base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
+                base_network: Some("base-mainnet".to_string()),
+            }),
+        )
+        .await
+        .unwrap()
+        .0
+        .intent;
+        assert_eq!(funding_intent.status, FundingIntentStatus::AwaitingEvidence);
 
         let indexer_store = PostgresStore::connect(&database_url).await.unwrap();
         let mut indexer_network = hydrate_network(&indexer_store).await.unwrap();
@@ -4689,6 +4795,16 @@ mod tests {
             .unwrap()
             .0;
 
+        assert_eq!(status.bounty.status, BountyStatus::Claimable);
+        assert!(status.funding_summary.claimable);
+        assert_eq!(status.funding_intents.len(), 1);
+        assert_eq!(status.funding_intents[0].id, funding_intent.id);
+        assert_eq!(
+            status.funding_intents[0].status,
+            FundingIntentStatus::Applied
+        );
+        assert_eq!(status.escrows.len(), 1);
+        assert_eq!(status.escrows[0].status, domain::EscrowStatus::Funded);
         assert_eq!(status.base_escrow_events.len(), 1);
         assert_eq!(status.base_escrow_events[0].bounty_id, bounty.id);
         assert_eq!(
