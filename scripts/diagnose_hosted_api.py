@@ -96,9 +96,38 @@ def fetch(url: str, timeout: float = 20.0) -> PathResult:
         return PathResult(path=path, ok=False, status=None, error=str(exc))
 
 
+def normalize_base_url(base_url: str) -> str:
+    """Ensure base URL has an https scheme so DNS + fetch use the same host."""
+    raw = (base_url or "").strip().rstrip("/")
+    if not raw:
+        raise ValueError("base URL must not be empty")
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    parsed = urlparse(raw)
+    if not parsed.hostname:
+        raise ValueError(f"invalid base URL (no hostname): {base_url!r}")
+    netloc = parsed.netloc or parsed.hostname
+    return f"{parsed.scheme}://{netloc}".rstrip("/")
+
+
 def diagnose(base_url: str) -> Diagnosis:
-    base = base_url.rstrip("/")
-    parsed = urlparse(base if "://" in base else f"https://{base}")
+    try:
+        base = normalize_base_url(base_url)
+    except ValueError as exc:
+        return Diagnosis(
+            base_url=base_url,
+            hostname="",
+            dns_ok=False,
+            dns_error=str(exc),
+            overall="invalid_url",
+            likely_causes=[str(exc)],
+            repair_steps=[
+                "Pass a full URL, e.g. https://agent-bounties-api.onrender.com",
+                "Or a hostname only (https will be assumed), e.g. agent-bounties-api.onrender.com",
+            ],
+        )
+
+    parsed = urlparse(base)
     host = parsed.hostname or ""
     dns_ok = False
     dns_error = None
@@ -133,6 +162,7 @@ def diagnose(base_url: str) -> Diagnosis:
         d.paths.append(fetch(f"{base}{path}"))
 
     statuses = [p.status for p in d.paths]
+    non_null_statuses = [s for s in statuses if s is not None]
     errors = [p.error or "" for p in d.paths]
 
     if all(p.ok for p in d.paths):
@@ -149,7 +179,7 @@ def diagnose(base_url: str) -> Diagnosis:
         d.likely_causes.append("Service spinning up (Render free/suspended) or overloaded.")
         d.repair_steps.append("Open Render dashboard → service → Logs; wait for deploy ready; retry.")
 
-    if any(s in {502, 503, 504} for s in statuses if s is not None):
+    if any(s in {502, 503, 504} for s in non_null_statuses):
         d.overall = "upstream_unavailable"
         d.likely_causes.extend(
             [
@@ -165,10 +195,9 @@ def diagnose(base_url: str) -> Diagnosis:
             ]
         )
 
-    if all(s == 404 for s in statuses if s is not None) or (
-        any(s == 404 for s in statuses if s is not None)
-        and all(s in {404, None} for s in statuses)
-    ):
+    # not_found only when we observed ≥1 real HTTP 404 and every non-null status is 404.
+    # all([]) is True in Python — do not classify all-None connection errors as 404.
+    if non_null_statuses and all(s == 404 for s in non_null_statuses):
         d.overall = "not_found"
         d.likely_causes.extend(
             [
@@ -187,6 +216,23 @@ def diagnose(base_url: str) -> Diagnosis:
                 "If Render assigned a different hostname, update PUBLIC_BASE_URL / MCP_BASE_URL and docs.",
                 "Set repo vars PRODUCTION_API_BASE_URL only after production smoke passes.",
                 "Run: python scripts/check-render-blueprint.py && python scripts/diagnose_hosted_api.py",
+            ]
+        )
+    elif not non_null_statuses and d.paths and d.overall not in {"timeout"}:
+        # Every path returned status=None (connection refused / reset / TLS, etc.)
+        d.overall = "connection_failure"
+        d.likely_causes.extend(
+            [
+                "DNS resolves but TCP/TLS connection fails (service suspended, not listening, or firewall).",
+                "Render free tier spun down and edge returns connection errors instead of HTTP.",
+            ]
+        )
+        d.repair_steps.extend(
+            [
+                "Open Render dashboard → service → confirm Live (not Suspended).",
+                "Check service logs for crash loop / failed start.",
+                "Confirm APP_BINARY=api binds 0.0.0.0:$PORT.",
+                "Re-run: python scripts/diagnose_hosted_api.py --base-url <url>",
             ]
         )
 

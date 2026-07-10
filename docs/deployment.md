@@ -73,15 +73,16 @@ python3 scripts/diagnose_hosted_api.py
 python3 scripts/diagnose_hosted_api.py --base-url https://agent-bounties-api.onrender.com --json-out target/hosted-api-diagnosis.json
 ```
 
-Typical causes when **all** paths are 404 and DNS still resolves:
+Typical causes when **all** paths are HTTP **404** (at least one non-null status)
+and DNS still resolves:
 
 1. The Render Blueprint was never applied (no live `agent-bounties-api` service).
 2. Docs still advertise `agent-bounties-api.onrender.com` but Render assigned a
    different hostname after rename/recreate.
-3. The web service is running the wrong binary (`worker` instead of `api`) so
+3. The service is running the wrong binary (`worker` instead of `api`) so
    HTTP routes are missing.
-4. The service exists but failed health checks / is suspended (sometimes
-   surfaces as 404/502 depending on platform edge).
+4. All paths return connection errors with no HTTP status (`connection_failure`) —
+   service suspended or not listening (distinct from 404).
 
 Repair sequence:
 
