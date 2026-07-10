@@ -1,5 +1,6 @@
 use domain::{FundingMode, Id, Money, PrivacyLevel};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -164,6 +165,55 @@ pub struct GitHubClaimCommentPlan {
     pub check: GitHubCheckRunOutput,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubIssueApiSyncInput {
+    pub repository: String,
+    pub issue_url: String,
+    pub title: String,
+    pub body: String,
+    pub api_base_url: Option<String>,
+    #[serde(default)]
+    pub existing_bounty_ids: Vec<Id>,
+    #[serde(default)]
+    pub hosted_api_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GitHubIssueApiSyncOperation {
+    Create,
+    Update,
+    InvalidIssue,
+    HostedApiUnavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubHostedApiCallPlan {
+    pub method: String,
+    pub url: String,
+    pub purpose: String,
+    pub idempotency_key: String,
+    pub body: Value,
+    pub replay_behavior: String,
+    pub settlement_authority: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubIssueApiSyncPlan {
+    pub ready: bool,
+    pub operation: GitHubIssueApiSyncOperation,
+    pub parsed: Option<GitHubIssueFormBounty>,
+    pub bounty_id: Option<Id>,
+    pub idempotency_key: Option<String>,
+    pub status_url: Option<String>,
+    pub public_bounty_url: Option<String>,
+    pub funding_page_url: Option<String>,
+    pub calls: Vec<GitHubHostedApiCallPlan>,
+    pub comment_markdown: Option<String>,
+    pub error: Option<String>,
+    pub check: GitHubCheckRunOutput,
+    pub evidence_boundaries: Vec<String>,
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum GitHubFundingCommentError {
     #[error("missing GitHub issue context")]
@@ -268,6 +318,135 @@ pub fn claim_comment_plan(input: GitHubClaimCommentInput) -> GitHubClaimCommentP
     }
 }
 
+pub fn issue_api_sync_plan(input: GitHubIssueApiSyncInput) -> GitHubIssueApiSyncPlan {
+    let parsed = parse_issue_form_bounty(
+        &input.repository,
+        &input.issue_url,
+        &input.title,
+        &input.body,
+    );
+    let evidence_boundaries = github_issue_api_sync_boundaries();
+
+    let bounty = match parsed {
+        Ok(bounty) => bounty,
+        Err(error) => {
+            return GitHubIssueApiSyncPlan {
+                ready: false,
+                operation: GitHubIssueApiSyncOperation::InvalidIssue,
+                parsed: None,
+                bounty_id: None,
+                idempotency_key: None,
+                status_url: None,
+                public_bounty_url: None,
+                funding_page_url: None,
+                calls: vec![],
+                comment_markdown: None,
+                error: Some(error.to_string()),
+                check: bounty_check_output(Err(&error)),
+                evidence_boundaries,
+            }
+        }
+    };
+
+    if let Some(error) = input
+        .hosted_api_error
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return GitHubIssueApiSyncPlan {
+            ready: false,
+            operation: GitHubIssueApiSyncOperation::HostedApiUnavailable,
+            parsed: Some(bounty.clone()),
+            bounty_id: Some(bounty.request.id),
+            idempotency_key: Some(github_issue_sync_idempotency_key(&bounty)),
+            status_url: None,
+            public_bounty_url: None,
+            funding_page_url: None,
+            calls: vec![],
+            comment_markdown: None,
+            error: Some(format!("hosted API lookup failed: {error}")),
+            check: GitHubCheckRunOutput {
+                title: "Agent bounty API sync blocked".to_string(),
+                summary: "Hosted API state could not be checked before planning sync.".to_string(),
+                text: "Do not create or update a hosted bounty until the API state lookup succeeds. Issue comments, planner output, and funding links are not settlement evidence.".to_string(),
+                conclusion: GitHubCheckConclusion::ActionRequired,
+            },
+            evidence_boundaries,
+        };
+    }
+
+    let api_base_url = normalize_url_base(input.api_base_url.as_deref());
+    let bounty_id = bounty.request.id;
+    let idempotency_key = github_issue_sync_idempotency_key(&bounty);
+    let status_url = format!("{api_base_url}/v1/bounties/{bounty_id}");
+    let public_bounty_url = format!("{api_base_url}/public/bounties/{bounty_id}");
+    let operation = if input.existing_bounty_ids.contains(&bounty_id) {
+        GitHubIssueApiSyncOperation::Update
+    } else {
+        GitHubIssueApiSyncOperation::Create
+    };
+    let operation_text = match operation {
+        GitHubIssueApiSyncOperation::Create => "create",
+        GitHubIssueApiSyncOperation::Update => "update",
+        GitHubIssueApiSyncOperation::InvalidIssue
+        | GitHubIssueApiSyncOperation::HostedApiUnavailable => unreachable!(),
+    };
+    let replay_behavior = match operation {
+        GitHubIssueApiSyncOperation::Create => {
+            "Creates the stable issue-derived bounty id if it is absent; reruns with the same id must update or return the existing record instead of duplicating it."
+        }
+        GitHubIssueApiSyncOperation::Update => {
+            "Updates the same stable issue-derived bounty id; it must not create a second hosted bounty record."
+        }
+        GitHubIssueApiSyncOperation::InvalidIssue
+        | GitHubIssueApiSyncOperation::HostedApiUnavailable => unreachable!(),
+    };
+    let funding_page_url = issue_sync_funding_page_url(&api_base_url, &bounty, &idempotency_key);
+    let body = json!({
+        "repository": input.repository.clone(),
+        "issue_url": input.issue_url.clone(),
+        "title": input.title.clone(),
+        "body": input.body.clone(),
+        "api_base_url": api_base_url.clone(),
+    });
+    let call = GitHubHostedApiCallPlan {
+        method: "POST".to_string(),
+        url: format!("{api_base_url}/v1/github/issue-api-sync"),
+        purpose: format!("{operation_text} hosted bounty record for GitHub issue"),
+        idempotency_key: idempotency_key.clone(),
+        body,
+        replay_behavior: replay_behavior.to_string(),
+        settlement_authority: false,
+    };
+    let comment_markdown = format!(
+        "Hosted bounty sync plan for {}.\n\nBounty id: `{}`\nOperation: `{}`\nStatus: {}\nPublic bounty: {}\nFunding page: {}\n\nIdempotency key: `{}`\n\nBoundary: this sync creates or updates a hosted bounty record only. It does not fund the bounty, reserve a claim, accept work, authorize payout, release escrow, or prove settlement.",
+        bounty.request.source_url,
+        bounty_id,
+        operation_text,
+        status_url,
+        public_bounty_url,
+        funding_page_url,
+        idempotency_key
+    );
+
+    GitHubIssueApiSyncPlan {
+        ready: true,
+        operation,
+        parsed: Some(bounty.clone()),
+        bounty_id: Some(bounty_id),
+        idempotency_key: Some(idempotency_key),
+        status_url: Some(status_url),
+        public_bounty_url: Some(public_bounty_url),
+        funding_page_url: Some(funding_page_url),
+        calls: vec![call],
+        comment_markdown: Some(comment_markdown),
+        error: None,
+        check: bounty_check_output(Ok(&bounty)),
+        evidence_boundaries,
+    }
+}
+
 pub fn proof_comment_fingerprint(comment: &GitHubProofComment) -> String {
     let mut hasher = Sha256::new();
     hasher.update(comment.markdown());
@@ -328,7 +507,7 @@ pub fn parse_issue_form_bounty(
 
     Ok(GitHubIssueFormBounty {
         request: GitHubBountyRequest {
-            id: stable_bounty_id(repository, issue_url, title),
+            id: stable_bounty_id(repository, issue_url),
             repository: repository.to_string(),
             source: GitHubBountySource::Issue,
             source_url: issue_url.to_string(),
@@ -666,6 +845,66 @@ fn funding_handoff_url(
     ))
 }
 
+fn issue_sync_funding_page_url(
+    api_base_url: &str,
+    bounty: &GitHubIssueFormBounty,
+    idempotency_key: &str,
+) -> String {
+    let rail = match &bounty.funding_mode {
+        FundingMode::BaseUsdcEscrow => "BaseUsdc",
+        FundingMode::StripeFiatLedger => "StripeFiat",
+        FundingMode::Simulated => "Simulated",
+        FundingMode::MixedRails => "MixedRails",
+    };
+    let query = [
+        ("apiBaseUrl", api_base_url.to_string()),
+        ("bountyId", bounty.request.id.to_string()),
+        ("amountMinor", bounty.amount.amount.to_string()),
+        ("currency", bounty.amount.currency.clone()),
+        ("rail", rail.to_string()),
+        ("source", "github-issue-sync".to_string()),
+        ("externalReference", idempotency_key.to_string()),
+    ];
+
+    format!(
+        "{STATIC_FUNDING_PAGE_URL}?{}",
+        query
+            .into_iter()
+            .map(|(key, value)| format!("{key}={}", url_query_encode(&value)))
+            .collect::<Vec<_>>()
+            .join("&")
+    )
+}
+
+fn github_issue_sync_idempotency_key(bounty: &GitHubIssueFormBounty) -> String {
+    format!(
+        "github-issue-sync:{}:{}",
+        bounty.request.repository, bounty.request.source_url
+    )
+}
+
+fn normalize_url_base(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("https://agentbounties.local")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn github_issue_api_sync_boundaries() -> Vec<String> {
+    vec![
+        "The GitHub issue sync planner creates or updates hosted bounty metadata only."
+            .to_string(),
+        "A funding page URL, issue comment, Checkout request, or transaction plan is not funding evidence."
+            .to_string(),
+        "A bounty becomes claimable only after verified Stripe webhook reconciliation or indexed EscrowCreated evidence."
+            .to_string(),
+        "Accepted work and payout still require verifier/operator approval and settlement evidence."
+            .to_string(),
+    ]
+}
+
 fn url_query_encode(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
@@ -927,15 +1166,48 @@ fn normalized_choice(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn stable_bounty_id(repository: &str, issue_url: &str, title: &str) -> Id {
+fn stable_bounty_id(repository: &str, issue_url: &str) -> Id {
     let mut hasher = Sha256::new();
-    hasher.update(repository);
-    hasher.update(issue_url);
-    hasher.update(title);
+    let canonical_repository = canonical_repository(repository);
+    let canonical_issue_identity = canonical_issue_identity(issue_url);
+    hasher.update(canonical_repository.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(canonical_issue_identity.as_bytes());
     let hash = hasher.finalize();
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&hash[..16]);
     Uuid::from_bytes(bytes)
+}
+
+fn canonical_repository(repository: &str) -> String {
+    repository.trim().trim_matches('/').to_ascii_lowercase()
+}
+
+fn canonical_issue_identity(issue_url: &str) -> String {
+    let trimmed = issue_url
+        .trim()
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
+    let parts = trimmed
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+
+    if let Some(issue_index) = parts.iter().position(|part| *part == "issues") {
+        if issue_index >= 2 && issue_index + 1 < parts.len() {
+            let owner = parts[issue_index - 2];
+            let repo = parts[issue_index - 1];
+            let number = parts[issue_index + 1];
+            if number.chars().all(|character| character.is_ascii_digit()) {
+                return format!("{owner}/{repo}#{number}");
+            }
+        }
+    }
+
+    trimmed
 }
 
 #[cfg(test)]
@@ -976,6 +1248,94 @@ mod tests {
         assert_eq!(plan.fingerprint.len(), 64);
         assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
         assert_eq!(plan.check.text, plan.markdown);
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct IssueApiSyncFixture {
+        name: String,
+        input: GitHubIssueApiSyncInput,
+        expect_ready: bool,
+        expect_operation: GitHubIssueApiSyncOperation,
+        expect_call_count: usize,
+        #[serde(default)]
+        expect_bounty_id: Option<Id>,
+    }
+
+    #[test]
+    fn issue_api_sync_replay_fixtures_cover_create_update_invalid_and_api_failure() {
+        let fixtures: Vec<IssueApiSyncFixture> =
+            serde_json::from_str(include_str!("../fixtures/github_issue_api_sync_cases.json"))
+                .expect("sync fixtures should parse");
+
+        for fixture in fixtures {
+            let plan = issue_api_sync_plan(fixture.input);
+            assert_eq!(plan.ready, fixture.expect_ready, "{}", fixture.name);
+            assert_eq!(plan.operation, fixture.expect_operation, "{}", fixture.name);
+            assert_eq!(
+                plan.calls.len(),
+                fixture.expect_call_count,
+                "{}",
+                fixture.name
+            );
+            if let Some(expected_bounty_id) = fixture.expect_bounty_id {
+                assert_eq!(plan.bounty_id, Some(expected_bounty_id), "{}", fixture.name);
+            }
+            assert!(
+                plan.evidence_boundaries
+                    .iter()
+                    .any(|boundary| boundary.contains("not funding evidence")),
+                "{}",
+                fixture.name
+            );
+        }
+    }
+
+    #[test]
+    fn issue_api_sync_plan_builds_stable_hosted_api_call() {
+        let input = GitHubIssueApiSyncInput {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/115".to_string(),
+            title: "[bounty]: Sync GitHub issue into API".to_string(),
+            body: valid_issue_body("BaseUsdcEscrow"),
+            api_base_url: Some("https://api.agentbounties.example/".to_string()),
+            existing_bounty_ids: vec![],
+            hosted_api_error: None,
+        };
+
+        let plan = issue_api_sync_plan(input);
+
+        assert!(plan.ready);
+        assert_eq!(plan.operation, GitHubIssueApiSyncOperation::Create);
+        let bounty_id = plan.bounty_id.expect("bounty id");
+        let call = plan.calls.first().expect("hosted API call");
+        assert_eq!(call.method, "POST");
+        assert_eq!(
+            call.url,
+            "https://api.agentbounties.example/v1/github/issue-api-sync"
+        );
+        let expected_idempotency_key = format!(
+            "github-issue-sync:agent-bounties/agent-bounties:{}",
+            "https://github.com/agent-bounties/agent-bounties/issues/115"
+        );
+        assert_eq!(
+            call.body["issue_url"].as_str(),
+            Some("https://github.com/agent-bounties/agent-bounties/issues/115")
+        );
+        assert!(call.body.get("bounty_id").is_none());
+        assert_eq!(
+            call.idempotency_key.as_str(),
+            expected_idempotency_key.as_str()
+        );
+        assert!(!call.settlement_authority);
+        assert!(plan.status_url.unwrap().ends_with(&bounty_id.to_string()));
+        assert!(plan
+            .funding_page_url
+            .unwrap()
+            .contains("source=github-issue-sync"));
+        assert!(plan
+            .comment_markdown
+            .unwrap()
+            .contains("does not fund the bounty"));
     }
 
     #[test]

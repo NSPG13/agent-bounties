@@ -30,7 +30,7 @@ use chain_base::{
     EthSendRawTransactionRequest, RpcLogSubmission, RpcTransactionReceipt,
 };
 use chrono::Utc;
-use db::PostgresStore;
+use db::{GitHubIssueSyncBountyUpsert, PostgresStore};
 use domain::{
     Agent, BountyStatus, Capability, CapabilityClass, ContributorContact, EvalRun, HelpRequest,
     Money, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord, VerificationDecision,
@@ -41,9 +41,10 @@ use eval_harness::{
     BountyBench, EvalSuiteResult, JudgeBench, LoopSuiteResult,
 };
 use github_app::{
-    bounty_check_output, claim_comment_plan, funding_comment_plan, parse_issue_form_bounty,
-    proof_comment_plan, GitHubCheckRunOutput, GitHubClaimCommentInput, GitHubClaimCommentPlan,
-    GitHubFundingCommentInput, GitHubFundingCommentPlan, GitHubIssueFormBounty, GitHubProofComment,
+    bounty_check_output, claim_comment_plan, funding_comment_plan, issue_api_sync_plan,
+    parse_issue_form_bounty, proof_comment_plan, GitHubCheckRunOutput, GitHubClaimCommentInput,
+    GitHubClaimCommentPlan, GitHubFundingCommentInput, GitHubFundingCommentPlan,
+    GitHubIssueApiSyncInput, GitHubIssueApiSyncPlan, GitHubIssueFormBounty, GitHubProofComment,
     GitHubProofCommentPlan,
 };
 use ledger::Ledger;
@@ -120,6 +121,8 @@ use worker::BaseEscrowLogWorker;
         reconcile_stripe_transfer_event,
         reconcile_stripe_checkout_webhook,
         plan_github_issue_bounty,
+        plan_github_issue_api_sync,
+        sync_github_issue_api_bounty,
         plan_github_funding_comment,
         plan_github_claim_comment,
         plan_github_proof_comment,
@@ -146,6 +149,7 @@ use worker::BaseEscrowLogWorker;
         PlanStripeConnectAccountRequest,
         PlanStripeConnectTransferRequest,
         PlanGitHubIssueBountyRequest,
+        PlanGitHubIssueApiSyncRequest,
         PlanGitHubFundingCommentRequest,
         PlanGitHubClaimCommentRequest,
         PlanGitHubProofCommentRequest,
@@ -307,6 +311,18 @@ struct PlanGitHubIssueBountyRequest {
     issue_url: String,
     title: String,
     body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct PlanGitHubIssueApiSyncRequest {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body: String,
+    api_base_url: Option<String>,
+    #[serde(default)]
+    existing_bounty_ids: Vec<Uuid>,
+    hosted_api_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -603,6 +619,14 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/github/issue-bounty-plan",
             post(plan_github_issue_bounty),
+        )
+        .route(
+            "/v1/github/issue-api-sync-plan",
+            post(plan_github_issue_api_sync),
+        )
+        .route(
+            "/v1/github/issue-api-sync",
+            post(sync_github_issue_api_bounty),
         )
         .route(
             "/v1/github/funding-comment-plan",
@@ -2484,6 +2508,125 @@ fn github_issue_bounty_plan(request: PlanGitHubIssueBountyRequest) -> GitHubIssu
 
 #[utoipa::path(
     post,
+    path = "/v1/github/issue-api-sync-plan",
+    request_body = PlanGitHubIssueApiSyncRequest,
+    responses((status = 200, description = "GitHub issue to hosted API bounty sync plan"))
+)]
+async fn plan_github_issue_api_sync(
+    Json(request): Json<PlanGitHubIssueApiSyncRequest>,
+) -> Json<GitHubIssueApiSyncPlan> {
+    Json(issue_api_sync_plan(GitHubIssueApiSyncInput {
+        repository: request.repository,
+        issue_url: request.issue_url,
+        title: request.title,
+        body: request.body,
+        api_base_url: request.api_base_url,
+        existing_bounty_ids: request.existing_bounty_ids,
+        hosted_api_error: request.hosted_api_error,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/github/issue-api-sync",
+    request_body = PlanGitHubIssueApiSyncRequest,
+    responses(
+        (status = 200, description = "GitHub issue synced into a hosted bounty record"),
+        (status = 400, description = "Issue is invalid or hosted API state could not be planned"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
+async fn sync_github_issue_api_bounty(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<PlanGitHubIssueApiSyncRequest>,
+) -> Result<Json<domain::Bounty>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let plan = issue_api_sync_plan(GitHubIssueApiSyncInput {
+        repository: request.repository,
+        issue_url: request.issue_url,
+        title: request.title,
+        body: request.body,
+        api_base_url: request.api_base_url,
+        existing_bounty_ids: request.existing_bounty_ids,
+        hosted_api_error: request.hosted_api_error,
+    });
+    if !plan.ready {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let parsed = plan.parsed.ok_or(StatusCode::BAD_REQUEST)?;
+    let bounty_id = plan.bounty_id.ok_or(StatusCode::BAD_REQUEST)?;
+    let idempotency_key = plan.idempotency_key.ok_or(StatusCode::BAD_REQUEST)?;
+    let request = OpenPooledBountyRequest {
+        bounty_id: None,
+        idempotency_key: None,
+        title: parsed.request.title,
+        template_slug: parsed.template_slug,
+        target_amount_minor: parsed.amount.amount,
+        currency: parsed.amount.currency,
+        funding_mode: parsed.funding_mode,
+        privacy: parsed.privacy,
+        funding_targets: vec![],
+    };
+
+    let bounty = if let Some(store) = &state.store {
+        let candidate = {
+            let mut network = state.network.lock().expect("state poisoned");
+            network.build_github_issue_pooled_bounty(request, bounty_id, idempotency_key)
+        };
+        let candidate = match candidate {
+            Ok(bounty) => bounty,
+            Err(_) => {
+                persist_all_risk_events(&state).await?;
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        };
+        match store
+            .upsert_github_issue_sync_bounty(&candidate)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            GitHubIssueSyncBountyUpsert::Upserted(bounty) => {
+                state
+                    .network
+                    .lock()
+                    .expect("state poisoned")
+                    .bounties
+                    .insert(bounty.id, bounty.clone());
+                bounty
+            }
+            GitHubIssueSyncBountyUpsert::BlockedByActivity(existing) => {
+                let id = existing.id;
+                state
+                    .network
+                    .lock()
+                    .expect("state poisoned")
+                    .bounties
+                    .insert(id, existing);
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    } else {
+        let result = {
+            let mut network = state.network.lock().expect("state poisoned");
+            network.upsert_github_issue_pooled_bounty(request, bounty_id, idempotency_key)
+        };
+        let bounty = match result {
+            Ok(bounty) => bounty,
+            Err(_) => {
+                persist_all_risk_events(&state).await?;
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        };
+        persist_bounty_and_ledger(&state, &bounty, &[]).await?;
+        bounty
+    };
+    Ok(Json(bounty))
+}
+
+#[utoipa::path(
+    post,
     path = "/v1/github/funding-comment-plan",
     request_body = PlanGitHubFundingCommentRequest,
     responses((status = 200, description = "GitHub public funding-comment signal plan"))
@@ -3380,8 +3523,8 @@ mod tests {
         EvmLog,
     };
     use domain::{
-        Bounty, BountyStatus, CapabilityClass, FundingMode, Money, PaymentEventStatus, PaymentRail,
-        PayoutStatus, ProofRecord, VerifierKind,
+        Bounty, BountyStatus, CapabilityClass, FundingIntentStatus, FundingMode, Money,
+        PaymentEventStatus, PaymentRail, PayoutStatus, ProofRecord, VerifierKind,
     };
     use github_app::GitHubCheckConclusion;
     use hmac::{Hmac, Mac};
@@ -3924,6 +4067,8 @@ mod tests {
         let organization_id = Uuid::new_v4();
         let bounty = network
             .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Debit card funded bounty".to_string(),
                 template_slug: "small-code-change".to_string(),
                 target_amount_minor: 5_000,
@@ -4072,6 +4217,307 @@ mod tests {
         assert!(plan.parsed.is_none());
         assert!(plan.error.expect("error").contains("missing required"));
         assert_eq!(plan.check.conclusion, GitHubCheckConclusion::ActionRequired);
+    }
+
+    #[tokio::test]
+    async fn public_pooled_bounty_cannot_overwrite_existing_unfunded_bounty() {
+        let state = test_state(BountyNetwork::default());
+        let existing = open_pooled_bounty(
+            State(state.clone()),
+            Json(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
+                title: "Original public bounty".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: domain::FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        let error = open_pooled_bounty(
+            State(state.clone()),
+            Json(OpenPooledBountyRequest {
+                bounty_id: Some(existing.id),
+                idempotency_key: Some(format!(
+                    "github-issue-sync:agent-bounties/example:{}",
+                    existing.id
+                )),
+                title: "Overwrite public bounty".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 2_000,
+                currency: "usdc".to_string(),
+                funding_mode: domain::FundingMode::Simulated,
+                privacy: PrivacyLevel::Private,
+                funding_targets: vec![],
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, StatusCode::BAD_REQUEST);
+        let status = bounty_status(State(state), Path(existing.id))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(status.bounty.title, "Original public bounty");
+        assert_eq!(status.bounty.privacy, PrivacyLevel::Public);
+        assert_eq!(status.bounty.amount.amount, 1_000);
+    }
+
+    #[tokio::test]
+    async fn github_issue_api_sync_is_operator_gated_and_title_edit_stable() {
+        let state = test_state_with_operator_token(BountyNetwork::default(), "secret-token");
+        let denied = sync_github_issue_api_bounty(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(github_issue_api_sync_request(
+                115,
+                "[bounty]: Sync GitHub issue into API",
+                valid_github_issue_body(),
+            )),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied, StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
+        let first = sync_github_issue_api_bounty(
+            State(state.clone()),
+            headers.clone(),
+            Json(github_issue_api_sync_request(
+                115,
+                "[bounty]: Sync GitHub issue into API",
+                valid_github_issue_body(),
+            )),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        let edited = sync_github_issue_api_bounty(
+            State(state.clone()),
+            headers.clone(),
+            Json(github_issue_api_sync_request(
+                115,
+                "[bounty]: Sync hosted GitHub issue bounty records",
+                valid_github_issue_body_with_goal(
+                    "Keep the same hosted bounty after an issue title edit.",
+                ),
+            )),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        let other_issue = sync_github_issue_api_bounty(
+            State(state),
+            headers,
+            Json(github_issue_api_sync_request(
+                116,
+                "[bounty]: Sync hosted GitHub issue bounty records",
+                valid_github_issue_body(),
+            )),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(edited.id, first.id);
+        assert_ne!(other_issue.id, first.id);
+        assert_eq!(
+            edited.title,
+            "[bounty]: Sync hosted GitHub issue bounty records"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn github_issue_api_sync_postgres_rejects_stale_cross_process_activity() {
+        let database_url = postgres_test_database_url();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let sync_state = test_state_with_operator_token_and_store(
+            BountyNetwork::default(),
+            "secret-token",
+            store.clone(),
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
+        let issue_number = (Uuid::new_v4().as_u128() % 1_000_000_000_000) as u64 + 1;
+
+        let first = sync_github_issue_api_bounty(
+            State(sync_state.clone()),
+            headers.clone(),
+            Json(github_issue_api_sync_request(
+                issue_number,
+                "[bounty]: Sync GitHub issue into API",
+                valid_github_issue_body(),
+            )),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        let edited = sync_github_issue_api_bounty(
+            State(sync_state.clone()),
+            headers.clone(),
+            Json(github_issue_api_sync_request(
+                issue_number,
+                "[bounty]: Sync hosted GitHub issue bounty records",
+                valid_github_issue_body_with_goal(
+                    "Keep the same hosted bounty after an issue title edit.",
+                ),
+            )),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(edited.id, first.id);
+        assert_eq!(
+            edited.title,
+            "[bounty]: Sync hosted GitHub issue bounty records"
+        );
+
+        let mcp_store = PostgresStore::connect(&database_url).await.unwrap();
+        let mcp_network = hydrate_network(&mcp_store).await.unwrap();
+        assert!(mcp_network.bounties.contains_key(&first.id));
+        let mcp_state =
+            test_state_with_operator_token_and_store(mcp_network, "secret-token", mcp_store);
+        let funding_report = create_funding_intent(
+            State(mcp_state),
+            Path(first.id),
+            Json(CreateFundingIntentRequest {
+                bounty_id: first.id,
+                contributor_agent_id: None,
+                source_organization_id: None,
+                amount_minor: first.amount.amount,
+                currency: first.amount.currency.clone(),
+                rail: PaymentRail::BaseUsdc,
+                external_reference: Some(format!("stale-sync-{issue_number}")),
+                stripe_success_url: None,
+                stripe_cancel_url: None,
+                base_escrow_contract: Some(
+                    "0x1111111111111111111111111111111111111111".to_string(),
+                ),
+                base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
+                base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
+                base_network: Some("base-mainnet".to_string()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(funding_report.0.intent.bounty_id, first.id);
+        assert_eq!(
+            funding_report.0.intent.status,
+            FundingIntentStatus::AwaitingEvidence
+        );
+
+        let rejected = sync_github_issue_api_bounty(
+            State(sync_state.clone()),
+            headers,
+            Json(github_issue_api_sync_request(
+                issue_number,
+                "[bounty]: Unsafe edit after funding activity",
+                valid_github_issue_body_with_goal(
+                    "This stale API process must not overwrite a funded row.",
+                ),
+            )),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(rejected, StatusCode::BAD_REQUEST);
+
+        let persisted = store
+            .list_bounties()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|bounty| bounty.id == first.id)
+            .unwrap();
+        assert_eq!(persisted.title, edited.title);
+        assert_eq!(persisted.amount.amount, edited.amount.amount);
+        assert_eq!(persisted.status, BountyStatus::Unfunded);
+
+        let funding_intents = store
+            .list_funding_intents()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|intent| intent.bounty_id == first.id)
+            .collect::<Vec<_>>();
+        assert_eq!(funding_intents.len(), 1);
+
+        let stale_status = bounty_status(State(sync_state), Path(first.id))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(stale_status.bounty.title, edited.title);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn github_issue_api_sync_postgres_serializes_concurrent_initial_sync() {
+        let database_url = postgres_test_database_url();
+        let first_store = PostgresStore::connect(&database_url).await.unwrap();
+        first_store.migrate().await.unwrap();
+        let second_store = PostgresStore::connect(&database_url).await.unwrap();
+        let first_state = test_state_with_operator_token_and_store(
+            BountyNetwork::default(),
+            "secret-token",
+            first_store.clone(),
+        );
+        let second_state = test_state_with_operator_token_and_store(
+            BountyNetwork::default(),
+            "secret-token",
+            second_store,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
+        let issue_number = (Uuid::new_v4().as_u128() % 1_000_000_000_000) as u64 + 1;
+
+        let first_sync = sync_github_issue_api_bounty(
+            State(first_state),
+            headers.clone(),
+            Json(github_issue_api_sync_request(
+                issue_number,
+                "[bounty]: Sync GitHub issue into API",
+                valid_github_issue_body(),
+            )),
+        );
+        let second_sync = sync_github_issue_api_bounty(
+            State(second_state),
+            headers,
+            Json(github_issue_api_sync_request(
+                issue_number,
+                "[bounty]: Sync GitHub issue into API",
+                valid_github_issue_body(),
+            )),
+        );
+        let (first_result, second_result) = tokio::join!(first_sync, second_sync);
+        let first = first_result.unwrap().0;
+        let second = second_result.unwrap().0;
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.title, "[bounty]: Sync GitHub issue into API");
+        assert_eq!(second.title, "[bounty]: Sync GitHub issue into API");
+
+        let matching_bounties = first_store
+            .list_bounties()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|bounty| bounty.id == first.id)
+            .collect::<Vec<_>>();
+        assert_eq!(matching_bounties.len(), 1);
+        assert_eq!(matching_bounties[0].status, BountyStatus::Unfunded);
+        assert_eq!(matching_bounties[0].amount.amount, first.amount.amount);
     }
 
     #[tokio::test]
@@ -4537,6 +4983,8 @@ mod tests {
         assert!(paths.contains_key("/v1/stripe/checkout-webhooks"));
         assert!(paths.contains_key("/v1/bounties/{id}/funding-intents"));
         assert!(paths.contains_key("/v1/github/issue-bounty-plan"));
+        assert!(paths.contains_key("/v1/github/issue-api-sync-plan"));
+        assert!(paths.contains_key("/v1/github/issue-api-sync"));
         assert!(paths.contains_key("/v1/github/funding-comment-plan"));
         assert!(paths.contains_key("/v1/github/claim-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan"));
@@ -4567,6 +5015,7 @@ mod tests {
             "/v1/stripe/live/checkout-top-ups",
             "/v1/stripe/live/connect-accounts",
             "/v1/stripe/connect-snapshots",
+            "/v1/github/issue-api-sync",
         ] {
             let security = paths[path]["post"]["security"].as_array().unwrap();
             assert!(
@@ -4994,6 +5443,8 @@ mod tests {
         let partial = open_pooled_bounty(
             State(state.clone()),
             Json(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Fund public docs".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
                 target_amount_minor: 1_000,
@@ -5025,6 +5476,8 @@ mod tests {
         let mixed = open_pooled_bounty(
             State(state.clone()),
             Json(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Fund mixed public work".to_string(),
                 template_slug: "payment-state-machine".to_string(),
                 target_amount_minor: 500,
@@ -5051,6 +5504,8 @@ mod tests {
         let private = open_pooled_bounty(
             State(state.clone()),
             Json(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Fund private work".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
                 target_amount_minor: 1_000,
@@ -5066,6 +5521,8 @@ mod tests {
         let funded = open_pooled_bounty(
             State(state.clone()),
             Json(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Funded public work".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
                 target_amount_minor: 1_000,
@@ -5165,6 +5622,8 @@ mod tests {
         let bounty = open_pooled_bounty(
             State(state.clone()),
             Json(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Fund shared public work".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
                 target_amount_minor: 1_000_000,
@@ -5515,6 +5974,8 @@ mod tests {
         let bounty = open_pooled_bounty(
             State(state.clone()),
             Json(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Fund shared docs work".to_string(),
                 template_slug: "write-docs-for-area".to_string(),
                 target_amount_minor: 1_000,
@@ -5585,6 +6046,8 @@ mod tests {
         let bounty = open_pooled_bounty(
             State(state.clone()),
             Json(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
                 title: "Fund mixed API intent".to_string(),
                 template_slug: "extract-data-to-schema".to_string(),
                 target_amount_minor: 500,
@@ -5713,6 +6176,11 @@ mod tests {
         })
     }
 
+    fn postgres_test_database_url() -> String {
+        std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL")
+            .expect("AGENT_BOUNTIES_TEST_DATABASE_URL must be set for ignored Postgres sync tests")
+    }
+
     fn test_state_with_unsigned_stripe_webhooks(network: BountyNetwork) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
@@ -5768,6 +6236,31 @@ mod tests {
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             stripe_payment_method_configuration: None,
             store: None,
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            operator_api_token: Some(token.to_string()),
+            public_base_url: "http://127.0.0.1:8080".to_string(),
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+        })
+    }
+
+    fn test_state_with_operator_token_and_store(
+        network: BountyNetwork,
+        token: &str,
+        store: PostgresStore,
+    ) -> SharedState {
+        Arc::new(AppState {
+            network: Arc::new(Mutex::new(network)),
+            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
+            eval_runs: Arc::new(Mutex::new(Vec::new())),
+            stripe_webhook_secret: None,
+            allow_unsigned_stripe_webhooks: false,
+            stripe_secret_key: None,
+            stripe_live_execution_enabled: false,
+            stripe_public_checkout_enabled: false,
+            stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            stripe_payment_method_configuration: None,
+            store: Some(store),
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: Some(token.to_string()),
@@ -6119,6 +6612,44 @@ mod tests {
 
     fn valid_github_issue_body() -> String {
         valid_github_issue_body_with_funding_mode("BaseUsdcEscrow")
+    }
+
+    fn github_issue_api_sync_request(
+        issue_number: u64,
+        title: &str,
+        body: String,
+    ) -> PlanGitHubIssueApiSyncRequest {
+        PlanGitHubIssueApiSyncRequest {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: format!(
+                "https://github.com/agent-bounties/agent-bounties/issues/{issue_number}"
+            ),
+            title: title.to_string(),
+            body,
+            api_base_url: Some("https://api.agentbounties.example".to_string()),
+            existing_bounty_ids: vec![],
+            hosted_api_error: None,
+        }
+    }
+
+    fn valid_github_issue_body_with_goal(goal: &str) -> String {
+        format!(
+            r#"### Goal
+{goal}
+
+### Acceptance criteria
+The test job is green and the patch explains the failure.
+
+### Template
+fix-ci-failure
+
+### Suggested amount
+10 USDC
+
+### Funding mode
+BaseUsdcEscrow
+"#
+        )
     }
 
     fn valid_github_issue_body_with_funding_mode(funding_mode: &str) -> String {

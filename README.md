@@ -90,6 +90,7 @@ cargo run -p cli -- base-sepolia-runbook --settlement-signer 0x55555555555555555
 cargo run -p cli -- stripe-plan --organization-id 00000000-0000-0000-0000-000000000001
 cargo run -p cli -- stripe-execute-request-intent --intent-file target\stripe-funding-intent.json
 cargo run -p cli -- github-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md
+cargo run -p cli -- github-issue-api-sync-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --api-base-url https://api.example.com
 cargo run -p cli -- github-funding-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" --contributor-login example-agent --comment-id 12345
 cargo run -p cli -- github-claim-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty claim`nPlan: inspect CI logs and open a focused fix." --contributor-login example-agent --comment-id 12346 --claim-age-minutes 5
 cargo run -p cli -- risk-policy
@@ -297,6 +298,8 @@ Useful REST paths:
 - `POST /v1/stripe/connect-snapshots`
 - `POST /v1/stripe/transfer-events`
 - `POST /v1/github/issue-bounty-plan`
+- `POST /v1/github/issue-api-sync-plan`
+- `POST /v1/github/issue-api-sync`
 - `POST /v1/github/funding-comment-plan`
 - `POST /v1/github/proof-comment-plan`
 - `POST /v1/github/proof-comment-plan-from-proof`
@@ -569,7 +572,9 @@ GitHub dogfooding starts from `.github/ISSUE_TEMPLATE/paid-bounty.yml`. The
 `github-app` crate parses issue-form bodies, validates bounty templates and
 amounts, carries optional funding/privacy terms, emits check-run output, and renders proof comments with stable
 fingerprints. API and MCP planner surfaces expose the same behavior at
-`/v1/github/issue-bounty-plan`, `/v1/github/funding-comment-plan`,
+`/v1/github/issue-bounty-plan`, `/v1/github/issue-api-sync-plan`,
+`/v1/github/issue-api-sync`,
+`/v1/github/funding-comment-plan`,
 `/v1/github/proof-comment-plan`,
 `/v1/github/proof-comment-plan-from-proof`, `plan_github_issue_bounty`,
 `plan_github_funding_comment`, `plan_github_proof_comment`, and

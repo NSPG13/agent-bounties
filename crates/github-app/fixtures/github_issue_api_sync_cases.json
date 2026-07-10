@@ -1,0 +1,77 @@
+[
+  {
+    "name": "valid-create",
+    "input": {
+      "repository": "agent-bounties/agent-bounties",
+      "issue_url": "https://github.com/agent-bounties/agent-bounties/issues/115",
+      "title": "[bounty]: Sync GitHub issue into API",
+      "body": "### Goal\nCreate a deterministic GitHub issue to hosted API bounty sync path.\n\n### Acceptance criteria\nThe sync plan returns a stable bounty id, idempotency key, hosted API call, funding page URL, status URL, and payment-boundary wording.\n\n### Template\nsmall-code-change\n\n### Suggested amount\n20 USDC\n\n### Funding mode\nBaseUsdcEscrow\n\n### Privacy\nPublic\n",
+      "api_base_url": "https://api.agentbounties.example",
+      "existing_bounty_ids": []
+    },
+    "expect_ready": true,
+    "expect_operation": "Create",
+    "expect_call_count": 1,
+    "expect_bounty_id": "e23cda07-f8c9-30eb-984c-4e56aa10e38e"
+  },
+  {
+    "name": "duplicate-rerun",
+    "input": {
+      "repository": "agent-bounties/agent-bounties",
+      "issue_url": "https://github.com/agent-bounties/agent-bounties/issues/115",
+      "title": "[bounty]: Sync GitHub issue into API",
+      "body": "### Goal\nCreate a deterministic GitHub issue to hosted API bounty sync path.\n\n### Acceptance criteria\nThe sync plan returns a stable bounty id, idempotency key, hosted API call, funding page URL, status URL, and payment-boundary wording.\n\n### Template\nsmall-code-change\n\n### Suggested amount\n20 USDC\n\n### Funding mode\nBaseUsdcEscrow\n\n### Privacy\nPublic\n",
+      "api_base_url": "https://api.agentbounties.example",
+      "existing_bounty_ids": ["e23cda07-f8c9-30eb-984c-4e56aa10e38e"]
+    },
+    "expect_ready": true,
+    "expect_operation": "Update",
+    "expect_call_count": 1,
+    "expect_bounty_id": "e23cda07-f8c9-30eb-984c-4e56aa10e38e"
+  },
+  {
+    "name": "title-edit-rerun",
+    "input": {
+      "repository": "agent-bounties/agent-bounties",
+      "issue_url": "https://github.com/agent-bounties/agent-bounties/issues/115",
+      "title": "[bounty]: Sync hosted GitHub issue bounty records",
+      "body": "### Goal\nKeep one hosted API bounty record attached to this GitHub issue even after maintainers edit the issue title.\n\n### Acceptance criteria\nA rerun after a title/body edit returns the same bounty id and updates the existing hosted record instead of creating a duplicate.\n\n### Template\nsmall-code-change\n\n### Suggested amount\n20 USDC\n\n### Funding mode\nBaseUsdcEscrow\n\n### Privacy\nPublic\n",
+      "api_base_url": "https://api.agentbounties.example",
+      "existing_bounty_ids": ["e23cda07-f8c9-30eb-984c-4e56aa10e38e"]
+    },
+    "expect_ready": true,
+    "expect_operation": "Update",
+    "expect_call_count": 1,
+    "expect_bounty_id": "e23cda07-f8c9-30eb-984c-4e56aa10e38e"
+  },
+  {
+    "name": "invalid-issue",
+    "input": {
+      "repository": "agent-bounties/agent-bounties",
+      "issue_url": "https://github.com/agent-bounties/agent-bounties/issues/115",
+      "title": "[bounty]: Missing terms",
+      "body": "### Goal\nOnly a goal was provided.\n",
+      "api_base_url": "https://api.agentbounties.example",
+      "existing_bounty_ids": []
+    },
+    "expect_ready": false,
+    "expect_operation": "InvalidIssue",
+    "expect_call_count": 0
+  },
+  {
+    "name": "hosted-api-failure",
+    "input": {
+      "repository": "agent-bounties/agent-bounties",
+      "issue_url": "https://github.com/agent-bounties/agent-bounties/issues/115",
+      "title": "[bounty]: Sync GitHub issue into API",
+      "body": "### Goal\nCreate a deterministic GitHub issue to hosted API bounty sync path.\n\n### Acceptance criteria\nThe sync plan returns a stable bounty id, idempotency key, hosted API call, funding page URL, status URL, and payment-boundary wording.\n\n### Template\nsmall-code-change\n\n### Suggested amount\n20 USDC\n\n### Funding mode\nBaseUsdcEscrow\n\n### Privacy\nPublic\n",
+      "api_base_url": "https://api.agentbounties.example",
+      "existing_bounty_ids": [],
+      "hosted_api_error": "GET /v1/bounties/e23cda07-f8c9-30eb-984c-4e56aa10e38e returned 503"
+    },
+    "expect_ready": false,
+    "expect_operation": "HostedApiUnavailable",
+    "expect_call_count": 0,
+    "expect_bounty_id": "e23cda07-f8c9-30eb-984c-4e56aa10e38e"
+  }
+]

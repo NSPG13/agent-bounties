@@ -16,6 +16,12 @@ refund ledger entry and settlement ids so later payout or refund review can bind
 back to the exact funding source. Legacy hydrated rows without an older ledger
 link remain readable but new funding events populate the link. Overfunding and
 duplicate external contribution references are rejected deterministically.
+The public `POST /v1/bounties/pooled` route never accepts caller-supplied
+`bounty_id` or `idempotency_key` values. GitHub issue synchronization uses the
+operator-gated `POST /v1/github/issue-api-sync` route instead: the server derives
+one stable issue identity from the canonical repository and issue number, then
+updates that hosted record only while it has no funding intents, funding
+contributions, claims, or submissions.
 
 Pooled bounties can also use `MixedRails` with explicit `funding_targets`.
 Targets are tracked by rail and currency, for example one `StripeFiat` USD

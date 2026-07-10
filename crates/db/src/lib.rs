@@ -9,7 +9,7 @@ use domain::{
     Settlement, Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{LedgerEntry, Posting};
-use sqlx::{PgPool, Row};
+use sqlx::{postgres::PgRow, PgPool, Row};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -52,6 +52,51 @@ pub enum DbError {
 }
 
 pub type DbResult<T> = Result<T, DbError>;
+
+const SELECT_GITHUB_ISSUE_SYNC_BOUNTY_FOR_UPDATE_SQL: &str = r#"
+            SELECT id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at
+            FROM bounties
+            WHERE id = $1
+            FOR UPDATE
+            "#;
+const LOCK_GITHUB_ISSUE_SYNC_BOUNTY_SQL: &str = r#"
+            SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+            "#;
+const GITHUB_ISSUE_SYNC_ACTIVITY_SQL: &str = r#"
+            SELECT
+              EXISTS(SELECT 1 FROM funding_intents WHERE bounty_id = $1)
+              OR EXISTS(SELECT 1 FROM funding_contributions WHERE bounty_id = $1)
+              OR EXISTS(SELECT 1 FROM claims WHERE bounty_id = $1)
+              OR EXISTS(SELECT 1 FROM submissions WHERE bounty_id = $1)
+              AS has_activity
+            "#;
+const INSERT_GITHUB_ISSUE_SYNC_BOUNTY_SQL: &str = r#"
+            INSERT INTO bounties
+              (id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at
+            "#;
+const UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL: &str = r#"
+            UPDATE bounties
+            SET help_request_id = $2,
+                title = $3,
+                template_slug = $4,
+                amount = $5,
+                currency = $6,
+                funding_targets = $7,
+                funding_mode = $8,
+                privacy = $9,
+                status = $10,
+                terms_hash = $11
+            WHERE id = $1
+            RETURNING id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at
+            "#;
+
+#[derive(Debug, Clone)]
+pub enum GitHubIssueSyncBountyUpsert {
+    Upserted(Bounty),
+    BlockedByActivity(Bounty),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseLogScanCursor {
@@ -468,6 +513,74 @@ impl PostgresStore {
         Ok(())
     }
 
+    pub async fn upsert_github_issue_sync_bounty(
+        &self,
+        bounty: &Bounty,
+    ) -> DbResult<GitHubIssueSyncBountyUpsert> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(LOCK_GITHUB_ISSUE_SYNC_BOUNTY_SQL)
+            .bind(bounty.id)
+            .fetch_one(&mut *tx)
+            .await?;
+        let existing = sqlx::query(SELECT_GITHUB_ISSUE_SYNC_BOUNTY_FOR_UPDATE_SQL)
+            .bind(bounty.id)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+        if let Some(row) = existing {
+            let existing_bounty = bounty_from_row(&row)?;
+            let has_activity: bool = sqlx::query(GITHUB_ISSUE_SYNC_ACTIVITY_SQL)
+                .bind(bounty.id)
+                .fetch_one(&mut *tx)
+                .await?
+                .try_get("has_activity")?;
+
+            if existing_bounty.status != BountyStatus::Unfunded || has_activity {
+                tx.commit().await?;
+                return Ok(GitHubIssueSyncBountyUpsert::BlockedByActivity(
+                    existing_bounty,
+                ));
+            }
+
+            let updated = sqlx::query(UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL)
+                .bind(bounty.id)
+                .bind(bounty.help_request_id)
+                .bind(&bounty.title)
+                .bind(&bounty.template_slug)
+                .bind(bounty.amount.amount)
+                .bind(&bounty.amount.currency)
+                .bind(serde_json::to_value(&bounty.funding_targets)?)
+                .bind(format!("{:?}", bounty.funding_mode))
+                .bind(format!("{:?}", bounty.privacy))
+                .bind(format!("{:?}", bounty.status))
+                .bind(&bounty.terms_hash)
+                .fetch_one(&mut *tx)
+                .await?;
+            let updated = bounty_from_row(&updated)?;
+            tx.commit().await?;
+            return Ok(GitHubIssueSyncBountyUpsert::Upserted(updated));
+        }
+
+        let inserted = sqlx::query(INSERT_GITHUB_ISSUE_SYNC_BOUNTY_SQL)
+            .bind(bounty.id)
+            .bind(bounty.help_request_id)
+            .bind(&bounty.title)
+            .bind(&bounty.template_slug)
+            .bind(bounty.amount.amount)
+            .bind(&bounty.amount.currency)
+            .bind(serde_json::to_value(&bounty.funding_targets)?)
+            .bind(format!("{:?}", bounty.funding_mode))
+            .bind(format!("{:?}", bounty.privacy))
+            .bind(format!("{:?}", bounty.status))
+            .bind(&bounty.terms_hash)
+            .bind(bounty.created_at)
+            .fetch_one(&mut *tx)
+            .await?;
+        let inserted = bounty_from_row(&inserted)?;
+        tx.commit().await?;
+        Ok(GitHubIssueSyncBountyUpsert::Upserted(inserted))
+    }
+
     pub async fn list_bounties(&self) -> DbResult<Vec<Bounty>> {
         let rows = sqlx::query(
             r#"
@@ -479,26 +592,7 @@ impl PostgresStore {
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter()
-            .map(|row| {
-                Ok(Bounty {
-                    id: row.try_get("id")?,
-                    help_request_id: row.try_get("help_request_id")?,
-                    title: row.try_get("title")?,
-                    template_slug: row.try_get("template_slug")?,
-                    amount: Money::new(
-                        row.try_get::<i64, _>("amount")?,
-                        row.try_get::<String, _>("currency")?,
-                    )?,
-                    funding_targets: serde_json::from_value(row.try_get("funding_targets")?)?,
-                    funding_mode: parse_funding_mode(row.try_get::<String, _>("funding_mode")?)?,
-                    privacy: parse_privacy(row.try_get::<String, _>("privacy")?)?,
-                    status: parse_bounty_status(row.try_get::<String, _>("status")?)?,
-                    terms_hash: row.try_get("terms_hash")?,
-                    created_at: row.try_get("created_at")?,
-                })
-            })
-            .collect()
+        rows.into_iter().map(|row| bounty_from_row(&row)).collect()
     }
 
     pub async fn upsert_funding_contribution(
@@ -1722,6 +1816,25 @@ fn parse_bounty_status(value: String) -> DbResult<BountyStatus> {
     }
 }
 
+fn bounty_from_row(row: &PgRow) -> DbResult<Bounty> {
+    Ok(Bounty {
+        id: row.try_get("id")?,
+        help_request_id: row.try_get("help_request_id")?,
+        title: row.try_get("title")?,
+        template_slug: row.try_get("template_slug")?,
+        amount: Money::new(
+            row.try_get::<i64, _>("amount")?,
+            row.try_get::<String, _>("currency")?,
+        )?,
+        funding_targets: serde_json::from_value(row.try_get("funding_targets")?)?,
+        funding_mode: parse_funding_mode(row.try_get::<String, _>("funding_mode")?)?,
+        privacy: parse_privacy(row.try_get::<String, _>("privacy")?)?,
+        status: parse_bounty_status(row.try_get::<String, _>("status")?)?,
+        terms_hash: row.try_get("terms_hash")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1800,5 +1913,26 @@ mod tests {
         assert!(UPSERT_PAYMENT_EVENT_SQL.contains("THEN payment_events.status"));
         assert!(UPSERT_PAYMENT_EVENT_SQL.contains("THEN payment_events.payload_hash"));
         assert!(UPSERT_PAYMENT_EVENT_SQL.contains("THEN payment_events.received_at"));
+    }
+
+    #[test]
+    fn github_issue_sync_upsert_locks_bounty_before_activity_check() {
+        assert!(LOCK_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("pg_advisory_xact_lock"));
+        assert!(LOCK_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("hashtextextended($1::text"));
+        assert!(SELECT_GITHUB_ISSUE_SYNC_BOUNTY_FOR_UPDATE_SQL.contains("FOR UPDATE"));
+        for table in [
+            "funding_intents",
+            "funding_contributions",
+            "claims",
+            "submissions",
+        ] {
+            assert!(
+                GITHUB_ISSUE_SYNC_ACTIVITY_SQL.contains(table),
+                "missing persisted activity table {table}"
+            );
+        }
+        assert!(UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("WHERE id = $1"));
+        assert!(UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("RETURNING id"));
+        assert!(!UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("created_at ="));
     }
 }
