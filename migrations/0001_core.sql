@@ -53,6 +53,85 @@ ALTER TABLE contributor_contacts
 CREATE UNIQUE INDEX IF NOT EXISTS idx_contributor_contacts_github_login_normalized
   ON contributor_contacts (github_login_normalized);
 
+CREATE TABLE IF NOT EXISTS audience_members (
+  id UUID PRIMARY KEY,
+  provider TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  external_id_normalized TEXT NOT NULL,
+  handle TEXT NOT NULL,
+  public_profile_url TEXT,
+  roles JSONB NOT NULL DEFAULT '[]'::jsonb,
+  lifecycle_stage TEXT NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL,
+  last_seen_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (provider, external_id_normalized),
+  CHECK (length(trim(external_id)) > 0),
+  CHECK (length(trim(handle)) > 0),
+  CHECK (last_seen_at >= first_seen_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_audience_members_last_seen_at
+  ON audience_members (last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS audience_interactions (
+  id UUID PRIMARY KEY,
+  audience_member_id UUID NOT NULL REFERENCES audience_members(id) ON DELETE CASCADE,
+  provider_event_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  public_url TEXT,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  referrer_url TEXT,
+  campaign TEXT,
+  source_interaction_id UUID REFERENCES audience_interactions(id) ON DELETE SET NULL,
+  UNIQUE (audience_member_id, provider_event_id),
+  CHECK (length(trim(provider_event_id)) > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_audience_interactions_member_occurred
+  ON audience_interactions (audience_member_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_audience_interactions_kind_occurred
+  ON audience_interactions (kind, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS discovery_responses (
+  id UUID PRIMARY KEY,
+  audience_member_id UUID NOT NULL REFERENCES audience_members(id) ON DELETE CASCADE,
+  interaction_id UUID REFERENCES audience_interactions(id) ON DELETE SET NULL,
+  provider_response_id TEXT NOT NULL,
+  public_source_url TEXT,
+  found_via TEXT NOT NULL,
+  motivation TEXT NOT NULL,
+  improvement_suggestion TEXT NOT NULL,
+  agent_or_tool TEXT,
+  private_storage_consent BOOLEAN NOT NULL DEFAULT false,
+  captured_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (audience_member_id, provider_response_id),
+  CHECK (length(trim(provider_response_id)) > 0),
+  CHECK (length(trim(found_via)) > 0),
+  CHECK (length(trim(motivation)) > 0),
+  CHECK (length(trim(improvement_suggestion)) > 0),
+  CHECK (public_source_url IS NOT NULL OR private_storage_consent)
+);
+
+CREATE TABLE IF NOT EXISTS outreach_attempts (
+  id UUID PRIMARY KEY,
+  audience_member_id UUID NOT NULL REFERENCES audience_members(id) ON DELETE CASCADE,
+  provider_event_id TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  public_url TEXT,
+  prompt_version TEXT NOT NULL,
+  status TEXT NOT NULL,
+  consent_contact_id UUID REFERENCES contributor_contacts(id) ON DELETE CASCADE,
+  sent_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (audience_member_id, provider_event_id),
+  CHECK (length(trim(provider_event_id)) > 0),
+  CHECK (length(trim(prompt_version)) > 0),
+  CHECK (channel != 'EmailPrivate' OR consent_contact_id IS NOT NULL),
+  CHECK (channel = 'EmailPrivate' OR public_url IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_outreach_attempts_member_sent
+  ON outreach_attempts (audience_member_id, sent_at);
+
 CREATE TABLE IF NOT EXISTS capabilities (
   id UUID PRIMARY KEY,
   agent_id UUID NOT NULL REFERENCES agents(id),

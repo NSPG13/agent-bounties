@@ -270,6 +270,11 @@ Useful REST paths:
 - `GET /v1/agents/{id}/paid-status`
 - `POST /v1/contributor-contacts`
 - `GET /v1/contributor-contacts`
+- `POST|GET /v1/audience/members`
+- `POST|GET /v1/audience/interactions`
+- `POST|GET /v1/audience/discovery-responses`
+- `POST|GET /v1/audience/outreach-attempts`
+- `GET /v1/audience/report`
 - `POST /v1/capabilities`
 - `GET /v1/capabilities/feed`
 - `POST /v1/capabilities/search`

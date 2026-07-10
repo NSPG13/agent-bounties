@@ -149,6 +149,160 @@ impl ContributorContact {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AudienceProvider {
+    Github,
+    HostedApi,
+    Mcp,
+    BaseWallet,
+    Stripe,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AudienceRole {
+    Observer,
+    Contributor,
+    BountyPoster,
+    ProspectiveFunder,
+    Funder,
+    ProspectiveSolver,
+    Claimer,
+    Solver,
+    Verifier,
+    Recipient,
+    Promoter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AudienceLifecycleStage {
+    Observed,
+    Engaged,
+    Converted,
+    Retained,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AudienceMember {
+    pub id: Id,
+    pub provider: AudienceProvider,
+    pub external_id: String,
+    pub handle: String,
+    pub public_profile_url: Option<String>,
+    pub roles: Vec<AudienceRole>,
+    pub lifecycle_stage: AudienceLifecycleStage,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AudienceInteractionKind {
+    IssueOpened,
+    PullRequestOpened,
+    IssueCommented,
+    PullRequestReviewed,
+    BountyPosted,
+    FundingSignaled,
+    BountyFunded,
+    ClaimSignaled,
+    BountyClaimed,
+    SubmissionMade,
+    SubmissionAccepted,
+    VerificationSubmitted,
+    PayoutReceived,
+    RepoStarred,
+    BountyUpvoted,
+    ProofShared,
+    ReferralCreated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AudienceInteraction {
+    pub id: Id,
+    pub audience_member_id: Id,
+    pub provider_event_id: String,
+    pub kind: AudienceInteractionKind,
+    pub public_url: Option<String>,
+    pub occurred_at: DateTime<Utc>,
+    pub referrer_url: Option<String>,
+    pub campaign: Option<String>,
+    pub source_interaction_id: Option<Id>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DiscoveryResponse {
+    pub id: Id,
+    pub audience_member_id: Id,
+    pub interaction_id: Option<Id>,
+    pub provider_response_id: String,
+    pub public_source_url: Option<String>,
+    pub found_via: String,
+    pub motivation: String,
+    pub improvement_suggestion: String,
+    pub agent_or_tool: Option<String>,
+    pub private_storage_consent: bool,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutreachChannel {
+    GithubPublic,
+    OtherPublic,
+    EmailPrivate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutreachStatus {
+    Pending,
+    Responded,
+    Declined,
+    Unreachable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct OutreachAttempt {
+    pub id: Id,
+    pub audience_member_id: Id,
+    pub provider_event_id: String,
+    pub channel: OutreachChannel,
+    pub public_url: Option<String>,
+    pub prompt_version: String,
+    pub status: OutreachStatus,
+    pub consent_contact_id: Option<Id>,
+    pub sent_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AudienceMetric {
+    pub key: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AudienceReport {
+    pub total_members: u64,
+    pub total_interactions: u64,
+    pub members_asked_for_discovery_feedback: u64,
+    pub members_with_discovery_responses: u64,
+    pub repeat_participants: u64,
+    pub external_bounty_posters: u64,
+    pub external_funders: u64,
+    pub external_solvers: u64,
+    pub paid_participants: u64,
+    pub repo_stars_attributed: u64,
+    pub shares_attributed: u64,
+    pub not_asked_or_answered_handles: Vec<String>,
+    pub asked_without_response_handles: Vec<String>,
+    pub interactions_by_kind: Vec<AudienceMetric>,
+    pub generated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Capability {
     pub id: Id,

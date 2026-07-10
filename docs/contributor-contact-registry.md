@@ -8,6 +8,11 @@ The registry is operator-only. Do not expose it as a public signup form until
 the deployment has a real consent screen, retention policy, export path, and
 deletion path.
 
+Public identities and public interaction history belong in the separate
+audience attribution registry described in `docs/audience-attribution.md`.
+Do not put every GitHub participant into this contact table: this table is for
+explicitly consented private contact or payout details.
+
 ## Public Outreach Rules
 
 - Public GitHub comments may ask contributors to share a Base-compatible wallet
@@ -45,7 +50,8 @@ case-insensitive GitHub login. `GET /v1/contributor-contacts` lists stored
 records. Both routes require `OPERATOR_API_TOKEN` when hosted operator auth is
 configured.
 
-Import historic public PR participants from GitHub after the API is running:
+Import historic public participation into the separate audience registry after
+the API is running:
 
 ```powershell
 $env:OPERATOR_API_TOKEN = "<operator-token>"
@@ -54,10 +60,9 @@ $env:OPERATOR_API_TOKEN = "<operator-token>"
   -ApiBaseUrl "https://api.example.com"
 ```
 
-The import stores GitHub login and associated PR URLs only. `email` and
-`payout_wallet` remain `null` until the contributor opts in. If a record already
-exists, the import reads it first and preserves existing consent, email, wallet,
-source, and notes fields while merging PR URLs.
+The compatibility wrapper runs the public GitHub audience audit. It does not
+create contributor contact records or infer email/wallet data. Create or update
+a contributor contact only after an explicit private-contact or payout opt-in.
 
 Example wallet-only opt-in:
 

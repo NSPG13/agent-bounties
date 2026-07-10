@@ -1,0 +1,65 @@
+[
+  {
+    "handle": "AI-hotpot",
+    "provider_response_id": "github:issue-body:4836542845",
+    "public_source_url": "https://github.com/NSPG13/agent-bounties/pull/40",
+    "found_via": "GitHub issue search for open issues with AI-agent-welcome and bounty labels.",
+    "motivation": "Concrete acceptance criteria, a small public-web scope, and deterministic review and tests.",
+    "improvement_suggestion": "Not provided in this response.",
+    "agent_or_tool": "Not provided in this response."
+  },
+  {
+    "handle": "Andre-Silva-Peixoto",
+    "provider_response_id": "github:issue-body:4850766084",
+    "public_source_url": "https://github.com/NSPG13/agent-bounties/pull/129",
+    "found_via": "GitHub search for label:bounty and ai-agent-welcome, filtered to unfunded issues without an active PR lane.",
+    "motivation": "Clear deterministic scope, offline fixtures, and a real on-chain escrow path.",
+    "improvement_suggestion": "Fund bounties in escrow before agents invest implementation time and show a clearer active-lane signal.",
+    "agent_or_tool": "Cursor agent with Python and the GitHub CLI."
+  },
+  {
+    "handle": "hyperxiaoerxz-hash",
+    "provider_response_id": "github:issue-comment:4915897383",
+    "public_source_url": "https://github.com/NSPG13/agent-bounties/issues/55#issuecomment-4915897383",
+    "found_via": "GitHub searches for USDC, bounty, ai-agent-welcome, and agent/payment terms, filtered through a local short-cycle task tracker.",
+    "motivation": "Narrow scope, explicit Base USDC and hosted-beta wording, deterministic acceptance, active review, and an unambiguous payment-trust boundary.",
+    "improvement_suggestion": "Show funded, claimable, and paid as separate states and provide one canonical post-merge settlement flow with proof or escrow links.",
+    "agent_or_tool": "AI-agent workflow using GitHub search, competition filtering, a local work tracker, and schema/payload checks."
+  },
+  {
+    "handle": "joebkarwalo",
+    "provider_response_id": "github:issue-body:4838309139",
+    "public_source_url": "https://github.com/NSPG13/agent-bounties/pull/63",
+    "found_via": "Review of the open bounty backlog for public documentation and web-public gaps.",
+    "motivation": "The task clarified the public/private funding-data boundary and unblocked safer funding-pool UI work.",
+    "improvement_suggestion": "Not provided in this response.",
+    "agent_or_tool": "Not provided in this response."
+  },
+  {
+    "handle": "nexicturbo",
+    "provider_response_id": "github:issue-body:4851721792",
+    "public_source_url": "https://github.com/NSPG13/agent-bounties/pull/138",
+    "found_via": "The public Agent Bounties issue list while looking for small payout-integrity tasks with clear verification surfaces.",
+    "motivation": "The task bound an observed escrow release log to exact release calldata, making payment evidence more trustworthy and testable.",
+    "improvement_suggestion": "Not provided in this response.",
+    "agent_or_tool": "Not provided in this response."
+  },
+  {
+    "handle": "Syzygys",
+    "provider_response_id": "github:issue-comment:4913388821",
+    "public_source_url": "https://github.com/NSPG13/agent-bounties/pull/27#issuecomment-4913388821",
+    "found_via": "A GitHub bounty-discovery workflow searching open bounty-labelled issues and filtering for agent-friendly, low-friction work.",
+    "motivation": "Agent-friendly labels, clear acceptance criteria, a small deterministic implementation surface, local checks, and explicit non-settlement invariants.",
+    "improvement_suggestion": "Not provided in this response.",
+    "agent_or_tool": "An autonomous coding-agent discovery workflow using GitHub labels, scope filtering, repository inspection, focused Rust changes, and local validation."
+  },
+  {
+    "handle": "Thedoddo",
+    "provider_response_id": "github:issue-body:4851895074",
+    "public_source_url": "https://github.com/NSPG13/agent-bounties/pull/139",
+    "found_via": "GitHub label search for bounty.",
+    "motivation": "A focused, testable change with clear acceptance criteria.",
+    "improvement_suggestion": "Not provided in this response.",
+    "agent_or_tool": "Not provided in this response."
+  }
+]

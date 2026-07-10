@@ -1,17 +1,19 @@
 use app::{
-    build_base_indexer_status_report, build_live_money_readiness_report, hash_artifact,
-    stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
-    ApproveRiskPayoutRequest, BaseEscrowReconciliation, BaseIndexerHeartbeatStatus,
-    BaseIndexerScanCursor, BaseIndexerStatusConfig, BaseIndexerStatusReport,
-    BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
-    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport,
-    LiveMoneyReadinessConfig, LiveMoneyReadinessReport, OpenPooledBountyRequest,
-    PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
-    PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
-    PostBountyRequest, QuoteSet, RegisterAgentRequest, RegisterCapabilityRequest,
-    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
-    StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest,
-    UpsertContributorContactRequest, VerifySubmissionRequest,
+    build_audience_report, build_base_indexer_status_report, build_live_money_readiness_report,
+    hash_artifact, stripe_secret_key_mode_from_secret, AddFundingContributionRequest,
+    ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseEscrowReconciliation,
+    BaseIndexerHeartbeatStatus, BaseIndexerScanCursor, BaseIndexerStatusConfig,
+    BaseIndexerStatusReport, BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse,
+    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
+    FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
+    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
+    PlanBaseReleaseRequest, PlanStripeTransferRequest as AppPlanStripeTransferRequest,
+    PooledFundingReport, PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest,
+    RecordDiscoveryResponseRequest, RecordOutreachAttemptRequest, RegisterAgentRequest,
+    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    ReviewedBountyApproval, RiskEventFilter, StripeTransferPlan, StripeTransferReconciliation,
+    SubmitResultRequest, UpsertAudienceMemberRequest, UpsertContributorContactRequest,
+    VerifySubmissionRequest,
 };
 use axum::{
     body::Bytes,
@@ -30,10 +32,11 @@ use chain_base::{
     EthSendRawTransactionRequest, RpcLogSubmission, RpcTransactionReceipt,
 };
 use chrono::Utc;
-use db::{BountyStatusScope, GitHubIssueSyncBountyUpsert, PostgresStore};
+use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
 use domain::{
-    Agent, BountyStatus, Capability, CapabilityClass, ContributorContact, EvalRun, HelpRequest,
-    Money, PaymentRail, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord,
+    Agent, AudienceInteraction, AudienceMember, AudienceReport, BountyStatus, Capability,
+    CapabilityClass, ContributorContact, DiscoveryResponse, EvalRun, HelpRequest, Money,
+    OutreachAttempt, PaymentRail, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord,
     VerificationDecision, VerifierKind,
 };
 use eval_harness::{
@@ -90,6 +93,15 @@ use worker::BaseEscrowLogWorker;
         agent_paid_status,
         upsert_contributor_contact,
         list_contributor_contacts,
+        upsert_audience_member,
+        list_audience_members,
+        record_audience_interaction,
+        list_audience_interactions,
+        record_discovery_response,
+        list_discovery_responses,
+        record_outreach_attempt,
+        list_outreach_attempts,
+        audience_report,
         register_capability,
         search_capabilities,
         create_help_request,
@@ -159,7 +171,12 @@ use worker::BaseEscrowLogWorker;
         BroadcastBaseSignedTransactionRequest,
         GetBaseTransactionReceiptRequest,
         SearchCapabilitiesRequest,
-        ContributorContact
+        ContributorContact,
+        AudienceMember,
+        AudienceInteraction,
+        DiscoveryResponse,
+        OutreachAttempt,
+        AudienceReport
     )),
     modifiers(&SecurityAddon)
 )]
@@ -534,6 +551,23 @@ async fn main() -> anyhow::Result<()> {
             "/v1/contributor-contacts",
             post(upsert_contributor_contact).get(list_contributor_contacts),
         )
+        .route(
+            "/v1/audience/members",
+            post(upsert_audience_member).get(list_audience_members),
+        )
+        .route(
+            "/v1/audience/interactions",
+            post(record_audience_interaction).get(list_audience_interactions),
+        )
+        .route(
+            "/v1/audience/discovery-responses",
+            post(record_discovery_response).get(list_discovery_responses),
+        )
+        .route(
+            "/v1/audience/outreach-attempts",
+            post(record_outreach_attempt).get(list_outreach_attempts),
+        )
+        .route("/v1/audience/report", get(audience_report))
         .route("/v1/capabilities", post(register_capability))
         .route("/v1/capabilities/feed", get(public_capability_feed))
         .route("/v1/capabilities/search", post(search_capabilities))
@@ -1189,6 +1223,282 @@ async fn list_contributor_contacts(
     require_operator(&state, &headers)?;
     let network = state.network.lock().expect("state poisoned");
     Ok(Json(network.list_contributor_contacts()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/audience/members",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = AudienceMember),
+        (status = 400, description = "Invalid public identity record"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn upsert_audience_member(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<UpsertAudienceMemberRequest>,
+) -> Result<Json<AudienceMember>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let member = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network
+            .upsert_audience_member(request)
+            .map_err(|_| StatusCode::BAD_REQUEST)?
+    };
+    if let Some(store) = &state.store {
+        store
+            .upsert_audience_member(&member)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    Ok(Json(member))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/audience/members",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = Vec<AudienceMember>),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn list_audience_members(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AudienceMember>>, StatusCode> {
+    require_operator(&state, &headers)?;
+    if let Some(store) = &state.store {
+        return store
+            .list_audience_members()
+            .await
+            .map(Json)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let network = state.network.lock().expect("state poisoned");
+    Ok(Json(network.list_audience_members()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/audience/interactions",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = AudienceInteraction),
+        (status = 400, description = "Invalid or unknown audience interaction"),
+        (status = 409, description = "Provider event ID conflicts with an immutable stored event"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn record_audience_interaction(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<RecordAudienceInteractionRequest>,
+) -> Result<Json<AudienceInteraction>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let (interaction, member) = {
+        let mut network = state.network.lock().expect("state poisoned");
+        let interaction = network
+            .record_audience_interaction(request)
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        let member = network
+            .audience_members
+            .get(&interaction.audience_member_id)
+            .cloned()
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        (interaction, member)
+    };
+    if let Some(store) = &state.store {
+        store
+            .upsert_audience_interaction_with_member(&member, &interaction)
+            .await
+            .map_err(|error| match error {
+                DbError::AudienceConflict(_) => StatusCode::CONFLICT,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            })?;
+    }
+    Ok(Json(interaction))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/audience/interactions",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = Vec<AudienceInteraction>),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn list_audience_interactions(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AudienceInteraction>>, StatusCode> {
+    require_operator(&state, &headers)?;
+    if let Some(store) = &state.store {
+        return store
+            .list_audience_interactions()
+            .await
+            .map(Json)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let network = state.network.lock().expect("state poisoned");
+    Ok(Json(network.list_audience_interactions()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/audience/discovery-responses",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = DiscoveryResponse),
+        (status = 400, description = "Response lacks a public source or private-storage consent"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn record_discovery_response(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<RecordDiscoveryResponseRequest>,
+) -> Result<Json<DiscoveryResponse>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let response = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network
+            .record_discovery_response(request)
+            .map_err(|_| StatusCode::BAD_REQUEST)?
+    };
+    if let Some(store) = &state.store {
+        store
+            .upsert_discovery_response(&response)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/audience/discovery-responses",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = Vec<DiscoveryResponse>),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn list_discovery_responses(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<DiscoveryResponse>>, StatusCode> {
+    require_operator(&state, &headers)?;
+    if let Some(store) = &state.store {
+        return store
+            .list_discovery_responses()
+            .await
+            .map(Json)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let network = state.network.lock().expect("state poisoned");
+    Ok(Json(network.list_discovery_responses()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/audience/outreach-attempts",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = OutreachAttempt),
+        (status = 400, description = "Private outreach lacks explicit consent or public outreach lacks a URL"),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn record_outreach_attempt(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<RecordOutreachAttemptRequest>,
+) -> Result<Json<OutreachAttempt>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let attempt = {
+        let mut network = state.network.lock().expect("state poisoned");
+        network
+            .record_outreach_attempt(request)
+            .map_err(|_| StatusCode::BAD_REQUEST)?
+    };
+    if let Some(store) = &state.store {
+        store
+            .upsert_outreach_attempt(&attempt)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    Ok(Json(attempt))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/audience/outreach-attempts",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = Vec<OutreachAttempt>),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn list_outreach_attempts(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<OutreachAttempt>>, StatusCode> {
+    require_operator(&state, &headers)?;
+    if let Some(store) = &state.store {
+        return store
+            .list_outreach_attempts()
+            .await
+            .map(Json)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let network = state.network.lock().expect("state poisoned");
+    Ok(Json(network.list_outreach_attempts()))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/audience/report",
+    security(("operator_api_token" = []), ("operator_bearer" = [])),
+    responses(
+        (status = 200, body = AudienceReport),
+        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
+    )
+)]
+async fn audience_report(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<AudienceReport>, StatusCode> {
+    require_operator(&state, &headers)?;
+    if let Some(store) = &state.store {
+        let members = store
+            .list_audience_members()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let interactions = store
+            .list_audience_interactions()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let responses = store
+            .list_discovery_responses()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let attempts = store
+            .list_outreach_attempts()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        return Ok(Json(build_audience_report(
+            &members,
+            &interactions,
+            &responses,
+            &attempts,
+        )));
+    }
+    let network = state.network.lock().expect("state poisoned");
+    Ok(Json(network.audience_report()))
 }
 
 #[utoipa::path(post, path = "/v1/capabilities")]
@@ -3410,6 +3720,30 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
             .into_iter()
             .map(|contact| (contact.id, contact))
             .collect(),
+        audience_members: store
+            .list_audience_members()
+            .await?
+            .into_iter()
+            .map(|member| (member.id, member))
+            .collect(),
+        audience_interactions: store
+            .list_audience_interactions()
+            .await?
+            .into_iter()
+            .map(|interaction| (interaction.id, interaction))
+            .collect(),
+        discovery_responses: store
+            .list_discovery_responses()
+            .await?
+            .into_iter()
+            .map(|response| (response.id, response))
+            .collect(),
+        outreach_attempts: store
+            .list_outreach_attempts()
+            .await?
+            .into_iter()
+            .map(|attempt| (attempt.id, attempt))
+            .collect(),
         capabilities: store
             .list_capabilities()
             .await?
@@ -4558,6 +4892,152 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn audience_audit_persists_idempotently_across_processes() {
+        let database_url = postgres_test_database_url();
+        let first_store = PostgresStore::connect(&database_url).await.unwrap();
+        first_store.migrate().await.unwrap();
+        let first_state = test_state_with_operator_token_and_store(
+            BountyNetwork::default(),
+            "secret-token",
+            first_store,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
+        let unique = Uuid::new_v4();
+
+        let member = upsert_audience_member(
+            State(first_state.clone()),
+            headers.clone(),
+            Json(UpsertAudienceMemberRequest {
+                provider: domain::AudienceProvider::Github,
+                external_id: format!("github-user-{unique}"),
+                handle: format!("audience-{unique}"),
+                public_profile_url: Some(format!("https://github.com/audience-{unique}")),
+                roles: vec![],
+                observed_at: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let stale_store = PostgresStore::connect(&database_url).await.unwrap();
+        let stale_network = hydrate_network(&stale_store).await.unwrap();
+        let stale_state =
+            test_state_with_operator_token_and_store(stale_network, "secret-token", stale_store);
+        let event_id = format!("pull-request:{unique}");
+        let interaction = record_audience_interaction(
+            State(first_state),
+            headers.clone(),
+            Json(RecordAudienceInteractionRequest {
+                audience_member_id: member.id,
+                provider_event_id: event_id.clone(),
+                kind: domain::AudienceInteractionKind::PullRequestOpened,
+                public_url: Some(format!(
+                    "https://github.com/NSPG13/agent-bounties/pull/{unique}"
+                )),
+                occurred_at: None,
+                referrer_url: None,
+                campaign: Some("postgres-audience-test".to_string()),
+                source_interaction_id: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let star = record_audience_interaction(
+            State(stale_state.clone()),
+            headers.clone(),
+            Json(RecordAudienceInteractionRequest {
+                audience_member_id: member.id,
+                provider_event_id: format!("star:{unique}"),
+                kind: domain::AudienceInteractionKind::RepoStarred,
+                public_url: Some("https://github.com/NSPG13/agent-bounties/stargazers".to_string()),
+                occurred_at: None,
+                referrer_url: None,
+                campaign: Some("postgres-audience-test".to_string()),
+                source_interaction_id: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_ne!(star.id, interaction.id);
+        let conflicting_replay = record_audience_interaction(
+            State(stale_state),
+            headers.clone(),
+            Json(RecordAudienceInteractionRequest {
+                audience_member_id: member.id,
+                provider_event_id: event_id.clone(),
+                kind: domain::AudienceInteractionKind::FundingSignaled,
+                public_url: interaction.public_url.clone(),
+                occurred_at: Some(interaction.occurred_at),
+                referrer_url: None,
+                campaign: Some("postgres-audience-test".to_string()),
+                source_interaction_id: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(conflicting_replay, StatusCode::CONFLICT);
+
+        let second_store = PostgresStore::connect(&database_url).await.unwrap();
+        let second_network = hydrate_network(&second_store).await.unwrap();
+        let second_state =
+            test_state_with_operator_token_and_store(second_network, "secret-token", second_store);
+        let replay = record_audience_interaction(
+            State(second_state.clone()),
+            headers.clone(),
+            Json(RecordAudienceInteractionRequest {
+                audience_member_id: member.id,
+                provider_event_id: event_id,
+                kind: domain::AudienceInteractionKind::PullRequestOpened,
+                public_url: interaction.public_url.clone(),
+                occurred_at: Some(interaction.occurred_at),
+                referrer_url: None,
+                campaign: Some("postgres-audience-test".to_string()),
+                source_interaction_id: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(replay.id, interaction.id);
+
+        let persisted = list_audience_interactions(State(second_state.clone()), headers.clone())
+            .await
+            .unwrap()
+            .0
+            .into_iter()
+            .filter(|candidate| candidate.audience_member_id == member.id)
+            .collect::<Vec<_>>();
+        assert_eq!(persisted.len(), 2);
+        let persisted_member = list_audience_members(State(second_state.clone()), headers.clone())
+            .await
+            .unwrap()
+            .0
+            .into_iter()
+            .find(|candidate| candidate.id == member.id)
+            .unwrap();
+        assert!(persisted_member
+            .roles
+            .contains(&domain::AudienceRole::Contributor));
+        assert!(persisted_member
+            .roles
+            .contains(&domain::AudienceRole::Promoter));
+        assert_eq!(
+            persisted_member.lifecycle_stage,
+            domain::AudienceLifecycleStage::Retained
+        );
+        let report = audience_report(State(second_state), headers)
+            .await
+            .unwrap()
+            .0;
+        assert!(report.total_members >= 1);
+        assert!(report.total_interactions >= 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn github_issue_api_sync_postgres_rejects_stale_cross_process_activity() {
         let database_url = postgres_test_database_url();
         let store = PostgresStore::connect(&database_url).await.unwrap();
@@ -5318,6 +5798,11 @@ mod tests {
         assert!(paths.contains_key("/v1/risk/events/{id}/reject"));
         assert!(paths.contains_key("/v1/agents/{id}/paid-status"));
         assert!(paths.contains_key("/v1/contributor-contacts"));
+        assert!(paths.contains_key("/v1/audience/members"));
+        assert!(paths.contains_key("/v1/audience/interactions"));
+        assert!(paths.contains_key("/v1/audience/discovery-responses"));
+        assert!(paths.contains_key("/v1/audience/outreach-attempts"));
+        assert!(paths.contains_key("/v1/audience/report"));
         assert!(paths.contains_key("/v1/capabilities/search"));
         assert!(paths.contains_key("/v1/base/indexer-status"));
         assert!(paths.contains_key("/v1/base/escrow-events"));
@@ -5468,6 +5953,93 @@ mod tests {
             .0;
         assert_eq!(contacts.len(), 1);
         assert_eq!(contacts[0].associated_prs, vec!["#24".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn audience_audit_is_operator_gated_and_reports_public_attribution() {
+        let state = test_state_with_operator_token(BountyNetwork::default(), "secret-token");
+        let request = UpsertAudienceMemberRequest {
+            provider: domain::AudienceProvider::Github,
+            external_id: "U_123".to_string(),
+            handle: "nexicturbo".to_string(),
+            public_profile_url: Some("https://github.com/nexicturbo".to_string()),
+            roles: vec![],
+            observed_at: None,
+        };
+        let denied = upsert_audience_member(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(request.clone()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied, StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
+        let member = upsert_audience_member(State(state.clone()), headers.clone(), Json(request))
+            .await
+            .unwrap()
+            .0;
+        let _ = record_audience_interaction(
+            State(state.clone()),
+            headers.clone(),
+            Json(RecordAudienceInteractionRequest {
+                audience_member_id: member.id,
+                provider_event_id: "pull-request:138".to_string(),
+                kind: domain::AudienceInteractionKind::PullRequestOpened,
+                public_url: Some("https://github.com/NSPG13/agent-bounties/pull/138".to_string()),
+                occurred_at: None,
+                referrer_url: None,
+                campaign: Some("github-bounty-label".to_string()),
+                source_interaction_id: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let _ = record_outreach_attempt(
+            State(state.clone()),
+            headers.clone(),
+            Json(RecordOutreachAttemptRequest {
+                audience_member_id: member.id,
+                provider_event_id: "issue-comment:feedback:138".to_string(),
+                channel: domain::OutreachChannel::GithubPublic,
+                public_url: Some(
+                    "https://github.com/NSPG13/agent-bounties/pull/138#issuecomment-1".to_string(),
+                ),
+                prompt_version: "distribution-v1".to_string(),
+                status: domain::OutreachStatus::Responded,
+                sent_at: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let _ = record_discovery_response(
+            State(state.clone()),
+            headers.clone(),
+            Json(RecordDiscoveryResponseRequest {
+                audience_member_id: member.id,
+                interaction_id: None,
+                provider_response_id: "pr-body:138".to_string(),
+                public_source_url: Some(
+                    "https://github.com/NSPG13/agent-bounties/pull/138".to_string(),
+                ),
+                found_via: "GitHub issue list".to_string(),
+                motivation: "clear payout-integrity scope".to_string(),
+                improvement_suggestion: "show durable payment evidence".to_string(),
+                agent_or_tool: Some("coding agent".to_string()),
+                private_storage_consent: false,
+                captured_at: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let report = audience_report(State(state), headers).await.unwrap().0;
+        assert_eq!(report.total_members, 1);
+        assert_eq!(report.total_interactions, 1);
+        assert_eq!(report.members_asked_for_discovery_feedback, 1);
+        assert_eq!(report.members_with_discovery_responses, 1);
     }
 
     #[tokio::test]
