@@ -13,6 +13,7 @@ const context = {
       return null;
     },
   },
+  setTimeout,
   URLSearchParams,
 };
 context.window = context;
@@ -23,16 +24,47 @@ const wallet = context.window.AgentBountiesBaseWallet;
 const config = wallet.baseMainnetWalletConfig;
 const bountyId = "31f83d55-f388-4cc8-b384-651403b71163";
 const payer = "0x0a8a657ba581f7a7c7dcd59ef637b7fbc6249850";
-const termsHash = "886ef7e42d7f2968ae5b44a9f963a95b4726d8d7244a6fbe35af6f2cffbbc7af";
+const otherAddress = "0x1111111111111111111111111111111111111111";
+const termsHash = "0x886ef7e42d7f2968ae5b44a9f963a95b4726d8d7244a6fbe35af6f2cffbbc7af";
+const amountMinor = 1_000_000;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function hex(value) {
+  return String(value || "").replace(/^0x/i, "").toLowerCase();
+}
+
+function word(value) {
+  return hex(value).padStart(64, "0");
+}
+
+function wordAddress(address) {
+  return word(hex(address));
+}
+
+function wordUint(value) {
+  return BigInt(value).toString(16).padStart(64, "0");
+}
+
+function uuidBytes32(value) {
+  return hex(String(value).replace(/-/g, "")).padStart(64, "0");
+}
+
+function encodeApprove(spender, amount) {
+  return `0x095ea7b3${wordAddress(spender)}${wordUint(amount)}`;
+}
+
+function encodeCreateEscrow(id, token, amount, hash) {
+  return `0x64a20554${uuidBytes32(id)}${wordAddress(token)}${wordUint(amount)}${word(hash)}`;
+}
+
 function bounty(overrides = {}) {
   return {
     id: bountyId,
-    amount: { amount: 1_000_000, currency: "usdc" },
+    title: "Wallet funding test bounty",
+    amount: { amount: amountMinor, currency: "usdc" },
     funding_mode: "BaseUsdcEscrow",
     funding_targets: [],
     status: "Unfunded",
@@ -41,8 +73,8 @@ function bounty(overrides = {}) {
   };
 }
 
-function validPlan(overrides = {}) {
-  const plan = {
+function validPlan() {
+  return {
     network: {
       name: "Base",
       chain_id: config.chainId,
@@ -53,7 +85,7 @@ function validPlan(overrides = {}) {
       bounty_id: bountyId,
       payer,
       token: config.nativeUsdc,
-      amount: { amount: 1_000_000, currency: "usdc" },
+      amount: { amount: amountMinor, currency: "usdc" },
       terms_hash: termsHash,
     },
     funding: {
@@ -61,33 +93,32 @@ function validPlan(overrides = {}) {
         from: payer,
         to: config.nativeUsdc,
         value_wei: 0,
-        data: "0xapprove",
+        data: encodeApprove(config.escrowContract, amountMinor),
         function: "approve(address,uint256)",
       },
       create_escrow: {
         from: payer,
         to: config.escrowContract,
         value_wei: 0,
-        data: "0xcreate",
+        data: encodeCreateEscrow(bountyId, config.nativeUsdc, amountMinor, termsHash),
         function: "createEscrow(bytes32,address,uint256,bytes32)",
       },
     },
   };
-  return Object.assign(plan, overrides);
 }
 
 function statusReport({ reconciled = false } = {}) {
   return {
     bounty: bounty({ status: reconciled ? "Claimable" : "Unfunded" }),
     funding_summary: {
-      applied: { amount: reconciled ? 1_000_000 : 0, currency: "usdc" },
-      remaining: { amount: reconciled ? 0 : 1_000_000, currency: "usdc" },
+      applied: { amount: reconciled ? amountMinor : 0, currency: "usdc" },
+      remaining: { amount: reconciled ? 0 : amountMinor, currency: "usdc" },
       claimable: reconciled,
       partitions: [
         {
           rail: "BaseUsdc",
-          confirmed: { amount: reconciled ? 1_000_000 : 0, currency: "usdc" },
-          remaining: { amount: reconciled ? 0 : 1_000_000, currency: "usdc" },
+          confirmed: { amount: reconciled ? amountMinor : 0, currency: "usdc" },
+          remaining: { amount: reconciled ? 0 : amountMinor, currency: "usdc" },
           escrow_count: reconciled ? 1 : 0,
           claimable: reconciled,
         },
@@ -105,13 +136,17 @@ function mockProvider(handlers) {
       calls.push(request);
       const handler = handlers[request.method];
       if (Array.isArray(handler)) {
+        assert(handler.length > 0, `unexpected provider call ${request.method}`);
         const next = handler.shift();
         return typeof next === "function" ? next(request.params) : next;
       }
       if (typeof handler === "function") {
         return handler(request.params);
       }
-      return handler;
+      if (handler !== undefined) {
+        return handler;
+      }
+      throw new Error(`unexpected provider call ${request.method}`);
     },
   };
 }
@@ -120,14 +155,12 @@ function mockFetch(responses) {
   const calls = [];
   const fetchImpl = async (url, options) => {
     calls.push({ url, options });
+    assert(responses.length > 0, `unexpected fetch ${url}`);
     const response = responses.shift();
-    if (!response) {
-      throw new Error(`unexpected fetch ${url}`);
-    }
     if (response.ok === false) {
       return { ok: false, status: response.status || 500, json: async () => response.body || {} };
     }
-    return { ok: true, status: 200, json: async () => response };
+    return { ok: true, status: 200, json: async () => clone(response) };
   };
   fetchImpl.calls = calls;
   return fetchImpl;
@@ -144,7 +177,53 @@ async function assertRejects(promise, pattern) {
   assert(rejected, "expected promise to reject");
 }
 
+function sendCount(provider) {
+  return provider.calls.filter((call) => call.method === "eth_sendTransaction").length;
+}
+
+async function reviewValidPlan(provider = mockProvider({
+  eth_chainId: "0x2105",
+  eth_accounts: () => [payer],
+})) {
+  return wallet.prepareBaseWalletFundingPlan({
+    apiBaseUrl: "https://api.example.com",
+    bountyId,
+    connectedAddress: payer,
+    fetchImpl: mockFetch([statusReport(), validPlan()]),
+    provider,
+  });
+}
+
+async function assertBadPlanDoesNotSend(label, mutatePlan, pattern) {
+  const plan = validPlan();
+  mutatePlan(plan);
+  const provider = mockProvider({
+    eth_chainId: "0x2105",
+    eth_accounts: () => [payer],
+    eth_sendTransaction: () => {
+      throw new Error(`unexpected send for ${label}`);
+    },
+  });
+  await assertRejects(
+    wallet.prepareBaseWalletFundingPlan({
+      apiBaseUrl: "https://api.example.com",
+      bountyId,
+      connectedAddress: payer,
+      fetchImpl: mockFetch([statusReport(), plan]),
+      provider,
+    }),
+    pattern,
+  );
+  assert.strictEqual(sendCount(provider), 0, `${label} sent a transaction`);
+}
+
 (async () => {
+  assert(wallet, "wallet helper export missing");
+  assert.strictEqual(
+    wallet.decodeBaseWalletPlanCalldata(validPlan()).approve.spender,
+    config.escrowContract.toLowerCase(),
+  );
+
   await assertRejects(wallet.connectBaseWallet(null), /No injected EVM wallet/);
 
   await assertRejects(
@@ -167,74 +246,259 @@ async function assertRejects(promise, pattern) {
     /User rejected account request/,
   );
 
-  const mismatch = validPlan();
-  mismatch.network.chain_id = 1;
-  mismatch.create.token = "0x9999999999999999999999999999999999999999";
-  mismatch.funding.approve.to = mismatch.create.token;
-  mismatch.create.payer = "0x1111111111111111111111111111111111111111";
-  const issues = wallet.baseWalletPlanValidationIssues(mismatch, {
-    bountyId,
-    connectedAddress: payer,
-    hostedBounty: bounty(),
-  });
-  assert(issues.some((issue) => issue.includes("Base mainnet chain 8453")));
-  assert(issues.some((issue) => issue.includes("connected wallet")));
-  assert(issues.some((issue) => issue.includes("native USDC")));
+  const review = await reviewValidPlan();
+  assert.strictEqual(review.heading, "ready for human wallet review");
+  assert(review.lines.includes("Approval spender decoded from calldata"));
+  assert(review.lines.includes("Create escrow calldata"));
 
-  const pendingProvider = mockProvider({
-    eth_chainId: "0x2105",
-    eth_sendTransaction: ["0xapprove", "0xescrow"],
-    eth_getTransactionReceipt: { status: "0x1" },
-  });
-  const pendingResult = await wallet.fundBaseWalletBounty({
-    apiBaseUrl: "https://api.example.com",
-    bountyId,
-    connectedAddress: payer,
-    fetchImpl: mockFetch([statusReport(), validPlan(), statusReport()]),
-    provider: pendingProvider,
-  });
-  assert.strictEqual(pendingResult.heading, "waiting for confirmations");
-  assert.strictEqual(
-    pendingProvider.calls.filter((call) => call.method === "eth_sendTransaction").length,
-    2,
+  await assertBadPlanDoesNotSend(
+    "approval spender word mismatch",
+    (plan) => {
+      plan.funding.approve.data = encodeApprove(otherAddress, amountMinor);
+    },
+    /approval calldata spender/,
   );
-  assert(pendingResult.lines.includes("Wallet transactions or transaction hashes are not funding evidence"));
+  await assertBadPlanDoesNotSend(
+    "approval amount word mismatch",
+    (plan) => {
+      plan.funding.approve.data = encodeApprove(config.escrowContract, amountMinor + 1);
+    },
+    /calldata amount/,
+  );
+  await assertBadPlanDoesNotSend(
+    "createEscrow bounty id word mismatch",
+    (plan) => {
+      plan.funding.create_escrow.data = encodeCreateEscrow(
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        config.nativeUsdc,
+        amountMinor,
+        termsHash,
+      );
+    },
+    /calldata bounty id/,
+  );
+  await assertBadPlanDoesNotSend(
+    "createEscrow token word mismatch",
+    (plan) => {
+      plan.funding.create_escrow.data = encodeCreateEscrow(bountyId, otherAddress, amountMinor, termsHash);
+    },
+    /calldata token/,
+  );
+  await assertBadPlanDoesNotSend(
+    "createEscrow amount word mismatch",
+    (plan) => {
+      plan.funding.create_escrow.data = encodeCreateEscrow(bountyId, config.nativeUsdc, amountMinor + 1, termsHash);
+    },
+    /calldata amount/,
+  );
+  await assertBadPlanDoesNotSend(
+    "createEscrow terms hash word mismatch",
+    (plan) => {
+      plan.funding.create_escrow.data = encodeCreateEscrow(
+        bountyId,
+        config.nativeUsdc,
+        amountMinor,
+        `0x${"2".repeat(64)}`,
+      );
+    },
+    /calldata terms hash/,
+  );
+  await assertBadPlanDoesNotSend(
+    "escrow target mismatch",
+    (plan) => {
+      plan.funding.create_escrow.to = otherAddress;
+    },
+    /escrow target/,
+  );
+  await assertBadPlanDoesNotSend(
+    "nonzero ETH value",
+    (plan) => {
+      plan.funding.approve.value_wei = 1;
+    },
+    /zero ETH value/,
+  );
+  await assertBadPlanDoesNotSend(
+    "missing terms hash",
+    (plan) => {
+      plan.create.terms_hash = "";
+    },
+    /terms hash/,
+  );
 
-  const revertedResult = await wallet.fundBaseWalletBounty({
-    apiBaseUrl: "https://api.example.com",
-    bountyId,
-    connectedAddress: payer,
-    fetchImpl: mockFetch([statusReport(), validPlan()]),
+  const approvalProvider = mockProvider({
+    eth_chainId: "0x2105",
+    eth_accounts: () => [payer],
+    eth_sendTransaction: ["0xapprovehash"],
+    eth_getTransactionReceipt: [{ status: "0x1" }],
+  });
+  const approval = await wallet.sendBaseWalletApproval({
+    provider: approvalProvider,
+    review,
+    receiptDelayMs: 0,
+  });
+  assert.strictEqual(approval.heading, "approval confirmed");
+  assert.strictEqual(sendCount(approvalProvider), 1);
+
+  const changedChainProvider = mockProvider({
+    eth_chainId: "0x1",
+    eth_accounts: () => [payer],
+  });
+  await assertRejects(
+    wallet.sendBaseWalletApproval({ provider: changedChainProvider, review, receiptDelayMs: 0 }),
+    /Base mainnet/,
+  );
+  assert.strictEqual(sendCount(changedChainProvider), 0);
+
+  const changedAccountProvider = mockProvider({
+    eth_chainId: "0x2105",
+    eth_accounts: () => [otherAddress],
+  });
+  await assertRejects(
+    wallet.sendBaseWalletApproval({ provider: changedAccountProvider, review, receiptDelayMs: 0 }),
+    /account changed/,
+  );
+  assert.strictEqual(sendCount(changedAccountProvider), 0);
+
+  const approvalRejectProvider = mockProvider({
+    eth_chainId: "0x2105",
+    eth_accounts: () => [payer],
+    eth_sendTransaction: () => {
+      throw new Error("User rejected approval");
+    },
+  });
+  await assertRejects(
+    wallet.sendBaseWalletApproval({ provider: approvalRejectProvider, review, receiptDelayMs: 0 }),
+    /User rejected approval/,
+  );
+  assert.strictEqual(sendCount(approvalRejectProvider), 1);
+
+  const approvalRevertProvider = mockProvider({
+    eth_chainId: "0x2105",
+    eth_accounts: () => [payer],
+    eth_sendTransaction: ["0xapprovehash"],
+    eth_getTransactionReceipt: [{ status: "0x0" }],
+  });
+  await assertRejects(
+    wallet.sendBaseWalletApproval({ provider: approvalRevertProvider, review, receiptDelayMs: 0 }),
+    /reverted/,
+  );
+  assert.strictEqual(sendCount(approvalRevertProvider), 1);
+
+  const betweenSendProvider = mockProvider({
+    eth_chainId: ["0x2105", "0x1"],
+    eth_accounts: [[payer], [payer]],
+    eth_sendTransaction: ["0xapprovehash"],
+    eth_getTransactionReceipt: [{ status: "0x1" }],
+  });
+  await wallet.sendBaseWalletApproval({ provider: betweenSendProvider, review, receiptDelayMs: 0 });
+  await assertRejects(
+    wallet.sendBaseWalletEscrow({
+      fetchImpl: mockFetch([]),
+      provider: betweenSendProvider,
+      review,
+      pollDelayMs: 0,
+    }),
+    /Base mainnet/,
+  );
+  assert.strictEqual(sendCount(betweenSendProvider), 1);
+
+  const escrowRejectProvider = mockProvider({
+    eth_chainId: "0x2105",
+    eth_accounts: () => [payer],
+    eth_sendTransaction: () => {
+      throw new Error("User rejected escrow");
+    },
+  });
+  await assertRejects(
+    wallet.sendBaseWalletEscrow({
+      fetchImpl: mockFetch([]),
+      provider: escrowRejectProvider,
+      review,
+      pollDelayMs: 0,
+    }),
+    /User rejected escrow/,
+  );
+  assert.strictEqual(sendCount(escrowRejectProvider), 1);
+
+  const escrowRevert = await wallet.sendBaseWalletEscrow({
+    fetchImpl: mockFetch([]),
     provider: mockProvider({
       eth_chainId: "0x2105",
-      eth_sendTransaction: ["0xapprove", "0xescrow"],
+      eth_accounts: () => [payer],
+      eth_sendTransaction: ["0xescrowhash"],
       eth_getTransactionReceipt: { status: "0x0" },
     }),
+    review,
+    pollDelayMs: 0,
   });
-  assert.strictEqual(revertedResult.heading, "needs operator review");
-  assert(revertedResult.lines.includes("reverted"));
+  assert.strictEqual(escrowRevert.heading, "needs operator review");
+  assert(escrowRevert.lines.includes("reverted"));
 
-  const reconciledResult = await wallet.fundBaseWalletBounty({
-    apiBaseUrl: "https://api.example.com",
-    bountyId,
-    connectedAddress: payer,
-    fetchImpl: mockFetch([statusReport(), validPlan(), statusReport({ reconciled: true })]),
+  const pendingFetch = mockFetch([statusReport(), statusReport()]);
+  const pending = await wallet.sendBaseWalletEscrow({
+    fetchImpl: pendingFetch,
+    pollAttempts: 2,
+    pollDelayMs: 0,
     provider: mockProvider({
       eth_chainId: "0x2105",
-      eth_sendTransaction: ["0xapprove", "0xescrow"],
+      eth_accounts: () => [payer],
+      eth_sendTransaction: ["0xescrowhash"],
       eth_getTransactionReceipt: { status: "0x1" },
     }),
+    review,
+    shareUrl: "https://example.com/share",
   });
-  assert.strictEqual(reconciledResult.heading, "funding reconciled");
-  assert(reconciledResult.lines.includes("State: funding reconciled"));
-  assert(reconciledResult.lines.includes("indexed EscrowCreated evidence"));
+  assert.strictEqual(pending.heading, "waiting for confirmations");
+  assert.strictEqual(pendingFetch.calls.length, 2);
+  assert(!pending.lines.includes("Share link"));
+
+  const reconciledFetch = mockFetch([statusReport(), statusReport(), statusReport({ reconciled: true })]);
+  const reconciled = await wallet.sendBaseWalletEscrow({
+    fetchImpl: reconciledFetch,
+    pollAttempts: 3,
+    pollDelayMs: 0,
+    provider: mockProvider({
+      eth_chainId: "0x2105",
+      eth_accounts: () => [payer],
+      eth_sendTransaction: ["0xescrowhash"],
+      eth_getTransactionReceipt: { status: "0x1" },
+    }),
+    review,
+    shareUrl: "https://example.com/share",
+  });
+  assert.strictEqual(reconciled.heading, "funding reconciled");
+  assert.strictEqual(reconciledFetch.calls.length, 3);
+  assert(reconciled.lines.includes("Share link: https://example.com/share"));
+  assert(reconciled.lines.includes("Default CTA: Post your own bounty."));
 
   const genericClaimableWithoutBaseEscrow = wallet.baseWalletStatusLines({
     bounty: bounty({ status: "Claimable" }),
-    funding_summary: { claimable: true, applied: { amount: 1, currency: "usd" }, remaining: { amount: 0, currency: "usd" } },
+    funding_summary: {
+      claimable: true,
+      applied: { amount: 1, currency: "usd" },
+      remaining: { amount: 0, currency: "usd" },
+    },
     escrows: [],
-  });
+  }, { shareUrl: "https://example.com/share" });
   assert(genericClaimableWithoutBaseEscrow.includes("State: waiting for confirmations"));
+  assert(!genericClaimableWithoutBaseEscrow.includes("Share link"));
+
+  const busyState = { busy: false };
+  let releaseBusy;
+  const firstAction = wallet.runExclusiveWalletAction(
+    busyState,
+    () => new Promise((resolve) => {
+      releaseBusy = resolve;
+    }),
+  );
+  await Promise.resolve();
+  await assertRejects(
+    wallet.runExclusiveWalletAction(busyState, async () => "second"),
+    /already in progress/,
+  );
+  releaseBusy("first");
+  assert.strictEqual(await firstAction, "first");
+  assert.strictEqual(busyState.busy, false);
 
   console.log("base wallet flow tests passed");
 })();
