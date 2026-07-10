@@ -4,7 +4,10 @@
     "eth_chainId:[]": {
       "jsonrpc": "2.0",
       "id": 1,
-      "result": "0x2105"
+      "error": {
+        "code": -32603,
+        "message": "provider failure at https://rpc.example/?apikey=SECRET"
+      }
     },
     "eth_getTransactionReceipt:[\"0xede8896af324658d7da6fc08589cc5d02cc344ef934087a1c147f6c9617b865d\"]": {
       "jsonrpc": "2.0",
@@ -59,8 +62,5 @@
       "id": 1,
       "result": "0x0000000000000000000000000000000000000000000000000000000000000001"
     }
-  },
-  "raw_bodies": {
-    "eth_chainId:[]": "{not-json"
   }
 }

@@ -36,7 +36,6 @@ BOUNDARY = (
     "and does not prove a bounty is funded, claimable, accepted, paid, or settled."
 )
 
-
 @dataclass
 class CheckResult:
     name: str
@@ -46,15 +45,37 @@ class CheckResult:
     note: str = ""
 
 
+class AttestationError(Exception):
+    def __init__(self, error_type: str, message: str) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
 def redact_rpc_url(url: str) -> str:
+    """Return only scheme + host + optional port; never userinfo/path/query/fragment."""
     parsed = urlparse(url)
-    if not parsed.username and not parsed.password:
-        return url
-    host = parsed.hostname or ""
+    if not parsed.scheme or not parsed.hostname:
+        return "redacted://unknown-host"
+    host = parsed.hostname
     if parsed.port:
         host = f"{host}:{parsed.port}"
-    scheme = parsed.scheme or "https"
-    return f"{scheme}://***REDACTED***@{host}{parsed.path or ''}"
+    return f"{parsed.scheme}://{host}"
+
+
+def sanitize_provider_message(message: str) -> str:
+    redacted = message
+    for match in re.finditer(r"https?://\S+", message):
+        redacted = redacted.replace(match.group(0), redact_rpc_url(match.group(0)))
+    return redacted
+
+
+def failure_report(error_type: str, message: str) -> dict[str, Any]:
+    return {
+        "overall_result": "fail",
+        "error_type": error_type,
+        "error": sanitize_provider_message(message),
+        "boundary": BOUNDARY,
+    }
 
 
 def normalize_address(value: str | None) -> str:
@@ -93,6 +114,35 @@ def decode_uint256(result: str) -> int:
     return int(result, 16)
 
 
+def decode_runtime_bytecode(runtime_code: str) -> bytes:
+    if runtime_code in ("0x", ""):
+        return b""
+    if not runtime_code.startswith("0x"):
+        raise AttestationError("invalid_hex", "runtime bytecode must be a 0x-prefixed hex string")
+    try:
+        return bytes.fromhex(runtime_code[2:])
+    except ValueError as exc:
+        raise AttestationError("invalid_hex", "runtime bytecode contains invalid hex escapes") from exc
+
+
+def request_key(method: str, params: list[Any]) -> str:
+    return f"{method}:{json.dumps(params, separators=(',', ':'))}"
+
+
+def validate_jsonrpc_envelope(payload: Any, request_id: int) -> None:
+    if not isinstance(payload, dict):
+        raise AttestationError("malformed_provider_response", "RPC provider returned a non-object JSON payload")
+    if payload.get("jsonrpc") != "2.0":
+        raise AttestationError("malformed_provider_response", "RPC provider response missing jsonrpc 2.0 envelope")
+    if "id" not in payload:
+        raise AttestationError("malformed_provider_response", "RPC provider response missing id field")
+    if payload.get("id") != request_id:
+        raise AttestationError(
+            "malformed_provider_response",
+            f"RPC provider response id mismatch (expected {request_id})",
+        )
+
+
 class RpcClient:
     def __init__(self, url: str, mock_fixture: dict[str, Any] | None = None) -> None:
         self.url = url
@@ -101,18 +151,28 @@ class RpcClient:
 
     def call(self, method: str, params: list[Any]) -> Any:
         self._request_id += 1
-        key = f"{method}:{json.dumps(params, separators=(',', ':'))}"
+        request_id = self._request_id
+        key = request_key(method, params)
         if self.mock_fixture is not None:
+            raw_bodies = self.mock_fixture.get("raw_bodies", {})
+            if key in raw_bodies:
+                return self._parse_provider_body(raw_bodies[key], request_id)
             responses = self.mock_fixture.get("responses", {})
             if key not in responses:
-                raise RuntimeError(f"mock fixture missing response for {key}")
+                raise AttestationError("mock_fixture_missing", f"mock fixture missing response for {key}")
             payload = responses[key]
+            if isinstance(payload, str):
+                return self._parse_provider_body(payload, request_id)
+            if isinstance(payload, dict):
+                payload = {**payload, "id": request_id}
+            validate_jsonrpc_envelope(payload, request_id)
             if "error" in payload:
-                raise RuntimeError(payload["error"]["message"])
+                message = payload["error"].get("message", "unknown RPC error")
+                raise AttestationError("rpc_provider_error", str(message))
             return payload.get("result")
 
         body = json.dumps(
-            {"jsonrpc": "2.0", "id": self._request_id, "method": method, "params": params}
+            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
         ).encode()
         request = urllib.request.Request(
             self.url,
@@ -125,23 +185,42 @@ class RpcClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                payload = json.loads(response.read().decode())
+                raw = response.read().decode()
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"RPC request failed: {exc}") from exc
+            raise AttestationError("rpc_transport_error", f"RPC request failed: {exc}") from exc
+        return self._parse_provider_body(raw, request_id)
+
+    def _parse_provider_body(self, raw: str, request_id: int) -> Any:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AttestationError("malformed_provider_response", "RPC provider returned invalid JSON") from exc
+        validate_jsonrpc_envelope(payload, request_id)
         if "error" in payload:
-            raise RuntimeError(payload["error"].get("message", "unknown RPC error"))
+            message = payload["error"].get("message", "unknown RPC error")
+            raise AttestationError("rpc_provider_error", str(message))
         return payload.get("result")
 
     def eth_call(self, contract: str, selector_name: str) -> str:
         selector = SELECTORS[selector_name]
-        return self.call("eth_call", [{"to": contract, "data": f"0x{selector}"}, "latest"])
+        result = self.call("eth_call", [{"to": contract, "data": f"0x{selector}"}, "latest"])
+        if not isinstance(result, str):
+            raise AttestationError("malformed_provider_response", "eth_call result must be a hex string")
+        return result
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def add_check(checks: list[CheckResult], name: str, expected: Any, observed: Any, passed: bool, note: str = "") -> None:
+def add_check(
+    checks: list[CheckResult],
+    name: str,
+    expected: Any,
+    observed: Any,
+    passed: bool,
+    note: str = "",
+) -> None:
     checks.append(CheckResult(name=name, expected=expected, observed=observed, passed=passed, note=note))
 
 
@@ -156,6 +235,8 @@ def run_attestation(
     client = RpcClient(rpc_url, mock_fixture=mock_fixture)
 
     chain_id_hex = client.call("eth_chainId", [])
+    if not isinstance(chain_id_hex, str):
+        raise AttestationError("malformed_provider_response", "eth_chainId result must be a hex string")
     chain_id = int(chain_id_hex, 16)
     add_check(
         checks,
@@ -169,6 +250,8 @@ def run_attestation(
     if receipt is None:
         add_check(checks, "deployment_receipt_present", True, False, False)
     else:
+        if not isinstance(receipt, dict):
+            raise AttestationError("malformed_provider_response", "transaction receipt must be an object")
         add_check(checks, "deployment_receipt_present", True, True, True)
         status = receipt.get("status")
         add_check(checks, "deployment_receipt_status", "0x1", status, status == "0x1")
@@ -190,7 +273,9 @@ def run_attestation(
         )
 
     runtime_code = client.call("eth_getCode", [contract, "latest"]) or "0x"
-    bytecode = bytes.fromhex(runtime_code[2:]) if runtime_code not in ("0x", "") else b""
+    if not isinstance(runtime_code, str):
+        raise AttestationError("malformed_provider_response", "eth_getCode result must be a hex string")
+    bytecode = decode_runtime_bytecode(runtime_code)
     add_check(checks, "runtime_bytecode_nonempty", "non-empty", len(bytecode), len(bytecode) > 0)
     observed_hash = keccak256_hex(bytecode) if bytecode else "0x"
     add_check(
@@ -307,11 +392,19 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    manifest = load_manifest(args.manifest)
+    try:
+        manifest = load_manifest(args.manifest)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(json.dumps(failure_report("manifest_error", str(exc)), indent=2))
+        return 1
 
     mock_fixture: dict[str, Any] | None = None
     if args.mock_fixture is not None:
-        mock_fixture = json.loads(args.mock_fixture.read_text(encoding="utf-8"))
+        try:
+            mock_fixture = json.loads(args.mock_fixture.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(json.dumps(failure_report("fixture_error", str(exc)), indent=2))
+            return 1
         rpc_url = mock_fixture.get("rpc_url", manifest["rpc_url"])
     else:
         rpc_url = args.rpc_url or manifest["rpc_url"]
@@ -325,8 +418,11 @@ def main() -> int:
 
     try:
         report = run_attestation(manifest, rpc_url, mock_fixture=mock_fixture)
-    except RuntimeError as exc:
-        print(json.dumps({"overall_result": "fail", "error": str(exc), "boundary": BOUNDARY}, indent=2))
+    except AttestationError as exc:
+        print(json.dumps(failure_report(exc.error_type, str(exc)), indent=2))
+        return 1
+    except Exception as exc:  # pragma: no cover - defensive boundary
+        print(json.dumps(failure_report("unexpected_error", str(exc)), indent=2))
         return 1
 
     output = json.dumps(report, indent=2)

@@ -109,6 +109,8 @@ cargo run -p cli -- discovery-report \
   --json-out target/tmp/discovery-report.json \
   --markdown-out target/tmp/discovery-report.md
 "${python_cmd[@]}" scripts/check-site.py
+"${python_cmd[@]}" -m pip install -r scripts/requirements-attest.txt
+"${python_cmd[@]}" scripts/test_base_deployment_attest.py -v
 "${python_cmd[@]}" scripts/check-render-blueprint.py
 "${python_cmd[@]}" scripts/test_stage_review_contract_root.py -v
 cargo run -p cli -- docs-contract-check
@@ -133,7 +135,10 @@ bash scripts/real-funding-rehearsal.sh
   scripts/check-render-blueprint.py \
   scripts/stage_review_contract_root.py \
   scripts/test_stage_review_contract_root.py \
-  scripts/validate_real_funding_rehearsal.py
+  scripts/validate_real_funding_rehearsal.py \
+  scripts/base_deployment_attest.py \
+  scripts/test_base_deployment_attest.py \
+  scripts/build_base_attest_fixtures.py
 
 cd "$repo_root/crates/sdk-typescript"
 npm ci

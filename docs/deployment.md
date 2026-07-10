@@ -70,6 +70,7 @@ never signs, broadcasts, funds, releases, or mutates on-chain state.
 Offline deterministic replay (default CI path):
 
 ```powershell
+python -m pip install -r scripts\requirements-attest.txt
 python scripts\test_base_deployment_attest.py -v
 python scripts\base_deployment_attest.py --mock-fixture scripts\fixtures\base_attest\success.json
 ```
@@ -77,6 +78,7 @@ python scripts\base_deployment_attest.py --mock-fixture scripts\fixtures\base_at
 On Unix-like shells:
 
 ```bash
+python3 -m pip install -r scripts/requirements-attest.txt
 python3 scripts/test_base_deployment_attest.py -v
 python3 scripts/base_deployment_attest.py --mock-fixture scripts/fixtures/base_attest/success.json
 ```

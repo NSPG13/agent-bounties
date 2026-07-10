@@ -91,13 +91,21 @@ def main() -> None:
         lambda d: d["responses"].update({code_key: {"jsonrpc": "2.0", "id": 1, "result": "0x60006000"}}),
     )
     write(
+        "invalid_hex.json",
+        lambda d: d["responses"].update({code_key: {"jsonrpc": "2.0", "id": 1, "result": "0xZZ"}}),
+    )
+    write(
         "malformed_response.json",
+        lambda d: d.setdefault("raw_bodies", {}).update({"eth_chainId:[]": "{not-json"}),
+    )
+    write(
+        "rpc_provider_error.json",
         lambda d: d["responses"].update(
             {
                 "eth_chainId:[]": {
                     "jsonrpc": "2.0",
                     "id": 1,
-                    "error": {"code": -32603, "message": "malformed provider response"},
+                    "error": {"code": -32603, "message": "provider failure at https://rpc.example/?apikey=SECRET"},
                 }
             }
         ),
