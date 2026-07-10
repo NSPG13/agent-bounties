@@ -1,0 +1,122 @@
+{
+  "health": {"status": 200, "body": "ok", "error": null},
+  "readiness": {"status": 200, "body": {"live_money_ready": true}, "error": null},
+  "claimable_feed": {
+    "status": 200,
+    "body": [
+      {"id": "base-valid"},
+      {"id": "base-hash-only"},
+      {"id": "simulated-demo"}
+    ],
+    "error": null
+  },
+  "funding_feed": {
+    "status": 200,
+    "body": [
+      {
+        "bounty_id": "needs-funding",
+        "title": "Fund a deterministic docs task",
+        "funding_target_minor": 5000000,
+        "funding_remaining_minor": 5000000,
+        "currency": "usdc",
+        "public_url": "https://example.test/public/bounties/needs-funding"
+      }
+    ],
+    "error": null
+  },
+  "statuses": {
+    "base-valid": {
+      "status": 200,
+      "error": null,
+      "body": {
+        "bounty": {
+          "id": "base-valid",
+          "title": "Verify a deterministic Base artifact",
+          "template_slug": "fix-ci-failure",
+          "amount": {"amount": 1000000, "currency": "usdc"},
+          "funding_mode": "BaseUsdcEscrow",
+          "status": "Claimable"
+        },
+        "funding_summary": {
+          "target": {"amount": 1000000, "currency": "usdc"},
+          "applied": {"amount": 1000000, "currency": "usdc"},
+          "claimable": true,
+          "partitions": [
+            {
+              "rail": "BaseUsdc",
+              "target": {"amount": 1000000, "currency": "usdc"},
+              "claimable": true
+            }
+          ]
+        },
+        "escrows": [
+          {
+            "rail": "BaseUsdc",
+            "status": "Funded",
+            "external_reference": "1"
+          }
+        ],
+        "base_escrow_events": [
+          {"kind": "Created", "status": "Funded"}
+        ],
+        "funding_intents": [],
+        "funding_contributions": [],
+        "claims": []
+      }
+    },
+    "base-hash-only": {
+      "status": 200,
+      "error": null,
+      "body": {
+        "bounty": {
+          "id": "base-hash-only",
+          "title": "Transaction hash without indexed escrow",
+          "template_slug": "fix-ci-failure",
+          "amount": {"amount": 1000000, "currency": "usdc"},
+          "funding_mode": "BaseUsdcEscrow",
+          "status": "Claimable"
+        },
+        "funding_summary": {
+          "target": {"amount": 1000000, "currency": "usdc"},
+          "applied": {"amount": 1000000, "currency": "usdc"},
+          "claimable": true,
+          "partitions": []
+        },
+        "escrows": [],
+        "base_escrow_events": [],
+        "funding_intents": [
+          {"rail": "BaseUsdc", "status": "AwaitingEvidence", "external_reference": "0xabc"}
+        ],
+        "funding_contributions": [],
+        "claims": []
+      }
+    },
+    "simulated-demo": {
+      "status": 200,
+      "error": null,
+      "body": {
+        "bounty": {
+          "id": "simulated-demo",
+          "title": "Local simulated bounty",
+          "template_slug": "fix-ci-failure",
+          "amount": {"amount": 1000, "currency": "credits"},
+          "funding_mode": "Simulated",
+          "status": "Claimable"
+        },
+        "funding_summary": {
+          "target": {"amount": 1000, "currency": "credits"},
+          "applied": {"amount": 1000, "currency": "credits"},
+          "claimable": true,
+          "partitions": []
+        },
+        "escrows": [],
+        "base_escrow_events": [],
+        "funding_intents": [],
+        "funding_contributions": [
+          {"rail": "Simulated", "status": "Applied"}
+        ],
+        "claims": []
+      }
+    }
+  }
+}

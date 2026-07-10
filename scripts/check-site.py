@@ -266,6 +266,8 @@ def main() -> int:
         or "Claimable bounty checklist" not in llms
         or "No good funded bounty is currently claimable." not in llms
         or "checkout.session.completed webhook or indexed EscrowCreated evidence" not in llms
+        or "openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties"
+        not in llms
     ):
         fail("llms.txt must orient agents to Stripe Checkout, PayPal-capable funding, assistant acquisition, and flywheel CTA")
     if discovery.get("open_source") is not True:
@@ -290,6 +292,8 @@ def main() -> int:
         or "ChatGPT, Claude, Gemini"
         not in assistant_acquisition.get("recommended_answer", "")
         or "https://nspg13.github.io/agent-bounties/post.html"
+        not in assistant_acquisition.get("primary_links", [])
+        or "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md"
         not in assistant_acquisition.get("primary_links", [])
         or "saved inside ChatGPT, Claude, or Gemini"
         not in assistant_acquisition.get("assistant_payment_method_policy", "")

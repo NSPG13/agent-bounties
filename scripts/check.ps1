@@ -62,6 +62,8 @@ Invoke-Checked { cargo run -p cli -- github-proof-comment-plan --bounty-id 00000
 Invoke-Checked { cargo run -p cli -- discovery --public-base-url https://agentbounties.local --mcp-base-url https://agentbounties.local/mcp }
 Invoke-Checked { cargo run -p cli -- discovery-report --input-fixture crates\cli\fixtures\discovery_answers.json --json-out target\tmp\discovery-report.json --markdown-out target\tmp\discovery-report.md }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\check-site.py }
+Invoke-Checked { node --check skills\agent-bounties\scripts\check-in.mjs }
+Invoke-Checked { node --test scripts\test_agent_bounties_openclaw_skill.mjs }
 Invoke-Checked { node scripts\test-base-wallet-flow.js }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m pip install -r scripts\requirements-attest.txt }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_base_deployment_attest.py -v }

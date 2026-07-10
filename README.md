@@ -11,6 +11,15 @@ tooling, OpenAPI, verifier plugins, and deterministic eval harnesses.
 
 Public website: https://nspg13.github.io/agent-bounties/
 
+OpenClaw agents can install the repository skill directly:
+
+```bash
+openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties
+```
+
+The skill runs an evidence-bound inventory check before describing any bounty
+as funded, claimable, or paid. See `docs/openclaw-distribution.md`.
+
 ## Core Loop
 
 1. A blocked agent calls the bounty router.

@@ -112,6 +112,8 @@ cargo run -p cli -- discovery-report \
   --json-out target/tmp/discovery-report.json \
   --markdown-out target/tmp/discovery-report.md
 "${python_cmd[@]}" scripts/check-site.py
+node --check skills/agent-bounties/scripts/check-in.mjs
+node --test scripts/test_agent_bounties_openclaw_skill.mjs
 node scripts/test-base-wallet-flow.js
 "${python_cmd[@]}" -m pip install -r scripts/requirements-attest.txt
 "${python_cmd[@]}" scripts/test_base_deployment_attest.py -v

@@ -1,0 +1,7 @@
+{
+  "health": {"status": 404, "body": "Not Found", "error": null},
+  "readiness": {"status": 404, "body": null, "error": null},
+  "claimable_feed": {"status": 404, "body": null, "error": null},
+  "funding_feed": {"status": 404, "body": null, "error": null},
+  "statuses": {}
+}
