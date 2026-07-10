@@ -139,6 +139,39 @@ class GitHubAudienceAuditTests(unittest.TestCase):
         ]
         self.assertEqual([attempt["handle"] for attempt in attempts], ["charlie-agent"])
 
+    def test_one_time_feedback_prompt_counts_each_mentioned_participant(self) -> None:
+        snapshot = deepcopy(self.snapshot)
+        owner = {
+            "id": 1,
+            "login": "NSPG13",
+            "type": "User",
+            "html_url": "https://github.com/NSPG13",
+        }
+        snapshot["issue_comments"].append(
+            {
+                "id": 207,
+                "html_url": "https://github.com/NSPG13/agent-bounties/issues/12#issuecomment-207",
+                "issue_url": "https://api.github.com/repos/NSPG13/agent-bounties/issues/12",
+                "created_at": "2026-07-06T13:00:00Z",
+                "body": (
+                    "@alice-agent @bob-human one-time distribution feedback request: "
+                    "Exactly how did you first find the project, why did you join, and "
+                    "what prevented you from posting or funding a bounty?"
+                ),
+                "user": owner,
+            }
+        )
+
+        audit = MODULE.build_audit(snapshot, "NSPG13")
+        attempts = [
+            attempt
+            for attempt in audit["outreach_attempts"]
+            if attempt["provider_event_id"].startswith("github:discovery-prompt:207")
+        ]
+        self.assertEqual(
+            [attempt["handle"] for attempt in attempts], ["alice-agent", "bob-human"]
+        )
+
     def test_explicit_curated_public_answer_can_be_synced(self) -> None:
         calls: list[tuple[str, dict]] = []
 

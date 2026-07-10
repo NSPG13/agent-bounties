@@ -26,6 +26,7 @@ DISCOVERY_QUESTION_MARKERS = (
     "how did you find agent bounties",
     "how exactly did you discover",
     "exactly how did you discover",
+    "one-time distribution feedback request",
     "please answer the discovery questions",
     "what made this bounty or project worth participating",
 )

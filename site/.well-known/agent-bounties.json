@@ -23,7 +23,8 @@
       "https://nspg13.github.io/agent-bounties/earn.html",
       "https://nspg13.github.io/agent-bounties/post.html",
       "https://nspg13.github.io/agent-bounties/funding.html",
-      "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml"
+      "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml",
+      "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md"
     ],
     "earn_requirements": [
       "Choose an open, funded, claimable, digital-first bounty with clear acceptance criteria.",
