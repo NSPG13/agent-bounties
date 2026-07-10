@@ -3523,8 +3523,8 @@ mod tests {
         EvmLog,
     };
     use domain::{
-        Bounty, BountyStatus, CapabilityClass, FundingIntent, FundingIntentStatus, FundingMode,
-        Money, PaymentEventStatus, PaymentRail, PayoutStatus, ProofRecord, VerifierKind,
+        Bounty, BountyStatus, CapabilityClass, FundingIntentStatus, FundingMode, Money,
+        PaymentEventStatus, PaymentRail, PayoutStatus, ProofRecord, VerifierKind,
     };
     use github_app::GitHubCheckConclusion;
     use hmac::{Hmac, Mac};
@@ -4338,10 +4338,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn github_issue_api_sync_postgres_rejects_stale_cross_process_activity() {
-        let Ok(database_url) = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL") else {
-            return;
-        };
+        let database_url = postgres_test_database_url();
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
         let sync_state = test_state_with_operator_token_and_store(
@@ -4389,22 +4388,36 @@ mod tests {
         let mcp_store = PostgresStore::connect(&database_url).await.unwrap();
         let mcp_network = hydrate_network(&mcp_store).await.unwrap();
         assert!(mcp_network.bounties.contains_key(&first.id));
-        mcp_store
-            .upsert_funding_intent(&FundingIntent {
-                id: Uuid::new_v4(),
+        let mcp_state =
+            test_state_with_operator_token_and_store(mcp_network, "secret-token", mcp_store);
+        let funding_report = create_funding_intent(
+            State(mcp_state),
+            Path(first.id),
+            Json(CreateFundingIntentRequest {
                 bounty_id: first.id,
                 contributor_agent_id: None,
                 source_organization_id: None,
+                amount_minor: 1,
+                currency: "usdc".to_string(),
                 rail: PaymentRail::BaseUsdc,
-                amount: Money::new(1, "usdc").unwrap(),
-                status: FundingIntentStatus::AwaitingEvidence,
                 external_reference: Some(format!("stale-sync-{issue_number}")),
                 stripe_success_url: None,
                 stripe_cancel_url: None,
-                created_at: Utc::now(),
-            })
+                base_escrow_contract: Some(
+                    "0x1111111111111111111111111111111111111111".to_string(),
+                ),
+                base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
+                base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
+                base_network: Some("base-mainnet".to_string()),
+            }),
+        )
             .await
             .unwrap();
+        assert_eq!(funding_report.0.intent.bounty_id, first.id);
+        assert_eq!(
+            funding_report.0.intent.status,
+            FundingIntentStatus::AwaitingEvidence
+        );
 
         let rejected = sync_github_issue_api_bounty(
             State(sync_state.clone()),
@@ -4446,6 +4459,65 @@ mod tests {
             .unwrap()
             .0;
         assert_eq!(stale_status.bounty.title, edited.title);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn github_issue_api_sync_postgres_serializes_concurrent_initial_sync() {
+        let database_url = postgres_test_database_url();
+        let first_store = PostgresStore::connect(&database_url).await.unwrap();
+        first_store.migrate().await.unwrap();
+        let second_store = PostgresStore::connect(&database_url).await.unwrap();
+        let first_state = test_state_with_operator_token_and_store(
+            BountyNetwork::default(),
+            "secret-token",
+            first_store.clone(),
+        );
+        let second_state = test_state_with_operator_token_and_store(
+            BountyNetwork::default(),
+            "secret-token",
+            second_store,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(OPERATOR_TOKEN_HEADER, "secret-token".parse().unwrap());
+        let issue_number = (Uuid::new_v4().as_u128() % 1_000_000_000_000) as u64 + 1;
+
+        let first_sync = sync_github_issue_api_bounty(
+            State(first_state),
+            headers.clone(),
+            Json(github_issue_api_sync_request(
+                issue_number,
+                "[bounty]: Sync GitHub issue into API",
+                valid_github_issue_body(),
+            )),
+        );
+        let second_sync = sync_github_issue_api_bounty(
+            State(second_state),
+            headers,
+            Json(github_issue_api_sync_request(
+                issue_number,
+                "[bounty]: Sync GitHub issue into API",
+                valid_github_issue_body(),
+            )),
+        );
+        let (first_result, second_result) = tokio::join!(first_sync, second_sync);
+        let first = first_result.unwrap().0;
+        let second = second_result.unwrap().0;
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.title, "[bounty]: Sync GitHub issue into API");
+        assert_eq!(second.title, "[bounty]: Sync GitHub issue into API");
+
+        let matching_bounties = first_store
+            .list_bounties()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|bounty| bounty.id == first.id)
+            .collect::<Vec<_>>();
+        assert_eq!(matching_bounties.len(), 1);
+        assert_eq!(matching_bounties[0].status, BountyStatus::Unfunded);
+        assert_eq!(matching_bounties[0].amount.amount, first.amount.amount);
     }
 
     #[tokio::test]
@@ -6102,6 +6174,12 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
         })
+    }
+
+    fn postgres_test_database_url() -> String {
+        std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").expect(
+            "AGENT_BOUNTIES_TEST_DATABASE_URL must be set for ignored Postgres sync tests",
+        )
     }
 
     fn test_state_with_unsigned_stripe_webhooks(network: BountyNetwork) -> SharedState {

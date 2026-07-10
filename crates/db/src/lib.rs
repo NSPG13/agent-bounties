@@ -59,6 +59,9 @@ const SELECT_GITHUB_ISSUE_SYNC_BOUNTY_FOR_UPDATE_SQL: &str = r#"
             WHERE id = $1
             FOR UPDATE
             "#;
+const LOCK_GITHUB_ISSUE_SYNC_BOUNTY_SQL: &str = r#"
+            SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+            "#;
 const GITHUB_ISSUE_SYNC_ACTIVITY_SQL: &str = r#"
             SELECT
               EXISTS(SELECT 1 FROM funding_intents WHERE bounty_id = $1)
@@ -515,6 +518,10 @@ impl PostgresStore {
         bounty: &Bounty,
     ) -> DbResult<GitHubIssueSyncBountyUpsert> {
         let mut tx = self.pool.begin().await?;
+        sqlx::query(LOCK_GITHUB_ISSUE_SYNC_BOUNTY_SQL)
+            .bind(bounty.id)
+            .fetch_one(&mut *tx)
+            .await?;
         let existing = sqlx::query(SELECT_GITHUB_ISSUE_SYNC_BOUNTY_FOR_UPDATE_SQL)
             .bind(bounty.id)
             .fetch_optional(&mut *tx)
@@ -1910,6 +1917,8 @@ mod tests {
 
     #[test]
     fn github_issue_sync_upsert_locks_bounty_before_activity_check() {
+        assert!(LOCK_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("pg_advisory_xact_lock"));
+        assert!(LOCK_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("hashtextextended($1::text"));
         assert!(SELECT_GITHUB_ISSUE_SYNC_BOUNTY_FOR_UPDATE_SQL.contains("FOR UPDATE"));
         for table in [
             "funding_intents",
