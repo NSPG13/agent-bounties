@@ -98,6 +98,7 @@ cargo run -p cli -- github-claim-comment-plan \
 "${python_cmd[@]}" scripts/github_claim_comment.py --self-test
 "${python_cmd[@]}" scripts/github_proof_comment.py --self-test
 "${python_cmd[@]}" scripts/test_sync_hosted_bounty_inventory.py -v
+"${python_cmd[@]}" scripts/test_diagnose_hosted_api.py -v
 cargo run -p cli -- github-proof-comment-plan \
   --bounty-id 00000000-0000-0000-0000-000000000001 \
   --proof-url https://agentbounties.local/public/proofs/example \
@@ -135,6 +136,8 @@ bash scripts/real-funding-rehearsal.sh
   scripts/github_proof_comment.py \
   scripts/sync_hosted_bounty_inventory.py \
   scripts/test_sync_hosted_bounty_inventory.py \
+  scripts/diagnose_hosted_api.py \
+  scripts/test_diagnose_hosted_api.py \
   scripts/check-site.py \
   scripts/check-render-blueprint.py \
   scripts/stage_review_contract_root.py \
