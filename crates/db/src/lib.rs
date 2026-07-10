@@ -187,6 +187,28 @@ impl PostgresStore {
         }
     }
 
+    pub async fn health_check(&self) -> DbResult<(bool, Option<String>, Option<i64>)> {
+        let row = sqlx::query(
+            r#"
+            SELECT 
+                COUNT(*) as bounty_count,
+                MAX(created_at) as last_bounty_created_at
+            FROM bounties
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let bounty_count: i64 = row.get("bounty_count");
+        let last_bounty_created_at: Option<chrono::NaiveDateTime> = row.get("last_bounty_created_at");
+
+        Ok((
+            true,
+            last_bounty_created_at.map(|dt| dt.to_string()),
+            Some(bounty_count),
+        ))
+    }
+
     pub async fn upsert_agent(&self, agent: &Agent) -> DbResult<()> {
         sqlx::query(
             r#"

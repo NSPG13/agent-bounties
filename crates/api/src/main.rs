@@ -679,9 +679,42 @@ fn service_bind_addr(configured: Option<&str>, port: Option<&str>, default_addr:
         .unwrap_or_else(|| default_addr.to_string())
 }
 
-#[utoipa::path(get, path = "/health", responses((status = 200, body = String)))]
-async fn health() -> &'static str {
-    "ok"
+#[derive(serde::Serialize)]
+struct HealthResponse {
+    status: String,
+    db: Option<DbHealth>,
+}
+
+#[derive(serde::Serialize)]
+struct DbHealth {
+    connected: bool,
+    last_bounty_created_at: Option<String>,
+    bounty_count: Option<i64>,
+}
+
+#[utoipa::path(get, path = "/health", responses((status = 200, body = HealthResponse)))]
+async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
+    let db_health = if let Some(ref store) = state.store {
+        match store.health_check().await {
+            Ok((connected, last_at, count)) => Some(DbHealth {
+                connected,
+                last_bounty_created_at: last_at,
+                bounty_count: count,
+            }),
+            Err(_) => Some(DbHealth {
+                connected: false,
+                last_bounty_created_at: None,
+                bounty_count: None,
+            }),
+        }
+    } else {
+        None
+    };
+
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        db: db_health,
+    })
 }
 
 #[utoipa::path(get, path = "/llms.txt", responses((status = 200, body = String)))]
