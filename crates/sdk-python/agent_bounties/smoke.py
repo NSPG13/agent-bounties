@@ -760,7 +760,7 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(len(agent_paid["payouts"]) >= 1, "agent paid status missing payout lines")
     _require(
         any(
-            total["currency"] == "usdc" and total["pending_minor"] == 900_000
+            total["currency"] == "usdc" and total["pending_minor"] == 1_000_000
             for total in agent_paid["totals"]
         ),
         "agent paid status missing pending USDC total",
@@ -798,7 +798,11 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     )
     eval_loops = client.run_eval_loops()
     _require(eval_loops["passed"] is True, "eval loop suite did not pass")
-    _require(len(eval_loops["loops"]) == 5, "eval loop count changed")
+    _require(len(eval_loops["loops"]) == 6, "eval loop count changed")
+    _require(
+        any(loop["loop_name"] == "DistributionLoop" for loop in eval_loops["loops"]),
+        "distribution loop report is missing",
+    )
     eval_runs = client.get_eval_runs()
     _require(
         any(run["suite"] == "EvalLoops/all-v0" for run in eval_runs),

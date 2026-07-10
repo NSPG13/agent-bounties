@@ -150,6 +150,1024 @@
   const readinessOutput = document.getElementById("readiness-output");
   const baseForm = document.getElementById("base-plan-form");
   const baseOutput = document.getElementById("base-plan-output");
+  const baseWalletForm = document.getElementById("base-wallet-form");
+  const baseWalletConnect = document.getElementById("base-wallet-connect");
+  const baseWalletApprove = document.getElementById("base-wallet-approve");
+  const baseWalletEscrow = document.getElementById("base-wallet-escrow");
+  const baseWalletRefresh = document.getElementById("base-wallet-refresh");
+  const baseWalletOutput = document.getElementById("base-wallet-output");
+  const checkoutStatusOutput = document.getElementById("checkout-status-output");
+  const checkoutStatusRefresh = document.getElementById("checkout-status-refresh");
+
+  const baseMainnetWalletConfig = {
+    network: "base-mainnet",
+    chainId: 8453,
+    chainIdHex: "0x2105",
+    escrowContract: "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
+    escrowCreatedTopic: "0xb67bc2da9ebef7d93355d3f5b6c7cc857b34cc7a4b8b2850ff3dcb90ea563ac2",
+    nativeUsdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  };
+
+  function normalizedText(value) {
+    return String(value || "").trim();
+  }
+
+  function firstCheckoutStatusParam(searchParams, names) {
+    for (const name of names) {
+      const value = searchParams.get(name);
+      if (value && value.trim()) {
+        return value.trim();
+      }
+    }
+    return "";
+  }
+
+  function displayMoney(money) {
+    if (!money || typeof money.amount !== "number") {
+      return "unknown";
+    }
+    const currency = String(money.currency || "").trim().toLowerCase();
+    const exponent = {
+      usd: 2,
+      eur: 2,
+      gbp: 2,
+      usdc: 6,
+    }[currency];
+    if (typeof exponent !== "number") {
+      return `${money.amount} minor units${currency ? ` ${currency.toUpperCase()}` : ""}`;
+    }
+    const minor = Math.trunc(money.amount);
+    const sign = minor < 0 ? "-" : "";
+    const absolute = Math.abs(minor);
+    const base = 10 ** exponent;
+    const whole = Math.trunc(absolute / base);
+    if (exponent === 0) {
+      return `${sign}${whole} ${currency.toUpperCase()}`;
+    }
+    const fractional = String(absolute % base).padStart(exponent, "0");
+    return `${sign}${whole}.${fractional} ${currency.toUpperCase()}`;
+  }
+
+  function normalizeAddress(value) {
+    const normalized = normalizedText(value).toLowerCase();
+    return /^0x[0-9a-f]{40}$/.test(normalized) ? normalized : "";
+  }
+
+  function sameAddress(left, right) {
+    const leftAddress = normalizeAddress(left);
+    return leftAddress !== "" && leftAddress === normalizeAddress(right);
+  }
+
+  function normalizeChainId(value) {
+    if (typeof value === "number") {
+      return value;
+    }
+    const text = normalizedText(value).toLowerCase();
+    if (text.startsWith("0x")) {
+      return Number.parseInt(text, 16);
+    }
+    return Number.parseInt(text, 10);
+  }
+
+  function sameMoney(left, right) {
+    return left
+      && right
+      && left.amount === right.amount
+      && normalizedText(left.currency).toLowerCase() === normalizedText(right.currency).toLowerCase();
+  }
+
+  function normalizedQuantityToBigInt(value) {
+    if (typeof value === "bigint") {
+      return value;
+    }
+    if (typeof value === "number") {
+      return Number.isSafeInteger(value) ? BigInt(value) : null;
+    }
+    const text = normalizedText(value).toLowerCase();
+    if (/^0x[0-9a-f]+$/.test(text)) {
+      return BigInt(text);
+    }
+    if (/^[0-9]+$/.test(text)) {
+      return BigInt(text);
+    }
+    return null;
+  }
+
+  function moneyAmountBigInt(money) {
+    return money ? normalizedQuantityToBigInt(money.amount) : null;
+  }
+
+  function sameBigInt(left, right) {
+    return typeof left === "bigint" && typeof right === "bigint" && left === right;
+  }
+
+  function isZeroQuantity(value) {
+    const numeric = normalizedQuantityToBigInt(value);
+    return numeric !== null && numeric === 0n;
+  }
+
+  function stripHexPrefix(value) {
+    return normalizedText(value).replace(/^0x/i, "").toLowerCase();
+  }
+
+  function normalizeHexData(value) {
+    const hex = stripHexPrefix(value);
+    return hex.length % 2 === 0 && /^[0-9a-f]*$/.test(hex) ? `0x${hex}` : "";
+  }
+
+  function normalizeBytes32(value) {
+    const hex = stripHexPrefix(value);
+    return /^[0-9a-f]{64}$/.test(hex) ? `0x${hex}` : "";
+  }
+
+  function uuidToBytes32(value) {
+    const uuidHex = normalizedText(value).toLowerCase().replace(/-/g, "");
+    return /^[0-9a-f]{32}$/.test(uuidHex) ? `0x${uuidHex.padStart(64, "0")}` : "";
+  }
+
+  function calldataWord(data, index) {
+    const hex = stripHexPrefix(data);
+    const start = 8 + index * 64;
+    return `0x${hex.slice(start, start + 64)}`;
+  }
+
+  function calldataWordAddress(word) {
+    const hex = stripHexPrefix(word);
+    return /^[0-9a-f]{64}$/.test(hex) ? normalizeAddress(`0x${hex.slice(24)}`) : "";
+  }
+
+  function calldataWordBigInt(word) {
+    return normalizedQuantityToBigInt(word);
+  }
+
+  function abiDataWord(data, index) {
+    const hex = stripHexPrefix(data);
+    const start = index * 64;
+    return `0x${hex.slice(start, start + 64)}`;
+  }
+
+  function baseFundingTargetAmount(bounty) {
+    const targets = Array.isArray(bounty && bounty.funding_targets)
+      ? bounty.funding_targets
+      : [];
+    const baseTarget = targets.find((target) => target && target.rail === "BaseUsdc");
+    return baseTarget && baseTarget.amount ? baseTarget.amount : bounty && bounty.amount;
+  }
+
+  function quantityHex(value) {
+    if (typeof value === "string" && value.startsWith("0x")) {
+      return value;
+    }
+    const numeric = typeof value === "bigint" ? value : BigInt(value || 0);
+    return `0x${numeric.toString(16)}`;
+  }
+
+  function evmTransactionRequest(intent, fallbackFrom) {
+    return {
+      from: intent.from || fallbackFrom,
+      to: intent.to,
+      value: quantityHex(intent.value_wei || 0),
+      data: intent.data,
+    };
+  }
+
+  function decodeApproveCalldata(data) {
+    const normalized = normalizeHexData(data);
+    const issues = [];
+    const expectedLength = 2 + 8 + 64 * 2;
+    if (!normalized) {
+      issues.push("approval calldata is not valid hex");
+      return { issues };
+    }
+    if (normalized.length !== expectedLength) {
+      issues.push("approval calldata length is not approve(address,uint256)");
+    }
+    if (!normalized.startsWith("0x095ea7b3")) {
+      issues.push("approval calldata selector is not approve(address,uint256)");
+    }
+    return {
+      amount: calldataWordBigInt(calldataWord(normalized, 1)),
+      data: normalized,
+      issues,
+      selector: normalized.slice(0, 10),
+      spender: calldataWordAddress(calldataWord(normalized, 0)),
+    };
+  }
+
+  function decodeCreateEscrowCalldata(data) {
+    const normalized = normalizeHexData(data);
+    const issues = [];
+    const expectedLength = 2 + 8 + 64 * 4;
+    if (!normalized) {
+      issues.push("createEscrow calldata is not valid hex");
+      return { issues };
+    }
+    if (normalized.length !== expectedLength) {
+      issues.push("createEscrow calldata length is not createEscrow(bytes32,address,uint256,bytes32)");
+    }
+    if (!normalized.startsWith("0x64a20554")) {
+      issues.push("createEscrow calldata selector is not createEscrow(bytes32,address,uint256,bytes32)");
+    }
+    return {
+      amount: calldataWordBigInt(calldataWord(normalized, 2)),
+      bountyId: normalizeBytes32(calldataWord(normalized, 0)),
+      data: normalized,
+      issues,
+      selector: normalized.slice(0, 10),
+      termsHash: normalizeBytes32(calldataWord(normalized, 3)),
+      token: calldataWordAddress(calldataWord(normalized, 1)),
+    };
+  }
+
+  function decodeBaseWalletPlanCalldata(plan) {
+    const funding = plan && plan.funding ? plan.funding : {};
+    return {
+      approve: decodeApproveCalldata(funding.approve && funding.approve.data),
+      createEscrow: decodeCreateEscrowCalldata(funding.create_escrow && funding.create_escrow.data),
+    };
+  }
+
+  function baseWalletPlanValidationIssues(plan, context) {
+    const issues = [];
+    const connectedAddress = context && context.connectedAddress;
+    const expectedBountyId = context && context.bountyId;
+    const hostedBounty = context && context.hostedBounty;
+    const bounty = plan && plan.bounty ? plan.bounty : {};
+    const create = plan && plan.create ? plan.create : {};
+    const funding = plan && plan.funding ? plan.funding : {};
+    const network = plan && plan.network ? plan.network : funding.network || {};
+    const approve = funding.approve || {};
+    const createEscrow = funding.create_escrow || {};
+    const configured = baseMainnetWalletConfig;
+    const decoded = decodeBaseWalletPlanCalldata(plan);
+    const expectedBountyBytes32 = uuidToBytes32(expectedBountyId || bounty.id || create.bounty_id);
+    const createAmount = moneyAmountBigInt(create.amount);
+    const bountyTargetAmount = moneyAmountBigInt(baseFundingTargetAmount(bounty));
+    const hostedTargetAmount = hostedBounty ? moneyAmountBigInt(baseFundingTargetAmount(hostedBounty)) : null;
+    const createTermsHash = normalizeBytes32(create.terms_hash);
+    const bountyTermsHash = normalizeBytes32(bounty.terms_hash);
+    const hostedTermsHash = hostedBounty && hostedBounty.terms_hash ? normalizeBytes32(hostedBounty.terms_hash) : "";
+
+    for (const issue of decoded.approve.issues) {
+      issues.push(issue);
+    }
+    for (const issue of decoded.createEscrow.issues) {
+      issues.push(issue);
+    }
+
+    if (normalizeChainId(network.chain_id) !== configured.chainId) {
+      issues.push("funding plan is not for Base mainnet chain 8453");
+    }
+    if (expectedBountyId && bounty.id !== expectedBountyId) {
+      issues.push("funding plan bounty id does not match the displayed bounty");
+    }
+    if (expectedBountyId && create.bounty_id !== expectedBountyId) {
+      issues.push("funding plan createEscrow bounty id does not match the displayed bounty");
+    }
+    if (!sameAddress(connectedAddress, create.payer)) {
+      issues.push("funding plan payer does not match the connected wallet");
+    }
+    if (!sameAddress(connectedAddress, approve.from) || !sameAddress(connectedAddress, createEscrow.from)) {
+      issues.push("transaction sender does not match the connected wallet");
+    }
+    if (!sameAddress(create.token, configured.nativeUsdc) || !sameAddress(approve.to, configured.nativeUsdc)) {
+      issues.push("funding plan token is not native USDC on Base mainnet");
+    }
+    if (!sameAddress(createEscrow.to, configured.escrowContract)) {
+      issues.push("funding plan escrow target does not match the verified Base mainnet deployment");
+    }
+    if (!sameAddress(decoded.approve.spender, configured.escrowContract)) {
+      issues.push("approval calldata spender does not match the verified Base mainnet escrow");
+    }
+    if (!sameAddress(decoded.createEscrow.token, configured.nativeUsdc)) {
+      issues.push("createEscrow calldata token is not native USDC on Base mainnet");
+    }
+    if (!expectedBountyBytes32 || decoded.createEscrow.bountyId !== expectedBountyBytes32) {
+      issues.push("createEscrow calldata bounty id does not match the displayed bounty");
+    }
+    if (!sameBigInt(decoded.approve.amount, createAmount) || !sameBigInt(decoded.createEscrow.amount, createAmount)) {
+      issues.push("calldata amount does not match the displayed Base funding amount");
+    }
+    if (!sameBigInt(createAmount, bountyTargetAmount)) {
+      issues.push("funding plan amount does not match the bounty Base funding target");
+    }
+    if (hostedBounty && !sameBigInt(createAmount, hostedTargetAmount)) {
+      issues.push("funding plan amount does not match hosted Base funding target");
+    }
+    if (!createTermsHash || !bountyTermsHash || createTermsHash !== bountyTermsHash) {
+      issues.push("funding plan terms hash does not match the bounty terms hash");
+    }
+    if (hostedBounty && hostedTermsHash && createTermsHash !== hostedTermsHash) {
+      issues.push("funding plan terms hash does not match hosted status readback");
+    }
+    if (decoded.createEscrow.termsHash !== createTermsHash) {
+      issues.push("createEscrow calldata terms hash does not match the displayed terms hash");
+    }
+    if (!isZeroQuantity(approve.value_wei) || !isZeroQuantity(createEscrow.value_wei)) {
+      issues.push("Base wallet funding transactions must carry exactly zero ETH value");
+    }
+    if (approve.function !== "approve(address,uint256)") {
+      issues.push("approval transaction is not USDC approve(address,uint256)");
+    }
+    if (createEscrow.function !== "createEscrow(bytes32,address,uint256,bytes32)") {
+      issues.push("escrow transaction is not createEscrow(bytes32,address,uint256,bytes32)");
+    }
+    if (hostedBounty) {
+      if (hostedBounty.id && hostedBounty.id !== bounty.id) {
+        issues.push("funding plan bounty id does not match hosted status readback");
+      }
+      if (!sameMoney(baseFundingTargetAmount(hostedBounty), create.amount)) {
+        issues.push("funding plan amount does not match hosted Base funding target");
+      }
+    }
+    if (!sameMoney(baseFundingTargetAmount(bounty), create.amount)) {
+      issues.push("funding plan amount does not match the bounty Base funding target");
+    }
+
+    return issues;
+  }
+
+  function validateBaseWalletPlan(plan, context) {
+    const issues = baseWalletPlanValidationIssues(plan, context);
+    if (issues.length > 0) {
+      throw new Error(`Base wallet funding plan rejected: ${issues.join("; ")}`);
+    }
+    return plan;
+  }
+
+  function decodeEscrowCreatedLog(log, receiptTxHash) {
+    const topics = Array.isArray(log && log.topics) ? log.topics.map(normalizeBytes32) : [];
+    const data = normalizeHexData(log && log.data);
+    const txHash = normalizeBytes32(
+      (log && (log.transactionHash || log.transaction_hash || log.txHash || log.tx_hash)) || receiptTxHash,
+    );
+    if (!sameAddress(log && log.address, baseMainnetWalletConfig.escrowContract)) {
+      return null;
+    }
+    if (topics.length !== 4 || topics[0] !== baseMainnetWalletConfig.escrowCreatedTopic) {
+      return null;
+    }
+    if (!data || data.length !== 2 + 64 * 3 || !txHash) {
+      throw new Error("EscrowCreated log from the verified contract is malformed.");
+    }
+    const onchainEscrowId = normalizedQuantityToBigInt(topics[1]);
+    const bountyId = normalizeBytes32(topics[2]);
+    const payer = calldataWordAddress(topics[3]);
+    const token = calldataWordAddress(abiDataWord(data, 0));
+    const amount = normalizedQuantityToBigInt(abiDataWord(data, 1));
+    const termsHash = normalizeBytes32(abiDataWord(data, 2));
+    if (onchainEscrowId === null || !bountyId || !payer || !token || amount === null || !termsHash) {
+      throw new Error("EscrowCreated log from the verified contract could not be decoded.");
+    }
+    return {
+      amount: amount.toString(),
+      bountyId,
+      logIndex: normalizedText(log && (log.logIndex || log.log_index)),
+      onchainEscrowId: onchainEscrowId.toString(),
+      payer,
+      termsHash,
+      token,
+      txHash,
+    };
+  }
+
+  function decodeEscrowCreatedReceipt(receipt, expected) {
+    if (!receipt || normalizeChainId(receipt.status) !== 1) {
+      throw new Error("Escrow transaction receipt was not successful.");
+    }
+    const submittedHash = normalizeBytes32(expected && expected.txHash);
+    const receiptHash = normalizeBytes32(receipt.transactionHash || receipt.transaction_hash || receipt.txHash || receipt.tx_hash);
+    if (submittedHash && receiptHash && submittedHash !== receiptHash) {
+      throw new Error("Escrow transaction receipt hash does not match the submitted transaction.");
+    }
+    const expectedBountyId = uuidToBytes32(expected && expected.bountyId);
+    const expectedAmount = moneyAmountBigInt(expected && expected.amount);
+    const expectedTermsHash = normalizeBytes32(expected && expected.termsHash);
+    const logs = Array.isArray(receipt.logs) ? receipt.logs : [];
+    const mismatches = [];
+    for (const log of logs) {
+      const evidence = decodeEscrowCreatedLog(log, receiptHash || submittedHash);
+      if (!evidence) {
+        continue;
+      }
+      const issues = [];
+      if (!expectedBountyId || evidence.bountyId !== expectedBountyId) {
+        issues.push("bounty id");
+      }
+      if (!sameAddress(evidence.payer, expected && expected.payer)) {
+        issues.push("payer");
+      }
+      if (!sameAddress(evidence.token, expected && expected.token)) {
+        issues.push("token");
+      }
+      if (!sameBigInt(normalizedQuantityToBigInt(evidence.amount), expectedAmount)) {
+        issues.push("amount");
+      }
+      if (!expectedTermsHash || evidence.termsHash !== expectedTermsHash) {
+        issues.push("terms hash");
+      }
+      if (issues.length === 0) {
+        return evidence;
+      }
+      mismatches.push(issues.join(", "));
+    }
+    const detail = mismatches.length > 0 ? ` Mismatched fields: ${mismatches.join("; ")}.` : "";
+    throw new Error(`Escrow receipt did not contain matching EscrowCreated evidence from the verified escrow contract.${detail}`);
+  }
+
+  function eventOnchainEscrowId(event) {
+    return normalizedQuantityToBigInt(
+      event && (
+        event.onchain_escrow_id
+        || event.onchainEscrowId
+        || event.onchain_id
+        || event.onchainId
+      ),
+    );
+  }
+
+  function escrowOnchainEscrowId(escrow) {
+    const direct = eventOnchainEscrowId(escrow);
+    if (direct !== null) {
+      return direct;
+    }
+    const reference = normalizedText(
+      escrow && (escrow.external_reference || escrow.externalReference || escrow.reference),
+    ).toLowerCase();
+    const match = /^base:([0-9]+)$/.exec(reference);
+    return match ? BigInt(match[1]) : null;
+  }
+
+  function hostedEventMatchesEvidence(event, evidence) {
+    const eventAmount = moneyAmountBigInt(event && event.amount);
+    return normalizedText(event && event.kind).toLowerCase() === "created"
+      && normalizeBytes32(event && (event.tx_hash || event.txHash || event.transaction_hash || event.transactionHash)) === evidence.txHash
+      && sameBigInt(eventOnchainEscrowId(event), normalizedQuantityToBigInt(evidence.onchainEscrowId))
+      && uuidToBytes32(event && (event.bounty_id || event.bountyId)) === evidence.bountyId
+      && sameAddress(event && event.token, evidence.token)
+      && sameBigInt(eventAmount, normalizedQuantityToBigInt(evidence.amount))
+      && normalizeBytes32(event && (event.terms_hash || event.termsHash)) === evidence.termsHash;
+  }
+
+  function hostedEscrowMatchesEvidence(escrow, evidence) {
+    const status = normalizedText(escrow && escrow.status).toLowerCase();
+    const eventId = normalizedQuantityToBigInt(evidence.onchainEscrowId);
+    const escrowId = escrowOnchainEscrowId(escrow);
+    return ["funded", "released", "disputed"].includes(status)
+      && sameBigInt(escrowId, eventId)
+      && uuidToBytes32(escrow && (escrow.bounty_id || escrow.bountyId)) === evidence.bountyId
+      && sameAddress(escrow && escrow.token, evidence.token)
+      && sameBigInt(moneyAmountBigInt(escrow && escrow.amount), normalizedQuantityToBigInt(evidence.amount));
+  }
+
+  function matchingHostedBaseEscrow(report, evidence) {
+    if (!report || !evidence) {
+      return null;
+    }
+    const events = Array.isArray(report.base_escrow_events)
+      ? report.base_escrow_events
+      : Array.isArray(report.baseEscrowEvents)
+        ? report.baseEscrowEvents
+        : [];
+    const escrows = Array.isArray(report.escrows) ? report.escrows : [];
+    const event = events.find((candidate) => hostedEventMatchesEvidence(candidate, evidence));
+    const escrow = escrows.find((candidate) => hostedEscrowMatchesEvidence(candidate, evidence));
+    return event && escrow ? { event, escrow } : null;
+  }
+
+  function baseWalletFundingStatusModel(report, options) {
+    const expectedEvidence = options && options.expectedEvidence;
+    const matchedEvidence = matchingHostedBaseEscrow(report, expectedEvidence);
+    const summary = report && report.funding_summary ? report.funding_summary : {};
+    const partitions = Array.isArray(summary.partitions) ? summary.partitions : [];
+    const basePartition = partitions.find((partition) => partition && partition.rail === "BaseUsdc");
+    const escrows = Array.isArray(report && report.escrows) ? report.escrows : [];
+    const escrowCount = basePartition && typeof basePartition.escrow_count === "number"
+      ? basePartition.escrow_count
+      : escrows.length;
+    const reconciled = Boolean(matchedEvidence);
+    return {
+      basePartition,
+      bounty: report && report.bounty ? report.bounty : {},
+      escrowCount,
+      heading: reconciled ? "funding reconciled" : "waiting for confirmations",
+      matchedEvidence,
+      reconciled,
+      summary,
+    };
+  }
+
+  function baseWalletStatusLines(report, options) {
+    const outputOptions = options || {};
+    const state = baseWalletFundingStatusModel(report, outputOptions);
+    const applied = state.basePartition && state.basePartition.confirmed
+      ? state.basePartition.confirmed
+      : state.summary.applied;
+    const remaining = state.basePartition && state.basePartition.remaining
+      ? state.basePartition.remaining
+      : state.summary.remaining;
+    const lines = [
+      `State: ${state.heading}`,
+      `Bounty status: ${state.bounty.status || "unknown"}`,
+      `Base applied funding: ${displayMoney(applied)}`,
+      `Base remaining funding: ${displayMoney(remaining)}`,
+      `Indexed Base escrows: ${state.escrowCount}`,
+      `Bounty claimable from this Base evidence: ${state.reconciled ? "yes" : "no"}`,
+      `Whole bounty claimable: ${state.summary.claimable === true ? "yes" : "no"}`,
+    ];
+    if (state.reconciled) {
+      lines.push(`Matched escrow transaction: ${outputOptions.expectedEvidence.txHash}`);
+      lines.push(`Matched on-chain escrow id: ${outputOptions.expectedEvidence.onchainEscrowId}`);
+      lines.push("Base funding is reconciled only because hosted status reports the same indexed EscrowCreated transaction provenance.");
+      if (outputOptions.shareUrl) {
+        lines.push(`Share link: ${outputOptions.shareUrl}`);
+      }
+      lines.push("Default CTA: Post your own bounty.");
+    } else {
+      lines.push("Wallet transactions or transaction hashes are not funding evidence. Keep polling hosted status until indexed EscrowCreated evidence is reconciled.");
+    }
+    return lines.join("\n");
+  }
+
+  async function providerRequest(provider, method, params) {
+    if (!provider || typeof provider.request !== "function") {
+      throw new Error("No injected EVM wallet provider found.");
+    }
+    return provider.request({ method, params: params || [] });
+  }
+
+  async function connectBaseWallet(provider) {
+    const accounts = await providerRequest(provider, "eth_requestAccounts");
+    const address = Array.isArray(accounts) && accounts.length > 0 ? normalizeAddress(accounts[0]) : "";
+    if (!address) {
+      throw new Error("Wallet did not return a usable account address.");
+    }
+    let chainId = normalizedText(await providerRequest(provider, "eth_chainId")).toLowerCase();
+    if (chainId !== baseMainnetWalletConfig.chainIdHex) {
+      await providerRequest(provider, "wallet_switchEthereumChain", [{ chainId: baseMainnetWalletConfig.chainIdHex }]);
+      chainId = normalizedText(await providerRequest(provider, "eth_chainId")).toLowerCase();
+    }
+    if (chainId !== baseMainnetWalletConfig.chainIdHex) {
+      throw new Error("Wallet is not connected to Base mainnet.");
+    }
+    return { address, chainId };
+  }
+
+  async function assertBaseWalletStillConnected(provider, expectedAddress) {
+    const chainId = normalizedText(await providerRequest(provider, "eth_chainId")).toLowerCase();
+    if (chainId !== baseMainnetWalletConfig.chainIdHex) {
+      throw new Error("Wallet must stay on Base mainnet before signing.");
+    }
+    const accounts = await providerRequest(provider, "eth_accounts");
+    const address = Array.isArray(accounts) && accounts.length > 0 ? normalizeAddress(accounts[0]) : "";
+    if (!sameAddress(address, expectedAddress)) {
+      throw new Error("Connected wallet account changed before signing.");
+    }
+    return { address, chainId };
+  }
+
+  async function readHostedBountyStatus(fetchImpl, apiBaseUrl, bountyId) {
+    const response = await fetchImpl(`${apiBaseUrl}/v1/bounties/${bountyId}`, {
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(`Hosted bounty status failed with ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async function requestBaseFundingPlan(fetchImpl, apiBaseUrl, request) {
+    const response = await fetchImpl(`${apiBaseUrl}/v1/base/funding-plan`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw new Error(`Base funding plan failed with ${response.status}`);
+    }
+    return response.json();
+  }
+
+  function baseWalletReviewLines(review) {
+    const plan = review.plan;
+    const bounty = plan.bounty || {};
+    const create = plan.create || {};
+    const funding = plan.funding || {};
+    const approve = funding.approve || {};
+    const createEscrow = funding.create_escrow || {};
+    const decoded = review.decoded;
+    const bountyTitle = bounty.title ? `${bounty.title} (${bounty.id})` : bounty.id || review.bountyId;
+    return [
+      "State: ready for human wallet review",
+      `Bounty: ${bountyTitle}`,
+      `Bounty id: ${review.bountyId}`,
+      `Amount: ${displayMoney(create.amount)}`,
+      `Terms hash: ${normalizeBytes32(create.terms_hash)}`,
+      `Token: ${baseMainnetWalletConfig.nativeUsdc}`,
+      `Approval target: ${approve.to}`,
+      `Approval spender decoded from calldata: ${decoded.approve.spender}`,
+      `Escrow target: ${createEscrow.to}`,
+      `CreateEscrow token decoded from calldata: ${decoded.createEscrow.token}`,
+      `CreateEscrow bounty id decoded from calldata: ${decoded.createEscrow.bountyId}`,
+      `CreateEscrow terms hash decoded from calldata: ${decoded.createEscrow.termsHash}`,
+      "Approval ETH value: 0",
+      "Escrow ETH value: 0",
+      `Approval calldata: ${approve.data}`,
+      `Create escrow calldata: ${createEscrow.data}`,
+      "",
+      "Review these exact decoded values before signing. Sign USDC approval first; the escrow transaction stays disabled until the approval receipt succeeds.",
+    ].join("\n");
+  }
+
+  async function prepareBaseWalletFundingPlan(options) {
+    const fetchImpl = options.fetchImpl || window.fetch.bind(window);
+    const provider = options.provider;
+    const apiBaseUrl = normalizedText(options.apiBaseUrl).replace(/\/+$/, "");
+    const bountyId = normalizedText(options.bountyId);
+    const connectedAddress = normalizeAddress(options.connectedAddress);
+    const onState = typeof options.onState === "function" ? options.onState : () => {};
+
+    if (!apiBaseUrl || !bountyId || !connectedAddress) {
+      throw new Error("Hosted API URL, bounty id, and connected wallet are required.");
+    }
+
+    await assertBaseWalletStillConnected(provider, connectedAddress);
+
+    onState("Reading hosted bounty status...");
+    const statusBefore = await readHostedBountyStatus(fetchImpl, apiBaseUrl, bountyId);
+    onState("Requesting Base mainnet funding plan...");
+    const plan = await requestBaseFundingPlan(fetchImpl, apiBaseUrl, {
+      bounty_id: bountyId,
+      escrow_contract: baseMainnetWalletConfig.escrowContract,
+      payer: connectedAddress,
+      token: baseMainnetWalletConfig.nativeUsdc,
+      network: baseMainnetWalletConfig.network,
+    });
+    validateBaseWalletPlan(plan, {
+      bountyId,
+      connectedAddress,
+      hostedBounty: statusBefore.bounty,
+    });
+    const review = {
+      apiBaseUrl,
+      bountyId,
+      connectedAddress,
+      decoded: decodeBaseWalletPlanCalldata(plan),
+      plan,
+      statusBefore,
+    };
+    return {
+      ...review,
+      heading: "ready for human wallet review",
+      lines: baseWalletReviewLines(review),
+    };
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function waitForTransactionSuccess(provider, txHash, options) {
+    const receiptOptions = options || {};
+    const attempts = receiptOptions.attempts || 8;
+    const delayMs = typeof receiptOptions.delayMs === "number" ? receiptOptions.delayMs : 2000;
+    const sleepImpl = receiptOptions.sleepImpl || sleep;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const receipt = await providerRequest(provider, "eth_getTransactionReceipt", [txHash]);
+      if (receipt && receipt.status === "0x1") {
+        return receipt;
+      }
+      if (receipt && receipt.status === "0x0") {
+        throw new Error("Wallet transaction reverted before required receipt confirmation.");
+      }
+      if (attempt + 1 < attempts && delayMs > 0) {
+        await sleepImpl(delayMs);
+      }
+    }
+    throw new Error("Wallet transaction did not produce a successful receipt within the bounded polling window.");
+  }
+
+  async function sendBaseWalletApproval(options) {
+    const provider = options.provider;
+    const review = options.review;
+    const onState = typeof options.onState === "function" ? options.onState : () => {};
+    const connectedAddress = normalizeAddress(options.connectedAddress || review.connectedAddress);
+    await assertBaseWalletStillConnected(provider, connectedAddress);
+    onState("Request wallet confirmation: USDC approval.");
+    const approveHash = await providerRequest(provider, "eth_sendTransaction", [
+      evmTransactionRequest(review.plan.funding.approve, connectedAddress),
+    ]);
+    onState("Approval submitted. Waiting for a successful approval receipt before escrow can be signed...");
+    await waitForTransactionSuccess(provider, approveHash, {
+      attempts: options.receiptAttempts,
+      delayMs: options.receiptDelayMs,
+      sleepImpl: options.sleepImpl,
+    });
+    return {
+      approveHash,
+      heading: "approval confirmed",
+      lines: [
+        "State: approval confirmed",
+        `Approval transaction: ${approveHash}`,
+        "A successful approval receipt was read. Review once more, then sign the escrow transaction.",
+      ].join("\n"),
+    };
+  }
+
+  async function pollBaseWalletReconciliation(options) {
+    const fetchImpl = options.fetchImpl || window.fetch.bind(window);
+    const apiBaseUrl = normalizedText(options.apiBaseUrl).replace(/\/+$/, "");
+    const bountyId = normalizedText(options.bountyId);
+    const onState = typeof options.onState === "function" ? options.onState : () => {};
+    const attempts = options.attempts || 6;
+    const delayMs = typeof options.delayMs === "number" ? options.delayMs : 2000;
+    const sleepImpl = options.sleepImpl || sleep;
+    let latestReport = null;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      onState(`Reading hosted status for indexed EscrowCreated evidence (${attempt + 1}/${attempts})...`);
+      latestReport = await readHostedBountyStatus(fetchImpl, apiBaseUrl, bountyId);
+      const model = baseWalletFundingStatusModel(latestReport, {
+        expectedEvidence: options.expectedEvidence,
+      });
+      if (model.reconciled) {
+        return {
+          heading: model.heading,
+          lines: baseWalletStatusLines(latestReport, {
+            expectedEvidence: options.expectedEvidence,
+            shareUrl: options.shareUrl,
+          }),
+          report: latestReport,
+        };
+      }
+      if (attempt + 1 < attempts && delayMs > 0) {
+        await sleepImpl(delayMs);
+      }
+    }
+
+    return {
+      heading: "waiting for confirmations",
+      lines: baseWalletStatusLines(latestReport, {
+        expectedEvidence: options.expectedEvidence,
+        shareUrl: options.shareUrl,
+      }),
+      report: latestReport,
+    };
+  }
+
+  async function sendBaseWalletEscrow(options) {
+    const provider = options.provider;
+    const review = options.review;
+    const onState = typeof options.onState === "function" ? options.onState : () => {};
+    const connectedAddress = normalizeAddress(options.connectedAddress || review.connectedAddress);
+    await assertBaseWalletStillConnected(provider, connectedAddress);
+    onState("Request wallet confirmation: create escrow.");
+    const escrowHash = await providerRequest(provider, "eth_sendTransaction", [
+      evmTransactionRequest(review.plan.funding.create_escrow, connectedAddress),
+    ]);
+    onState("Escrow submitted. Waiting for a successful escrow receipt...");
+    let receipt;
+    try {
+      receipt = await waitForTransactionSuccess(provider, escrowHash, {
+        attempts: options.receiptAttempts,
+        delayMs: options.receiptDelayMs,
+        sleepImpl: options.sleepImpl,
+      });
+    } catch (error) {
+      if (error instanceof Error && /reverted/.test(error.message)) {
+        return {
+          escrowHash,
+          heading: "needs operator review",
+          lines: [
+            "State: needs operator review",
+            `Escrow transaction: ${escrowHash}`,
+            "The wallet/provider reports the escrow transaction reverted. No retry was attempted.",
+          ].join("\n"),
+        };
+      }
+      throw error;
+    }
+    let escrowEvidence;
+    try {
+      escrowEvidence = decodeEscrowCreatedReceipt(receipt, {
+        amount: review.plan.create && review.plan.create.amount,
+        bountyId: review.bountyId,
+        payer: connectedAddress,
+        termsHash: review.plan.create && review.plan.create.terms_hash,
+        token: baseMainnetWalletConfig.nativeUsdc,
+        txHash: escrowHash,
+      });
+    } catch (error) {
+      return {
+        escrowHash,
+        heading: "needs operator review",
+        lines: [
+          "State: needs operator review",
+          `Escrow transaction: ${escrowHash}`,
+          error instanceof Error ? error.message : String(error),
+          "The submitted transaction is not treated as funding. No retry was attempted.",
+        ].join("\n"),
+      };
+    }
+    onState("EscrowCreated log matched the submitted transaction. Polling hosted indexed evidence...");
+
+    const reconciliation = await pollBaseWalletReconciliation({
+      apiBaseUrl: review.apiBaseUrl,
+      bountyId: review.bountyId,
+      attempts: options.pollAttempts,
+      delayMs: options.pollDelayMs,
+      expectedEvidence: escrowEvidence,
+      fetchImpl: options.fetchImpl,
+      onState,
+      shareUrl: options.shareUrl,
+      sleepImpl: options.sleepImpl,
+    });
+    return {
+      escrowHash,
+      heading: reconciliation.heading,
+      lines: [
+        `Escrow transaction: ${escrowHash}`,
+        `EscrowCreated transaction evidence: ${escrowEvidence.txHash}`,
+        `EscrowCreated on-chain escrow id: ${escrowEvidence.onchainEscrowId}`,
+        "",
+        reconciliation.lines,
+      ].join("\n"),
+      escrowEvidence,
+      report: reconciliation.report,
+    };
+  }
+
+  async function runExclusiveWalletAction(state, task) {
+    if (state.busy) {
+      throw new Error("A Base wallet action is already in progress.");
+    }
+    state.busy = true;
+    try {
+      return await task();
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  function stripeFundingIntents(report) {
+    return Array.isArray(report.funding_intents)
+      ? report.funding_intents.filter((intent) => intent && intent.rail === "StripeFiat")
+      : [];
+  }
+
+  function matchingStripeFundingIntent(report, lookup) {
+    const intents = stripeFundingIntents(report);
+    if (lookup.fundingIntentId) {
+      return intents.find((intent) => intent.id === lookup.fundingIntentId) || null;
+    }
+    if (lookup.externalReference) {
+      return intents.find((intent) => intent.external_reference === lookup.externalReference) || null;
+    }
+    return intents.length === 1 ? intents[0] : null;
+  }
+
+  function checkoutStatusModel(report, lookup) {
+    const bounty = report.bounty || {};
+    const summary = report.funding_summary || {};
+    const intent = matchingStripeFundingIntent(report, lookup);
+    const status = intent && intent.status;
+    const claimable = summary.claimable === true;
+    const appliedMinor = summary.applied && typeof summary.applied.amount === "number"
+      ? summary.applied.amount
+      : 0;
+    const heading = status === "Applied"
+      ? "funding reconciled"
+      : status === "Rejected"
+        ? "needs operator review"
+        : "waiting for webhook";
+    return {
+      appliedMinor,
+      bounty,
+      claimable,
+      heading,
+      intent,
+      status,
+      summary,
+    };
+  }
+
+  function checkoutStatusLines(report, lookup) {
+    const state = checkoutStatusModel(report, lookup);
+    const bounty = state.bounty;
+    const summary = state.summary;
+    const intent = state.intent;
+    const status = state.status;
+    const claimable = state.claimable;
+    const lines = [
+      `State: ${state.heading}`,
+      `Bounty status: ${bounty.status || "unknown"}`,
+      `Bounty id: ${lookup.bountyId || bounty.id || "unknown"}`,
+      `Applied funding: ${displayMoney(summary.applied)}`,
+      `Remaining funding: ${displayMoney(summary.remaining)}`,
+      `Bounty claimable: ${claimable ? "yes" : "no"}`,
+    ];
+
+    if (intent) {
+      lines.push(`Funding intent id: ${intent.id}`);
+      lines.push(`Funding intent status: ${status || "unknown"}`);
+      lines.push(`External reference: ${intent.external_reference || "not set"}`);
+    } else {
+      lines.push(`Funding intent: not identified${lookup.externalReference ? ` for external reference ${lookup.externalReference}` : ""}`);
+    }
+
+    if (status === "Applied") {
+      lines.push("Funding is reconciled only because the matching Stripe funding intent reports applied checkout.session.completed webhook evidence.");
+      lines.push("Default CTA: Post your own bounty.");
+    } else if (status === "Rejected") {
+      lines.push("The hosted API rejected this funding intent. Contact the operator with the funding intent id if available.");
+    } else if (state.appliedMinor > 0 || claimable) {
+      lines.push("Some bounty funding or claimability exists, but this return page still waits for the matching Checkout funding intent to show Applied webhook evidence.");
+    } else {
+      lines.push("Checkout returned, but funding is still pending until the signed checkout.session.completed webhook is reconciled.");
+      lines.push("Refresh this page after a few seconds. If it stays pending, the hosted operator should check webhook delivery.");
+    }
+
+    return lines.join("\n");
+  }
+
+  function checkoutUnavailableStatusLines(message) {
+    return [
+      "State: needs operator review",
+      message,
+      "Hosted API status is unavailable, so this page cannot show funding as reconciled.",
+      "Refresh later or ask the operator to inspect webhook delivery for the funding intent.",
+    ].join("\n");
+  }
+
+  window.AgentBountiesCheckoutStatus = {
+    checkoutStatusLines,
+    checkoutStatusModel,
+    checkoutUnavailableStatusLines,
+    displayMoney,
+    matchingStripeFundingIntent,
+  };
+
+  async function refreshCheckoutStatus() {
+    if (!checkoutStatusOutput) return;
+    const params = new URLSearchParams(window.location.search);
+    const lookup = {
+      apiBaseUrl: firstCheckoutStatusParam(params, ["apiBaseUrl", "api_base_url", "api"]),
+      bountyId: firstCheckoutStatusParam(params, ["bountyId", "bounty_id"]),
+      fundingIntentId: firstCheckoutStatusParam(params, ["fundingIntentId", "funding_intent_id"]),
+      externalReference: firstCheckoutStatusParam(params, ["externalReference", "external_reference"]),
+    };
+    if (!lookup.apiBaseUrl || !lookup.bountyId) {
+      checkoutStatusOutput.textContent = [
+        "State: Checkout returned",
+        "Missing hosted API or bounty id in the return link, so this page cannot verify funding.",
+        "A Checkout redirect is not funding evidence. Open the funding page or hosted bounty status to check reconciliation.",
+      ].join("\n");
+      return;
+    }
+
+    const apiBaseUrl = lookup.apiBaseUrl.replace(/\/+$/, "");
+    checkoutStatusOutput.textContent = "Checkout returned. Reading hosted bounty status...";
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/bounties/${lookup.bountyId}`, {
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`Hosted bounty status returned ${response.status}`);
+      }
+      checkoutStatusOutput.textContent = checkoutStatusLines(await response.json(), lookup);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      checkoutStatusOutput.textContent = checkoutUnavailableStatusLines(message);
+    }
+  }
+
+  if (checkoutStatusOutput) {
+    if (checkoutStatusRefresh) {
+      checkoutStatusRefresh.addEventListener("click", refreshCheckoutStatus);
+    }
+    refreshCheckoutStatus();
+  }
+
+  window.AgentBountiesBaseWallet = {
+    baseMainnetWalletConfig,
+    baseWalletFundingStatusModel,
+    baseWalletPlanValidationIssues,
+    baseWalletReviewLines,
+    baseWalletStatusLines,
+    connectBaseWallet,
+    decodeEscrowCreatedReceipt,
+    decodeBaseWalletPlanCalldata,
+    evmTransactionRequest,
+    matchingHostedBaseEscrow,
+    normalizeAddress,
+    pollBaseWalletReconciliation,
+    prepareBaseWalletFundingPlan,
+    runExclusiveWalletAction,
+    sendBaseWalletApproval,
+    sendBaseWalletEscrow,
+    validateBaseWalletPlan,
+  };
+
   if (!form || !output) return;
 
   function randomUuid() {
@@ -253,6 +1271,10 @@
     setNamedInputValue(baseForm, "baseEscrowContract", prefillValues.escrowContract);
     setNamedInputValue(baseForm, "basePayer", prefillValues.payer);
     setNamedInputValue(baseForm, "baseToken", prefillValues.token);
+  }
+  if (baseWalletForm) {
+    setNamedInputValue(baseWalletForm, "walletApiBaseUrl", prefillValues.apiBaseUrl);
+    setNamedInputValue(baseWalletForm, "walletBountyId", prefillValues.bountyId);
   }
   if (prefillOutput) {
     if (prefilledFields.length > 0) {
@@ -387,6 +1409,179 @@
     });
   }
 
+  let baseWalletConnection = null;
+  let baseWalletReview = null;
+  let baseWalletApprovalHash = "";
+  let baseWalletEscrowEvidence = null;
+  const baseWalletActionState = { busy: false };
+
+  function setElementDisabled(element, disabled) {
+    if (element) {
+      element.disabled = disabled;
+    }
+  }
+
+  function baseWalletShareUrl(apiBaseUrl, bountyId) {
+    try {
+      const url = new URL(window.location.href);
+      url.search = new URLSearchParams({
+        apiBaseUrl,
+        bountyId,
+        rail: "BaseUsdc",
+        source: "base-wallet",
+      }).toString();
+      return url.toString();
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function updateBaseWalletButtons() {
+    const busy = baseWalletActionState.busy;
+    const hasReview = Boolean(baseWalletReview);
+    const hasApproval = Boolean(baseWalletApprovalHash);
+    setElementDisabled(baseWalletConnect, busy);
+    setElementDisabled(baseWalletForm && baseWalletForm.querySelector("button[type='submit']"), busy || !baseWalletConnection);
+    setElementDisabled(baseWalletApprove, busy || !hasReview || hasApproval);
+    setElementDisabled(baseWalletEscrow, busy || !hasReview || !hasApproval);
+    setElementDisabled(baseWalletRefresh, busy || !hasReview);
+  }
+
+  function resetBaseWalletSigningState() {
+    baseWalletReview = null;
+    baseWalletApprovalHash = "";
+    baseWalletEscrowEvidence = null;
+    updateBaseWalletButtons();
+  }
+
+  async function runBaseWalletUiAction(task) {
+    try {
+      await runExclusiveWalletAction(baseWalletActionState, task);
+    } catch (error) {
+      baseWalletOutput.textContent = `${error.message}\n\nNo automatic retry was started. Inspect the wallet and hosted bounty status before trying again. Transaction hashes are not reconciled funding.`;
+    } finally {
+      updateBaseWalletButtons();
+    }
+  }
+
+  if (baseWalletForm && baseWalletOutput) {
+    updateBaseWalletButtons();
+    if (baseWalletConnect) {
+      baseWalletConnect.addEventListener("click", async () => {
+        await runBaseWalletUiAction(async () => {
+          baseWalletOutput.textContent = "Requesting wallet account and Base mainnet network...";
+          baseWalletConnection = await connectBaseWallet(window.ethereum);
+          resetBaseWalletSigningState();
+          baseWalletOutput.textContent = [
+            "State: wallet connected",
+            `Connected address: ${baseWalletConnection.address}`,
+            "Network: Base mainnet (8453)",
+            "No transaction has been planned, signed, or broadcast.",
+          ].join("\n");
+        });
+      });
+    }
+
+    baseWalletForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await runBaseWalletUiAction(async () => {
+        const data = new FormData(baseWalletForm);
+        const apiBaseUrl = String(data.get("walletApiBaseUrl") || "").replace(/\/+$/, "");
+        const bountyId = String(data.get("walletBountyId") || "").trim();
+        if (!baseWalletConnection) {
+          throw new Error("Connect a Base mainnet wallet before planning. No transaction was signed.");
+        }
+
+        baseWalletReview = await prepareBaseWalletFundingPlan({
+          apiBaseUrl,
+          bountyId,
+          connectedAddress: baseWalletConnection.address,
+          fetchImpl: window.fetch.bind(window),
+          provider: window.ethereum,
+          onState(message) {
+            baseWalletOutput.textContent = message;
+          },
+        });
+        baseWalletApprovalHash = "";
+        baseWalletEscrowEvidence = null;
+        baseWalletOutput.textContent = baseWalletReview.lines;
+      });
+    });
+
+    if (baseWalletApprove) {
+      baseWalletApprove.addEventListener("click", async () => {
+        await runBaseWalletUiAction(async () => {
+          if (!baseWalletReview) {
+            throw new Error("Review a Base wallet funding plan before signing approval.");
+          }
+          const result = await sendBaseWalletApproval({
+            connectedAddress: baseWalletConnection && baseWalletConnection.address,
+            provider: window.ethereum,
+            review: baseWalletReview,
+            onState(message) {
+              baseWalletOutput.textContent = message;
+            },
+          });
+          baseWalletApprovalHash = result.approveHash;
+          baseWalletEscrowEvidence = null;
+          baseWalletOutput.textContent = result.lines;
+        });
+      });
+    }
+
+    if (baseWalletEscrow) {
+      baseWalletEscrow.addEventListener("click", async () => {
+        await runBaseWalletUiAction(async () => {
+          if (!baseWalletReview || !baseWalletApprovalHash) {
+            throw new Error("A successful approval receipt is required before escrow signing.");
+          }
+          const result = await sendBaseWalletEscrow({
+            connectedAddress: baseWalletConnection && baseWalletConnection.address,
+            fetchImpl: window.fetch.bind(window),
+            pollAttempts: 6,
+            pollDelayMs: 2000,
+            provider: window.ethereum,
+            review: baseWalletReview,
+            receiptAttempts: 8,
+            receiptDelayMs: 2000,
+            shareUrl: baseWalletShareUrl(baseWalletReview.apiBaseUrl, baseWalletReview.bountyId),
+            onState(message) {
+              baseWalletOutput.textContent = message;
+            },
+          });
+          baseWalletEscrowEvidence = result.escrowEvidence || null;
+          baseWalletOutput.textContent = [
+            `Approval transaction: ${baseWalletApprovalHash}`,
+            result.lines,
+          ].join("\n");
+        });
+      });
+    }
+
+    if (baseWalletRefresh) {
+      baseWalletRefresh.addEventListener("click", async () => {
+        await runBaseWalletUiAction(async () => {
+          if (!baseWalletReview) {
+            throw new Error("Review a Base wallet funding plan before refreshing status.");
+          }
+          const result = await pollBaseWalletReconciliation({
+            apiBaseUrl: baseWalletReview.apiBaseUrl,
+            bountyId: baseWalletReview.bountyId,
+            attempts: 1,
+            delayMs: 0,
+            expectedEvidence: baseWalletEscrowEvidence,
+            fetchImpl: window.fetch.bind(window),
+            shareUrl: baseWalletShareUrl(baseWalletReview.apiBaseUrl, baseWalletReview.bountyId),
+            onState(message) {
+              baseWalletOutput.textContent = message;
+            },
+          });
+          baseWalletOutput.textContent = result.lines;
+        });
+      });
+    }
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     output.textContent = "Creating funding intent...";
@@ -403,7 +1598,14 @@
       String(data.get("externalReference") || "").trim() ||
       `${source}-${paymentPreference === "paypal" ? "paypal-" : ""}checkout-${Date.now()}`;
     const pageBase = `${window.location.origin}${window.location.pathname.replace(/funding\.html$/, "")}`;
-    const returnQuery = `?bountyId=${encodeURIComponent(bountyId)}&source=${encodeURIComponent(source)}&paymentPreference=${encodeURIComponent(paymentPreference)}`;
+    const returnParams = new URLSearchParams({
+      apiBaseUrl,
+      bountyId,
+      source,
+      paymentPreference,
+      externalReference,
+    });
+    const returnQuery = `?${returnParams.toString()}`;
 
     try {
       if (paymentPreference === "paypal") {

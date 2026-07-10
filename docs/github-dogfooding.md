@@ -19,8 +19,12 @@ hosted low-value rail is available.
    - `Privacy` (optional; defaults to `Public`)
 3. The parser validates that the template is known and the amount is explicit.
 4. A check-run output marks the issue ready or action-required.
-5. Once funded, the issue maps to a platform bounty.
-6. Completion posts a proof comment with proof, verifier, bounty, and optional
+5. The issue API sync planner derives one stable `bounty_id` from the canonical
+   repository and issue number, then returns the exact operator-gated hosted
+   `POST /v1/github/issue-api-sync` body, funding page URL, public bounty URL,
+   and status URL.
+6. Once funded, the issue maps to a platform bounty.
+7. Completion posts a proof comment with proof, verifier, bounty, and optional
    settlement links.
 
 ## Public Co-Funding Loop
@@ -122,6 +126,24 @@ cargo run -p cli -- github-plan `
   --body-file examples/github-paid-bounty-issue.md
 ```
 
+Plan the hosted API sync locally:
+
+```powershell
+cargo run -p cli -- github-issue-api-sync-plan `
+  --repository agent-bounties/agent-bounties `
+  --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 `
+  --title "[bounty]: Fix CI" `
+  --body-file examples/github-paid-bounty-issue.md `
+  --api-base-url https://api.agentbounties.example
+```
+
+If a previous run already created the hosted bounty, pass the stable id back in
+with `--existing-bounty-id <uuid>`. The planner then reports `Update` and keeps
+the same idempotency key instead of generating a second bounty. If the hosted
+API lookup fails, pass the error to `--hosted-api-error` or return the same
+shape from the API endpoint so automation blocks without posting a stale sync
+comment.
+
 Plan a funding comment locally:
 
 ```powershell
@@ -152,6 +174,8 @@ cargo run -p cli -- github-claim-comment-plan `
 The same deterministic planner is exposed over HTTP and MCP:
 
 - `POST /v1/github/issue-bounty-plan`
+- `POST /v1/github/issue-api-sync-plan`
+- `POST /v1/github/issue-api-sync`
 - `POST /v1/github/funding-comment-plan`
 - `POST /v1/github/claim-comment-plan`
 - `POST /v1/github/proof-comment-plan`
@@ -163,9 +187,11 @@ The same deterministic planner is exposed over HTTP and MCP:
 - MCP `plan_github_proof_comment_for_proof`
 
 These surfaces do not call the GitHub API. They produce the parsed issue,
-check-run output, funding-signal idempotency keys, claim-reservation signals,
-proof-comment markdown, and stable fingerprint that an operator or GitHub
-automation can post. Funding signals always require operator reconciliation and
+check-run output, hosted API sync plan, funding-signal idempotency keys,
+claim-reservation signals, proof-comment markdown, and stable fingerprint that
+an operator or GitHub automation can post. Sync plans create or update hosted
+bounty metadata only through the operator-gated sync endpoint; they do not fund
+a bounty, make it claimable, accept work, or authorize payout. Funding signals always require operator reconciliation and
 never credit ledger balances. Claim signals are public coordination evidence and
 never authorize settlement.
 The proof-record planner accepts a public `proof_id` and derives the proof URL,

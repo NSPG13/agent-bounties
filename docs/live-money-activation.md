@@ -33,13 +33,15 @@ $env:STRIPE_PAYMENT_METHOD_CONFIGURATION = "" # optional Stripe Dashboard config
 $env:STRIPE_WEBHOOK_SECRET = "whsec_..."
 $env:ALLOW_UNSIGNED_STRIPE_WEBHOOKS = "false"
 $env:BASE_SEPOLIA_RPC_URL = "https://..."
-$env:BASE_MAINNET_RPC_URL = "https://..."
+$env:BASE_MAINNET_RPC_URL = "https://mainnet.base.org" # replace with a managed RPC before higher volume
 $env:BASE_SEPOLIA_ESCROW_CONTRACT = "0x..."
-$env:BASE_MAINNET_ESCROW_CONTRACT = "0x..."
-$env:BASE_SETTLEMENT_SIGNER = "0x..."
-$env:BASE_PLATFORM_FEE_WALLET = "0x..."
-$env:BASE_INDEXER_NETWORK = "base-sepolia" # use base-mainnet after live signoff
-$env:BASE_INDEXER_START_BLOCK = "<escrow-deployment-block>"
+$env:BASE_MAINNET_ESCROW_CONTRACT = "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce"
+$env:BASE_SETTLEMENT_SIGNER = "0x884834E884d6e93462655A2820140aD03E6747bC"
+$env:BASE_PLATFORM_FEE_WALLET = "0x884834E884d6e93462655A2820140aD03E6747bC"
+$env:BASE_INDEXER_NETWORK = "base-mainnet"
+$env:BASE_INDEXER_RPC_URL = $env:BASE_MAINNET_RPC_URL
+$env:BASE_INDEXER_ESCROW_CONTRACT = $env:BASE_MAINNET_ESCROW_CONTRACT
+$env:BASE_INDEXER_START_BLOCK = "48422806"
 $env:BASE_INDEXER_POLL_SECONDS = "15"
 $env:BASE_INDEXER_CONFIRMATIONS = "2"
 $env:BASE_INDEXER_MAX_BLOCKS_PER_QUERY = "2000"
@@ -49,6 +51,29 @@ Native USDC addresses:
 
 - Base Sepolia: `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
 - Base mainnet: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
+
+## Verified Base Mainnet Deployment
+
+The current low-value pilot escrow is deployed on Base mainnet:
+
+- Contract: [`0x150C6dFbCe7803cc7f634f59b0624e87349CEAce`](https://base.blockscout.com/address/0x150C6dFbCe7803cc7f634f59b0624e87349CEAce)
+- Deployment transaction: [`0xede8896af324658d7da6fc08589cc5d02cc344ef934087a1c147f6c9617b865d`](https://base.blockscout.com/tx/0xede8896af324658d7da6fc08589cc5d02cc344ef934087a1c147f6c9617b865d)
+- Deployment block: `48422806`
+- Owner and initial settlement signer: `0x884834E884d6e93462655A2820140aD03E6747bC`
+- Native Base USDC: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
+- Source verification: Sourcify exact match and Blockscout verified
+
+The machine-readable source of truth is
+[`deployments/base-mainnet.json`](../deployments/base-mainnet.json). Hosted
+transaction broadcasting remains disabled. The owner and settlement signer are
+the same externally controlled wallet during the capped pilot, so every
+release, refund, and dispute requires explicit wallet review. Rotate the signer
+to a dedicated policy-controlled wallet before increasing limits.
+
+The first complete mainnet loop is capped at `1 USDC`. The deterministic open
+flow and automatic-release policy remains capped at `10 USDC`; higher values
+require operator review. These are platform controls, not token guarantees, so
+funders must still inspect the wallet transaction before signing.
 
 ## Readiness Gates
 
@@ -81,6 +106,11 @@ The strict gate requires:
 - Base mainnet RPC,
 - deployed Base mainnet escrow contract,
 - native Base USDC token.
+
+The official public Base RPC is sufficient for the first low-volume smoke and
+indexer bootstrap. Replace it with a managed RPC and failover before advertising
+higher-volume availability; do not change the chain, escrow address, or start
+block when replacing only the provider URL.
 
 Hosted API and MCP services expose the same non-secret readiness evidence:
 
@@ -178,6 +208,21 @@ Human-facing funding links can include `paymentPreference=paypal` to make the
 PayPal-capable path explicit on the static funding page. The parameter is a UI
 hint only; Stripe Checkout decides whether PayPal is available for the account,
 customer location, browser, currency, and configured payment-method set.
+
+After Checkout returns, route funders to the static status page with the hosted
+API URL, bounty id, and external reference:
+
+```text
+https://nspg13.github.io/agent-bounties/success.html?apiBaseUrl=$PUBLIC_BASE_URL&bountyId=<bounty-id>&externalReference=<external-reference>
+```
+
+The page reads `GET /v1/bounties/{id}` and shows `Checkout returned`, `waiting
+for webhook`, `funding reconciled`, or `needs operator review`. It must never
+present the redirect itself as funding evidence. `funding reconciled` is shown
+only when the matching Stripe funding intent reports `Applied` webhook evidence
+for the supplied funding intent id or external reference. Generic bounty
+claimability can come from another rail or contribution and must be shown
+separately, not attributed to the Checkout return.
 
 ## Payout Flow
 

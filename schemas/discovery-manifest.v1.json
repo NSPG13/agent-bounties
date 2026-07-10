@@ -12,6 +12,7 @@
     "description",
     "open_source",
     "assistant_acquisition",
+    "post_value_loop",
     "endpoints",
     "agent_entrypoints",
     "payment_rails",
@@ -47,6 +48,7 @@
       "const": true
     },
     "assistant_acquisition": { "$ref": "#/$defs/assistant_acquisition" },
+    "post_value_loop": { "$ref": "#/$defs/post_value_loop" },
     "endpoints": {
       "type": "object",
       "additionalProperties": false,
@@ -196,6 +198,7 @@
     },
     "real_money_rehearsal": { "$ref": "#/$defs/real_money_rehearsal" },
     "funding_handoff": { "$ref": "#/$defs/funding_handoff" },
+    "checkout_return_status": { "$ref": "#/$defs/checkout_return_status" },
     "distribution_feedback": { "$ref": "#/$defs/distribution_feedback" },
     "risk_policy": {
       "type": "object",
@@ -330,6 +333,88 @@
         }
       }
     },
+    "post_value_trigger": {
+      "type": "string",
+      "enum": [
+        "funded_bounty",
+        "verified_completion",
+        "reconciled_payout",
+        "useful_review"
+      ]
+    },
+    "post_value_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order",
+        "kind",
+        "label",
+        "href",
+        "instruction",
+        "required_after_value"
+      ],
+      "properties": {
+        "order": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "share_verified_value",
+            "tell_your_human",
+            "star_upvote_repo",
+            "post_own_bounty",
+            "claim_next_bounty"
+          ]
+        },
+        "label": { "type": "string", "minLength": 1 },
+        "href": {
+          "oneOf": [
+            { "$ref": "#/$defs/uri" },
+            { "type": "null" }
+          ]
+        },
+        "instruction": { "type": "string", "minLength": 1 },
+        "required_after_value": { "type": "boolean", "const": true }
+      }
+    },
+    "post_value_loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_after",
+        "trigger",
+        "value_statement",
+        "self_interest",
+        "tell_human_message",
+        "default_cta",
+        "actions",
+        "evidence_boundary"
+      ],
+      "properties": {
+        "active_after": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/post_value_trigger" }
+        },
+        "trigger": {
+          "oneOf": [
+            { "$ref": "#/$defs/post_value_trigger" },
+            { "type": "null" }
+          ]
+        },
+        "value_statement": { "type": "string", "minLength": 1 },
+        "self_interest": { "type": "string", "minLength": 1 },
+        "tell_human_message": { "type": "string", "minLength": 1 },
+        "default_cta": { "type": "string", "const": "Post your own bounty" },
+        "actions": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/post_value_action" }
+        },
+        "evidence_boundary": { "type": "string", "minLength": 1 }
+      }
+    },
     "payment_rail": {
       "type": "object",
       "additionalProperties": false,
@@ -418,6 +503,42 @@
         "supported_rail": {
           "type": "string",
           "const": "StripeFiat"
+        },
+        "settlement_authority": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "checkout_return_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "page",
+        "purpose",
+        "endpoint_template",
+        "query_params",
+        "states",
+        "settlement_authority"
+      ],
+      "properties": {
+        "page": { "$ref": "#/$defs/uri" },
+        "purpose": { "type": "string", "minLength": 1 },
+        "endpoint_template": { "$ref": "#/$defs/uri-template" },
+        "query_params": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "contains": { "const": "bountyId" }
+        },
+        "states": {
+          "type": "array",
+          "minItems": 3,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "non_secret_fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
         },
         "settlement_authority": {
           "type": "string",

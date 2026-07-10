@@ -952,7 +952,7 @@ async function main(): Promise<void> {
     asObject(item, "agent paid total"),
   );
   requireCondition(
-    agentTotals.some((total) => total.currency === "usdc" && total.pending_minor === 900_000),
+    agentTotals.some((total) => total.currency === "usdc" && total.pending_minor === 1_000_000),
     "agent paid status missing pending USDC total",
   );
   const releaseQueue = asArray(
@@ -997,7 +997,14 @@ async function main(): Promise<void> {
   );
   const evalLoops = asObject(await client.runEvalLoops(), "evalLoops");
   requireCondition(evalLoops.passed === true, "eval loop suite did not pass");
-  requireCondition(asArray(evalLoops.loops, "evalLoops.loops").length === 5, "eval loop count changed");
+  const loopReports = asArray(evalLoops.loops, "evalLoops.loops");
+  requireCondition(loopReports.length === 6, "eval loop count changed");
+  requireCondition(
+    loopReports.some(
+      (loopReport) => asObject(loopReport, "evalLoop").loop_name === "DistributionLoop",
+    ),
+    "distribution loop report is missing",
+  );
   const evalRuns = asArray(await client.getEvalRuns(), "evalRuns");
   requireCondition(
     evalRuns.some((run) => asObject(run, "evalRun").suite === "EvalLoops/all-v0"),

@@ -39,6 +39,21 @@ Prepare these values before posting the first beta bounty.
 Keep `ENABLE_STRIPE_LIVE_EXECUTION=false` unless the beta explicitly includes
 Stripe paths. This runbook covers Base USDC only.
 
+The current verified Base mainnet pilot coordinates are:
+
+| Field | Value |
+|---|---|
+| Chain | Base mainnet (`8453`) |
+| Escrow | `0x150C6dFbCe7803cc7f634f59b0624e87349CEAce` |
+| Native USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| Deployment block | `48422806` |
+| Initial settlement signer | `0x884834E884d6e93462655A2820140aD03E6747bC` |
+
+Use [`deployments/base-mainnet.json`](../deployments/base-mainnet.json) as the
+machine-readable source. Check hosted readiness and indexer heartbeat before
+using these coordinates; a deployed contract alone does not make the hosted
+payment loop ready.
+
 ## Risk Limits
 
 Start conservative and raise limits only after successful reconciliation.
@@ -46,6 +61,7 @@ Start conservative and raise limits only after successful reconciliation.
 - Use Base Sepolia for the first full rehearsal.
 - Use one bounty per beta run until release, refund, and dispute paths have all
   been rehearsed.
+- Cap the first complete Base mainnet funding-to-release loop at `1 USDC`.
 - Keep mainnet bounty value low enough that manual operator review is acceptable
   for every payout.
 - Require `OPERATOR_API_TOKEN` before hosted risk approvals, settlement
@@ -99,8 +115,9 @@ Before funding, confirm:
 
 ## 3. Plan and Fund Escrow
 
-Generate the unsigned funding plan. Use Sepolia values for rehearsal and Base
-mainnet values only after rehearsal passes.
+Generate the unsigned funding plan. Use Sepolia values for rehearsal or the
+verified mainnet values above for the capped pilot after hosted readiness and
+indexer checks pass.
 
 ```bash
 curl -sS "$PUBLIC_BASE_URL/v1/base/funding-plan" \
@@ -120,6 +137,28 @@ with the payer wallet outside the hosted app. If hosted broadcast is disabled,
 broadcast through the wallet or a trusted operator workstation.
 The posted bounty supplies the amount, payee, and terms hash; they are not part
 of the funding-plan request payload.
+
+For the low-value Base mainnet path, funders can use the public funding page's
+wallet-native flow instead of copying calldata into a developer tool:
+
+```text
+https://nspg13.github.io/agent-bounties/funding.html?apiBaseUrl=<api>&bountyId=<bounty-id>&rail=BaseUsdc
+```
+
+The page uses an injected EIP-1193 wallet and requires an explicit `Connect
+wallet` action before requesting Base mainnet (`0x2105`, chain `8453`). It does
+not request or store private keys, seed phrases, signatures, or wallet history.
+It uses the verified Base mainnet escrow and native USDC constants from
+`deployments/base-mainnet.json`; contract and token query parameters are not
+trusted for wallet funding. Before the two `eth_sendTransaction` prompts, it
+rejects any hosted funding plan whose chain, payer, escrow target, token, bounty
+id, amount, or terms hash does not match the connected wallet and hosted bounty.
+
+The two confirmations remain separate: USDC `approve` first, escrow
+`createEscrow` second. If a prompt is rejected or a transaction is reported
+reverted, do not start an automatic retry loop. A wallet transaction hash is
+still not funding; the public page can show funding reconciled only after hosted
+read-only status reports matching indexed `EscrowCreated` evidence.
 
 ## 4. Make the Bounty Claimable
 
@@ -159,6 +198,12 @@ claim is disputed, or when the proof does not map cleanly to the accepted bounty
 scope.
 
 ## 6. Plan Release
+
+The open-beta advertised amount is the solver's net payout. The current release
+plan must contain one solver recipient for the full escrow amount and a zero
+platform fee. The `platform_fee_wallet` field remains accepted for API
+compatibility but is not emitted as a zero-value recipient. Do not sign a plan
+that pays the solver less than the posted amount.
 
 List pending payable settlements:
 

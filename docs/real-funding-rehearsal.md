@@ -144,8 +144,8 @@ It then validates that:
 - Stripe payout applies only after `transfer.created`,
 - readiness reports whether `STRIPE_PAYMENT_METHOD_CONFIGURATION` is configured
   without exposing the Stripe object id,
-- final settlements contain paid solver payouts and platform fees for both
-  rails.
+- final settlements pay each rail's full advertised amount to the solver and
+  record a zero open-beta platform fee.
 
 The `Real Funding Rehearsal` GitHub Actions workflow runs the same script on
 manual dispatch, schedule, main-branch payment-path changes, and PRs that touch

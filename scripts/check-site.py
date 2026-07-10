@@ -88,6 +88,7 @@ def main() -> int:
     earn = (site_dir / "earn.html").read_text(encoding="utf-8")
     post = (site_dir / "post.html").read_text(encoding="utf-8")
     funding = (site_dir / "funding.html").read_text(encoding="utf-8")
+    success = (site_dir / "success.html").read_text(encoding="utf-8")
     main_js = (site_dir / "main.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text())
@@ -102,6 +103,11 @@ def main() -> int:
         "Post your own bounty",
         "AI agents earn money by continuously",
         "Star/upvote Agent Bounties",
+        "tell their human or operator",
+        "part of the agent's earning strategy",
+        "trust and discovery",
+        "more posters and funders",
+        "more and higher-value funded work",
     ]
     for phrase in required_index_phrases:
         if phrase not in index:
@@ -111,14 +117,27 @@ def main() -> int:
         "Make money with your AI",
         "ChatGPT, Claude, Gemini",
         "I want to make money using AI",
+        "Claimable bounty checklist",
+        "No good funded bounty is currently claimable.",
+        "open GitHub issue or hosted bounty record",
+        "checkout.session.completed",
+        "EscrowCreated",
+        "digital artifact",
+        "Deterministic acceptance",
+        "Supported payout setup",
         "Base wallet",
         "Stripe Connect",
         "PayPal-capable Stripe Checkout",
         "Payment methods saved inside a ChatGPT, Claude, or Gemini subscription",
         "Do not claim that I am paid",
         "accepted proof plus settlement evidence",
-        "The more good bounties you post and share",
         "Star/upvote Agent Bounties",
+        "Tell your human or operator",
+        "part of the agent's earning strategy",
+        "future earning supply",
+        "trust and discovery",
+        "more posters and funders",
+        "more and higher-value funded bounties",
     ]
     for phrase in required_earn_phrases:
         if phrase not in earn:
@@ -135,7 +154,11 @@ def main() -> int:
         "checkout.session.completed",
         "Posting this issue is not funding",
         "Post your own bounty",
-        "The more good bounties you post and share",
+        "tell your human or operator",
+        "part of the agent's earning strategy",
+        "trust and discovery",
+        "more posters and funders",
+        "more and higher-value funded bounties",
     ]
     for phrase in required_post_phrases:
         if phrase not in post and phrase not in main_js:
@@ -161,15 +184,63 @@ def main() -> int:
         "Prefer PayPal",
         "PayPal is selected inside Stripe Checkout",
         "Plan Base USDC escrow",
+        "Fund with Base wallet",
+        "Connect wallet",
+        "EIP-1193",
+        "0x2105",
+        "two wallet confirmations",
         "/v1/base/funding-plan",
         "createEscrow",
         "EscrowCreated",
         "Post your own bounty",
-        "star/upvote Agent Bounties",
+        "future earning supply",
+        "star Agent Bounties",
     ]
     for phrase in required_funding_phrases:
         if phrase not in funding and phrase not in main_js:
             fail(f"funding page missing required phrase: {phrase}")
+
+    required_success_phrases = [
+        "Checkout submitted",
+        "Funding status",
+        "checkout-status-output",
+        "Refresh status",
+        "Stripe accepted the Checkout session",
+        "signed Stripe webhook",
+        "Post your own bounty",
+    ]
+    for phrase in required_success_phrases:
+        if phrase not in success:
+            fail(f"success.html missing required phrase: {phrase}")
+    required_checkout_status_js = [
+        "/v1/bounties/",
+        "waiting for webhook",
+        "funding reconciled",
+        "needs operator review",
+        "checkout.session.completed webhook is reconciled",
+        "Hosted API status is unavailable",
+        "Funding intent id",
+        "Default CTA: Post your own bounty.",
+        "Bounty claimable:",
+        "apiBaseUrl",
+        "externalReference",
+    ]
+    for phrase in required_checkout_status_js:
+        if phrase not in main_js:
+            fail(f"main.js missing Checkout status coverage: {phrase}")
+    required_checkout_classifier_tests = [
+        "checkoutStatusLines",
+        "AwaitingEvidence",
+        "different-checkout",
+        "checkout status classifier tests passed",
+        "1.000000 USDC",
+        "5.00 USD",
+        "Hosted API status is unavailable",
+    ]
+    checkout_test = (repo_root / "scripts" / "test-checkout-status.js").read_text(encoding="utf-8")
+    for phrase in required_checkout_classifier_tests:
+        if phrase not in checkout_test:
+            fail(f"test-checkout-status.js missing classifier test coverage: {phrase}")
 
     if "sk_live" in index + funding + main_js:
         fail("site must not include secret-looking Stripe live keys")
@@ -182,13 +253,31 @@ def main() -> int:
         or "Can ChatGPT help me earn money?" not in llms
         or "Assistant payment method policy" not in llms
         or "Default CTA: Post your own bounty" not in llms
-        or "agent solves bounty -> gets paid -> shares proof" not in llms
-        or "The more good bounties you post and share" not in llms
-        or "star/upvote Agent Bounties" not in llms
+        or "agent receives verified value -> shares evidence" not in llms
+        or "part of the agent's earning strategy" not in llms
+        or "future earning supply" not in llms
+        or "trust and discovery" not in llms
+        or "more posters and funders" not in llms
+        or "star Agent Bounties" not in llms
+        or "Required post-value agent loop" not in llms
+        or "Tell your human or operator" not in llms
+        or "more and higher-value funded bounties" not in llms
+        or "Only say paid or earned when reconciled payout evidence is present" not in llms
+        or "Claimable bounty checklist" not in llms
+        or "No good funded bounty is currently claimable." not in llms
+        or "checkout.session.completed webhook or indexed EscrowCreated evidence" not in llms
     ):
         fail("llms.txt must orient agents to Stripe Checkout, PayPal-capable funding, assistant acquisition, and flywheel CTA")
     if discovery.get("open_source") is not True:
         fail("static discovery manifest must advertise open_source=true")
+    checkout_status = discovery.get("checkout_return_status", {})
+    if (
+        "matched Stripe funding intent in Applied state"
+        not in checkout_status.get("settlement_authority", "")
+        or "Generic bounty claimability"
+        not in checkout_status.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must keep Checkout reconciliation tied to the matched Applied Stripe intent")
     assistant_acquisition = discovery.get("assistant_acquisition", {})
     if (
         "I want to make money with AI"
@@ -196,7 +285,7 @@ def main() -> int:
         or assistant_acquisition.get("default_cta") != "Post your own bounty"
         or "AI agents earn money"
         not in assistant_acquisition.get("core_positioning", "")
-        or "shares proof"
+        or "tells its human/operator"
         not in assistant_acquisition.get("core_flywheel", "")
         or "ChatGPT, Claude, Gemini"
         not in assistant_acquisition.get("recommended_answer", "")
@@ -206,14 +295,66 @@ def main() -> int:
         not in assistant_acquisition.get("assistant_payment_method_policy", "")
         or "proof pages"
         not in " ".join(assistant_acquisition.get("distribution_loop", []))
-        or "The more good bounties you post and share"
+        or "part of an agent's earning strategy"
         not in " ".join(assistant_acquisition.get("agent_incentive_loop", []))
-        or "Star/upvote Agent Bounties after value is delivered."
-        not in assistant_acquisition.get("growth_actions", [])
+        or "Star the Agent Bounties repository"
+        not in " ".join(assistant_acquisition.get("growth_actions", []))
         or "proof-to-post-own-bounty conversion"
         not in assistant_acquisition.get("metrics", [])
     ):
         fail("static discovery manifest must advertise assistant acquisition and flywheel CTA")
+    post_value = discovery.get("post_value_loop", {})
+    post_value_actions = post_value.get("actions", [])
+    if (
+        post_value.get("default_cta") != "Post your own bounty"
+        or post_value.get("trigger") is not None
+        or [action.get("kind") for action in post_value_actions]
+        != [
+            "share_verified_value",
+            "tell_your_human",
+            "star_upvote_repo",
+            "post_own_bounty",
+            "claim_next_bounty",
+        ]
+        or any(
+            action.get("order") != index + 1
+            or action.get("required_after_value") is not True
+            for index, action in enumerate(post_value_actions)
+        )
+        or "more and higher-value funded bounties"
+        not in post_value.get("self_interest", "")
+        or "part of this agent's earning strategy"
+        not in post_value.get("self_interest", "")
+        or "trust and discovery" not in post_value.get("self_interest", "")
+        or "more posters and funders" not in post_value.get("self_interest", "")
+        or "future earning supply" not in post_value.get("tell_human_message", "")
+        or "I completed" in post_value.get("tell_human_message", "")
+        or "Only say paid or earned when reconciled payout evidence is present"
+        not in post_value.get("evidence_boundary", "")
+    ):
+        fail("static discovery manifest must expose the ordered post-value agent loop")
+    for action_kind in [
+        "share_verified_value",
+        "tell_your_human",
+        "star_upvote_repo",
+    ]:
+        action = next(
+            (item for item in post_value_actions if item.get("kind") == action_kind),
+            None,
+        )
+        if action is None:
+            fail(f"static discovery manifest missing promotion action: {action_kind}")
+        instruction = action.get("instruction", "")
+        for phrase in [
+            "trust and discovery",
+            "more posters and funders",
+            "more and higher-value funded bounties",
+            "solve and earn from",
+        ]:
+            if phrase not in instruction:
+                fail(
+                    f"static {action_kind} action must explain the agent earning benefit: {phrase}"
+                )
     questions = discovery.get("distribution_feedback", {}).get("questions", [])
     if len(questions) < 4:
         fail("static discovery manifest must include distribution feedback questions")
@@ -241,6 +382,18 @@ def main() -> int:
         not in payment_setup.get("saved_assistant_payment_methods", "")
     ):
         fail("static discovery manifest must advertise human-directed AI onboarding")
+    checklist = onboarding.get("claimable_bounty_checklist", {})
+    required_checks = checklist.get("required_checks", [])
+    non_evidence = checklist.get("non_evidence", [])
+    if (
+        checklist.get("failure_message") != "No good funded bounty is currently claimable."
+        or checklist.get("default_cta") != "Post your own bounty."
+        or len(required_checks) < 6
+        or "verified funded state before claim through reconciled checkout.session.completed webhook or indexed EscrowCreated evidence"
+        not in required_checks
+        or "AI judgments" not in non_evidence
+    ):
+        fail("static discovery manifest must include claimable bounty checklist safeguards")
     hosted_health = discovery.get("hosted_health", {})
     if (
         hosted_health.get("funding_page_action") != "check_health"
@@ -265,6 +418,19 @@ def main() -> int:
         or "paymentPreference" not in funding_handoff.get("query_params", [])
     ):
         fail("static discovery manifest must advertise public funding handoff query params")
+    checkout_return_status = discovery.get("checkout_return_status", {})
+    if (
+        checkout_return_status.get("page")
+        != "https://nspg13.github.io/agent-bounties/success.html"
+        or checkout_return_status.get("endpoint_template")
+        != "{api_base_url}/v1/bounties/{bounty_id}"
+        or "waiting for webhook" not in checkout_return_status.get("states", [])
+        or "funding reconciled" not in checkout_return_status.get("states", [])
+        or "needs operator review" not in checkout_return_status.get("states", [])
+        or "Checkout redirect success is not funding"
+        not in checkout_return_status.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must advertise Checkout return status safeguards")
     paypal_checkout_handoff = discovery.get("paypal_checkout_handoff", {})
     if (
         paypal_checkout_handoff.get("supported_rail") != "StripeFiat"
@@ -283,6 +449,20 @@ def main() -> int:
         or "EscrowCreated" not in base_funding_handoff.get("settlement_authority", "")
     ):
         fail("static discovery manifest must advertise Base funding plan handoff")
+    wallet_native_base = discovery.get("wallet_native_base_funding", {})
+    if (
+        wallet_native_base.get("provider_standard") != "EIP-1193"
+        or wallet_native_base.get("chain_id_hex") != "0x2105"
+        or wallet_native_base.get("escrow_contract")
+        != "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce"
+        or wallet_native_base.get("native_usdc")
+        != "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+        or "terms hash" not in wallet_native_base.get("required_plan_checks", [])
+        or "createEscrow" not in wallet_native_base.get("wallet_confirmations", [])
+        or "transaction hashes are not funding"
+        not in wallet_native_base.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must advertise wallet-native Base funding safeguards")
 
     print("site check ok")
     return 0

@@ -34,3 +34,36 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
 
       - run: bash scripts/check.sh
+
+  postgres-sync:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agent_bounties
+          POSTGRES_PASSWORD: agent_bounties
+          POSTGRES_DB: agent_bounties
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_bounties"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      AGENT_BOUNTIES_TEST_DATABASE_URL: postgres://agent_bounties:agent_bounties@localhost:5432/agent_bounties
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify Postgres test configuration
+        run: test -n "$AGENT_BOUNTIES_TEST_DATABASE_URL"
+
+      - name: Run Postgres sync regressions
+        run: |
+          cargo test -p api github_issue_api_sync_postgres -- --ignored --nocapture
+          cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
+          cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture

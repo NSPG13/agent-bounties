@@ -36,9 +36,13 @@ The Blueprint intentionally starts with live-value mutation disabled:
 - `ENABLE_BASE_TX_BROADCAST=false`
 - `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false`
 
-Render generates `OPERATOR_API_TOKEN`. Stripe secrets, Base RPC URLs, escrow
-contracts, settlement signer, platform fee wallet, and indexer start block are
-Dashboard-provided values. `STRIPE_PAYMENT_METHOD_CONFIGURATION` is an optional
+Render generates `OPERATOR_API_TOKEN`. Stripe secrets remain
+Dashboard-provided. The verified Base mainnet escrow address, public signer and
+fee-wallet addresses, official bootstrap RPC, and deployment start block come
+from [`deployments/base-mainnet.json`](../deployments/base-mainnet.json) and are
+checked into the Blueprint. Replace the public RPC with a managed provider at
+higher volume, but do not replace the escrow coordinates without a reviewed
+deployment-manifest change. `STRIPE_PAYMENT_METHOD_CONFIGURATION` is an optional
 non-secret Stripe Dashboard id for targeting a Checkout payment-method set such
 as a PayPal-enabled configuration. Do not enable public Checkout funding until
 Stripe webhooks are configured and
@@ -105,14 +109,46 @@ credit balances, enable Checkout, or authorize payout. Stripe/Base rails still
 require secrets + readiness gates in
 [live-money-activation.md](live-money-activation.md).
 
+## Base mainnet deployment attestation
+
+Replayable read-only checks compare live Base mainnet RPC state against
+[`deployments/base-mainnet.json`](../deployments/base-mainnet.json). The harness
+never signs, broadcasts, funds, releases, or mutates on-chain state.
+
+Offline deterministic replay (default CI path):
+
+```powershell
+python -m pip install -r scripts\requirements-attest.txt
+python scripts\test_base_deployment_attest.py -v
+python scripts\base_deployment_attest.py --mock-fixture scripts\fixtures\base_attest\success.json
+```
+
+On Unix-like shells:
+
+```bash
+python3 -m pip install -r scripts/requirements-attest.txt
+python3 scripts/test_base_deployment_attest.py -v
+python3 scripts/base_deployment_attest.py --mock-fixture scripts/fixtures/base_attest/success.json
+```
+
+Opt-in production smoke against the public manifest RPC:
+
+```powershell
+python scripts\base_deployment_attest.py --live --json-out target\base-mainnet-attest.json
+```
+
+Passing attestation proves deployment coordinates still match the manifest. It does
+**not** prove hosted API health, indexer health, bounty funding, claimability,
+acceptance, payout, or settlement.
+
 To deploy from the Dashboard after the PR is merged:
 
 1. Open
    `https://dashboard.render.com/blueprint/new?repo=https://github.com/NSPG13/agent-bounties`.
 2. Connect GitHub if prompted and select the merged `main` branch.
 3. Review the API, MCP, worker, and Postgres resources.
-4. Fill the `sync: false` values for Stripe/Base only when you are ready to run
-   the corresponding rail.
+4. Leave optional Base Sepolia values blank unless running a testnet rehearsal;
+   fill Stripe secrets only when you are ready to run the fiat rail.
 5. Apply the Blueprint and wait for all services to deploy.
 6. Update `PUBLIC_BASE_URL` and `MCP_BASE_URL` if Render assigned different
    hostnames or you attached custom domains.
@@ -124,6 +160,18 @@ To deploy from the Dashboard after the PR is merged:
    `AGENT_BOUNTIES_API_BASE_URL` so GitHub funding-comment handoffs can prefill
    the public Stripe Checkout funding page. A dead or unverified API URL should
    not be advertised to funders.
+10. Verify a post-Checkout return URL in the browser:
+   `https://nspg13.github.io/agent-bounties/success.html?apiBaseUrl=<api>&bountyId=<bounty-id>&externalReference=<external-reference>`.
+   The page may show `waiting for webhook`, `funding reconciled`, or `needs
+   operator review` from `GET /v1/bounties/{id}`, but the Checkout redirect
+   itself is not funding evidence. It should show `funding reconciled` only
+   when the matched Stripe funding intent is `Applied`; generic bounty
+   claimability is displayed separately.
+
+The checked-in Base worker starts at block `48422806` for escrow
+`0x150C6dFbCe7803cc7f634f59b0624e87349CEAce`. It is read-only with respect to
+wallet signing: `ENABLE_BASE_TX_BROADCAST=false`, and no private key belongs in
+Render. Source and deployment links are recorded in the deployment manifest.
 
 The Blueprint uses low paid service/database plans because the Base indexer is a
 background worker and real-money webhooks should not depend on sleeping
