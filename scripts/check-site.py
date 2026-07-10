@@ -170,6 +170,11 @@ def main() -> int:
         "Prefer PayPal",
         "PayPal is selected inside Stripe Checkout",
         "Plan Base USDC escrow",
+        "Fund with Base wallet",
+        "Connect wallet",
+        "EIP-1193",
+        "0x2105",
+        "two wallet confirmations",
         "/v1/base/funding-plan",
         "createEscrow",
         "EscrowCreated",
@@ -370,6 +375,20 @@ def main() -> int:
         or "EscrowCreated" not in base_funding_handoff.get("settlement_authority", "")
     ):
         fail("static discovery manifest must advertise Base funding plan handoff")
+    wallet_native_base = discovery.get("wallet_native_base_funding", {})
+    if (
+        wallet_native_base.get("provider_standard") != "EIP-1193"
+        or wallet_native_base.get("chain_id_hex") != "0x2105"
+        or wallet_native_base.get("escrow_contract")
+        != "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce"
+        or wallet_native_base.get("native_usdc")
+        != "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+        or "terms hash" not in wallet_native_base.get("required_plan_checks", [])
+        or "createEscrow" not in wallet_native_base.get("wallet_confirmations", [])
+        or "transaction hashes are not funding"
+        not in wallet_native_base.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must advertise wallet-native Base funding safeguards")
 
     print("site check ok")
     return 0

@@ -854,37 +854,26 @@ impl PostgresStore {
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter()
-            .map(|row| {
-                let amount = match (
-                    row.try_get::<Option<i64>, _>("amount")?,
-                    row.try_get::<Option<String>, _>("currency")?,
-                ) {
-                    (Some(amount), Some(currency)) => Some(Money::new(amount, currency)?),
-                    _ => None,
-                };
-                Ok(BaseEscrowEvent {
-                    id: row.try_get("id")?,
-                    log_key: row.try_get("log_key")?,
-                    tx_hash: row.try_get("tx_hash")?,
-                    block_number: u64_from_i64(row.try_get("block_number")?)?,
-                    onchain_escrow_id: row
-                        .try_get::<String, _>("onchain_escrow_id")?
-                        .parse()
-                        .map_err(|_| DbError::InvalidEnum("onchain_escrow_id".to_string()))?,
-                    bounty_id: row.try_get("bounty_id")?,
-                    kind: parse_base_escrow_event_kind(row.try_get::<String, _>("kind")?)?,
-                    status: parse_escrow_status(row.try_get::<String, _>("status")?)?,
-                    token: row.try_get("token")?,
-                    amount,
-                    terms_hash: row.try_get("terms_hash")?,
-                    proof_hash: row.try_get("proof_hash")?,
-                    reason_hash: row.try_get("reason_hash")?,
-                    dispute_hash: row.try_get("dispute_hash")?,
-                    occurred_at: row.try_get("occurred_at")?,
-                })
-            })
-            .collect()
+        rows.into_iter().map(base_escrow_event_from_row).collect()
+    }
+
+    pub async fn list_base_escrow_events_for_bounty(
+        &self,
+        bounty_id: Id,
+    ) -> DbResult<Vec<BaseEscrowEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, log_key, tx_hash, block_number, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at
+            FROM base_escrow_events
+            WHERE bounty_id = $1
+            ORDER BY block_number, COALESCE(log_index, 0), occurred_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(base_escrow_event_from_row).collect()
     }
 
     pub async fn get_base_log_cursor(
@@ -1742,6 +1731,36 @@ fn parse_base_escrow_event_kind(value: String) -> DbResult<BaseEscrowEventKind> 
         "Paused" => Ok(BaseEscrowEventKind::Paused),
         _ => Err(DbError::InvalidEnum(value)),
     }
+}
+
+fn base_escrow_event_from_row(row: PgRow) -> DbResult<BaseEscrowEvent> {
+    let amount = match (
+        row.try_get::<Option<i64>, _>("amount")?,
+        row.try_get::<Option<String>, _>("currency")?,
+    ) {
+        (Some(amount), Some(currency)) => Some(Money::new(amount, currency)?),
+        _ => None,
+    };
+    Ok(BaseEscrowEvent {
+        id: row.try_get("id")?,
+        log_key: row.try_get("log_key")?,
+        tx_hash: row.try_get("tx_hash")?,
+        block_number: u64_from_i64(row.try_get("block_number")?)?,
+        onchain_escrow_id: row
+            .try_get::<String, _>("onchain_escrow_id")?
+            .parse()
+            .map_err(|_| DbError::InvalidEnum("onchain_escrow_id".to_string()))?,
+        bounty_id: row.try_get("bounty_id")?,
+        kind: parse_base_escrow_event_kind(row.try_get::<String, _>("kind")?)?,
+        status: parse_escrow_status(row.try_get::<String, _>("status")?)?,
+        token: row.try_get("token")?,
+        amount,
+        terms_hash: row.try_get("terms_hash")?,
+        proof_hash: row.try_get("proof_hash")?,
+        reason_hash: row.try_get("reason_hash")?,
+        dispute_hash: row.try_get("dispute_hash")?,
+        occurred_at: row.try_get("occurred_at")?,
+    })
 }
 
 fn parse_risk_surface(value: String) -> DbResult<RiskSurface> {

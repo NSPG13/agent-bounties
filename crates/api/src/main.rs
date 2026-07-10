@@ -2748,11 +2748,27 @@ async fn bounty_status(
     State(state): State<SharedState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<BountyStatusResponse>, StatusCode> {
-    let network = state.network.lock().expect("state poisoned");
-    network
-        .status(id)
-        .map(Json)
-        .map_err(|_| StatusCode::NOT_FOUND)
+    let mut status = {
+        let network = state.network.lock().expect("state poisoned");
+        network.status(id).map_err(|_| StatusCode::NOT_FOUND)?
+    };
+    status.base_escrow_events = if let Some(store) = &state.store {
+        store
+            .list_base_escrow_events_for_bounty(id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        state
+            .base_log_worker
+            .lock()
+            .expect("state poisoned")
+            .indexed_events()
+            .iter()
+            .filter(|event| event.bounty_id == id)
+            .cloned()
+            .collect()
+    };
+    Ok(Json(status))
 }
 
 async fn public_proof_page(
@@ -4461,6 +4477,102 @@ mod tests {
         assert_eq!(stale_status.bounty.title, edited.title);
     }
 
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn bounty_status_reads_base_events_from_postgres_after_cross_process_indexing() {
+        let database_url = postgres_test_database_url();
+        let api_store = PostgresStore::connect(&database_url).await.unwrap();
+        api_store.migrate().await.unwrap();
+
+        let mut api_network = BountyNetwork::default();
+        let bounty = api_network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Expose separately indexed Base evidence".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        let other_bounty = api_network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Filter unrelated Base evidence".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        api_store.upsert_bounty(&bounty).await.unwrap();
+        api_store.upsert_bounty(&other_bounty).await.unwrap();
+        let api_state =
+            test_state_with_operator_token_and_store(api_network, "secret-token", api_store);
+
+        let initial_status = bounty_status(State(api_state.clone()), Path(bounty.id))
+            .await
+            .unwrap()
+            .0;
+        assert!(initial_status.base_escrow_events.is_empty());
+
+        let indexer_store = PostgresStore::connect(&database_url).await.unwrap();
+        let mut indexer_network = hydrate_network(&indexer_store).await.unwrap();
+        let mut indexer_worker = worker::hydrate_base_log_worker(&indexer_store)
+            .await
+            .unwrap();
+        let terms_hash = format!("0x{}", bounty.terms_hash.clone().unwrap());
+        let other_terms_hash = format!("0x{}", other_bounty.terms_hash.clone().unwrap());
+        let onchain_escrow_id = bounty.id.as_u128() % 1_000_000_000_000 + 10_000;
+        let other_onchain_escrow_id = onchain_escrow_id + 1;
+        let mut created_log = raw_created_log(
+            onchain_escrow_id,
+            bounty.id,
+            "0x2222222222222222222222222222222222222222",
+            "0x3333333333333333333333333333333333333333",
+            bounty.amount.clone(),
+            &terms_hash,
+            222,
+            0,
+        );
+        created_log.tx_hash = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let created_tx_hash = created_log.tx_hash.clone();
+        let mut other_log = raw_created_log(
+            other_onchain_escrow_id,
+            other_bounty.id,
+            "0x2222222222222222222222222222222222222222",
+            "0x3333333333333333333333333333333333333333",
+            other_bounty.amount,
+            &other_terms_hash,
+            223,
+            0,
+        );
+        other_log.tx_hash = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+
+        let report = worker::process_base_evm_logs_and_persist(
+            &indexer_store,
+            &mut indexer_worker,
+            &mut indexer_network,
+            vec![created_log, other_log],
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.applied_events.len(), 2);
+
+        let status = bounty_status(State(api_state), Path(bounty.id))
+            .await
+            .unwrap()
+            .0;
+
+        assert_eq!(status.base_escrow_events.len(), 1);
+        assert_eq!(status.base_escrow_events[0].bounty_id, bounty.id);
+        assert_eq!(
+            status.base_escrow_events[0].onchain_escrow_id,
+            onchain_escrow_id
+        );
+        assert_eq!(status.base_escrow_events[0].tx_hash, created_tx_hash);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn github_issue_api_sync_postgres_serializes_concurrent_initial_sync() {
@@ -5748,6 +5860,62 @@ mod tests {
             status.settlements[0].payout_intents[0].status,
             PayoutStatus::Paid
         );
+    }
+
+    #[tokio::test]
+    async fn bounty_status_uses_local_base_worker_events_without_store() {
+        let mut network = BountyNetwork::default();
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Expose local Base escrow evidence".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        let other_bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Keep other Base escrow evidence out".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        let state = test_state(network);
+        let event = chain_base::simulated_created_event(
+            bounty.id,
+            21,
+            "0x3333333333333333333333333333333333333333",
+            bounty.amount.clone(),
+            bounty.terms_hash.clone().unwrap(),
+        );
+        let other_event = chain_base::simulated_created_event(
+            other_bounty.id,
+            22,
+            "0x3333333333333333333333333333333333333333",
+            other_bounty.amount,
+            other_bounty.terms_hash.unwrap(),
+        );
+
+        {
+            let mut worker = state.base_log_worker.lock().expect("state poisoned");
+            worker.ingest_indexed_event(event.clone()).unwrap();
+            worker.ingest_indexed_event(other_event).unwrap();
+        }
+
+        let status = bounty_status(State(state), Path(bounty.id))
+            .await
+            .unwrap()
+            .0;
+
+        assert_eq!(status.base_escrow_events.len(), 1);
+        assert_eq!(status.base_escrow_events[0].id, event.id);
+        assert_eq!(status.base_escrow_events[0].bounty_id, bounty.id);
+        assert_eq!(status.base_escrow_events[0].onchain_escrow_id, 21);
     }
 
     #[tokio::test]

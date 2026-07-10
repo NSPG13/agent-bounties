@@ -253,6 +253,26 @@ you control. Hosted transaction broadcast is disabled unless
 `ENABLE_BASE_TX_BROADCAST=true`; transaction hashes and planner output are not
 settlement.
 
+For low-value Base mainnet funding, the public funding page also exposes a
+wallet-native path:
+
+```text
+https://nspg13.github.io/agent-bounties/funding.html?apiBaseUrl=<api>&bountyId=<bounty-id>&rail=BaseUsdc
+```
+
+Use the `Connect wallet` action with an injected EIP-1193 wallet. The page
+requires Base mainnet (`0x2105`, chain `8453`), then requests the hosted
+`/v1/base/funding-plan` with the verified Base mainnet escrow and native USDC
+deployment constants. Before any `eth_sendTransaction`, the page rejects plans
+whose chain, payer, escrow target, token, bounty id, amount, or terms hash do
+not match the connected wallet, hosted bounty, and
+`deployments/base-mainnet.json`. The wallet flow still requires two separate
+confirmations: USDC `approve` first, escrow `createEscrow` second.
+
+Do not describe a wallet popup, submitted transaction hash, or successful wallet
+return value as funded. Funding is reconciled only after hosted read-only status
+shows matching indexed `EscrowCreated` evidence.
+
 After the escrow contract emits `EscrowCreated`, reconcile the indexed event.
 Tool: `reconcile_base_escrow_event`.
 

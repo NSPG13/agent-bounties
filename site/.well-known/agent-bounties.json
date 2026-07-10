@@ -254,6 +254,31 @@
     "supported_rail": "BaseUsdc",
     "settlement_authority": "transaction plans are not funding; Base funding requires indexed EscrowCreated log reconciliation"
   },
+  "wallet_native_base_funding": {
+    "page": "https://nspg13.github.io/agent-bounties/funding.html",
+    "action": "connect_wallet_then_fund",
+    "provider_standard": "EIP-1193",
+    "network": "base-mainnet",
+    "chain_id": 8453,
+    "chain_id_hex": "0x2105",
+    "escrow_contract": "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
+    "native_usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "required_plan_checks": [
+      "connected payer",
+      "Base mainnet chain id",
+      "verified escrow contract",
+      "native USDC token",
+      "bounty id",
+      "amount",
+      "terms hash"
+    ],
+    "wallet_confirmations": [
+      "USDC approve",
+      "createEscrow"
+    ],
+    "query_param_policy": "apiBaseUrl and bountyId may prefill the page; contract and token query parameters are ignored for wallet funding.",
+    "settlement_authority": "wallet prompts and transaction hashes are not funding; only hosted status with indexed EscrowCreated evidence can show Base wallet funding reconciled"
+  },
   "base_mainnet_escrow": {
     "network": "base-mainnet",
     "chain_id": 8453,
