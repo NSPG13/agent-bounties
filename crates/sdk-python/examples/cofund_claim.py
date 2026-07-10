@@ -18,16 +18,16 @@ def run_example(client: AgentBountiesClient) -> dict:
     endpoints = discovery.get("endpoints", {})
     require(isinstance(endpoints.get("llms_txt"), str), "discovery missing llms.txt")
     require(
-        isinstance(endpoints.get("pooled_bounties"), str),
-        "discovery missing pooled bounty endpoint",
+        isinstance(endpoints.get("autonomous_bounty_feed"), str),
+        "discovery missing autonomous bounty feed",
     )
     require(
-        isinstance(endpoints.get("base_funding_plan"), str),
-        "discovery missing Base funding planner endpoint",
+        isinstance(endpoints.get("autonomous_contribution_plan"), str),
+        "discovery missing autonomous contribution planner",
     )
     require(
-        isinstance(endpoints.get("github_claim_comment_plan"), str),
-        "discovery missing GitHub claim comment planner endpoint",
+        discovery.get("protocol", {}).get("operator_settlement_signer") is False,
+        "autonomous protocol must not require a settlement operator",
     )
 
     solver = client.register_agent(
@@ -115,35 +115,13 @@ def run_example(client: AgentBountiesClient) -> dict:
     paid = client.get_paid_status(bounty_id)
     require(len(paid["settlements"]) == 1, "paid status missing simulated settlement")
 
-    base_bounty = client.open_pooled_bounty(
-        title=f"Python SDK Base Sepolia funding plan {suffix}",
-        template_slug="fix-ci-failure",
-        target_amount_minor=1_000_000,
-        currency="usdc",
-        funding_mode="BaseUsdcEscrow",
-        privacy="Public",
-    )
-    base_plan = client.plan_base_funding(
-        base_bounty["id"],
-        "0x1111111111111111111111111111111111111111",
-        "0x2222222222222222222222222222222222222222",
-        "0x3333333333333333333333333333333333333333",
-        network="base-sepolia",
-    )
-    require(base_plan["network"]["chain_id"] == 84_532, "Base plan did not use Base Sepolia")
-    require(
-        base_plan["funding"]["create_escrow"]["function"]
-        == "createEscrow(bytes32,address,uint256,bytes32)",
-        "Base plan createEscrow function drifted",
-    )
-
     return {
         "example": "python-cofund-claim",
         "bounty_id": bounty_id,
         "claim_decision": claim_plan["signal"]["decision"],
         "status": status["bounty"]["status"],
         "settlements": len(paid["settlements"]),
-        "base_plan_network": base_plan["network"]["name"],
+        "protocol": discovery["protocol"]["version"],
     }
 
 

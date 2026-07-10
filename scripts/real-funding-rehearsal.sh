@@ -33,11 +33,15 @@ fi
 cd "$repo_root"
 mkdir -p "$out_dir"
 
-cargo run -q -p cli -- funding-rehearsal-demo > "$out_dir/funding-rehearsal-demo.json"
+cargo run -q -p cli -- discovery \
+  --public-base-url https://agentbounties.example \
+  --mcp-base-url https://agentbounties.example/mcp \
+  > "$out_dir/autonomous-discovery.json"
 cargo run -q -p cli -- real-funding-readiness \
   --network base-sepolia \
   --escrow-contract 0x1111111111111111111111111111111111111111 \
   --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
-  > "$out_dir/real-funding-readiness.json"
+  > "$out_dir/autonomous-readiness.json"
+cp deployments/base-mainnet.json "$out_dir/base-mainnet-deployment.json"
 
 "${python_cmd[@]}" scripts/validate_real_funding_rehearsal.py "$out_dir"

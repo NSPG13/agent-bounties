@@ -49,16 +49,17 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
   const endpoints = asObject(discovery.endpoints, "discovery.endpoints");
   requireCondition(typeof endpoints.llms_txt === "string", "discovery missing llms.txt");
   requireCondition(
-    typeof endpoints.pooled_bounties === "string",
-    "discovery missing pooled bounty endpoint",
+    typeof endpoints.autonomous_bounty_feed === "string",
+    "discovery missing autonomous bounty feed",
   );
   requireCondition(
-    typeof endpoints.base_funding_plan === "string",
-    "discovery missing Base funding planner endpoint",
+    typeof endpoints.autonomous_contribution_plan === "string",
+    "discovery missing autonomous contribution planner",
   );
+  const protocol = asObject(discovery.protocol, "discovery.protocol");
   requireCondition(
-    typeof endpoints.github_claim_comment_plan === "string",
-    "discovery missing GitHub claim comment planner endpoint",
+    protocol.operator_settlement_signer === false,
+    "autonomous protocol must not require a settlement operator",
   );
 
   const solver = asObject(
@@ -191,44 +192,13 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
   const settlements = asArray(paid.settlements, "paid.settlements");
   requireCondition(settlements.length === 1, "paid status missing simulated settlement");
 
-  const baseBounty = asObject(
-    await client.openPooledBounty({
-      title: `TypeScript SDK Base Sepolia funding plan ${suffix}`,
-      template_slug: "fix-ci-failure",
-      target_amount_minor: 1_000_000,
-      currency: "usdc",
-      funding_mode: "BaseUsdcEscrow",
-      privacy: "Public",
-    }),
-    "baseBounty",
-  );
-  const basePlan = asObject(
-    await client.planBaseFunding({
-      bounty_id: stringField(baseBounty, "id"),
-      escrow_contract: "0x1111111111111111111111111111111111111111",
-      payer: "0x2222222222222222222222222222222222222222",
-      token: "0x3333333333333333333333333333333333333333",
-      network: "base-sepolia",
-    }),
-    "basePlan",
-  );
-  requireCondition(
-    asObject(basePlan.network, "basePlan.network").chain_id === 84_532,
-    "Base plan did not use Base Sepolia",
-  );
-  requireCondition(
-    asObject(asObject(basePlan.funding, "basePlan.funding").create_escrow, "basePlan.create_escrow")
-      .function === "createEscrow(bytes32,address,uint256,bytes32)",
-    "Base plan createEscrow function drifted",
-  );
-
   return {
     example: "typescript-cofund-claim",
     bounty_id: bountyId,
     claim_decision: claimSignal.decision,
     status: statusBounty.status,
     settlements: settlements.length,
-    base_plan_network: asObject(basePlan.network, "basePlan.network").name,
+    protocol: protocol.version,
   };
 }
 

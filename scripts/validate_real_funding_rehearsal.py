@@ -1,235 +1,159 @@
-#!/usr/bin/env python3
-"""Validate deterministic real-funding rehearsal artifacts.
-
-The rehearsal artifacts are intentionally strict: they prove that Stripe and
-Base plans do not mutate payment state until webhook/log evidence is reconciled.
-"""
-
-from __future__ import annotations
-
 import json
 import sys
 from pathlib import Path
 from typing import Any
 
 
-EXPECTED_STRIPE_API_VERSION = "2026-02-25.clover"
 EXPECTED_BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
-EXPECTED_BASE_CHAIN_ID = 84532
-
-
-def load_json(path: Path) -> dict[str, Any]:
-    try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
-    except FileNotFoundError:
-        fail(f"missing artifact: {path}")
-    except json.JSONDecodeError as error:
-        fail(f"invalid JSON in {path}: {error}")
-
-
-def fail(message: str) -> None:
-    raise SystemExit(f"real funding rehearsal validation failed: {message}")
 
 
 def expect(condition: bool, message: str) -> None:
     if not condition:
-        fail(message)
+        raise AssertionError(message)
 
 
-def money(value: dict[str, Any]) -> tuple[int, str]:
-    return int(value["amount"]), str(value["currency"])
+def load_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def settlement_for(report: dict[str, Any], rail: str) -> dict[str, Any]:
-    for settlement in report.get("settlements", []):
-        if settlement.get("rail") == rail:
-            return settlement
-    fail(f"missing final settlement for {rail}")
-
-
-def first_payout(settlement: dict[str, Any]) -> dict[str, Any]:
-    payouts = settlement.get("payout_intents", [])
-    expect(len(payouts) == 1, f"{settlement.get('rail')} must have one payout intent")
-    return payouts[0]
-
-
-def check_funding_targets(report: dict[str, Any]) -> None:
-    targets = {
-        (target["rail"], target["amount"]["currency"]): target["amount"]["amount"]
-        for target in report["final_bounty"]["funding_targets"]
-    }
-    expect(targets.get(("StripeFiat", "usd")) == 500, "missing USD Stripe funding target")
-    expect(targets.get(("BaseUsdc", "usdc")) == 1000, "missing USDC Base funding target")
-
-    partitions = {
-        (partition["rail"], partition["target"]["currency"]): partition
-        for partition in report["funding_summary"]["partitions"]
-    }
-    for key in (("StripeFiat", "usd"), ("BaseUsdc", "usdc")):
-        partition = partitions.get(key)
-        expect(partition is not None, f"missing funding partition {key}")
-        expect(partition["claimable"] is True, f"partition {key} must be claimable")
-        expect(money(partition["remaining"])[0] == 0, f"partition {key} must be fully funded")
-
-
-def check_stripe(report: dict[str, Any]) -> None:
-    stripe = report["stripe"]
-    checkout = stripe["checkout_request"]
-    expect(checkout["method"] == "POST", "Stripe checkout request must use POST")
-    expect(checkout["endpoint"] == "/v1/checkout/sessions", "Stripe funding must use Checkout Sessions")
-    expect(checkout["api_version"] == EXPECTED_STRIPE_API_VERSION, "Stripe API version drifted")
-    expect(checkout["body"]["mode"] == "payment", "Stripe checkout must be one-time payment mode")
+def check_discovery(discovery: dict[str, Any]) -> None:
     expect(
-        checkout["body"]["metadata"]["bounty_id"] == report["final_bounty"]["id"],
-        "Stripe checkout metadata must bind bounty_id",
+        discovery["schema"]
+        == "https://agentbounties.org/schemas/discovery-manifest.v2.json",
+        "rehearsal discovery must use v2",
+    )
+    protocol = discovery["protocol"]
+    expect(
+        protocol["version"] == "agent-bounties/autonomous-v1",
+        "rehearsal discovery must identify autonomous-v1",
     )
     expect(
-        checkout["body"]["metadata"]["funding_intent_id"] == stripe["funding_intent"]["id"],
-        "Stripe checkout metadata must bind funding_intent_id",
+        protocol["operator_settlement_signer"] is False,
+        "autonomous-v1 must not have an operator settlement signer",
     )
     expect(
-        stripe["funding_intent"]["status"] == "AwaitingEvidence",
-        "Stripe funding intent must start awaiting evidence",
+        "BountySettled" in protocol["payout_authority"],
+        "discovery must bind payout evidence to BountySettled",
+    )
+    endpoints = discovery["endpoints"]
+    for name in (
+        "autonomous_terms_publish",
+        "autonomous_bounty_feed",
+        "autonomous_verification_jobs",
+        "autonomous_events",
+        "autonomous_creation_plan",
+        "autonomous_contribution_plan",
+        "autonomous_claim_plan",
+        "autonomous_submission_plan",
+        "autonomous_module_settlement_plan",
+        "autonomous_attestation_settlement_plan",
+    ):
+        expect(isinstance(endpoints.get(name), str), f"missing autonomous endpoint: {name}")
+    for retired in (
+        "base_escrow_events",
+        "base_release_queue",
+        "base_funding_plan",
+        "base_refund_plan",
+        "base_dispute_plan",
+    ):
+        expect(retired not in endpoints, f"retired V1 endpoint leaked: {retired}")
+    tools = discovery["agent_tools"]
+    expect(
+        "plan_autonomous_bounty_creation" in tools
+        and "plan_autonomous_attestation_settlement" in tools,
+        "autonomous planning tools are incomplete",
     )
     expect(
-        stripe["funding_reconciliation"]["funding_intent"]["status"] == "Applied",
-        "Stripe funding must apply only after checkout webhook reconciliation",
+        not any(tool.startswith(("plan_base_", "reconcile_base_")) for tool in tools),
+        "retired V1 tools leaked into discovery",
     )
+    modes = {mode["name"]: mode for mode in discovery["verification_modes"]}
+    expect("deterministic_module" in modes, "deterministic verifier mode missing")
+    expect("signed_quorum" in modes, "signed verifier quorum missing")
     expect(
-        stripe["connect_eligibility"]["payout_state"]["status"] == "Pending",
-        "Stripe Connect eligibility should only unblock the payout intent",
+        modes["ai_judge_quorum"]["minimum_threshold"] >= 2,
+        "AI judge quorum must require at least two committed judges",
     )
-    expect(
-        stripe["transfer_plan"]["requires_reconciliation"] is True,
-        "Stripe transfer plan must require transfer.created reconciliation",
-    )
-    expect(
-        stripe["transfer_reconciliation"]["settlement"]["payout_intents"][0]["status"] == "Paid",
-        "Stripe payout must become paid after transfer.created reconciliation",
-    )
-
-
-def check_base(report: dict[str, Any]) -> None:
-    base = report["base"]
-    expect(
-        base["funding_intent"]["status"] == "AwaitingEvidence",
-        "Base funding intent must start awaiting evidence",
-    )
-    expect(
-        base["funding_plan"]["network"]["chain_id"] == EXPECTED_BASE_CHAIN_ID,
-        "Base funding plan must target Base Sepolia",
-    )
-    expect(
-        base["created_reconciliation"]["event"]["kind"] == "Created",
-        "Base funding must reconcile an EscrowCreated event",
-    )
-    expect(
-        base["created_reconciliation"]["bounty"]["status"] == "Claimable",
-        "Base EscrowCreated reconciliation must make mixed bounty claimable",
-    )
-    expect(
-        base["release_plan"]["transaction"]["function"] == "release(uint256,address[],uint256[],bytes32)",
-        "Base release plan must be an escrow release call",
-    )
-    recipients = base["release_plan"]["release_call"]["recipients"]
-    expect(len(recipients) == 1, "Base release must pay the advertised amount to the solver")
-    expect(
-        base["released_reconciliation"]["event"]["kind"] == "Released",
-        "Base payout must reconcile an EscrowReleased event",
-    )
-    released_base = settlement_for(base["released_reconciliation"], "BaseUsdc")
-    expect(
-        first_payout(released_base)["status"] == "Paid",
-        "Base payout intent must be paid only after EscrowReleased reconciliation",
-    )
-
-
-def check_final_settlements(report: dict[str, Any]) -> None:
-    stripe = settlement_for(report, "StripeFiat")
-    base = settlement_for(report, "BaseUsdc")
-    stripe_payout = first_payout(stripe)
-    base_payout = first_payout(base)
-
-    expect(stripe_payout["status"] == "Paid", "final Stripe payout must be paid")
-    expect(base_payout["status"] == "Paid", "final Base payout must be paid")
-    expect(money(stripe_payout["amount"]) == (500, "usd"), "unexpected Stripe solver payout")
-    expect(money(stripe["platform_fee"]) == (0, "usd"), "open-beta Stripe fee must be zero")
-    expect(money(base_payout["amount"]) == (1000, "usdc"), "unexpected Base solver payout")
-    expect(money(base["platform_fee"]) == (0, "usdc"), "open-beta Base fee must be zero")
+    actions = [action["kind"] for action in discovery["post_value_loop"]["actions"]]
+    for action in (
+        "share_verified_value",
+        "tell_your_human",
+        "star_upvote_repo",
+        "post_own_bounty",
+    ):
+        expect(action in actions, f"post-value distribution action missing: {action}")
 
 
 def check_readiness(readiness: dict[str, Any]) -> None:
     expect(readiness["local_rehearsal_ready"] is True, "local rehearsal must be ready")
     expect(readiness["network"] == "Base Sepolia", "readiness must describe Base Sepolia")
-    expect(readiness["network_chain_id"] == 84532, "readiness must include Base Sepolia chain id")
+    expect(readiness["network_chain_id"] == 84532, "Base Sepolia chain id is wrong")
     expect(
         readiness["network_native_usdc_token_address"] == EXPECTED_BASE_SEPOLIA_USDC,
-        "readiness must include Base Sepolia native USDC token",
+        "Base Sepolia native USDC address is wrong",
     )
     expect(
         readiness["supplied_usdc_token_matches_native"] is True,
-        "readiness must validate supplied Base Sepolia USDC token",
-    )
-    expect(
-        isinstance(readiness["stripe_payment_method_configuration_configured"], bool),
-        "readiness must expose a boolean Stripe payment-method configuration indicator",
+        "readiness must reject a non-native settlement token",
     )
     checks = {check["name"]: check for check in readiness["checks"]}
     expect(
         checks["local deterministic rehearsal"]["configured"] is True,
-        "local deterministic rehearsal check must be configured",
+        "deterministic rehearsal must be configured",
     )
     expect(
-        checks["Base escrow addresses"]["configured"] is True,
-        "Base Sepolia escrow and native token addresses must be accepted for planning",
+        checks["Autonomous bounty factory"]["configured"] is True,
+        "rehearsal factory configuration must be accepted",
     )
     expect(
-        "Stripe Checkout payment-method configuration" in checks,
-        "readiness must include the optional Stripe Checkout payment-method configuration check",
+        "Autonomous Base event indexing" in checks,
+        "readiness must describe canonical autonomous indexing",
     )
     boundaries = "\n".join(readiness["evidence_boundaries"])
     for phrase in (
-        "Checkout Session creation is not funding",
-        "Payment Method Configuration only changes eligible Checkout methods",
-        "approve/createEscrow transaction planning is not funding",
-        "verifier acceptance creates settlement intents",
-        "EscrowReleased log marks USDC payout paid",
-        "transfer planning are not payout",
+        "signature or transaction hash is not funding evidence",
+        "confirmed canonical FundingAdded events",
+        "confirmed BountySettled event",
+        "Stripe and PayPal are optional convenience on-ramps",
     ):
         expect(phrase in boundaries, f"missing evidence boundary: {phrase}")
+    for retired in ("EscrowReleased", "createEscrow", "release(uint256"):
+        expect(retired not in boundaries, f"retired V1 evidence leaked: {retired}")
+
+
+def check_deployment(deployment: dict[str, Any]) -> None:
+    expect(deployment["schema_version"] == 2, "deployment manifest must use schema v2")
+    expect(
+        deployment["protocol_version"] == "agent-bounties/autonomous-v1",
+        "deployment manifest must identify autonomous-v1",
+    )
+    expect(
+        deployment["status"] == "pending_external_review_and_deployment",
+        "rehearsal must not claim an undeployed protocol is active",
+    )
+    expect(deployment["factory"]["contract"] is None, "pending factory must be null")
+    expect(
+        deployment["policy"]["operator_settlement_signer"] is False,
+        "deployment policy must not have an operator settlement signer",
+    )
+    expect(
+        deployment["policy"]["hosted_paid_state_requires_confirmed_bounty_settled_event"]
+        is True,
+        "deployment policy must require canonical payout evidence",
+    )
 
 
 def main() -> None:
     out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "target/real-funding-rehearsal")
-    report = load_json(out_dir / "funding-rehearsal-demo.json")
-    readiness = load_json(out_dir / "real-funding-readiness.json")
-
-    expect(
-        report["rehearsal"] == "stripe-dev-plus-base-sepolia-mixed-funding",
-        "unexpected rehearsal id",
-    )
-    expect(report["final_bounty"]["status"] == "Paid", "final mixed bounty must be paid")
-    expect(report["final_bounty"]["funding_mode"] == "MixedRails", "must rehearse mixed funding")
-    expect(
-        report["ledger_entries"] == 5,
-        "expected five funding and zero-fee payout ledger entries",
-    )
-    for invariant in (
-        "Stripe Checkout Session creation does not credit balances.",
-        "Base payout is paid only after indexed EscrowReleased reconciliation.",
-        "Stripe payout is paid only after transfer.created reconciliation.",
-    ):
-        expect(invariant in report["invariants"], f"missing invariant: {invariant}")
-
-    check_funding_targets(report)
-    check_stripe(report)
-    check_base(report)
-    check_final_settlements(report)
+    discovery = load_json(out_dir / "autonomous-discovery.json")
+    readiness = load_json(out_dir / "autonomous-readiness.json")
+    deployment = load_json(out_dir / "base-mainnet-deployment.json")
+    check_discovery(discovery)
     check_readiness(readiness)
-
+    check_deployment(deployment)
     print(
-        "validated real funding rehearsal: "
-        "mixed bounty paid with StripeFiat and BaseUsdc settlements after evidence reconciliation"
+        "validated autonomous funding rehearsal: v2 discovery, canonical Base USDC "
+        "configuration, immutable verifier modes, and BountySettled evidence boundaries"
     )
 
 

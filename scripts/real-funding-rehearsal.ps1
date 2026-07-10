@@ -23,10 +23,13 @@ try {
     $resolvedOutDir = (Resolve-Path $OutDir).Path
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
-    $fundingJson = cargo run -q -p cli -- funding-rehearsal-demo | Out-String
+    $discoveryJson = cargo run -q -p cli -- discovery `
+        --public-base-url https://agentbounties.example `
+        --mcp-base-url https://agentbounties.example/mcp |
+        Out-String
     [System.IO.File]::WriteAllText(
-        (Join-Path $resolvedOutDir "funding-rehearsal-demo.json"),
-        $fundingJson,
+        (Join-Path $resolvedOutDir "autonomous-discovery.json"),
+        $discoveryJson,
         $utf8NoBom
     )
 
@@ -36,10 +39,12 @@ try {
         --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e |
         Out-String
     [System.IO.File]::WriteAllText(
-        (Join-Path $resolvedOutDir "real-funding-readiness.json"),
+        (Join-Path $resolvedOutDir "autonomous-readiness.json"),
         $readinessJson,
         $utf8NoBom
     )
+    Copy-Item deployments\base-mainnet.json `
+        (Join-Path $resolvedOutDir "base-mainnet-deployment.json") -Force
 
     & $pythonCommand.Source @pythonArgs scripts\validate_real_funding_rehearsal.py $OutDir
 }

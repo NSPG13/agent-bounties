@@ -102,56 +102,6 @@ export interface VerifySubmissionRequest {
   approved_risk_event_id?: string | null;
 }
 
-export interface PlanBaseReleaseRequest {
-  bounty_id: string;
-  escrow_contract: string;
-  platform_fee_wallet: string;
-  network?: string | null;
-}
-
-export interface PlanBaseFundingRequest {
-  bounty_id: string;
-  escrow_contract: string;
-  payer: string;
-  token: string;
-  network?: string | null;
-}
-
-export interface PlanBaseRefundRequest {
-  bounty_id: string;
-  escrow_contract: string;
-  reason_hash: string;
-  network?: string | null;
-}
-
-export interface PlanBaseDisputeRequest {
-  bounty_id: string;
-  escrow_contract: string;
-  dispute_hash: string;
-  network?: string | null;
-}
-
-export interface BaseReleaseQueueRequest {
-  escrow_contract?: string | null;
-  platform_fee_wallet?: string | null;
-  network?: string | null;
-}
-
-export interface PlanBaseLogQueryRequest {
-  escrow_contract: string;
-  from_block: number;
-  to_block?: number | null;
-  request_id?: number | null;
-}
-
-export interface FetchBaseRpcLogsRequest {
-  escrow_contract: string;
-  from_block: number;
-  to_block?: number | null;
-  request_id?: number | null;
-  network?: string | null;
-}
-
 export interface BroadcastBaseSignedTransactionRequest {
   signed_transaction: string;
   request_id?: number | null;
@@ -164,9 +114,24 @@ export interface GetBaseTransactionReceiptRequest {
   network?: string | null;
 }
 
-export type BaseEscrowEvent = Record<string, unknown>;
-export type BaseEvmLog = Record<string, unknown>;
-export type BaseRpcLogSubmission = unknown[] | Record<string, unknown>;
+export type AutonomousBountyCreate = Record<string, unknown>;
+export type AutonomousBountyContribution = Record<string, unknown>;
+export type AutonomousVerificationAttestation = Record<string, unknown>;
+export type AutonomousSignedAttestation = Record<string, unknown>;
+export type AutonomousEvmLog = Record<string, unknown>;
+
+export interface AutonomousAuthorizationSignature {
+  v: number;
+  r: string;
+  s: string;
+}
+
+export interface AutonomousLifecycleRequest {
+  bounty_contract: string;
+  network?: string | null;
+  caller?: string | null;
+}
+
 export type StripeConnectSnapshot = Record<string, unknown>;
 export type StripeWebhookEvent = Record<string, unknown>;
 export type DiscoveryManifest = Record<string, unknown>;
@@ -316,6 +281,13 @@ export class AgentBountiesClient {
     return response.json();
   }
 
+  private async autonomousPost(action: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request(`/v1/base/autonomous-bounties/${action}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
   async routeBlockedGoal(request: RouteBlockedGoalRequest): Promise<unknown> {
     return this.request("/v1/route-blocked-goal", {
       method: "POST",
@@ -328,7 +300,7 @@ export class AgentBountiesClient {
   }
 
   async getDiscoveryManifestSchema(): Promise<DiscoveryManifestSchema> {
-    return this.request("/schemas/discovery-manifest.v1.json") as Promise<DiscoveryManifestSchema>;
+    return this.request("/schemas/discovery-manifest.v2.json") as Promise<DiscoveryManifestSchema>;
   }
 
   async getRiskPolicy(): Promise<unknown> {
@@ -340,14 +312,6 @@ export class AgentBountiesClient {
     if (network) params.set("network", network);
     const query = params.toString();
     return this.request(`/v1/readiness/live-money${query ? `?${query}` : ""}`);
-  }
-
-  async getBaseIndexerStatus(network?: string | null, escrowContract?: string | null): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    if (escrowContract) params.set("escrow_contract", escrowContract);
-    const query = params.toString();
-    return this.request(`/v1/base/indexer-status${query ? `?${query}` : ""}`);
   }
 
   async getRiskEvents(request: RiskEventsRequest = {}): Promise<unknown> {
@@ -556,50 +520,237 @@ export class AgentBountiesClient {
     return this.request(`/v1/agents/${agentId}/paid-status`);
   }
 
-  async reconcileBaseEscrowEvent(event: BaseEscrowEvent): Promise<unknown> {
-    return this.request("/v1/base/escrow-events", {
-      method: "POST",
-      body: JSON.stringify(event),
+  async publishAutonomousBountyTerms(
+    creatorWallet: string,
+    document: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.autonomousPost("terms", {
+      creator_wallet: creatorWallet,
+      document,
     });
   }
 
-  async reconcileBaseEvmLogs(logs: BaseEvmLog[]): Promise<unknown> {
-    return this.request("/v1/base/evm-logs", {
-      method: "POST",
-      body: JSON.stringify(logs),
+  async getAutonomousBountyTerms(termsHash: string): Promise<unknown> {
+    return this.request(`/v1/base/autonomous-bounties/terms/${termsHash}`);
+  }
+
+  async publishAutonomousSubmissionEvidence(request: {
+    network?: string | null;
+    bounty_contract: string;
+    bounty_id: string;
+    round: number;
+    solver_wallet: string;
+    artifact_reference: string;
+    evidence: Record<string, unknown>;
+  }): Promise<unknown> {
+    return this.autonomousPost("submission-evidence", {
+      ...request,
+      network: request.network ?? null,
     });
   }
 
-  async reconcileBaseRpcLogs(submission: BaseRpcLogSubmission): Promise<unknown> {
-    return this.request("/v1/base/rpc-logs", {
-      method: "POST",
-      body: JSON.stringify(submission),
+  async getAutonomousSubmissionEvidence(
+    bountyContract: string,
+    round: number,
+    network?: string | null,
+  ): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (network) params.set("network", network);
+    const query = params.toString();
+    return this.request(
+      `/v1/base/autonomous-bounties/submission-evidence/${bountyContract}/${round}${query ? `?${query}` : ""}`,
+    );
+  }
+
+  async listAutonomousBounties(
+    network?: string | null,
+    claimableOnly?: boolean | null,
+  ): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (network) params.set("network", network);
+    if (claimableOnly != null) params.set("claimable_only", String(claimableOnly));
+    const query = params.toString();
+    return this.request(`/v1/base/autonomous-bounties/feed${query ? `?${query}` : ""}`);
+  }
+
+  async listAutonomousVerificationJobs(
+    network?: string | null,
+    verifier?: string | null,
+  ): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (network) params.set("network", network);
+    if (verifier) params.set("verifier", verifier);
+    const query = params.toString();
+    return this.request(
+      `/v1/base/autonomous-bounties/verification-jobs${query ? `?${query}` : ""}`,
+    );
+  }
+
+  async listAutonomousBountyEvents(
+    network?: string | null,
+    bountyId?: string | null,
+  ): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (network) params.set("network", network);
+    if (bountyId) params.set("bounty_id", bountyId);
+    const query = params.toString();
+    return this.request(`/v1/base/autonomous-bounties/events${query ? `?${query}` : ""}`);
+  }
+
+  async decodeAutonomousBountyEvents(logs: AutonomousEvmLog[]): Promise<unknown> {
+    return this.autonomousPost("decode-events", { logs });
+  }
+
+  async planAutonomousBountyCreation(
+    create: AutonomousBountyCreate,
+    network?: string | null,
+  ): Promise<unknown> {
+    return this.autonomousPost("creation-plan", { network: network ?? null, create });
+  }
+
+  async planAutonomousBountyAuthorizedCreation(
+    create: AutonomousBountyCreate,
+    signature: AutonomousAuthorizationSignature,
+    network?: string | null,
+    relayer?: string | null,
+  ): Promise<unknown> {
+    return this.autonomousPost("authorized-creation-plan", {
+      network: network ?? null,
+      create,
+      signature,
+      relayer: relayer ?? null,
     });
   }
 
-  async planBaseLogQuery(request: PlanBaseLogQueryRequest): Promise<unknown> {
-    return this.request("/v1/base/log-query", {
-      method: "POST",
-      body: JSON.stringify({
-        escrow_contract: request.escrow_contract,
-        from_block: request.from_block,
-        to_block: request.to_block ?? null,
-        request_id: request.request_id ?? null,
-      }),
+  async planAutonomousBountyContribution(
+    contribution: AutonomousBountyContribution,
+    network?: string | null,
+  ): Promise<unknown> {
+    return this.autonomousPost("contribution-plan", {
+      network: network ?? null,
+      contribution,
     });
   }
 
-  async fetchBaseRpcLogs(request: FetchBaseRpcLogsRequest): Promise<unknown> {
-    return this.request("/v1/base/fetch-rpc-logs", {
-      method: "POST",
-      body: JSON.stringify({
-        escrow_contract: request.escrow_contract,
-        from_block: request.from_block,
-        to_block: request.to_block ?? null,
-        request_id: request.request_id ?? null,
-        network: request.network ?? null,
-      }),
+  async planAutonomousBountyAuthorizedContribution(
+    contribution: AutonomousBountyContribution,
+    signature: AutonomousAuthorizationSignature,
+    network?: string | null,
+    relayer?: string | null,
+  ): Promise<unknown> {
+    return this.autonomousPost("authorized-contribution-plan", {
+      network: network ?? null,
+      contribution,
+      signature,
+      relayer: relayer ?? null,
     });
+  }
+
+  async planAutonomousBountyClaim(request: {
+    network?: string | null;
+    bounty_contract: string;
+    solver: string;
+    authorization_nonce?: string | null;
+    authorization_valid_before?: number | null;
+  }): Promise<unknown> {
+    return this.autonomousPost("claim-plan", {
+      ...request,
+      network: request.network ?? null,
+      authorization_nonce: request.authorization_nonce ?? null,
+      authorization_valid_before: request.authorization_valid_before ?? null,
+    });
+  }
+
+  async planAutonomousBountyAuthorizedClaim(request: {
+    network?: string | null;
+    bounty_contract: string;
+    solver: string;
+    authorization_nonce: string;
+    authorization_valid_before: number;
+    signature: AutonomousAuthorizationSignature;
+    relayer?: string | null;
+  }): Promise<unknown> {
+    return this.autonomousPost("authorized-claim-plan", {
+      ...request,
+      network: request.network ?? null,
+      relayer: request.relayer ?? null,
+    });
+  }
+
+  async planAutonomousBountySubmission(request: {
+    network?: string | null;
+    bounty_contract: string;
+    solver: string;
+    submission_hash: string;
+    evidence_hash: string;
+  }): Promise<unknown> {
+    return this.autonomousPost("submission-plan", {
+      ...request,
+      network: request.network ?? null,
+    });
+  }
+
+  async planAutonomousVerificationAttestation(
+    attestation: AutonomousVerificationAttestation,
+    network?: string | null,
+  ): Promise<unknown> {
+    return this.autonomousPost("verification-attestation-plan", {
+      network: network ?? null,
+      attestation,
+    });
+  }
+
+  async planAutonomousModuleSettlement(request: {
+    network?: string | null;
+    bounty_contract: string;
+    caller?: string | null;
+    proof: string;
+  }): Promise<unknown> {
+    return this.autonomousPost("module-settlement-plan", {
+      ...request,
+      network: request.network ?? null,
+      caller: request.caller ?? null,
+    });
+  }
+
+  async planAutonomousAttestationSettlement(request: {
+    network?: string | null;
+    bounty_contract: string;
+    caller?: string | null;
+    attestations: AutonomousSignedAttestation[];
+  }): Promise<unknown> {
+    return this.autonomousPost("attestation-settlement-plan", {
+      ...request,
+      network: request.network ?? null,
+      caller: request.caller ?? null,
+    });
+  }
+
+  private async planAutonomousLifecycle(
+    action: string,
+    request: AutonomousLifecycleRequest,
+  ): Promise<unknown> {
+    return this.autonomousPost(`${action}-plan`, {
+      ...request,
+      network: request.network ?? null,
+      caller: request.caller ?? null,
+    });
+  }
+
+  async planAutonomousExpireClaim(request: AutonomousLifecycleRequest): Promise<unknown> {
+    return this.planAutonomousLifecycle("expire-claim", request);
+  }
+
+  async planAutonomousExpireSubmission(request: AutonomousLifecycleRequest): Promise<unknown> {
+    return this.planAutonomousLifecycle("expire-submission", request);
+  }
+
+  async planAutonomousCancel(request: AutonomousLifecycleRequest): Promise<unknown> {
+    return this.planAutonomousLifecycle("cancel", request);
+  }
+
+  async planAutonomousRefundWithdrawal(request: AutonomousLifecycleRequest): Promise<unknown> {
+    return this.planAutonomousLifecycle("refund-withdrawal", request);
   }
 
   async broadcastBaseSignedTransaction(
@@ -621,45 +772,6 @@ export class AgentBountiesClient {
       body: JSON.stringify({
         tx_hash: request.tx_hash,
         request_id: request.request_id ?? null,
-        network: request.network ?? null,
-      }),
-    });
-  }
-
-  async planBaseFunding(request: PlanBaseFundingRequest): Promise<unknown> {
-    return this.request("/v1/base/funding-plan", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
-  }
-
-  async planBaseRelease(request: PlanBaseReleaseRequest): Promise<unknown> {
-    return this.request("/v1/base/release-plan", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
-  }
-
-  async planBaseRefund(request: PlanBaseRefundRequest): Promise<unknown> {
-    return this.request("/v1/base/refund-plan", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
-  }
-
-  async planBaseDispute(request: PlanBaseDisputeRequest): Promise<unknown> {
-    return this.request("/v1/base/dispute-plan", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
-  }
-
-  async listBaseReleaseQueue(request: BaseReleaseQueueRequest = {}): Promise<unknown> {
-    return this.request("/v1/base/release-queue", {
-      method: "POST",
-      body: JSON.stringify({
-        escrow_contract: request.escrow_contract ?? null,
-        platform_fee_wallet: request.platform_fee_wallet ?? null,
         network: request.network ?? null,
       }),
     });
