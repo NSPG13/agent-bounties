@@ -962,6 +962,8 @@ pub struct BountyStatusResponse {
     pub funding_intents: Vec<FundingIntent>,
     pub funding_contributions: Vec<FundingContribution>,
     pub escrows: Vec<Escrow>,
+    #[serde(default)]
+    pub base_escrow_events: Vec<BaseEscrowEvent>,
     pub claims: Vec<Claim>,
     pub submissions: Vec<Submission>,
     pub verifier_results: Vec<VerifierResult>,
@@ -2651,6 +2653,7 @@ impl BountyNetwork {
             funding_intents,
             funding_contributions,
             escrows,
+            base_escrow_events: Vec::new(),
             claims,
             submissions,
             verifier_results,

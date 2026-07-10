@@ -164,6 +164,7 @@
     chainId: 8453,
     chainIdHex: "0x2105",
     escrowContract: "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
+    escrowCreatedTopic: "0xb67bc2da9ebef7d93355d3f5b6c7cc857b34cc7a4b8b2850ff3dcb90ea563ac2",
     nativeUsdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   };
 
@@ -297,6 +298,12 @@
 
   function calldataWordBigInt(word) {
     return normalizedQuantityToBigInt(word);
+  }
+
+  function abiDataWord(data, index) {
+    const hex = stripHexPrefix(data);
+    const start = index * 64;
+    return `0x${hex.slice(start, start + 64)}`;
   }
 
   function baseFundingTargetAmount(bounty) {
@@ -488,7 +495,149 @@
     return plan;
   }
 
-  function baseWalletFundingStatusModel(report) {
+  function decodeEscrowCreatedLog(log, receiptTxHash) {
+    const topics = Array.isArray(log && log.topics) ? log.topics.map(normalizeBytes32) : [];
+    const data = normalizeHexData(log && log.data);
+    const txHash = normalizeBytes32(
+      (log && (log.transactionHash || log.transaction_hash || log.txHash || log.tx_hash)) || receiptTxHash,
+    );
+    if (!sameAddress(log && log.address, baseMainnetWalletConfig.escrowContract)) {
+      return null;
+    }
+    if (topics.length !== 4 || topics[0] !== baseMainnetWalletConfig.escrowCreatedTopic) {
+      return null;
+    }
+    if (!data || data.length !== 2 + 64 * 3 || !txHash) {
+      throw new Error("EscrowCreated log from the verified contract is malformed.");
+    }
+    const onchainEscrowId = normalizedQuantityToBigInt(topics[1]);
+    const bountyId = normalizeBytes32(topics[2]);
+    const payer = calldataWordAddress(topics[3]);
+    const token = calldataWordAddress(abiDataWord(data, 0));
+    const amount = normalizedQuantityToBigInt(abiDataWord(data, 1));
+    const termsHash = normalizeBytes32(abiDataWord(data, 2));
+    if (onchainEscrowId === null || !bountyId || !payer || !token || amount === null || !termsHash) {
+      throw new Error("EscrowCreated log from the verified contract could not be decoded.");
+    }
+    return {
+      amount: amount.toString(),
+      bountyId,
+      logIndex: normalizedText(log && (log.logIndex || log.log_index)),
+      onchainEscrowId: onchainEscrowId.toString(),
+      payer,
+      termsHash,
+      token,
+      txHash,
+    };
+  }
+
+  function decodeEscrowCreatedReceipt(receipt, expected) {
+    if (!receipt || normalizeChainId(receipt.status) !== 1) {
+      throw new Error("Escrow transaction receipt was not successful.");
+    }
+    const submittedHash = normalizeBytes32(expected && expected.txHash);
+    const receiptHash = normalizeBytes32(receipt.transactionHash || receipt.transaction_hash || receipt.txHash || receipt.tx_hash);
+    if (submittedHash && receiptHash && submittedHash !== receiptHash) {
+      throw new Error("Escrow transaction receipt hash does not match the submitted transaction.");
+    }
+    const expectedBountyId = uuidToBytes32(expected && expected.bountyId);
+    const expectedAmount = moneyAmountBigInt(expected && expected.amount);
+    const expectedTermsHash = normalizeBytes32(expected && expected.termsHash);
+    const logs = Array.isArray(receipt.logs) ? receipt.logs : [];
+    const mismatches = [];
+    for (const log of logs) {
+      const evidence = decodeEscrowCreatedLog(log, receiptHash || submittedHash);
+      if (!evidence) {
+        continue;
+      }
+      const issues = [];
+      if (!expectedBountyId || evidence.bountyId !== expectedBountyId) {
+        issues.push("bounty id");
+      }
+      if (!sameAddress(evidence.payer, expected && expected.payer)) {
+        issues.push("payer");
+      }
+      if (!sameAddress(evidence.token, expected && expected.token)) {
+        issues.push("token");
+      }
+      if (!sameBigInt(normalizedQuantityToBigInt(evidence.amount), expectedAmount)) {
+        issues.push("amount");
+      }
+      if (!expectedTermsHash || evidence.termsHash !== expectedTermsHash) {
+        issues.push("terms hash");
+      }
+      if (issues.length === 0) {
+        return evidence;
+      }
+      mismatches.push(issues.join(", "));
+    }
+    const detail = mismatches.length > 0 ? ` Mismatched fields: ${mismatches.join("; ")}.` : "";
+    throw new Error(`Escrow receipt did not contain matching EscrowCreated evidence from the verified escrow contract.${detail}`);
+  }
+
+  function eventOnchainEscrowId(event) {
+    return normalizedQuantityToBigInt(
+      event && (
+        event.onchain_escrow_id
+        || event.onchainEscrowId
+        || event.onchain_id
+        || event.onchainId
+      ),
+    );
+  }
+
+  function escrowOnchainEscrowId(escrow) {
+    const direct = eventOnchainEscrowId(escrow);
+    if (direct !== null) {
+      return direct;
+    }
+    const reference = normalizedText(
+      escrow && (escrow.external_reference || escrow.externalReference || escrow.reference),
+    ).toLowerCase();
+    const match = /^base:([0-9]+)$/.exec(reference);
+    return match ? BigInt(match[1]) : null;
+  }
+
+  function hostedEventMatchesEvidence(event, evidence) {
+    const eventAmount = moneyAmountBigInt(event && event.amount);
+    return normalizedText(event && event.kind).toLowerCase() === "created"
+      && normalizeBytes32(event && (event.tx_hash || event.txHash || event.transaction_hash || event.transactionHash)) === evidence.txHash
+      && sameBigInt(eventOnchainEscrowId(event), normalizedQuantityToBigInt(evidence.onchainEscrowId))
+      && uuidToBytes32(event && (event.bounty_id || event.bountyId)) === evidence.bountyId
+      && sameAddress(event && event.token, evidence.token)
+      && sameBigInt(eventAmount, normalizedQuantityToBigInt(evidence.amount))
+      && normalizeBytes32(event && (event.terms_hash || event.termsHash)) === evidence.termsHash;
+  }
+
+  function hostedEscrowMatchesEvidence(escrow, evidence) {
+    const status = normalizedText(escrow && escrow.status).toLowerCase();
+    const eventId = normalizedQuantityToBigInt(evidence.onchainEscrowId);
+    const escrowId = escrowOnchainEscrowId(escrow);
+    return ["funded", "released", "disputed"].includes(status)
+      && sameBigInt(escrowId, eventId)
+      && uuidToBytes32(escrow && (escrow.bounty_id || escrow.bountyId)) === evidence.bountyId
+      && sameAddress(escrow && escrow.token, evidence.token)
+      && sameBigInt(moneyAmountBigInt(escrow && escrow.amount), normalizedQuantityToBigInt(evidence.amount));
+  }
+
+  function matchingHostedBaseEscrow(report, evidence) {
+    if (!report || !evidence) {
+      return null;
+    }
+    const events = Array.isArray(report.base_escrow_events)
+      ? report.base_escrow_events
+      : Array.isArray(report.baseEscrowEvents)
+        ? report.baseEscrowEvents
+        : [];
+    const escrows = Array.isArray(report.escrows) ? report.escrows : [];
+    const event = events.find((candidate) => hostedEventMatchesEvidence(candidate, evidence));
+    const escrow = escrows.find((candidate) => hostedEscrowMatchesEvidence(candidate, evidence));
+    return event && escrow ? { event, escrow } : null;
+  }
+
+  function baseWalletFundingStatusModel(report, options) {
+    const expectedEvidence = options && options.expectedEvidence;
+    const matchedEvidence = matchingHostedBaseEscrow(report, expectedEvidence);
     const summary = report && report.funding_summary ? report.funding_summary : {};
     const partitions = Array.isArray(summary.partitions) ? summary.partitions : [];
     const basePartition = partitions.find((partition) => partition && partition.rail === "BaseUsdc");
@@ -496,13 +645,13 @@
     const escrowCount = basePartition && typeof basePartition.escrow_count === "number"
       ? basePartition.escrow_count
       : escrows.length;
-    const baseClaimable = basePartition ? basePartition.claimable === true : summary.claimable === true && escrowCount > 0;
-    const reconciled = baseClaimable && escrowCount > 0;
+    const reconciled = Boolean(matchedEvidence);
     return {
       basePartition,
       bounty: report && report.bounty ? report.bounty : {},
       escrowCount,
       heading: reconciled ? "funding reconciled" : "waiting for confirmations",
+      matchedEvidence,
       reconciled,
       summary,
     };
@@ -510,7 +659,7 @@
 
   function baseWalletStatusLines(report, options) {
     const outputOptions = options || {};
-    const state = baseWalletFundingStatusModel(report);
+    const state = baseWalletFundingStatusModel(report, outputOptions);
     const applied = state.basePartition && state.basePartition.confirmed
       ? state.basePartition.confirmed
       : state.summary.applied;
@@ -523,11 +672,13 @@
       `Base applied funding: ${displayMoney(applied)}`,
       `Base remaining funding: ${displayMoney(remaining)}`,
       `Indexed Base escrows: ${state.escrowCount}`,
-      `Bounty claimable from Base evidence: ${state.reconciled ? "yes" : "no"}`,
+      `Bounty claimable from this Base evidence: ${state.reconciled ? "yes" : "no"}`,
       `Whole bounty claimable: ${state.summary.claimable === true ? "yes" : "no"}`,
     ];
     if (state.reconciled) {
-      lines.push("Base funding is reconciled only because hosted status reports matching indexed EscrowCreated evidence.");
+      lines.push(`Matched escrow transaction: ${outputOptions.expectedEvidence.txHash}`);
+      lines.push(`Matched on-chain escrow id: ${outputOptions.expectedEvidence.onchainEscrowId}`);
+      lines.push("Base funding is reconciled only because hosted status reports the same indexed EscrowCreated transaction provenance.");
       if (outputOptions.shareUrl) {
         lines.push(`Share link: ${outputOptions.shareUrl}`);
       }
@@ -696,14 +847,6 @@
     throw new Error("Wallet transaction did not produce a successful receipt within the bounded polling window.");
   }
 
-  async function readTransactionReceiptOnce(provider, txHash) {
-    try {
-      return await providerRequest(provider, "eth_getTransactionReceipt", [txHash]);
-    } catch (_error) {
-      return null;
-    }
-  }
-
   async function sendBaseWalletApproval(options) {
     const provider = options.provider;
     const review = options.review;
@@ -744,11 +887,16 @@
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       onState(`Reading hosted status for indexed EscrowCreated evidence (${attempt + 1}/${attempts})...`);
       latestReport = await readHostedBountyStatus(fetchImpl, apiBaseUrl, bountyId);
-      const model = baseWalletFundingStatusModel(latestReport);
+      const model = baseWalletFundingStatusModel(latestReport, {
+        expectedEvidence: options.expectedEvidence,
+      });
       if (model.reconciled) {
         return {
           heading: model.heading,
-          lines: baseWalletStatusLines(latestReport, { shareUrl: options.shareUrl }),
+          lines: baseWalletStatusLines(latestReport, {
+            expectedEvidence: options.expectedEvidence,
+            shareUrl: options.shareUrl,
+          }),
           report: latestReport,
         };
       }
@@ -759,7 +907,10 @@
 
     return {
       heading: "waiting for confirmations",
-      lines: baseWalletStatusLines(latestReport, { shareUrl: options.shareUrl }),
+      lines: baseWalletStatusLines(latestReport, {
+        expectedEvidence: options.expectedEvidence,
+        shareUrl: options.shareUrl,
+      }),
       report: latestReport,
     };
   }
@@ -774,24 +925,58 @@
     const escrowHash = await providerRequest(provider, "eth_sendTransaction", [
       evmTransactionRequest(review.plan.funding.create_escrow, connectedAddress),
     ]);
-    const receipt = await readTransactionReceiptOnce(provider, escrowHash);
-    if (receipt && receipt.status === "0x0") {
+    onState("Escrow submitted. Waiting for a successful escrow receipt...");
+    let receipt;
+    try {
+      receipt = await waitForTransactionSuccess(provider, escrowHash, {
+        attempts: options.receiptAttempts,
+        delayMs: options.receiptDelayMs,
+        sleepImpl: options.sleepImpl,
+      });
+    } catch (error) {
+      if (error instanceof Error && /reverted/.test(error.message)) {
+        return {
+          escrowHash,
+          heading: "needs operator review",
+          lines: [
+            "State: needs operator review",
+            `Escrow transaction: ${escrowHash}`,
+            "The wallet/provider reports the escrow transaction reverted. No retry was attempted.",
+          ].join("\n"),
+        };
+      }
+      throw error;
+    }
+    let escrowEvidence;
+    try {
+      escrowEvidence = decodeEscrowCreatedReceipt(receipt, {
+        amount: review.plan.create && review.plan.create.amount,
+        bountyId: review.bountyId,
+        payer: connectedAddress,
+        termsHash: review.plan.create && review.plan.create.terms_hash,
+        token: baseMainnetWalletConfig.nativeUsdc,
+        txHash: escrowHash,
+      });
+    } catch (error) {
       return {
         escrowHash,
         heading: "needs operator review",
         lines: [
           "State: needs operator review",
           `Escrow transaction: ${escrowHash}`,
-          "The wallet/provider reports the escrow transaction reverted. No retry was attempted.",
+          error instanceof Error ? error.message : String(error),
+          "The submitted transaction is not treated as funding. No retry was attempted.",
         ].join("\n"),
       };
     }
+    onState("EscrowCreated log matched the submitted transaction. Polling hosted indexed evidence...");
 
     const reconciliation = await pollBaseWalletReconciliation({
       apiBaseUrl: review.apiBaseUrl,
       bountyId: review.bountyId,
       attempts: options.pollAttempts,
       delayMs: options.pollDelayMs,
+      expectedEvidence: escrowEvidence,
       fetchImpl: options.fetchImpl,
       onState,
       shareUrl: options.shareUrl,
@@ -802,9 +987,12 @@
       heading: reconciliation.heading,
       lines: [
         `Escrow transaction: ${escrowHash}`,
+        `EscrowCreated transaction evidence: ${escrowEvidence.txHash}`,
+        `EscrowCreated on-chain escrow id: ${escrowEvidence.onchainEscrowId}`,
         "",
         reconciliation.lines,
       ].join("\n"),
+      escrowEvidence,
       report: reconciliation.report,
     };
   }
@@ -967,8 +1155,10 @@
     baseWalletReviewLines,
     baseWalletStatusLines,
     connectBaseWallet,
+    decodeEscrowCreatedReceipt,
     decodeBaseWalletPlanCalldata,
     evmTransactionRequest,
+    matchingHostedBaseEscrow,
     normalizeAddress,
     pollBaseWalletReconciliation,
     prepareBaseWalletFundingPlan,
@@ -1222,6 +1412,7 @@
   let baseWalletConnection = null;
   let baseWalletReview = null;
   let baseWalletApprovalHash = "";
+  let baseWalletEscrowEvidence = null;
   const baseWalletActionState = { busy: false };
 
   function setElementDisabled(element, disabled) {
@@ -1259,6 +1450,7 @@
   function resetBaseWalletSigningState() {
     baseWalletReview = null;
     baseWalletApprovalHash = "";
+    baseWalletEscrowEvidence = null;
     updateBaseWalletButtons();
   }
 
@@ -1311,6 +1503,7 @@
           },
         });
         baseWalletApprovalHash = "";
+        baseWalletEscrowEvidence = null;
         baseWalletOutput.textContent = baseWalletReview.lines;
       });
     });
@@ -1330,6 +1523,7 @@
             },
           });
           baseWalletApprovalHash = result.approveHash;
+          baseWalletEscrowEvidence = null;
           baseWalletOutput.textContent = result.lines;
         });
       });
@@ -1348,11 +1542,14 @@
             pollDelayMs: 2000,
             provider: window.ethereum,
             review: baseWalletReview,
+            receiptAttempts: 8,
+            receiptDelayMs: 2000,
             shareUrl: baseWalletShareUrl(baseWalletReview.apiBaseUrl, baseWalletReview.bountyId),
             onState(message) {
               baseWalletOutput.textContent = message;
             },
           });
+          baseWalletEscrowEvidence = result.escrowEvidence || null;
           baseWalletOutput.textContent = [
             `Approval transaction: ${baseWalletApprovalHash}`,
             result.lines,
@@ -1372,6 +1569,7 @@
             bountyId: baseWalletReview.bountyId,
             attempts: 1,
             delayMs: 0,
+            expectedEvidence: baseWalletEscrowEvidence,
             fetchImpl: window.fetch.bind(window),
             shareUrl: baseWalletShareUrl(baseWalletReview.apiBaseUrl, baseWalletReview.bountyId),
             onState(message) {

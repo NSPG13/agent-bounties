@@ -27,6 +27,8 @@ const payer = "0x0a8a657ba581f7a7c7dcd59ef637b7fbc6249850";
 const otherAddress = "0x1111111111111111111111111111111111111111";
 const termsHash = "0x886ef7e42d7f2968ae5b44a9f963a95b4726d8d7244a6fbe35af6f2cffbbc7af";
 const amountMinor = 1_000_000;
+const escrowTxHash = `0x${"ab".repeat(32)}`;
+const otherEscrowTxHash = `0x${"cd".repeat(32)}`;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -58,6 +60,74 @@ function encodeApprove(spender, amount) {
 
 function encodeCreateEscrow(id, token, amount, hash) {
   return `0x64a20554${uuidBytes32(id)}${wordAddress(token)}${wordUint(amount)}${word(hash)}`;
+}
+
+function evidenceFixture(overrides = {}) {
+  return {
+    amount: String(amountMinor),
+    bountyId: `0x${uuidBytes32(bountyId)}`,
+    logIndex: "0x0",
+    onchainEscrowId: "7",
+    payer,
+    termsHash,
+    token: config.nativeUsdc.toLowerCase(),
+    txHash: escrowTxHash,
+    ...overrides,
+  };
+}
+
+function escrowCreatedLog(evidence = evidenceFixture()) {
+  return {
+    address: config.escrowContract,
+    topics: [
+      config.escrowCreatedTopic,
+      `0x${wordUint(evidence.onchainEscrowId)}`,
+      evidence.bountyId,
+      `0x${wordAddress(evidence.payer)}`,
+    ],
+    data: `0x${wordAddress(evidence.token)}${wordUint(evidence.amount)}${word(evidence.termsHash)}`,
+    transactionHash: evidence.txHash,
+    blockNumber: "0x10",
+    logIndex: evidence.logIndex || "0x0",
+  };
+}
+
+function escrowReceipt(evidence = evidenceFixture()) {
+  return {
+    status: "0x1",
+    transactionHash: evidence.txHash,
+    logs: [escrowCreatedLog(evidence)],
+  };
+}
+
+function hostedEscrow(evidence = evidenceFixture(), overrides = {}) {
+  return {
+    id: `escrow-${evidence.onchainEscrowId}`,
+    bounty_id: bountyId,
+    rail: "BaseUsdc",
+    token: config.nativeUsdc,
+    amount: { amount: amountMinor, currency: "usdc" },
+    status: "Funded",
+    external_reference: `base:${evidence.onchainEscrowId}`,
+    ...overrides,
+  };
+}
+
+function hostedEscrowEvent(evidence = evidenceFixture(), overrides = {}) {
+  return {
+    id: `event-${evidence.onchainEscrowId}`,
+    log_key: `${evidence.txHash}:${evidence.logIndex || "0x0"}`,
+    tx_hash: evidence.txHash,
+    block_number: 16,
+    onchain_escrow_id: Number(evidence.onchainEscrowId),
+    bounty_id: bountyId,
+    kind: "Created",
+    status: "Funded",
+    token: config.nativeUsdc,
+    amount: { amount: amountMinor, currency: "usdc" },
+    terms_hash: termsHash,
+    ...overrides,
+  };
 }
 
 function bounty(overrides = {}) {
@@ -107,24 +177,40 @@ function validPlan() {
   };
 }
 
-function statusReport({ reconciled = false } = {}) {
+function statusReport({ reconciled = false, evidence = evidenceFixture(), otherEscrow = false } = {}) {
+  const activeEvidence = reconciled ? evidence : null;
+  const raceEvidence = otherEscrow ? evidenceFixture({
+    onchainEscrowId: "8",
+    payer: otherAddress,
+    txHash: otherEscrowTxHash,
+  }) : null;
+  const escrows = [
+    ...(activeEvidence ? [hostedEscrow(activeEvidence)] : []),
+    ...(raceEvidence ? [hostedEscrow(raceEvidence)] : []),
+  ];
+  const baseEscrowEvents = [
+    ...(activeEvidence ? [hostedEscrowEvent(activeEvidence)] : []),
+    ...(raceEvidence ? [hostedEscrowEvent(raceEvidence)] : []),
+  ];
+  const claimable = escrows.length > 0;
   return {
-    bounty: bounty({ status: reconciled ? "Claimable" : "Unfunded" }),
+    bounty: bounty({ status: claimable ? "Claimable" : "Unfunded" }),
     funding_summary: {
-      applied: { amount: reconciled ? amountMinor : 0, currency: "usdc" },
-      remaining: { amount: reconciled ? 0 : amountMinor, currency: "usdc" },
-      claimable: reconciled,
+      applied: { amount: claimable ? amountMinor : 0, currency: "usdc" },
+      remaining: { amount: claimable ? 0 : amountMinor, currency: "usdc" },
+      claimable,
       partitions: [
         {
           rail: "BaseUsdc",
-          confirmed: { amount: reconciled ? amountMinor : 0, currency: "usdc" },
-          remaining: { amount: reconciled ? 0 : amountMinor, currency: "usdc" },
-          escrow_count: reconciled ? 1 : 0,
-          claimable: reconciled,
+          confirmed: { amount: claimable ? amountMinor : 0, currency: "usdc" },
+          remaining: { amount: claimable ? 0 : amountMinor, currency: "usdc" },
+          escrow_count: escrows.length,
+          claimable,
         },
       ],
     },
-    escrows: reconciled ? [{ id: "escrow-1" }] : [],
+    escrows,
+    base_escrow_events: baseEscrowEvents,
   };
 }
 
@@ -425,7 +511,7 @@ async function assertBadPlanDoesNotSend(label, mutatePlan, pattern) {
     provider: mockProvider({
       eth_chainId: "0x2105",
       eth_accounts: () => [payer],
-      eth_sendTransaction: ["0xescrowhash"],
+      eth_sendTransaction: [escrowTxHash],
       eth_getTransactionReceipt: { status: "0x0" },
     }),
     review,
@@ -435,6 +521,7 @@ async function assertBadPlanDoesNotSend(label, mutatePlan, pattern) {
   assert(escrowRevert.lines.includes("reverted"));
 
   const pendingFetch = mockFetch([statusReport(), statusReport()]);
+  const expectedEvidence = evidenceFixture({ txHash: escrowTxHash });
   const pending = await wallet.sendBaseWalletEscrow({
     fetchImpl: pendingFetch,
     pollAttempts: 2,
@@ -442,8 +529,8 @@ async function assertBadPlanDoesNotSend(label, mutatePlan, pattern) {
     provider: mockProvider({
       eth_chainId: "0x2105",
       eth_accounts: () => [payer],
-      eth_sendTransaction: ["0xescrowhash"],
-      eth_getTransactionReceipt: { status: "0x1" },
+      eth_sendTransaction: [escrowTxHash],
+      eth_getTransactionReceipt: escrowReceipt(expectedEvidence),
     }),
     review,
     shareUrl: "https://example.com/share",
@@ -452,7 +539,49 @@ async function assertBadPlanDoesNotSend(label, mutatePlan, pattern) {
   assert.strictEqual(pendingFetch.calls.length, 2);
   assert(!pending.lines.includes("Share link"));
 
-  const reconciledFetch = mockFetch([statusReport(), statusReport(), statusReport({ reconciled: true })]);
+  const raceFetch = mockFetch([statusReport({ otherEscrow: true })]);
+  const race = await wallet.sendBaseWalletEscrow({
+    fetchImpl: raceFetch,
+    pollAttempts: 1,
+    pollDelayMs: 0,
+    provider: mockProvider({
+      eth_chainId: "0x2105",
+      eth_accounts: () => [payer],
+      eth_sendTransaction: [escrowTxHash],
+      eth_getTransactionReceipt: escrowReceipt(expectedEvidence),
+    }),
+    review,
+    shareUrl: "https://example.com/share",
+  });
+  assert.strictEqual(race.heading, "waiting for confirmations");
+  assert(race.lines.includes("Whole bounty claimable: yes"));
+  assert(!race.lines.includes("Share link"));
+
+  const pendingRaceFetch = mockFetch([statusReport({ otherEscrow: true })]);
+  await assertRejects(
+    wallet.sendBaseWalletEscrow({
+      fetchImpl: pendingRaceFetch,
+      pollDelayMs: 0,
+      provider: mockProvider({
+        eth_chainId: "0x2105",
+        eth_accounts: () => [payer],
+        eth_sendTransaction: [escrowTxHash],
+        eth_getTransactionReceipt: [null, null],
+      }),
+      receiptAttempts: 2,
+      receiptDelayMs: 0,
+      review,
+      shareUrl: "https://example.com/share",
+    }),
+    /did not produce a successful receipt/,
+  );
+  assert.strictEqual(pendingRaceFetch.calls.length, 0);
+
+  const reconciledFetch = mockFetch([
+    statusReport(),
+    statusReport(),
+    statusReport({ reconciled: true, evidence: expectedEvidence }),
+  ]);
   const reconciled = await wallet.sendBaseWalletEscrow({
     fetchImpl: reconciledFetch,
     pollAttempts: 3,
@@ -460,14 +589,15 @@ async function assertBadPlanDoesNotSend(label, mutatePlan, pattern) {
     provider: mockProvider({
       eth_chainId: "0x2105",
       eth_accounts: () => [payer],
-      eth_sendTransaction: ["0xescrowhash"],
-      eth_getTransactionReceipt: { status: "0x1" },
+      eth_sendTransaction: [escrowTxHash],
+      eth_getTransactionReceipt: escrowReceipt(expectedEvidence),
     }),
     review,
     shareUrl: "https://example.com/share",
   });
   assert.strictEqual(reconciled.heading, "funding reconciled");
   assert.strictEqual(reconciledFetch.calls.length, 3);
+  assert.strictEqual(reconciled.escrowEvidence.txHash, escrowTxHash);
   assert(reconciled.lines.includes("Share link: https://example.com/share"));
   assert(reconciled.lines.includes("Default CTA: Post your own bounty."));
 

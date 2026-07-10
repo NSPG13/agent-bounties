@@ -2748,11 +2748,20 @@ async fn bounty_status(
     State(state): State<SharedState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<BountyStatusResponse>, StatusCode> {
-    let network = state.network.lock().expect("state poisoned");
-    network
-        .status(id)
-        .map(Json)
-        .map_err(|_| StatusCode::NOT_FOUND)
+    let mut status = {
+        let network = state.network.lock().expect("state poisoned");
+        network.status(id).map_err(|_| StatusCode::NOT_FOUND)?
+    };
+    status.base_escrow_events = state
+        .base_log_worker
+        .lock()
+        .expect("state poisoned")
+        .indexed_events()
+        .iter()
+        .filter(|event| event.bounty_id == id)
+        .cloned()
+        .collect();
+    Ok(Json(status))
 }
 
 async fn public_proof_page(
