@@ -1094,7 +1094,7 @@ pub struct BaseReleaseTransactionEvidence {
     pub escrow_contract: String,
     pub input: String,
     pub receipt_succeeded: bool,
-    pub platform_fee_wallet: String,
+    pub platform_fee_wallet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2996,7 +2996,7 @@ impl BountyNetwork {
         &self,
         bounty_id: Id,
         onchain_escrow_id: u128,
-        platform_fee_wallet: String,
+        platform_fee_wallet: Option<String>,
     ) -> AppResult<BaseEscrowReleaseCall> {
         let settlement = self
             .settlements
@@ -3048,6 +3048,12 @@ impl BountyNetwork {
             })
             .collect::<AppResult<Vec<_>>>()?;
         if settlement.platform_fee.amount > 0 {
+            let platform_fee_wallet = platform_fee_wallet.ok_or_else(|| {
+                AppError::InvalidBaseEscrowEvent(
+                    "platform fee wallet is required for fee-bearing Base release attestation"
+                        .to_string(),
+                )
+            })?;
             recipients.push(EscrowRecipient {
                 address: platform_fee_wallet,
                 amount: settlement.platform_fee.clone(),
@@ -6377,7 +6383,7 @@ mod tests {
             escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
             input: release_plan.transaction.data.clone(),
             receipt_succeeded: true,
-            platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+            platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
         };
         let reconciliation = network
             .apply_attested_base_release_event(released.clone(), release_evidence.clone())
@@ -7077,7 +7083,9 @@ mod tests {
                     escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                     input: release_plan.transaction.data.clone(),
                     receipt_succeeded: true,
-                    platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                    platform_fee_wallet: Some(
+                        "0x4444444444444444444444444444444444444444".to_string(),
+                    ),
                 },
             )
             .unwrap_err();
@@ -7103,7 +7111,9 @@ mod tests {
                     escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                     input: release_plan.transaction.data.clone(),
                     receipt_succeeded: true,
-                    platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                    platform_fee_wallet: Some(
+                        "0x4444444444444444444444444444444444444444".to_string(),
+                    ),
                 },
             )
             .unwrap();
@@ -7636,7 +7646,9 @@ mod tests {
                     escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
                     input: release_plan.transaction.data.clone(),
                     receipt_succeeded: true,
-                    platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+                    platform_fee_wallet: Some(
+                        "0x5555555555555555555555555555555555555555".to_string(),
+                    ),
                 },
             )
             .unwrap();

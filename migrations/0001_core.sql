@@ -260,6 +260,28 @@ CREATE TABLE IF NOT EXISTS base_escrow_events (
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS base_release_attestations (
+  id UUID PRIMARY KEY,
+  network TEXT NOT NULL,
+  tx_hash TEXT NOT NULL,
+  log_key TEXT NOT NULL,
+  bounty_id UUID NOT NULL REFERENCES bounties(id),
+  onchain_escrow_id TEXT NOT NULL,
+  calldata_hash TEXT,
+  proof_hash TEXT,
+  recipients JSONB NOT NULL DEFAULT '[]'::jsonb,
+  escrow_contract TEXT NOT NULL,
+  settlement_signer TEXT NOT NULL,
+  platform_fee_wallet TEXT,
+  verdict TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (network, tx_hash, log_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_base_release_attestations_bounty
+  ON base_release_attestations (bounty_id, created_at);
+
 CREATE TABLE IF NOT EXISTS base_log_cursors (
   network TEXT NOT NULL,
   escrow_contract TEXT NOT NULL,

@@ -23,8 +23,8 @@ use chain_base::{
     base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_by_hash_request,
     eth_get_transaction_receipt_request, eth_send_raw_transaction_request, evm_event_topic,
     fetch_base_escrow_logs, fetch_transaction_by_hash, fetch_transaction_receipt,
-    rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, EvmLog, RpcLogSubmission,
+    normalize_evm_address, rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery,
+    BaseNetworkDescriptor, BaseRpcUrlConfig, EvmLog, RpcLogSubmission,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
@@ -270,9 +270,6 @@ struct GetBaseTransactionReceiptArgs {
     request_id: Option<u64>,
     network: Option<String>,
     reconcile_logs: Option<bool>,
-    escrow_contract: Option<String>,
-    settlement_signer: Option<String>,
-    platform_fee_wallet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1088,10 +1085,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "tx_hash": string_property("0x-prefixed transaction hash."),
                     "request_id": nullable_integer_property("Optional JSON-RPC request id."),
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia."),
-                    "reconcile_logs": nullable_boolean_property("When true, normalize receipt logs and run the Base escrow indexer."),
-                    "escrow_contract": nullable_string_property("Expected Base escrow contract for release calldata attestation; inferred for known deployments when omitted."),
-                    "settlement_signer": nullable_string_property("Expected settlement signer address. Required for EscrowReleased reconciliation unless BASE_SETTLEMENT_SIGNER is configured."),
-                    "platform_fee_wallet": nullable_string_property("Expected platform fee wallet used to rebuild the release plan. Required for EscrowReleased reconciliation unless BASE_PLATFORM_FEE_WALLET is configured.")
+                    "reconcile_logs": nullable_boolean_property("When true, normalize receipt logs and run the Base escrow indexer using configured release authorities.")
                 }),
                 &["tx_hash"],
             ),
@@ -2704,10 +2698,29 @@ async fn get_base_transaction_receipt(
     let mut transaction_request = None;
     let mut transaction = None;
     let reconciliation = if args.reconcile_logs.unwrap_or(false) {
+        let escrow_contract = match base_escrow_contract_for_chain(network.chain_id) {
+            Some(value) => value,
+            None => return mcp_error("configured Base escrow contract is unknown for network"),
+        };
+        let settlement_signer = match env::var("BASE_SETTLEMENT_SIGNER") {
+            Ok(value) => value,
+            Err(_) => {
+                return mcp_error("BASE_SETTLEMENT_SIGNER is required for release attestation")
+            }
+        };
+        let platform_fee_wallet = env::var("BASE_PLATFORM_FEE_WALLET").ok();
         let logs = match receipt.logs_to_evm_logs() {
             Ok(logs) => logs,
             Err(error) => return mcp_error(error),
         };
+        let logs = logs
+            .into_iter()
+            .filter(|log| {
+                normalize_evm_address(&log.address)
+                    .map(|address| address == escrow_contract)
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
         let release_attestations = if logs_contain_release(&logs) {
             let request = match eth_get_transaction_by_hash_request(&tx_hash, request_id + 1) {
                 Ok(request) => request,
@@ -2721,40 +2734,31 @@ async fn get_base_transaction_receipt(
             let Some(tx) = response.result else {
                 return mcp_error("release log reconciliation requires transaction input");
             };
+            let receipt_tx_hash = match receipt.normalized_tx_hash() {
+                Ok(value) => value,
+                Err(error) => return mcp_error(error),
+            };
+            if receipt_tx_hash != tx_hash {
+                return mcp_error("release receipt hash does not match requested transaction");
+            }
+            let transaction_tx_hash = match tx.normalized_hash() {
+                Ok(value) => value,
+                Err(error) => return mcp_error(error),
+            };
+            if transaction_tx_hash != tx_hash {
+                return mcp_error("release transaction hash does not match receipt");
+            }
+            let chain_id = match tx.chain_id() {
+                Ok(Some(value)) => value,
+                Ok(None) => return mcp_error("release transaction is missing chainId"),
+                Err(error) => return mcp_error(error),
+            };
             let Some(to) = tx.to.clone() else {
                 return mcp_error("release transaction is missing target contract");
             };
-            let escrow_contract = match args
-                .escrow_contract
-                .clone()
-                .or_else(|| base_escrow_contract_for_chain(network.chain_id))
-            {
-                Some(value) => value,
-                None => return mcp_error("escrow_contract is required to attest release calldata"),
-            };
-            let settlement_signer = match args
-                .settlement_signer
-                .clone()
-                .or_else(|| env::var("BASE_SETTLEMENT_SIGNER").ok())
-            {
-                Some(value) => value,
-                None => {
-                    return mcp_error("settlement_signer is required to attest release calldata")
-                }
-            };
-            let platform_fee_wallet = match args
-                .platform_fee_wallet
-                .clone()
-                .or_else(|| env::var("BASE_PLATFORM_FEE_WALLET").ok())
-            {
-                Some(value) => value,
-                None => {
-                    return mcp_error("platform_fee_wallet is required to attest release calldata")
-                }
-            };
             let evidence = BaseReleaseTransactionEvidence {
                 tx_hash: tx.hash.clone(),
-                chain_id: network.chain_id,
+                chain_id,
                 expected_chain_id: network.chain_id,
                 from: tx.from.clone(),
                 settlement_signer,
@@ -2890,6 +2894,11 @@ async fn process_base_evm_logs_with_release_attestations(
         }
         for settlement in &settlements {
             if let Err(error) = store.upsert_settlement(settlement).await {
+                return mcp_error(error);
+            }
+        }
+        for attestation in &report.release_attestations {
+            if let Err(error) = store.upsert_base_release_attestation(attestation).await {
                 return mcp_error(error);
             }
         }

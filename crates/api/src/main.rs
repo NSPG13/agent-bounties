@@ -434,9 +434,6 @@ struct GetBaseTransactionReceiptRequest {
     request_id: Option<u64>,
     network: Option<String>,
     reconcile_logs: Option<bool>,
-    escrow_contract: Option<String>,
-    settlement_signer: Option<String>,
-    platform_fee_wallet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2225,9 +2222,22 @@ async fn get_base_transaction_receipt(
     let mut transaction_request = None;
     let mut transaction = None;
     let reconciliation = if request.reconcile_logs.unwrap_or(false) {
+        let escrow_contract =
+            base_escrow_contract_for_chain(network.chain_id).ok_or(StatusCode::BAD_REQUEST)?;
+        let settlement_signer =
+            env::var("BASE_SETTLEMENT_SIGNER").map_err(|_| StatusCode::BAD_REQUEST)?;
+        let platform_fee_wallet = env::var("BASE_PLATFORM_FEE_WALLET").ok();
         let logs = receipt
             .logs_to_evm_logs()
             .map_err(|error| base_rpc_fetch_status(&error))?;
+        let logs = logs
+            .into_iter()
+            .filter(|log| {
+                chain_base::normalize_evm_address(&log.address)
+                    .map(|address| address == escrow_contract)
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
         let release_attestations = if logs_contain_release(&logs) {
             let tx_request = eth_get_transaction_by_hash_request(&tx_hash, request_id + 1)
                 .map_err(|error| base_rpc_fetch_status(&error))?;
@@ -2235,25 +2245,26 @@ async fn get_base_transaction_receipt(
                 .await
                 .map_err(|error| base_rpc_fetch_status(&error))?;
             let tx = tx_response.result.ok_or(StatusCode::BAD_REQUEST)?;
-            let escrow_contract = request
-                .escrow_contract
-                .clone()
-                .or_else(|| base_escrow_contract_for_chain(network.chain_id))
-                .ok_or(StatusCode::BAD_REQUEST)?;
-            let settlement_signer = request
-                .settlement_signer
-                .clone()
-                .or_else(|| env::var("BASE_SETTLEMENT_SIGNER").ok())
-                .ok_or(StatusCode::BAD_REQUEST)?;
-            let platform_fee_wallet = request
-                .platform_fee_wallet
-                .clone()
-                .or_else(|| env::var("BASE_PLATFORM_FEE_WALLET").ok())
+            let receipt_tx_hash = receipt
+                .normalized_tx_hash()
+                .map_err(|error| base_rpc_fetch_status(&error))?;
+            if receipt_tx_hash != tx_hash {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            let transaction_tx_hash = tx
+                .normalized_hash()
+                .map_err(|error| base_rpc_fetch_status(&error))?;
+            if transaction_tx_hash != tx_hash {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            let chain_id = tx
+                .chain_id()
+                .map_err(|error| base_rpc_fetch_status(&error))?
                 .ok_or(StatusCode::BAD_REQUEST)?;
             let to = tx.to.clone().ok_or(StatusCode::BAD_REQUEST)?;
             let evidence = BaseReleaseTransactionEvidence {
                 tx_hash: tx.hash.clone(),
-                chain_id: network.chain_id,
+                chain_id,
                 expected_chain_id: network.chain_id,
                 from: tx.from.clone(),
                 settlement_signer,
@@ -2409,6 +2420,12 @@ async fn process_base_evm_logs_with_release_attestations(
         for settlement in &settlements {
             store
                 .upsert_settlement(settlement)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        for attestation in &report.release_attestations {
+            store
+                .upsert_base_release_attestation(attestation)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
@@ -6963,6 +6980,7 @@ mod tests {
                     "from": "0x5555555555555555555555555555555555555555",
                     "to": "0x1111111111111111111111111111111111111111",
                     "input": release_plan.transaction.data,
+                    "chainId": "0x14a34",
                     "blockNumber": "0xb",
                     "transactionIndex": "0x0"
                 }
@@ -6979,6 +6997,18 @@ mod tests {
         let _ = reconcile_base_escrow_event(State(state.clone()), HeaderMap::new(), Json(created))
             .await
             .unwrap();
+        std::env::set_var(
+            "BASE_SETTLEMENT_SIGNER",
+            "0x5555555555555555555555555555555555555555",
+        );
+        std::env::set_var(
+            "BASE_SEPOLIA_ESCROW_CONTRACT",
+            "0x1111111111111111111111111111111111111111",
+        );
+        std::env::set_var(
+            "BASE_PLATFORM_FEE_WALLET",
+            "0x4444444444444444444444444444444444444444",
+        );
 
         let report = get_base_transaction_receipt(
             State(state.clone()),
@@ -6988,9 +7018,6 @@ mod tests {
                 request_id: Some(14),
                 network: Some("base-sepolia".to_string()),
                 reconcile_logs: Some(true),
-                escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
-                settlement_signer: Some("0x5555555555555555555555555555555555555555".to_string()),
-                platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
             }),
         )
         .await

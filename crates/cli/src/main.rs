@@ -822,7 +822,7 @@ async fn demo() -> Result<()> {
             escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
             input: release_plan.transaction.data.clone(),
             receipt_succeeded: true,
-            platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+            platform_fee_wallet: Some("0x5555555555555555555555555555555555555555".to_string()),
         },
     )?;
     let status = network.status(bounty.id)?;
@@ -1059,7 +1059,7 @@ async fn funding_rehearsal_demo() -> Result<()> {
             escrow_contract,
             input: base_release_plan.transaction.data.clone(),
             receipt_succeeded: true,
-            platform_fee_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+            platform_fee_wallet: Some("0x5555555555555555555555555555555555555555".to_string()),
         },
     )?;
     let stripe_connect_eligibility =
@@ -6126,15 +6126,7 @@ fn request_contracts() -> BTreeMap<String, RequestContract> {
         &mut contracts,
         "/v1/base/transaction-receipt",
         &["tx_hash"],
-        &[
-            "tx_hash",
-            "request_id",
-            "network",
-            "reconcile_logs",
-            "escrow_contract",
-            "settlement_signer",
-            "platform_fee_wallet",
-        ],
+        &["tx_hash", "request_id", "network", "reconcile_logs"],
         &["request_id"],
     );
     contracts

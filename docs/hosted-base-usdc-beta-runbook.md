@@ -258,10 +258,7 @@ curl -sS "$PUBLIC_BASE_URL/v1/base/transaction-receipt" \
   --data '{
     "network": "base-sepolia",
     "tx_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "reconcile_logs": true,
-    "escrow_contract": "0x1111111111111111111111111111111111111111",
-    "settlement_signer": "0x5555555555555555555555555555555555555555",
-    "platform_fee_wallet": "0x4444444444444444444444444444444444444444"
+    "reconcile_logs": true
   }'
 ```
 

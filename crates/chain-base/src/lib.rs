@@ -771,6 +771,8 @@ pub struct RpcTransaction {
     pub from: String,
     pub to: Option<String>,
     pub input: String,
+    #[serde(rename = "chainId")]
+    pub chain_id: Option<String>,
     #[serde(rename = "blockNumber")]
     pub block_number: Option<String>,
     #[serde(rename = "transactionIndex")]
@@ -1197,6 +1199,10 @@ impl RpcTransaction {
 
     pub fn normalized_to(&self) -> Result<Option<String>, ChainBaseError> {
         self.to.as_deref().map(normalize_address).transpose()
+    }
+
+    pub fn chain_id(&self) -> Result<Option<u64>, ChainBaseError> {
+        self.chain_id.as_deref().map(parse_rpc_quantity).transpose()
     }
 }
 

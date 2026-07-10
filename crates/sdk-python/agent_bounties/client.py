@@ -497,9 +497,6 @@ class AgentBountiesClient:
         request_id: int | None = None,
         network: str | None = None,
         reconcile_logs: bool | None = None,
-        escrow_contract: str | None = None,
-        settlement_signer: str | None = None,
-        platform_fee_wallet: str | None = None,
     ):
         return self._request(
             "POST",
@@ -509,9 +506,6 @@ class AgentBountiesClient:
                 "request_id": request_id,
                 "network": network,
                 "reconcile_logs": reconcile_logs,
-                "escrow_contract": escrow_contract,
-                "settlement_signer": settlement_signer,
-                "platform_fee_wallet": platform_fee_wallet,
             },
         )
 

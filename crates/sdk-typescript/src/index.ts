@@ -163,9 +163,6 @@ export interface GetBaseTransactionReceiptRequest {
   request_id?: number | null;
   network?: string | null;
   reconcile_logs?: boolean | null;
-  escrow_contract?: string | null;
-  settlement_signer?: string | null;
-  platform_fee_wallet?: string | null;
 }
 
 export type BaseEscrowEvent = Record<string, unknown>;
@@ -627,9 +624,6 @@ export class AgentBountiesClient {
         request_id: request.request_id ?? null,
         network: request.network ?? null,
         reconcile_logs: request.reconcile_logs ?? null,
-        escrow_contract: request.escrow_contract ?? null,
-        settlement_signer: request.settlement_signer ?? null,
-        platform_fee_wallet: request.platform_fee_wallet ?? null,
       }),
     });
   }

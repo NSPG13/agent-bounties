@@ -176,6 +176,25 @@ pub struct BountyStatusScope {
     pub risk_events: Vec<RiskEvent>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BaseReleaseAttestationRecord {
+    pub id: Id,
+    pub network: String,
+    pub tx_hash: String,
+    pub log_key: String,
+    pub bounty_id: Id,
+    pub onchain_escrow_id: String,
+    pub calldata_hash: Option<String>,
+    pub proof_hash: Option<String>,
+    pub recipients: serde_json::Value,
+    pub escrow_contract: String,
+    pub settlement_signer: String,
+    pub platform_fee_wallet: Option<String>,
+    pub verdict: String,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Default)]
 pub struct InMemoryStore {
     pub agents: HashMap<Id, Agent>,
@@ -1576,6 +1595,70 @@ impl PostgresStore {
         rows.into_iter().map(base_escrow_event_from_row).collect()
     }
 
+    pub async fn upsert_base_release_attestation(
+        &self,
+        record: &BaseReleaseAttestationRecord,
+    ) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO base_release_attestations
+              (id, network, tx_hash, log_key, bounty_id, onchain_escrow_id, calldata_hash, proof_hash, recipients, escrow_contract, settlement_signer, platform_fee_wallet, verdict, reason, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            ON CONFLICT (network, tx_hash, log_key) DO UPDATE SET
+              bounty_id = EXCLUDED.bounty_id,
+              onchain_escrow_id = EXCLUDED.onchain_escrow_id,
+              calldata_hash = EXCLUDED.calldata_hash,
+              proof_hash = EXCLUDED.proof_hash,
+              recipients = EXCLUDED.recipients,
+              escrow_contract = EXCLUDED.escrow_contract,
+              settlement_signer = EXCLUDED.settlement_signer,
+              platform_fee_wallet = EXCLUDED.platform_fee_wallet,
+              verdict = EXCLUDED.verdict,
+              reason = EXCLUDED.reason,
+              created_at = EXCLUDED.created_at
+            "#,
+        )
+        .bind(record.id)
+        .bind(&record.network)
+        .bind(&record.tx_hash)
+        .bind(&record.log_key)
+        .bind(record.bounty_id)
+        .bind(&record.onchain_escrow_id)
+        .bind(&record.calldata_hash)
+        .bind(&record.proof_hash)
+        .bind(&record.recipients)
+        .bind(&record.escrow_contract)
+        .bind(&record.settlement_signer)
+        .bind(&record.platform_fee_wallet)
+        .bind(&record.verdict)
+        .bind(&record.reason)
+        .bind(record.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_base_release_attestations_for_bounty(
+        &self,
+        bounty_id: Id,
+    ) -> DbResult<Vec<BaseReleaseAttestationRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, network, tx_hash, log_key, bounty_id, onchain_escrow_id, calldata_hash, proof_hash, recipients, escrow_contract, settlement_signer, platform_fee_wallet, verdict, reason, created_at
+            FROM base_release_attestations
+            WHERE bounty_id = $1
+            ORDER BY created_at, tx_hash, log_key
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(base_release_attestation_from_row)
+            .collect()
+    }
+
     pub async fn get_base_log_cursor(
         &self,
         network: &str,
@@ -2527,6 +2610,26 @@ fn base_escrow_event_from_row(row: PgRow) -> DbResult<BaseEscrowEvent> {
     })
 }
 
+fn base_release_attestation_from_row(row: PgRow) -> DbResult<BaseReleaseAttestationRecord> {
+    Ok(BaseReleaseAttestationRecord {
+        id: row.try_get("id")?,
+        network: row.try_get("network")?,
+        tx_hash: row.try_get("tx_hash")?,
+        log_key: row.try_get("log_key")?,
+        bounty_id: row.try_get("bounty_id")?,
+        onchain_escrow_id: row.try_get("onchain_escrow_id")?,
+        calldata_hash: row.try_get("calldata_hash")?,
+        proof_hash: row.try_get("proof_hash")?,
+        recipients: row.try_get("recipients")?,
+        escrow_contract: row.try_get("escrow_contract")?,
+        settlement_signer: row.try_get("settlement_signer")?,
+        platform_fee_wallet: row.try_get("platform_fee_wallet")?,
+        verdict: row.try_get("verdict")?,
+        reason: row.try_get("reason")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
 fn parse_risk_surface(value: String) -> DbResult<RiskSurface> {
     match value.as_str() {
         "HelpRequest" => Ok(RiskSurface::HelpRequest),
@@ -2667,6 +2770,7 @@ mod tests {
             "funding_contributions",
             "escrows",
             "base_escrow_events",
+            "base_release_attestations",
             "claims",
             "submissions",
             "verifier_results",
