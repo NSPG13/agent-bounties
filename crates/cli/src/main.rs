@@ -7116,15 +7116,30 @@ fn require_agent_paid_status(value: &serde_json::Value, message: &str) -> Result
         value
             .pointer("/payouts")
             .and_then(|payouts| payouts.as_array())
-            .map(|payouts| !payouts.is_empty())
+            .map(|payouts| {
+                payouts.iter().any(|payout| {
+                    value_str(payout, "/status") == Some("Paid")
+                        && payout
+                            .pointer("/amount/amount")
+                            .and_then(|amount| amount.as_i64())
+                            .is_some_and(|amount| amount > 0)
+                })
+            })
             .unwrap_or(false),
         message,
     )?;
     require(
         value
-            .pointer("/totals/0/pending_minor")
-            .and_then(|amount| amount.as_i64())
-            .map(|amount| amount > 0)
+            .pointer("/totals")
+            .and_then(|totals| totals.as_array())
+            .map(|totals| {
+                totals.iter().any(|total| {
+                    total
+                        .pointer("/paid_minor")
+                        .and_then(|amount| amount.as_i64())
+                        .is_some_and(|amount| amount > 0)
+                })
+            })
             .unwrap_or(false),
         message,
     )

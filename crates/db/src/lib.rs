@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
+pub const AUTONOMOUS_PROTOCOL_MIGRATION: &str =
+    include_str!("../../../migrations/0002_autonomous_protocol.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -220,12 +222,14 @@ impl PostgresStore {
             .await?;
 
         let migration_result = async {
-            for statement in CORE_MIGRATION
-                .split(';')
-                .map(str::trim)
-                .filter(|statement| !statement.is_empty())
-            {
-                sqlx::query(statement).execute(&mut *connection).await?;
+            for migration in [CORE_MIGRATION, AUTONOMOUS_PROTOCOL_MIGRATION] {
+                for statement in migration
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|statement| !statement.is_empty())
+                {
+                    sqlx::query(statement).execute(&mut *connection).await?;
+                }
             }
             Ok::<(), sqlx::Error>(())
         }
@@ -3008,6 +3012,31 @@ mod tests {
         assert!(CORE_MIGRATION.contains("fund-contribution:"));
         assert!(CORE_MIGRATION.contains("CHECK (platform_fee >= 0)"));
         assert!(CORE_MIGRATION.contains("DROP CONSTRAINT IF EXISTS settlements_platform_fee_check"));
+    }
+
+    #[test]
+    fn autonomous_migration_contains_protocol_tables_and_indexes() {
+        for table in [
+            "autonomous_bounty_events",
+            "autonomous_bounty_terms",
+            "autonomous_submission_evidence",
+        ] {
+            assert!(
+                AUTONOMOUS_PROTOCOL_MIGRATION.contains(table),
+                "missing {table}"
+            );
+        }
+        for index in [
+            "idx_autonomous_bounty_events_bounty",
+            "idx_autonomous_bounty_events_contract",
+            "idx_autonomous_bounty_terms_creator",
+            "idx_autonomous_submission_evidence_bounty",
+        ] {
+            assert!(
+                AUTONOMOUS_PROTOCOL_MIGRATION.contains(index),
+                "missing {index}"
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,8 @@
+{
+  "algorithm": "sha256",
+  "line_endings": "lf",
+  "migrations": {
+    "0001_core.sql": "01c90253c0ecd84c3aedacf400062f3623d7c2a75ad77dbffbb140eb463b9f40",
+    "0002_autonomous_protocol.sql": "0af4ab404df1e830c1c8bd60b6553e6af604ed36a076de9eba9d8186175fd820"
+  }
+}

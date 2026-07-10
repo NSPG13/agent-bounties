@@ -55,6 +55,7 @@ Invoke-Checked { cargo run -p cli -- github-proof-comment-plan --bounty-id 00000
 Invoke-Checked { cargo run -p cli -- discovery --public-base-url https://agentbounties.local --mcp-base-url https://agentbounties.local/mcp }
 Invoke-Checked { cargo run -p cli -- discovery-report --input-fixture crates\cli\fixtures\discovery_answers.json --json-out target\tmp\discovery-report.json --markdown-out target\tmp\discovery-report.md }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\check-site.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\check-migration-history.py }
 Invoke-Checked { node --check skills\agent-bounties\scripts\check-in.mjs }
 Invoke-Checked { node --test scripts\test_agent_bounties_openclaw_skill.mjs }
 Invoke-Checked { node scripts\test-autonomous-wallet-flow.js }
@@ -67,7 +68,7 @@ Invoke-Checked { cargo run -p cli -- demo }
 Invoke-Checked { cargo run -p cli -- pooled-funding-demo }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\diagnose_hosted_api.py scripts\test_diagnose_hosted_api.py scripts\github_audience_audit.py scripts\test_github_audience_audit.py scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py scripts\sync_hosted_bounty_inventory.py scripts\test_sync_hosted_bounty_inventory.py scripts\validate_real_funding_rehearsal.py }
-Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py scripts\check-render-blueprint.py scripts\stage_review_contract_root.py scripts\test_stage_review_contract_root.py scripts\base_deployment_attest.py scripts\test_base_deployment_attest.py scripts\build_base_attest_fixtures.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py scripts\check-migration-history.py scripts\check-render-blueprint.py scripts\stage_review_contract_root.py scripts\test_stage_review_contract_root.py scripts\base_deployment_attest.py scripts\test_base_deployment_attest.py scripts\build_base_attest_fixtures.py }
 Pop-Location
 
 Push-Location (Join-Path $repoRoot "crates\sdk-typescript")

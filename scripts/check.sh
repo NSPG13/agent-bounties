@@ -88,6 +88,7 @@ cargo run -p cli -- discovery-report \
   --json-out target/tmp/discovery-report.json \
   --markdown-out target/tmp/discovery-report.md
 "${python_cmd[@]}" scripts/check-site.py
+"${python_cmd[@]}" scripts/check-migration-history.py
 node --check skills/agent-bounties/scripts/check-in.mjs
 node --test scripts/test_agent_bounties_openclaw_skill.mjs
 node scripts/test-autonomous-wallet-flow.js
@@ -113,6 +114,7 @@ cargo run -p cli -- pooled-funding-demo
   scripts/github_audience_audit.py \
   scripts/test_github_audience_audit.py \
   scripts/check-site.py \
+  scripts/check-migration-history.py \
   scripts/check-render-blueprint.py \
   scripts/stage_review_contract_root.py \
   scripts/test_stage_review_contract_root.py \
