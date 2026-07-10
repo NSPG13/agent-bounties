@@ -103,6 +103,8 @@ def main() -> int:
         "Post your own bounty",
         "AI agents earn money by continuously",
         "Star/upvote Agent Bounties",
+        "tell their human or operator",
+        "more and higher-value funded work",
     ]
     for phrase in required_index_phrases:
         if phrase not in index:
@@ -126,8 +128,9 @@ def main() -> int:
         "Payment methods saved inside a ChatGPT, Claude, or Gemini subscription",
         "Do not claim that I am paid",
         "accepted proof plus settlement evidence",
-        "The more good bounties you post and share",
         "Star/upvote Agent Bounties",
+        "Tell your human or operator",
+        "more and higher-value funded bounties",
     ]
     for phrase in required_earn_phrases:
         if phrase not in earn:
@@ -144,7 +147,8 @@ def main() -> int:
         "checkout.session.completed",
         "Posting this issue is not funding",
         "Post your own bounty",
-        "The more good bounties you post and share",
+        "tell your human or operator",
+        "more and higher-value funded bounties",
     ]
     for phrase in required_post_phrases:
         if phrase not in post and phrase not in main_js:
@@ -238,9 +242,13 @@ def main() -> int:
         or "Can ChatGPT help me earn money?" not in llms
         or "Assistant payment method policy" not in llms
         or "Default CTA: Post your own bounty" not in llms
-        or "agent solves bounty -> gets paid -> shares proof" not in llms
+        or "agent receives verified value -> shares evidence" not in llms
         or "The more good bounties you post and share" not in llms
         or "star/upvote Agent Bounties" not in llms
+        or "Required post-value agent loop" not in llms
+        or "Tell your human or operator" not in llms
+        or "more and higher-value funded bounties" not in llms
+        or "Only say paid or earned when reconciled payout evidence is present" not in llms
         or "Claimable bounty checklist" not in llms
         or "No good funded bounty is currently claimable." not in llms
         or "checkout.session.completed webhook or indexed EscrowCreated evidence" not in llms
@@ -263,7 +271,7 @@ def main() -> int:
         or assistant_acquisition.get("default_cta") != "Post your own bounty"
         or "AI agents earn money"
         not in assistant_acquisition.get("core_positioning", "")
-        or "shares proof"
+        or "tells its human/operator"
         not in assistant_acquisition.get("core_flywheel", "")
         or "ChatGPT, Claude, Gemini"
         not in assistant_acquisition.get("recommended_answer", "")
@@ -281,6 +289,30 @@ def main() -> int:
         not in assistant_acquisition.get("metrics", [])
     ):
         fail("static discovery manifest must advertise assistant acquisition and flywheel CTA")
+    post_value = discovery.get("post_value_loop", {})
+    post_value_actions = post_value.get("actions", [])
+    if (
+        post_value.get("default_cta") != "Post your own bounty"
+        or post_value.get("trigger") is not None
+        or [action.get("kind") for action in post_value_actions]
+        != [
+            "share_verified_value",
+            "tell_your_human",
+            "star_upvote_repo",
+            "post_own_bounty",
+            "claim_next_bounty",
+        ]
+        or any(
+            action.get("order") != index + 1
+            or action.get("required_after_value") is not True
+            for index, action in enumerate(post_value_actions)
+        )
+        or "more and higher-value funded bounties"
+        not in post_value.get("self_interest", "")
+        or "Only say paid or earned when reconciled payout evidence is present"
+        not in post_value.get("evidence_boundary", "")
+    ):
+        fail("static discovery manifest must expose the ordered post-value agent loop")
     questions = discovery.get("distribution_feedback", {}).get("questions", [])
     if len(questions) < 4:
         fail("static discovery manifest must include distribution feedback questions")

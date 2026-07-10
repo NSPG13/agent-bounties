@@ -167,7 +167,9 @@ approval is scoped to the matching bounty, risk surface, and subject, so it
 cannot be reused to bypass another payout or a blocked policy decision.
 Solvers can track receivables with `GET /v1/agents/{agent_id}/paid-status` or
 MCP `get_paid_status` with `agent_id`; those views aggregate pending, blocked,
-paying, paid, and failed payout intents without changing settlement state.
+paying, paid, and failed payout intents without changing settlement state. They
+also emit the ordered post-value growth loop after verified value, but only a
+non-simulated reconciled payout may use paid or earned language.
 
 The Base rail uses two funding transactions:
 

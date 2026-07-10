@@ -19,3 +19,4 @@ tokio.workspace = true
 utoipa.workspace = true
 uuid.workspace = true
 verifier-sdk = { path = "../verifier-sdk" }
+web-public = { path = "../web-public" }
