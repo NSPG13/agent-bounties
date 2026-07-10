@@ -12,6 +12,7 @@ REQUIRED_FILES = [
     "earn.html",
     "post.html",
     "funding.html",
+    "operator.html",
     "terms.html",
     "privacy.html",
     "refunds.html",
@@ -88,6 +89,7 @@ def main() -> int:
     earn = (site_dir / "earn.html").read_text(encoding="utf-8")
     post = (site_dir / "post.html").read_text(encoding="utf-8")
     funding = (site_dir / "funding.html").read_text(encoding="utf-8")
+    operator = (site_dir / "operator.html").read_text(encoding="utf-8")
     success = (site_dir / "success.html").read_text(encoding="utf-8")
     main_js = (site_dir / "main.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
@@ -199,6 +201,22 @@ def main() -> int:
     for phrase in required_funding_phrases:
         if phrase not in funding and phrase not in main_js:
             fail(f"funding page missing required phrase: {phrase}")
+
+    required_operator_phrases = [
+        "Settlement signer",
+        "No private key",
+        "/v1/base/release-plan",
+        "/v1/base/transaction-receipt",
+        "reconcile_logs=true",
+        "EscrowReleased",
+        "release(uint256,address[],uint256[],bytes32)",
+        "Transaction hashes are not payout evidence",
+        "Post your own bounty",
+        "star/upvote Agent Bounties",
+    ]
+    for phrase in required_operator_phrases:
+        if phrase not in operator and phrase not in main_js:
+            fail(f"operator.html missing required phrase: {phrase}")
 
     required_success_phrases = [
         "Checkout submitted",
@@ -467,6 +485,26 @@ def main() -> int:
         not in wallet_native_base.get("settlement_authority", "")
     ):
         fail("static discovery manifest must advertise wallet-native Base funding safeguards")
+    base_operator_settlement = discovery.get("base_operator_settlement", {})
+    if (
+        base_operator_settlement.get("page")
+        != "https://nspg13.github.io/agent-bounties/operator.html"
+        or base_operator_settlement.get("provider_standard") != "EIP-1193"
+        or base_operator_settlement.get("chain_id_hex") != "0x2105"
+        or base_operator_settlement.get("release_plan_endpoint_template")
+        != "{api_base_url}/v1/base/release-plan"
+        or base_operator_settlement.get("receipt_endpoint_template")
+        != "{api_base_url}/v1/base/transaction-receipt"
+        or "release(uint256,address[],uint256[],bytes32) selector"
+        not in base_operator_settlement.get("required_plan_checks", [])
+        or "recipient split equals hosted escrow amount"
+        not in base_operator_settlement.get("required_plan_checks", [])
+        or base_operator_settlement.get("reconciliation_request", {}).get("reconcile_logs")
+        is not True
+        or "EscrowReleased"
+        not in base_operator_settlement.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must advertise operator Base release safeguards")
 
     print("site check ok")
     return 0

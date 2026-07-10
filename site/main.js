@@ -158,6 +158,11 @@
   const baseWalletOutput = document.getElementById("base-wallet-output");
   const checkoutStatusOutput = document.getElementById("checkout-status-output");
   const checkoutStatusRefresh = document.getElementById("checkout-status-refresh");
+  const operatorReleaseForm = document.getElementById("operator-release-form");
+  const operatorReleaseConnect = document.getElementById("operator-release-connect");
+  const operatorReleaseSign = document.getElementById("operator-release-sign");
+  const operatorReleaseReconcile = document.getElementById("operator-release-reconcile");
+  const operatorReleaseOutput = document.getElementById("operator-release-output");
 
   const baseMainnetWalletConfig = {
     network: "base-mainnet",
@@ -165,6 +170,7 @@
     chainIdHex: "0x2105",
     escrowContract: "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
     escrowCreatedTopic: "0xb67bc2da9ebef7d93355d3f5b6c7cc857b34cc7a4b8b2850ff3dcb90ea563ac2",
+    escrowReleasedTopic: "0x5c3cdb5e0a182625b29f652597bcf23eafc02808ceed42a6b452e1833c83a830",
     nativeUsdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   };
 
@@ -997,6 +1003,326 @@
     };
   }
 
+  function operatorRequestHeaders(operatorToken) {
+    const headers = { "content-type": "application/json", accept: "application/json" };
+    const token = normalizedText(operatorToken);
+    if (token) {
+      headers.authorization = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
+  function releaseRecipients(releaseCall) {
+    return Array.isArray(releaseCall && releaseCall.recipients)
+      ? releaseCall.recipients
+      : [];
+  }
+
+  function releaseRecipientTotal(recipients) {
+    let total = 0n;
+    for (const recipient of recipients) {
+      const amount = moneyAmountBigInt(recipient && recipient.amount);
+      if (amount === null) {
+        return null;
+      }
+      total += amount;
+    }
+    return total;
+  }
+
+  async function requestBaseOperatorReleasePlan(fetchImpl, apiBaseUrl, request, operatorToken) {
+    const response = await fetchImpl(`${apiBaseUrl}/v1/base/release-plan`, {
+      method: "POST",
+      headers: operatorRequestHeaders(operatorToken),
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw new Error(`Base release plan failed with ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async function requestBaseTransactionReceipt(fetchImpl, apiBaseUrl, request, operatorToken) {
+    const response = await fetchImpl(`${apiBaseUrl}/v1/base/transaction-receipt`, {
+      method: "POST",
+      headers: operatorRequestHeaders(operatorToken),
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw new Error(`Base transaction receipt reconciliation failed with ${response.status}`);
+    }
+    return response.json();
+  }
+
+  function baseOperatorReleasePlanIssues(plan, context) {
+    const issues = [];
+    const configured = baseMainnetWalletConfig;
+    const expectedBountyId = context && context.bountyId;
+    const connectedAddress = context && context.connectedAddress;
+    const escrowContract = normalizeAddress((context && context.escrowContract) || configured.escrowContract);
+    const network = plan && plan.network ? plan.network : {};
+    const bounty = plan && plan.bounty ? plan.bounty : {};
+    const escrow = plan && plan.escrow ? plan.escrow : {};
+    const releaseCall = plan && plan.release_call ? plan.release_call : {};
+    const transaction = plan && plan.transaction ? plan.transaction : {};
+    const recipients = releaseRecipients(releaseCall);
+    const transactionData = normalizeHexData(transaction.data);
+    const onchainEscrowId = normalizedQuantityToBigInt(releaseCall.onchain_escrow_id);
+    const recipientTotal = releaseRecipientTotal(recipients);
+    const escrowAmount = moneyAmountBigInt(escrow.amount);
+
+    if (normalizeChainId(network.chain_id) !== configured.chainId) {
+      issues.push("release plan is not for Base mainnet chain 8453");
+    }
+    if (expectedBountyId && bounty.id !== expectedBountyId) {
+      issues.push("release plan bounty id does not match the displayed bounty");
+    }
+    if (bounty.status && bounty.status !== "Payable") {
+      issues.push("release plan bounty is not Payable");
+    }
+    if (!escrowContract || !sameAddress(transaction.to, escrowContract)) {
+      issues.push("release transaction target does not match the verified escrow contract");
+    }
+    if (transaction.from && !sameAddress(transaction.from, connectedAddress)) {
+      issues.push("release transaction sender does not match the connected settlement wallet");
+    }
+    if (!isZeroQuantity(transaction.value_wei)) {
+      issues.push("release transaction must carry exactly zero ETH value");
+    }
+    if (transaction.function !== "release(uint256,address[],uint256[],bytes32)") {
+      issues.push("release transaction is not release(uint256,address[],uint256[],bytes32)");
+    }
+    if (!transactionData || !transactionData.startsWith("0xbfc95334")) {
+      issues.push("release calldata selector is not release(uint256,address[],uint256[],bytes32)");
+    }
+    if (onchainEscrowId === null || onchainEscrowId <= 0n) {
+      issues.push("release call must name a positive on-chain escrow id");
+    }
+    if (escrow.external_reference && onchainEscrowId !== null) {
+      const expectedReference = `base:${onchainEscrowId.toString(10)}`;
+      if (normalizedText(escrow.external_reference).toLowerCase() !== expectedReference) {
+        issues.push("release call on-chain escrow id does not match hosted escrow reference");
+      }
+    }
+    if (!normalizeBytes32(releaseCall.proof_hash)) {
+      issues.push("release call proof hash is not bytes32");
+    }
+    if (recipients.length === 0) {
+      issues.push("release call has no recipients");
+    }
+    for (const recipient of recipients) {
+      const amount = moneyAmountBigInt(recipient && recipient.amount);
+      if (!normalizeAddress(recipient && recipient.address)) {
+        issues.push("release recipient has an invalid address");
+      }
+      if (amount === null || amount <= 0n) {
+        issues.push("release recipient amount must be positive");
+      }
+    }
+    if (recipientTotal === null) {
+      issues.push("release recipient total could not be decoded");
+    } else if (escrowAmount !== null && recipientTotal !== escrowAmount) {
+      issues.push("release recipient total does not match hosted escrow amount");
+    }
+    return issues;
+  }
+
+  function validateBaseOperatorReleasePlan(plan, context) {
+    const issues = baseOperatorReleasePlanIssues(plan, context);
+    if (issues.length > 0) {
+      throw new Error(`Base operator release plan rejected: ${issues.join("; ")}`);
+    }
+    return plan;
+  }
+
+  function baseOperatorReleaseReviewLines(review) {
+    const plan = review.plan;
+    const bounty = plan.bounty || {};
+    const escrow = plan.escrow || {};
+    const releaseCall = plan.release_call || {};
+    const transaction = plan.transaction || {};
+    const recipients = releaseRecipients(releaseCall);
+    const recipientLines = recipients.map((recipient, index) => (
+      `Recipient ${index + 1}: ${recipient.address} receives ${displayMoney(recipient.amount)}`
+    ));
+    return [
+      "State: ready for settlement signer wallet review",
+      `Bounty: ${bounty.title ? `${bounty.title} (${bounty.id})` : bounty.id || review.bountyId}`,
+      `Bounty status: ${bounty.status || "unknown"}`,
+      `Escrow status: ${escrow.status || "unknown"}`,
+      `Escrow amount: ${displayMoney(escrow.amount)}`,
+      `On-chain escrow id: ${releaseCall.onchain_escrow_id}`,
+      `Proof hash: ${normalizeBytes32(releaseCall.proof_hash)}`,
+      `EscrowReleased topic: ${baseMainnetWalletConfig.escrowReleasedTopic}`,
+      ...recipientLines,
+      `Release target: ${transaction.to}`,
+      "Release ETH value: 0",
+      `Release calldata: ${transaction.data}`,
+      "",
+      "No private key or seed phrase is requested. The connected wallet must be the current settlement signer for this escrow contract.",
+      "Transaction hashes are not payout evidence. Payout is complete only after the hosted API reconciles an indexed EscrowReleased event and the bounty moves to Paid.",
+      "Default CTA after verified payout: Post your own bounty.",
+    ].join("\n");
+  }
+
+  async function prepareBaseOperatorReleasePlan(options) {
+    const fetchImpl = options.fetchImpl || window.fetch.bind(window);
+    const provider = options.provider;
+    const apiBaseUrl = normalizedText(options.apiBaseUrl).replace(/\/+$/, "");
+    const bountyId = normalizedText(options.bountyId);
+    const connectedAddress = normalizeAddress(options.connectedAddress);
+    const escrowContract = normalizeAddress(options.escrowContract) || baseMainnetWalletConfig.escrowContract;
+    const platformFeeWallet = normalizedText(options.platformFeeWallet);
+    const operatorToken = normalizedText(options.operatorToken);
+    const onState = typeof options.onState === "function" ? options.onState : () => {};
+
+    if (!apiBaseUrl || !bountyId || !connectedAddress) {
+      throw new Error("Hosted API URL, bounty id, and connected settlement wallet are required.");
+    }
+    if (platformFeeWallet && !normalizeAddress(platformFeeWallet)) {
+      throw new Error("Platform fee wallet must be a valid EVM address when provided.");
+    }
+
+    await assertBaseWalletStillConnected(provider, connectedAddress);
+    onState("Requesting unsigned Base release plan...");
+    const plan = await requestBaseOperatorReleasePlan(fetchImpl, apiBaseUrl, {
+      bounty_id: bountyId,
+      escrow_contract: escrowContract,
+      network: baseMainnetWalletConfig.network,
+      platform_fee_wallet: platformFeeWallet,
+    }, operatorToken);
+    validateBaseOperatorReleasePlan(plan, {
+      bountyId,
+      connectedAddress,
+      escrowContract,
+    });
+    const review = {
+      apiBaseUrl,
+      bountyId,
+      connectedAddress,
+      escrowContract,
+      operatorToken,
+      plan,
+    };
+    return {
+      ...review,
+      heading: "ready for settlement signer wallet review",
+      lines: baseOperatorReleaseReviewLines(review),
+    };
+  }
+
+  function baseOperatorReleaseHeading(report) {
+    if (!report || report.receipt_found === false) {
+      return "waiting for receipt";
+    }
+    if (report.succeeded === false) {
+      return "needs operator review";
+    }
+    const appliedEvents = report.reconciliation && Array.isArray(report.reconciliation.applied_events)
+      ? report.reconciliation.applied_events
+      : [];
+    return appliedEvents.some((event) => event && event.kind === "Released")
+      ? "payout reconciled"
+      : "receipt confirmed, reconciliation pending";
+  }
+
+  function baseOperatorReleaseStatusLines(report, txHash) {
+    const heading = baseOperatorReleaseHeading(report);
+    const reconciliation = report && report.reconciliation ? report.reconciliation : {};
+    const appliedEvents = Array.isArray(reconciliation.applied_events) ? reconciliation.applied_events : [];
+    const failures = Array.isArray(reconciliation.failures) ? reconciliation.failures : [];
+    const releasedEvents = appliedEvents.filter((event) => event && event.kind === "Released");
+    const lines = [
+      `State: ${heading}`,
+      `Release transaction: ${txHash || (report && report.tx_hash) || "unknown"}`,
+      `Receipt found: ${report && report.receipt_found === true ? "yes" : "no"}`,
+      `Receipt succeeded: ${report && typeof report.succeeded === "boolean" ? (report.succeeded ? "yes" : "no") : "unknown"}`,
+      `Receipt log count: ${report && typeof report.log_count === "number" ? report.log_count : 0}`,
+      `Decoded escrow events: ${typeof reconciliation.decoded_events === "number" ? reconciliation.decoded_events : 0}`,
+      `Applied release events: ${releasedEvents.length}`,
+      `Reconciliation failures: ${failures.length}`,
+    ];
+    if (heading === "payout reconciled") {
+      lines.push("Payout is reconciled because the hosted API applied an indexed EscrowReleased event from the receipt.");
+      lines.push("Ask the solver to share verified payout proof, tell their human or operator, star/upvote Agent Bounties, and post their own bounty to create more funded work.");
+    } else if (heading === "receipt confirmed, reconciliation pending") {
+      lines.push("The transaction receipt succeeded, but no Released event has been applied yet. Refresh reconciliation before claiming the payout is complete.");
+    } else if (heading === "waiting for receipt") {
+      lines.push("The hosted API has not found a receipt yet. Transaction hashes are not payout evidence.");
+    } else {
+      lines.push("The release transaction failed or needs review. Do not retry automatically.");
+    }
+    return lines.join("\n");
+  }
+
+  async function reconcileBaseOperatorRelease(options) {
+    const fetchImpl = options.fetchImpl || window.fetch.bind(window);
+    const apiBaseUrl = normalizedText(options.apiBaseUrl).replace(/\/+$/, "");
+    const releaseHash = normalizeBytes32(options.releaseHash);
+    const operatorToken = normalizedText(options.operatorToken);
+    const onState = typeof options.onState === "function" ? options.onState : () => {};
+    if (!apiBaseUrl || !releaseHash) {
+      throw new Error("Hosted API URL and release transaction hash are required for reconciliation.");
+    }
+    onState("Polling hosted Base transaction receipt with reconcile_logs=true...");
+    const report = await requestBaseTransactionReceipt(fetchImpl, apiBaseUrl, {
+      network: baseMainnetWalletConfig.network,
+      tx_hash: releaseHash,
+      reconcile_logs: true,
+    }, operatorToken);
+    return {
+      heading: baseOperatorReleaseHeading(report),
+      lines: baseOperatorReleaseStatusLines(report, releaseHash),
+      report,
+    };
+  }
+
+  async function sendBaseOperatorRelease(options) {
+    const provider = options.provider;
+    const review = options.review;
+    const onState = typeof options.onState === "function" ? options.onState : () => {};
+    const connectedAddress = normalizeAddress(options.connectedAddress || review.connectedAddress);
+    await assertBaseWalletStillConnected(provider, connectedAddress);
+    onState("Request wallet confirmation: release escrow payout.");
+    const releaseHash = await providerRequest(provider, "eth_sendTransaction", [
+      evmTransactionRequest(review.plan.transaction, connectedAddress),
+    ]);
+    onState("Release submitted. Waiting for a successful wallet receipt...");
+    try {
+      await waitForTransactionSuccess(provider, releaseHash, {
+        attempts: options.receiptAttempts,
+        delayMs: options.receiptDelayMs,
+        sleepImpl: options.sleepImpl,
+      });
+    } catch (error) {
+      if (error instanceof Error && /reverted/.test(error.message)) {
+        return {
+          releaseHash,
+          heading: "needs operator review",
+          lines: [
+            "State: needs operator review",
+            `Release transaction: ${releaseHash}`,
+            "The wallet/provider reports the release transaction reverted. No retry was attempted.",
+          ].join("\n"),
+        };
+      }
+      throw error;
+    }
+    const reconciliation = await reconcileBaseOperatorRelease({
+      apiBaseUrl: review.apiBaseUrl,
+      fetchImpl: options.fetchImpl,
+      operatorToken: options.operatorToken || review.operatorToken,
+      releaseHash,
+      onState,
+    });
+    return {
+      releaseHash,
+      heading: reconciliation.heading,
+      lines: reconciliation.lines,
+      report: reconciliation.report,
+    };
+  }
+
   async function runExclusiveWalletAction(state, task) {
     if (state.busy) {
       throw new Error("A Base wallet action is already in progress.");
@@ -1148,8 +1474,150 @@
     refreshCheckoutStatus();
   }
 
+  function setElementDisabled(element, disabled) {
+    if (element) {
+      element.disabled = disabled;
+    }
+  }
+
+  let operatorReleaseConnection = null;
+  let operatorReleaseReview = null;
+  let operatorReleaseHash = "";
+  const operatorReleaseActionState = { busy: false };
+
+  function updateOperatorReleaseButtons() {
+    const busy = operatorReleaseActionState.busy;
+    const hasConnection = Boolean(operatorReleaseConnection);
+    const hasReview = Boolean(operatorReleaseReview);
+    const hasReleaseHash = Boolean(operatorReleaseHash);
+    setElementDisabled(operatorReleaseConnect, busy);
+    setElementDisabled(operatorReleaseForm && operatorReleaseForm.querySelector("button[type='submit']"), busy || !hasConnection);
+    setElementDisabled(operatorReleaseSign, busy || !hasReview);
+    setElementDisabled(operatorReleaseReconcile, busy || !hasReleaseHash);
+  }
+
+  function resetOperatorReleaseState() {
+    operatorReleaseReview = null;
+    operatorReleaseHash = "";
+    updateOperatorReleaseButtons();
+  }
+
+  function operatorReleaseFormValues() {
+    const data = new FormData(operatorReleaseForm);
+    return {
+      apiBaseUrl: String(data.get("operatorApiBaseUrl") || "").replace(/\/+$/, ""),
+      bountyId: String(data.get("operatorBountyId") || "").trim(),
+      escrowContract: String(data.get("operatorEscrowContract") || "").trim(),
+      operatorToken: String(data.get("operatorToken") || ""),
+      platformFeeWallet: String(data.get("operatorPlatformFeeWallet") || "").trim(),
+    };
+  }
+
+  async function runOperatorReleaseUiAction(task) {
+    try {
+      await runExclusiveWalletAction(operatorReleaseActionState, task);
+    } catch (error) {
+      operatorReleaseOutput.textContent = `${error.message}\n\nNo transaction was retried. Inspect the wallet, release plan, and hosted receipt reconciliation before trying again. Transaction hashes are not payout evidence.`;
+    } finally {
+      updateOperatorReleaseButtons();
+    }
+  }
+
+  if (operatorReleaseForm && operatorReleaseOutput) {
+    updateOperatorReleaseButtons();
+    if (operatorReleaseConnect) {
+      operatorReleaseConnect.addEventListener("click", async () => {
+        await runOperatorReleaseUiAction(async () => {
+          operatorReleaseOutput.textContent = "Requesting settlement signer wallet and Base mainnet network...";
+          operatorReleaseConnection = await connectBaseWallet(window.ethereum);
+          resetOperatorReleaseState();
+          operatorReleaseOutput.textContent = [
+            "State: settlement signer wallet connected",
+            `Connected address: ${operatorReleaseConnection.address}`,
+            "Network: Base mainnet (8453)",
+            "No release plan has been reviewed, signed, broadcast, or reconciled.",
+          ].join("\n");
+        });
+      });
+    }
+
+    operatorReleaseForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await runOperatorReleaseUiAction(async () => {
+        if (!operatorReleaseConnection) {
+          throw new Error("Connect the settlement signer wallet before planning a release. No transaction was signed.");
+        }
+        const values = operatorReleaseFormValues();
+        operatorReleaseReview = await prepareBaseOperatorReleasePlan({
+          apiBaseUrl: values.apiBaseUrl,
+          bountyId: values.bountyId,
+          connectedAddress: operatorReleaseConnection.address,
+          escrowContract: values.escrowContract,
+          fetchImpl: window.fetch.bind(window),
+          operatorToken: values.operatorToken,
+          platformFeeWallet: values.platformFeeWallet,
+          provider: window.ethereum,
+          onState(message) {
+            operatorReleaseOutput.textContent = message;
+          },
+        });
+        operatorReleaseHash = "";
+        operatorReleaseOutput.textContent = operatorReleaseReview.lines;
+      });
+    });
+
+    if (operatorReleaseSign) {
+      operatorReleaseSign.addEventListener("click", async () => {
+        await runOperatorReleaseUiAction(async () => {
+          if (!operatorReleaseReview) {
+            throw new Error("Review a Base release plan before signing payout release.");
+          }
+          const result = await sendBaseOperatorRelease({
+            connectedAddress: operatorReleaseConnection && operatorReleaseConnection.address,
+            fetchImpl: window.fetch.bind(window),
+            operatorToken: operatorReleaseFormValues().operatorToken,
+            provider: window.ethereum,
+            receiptAttempts: 8,
+            receiptDelayMs: 2000,
+            review: operatorReleaseReview,
+            onState(message) {
+              operatorReleaseOutput.textContent = message;
+            },
+          });
+          operatorReleaseHash = result.releaseHash || "";
+          operatorReleaseOutput.textContent = result.lines;
+        });
+      });
+    }
+
+    if (operatorReleaseReconcile) {
+      operatorReleaseReconcile.addEventListener("click", async () => {
+        await runOperatorReleaseUiAction(async () => {
+          if (!operatorReleaseHash) {
+            throw new Error("No release transaction hash is available for reconciliation.");
+          }
+          const values = operatorReleaseFormValues();
+          const result = await reconcileBaseOperatorRelease({
+            apiBaseUrl: values.apiBaseUrl,
+            fetchImpl: window.fetch.bind(window),
+            operatorToken: values.operatorToken,
+            releaseHash: operatorReleaseHash,
+            onState(message) {
+              operatorReleaseOutput.textContent = message;
+            },
+          });
+          operatorReleaseOutput.textContent = result.lines;
+        });
+      });
+    }
+  }
+
   window.AgentBountiesBaseWallet = {
     baseMainnetWalletConfig,
+    baseOperatorReleaseHeading,
+    baseOperatorReleasePlanIssues,
+    baseOperatorReleaseReviewLines,
+    baseOperatorReleaseStatusLines,
     baseWalletFundingStatusModel,
     baseWalletPlanValidationIssues,
     baseWalletReviewLines,
@@ -1161,10 +1629,14 @@
     matchingHostedBaseEscrow,
     normalizeAddress,
     pollBaseWalletReconciliation,
+    prepareBaseOperatorReleasePlan,
     prepareBaseWalletFundingPlan,
+    reconcileBaseOperatorRelease,
     runExclusiveWalletAction,
+    sendBaseOperatorRelease,
     sendBaseWalletApproval,
     sendBaseWalletEscrow,
+    validateBaseOperatorReleasePlan,
     validateBaseWalletPlan,
   };
 
@@ -1414,12 +1886,6 @@
   let baseWalletApprovalHash = "";
   let baseWalletEscrowEvidence = null;
   const baseWalletActionState = { busy: false };
-
-  function setElementDisabled(element, disabled) {
-    if (element) {
-      element.disabled = disabled;
-    }
-  }
 
   function baseWalletShareUrl(apiBaseUrl, bountyId) {
     try {
