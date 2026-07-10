@@ -41,6 +41,13 @@ impl Money {
             currency: currency.into().to_lowercase(),
         })
     }
+
+    pub fn zero(currency: impl Into<String>) -> Self {
+        Self {
+            amount: 0,
+            currency: currency.into().to_lowercase(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -671,6 +678,18 @@ pub struct EvalRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_money_is_explicit_and_does_not_allow_zero_value_bounties() {
+        assert_eq!(
+            Money::zero("USDC"),
+            Money {
+                amount: 0,
+                currency: "usdc".to_string()
+            }
+        );
+        assert_eq!(Money::new(0, "usdc"), Err(DomainError::InvalidAmount));
+    }
 
     #[test]
     fn bounty_must_be_funded_before_claim() {

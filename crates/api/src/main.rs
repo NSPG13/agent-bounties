@@ -3659,7 +3659,7 @@ mod tests {
         .0;
         assert_eq!(release_plan.network.chain_id, 8_453);
         assert_eq!(release_plan.release_call.onchain_escrow_id, 7);
-        assert_eq!(release_plan.release_call.recipients.len(), 2);
+        assert_eq!(release_plan.release_call.recipients.len(), 1);
         let release_log = raw_released_log(7, &format!("0x{}", proof.proof_hash), 11, 0);
         let report = reconcile_base_evm_logs(
             State(state.clone()),
@@ -3730,7 +3730,7 @@ mod tests {
         assert_eq!(response.payouts.len(), 1);
         assert_eq!(response.payouts[0].status, PayoutStatus::Pending);
         assert_eq!(response.totals[0].currency, "usdc");
-        assert_eq!(response.totals[0].pending_minor, 900_000);
+        assert_eq!(response.totals[0].pending_minor, 1_000_000);
         assert_eq!(response.totals[0].paid_minor, 0);
     }
 

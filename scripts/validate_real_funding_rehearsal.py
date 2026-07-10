@@ -132,7 +132,7 @@ def check_base(report: dict[str, Any]) -> None:
         "Base release plan must be an escrow release call",
     )
     recipients = base["release_plan"]["release_call"]["recipients"]
-    expect(len(recipients) == 2, "Base release must split solver payout and platform fee")
+    expect(len(recipients) == 1, "Base release must pay the advertised amount to the solver")
     expect(
         base["released_reconciliation"]["event"]["kind"] == "Released",
         "Base payout must reconcile an EscrowReleased event",
@@ -152,10 +152,10 @@ def check_final_settlements(report: dict[str, Any]) -> None:
 
     expect(stripe_payout["status"] == "Paid", "final Stripe payout must be paid")
     expect(base_payout["status"] == "Paid", "final Base payout must be paid")
-    expect(money(stripe_payout["amount"]) == (450, "usd"), "unexpected Stripe solver payout")
-    expect(money(stripe["platform_fee"]) == (50, "usd"), "unexpected Stripe platform fee")
-    expect(money(base_payout["amount"]) == (900, "usdc"), "unexpected Base solver payout")
-    expect(money(base["platform_fee"]) == (100, "usdc"), "unexpected Base platform fee")
+    expect(money(stripe_payout["amount"]) == (500, "usd"), "unexpected Stripe solver payout")
+    expect(money(stripe["platform_fee"]) == (0, "usd"), "open-beta Stripe fee must be zero")
+    expect(money(base_payout["amount"]) == (1000, "usdc"), "unexpected Base solver payout")
+    expect(money(base["platform_fee"]) == (0, "usdc"), "open-beta Base fee must be zero")
 
 
 def check_readiness(readiness: dict[str, Any]) -> None:
@@ -210,7 +210,10 @@ def main() -> None:
     )
     expect(report["final_bounty"]["status"] == "Paid", "final mixed bounty must be paid")
     expect(report["final_bounty"]["funding_mode"] == "MixedRails", "must rehearse mixed funding")
-    expect(report["ledger_entries"] >= 6, "expected funding and payout ledger entries")
+    expect(
+        report["ledger_entries"] == 5,
+        "expected five funding and zero-fee payout ledger entries",
+    )
     for invariant in (
         "Stripe Checkout Session creation does not credit balances.",
         "Base payout is paid only after indexed EscrowReleased reconciliation.",

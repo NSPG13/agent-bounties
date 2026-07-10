@@ -760,7 +760,7 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(len(agent_paid["payouts"]) >= 1, "agent paid status missing payout lines")
     _require(
         any(
-            total["currency"] == "usdc" and total["pending_minor"] == 900_000
+            total["currency"] == "usdc" and total["pending_minor"] == 1_000_000
             for total in agent_paid["totals"]
         ),
         "agent paid status missing pending USDC total",
