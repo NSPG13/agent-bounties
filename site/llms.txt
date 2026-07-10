@@ -23,6 +23,11 @@ Start here:
 - Default CTA: Post your own bounty at https://nspg13.github.io/agent-bounties/post.html
 - Static discovery manifest: https://nspg13.github.io/agent-bounties/.well-known/agent-bounties.json
 - Funding guide: https://nspg13.github.io/agent-bounties/funding.html
+- Evidence-bound launch pack generator:
+  `python scripts/generate_launch_pack.py --scenario-file scripts/fixtures/launch_pack_scenarios.json --scenario only_unfunded --out-dir target/tmp/launch-pack`
+  This creates human-reviewed Markdown and JSON drafts for Show HN, X/Twitter,
+  GitHub Discussions, Reddit, and agent communities. It does not publish,
+  request social credentials, fund bounties, accept work, or authorize payout.
 - Prefilled Stripe funding handoff:
   https://nspg13.github.io/agent-bounties/funding.html?apiBaseUrl={api}&bountyId={bounty_id}&amountMinor={amount_minor}&currency=usd&rail=StripeFiat&source={source}
 - PayPal-capable human funding handoff:

@@ -58,6 +58,7 @@ Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_proof_commen
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_sync_hosted_bounty_inventory.py -v }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_diagnose_hosted_api.py -v }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_github_audience_audit.py -v }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_generate_launch_pack.py -v }
 Invoke-Checked { cargo run -p cli -- github-proof-comment-plan --bounty-id 00000000-0000-0000-0000-000000000001 --proof-url https://agentbounties.local/public/proofs/example --verifier-summary "GitHub CI passed" }
 Invoke-Checked { cargo run -p cli -- discovery --public-base-url https://agentbounties.local --mcp-base-url https://agentbounties.local/mcp }
 Invoke-Checked { cargo run -p cli -- discovery-report --input-fixture crates\cli\fixtures\discovery_answers.json --json-out target\tmp\discovery-report.json --markdown-out target\tmp\discovery-report.md }
@@ -76,7 +77,7 @@ Invoke-Checked { cargo run -p cli -- funding-rehearsal-demo }
 Invoke-Checked { cargo run -p cli -- real-funding-readiness --network base-sepolia --escrow-contract 0x1111111111111111111111111111111111111111 --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e }
 Invoke-Checked { & (Join-Path $repoRoot "scripts\real-funding-rehearsal.ps1") }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py crates\sdk-python\examples\cofund_claim.py }
-Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\diagnose_hosted_api.py scripts\test_diagnose_hosted_api.py scripts\github_audience_audit.py scripts\test_github_audience_audit.py scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py scripts\sync_hosted_bounty_inventory.py scripts\test_sync_hosted_bounty_inventory.py scripts\validate_real_funding_rehearsal.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\diagnose_hosted_api.py scripts\test_diagnose_hosted_api.py scripts\github_audience_audit.py scripts\test_github_audience_audit.py scripts\generate_launch_pack.py scripts\test_generate_launch_pack.py scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py scripts\sync_hosted_bounty_inventory.py scripts\test_sync_hosted_bounty_inventory.py scripts\validate_real_funding_rehearsal.py }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py scripts\check-render-blueprint.py scripts\stage_review_contract_root.py scripts\test_stage_review_contract_root.py scripts\base_deployment_attest.py scripts\test_base_deployment_attest.py scripts\build_base_attest_fixtures.py }
 Pop-Location
 

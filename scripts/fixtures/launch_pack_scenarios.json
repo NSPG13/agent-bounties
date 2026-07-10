@@ -1,0 +1,348 @@
+{
+  "scenarios": {
+    "no_inventory": {
+      "source_status": {
+        "stale": false
+      },
+      "manifest": {
+        "name": "Agent Bounties",
+        "website": "https://nspg13.github.io/agent-bounties/",
+        "repository": "https://github.com/NSPG13/agent-bounties",
+        "assistant_acquisition": {
+          "core_positioning": "Agent Bounties is where AI agents earn money by continuously finding, claiming, solving, verifying, and getting paid for digital bounties.",
+          "default_cta": "Post your own bounty"
+        }
+      },
+      "bounties": {
+        "items": []
+      },
+      "proofs": {
+        "items": []
+      },
+      "payouts": {
+        "items": []
+      },
+      "communities": [
+        {
+          "id": "show_hn",
+          "name": "Hacker News Show HN",
+          "rules_url": "https://news.ycombinator.com/showhn.html",
+          "allowed_format": "Show HN launch post",
+          "last_human_review_date": "2026-07-10",
+          "relevance_rationale": "HN readers evaluate developer tools and infrastructure launches."
+        }
+      ]
+    },
+    "only_unfunded": {
+      "source_status": {
+        "stale": false
+      },
+      "manifest": {
+        "name": "Agent Bounties",
+        "website": "https://nspg13.github.io/agent-bounties/",
+        "repository": "https://github.com/NSPG13/agent-bounties",
+        "assistant_acquisition": {
+          "core_positioning": "Agent Bounties is where AI agents earn money by continuously finding, claiming, solving, verifying, and getting paid for digital bounties.",
+          "default_cta": "Post your own bounty"
+        }
+      },
+      "bounties": {
+        "items": [
+          {
+            "id": "issue-141",
+            "title": "Publish live bounties as RSS and JSON Feed",
+            "url": "https://github.com/NSPG13/agent-bounties/issues/141",
+            "template": "small-code-change",
+            "amount_minor": 5000000,
+            "currency": "USDC",
+            "funding_mode": "BaseUsdcEscrow",
+            "state": "FundingCandidate",
+            "privacy": "Public",
+            "updated_at": "2026-07-10T08:00:00Z",
+            "funding_evidence": []
+          },
+          {
+            "id": "issue-142",
+            "title": "Generate evidence-bound launch packs for HN, X and agent communities",
+            "url": "https://github.com/NSPG13/agent-bounties/issues/142",
+            "template": "small-code-change",
+            "amount_minor": 5000000,
+            "currency": "USDC",
+            "funding_mode": "BaseUsdcEscrow",
+            "state": "FundingCandidate",
+            "privacy": "Public",
+            "updated_at": "2026-07-10T08:05:00Z",
+            "funding_evidence": []
+          }
+        ]
+      },
+      "proofs": {
+        "items": []
+      },
+      "payouts": {
+        "items": []
+      },
+      "communities": [
+        {
+          "id": "show_hn",
+          "name": "Hacker News Show HN",
+          "rules_url": "https://news.ycombinator.com/showhn.html",
+          "allowed_format": "Show HN launch post",
+          "last_human_review_date": "2026-07-10",
+          "relevance_rationale": "HN readers evaluate developer tools and infrastructure launches."
+        },
+        {
+          "id": "agent_dev_forum",
+          "name": "AI agent developer community",
+          "rules_url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/open-source-launch.md",
+          "allowed_format": "Evidence-backed project announcement",
+          "last_human_review_date": "2026-07-10",
+          "relevance_rationale": "Agent builders need machine-readable earning opportunities and payment-truth constraints."
+        }
+      ]
+    },
+    "claimable_funded": {
+      "source_status": {
+        "stale": false
+      },
+      "manifest": {
+        "name": "Agent Bounties",
+        "website": "https://nspg13.github.io/agent-bounties/",
+        "repository": "https://github.com/NSPG13/agent-bounties",
+        "assistant_acquisition": {
+          "core_positioning": "Agent Bounties is where AI agents earn money by continuously finding, claiming, solving, verifying, and getting paid for digital bounties.",
+          "default_cta": "Post your own bounty"
+        }
+      },
+      "bounties": {
+        "items": [
+          {
+            "id": "funded-1",
+            "title": "Add deterministic payout proof",
+            "url": "https://example.com/bounties/funded-1",
+            "template": "small-code-change",
+            "amount_minor": 1000000,
+            "currency": "USDC",
+            "funding_mode": "BaseUsdcEscrow",
+            "state": "Claimable",
+            "privacy": "Public",
+            "updated_at": "2026-07-10T08:10:00Z",
+            "funding_evidence": [
+              {
+                "type": "EscrowCreated",
+                "status": "reconciled",
+                "amount_minor": 1000000
+              }
+            ]
+          }
+        ]
+      },
+      "proofs": {
+        "items": []
+      },
+      "payouts": {
+        "items": []
+      },
+      "communities": [
+        {
+          "id": "show_hn",
+          "name": "Hacker News Show HN",
+          "rules_url": "https://news.ycombinator.com/showhn.html",
+          "allowed_format": "Show HN launch post",
+          "last_human_review_date": "2026-07-10",
+          "relevance_rationale": "HN readers evaluate developer tools and infrastructure launches."
+        }
+      ]
+    },
+    "verified_unpaid_proof": {
+      "source_status": {
+        "stale": false
+      },
+      "manifest": {
+        "name": "Agent Bounties",
+        "website": "https://nspg13.github.io/agent-bounties/",
+        "repository": "https://github.com/NSPG13/agent-bounties",
+        "assistant_acquisition": {
+          "core_positioning": "Agent Bounties is where AI agents earn money by continuously finding, claiming, solving, verifying, and getting paid for digital bounties.",
+          "default_cta": "Post your own bounty"
+        }
+      },
+      "bounties": {
+        "items": []
+      },
+      "proofs": {
+        "items": [
+          {
+            "id": "proof-verified-1",
+            "title": "Verified docs contract fix",
+            "url": "https://example.com/proofs/verified-1",
+            "status": "verified",
+            "paid": false,
+            "updated_at": "2026-07-10T08:20:00Z"
+          }
+        ]
+      },
+      "payouts": {
+        "items": []
+      },
+      "communities": [
+        {
+          "id": "show_hn",
+          "name": "Hacker News Show HN",
+          "rules_url": "https://news.ycombinator.com/showhn.html",
+          "allowed_format": "Show HN launch post",
+          "last_human_review_date": "2026-07-10",
+          "relevance_rationale": "HN readers evaluate developer tools and infrastructure launches."
+        }
+      ]
+    },
+    "reconciled_paid_proof": {
+      "source_status": {
+        "stale": false
+      },
+      "manifest": {
+        "name": "Agent Bounties",
+        "website": "https://nspg13.github.io/agent-bounties/",
+        "repository": "https://github.com/NSPG13/agent-bounties",
+        "assistant_acquisition": {
+          "core_positioning": "Agent Bounties is where AI agents earn money by continuously finding, claiming, solving, verifying, and getting paid for digital bounties.",
+          "default_cta": "Post your own bounty"
+        }
+      },
+      "bounties": {
+        "items": []
+      },
+      "proofs": {
+        "items": [
+          {
+            "id": "proof-paid-1",
+            "title": "Accepted API fix",
+            "url": "https://example.com/proofs/paid-1",
+            "status": "verified",
+            "paid": true,
+            "payout_id": "payout-1",
+            "updated_at": "2026-07-10T08:30:00Z"
+          }
+        ]
+      },
+      "payouts": {
+        "items": [
+          {
+            "id": "payout-1",
+            "proof_id": "proof-paid-1",
+            "status": "reconciled",
+            "rail": "BaseUsdcEscrow",
+            "amount_minor": 1000000,
+            "currency": "USDC",
+            "evidence_url": "https://example.com/evidence/payout-1",
+            "updated_at": "2026-07-10T08:35:00Z"
+          }
+        ]
+      },
+      "communities": [
+        {
+          "id": "show_hn",
+          "name": "Hacker News Show HN",
+          "rules_url": "https://news.ycombinator.com/showhn.html",
+          "allowed_format": "Show HN launch post",
+          "last_human_review_date": "2026-07-10",
+          "relevance_rationale": "HN readers evaluate developer tools and infrastructure launches."
+        }
+      ]
+    },
+    "malicious_injection": {
+      "source_status": {
+        "stale": false
+      },
+      "manifest": {
+        "name": "Agent Bounties",
+        "website": "https://nspg13.github.io/agent-bounties/",
+        "repository": "https://github.com/NSPG13/agent-bounties",
+        "assistant_acquisition": {
+          "core_positioning": "Agent Bounties is where AI agents earn money by continuously finding, claiming, solving, verifying, and getting paid for digital bounties.",
+          "default_cta": "Post your own bounty"
+        }
+      },
+      "bounties": {
+        "items": [
+          {
+            "id": "evil-public",
+            "title": "<script>alert(1)</script> funding candidate",
+            "url": "https://example.com/bounties/evil-public?x=<script>",
+            "template": "small-code-change",
+            "amount_minor": 5000000,
+            "currency": "USDC",
+            "funding_mode": "BaseUsdcEscrow",
+            "state": "FundingCandidate",
+            "privacy": "Public",
+            "updated_at": "2026-07-10T08:40:00Z",
+            "funding_evidence": []
+          },
+          {
+            "id": "evil-private",
+            "title": "Private secret wallet_secret private@example.com",
+            "url": "https://example.com/bounties/evil-private",
+            "template": "private",
+            "amount_minor": 1,
+            "currency": "USDC",
+            "funding_mode": "BaseUsdcEscrow",
+            "state": "FundingCandidate",
+            "privacy": "Private",
+            "contact_email": "private@example.com",
+            "wallet_secret": "do-not-print"
+          }
+        ]
+      },
+      "proofs": {
+        "items": []
+      },
+      "payouts": {
+        "items": []
+      },
+      "communities": [
+        {
+          "id": "reddit_ai_agents",
+          "name": "AI agents subreddit",
+          "rules_url": "https://www.reddit.com/r/LocalLLaMA/about/rules/",
+          "allowed_format": "Human-reviewed text post only",
+          "last_human_review_date": "2026-07-10",
+          "relevance_rationale": "Agent builders discuss tooling, but self-promotion requires strict human review."
+        }
+      ]
+    },
+    "stale_endpoints": {
+      "source_status": {
+        "stale": true,
+        "reason": "funding-feed last checked before current discovery manifest"
+      },
+      "manifest": {
+        "name": "Agent Bounties",
+        "website": "https://nspg13.github.io/agent-bounties/",
+        "repository": "https://github.com/NSPG13/agent-bounties",
+        "assistant_acquisition": {
+          "core_positioning": "Agent Bounties is where AI agents earn money by continuously finding, claiming, solving, verifying, and getting paid for digital bounties.",
+          "default_cta": "Post your own bounty"
+        }
+      },
+      "bounties": {
+        "items": []
+      },
+      "proofs": {
+        "items": []
+      },
+      "payouts": {
+        "items": []
+      },
+      "communities": [
+        {
+          "id": "show_hn",
+          "name": "Hacker News Show HN",
+          "rules_url": "https://news.ycombinator.com/showhn.html",
+          "allowed_format": "Show HN launch post",
+          "last_human_review_date": "2026-07-10",
+          "relevance_rationale": "HN readers evaluate developer tools and infrastructure launches."
+        }
+      ]
+    }
+  }
+}

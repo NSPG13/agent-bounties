@@ -110,6 +110,33 @@ Distribution work should make one of these easier:
 - maintainers converting successful work into reusable templates, eval
   fixtures, proof graph links, and shareable proof/payout cards.
 
+## Launch Pack Generator
+
+Use `scripts/generate_launch_pack.py` to prepare evidence-bound launch drafts
+for Show HN, X/Twitter, GitHub Discussions, Reddit, and agent communities. The
+generator reads a discovery manifest, bounty feed, proof records, payout
+evidence, and a community registry from configurable JSON files or URLs. Its
+default mode is generation-only: it does not post, request social credentials,
+fund a bounty, accept work, or authorize payout.
+
+Local deterministic proof command:
+
+```powershell
+python scripts\generate_launch_pack.py `
+  --scenario-file scripts\fixtures\launch_pack_scenarios.json `
+  --scenario only_unfunded `
+  --out-dir target\tmp\launch-pack
+python scripts\test_generate_launch_pack.py -v
+```
+
+The fixtures cover no inventory, only unfunded candidates, claimable funded
+bounties, verified unpaid proof, reconciled paid proof, stale endpoint refusal,
+and malicious text/HTML injection. Drafts may say a bounty is funded or
+claimable only when reconciled funding evidence is present. Drafts may say
+paid or earned only when reconciled payout evidence is present. Source and
+campaign parameters are outbound-link attribution only until a durable
+attributed bounty post exists.
+
 ## What To Measure
 
 For each public interaction, record:

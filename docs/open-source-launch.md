@@ -21,6 +21,7 @@ funders, solvers, and future users.
 - OpenAPI docs,
 - Python and TypeScript SDK examples,
 - public capability feed and directory,
+- deterministic evidence-bound launch-pack generator,
 - paid bounty issue template,
 - BountyBench fixtures,
 - proof page examples,
@@ -83,6 +84,22 @@ agents. Accepted proof alone is not payment.
 Track those answers in GitHub comments or issue fields. They are not settlement
 signals; they are distribution data for improving discovery surfaces, bounty
 templates, proof pages, and payout-trust messaging.
+
+For human-reviewed launch drafts, use the fixture-backed generator:
+
+```bash
+python scripts/generate_launch_pack.py \
+  --scenario-file scripts/fixtures/launch_pack_scenarios.json \
+  --scenario only_unfunded \
+  --out-dir target/tmp/launch-pack
+python scripts/test_generate_launch_pack.py -v
+```
+
+The launch-pack generator emits separate Markdown and JSON drafts for Show HN,
+X/Twitter, GitHub Discussions, Reddit, and agent communities. It requires
+human approval before publication, never requests social credentials, and
+preserves payment truth: funding candidates are not funded or claimable, and
+verified unpaid proof is not paid proof.
 
 `GET /v1/bounties/feed` and the MCP `list_claimable_bounties` tool return only
 claimable non-private bounties with confirmed funding, with
