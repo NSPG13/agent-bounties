@@ -120,6 +120,66 @@ To deploy from the Dashboard after the PR is merged:
    when the matched Stripe funding intent is `Applied`; generic bounty
    claimability is displayed separately.
 
+## Hosted Inventory Reconstruction
+
+Use the checked reconstruction harness when public GitHub bounty issues are
+missing from a new or repaired hosted database. It defaults to a no-write dry
+run, derives each stable bounty id through the Rust sync planner, probes the
+target API for an existing record, and emits an auditable JSON plan.
+
+If the hosted API is older than the planner route, run the reviewed current API
+locally as the planner while keeping the real hosted API as the target:
+
+```powershell
+$env:API_BIND_ADDR = "127.0.0.1:18180"
+$env:PUBLIC_BASE_URL = "https://agent-bounties-api.onrender.com"
+$env:MCP_BASE_URL = "https://agent-bounties-mcp.onrender.com"
+cargo run -p api
+```
+
+In a second terminal, generate the production-bound dry run:
+
+```powershell
+python scripts\sync_hosted_bounty_inventory.py `
+  --api-base-url https://agent-bounties-api.onrender.com `
+  --planner-base-url http://127.0.0.1:18180 `
+  --issue 113 --issue 132 --issue 136 --issue 141 --issue 142 `
+  --output target\hosted-inventory-dry-run.json
+```
+
+The planner URL may differ from the target, but every returned write call must
+still target `--api-base-url` and explicitly have no settlement authority. The
+target server preflight remains authoritative. Execution is blocked until its
+health response is exactly `ok` and its `/llms.txt` contains the current sync
+and agent-earning contract markers.
+
+Only after the exact reviewed commit is deployed to API, MCP, and indexer, the
+production smoke passes, and the dry-run diff is approved, execute the same
+issue set:
+
+```powershell
+$env:AGENT_BOUNTIES_OPERATOR_TOKEN = "<read from the Render secret in a private terminal>"
+python scripts\sync_hosted_bounty_inventory.py `
+  --api-base-url https://agent-bounties-api.onrender.com `
+  --issue 113 --issue 132 --issue 136 --issue 141 --issue 142 `
+  --execute `
+  --confirm-api-base-url https://agent-bounties-api.onrender.com `
+  --confirm-issue-count 5 `
+  --output target\hosted-inventory-execution.json
+```
+
+Never pass the operator token as a command-line argument or commit an output
+containing secrets. Execution always reloads live GitHub issues, requires the
+planner and target to be the same deployed service, and refuses fixture input.
+The tool stops on the first failed write, verifies every
+successful record through `GET /v1/bounties/{id}`, and is safe to replay through
+the existing issue-derived idempotency key. The server refuses to overwrite a
+record that already has funding or lifecycle activity.
+
+This reconstruction creates unfunded bounty metadata only. It does not fund a
+bounty, make work claimable, reconcile an escrow, reserve a claim, accept work,
+authorize payout, release escrow, or prove settlement.
+
 The checked-in Base worker starts at block `48422806` for escrow
 `0x150C6dFbCe7803cc7f634f59b0624e87349CEAce`. It is read-only with respect to
 wallet signing: `ENABLE_BASE_TX_BROADCAST=false`, and no private key belongs in
