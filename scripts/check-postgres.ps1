@@ -42,6 +42,19 @@ try {
     }
 
     Invoke-Checked { cargo build -p api -p mcp-server }
+    $previousTestDatabaseUrl = $env:AGENT_BOUNTIES_TEST_DATABASE_URL
+    $env:AGENT_BOUNTIES_TEST_DATABASE_URL = $databaseUrl
+    try {
+        Invoke-Checked {
+            cargo test -p api bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact
+        }
+        Invoke-Checked {
+            cargo test -p mcp-server mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact
+        }
+    }
+    finally {
+        $env:AGENT_BOUNTIES_TEST_DATABASE_URL = $previousTestDatabaseUrl
+    }
     Invoke-Checked {
         cargo run -p cli -- service-smoke-spawn `
             --api-base-url http://127.0.0.1:18180 `

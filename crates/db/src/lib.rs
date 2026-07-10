@@ -125,6 +125,23 @@ pub struct BaseIndexerHeartbeat {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct BountyStatusScope {
+    pub bounty: Bounty,
+    pub funding_intents: Vec<FundingIntent>,
+    pub funding_contributions: Vec<FundingContribution>,
+    pub escrows: Vec<Escrow>,
+    pub base_escrow_events: Vec<BaseEscrowEvent>,
+    pub claims: Vec<Claim>,
+    pub submissions: Vec<Submission>,
+    pub verifier_results: Vec<VerifierResult>,
+    pub proofs: Vec<ProofRecord>,
+    pub settlements: Vec<Settlement>,
+    pub reputation_events: Vec<ReputationEvent>,
+    pub template_signals: Vec<TemplateSignal>,
+    pub risk_events: Vec<RiskEvent>,
+}
+
 #[derive(Debug, Default)]
 pub struct InMemoryStore {
     pub agents: HashMap<Id, Agent>,
@@ -593,6 +610,375 @@ impl PostgresStore {
         .await?;
 
         rows.into_iter().map(|row| bounty_from_row(&row)).collect()
+    }
+
+    pub async fn load_bounty_status_scope(
+        &self,
+        bounty_id: Id,
+    ) -> DbResult<Option<BountyStatusScope>> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+
+        let bounty = sqlx::query(
+            r#"
+            SELECT id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at
+            FROM bounties
+            WHERE id = $1
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(|row| bounty_from_row(&row))
+        .transpose()?;
+
+        let Some(bounty) = bounty else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        let funding_intents = sqlx::query(
+            r#"
+            SELECT id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, external_reference, stripe_success_url, stripe_cancel_url, created_at
+            FROM funding_intents
+            WHERE bounty_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(FundingIntent {
+                id: row.try_get("id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                contributor_agent_id: row.try_get("contributor_agent_id")?,
+                source_organization_id: row.try_get("source_organization_id")?,
+                rail: parse_payment_rail(row.try_get::<String, _>("rail")?)?,
+                amount: Money::new(
+                    row.try_get::<i64, _>("amount")?,
+                    row.try_get::<String, _>("currency")?,
+                )?,
+                status: parse_funding_intent_status(row.try_get::<String, _>("status")?)?,
+                external_reference: row.try_get("external_reference")?,
+                stripe_success_url: row.try_get("stripe_success_url")?,
+                stripe_cancel_url: row.try_get("stripe_cancel_url")?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let funding_contributions = sqlx::query(
+            r#"
+            SELECT id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, funding_ledger_entry_id, refund_ledger_entry_id, settlement_id, external_reference, created_at
+            FROM funding_contributions
+            WHERE bounty_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(FundingContribution {
+                id: row.try_get("id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                contributor_agent_id: row.try_get("contributor_agent_id")?,
+                source_organization_id: row.try_get("source_organization_id")?,
+                rail: parse_payment_rail(row.try_get::<String, _>("rail")?)?,
+                amount: Money::new(
+                    row.try_get::<i64, _>("amount")?,
+                    row.try_get::<String, _>("currency")?,
+                )?,
+                status: parse_funding_contribution_status(row.try_get::<String, _>("status")?)?,
+                funding_ledger_entry_id: row.try_get("funding_ledger_entry_id")?,
+                refund_ledger_entry_id: row.try_get("refund_ledger_entry_id")?,
+                settlement_id: row.try_get("settlement_id")?,
+                external_reference: row.try_get("external_reference")?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let escrows = sqlx::query(
+            r#"
+            SELECT id, bounty_id, rail, token, amount, currency, status, external_reference
+            FROM escrows
+            WHERE bounty_id = $1
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(Escrow {
+                id: row.try_get("id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                rail: parse_payment_rail(row.try_get::<String, _>("rail")?)?,
+                token: row.try_get("token")?,
+                amount: Money::new(
+                    row.try_get::<i64, _>("amount")?,
+                    row.try_get::<String, _>("currency")?,
+                )?,
+                status: parse_escrow_status(row.try_get::<String, _>("status")?)?,
+                external_reference: row.try_get("external_reference")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let base_escrow_events = sqlx::query(
+            r#"
+            SELECT id, log_key, tx_hash, block_number, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at
+            FROM base_escrow_events
+            WHERE bounty_id = $1
+            ORDER BY block_number, COALESCE(log_index, 0), occurred_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(base_escrow_event_from_row)
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let claims = sqlx::query(
+            r#"
+            SELECT id, bounty_id, solver_agent_id, claimed_at
+            FROM claims
+            WHERE bounty_id = $1
+            ORDER BY claimed_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(Claim {
+                id: row.try_get("id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                solver_agent_id: row.try_get("solver_agent_id")?,
+                claimed_at: row.try_get("claimed_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let submissions = sqlx::query(
+            r#"
+            SELECT id, bounty_id, solver_agent_id, artifact_digest, artifact_uri, submitted_at
+            FROM submissions
+            WHERE bounty_id = $1
+            ORDER BY submitted_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(Submission {
+                id: row.try_get("id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                solver_agent_id: row.try_get("solver_agent_id")?,
+                artifact_digest: row.try_get("artifact_digest")?,
+                artifact_uri: row.try_get("artifact_uri")?,
+                submitted_at: row.try_get("submitted_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let verifier_results = sqlx::query(
+            r#"
+            SELECT id, bounty_id, submission_id, verifier_agent_id, kind, decision, summary, confidence, signed_payload_hash, created_at
+            FROM verifier_results
+            WHERE bounty_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(VerifierResult {
+                id: row.try_get("id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                submission_id: row.try_get("submission_id")?,
+                verifier_agent_id: row.try_get("verifier_agent_id")?,
+                kind: parse_verifier_kind(row.try_get::<String, _>("kind")?)?,
+                decision: parse_verification_decision(row.try_get::<String, _>("decision")?)?,
+                summary: row.try_get("summary")?,
+                confidence: row.try_get("confidence")?,
+                signed_payload_hash: row.try_get("signed_payload_hash")?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let proofs = sqlx::query(
+            r#"
+            SELECT id, bounty_id, submission_id, verifier_result_id, proof_hash, public_summary, privacy, created_at
+            FROM proof_records
+            WHERE bounty_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(ProofRecord {
+                id: row.try_get("id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                submission_id: row.try_get("submission_id")?,
+                verifier_result_id: row.try_get("verifier_result_id")?,
+                proof_hash: row.try_get("proof_hash")?,
+                public_summary: row.try_get("public_summary")?,
+                privacy: parse_privacy(row.try_get::<String, _>("privacy")?)?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let settlements = sqlx::query(
+            r#"
+            SELECT id, bounty_id, proof_record_id, rail, payout_intents, platform_fee, currency, created_at
+            FROM settlements
+            WHERE bounty_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let platform_fee_amount = row.try_get::<i64, _>("platform_fee")?;
+            let currency = row.try_get::<String, _>("currency")?;
+            let platform_fee = persisted_nonnegative_money(platform_fee_amount, currency)?;
+            Ok(Settlement {
+                id: row.try_get("id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                proof_record_id: row.try_get("proof_record_id")?,
+                rail: parse_payment_rail(row.try_get::<String, _>("rail")?)?,
+                payout_intents: serde_json::from_value(row.try_get("payout_intents")?)?,
+                platform_fee,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let reputation_events = sqlx::query(
+            r#"
+            SELECT id, agent_id, bounty_id, capability_class, template_slug, delta, reason, created_at
+            FROM reputation_events
+            WHERE bounty_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(ReputationEvent {
+                id: row.try_get("id")?,
+                agent_id: row.try_get("agent_id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                capability_class: parse_capability_class(
+                    row.try_get::<String, _>("capability_class")?,
+                )?,
+                template_slug: row.try_get("template_slug")?,
+                delta: row.try_get("delta")?,
+                reason: row.try_get("reason")?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let template_signals = sqlx::query(
+            r#"
+            SELECT id, bounty_id, proof_record_id, template_slug, capability_class, verifier_kind, amount, currency, success, created_at
+            FROM template_signals
+            WHERE bounty_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(TemplateSignal {
+                id: row.try_get("id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                proof_record_id: row.try_get("proof_record_id")?,
+                template_slug: row.try_get("template_slug")?,
+                capability_class: parse_capability_class(
+                    row.try_get::<String, _>("capability_class")?,
+                )?,
+                verifier_kind: parse_verifier_kind(row.try_get::<String, _>("verifier_kind")?)?,
+                amount: Money::new(
+                    row.try_get::<i64, _>("amount")?,
+                    row.try_get::<String, _>("currency")?,
+                )?,
+                success: row.try_get("success")?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        let risk_events = sqlx::query(
+            r#"
+            SELECT id, subject_id, agent_id, bounty_id, surface, action, score, reasons, created_at
+            FROM risk_events
+            WHERE bounty_id = $1
+            ORDER BY created_at
+            "#,
+        )
+        .bind(bounty_id)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let score: i32 = row.try_get("score")?;
+            Ok(RiskEvent {
+                id: row.try_get("id")?,
+                subject_id: row.try_get("subject_id")?,
+                agent_id: row.try_get("agent_id")?,
+                bounty_id: row.try_get("bounty_id")?,
+                surface: parse_risk_surface(row.try_get::<String, _>("surface")?)?,
+                action: parse_risk_action(row.try_get::<String, _>("action")?)?,
+                score: u16::try_from(score)
+                    .map_err(|_| DbError::IntegerOverflow("risk_event.score".to_string()))?,
+                reasons: serde_json::from_value(row.try_get("reasons")?)?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+
+        tx.commit().await?;
+        Ok(Some(BountyStatusScope {
+            bounty,
+            funding_intents,
+            funding_contributions,
+            escrows,
+            base_escrow_events,
+            claims,
+            submissions,
+            verifier_results,
+            proofs,
+            settlements,
+            reputation_events,
+            template_signals,
+            risk_events,
+        }))
     }
 
     pub async fn upsert_funding_contribution(
