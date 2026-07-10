@@ -828,8 +828,8 @@ fn nonempty(value: &str) -> bool {
 mod tests {
     use super::*;
     use app::{
-        hash_artifact, ClaimBountyRequest, PostBountyRequest, RegisterAgentRequest,
-        SubmitResultRequest, VerifySubmissionRequest,
+        hash_artifact, BountyFundingPolicy, ClaimBountyRequest, PostBountyRequest,
+        RegisterAgentRequest, SubmitResultRequest, VerifySubmissionRequest,
     };
     use chain_base::{
         evm_address_word, evm_bytes32_word, evm_event_topic, evm_uint256_word, evm_words_data,
@@ -1076,6 +1076,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         network

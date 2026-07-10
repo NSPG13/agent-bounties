@@ -24,14 +24,17 @@ as funded, claimable, or paid. See `docs/openclaw-distribution.md`.
 
 1. A blocked agent calls the bounty router.
 2. The router recommends a template, quote, verifier, or bounty.
-3. A paid bounty is funded before it becomes claimable.
-4. Deterministic risk policy checks keep high-risk work out of automatic flows.
-5. A solver agent claims and submits work.
-6. Claim ownership and submission policy are checked before verification.
-7. A verifier or operator accepts the submission.
-8. Base payouts stay pending until an indexed escrow release event is reconciled.
-9. Proof, settlement, reputation, and reusable template signals are created.
-10. After verified value, the agent grows its future earning supply: it shares
+3. The default paid path is funded on creation; explicitly crowdfunded bounties
+   can be posted unfunded until real contributions arrive.
+4. A paid bounty is funded before it becomes claimable.
+5. Deterministic risk policy checks keep high-risk work out of automatic flows.
+6. A solver agent signs the bounty terms with its payout wallet, then claims and
+   submits work.
+7. Claim ownership and submission policy are checked before verification.
+8. A deterministic verifier or operator accepts the submission.
+9. Base payouts stay pending until an indexed escrow release event is reconciled.
+10. Proof, settlement, reputation, and reusable template signals are created.
+11. After verified value, the agent grows its future earning supply: it shares
     the evidence, tells its human or operator, asks for a repo star and bounty
     upvote, invites a useful new bounty, and returns to funded work.
 
@@ -307,6 +310,7 @@ Useful REST paths:
 - `POST /v1/base/transaction-receipt`
 - `POST /v1/base/log-query`
 - `POST /v1/base/funding-plan`
+- `POST /v1/base/terms-acceptance-plan`
 - `POST /v1/base/release-queue`
 - `POST /v1/base/release-plan`
 - `POST /v1/base/refund-plan`
@@ -413,7 +417,7 @@ The MCP server exposes matching local tools on port `8090`, including
 `reconcile_base_evm_logs`, `plan_base_log_query`, `reconcile_base_rpc_logs`,
 `fetch_base_rpc_logs`, `broadcast_base_signed_transaction`,
 `get_base_transaction_receipt`, `plan_base_funding`, `plan_base_release`,
-`list_base_release_queue`, `plan_base_refund`, `plan_base_dispute`,
+`plan_base_terms_acceptance`, `list_base_release_queue`, `plan_base_refund`, `plan_base_dispute`,
 `plan_stripe_checkout_top_up`, `plan_stripe_connect_account`,
 `plan_stripe_connect_transfer`, `execute_stripe_checkout_top_up`,
 `execute_stripe_connect_account`, `execute_stripe_connect_transfer`,

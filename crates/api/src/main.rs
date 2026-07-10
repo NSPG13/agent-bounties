@@ -3,17 +3,17 @@ use app::{
     hash_artifact, stripe_secret_key_mode_from_secret, AddFundingContributionRequest,
     ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseEscrowReconciliation,
     BaseIndexerHeartbeatStatus, BaseIndexerScanCursor, BaseIndexerStatusConfig,
-    BaseIndexerStatusReport, BaseReleaseQueueRequest, BountyNetwork, BountyStatusResponse,
-    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
+    BaseIndexerStatusReport, BaseReleaseQueueRequest, BountyFundingPolicy, BountyNetwork,
+    BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest,
+    FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig, LiveMoneyReadinessReport,
     OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest, PlanStripeTransferRequest as AppPlanStripeTransferRequest,
-    PooledFundingReport, PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest,
-    RecordDiscoveryResponseRequest, RecordOutreachAttemptRequest, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
-    ReviewedBountyApproval, RiskEventFilter, StripeTransferPlan, StripeTransferReconciliation,
-    SubmitResultRequest, UpsertAudienceMemberRequest, UpsertContributorContactRequest,
-    VerifySubmissionRequest,
+    PlanBaseReleaseRequest, PlanBaseTermsAcceptanceRequest,
+    PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
+    PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest, RecordDiscoveryResponseRequest,
+    RecordOutreachAttemptRequest, RegisterAgentRequest, RegisterCapabilityRequest,
+    RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
+    StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest,
+    UpsertAudienceMemberRequest, UpsertContributorContactRequest, VerifySubmissionRequest,
 };
 use axum::{
     body::Bytes,
@@ -120,6 +120,7 @@ use worker::BaseEscrowLogWorker;
         get_base_transaction_receipt,
         plan_base_funding,
         list_base_release_queue,
+        plan_base_terms_acceptance,
         plan_stripe_checkout_top_up,
         plan_stripe_connect_account,
         plan_stripe_connect_transfer,
@@ -607,6 +608,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/base/log-query", post(plan_base_log_query))
         .route("/v1/base/funding-plan", post(plan_base_funding))
         .route("/v1/base/release-queue", post(list_base_release_queue))
+        .route(
+            "/v1/base/terms-acceptance-plan",
+            post(plan_base_terms_acceptance),
+        )
         .route("/v1/base/release-plan", post(plan_base_release))
         .route("/v1/base/refund-plan", post(plan_base_refund))
         .route("/v1/base/dispute-plan", post(plan_base_dispute))
@@ -2364,6 +2369,18 @@ async fn plan_base_funding(
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[utoipa::path(post, path = "/v1/base/terms-acceptance-plan", responses((status = 200, description = "Unsigned Base escrow v2 terms acceptance transaction plan")))]
+async fn plan_base_terms_acceptance(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanBaseTermsAcceptanceRequest>,
+) -> Result<Json<app::BaseTermsAcceptancePlan>, StatusCode> {
+    let network = state.network.lock().expect("state poisoned");
+    network
+        .plan_base_terms_acceptance(request)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
 #[utoipa::path(post, path = "/v1/base/release-plan", responses((status = 200, description = "Unsigned Base escrow release transaction plan")))]
 async fn plan_base_release(
     State(state): State<SharedState>,
@@ -2919,6 +2936,9 @@ async fn sync_github_issue_api_bounty(
         currency: parsed.amount.currency,
         funding_mode: parsed.funding_mode,
         privacy: parsed.privacy,
+        funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+        verification_contract: None,
+        automatic_release: false,
         funding_targets: vec![],
     };
 
@@ -3994,9 +4014,10 @@ fn expected_digest_for_body(body: &str) -> String {
 mod tests {
     use super::*;
     use app::{
-        AddFundingContributionRequest, ClaimBountyRequest, CreateFundingIntentRequest,
-        OpenPooledBountyRequest, PostBountyRequest, RegisterAgentRequest,
-        RegisterCapabilityRequest, SubmitResultRequest, VerifySubmissionRequest,
+        AddFundingContributionRequest, BountyFundingPolicy, ClaimBountyRequest,
+        CreateFundingIntentRequest, OpenPooledBountyRequest, PostBountyRequest,
+        RegisterAgentRequest, RegisterCapabilityRequest, SubmitResultRequest,
+        VerifySubmissionRequest,
     };
     use chain_base::{
         evm_address_word, evm_bytes32_word, evm_event_topic, evm_uint256_word, evm_words_data,
@@ -4028,6 +4049,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         let state = test_state(network);
@@ -4241,6 +4265,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         network
@@ -4302,6 +4329,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         network
@@ -4628,6 +4658,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: domain::FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             })
             .unwrap();
@@ -4786,6 +4819,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: domain::FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             }),
         )
@@ -4807,6 +4843,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: domain::FundingMode::Simulated,
                 privacy: PrivacyLevel::Private,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             }),
         )
@@ -5176,6 +5215,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         let other_bounty = api_network
@@ -5186,6 +5228,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         api_store.upsert_bounty(&bounty).await.unwrap();
@@ -6078,6 +6123,9 @@ mod tests {
             currency: "usdc".to_string(),
             funding_mode: FundingMode::BaseUsdcEscrow,
             privacy: PrivacyLevel::Public,
+            funding_policy: BountyFundingPolicy::FundOnCreation,
+            verification_contract: None,
+            automatic_release: false,
         });
         assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
         let state = test_state(network);
@@ -6109,6 +6157,9 @@ mod tests {
             currency: "usdc".to_string(),
             funding_mode: FundingMode::BaseUsdcEscrow,
             privacy: PrivacyLevel::Public,
+            funding_policy: BountyFundingPolicy::FundOnCreation,
+            verification_contract: None,
+            automatic_release: false,
         });
         assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
         let risk_event_id = network
@@ -6179,6 +6230,9 @@ mod tests {
             currency: "usdc".to_string(),
             funding_mode: FundingMode::BaseUsdcEscrow,
             privacy: PrivacyLevel::Public,
+            funding_policy: BountyFundingPolicy::FundOnCreation,
+            verification_contract: None,
+            automatic_release: false,
         });
         assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
         let bounty_event_id = network
@@ -6274,6 +6328,9 @@ mod tests {
             currency: "usdc".to_string(),
             funding_mode: FundingMode::BaseUsdcEscrow,
             privacy: PrivacyLevel::Public,
+            funding_policy: BountyFundingPolicy::FundOnCreation,
+            verification_contract: None,
+            automatic_release: false,
         });
         assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
         let risk_event_id = network
@@ -6332,6 +6389,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         apply_base_funding_event(&mut network, &public, 1);
@@ -6343,6 +6403,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Private,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         let state = test_state(network);
@@ -6376,6 +6439,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             }),
         )
@@ -6409,6 +6475,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::MixedRails,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![
                     app::FundingPartitionTargetRequest {
                         rail: PaymentRail::StripeFiat,
@@ -6437,6 +6506,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Private,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             }),
         )
@@ -6454,6 +6526,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             }),
         )
@@ -6517,6 +6592,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         apply_base_funding_event(&mut network, &bounty, 1);
@@ -6555,6 +6633,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             }),
         )
@@ -6609,6 +6690,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Private,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         let state = test_state(network);
@@ -6686,6 +6770,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         let other_bounty = network
@@ -6696,6 +6783,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         let state = test_state(network);
@@ -6963,6 +7053,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             }),
         )
@@ -7035,6 +7128,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::MixedRails,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![
                     app::FundingPartitionTargetRequest {
                         rail: PaymentRail::StripeFiat,
@@ -7402,6 +7498,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         apply_base_funding_event(&mut network, &bounty, 7);

@@ -83,7 +83,7 @@ contract AgentBountyEscrow {
         emit EscrowCreated(escrowId, bountyId, msg.sender, token, amount, termsHash);
     }
 
-    function release(uint256 escrowId, address[] calldata recipients, uint256[] calldata amounts, bytes32 proofHash) external onlySettlementSigner {
+    function release(uint256 escrowId, address[] calldata recipients, uint256[] calldata amounts, bytes32 proofHash) public virtual onlySettlementSigner {
         Escrow storage escrow = escrows[escrowId];
         require(escrow.status == EscrowStatus.Funded || escrow.status == EscrowStatus.Disputed, "not releasable");
         require(recipients.length == amounts.length && recipients.length > 0, "bad split");
@@ -119,4 +119,3 @@ contract AgentBountyEscrow {
         emit EscrowDisputed(escrowId, disputeHash);
     }
 }
-

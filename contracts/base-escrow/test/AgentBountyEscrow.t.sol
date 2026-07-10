@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "../src/AgentBountyEscrow.sol";
+import "../src/AgentBountyEscrowV2.sol";
 
 contract TestToken {
     mapping(address => uint256) public balanceOf;
@@ -30,6 +31,12 @@ contract TestToken {
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
         return true;
+    }
+}
+
+contract TermsSigner {
+    function accept(AgentBountyEscrowV2 escrow, uint256 escrowId, bytes32 termsHash) external {
+        escrow.acceptTerms(escrowId, termsHash, address(this));
     }
 }
 
@@ -142,5 +149,58 @@ contract AgentBountyEscrowTest {
         } catch Error(string memory reason) {
             require(keccak256(bytes(reason)) == keccak256(bytes("not settlement signer")), "wrong reason");
         }
+    }
+}
+
+contract AgentBountyEscrowV2Test {
+    AgentBountyEscrowV2 escrow;
+    TestToken token;
+    TermsSigner solver;
+    bytes32 termsHash = bytes32("terms");
+
+    function setUp() public {
+        escrow = new AgentBountyEscrowV2(address(this));
+        token = new TestToken();
+        solver = new TermsSigner();
+        token.mint(address(this), 1000);
+        token.approve(address(escrow), 1000);
+    }
+
+    function testRecipientMustAcceptTermsBeforeRelease() public {
+        uint256 escrowId = escrow.createEscrow(bytes32("bounty"), address(token), 1000, termsHash);
+        address[] memory recipients = new address[](1);
+        recipients[0] = address(solver);
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 1000;
+
+        try escrow.release(escrowId, recipients, amounts, bytes32("proof")) {
+            revert("expected recipient acceptance revert");
+        } catch Error(string memory reason) {
+            require(keccak256(bytes(reason)) == keccak256(bytes("recipient not accepted")), "wrong reason");
+        }
+    }
+
+    function testWrongTermsCannotBeAccepted() public {
+        uint256 escrowId = escrow.createEscrow(bytes32("bounty"), address(token), 1000, termsHash);
+
+        try solver.accept(escrow, escrowId, bytes32("other")) {
+            revert("expected terms mismatch");
+        } catch Error(string memory reason) {
+            require(keccak256(bytes(reason)) == keccak256(bytes("terms mismatch")), "wrong reason");
+        }
+    }
+
+    function testAcceptedRecipientCanBeReleased() public {
+        uint256 escrowId = escrow.createEscrow(bytes32("bounty"), address(token), 1000, termsHash);
+        solver.accept(escrow, escrowId, termsHash);
+
+        address[] memory recipients = new address[](1);
+        recipients[0] = address(solver);
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 1000;
+
+        escrow.release(escrowId, recipients, amounts, bytes32("proof"));
+
+        require(token.balanceOf(address(solver)) == 1000, "solver payout");
     }
 }

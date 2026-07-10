@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use app::{
     build_live_money_readiness_report, hash_artifact, stripe_secret_key_mode_from_secret,
-    AddFundingContributionRequest, BaseReleaseQueueRequest, BountyNetwork, ClaimBountyRequest,
-    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
+    AddFundingContributionRequest, BaseReleaseQueueRequest, BountyFundingPolicy, BountyNetwork,
+    ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
     FundingIntentNextAction, FundingPartitionTargetRequest, LiveMoneyReadinessConfig,
     OpenPooledBountyRequest, PlanBaseReleaseRequest, PlanStripeTransferRequest, PostBountyRequest,
     RegisterAgentRequest, RegisterCapabilityRequest, RequestQuotesRequest, SubmitResultRequest,
@@ -840,6 +840,9 @@ fn pooled_funding_demo() -> Result<()> {
         currency: "usdc".to_string(),
         funding_mode: FundingMode::Simulated,
         privacy: PrivacyLevel::Public,
+        funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+        verification_contract: None,
+        automatic_release: false,
         funding_targets: vec![],
     })?;
     let first = network.add_funding_contribution(AddFundingContributionRequest {
@@ -896,6 +899,9 @@ async fn funding_rehearsal_demo() -> Result<()> {
         currency: "usd".to_string(),
         funding_mode: FundingMode::MixedRails,
         privacy: PrivacyLevel::Public,
+        funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+        verification_contract: None,
+        automatic_release: false,
         funding_targets: vec![
             FundingPartitionTargetRequest {
                 rail: PaymentRail::StripeFiat,
@@ -1673,6 +1679,9 @@ async fn base_release_queue_demo(
         currency: "usdc".to_string(),
         funding_mode: FundingMode::BaseUsdcEscrow,
         privacy: PrivacyLevel::Public,
+        funding_policy: BountyFundingPolicy::FundOnCreation,
+        verification_contract: None,
+        automatic_release: false,
     })?;
     let created = simulated_created_event(
         bounty.id,

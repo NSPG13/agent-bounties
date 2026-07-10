@@ -6,9 +6,10 @@ use app::{
     ClaimBountyRequest, CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
     FundingIntentReport, LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanBaseDisputeRequest,
     PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
-    PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest, RegisterAgentRequest,
-    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
-    ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
+    PlanBaseTermsAcceptanceRequest, PlanStripeTransferRequest, PooledFundingReport,
+    PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest,
+    RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest,
+    VerifySubmissionRequest,
 };
 use axum::{
     extract::State,
@@ -438,6 +439,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/list_base_release_queue",
             post(list_base_release_queue),
+        )
+        .route(
+            "/tools/plan_base_terms_acceptance",
+            post(plan_base_terms_acceptance),
         )
         .route("/tools/plan_base_release", post(plan_base_release))
         .route("/tools/plan_base_refund", post(plan_base_refund))
@@ -1125,6 +1130,19 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
                 }),
                 &["bounty_id", "escrow_contract", "payer", "token"],
+            ),
+        ),
+        tool(
+            "plan_base_terms_acceptance",
+            "Build an unsigned AgentBountyEscrowV2 acceptTerms transaction. Agents that want to get paid sign this with their payout wallet before release; it never approves review, acceptance, or settlement by itself.",
+            object_tool_schema(
+                json!({
+                    "bounty_id": uuid_property("Base USDC bounty UUID with indexed funded escrow."),
+                    "escrow_contract": string_property("AgentBountyEscrowV2 contract address."),
+                    "solver_agent_id": uuid_property("Registered solver agent whose payout wallet will sign the terms."),
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
+                }),
+                &["bounty_id", "escrow_contract", "solver_agent_id"],
             ),
         ),
         tool(
@@ -2840,6 +2858,17 @@ async fn plan_base_release(
     }
 }
 
+async fn plan_base_terms_acceptance(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanBaseTermsAcceptanceRequest>,
+) -> Json<serde_json::Value> {
+    let network = state.network.lock().expect("state poisoned");
+    match network.plan_base_terms_acceptance(args) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn plan_base_refund(
     State(state): State<SharedState>,
     Json(args): Json<PlanBaseRefundRequest>,
@@ -3198,6 +3227,7 @@ async fn record_eval_run(state: &SharedState, run: EvalRun) -> Result<(), String
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+    use app::BountyFundingPolicy;
 
     #[tokio::test]
     async fn tool_descriptors_publish_machine_readable_input_schemas() {
@@ -3731,6 +3761,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: domain::FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         network
@@ -3982,6 +4015,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: domain::FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             });
             assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
         }
@@ -4019,6 +4055,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: domain::FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             });
             assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
             network.risk_events.values().next().unwrap().id
@@ -4089,6 +4128,9 @@ mod tests {
             currency: "usdc".to_string(),
             funding_mode: domain::FundingMode::BaseUsdcEscrow,
             privacy: PrivacyLevel::Public,
+            funding_policy: BountyFundingPolicy::FundOnCreation,
+            verification_contract: None,
+            automatic_release: false,
         });
         assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
         let bounty_event_id = network.risk_events.values().next().unwrap().id;
@@ -4184,6 +4226,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: domain::FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             });
             assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
             network.risk_events.values().next().unwrap().id
@@ -4308,6 +4353,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: domain::FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         let other_bounty = reader_network
@@ -4318,6 +4366,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: domain::FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         reader_store.upsert_bounty(&bounty).await.unwrap();

@@ -88,6 +88,14 @@ pub struct BaseEscrowReleaseCall {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseEscrowTermsAcceptance {
+    pub onchain_escrow_id: u128,
+    pub participant: String,
+    pub payout_wallet: String,
+    pub terms_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionIntent {
     pub from: Option<String>,
     pub to: String,
@@ -208,6 +216,32 @@ impl BaseEscrowTxPlanner {
                 proof_hash,
             ),
             function: "release(uint256,address[],uint256[],bytes32)".to_string(),
+        })
+    }
+
+    pub fn accept_terms(
+        &self,
+        acceptance: &BaseEscrowTermsAcceptance,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        if acceptance.onchain_escrow_id == 0 {
+            return Err(ChainBaseError::InvalidEscrowId);
+        }
+        let participant = normalize_address(&acceptance.participant)?;
+        let payout_wallet = normalize_address(&acceptance.payout_wallet)?;
+        let terms_hash = parse_bytes32(&acceptance.terms_hash)?;
+        Ok(EvmTransactionIntent {
+            from: Some(participant),
+            to: self.escrow_contract.clone(),
+            value_wei: 0,
+            data: encode_call(
+                "acceptTerms(uint256,bytes32,address)",
+                vec![
+                    encode_uint256(acceptance.onchain_escrow_id)?,
+                    terms_hash,
+                    encode_address(&payout_wallet)?,
+                ],
+            ),
+            function: "acceptTerms(uint256,bytes32,address)".to_string(),
         })
     }
 
@@ -1687,6 +1721,29 @@ mod tests {
         assert!(tx
             .data
             .contains("00000000000000000000000000000000000000000000000000000000000000e0"));
+    }
+
+    #[test]
+    fn plans_terms_acceptance_for_solver_wallet() {
+        let planner =
+            BaseEscrowTxPlanner::new("0x1111111111111111111111111111111111111111").unwrap();
+        let acceptance = BaseEscrowTermsAcceptance {
+            onchain_escrow_id: 7,
+            participant: "0x2222222222222222222222222222222222222222".to_string(),
+            payout_wallet: "0x2222222222222222222222222222222222222222".to_string(),
+            terms_hash: format!("0x{}", "ab".repeat(32)),
+        };
+
+        let tx = planner.accept_terms(&acceptance).unwrap();
+
+        assert_eq!(tx.from.as_deref(), Some(acceptance.participant.as_str()));
+        assert_eq!(tx.to, planner.escrow_contract);
+        assert_eq!(tx.function, "acceptTerms(uint256,bytes32,address)");
+        assert!(tx.data.starts_with("0x6e2a4357"));
+        assert!(tx.data.contains(&"ab".repeat(32)));
+        assert!(tx
+            .data
+            .contains("0000000000000000000000002222222222222222222222222222222222222222"));
     }
 
     #[test]

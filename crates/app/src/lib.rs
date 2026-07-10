@@ -1,8 +1,9 @@
 use bounty_router::{template_for_class, BountyRouter};
 use chain_base::{
     base_network_descriptor, BaseEscrowCreate, BaseEscrowEvent, BaseEscrowEventKind,
-    BaseEscrowFundingPlan, BaseEscrowRelease, BaseEscrowReleaseCall, BaseEscrowTxPlanner,
-    BaseNetworkDescriptor, ChainBaseError, EscrowRecipient, EvmTransactionIntent,
+    BaseEscrowFundingPlan, BaseEscrowRelease, BaseEscrowReleaseCall, BaseEscrowTermsAcceptance,
+    BaseEscrowTxPlanner, BaseNetworkDescriptor, ChainBaseError, EscrowRecipient,
+    EvmTransactionIntent,
 };
 use chrono::{DateTime, Utc};
 use domain::{
@@ -74,6 +75,8 @@ pub enum AppError {
     InvalidFundingContribution(String),
     #[error("invalid funding intent: {0}")]
     InvalidFundingIntent(String),
+    #[error("invalid bounty terms: {0}")]
+    InvalidBountyTerms(String),
     #[error("invalid Stripe payout reconciliation: {0}")]
     InvalidStripePayout(String),
     #[error("invalid contributor contact: {0}")]
@@ -873,6 +876,27 @@ pub struct RecordOutreachAttemptRequest {
     pub sent_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BountyFundingPolicy {
+    #[default]
+    FundOnCreation,
+    CrowdfundUntilFunded,
+}
+
+fn default_crowdfunding_policy() -> BountyFundingPolicy {
+    BountyFundingPolicy::CrowdfundUntilFunded
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BountyVerificationContractRequest {
+    pub acceptance_criteria: String,
+    pub evidence_requirements: String,
+    #[serde(default)]
+    pub verifier_kind: Option<VerifierKind>,
+    #[serde(default)]
+    pub human_release_gate: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostBountyRequest {
     pub title: String,
@@ -881,6 +905,12 @@ pub struct PostBountyRequest {
     pub currency: String,
     pub funding_mode: FundingMode,
     pub privacy: PrivacyLevel,
+    #[serde(default)]
+    pub funding_policy: BountyFundingPolicy,
+    #[serde(default)]
+    pub verification_contract: Option<BountyVerificationContractRequest>,
+    #[serde(default)]
+    pub automatic_release: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -895,6 +925,12 @@ pub struct OpenPooledBountyRequest {
     pub currency: String,
     pub funding_mode: FundingMode,
     pub privacy: PrivacyLevel,
+    #[serde(default = "default_crowdfunding_policy")]
+    pub funding_policy: BountyFundingPolicy,
+    #[serde(default)]
+    pub verification_contract: Option<BountyVerificationContractRequest>,
+    #[serde(default)]
+    pub automatic_release: bool,
     #[serde(default)]
     pub funding_targets: Vec<FundingPartitionTargetRequest>,
 }
@@ -1022,6 +1058,15 @@ pub struct PlanBaseReleaseRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanBaseTermsAcceptanceRequest {
+    pub bounty_id: Id,
+    pub escrow_contract: String,
+    pub solver_agent_id: Id,
+    #[serde(default)]
+    pub network: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanBaseRefundRequest {
     pub bounty_id: Id,
     pub escrow_contract: String,
@@ -1079,6 +1124,20 @@ pub struct BaseReleasePlan {
     pub escrow: Escrow,
     pub settlement: Settlement,
     pub release_call: BaseEscrowReleaseCall,
+    pub transaction: EvmTransactionIntent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseTermsAcceptancePlan {
+    pub network: BaseNetworkDescriptor,
+    pub bounty: Bounty,
+    pub escrow: Escrow,
+    pub onchain_escrow_id: u128,
+    pub terms_hash: String,
+    pub participant: String,
+    pub payout_wallet: String,
+    pub contract_function: String,
+    pub contract_requirement: String,
     pub transaction: EvmTransactionIntent,
 }
 
@@ -1975,6 +2034,9 @@ impl BountyNetwork {
             currency: quote.price.currency,
             funding_mode: request.funding_mode.unwrap_or(route.funding_mode),
             privacy: help_request.privacy,
+            funding_policy: BountyFundingPolicy::FundOnCreation,
+            verification_contract: None,
+            automatic_release: false,
         })?;
         bounty.help_request_id = Some(help_request.id);
         self.bounties.insert(bounty.id, bounty.clone());
@@ -1982,25 +2044,49 @@ impl BountyNetwork {
     }
 
     pub fn post_funded_bounty(&mut self, request: PostBountyRequest) -> AppResult<Bounty> {
-        let amount = Money::new(request.amount_minor, request.currency)?;
-        let funding_mode = request.funding_mode.clone();
+        let PostBountyRequest {
+            title,
+            template_slug,
+            amount_minor,
+            currency,
+            funding_mode,
+            privacy,
+            funding_policy,
+            verification_contract,
+            automatic_release,
+        } = request;
+        validate_bounty_posting_terms(
+            &template_slug,
+            automatic_release,
+            verification_contract.as_ref(),
+        )?;
+        let amount = Money::new(amount_minor, currency)?;
         let mut bounty = Bounty::new(
-            request.title,
-            request.template_slug,
+            title,
+            template_slug,
             amount.clone(),
             funding_mode.clone(),
-            request.privacy.clone(),
+            privacy.clone(),
         );
         let risk = self.risk_policy.evaluate_bounty(&BountyRiskInput {
             title: bounty.title.clone(),
             template_slug: bounty.template_slug.clone(),
             amount: amount.clone(),
             funding_mode: funding_mode.clone(),
-            privacy: request.privacy,
+            privacy,
         });
         self.enforce_risk(risk, bounty.id, None, Some(bounty.id))?;
-        let terms_hash = hash_terms(&bounty.title, &bounty.template_slug, &amount);
-        if funding_mode == FundingMode::BaseUsdcEscrow {
+        let terms_hash = hash_terms_with_policy(
+            &bounty.title,
+            &bounty.template_slug,
+            &amount,
+            &funding_policy,
+            verification_contract.as_ref(),
+            automatic_release,
+        );
+        if funding_policy == BountyFundingPolicy::CrowdfundUntilFunded
+            || funding_mode == FundingMode::BaseUsdcEscrow
+        {
             bounty.terms_hash = Some(terms_hash);
             self.bounties.insert(bounty.id, bounty.clone());
             return Ok(bounty);
@@ -2142,17 +2228,35 @@ impl BountyNetwork {
         request: OpenPooledBountyRequest,
         existing_created_at: Option<chrono::DateTime<Utc>>,
     ) -> AppResult<Bounty> {
-        let amount = Money::new(request.target_amount_minor, request.currency)?;
-        let funding_mode = request.funding_mode.clone();
+        let OpenPooledBountyRequest {
+            bounty_id,
+            idempotency_key: _,
+            title,
+            template_slug,
+            target_amount_minor,
+            currency,
+            funding_mode,
+            privacy,
+            funding_policy,
+            verification_contract,
+            automatic_release,
+            funding_targets,
+        } = request;
+        validate_bounty_posting_terms(
+            &template_slug,
+            automatic_release,
+            verification_contract.as_ref(),
+        )?;
+        let amount = Money::new(target_amount_minor, currency)?;
         let funding_targets =
-            funding_targets_from_request(&funding_mode, &amount, &request.funding_targets)?;
-        let requested_bounty_id = request.bounty_id;
+            funding_targets_from_request(&funding_mode, &amount, &funding_targets)?;
+        let requested_bounty_id = bounty_id;
         let mut bounty = Bounty::new(
-            request.title,
-            request.template_slug,
+            title,
+            template_slug,
             amount.clone(),
             funding_mode.clone(),
-            request.privacy.clone(),
+            privacy.clone(),
         )
         .with_funding_targets(funding_targets);
         if let Some(bounty_id) = requested_bounty_id {
@@ -2166,10 +2270,17 @@ impl BountyNetwork {
             template_slug: bounty.template_slug.clone(),
             amount: amount.clone(),
             funding_mode,
-            privacy: request.privacy,
+            privacy,
         });
         self.enforce_risk(risk, bounty.id, None, Some(bounty.id))?;
-        bounty.terms_hash = Some(hash_terms(&bounty.title, &bounty.template_slug, &amount));
+        bounty.terms_hash = Some(hash_terms_with_policy(
+            &bounty.title,
+            &bounty.template_slug,
+            &amount,
+            &funding_policy,
+            verification_contract.as_ref(),
+            automatic_release,
+        ));
         Ok(bounty)
     }
 
@@ -3688,6 +3799,74 @@ impl BountyNetwork {
         })
     }
 
+    pub fn plan_base_terms_acceptance(
+        &self,
+        request: PlanBaseTermsAcceptanceRequest,
+    ) -> AppResult<BaseTermsAcceptancePlan> {
+        let network = base_plan_network(request.network.as_deref(), "terms acceptance")?;
+        let bounty = self
+            .bounties
+            .get(&request.bounty_id)
+            .ok_or(AppError::BountyNotFound)?
+            .clone();
+        let terms_hash = bounty.terms_hash.clone().ok_or_else(|| {
+            AppError::InvalidBaseEscrowPlan(
+                "bounty has no terms hash to accept on-chain".to_string(),
+            )
+        })?;
+        let escrow = self
+            .escrows
+            .values()
+            .find(|escrow| {
+                escrow.bounty_id == request.bounty_id
+                    && escrow.rail == PaymentRail::BaseUsdc
+                    && is_releasable_base_escrow_status(&escrow.status)
+            })
+            .cloned()
+            .ok_or_else(|| {
+                AppError::InvalidBaseEscrowPlan(
+                    "bounty has no funded or disputed Base USDC escrow for terms acceptance"
+                        .to_string(),
+                )
+            })?;
+        let onchain_escrow_id = parse_base_escrow_reference(&escrow.external_reference)?;
+        let agent = self
+            .agents
+            .get(&request.solver_agent_id)
+            .ok_or(AppError::AgentNotFound)?;
+        let payout_wallet = agent.payout_wallet.clone().ok_or_else(|| {
+            AppError::InvalidBaseEscrowPlan(format!(
+                "solver agent {} has no payout wallet",
+                agent.id
+            ))
+        })?;
+        let acceptance = BaseEscrowTermsAcceptance {
+            onchain_escrow_id,
+            participant: payout_wallet.clone(),
+            payout_wallet: payout_wallet.clone(),
+            terms_hash: ensure_0x_hash(&terms_hash),
+        };
+        let transaction = BaseEscrowTxPlanner::new(request.escrow_contract)
+            .map_err(|error| AppError::InvalidBaseEscrowPlan(error.to_string()))?
+            .accept_terms(&acceptance)
+            .map_err(|error| AppError::InvalidBaseEscrowPlan(error.to_string()))?;
+
+        Ok(BaseTermsAcceptancePlan {
+            network,
+            bounty,
+            escrow,
+            onchain_escrow_id,
+            terms_hash: acceptance.terms_hash,
+            participant: acceptance.participant,
+            payout_wallet,
+            contract_function: "acceptTerms(uint256,bytes32,address)".to_string(),
+            contract_requirement:
+                "AgentBountyEscrowV2 recipients must call acceptTerms before escrow release."
+                    .to_string(),
+            transaction,
+        })
+    }
+
     pub fn plan_base_refund(&self, request: PlanBaseRefundRequest) -> AppResult<BaseRefundPlan> {
         let network = base_plan_network(request.network.as_deref(), "refund")?;
         let bounty = self
@@ -4494,10 +4673,87 @@ fn hash_terms(title: &str, template_slug: &str, amount: &Money) -> String {
     hex::encode(hasher.finalize())
 }
 
+fn hash_terms_with_policy(
+    title: &str,
+    template_slug: &str,
+    amount: &Money,
+    funding_policy: &BountyFundingPolicy,
+    verification_contract: Option<&BountyVerificationContractRequest>,
+    automatic_release: bool,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(format!(
+        "{}:{}:{}:{}:{:?}:{}",
+        title, template_slug, amount.amount, amount.currency, funding_policy, automatic_release
+    ));
+    if let Some(contract) = verification_contract {
+        hasher.update(contract.acceptance_criteria.trim().as_bytes());
+        hasher.update(contract.evidence_requirements.trim().as_bytes());
+        hasher.update(format!(
+            ":{:?}:{}",
+            contract.verifier_kind, contract.human_release_gate
+        ));
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn validate_bounty_posting_terms(
+    template_slug: &str,
+    automatic_release: bool,
+    verification_contract: Option<&BountyVerificationContractRequest>,
+) -> AppResult<()> {
+    if !automatic_release {
+        return Ok(());
+    }
+    let contract = verification_contract.ok_or_else(|| {
+        AppError::InvalidBountyTerms(
+            "automatic_release requires explicit acceptance criteria and evidence requirements"
+                .to_string(),
+        )
+    })?;
+    if contract.acceptance_criteria.trim().is_empty() {
+        return Err(AppError::InvalidBountyTerms(
+            "automatic_release requires non-empty acceptance_criteria".to_string(),
+        ));
+    }
+    if contract.evidence_requirements.trim().is_empty() {
+        return Err(AppError::InvalidBountyTerms(
+            "automatic_release requires non-empty evidence_requirements".to_string(),
+        ));
+    }
+    if contract.human_release_gate {
+        return Err(AppError::InvalidBountyTerms(
+            "automatic_release cannot also require a human release gate".to_string(),
+        ));
+    }
+    let verifier_kind = contract
+        .verifier_kind
+        .clone()
+        .unwrap_or_else(|| verifier_kind_for_template(template_slug));
+    if matches!(
+        verifier_kind,
+        VerifierKind::Manual | VerifierKind::AiJudgeFilter
+    ) {
+        return Err(AppError::InvalidBountyTerms(format!(
+            "automatic_release requires deterministic verifier evidence, not {:?}",
+            verifier_kind
+        )));
+    }
+    Ok(())
+}
+
 fn hash_proof(artifact_digest: &str, verifier_hash: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(format!("{artifact_digest}:{verifier_hash}"));
     hex::encode(hasher.finalize())
+}
+
+fn ensure_0x_hash(hash: &str) -> String {
+    if hash.starts_with("0x") || hash.starts_with("0X") {
+        hash.to_string()
+    } else {
+        format!("0x{hash}")
+    }
 }
 
 fn payment_rail_for_funding_mode(funding_mode: &FundingMode) -> AppResult<PaymentRail> {
@@ -5153,6 +5409,9 @@ mod tests {
             currency: "usdc".to_string(),
             funding_mode: FundingMode::Simulated,
             privacy: PrivacyLevel::Public,
+            funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+            verification_contract: None,
+            automatic_release: false,
             funding_targets: vec![],
         }
     }
@@ -5687,6 +5946,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::MixedRails,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![
                     FundingPartitionTargetRequest {
                         rail: PaymentRail::StripeFiat,
@@ -5892,6 +6154,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::MixedRails,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![
                     FundingPartitionTargetRequest {
                         rail: PaymentRail::StripeFiat,
@@ -5972,6 +6237,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
 
@@ -6164,6 +6432,212 @@ mod tests {
         assert_eq!(network.ledger.entries().len(), 2);
     }
 
+    #[test]
+    fn base_terms_acceptance_plan_requires_solver_payout_wallet() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "solver".to_string(),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+        });
+        let no_wallet_solver = network.register_agent(RegisterAgentRequest {
+            handle: "no-wallet".to_string(),
+            payout_wallet: None,
+        });
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Sign payout terms".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
+            })
+            .unwrap();
+        fund_base_bounty(&mut network, &bounty, 7);
+
+        let plan = network
+            .plan_base_terms_acceptance(PlanBaseTermsAcceptanceRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                solver_agent_id: solver.id,
+                network: Some("base-mainnet".to_string()),
+            })
+            .unwrap();
+
+        assert_eq!(plan.network.chain_id, 8_453);
+        assert_eq!(plan.onchain_escrow_id, 7);
+        assert_eq!(
+            plan.participant,
+            "0x2222222222222222222222222222222222222222"
+        );
+        assert_eq!(plan.participant, plan.payout_wallet);
+        assert_eq!(
+            plan.terms_hash,
+            ensure_0x_hash(bounty.terms_hash.as_ref().unwrap())
+        );
+        assert_eq!(
+            plan.transaction.function,
+            "acceptTerms(uint256,bytes32,address)"
+        );
+        assert!(plan.transaction.data.starts_with("0x6e2a4357"));
+        assert!(plan.transaction.data.contains(
+            &bounty
+                .terms_hash
+                .as_ref()
+                .expect("terms hash")
+                .to_ascii_lowercase()
+        ));
+
+        let err = network
+            .plan_base_terms_acceptance(PlanBaseTermsAcceptanceRequest {
+                bounty_id: bounty.id,
+                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                solver_agent_id: no_wallet_solver.id,
+                network: None,
+            })
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidBaseEscrowPlan(_)));
+    }
+
+    #[test]
+    fn crowdfunded_policy_posts_unfunded_until_real_contribution_arrives() {
+        let mut network = BountyNetwork::default();
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Crowdfund useful verifier".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
+            })
+            .unwrap();
+
+        assert_eq!(bounty.status, BountyStatus::Unfunded);
+        assert!(bounty.terms_hash.is_some());
+        assert!(network.list_claimable_bounties().is_empty());
+        assert!(network.ledger.entries().is_empty());
+    }
+
+    #[test]
+    fn automatic_release_requires_explicit_deterministic_verification_terms() {
+        let mut network = BountyNetwork::default();
+        let missing_terms = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Unsafe auto release".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: true,
+            })
+            .unwrap_err();
+        assert!(matches!(missing_terms, AppError::InvalidBountyTerms(_)));
+
+        let manual_verifier = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Manual release must stay gated".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: Some(BountyVerificationContractRequest {
+                    acceptance_criteria: "maintainer approves prose quality".to_string(),
+                    evidence_requirements: "merged PR".to_string(),
+                    verifier_kind: Some(VerifierKind::AiJudgeFilter),
+                    human_release_gate: false,
+                }),
+                automatic_release: true,
+            })
+            .unwrap_err();
+        assert!(matches!(manual_verifier, AppError::InvalidBountyTerms(_)));
+
+        let deterministic = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Safe auto release".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: Some(BountyVerificationContractRequest {
+                    acceptance_criteria: "JSON artifact exactly matches the published schema"
+                        .to_string(),
+                    evidence_requirements: "schema verifier returns accepted".to_string(),
+                    verifier_kind: Some(VerifierKind::JsonSchema),
+                    human_release_gate: false,
+                }),
+                automatic_release: true,
+            })
+            .unwrap();
+        assert_eq!(deterministic.status, BountyStatus::Unfunded);
+        assert!(deterministic.terms_hash.is_some());
+    }
+
+    #[test]
+    fn pooled_automatic_release_requires_deterministic_terms() {
+        let mut network = BountyNetwork::default();
+        let ai_judge_only = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
+                title: "Crowdfund unsafe automatic release".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                target_amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: Some(BountyVerificationContractRequest {
+                    acceptance_criteria: "AI judge says the docs are good".to_string(),
+                    evidence_requirements: "review comment".to_string(),
+                    verifier_kind: Some(VerifierKind::AiJudgeFilter),
+                    human_release_gate: false,
+                }),
+                automatic_release: true,
+                funding_targets: vec![],
+            })
+            .unwrap_err();
+        assert!(matches!(ai_judge_only, AppError::InvalidBountyTerms(_)));
+
+        let deterministic = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
+                title: "Crowdfund deterministic automatic release".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                target_amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::BaseUsdcEscrow,
+                privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: Some(BountyVerificationContractRequest {
+                    acceptance_criteria: "GitHub Actions passes on the submitted PR".to_string(),
+                    evidence_requirements: "merged PR URL and passing check-run URL".to_string(),
+                    verifier_kind: Some(VerifierKind::GitHubCi),
+                    human_release_gate: false,
+                }),
+                automatic_release: true,
+                funding_targets: vec![],
+            })
+            .unwrap();
+
+        assert_eq!(deterministic.status, BountyStatus::Unfunded);
+        assert!(deterministic.terms_hash.is_some());
+    }
+
     #[tokio::test]
     async fn open_beta_pays_even_one_minor_unit_in_full_to_solver() {
         let mut network = BountyNetwork::default();
@@ -6179,6 +6653,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         network
@@ -6234,6 +6711,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
 
@@ -6368,6 +6848,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             })
             .unwrap();
@@ -6460,6 +6943,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             })
             .unwrap();
@@ -6528,6 +7014,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             })
             .unwrap();
@@ -6593,6 +7082,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             })
             .unwrap();
@@ -6719,6 +7211,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         fund_base_bounty(&mut network, &bounty, 1);
@@ -6781,6 +7276,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         fund_base_bounty(&mut network, &bounty, 9);
@@ -6918,6 +7416,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         fund_base_bounty(&mut network, &bounty, 1);
@@ -6973,6 +7474,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         let second = network
@@ -6983,6 +7487,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         fund_base_bounty(&mut network, &first, 1);
@@ -7040,6 +7547,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Private,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![],
             })
             .unwrap();
@@ -7212,6 +7722,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::MixedRails,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![
                     FundingPartitionTargetRequest {
                         rail: PaymentRail::StripeFiat,
@@ -7424,6 +7937,9 @@ mod tests {
                 currency: "usd".to_string(),
                 funding_mode: FundingMode::MixedRails,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::CrowdfundUntilFunded,
+                verification_contract: None,
+                automatic_release: false,
                 funding_targets: vec![
                     FundingPartitionTargetRequest {
                         rail: PaymentRail::StripeFiat,
@@ -7551,6 +8067,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
 
@@ -7586,6 +8105,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap_err();
 
@@ -7615,6 +8137,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap_err();
         assert!(matches!(err, AppError::RiskNeedsReview(_)));
@@ -7672,6 +8197,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap_err();
         assert!(matches!(err, AppError::RiskNeedsReview(_)));
@@ -7788,6 +8316,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap_err();
         assert!(matches!(err, AppError::RiskNeedsReview(_)));
@@ -7841,6 +8372,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
 
@@ -7878,6 +8412,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         fund_base_bounty(&mut network, &bounty, 7);
@@ -7912,6 +8449,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         network
@@ -7984,6 +8524,9 @@ mod tests {
                 currency: "usdc".to_string(),
                 funding_mode: FundingMode::BaseUsdcEscrow,
                 privacy: PrivacyLevel::Public,
+                funding_policy: BountyFundingPolicy::FundOnCreation,
+                verification_contract: None,
+                automatic_release: false,
             })
             .unwrap();
         network

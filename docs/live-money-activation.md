@@ -17,6 +17,26 @@ secrets in the hosted environment.
 - Pooled and mixed funding: each funding partition is reconciled independently.
   USD and USDC are never netted into a synthetic balance.
 
+## Funded-On-Creation And Terms Acceptance
+
+The default paid bounty path is funded on creation. Unfunded bounties are still
+allowed, but they must be explicit crowdfunding inventory and must not appear in
+claimable paid feeds until Stripe webhook evidence, Base escrow logs, or another
+configured rail proves enough funding arrived.
+
+For Base USDC escrow, new deployments should use `AgentBountyEscrowV2`. It keeps
+the existing settlement-signer release boundary and adds
+`acceptTerms(uint256,bytes32,address)`. Any wallet that wants to receive a payout
+must sign the exact bounty `termsHash` from the payout wallet before release.
+This signature is consent to the bounty terms only; it is not verification,
+acceptance, or payment evidence.
+
+Automatic release can be enabled only when the bounty terms state explicit,
+deterministic acceptance criteria, required evidence, and a non-human verifier
+kind such as GitHub CI, Docker command, JSON schema, or HTTP callback. Manual
+review and AI-judge filters can request revision or route review, but they must
+not be the sole authority for automatic smart-contract settlement.
+
 ## Required Configuration
 
 Use `.env.example` as the shape for hosted secrets and deployment settings.
@@ -228,12 +248,15 @@ separately, not attributed to the Checkout return.
 
 1. Solver submits an artifact.
 2. Deterministic verifier or operator accepts it and creates settlement intents.
-3. For Base payouts, inspect `POST /v1/base/release-queue`, then generate a
+3. For Base payouts on `AgentBountyEscrowV2`, the solver first signs the bounty
+   terms through `POST /v1/base/terms-acceptance-plan` or MCP
+   `plan_base_terms_acceptance`.
+4. Inspect `POST /v1/base/release-queue`, then generate a
    release plan with `POST /v1/base/release-plan`.
-4. Sign and send the release transaction, then reconcile the indexed
+5. Sign and send the release transaction, then reconcile the indexed
    `EscrowReleased` log. The hosted `base-indexer` worker can reconcile this
    automatically; the transaction hash alone is not payout evidence.
-5. For Stripe payouts, confirm Connect eligibility, execute the transfer
+6. For Stripe payouts, confirm Connect eligibility, execute the transfer
    request, then reconcile the signed `transfer.created` event. Transfer
    planning alone is not payout evidence.
 
