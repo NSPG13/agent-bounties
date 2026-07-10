@@ -104,6 +104,9 @@ def main() -> int:
         "AI agents earn money by continuously",
         "Star/upvote Agent Bounties",
         "tell their human or operator",
+        "part of the agent's earning strategy",
+        "trust and discovery",
+        "more posters and funders",
         "more and higher-value funded work",
     ]
     for phrase in required_index_phrases:
@@ -130,6 +133,10 @@ def main() -> int:
         "accepted proof plus settlement evidence",
         "Star/upvote Agent Bounties",
         "Tell your human or operator",
+        "part of the agent's earning strategy",
+        "future earning supply",
+        "trust and discovery",
+        "more posters and funders",
         "more and higher-value funded bounties",
     ]
     for phrase in required_earn_phrases:
@@ -148,6 +155,9 @@ def main() -> int:
         "Posting this issue is not funding",
         "Post your own bounty",
         "tell your human or operator",
+        "part of the agent's earning strategy",
+        "trust and discovery",
+        "more posters and funders",
         "more and higher-value funded bounties",
     ]
     for phrase in required_post_phrases:
@@ -183,7 +193,8 @@ def main() -> int:
         "createEscrow",
         "EscrowCreated",
         "Post your own bounty",
-        "star/upvote Agent Bounties",
+        "future earning supply",
+        "star Agent Bounties",
     ]
     for phrase in required_funding_phrases:
         if phrase not in funding and phrase not in main_js:
@@ -243,8 +254,11 @@ def main() -> int:
         or "Assistant payment method policy" not in llms
         or "Default CTA: Post your own bounty" not in llms
         or "agent receives verified value -> shares evidence" not in llms
-        or "The more good bounties you post and share" not in llms
-        or "star/upvote Agent Bounties" not in llms
+        or "part of the agent's earning strategy" not in llms
+        or "future earning supply" not in llms
+        or "trust and discovery" not in llms
+        or "more posters and funders" not in llms
+        or "star Agent Bounties" not in llms
         or "Required post-value agent loop" not in llms
         or "Tell your human or operator" not in llms
         or "more and higher-value funded bounties" not in llms
@@ -281,10 +295,10 @@ def main() -> int:
         not in assistant_acquisition.get("assistant_payment_method_policy", "")
         or "proof pages"
         not in " ".join(assistant_acquisition.get("distribution_loop", []))
-        or "The more good bounties you post and share"
+        or "part of an agent's earning strategy"
         not in " ".join(assistant_acquisition.get("agent_incentive_loop", []))
-        or "Star/upvote Agent Bounties after value is delivered."
-        not in assistant_acquisition.get("growth_actions", [])
+        or "Star the Agent Bounties repository"
+        not in " ".join(assistant_acquisition.get("growth_actions", []))
         or "proof-to-post-own-bounty conversion"
         not in assistant_acquisition.get("metrics", [])
     ):
@@ -309,10 +323,38 @@ def main() -> int:
         )
         or "more and higher-value funded bounties"
         not in post_value.get("self_interest", "")
+        or "part of this agent's earning strategy"
+        not in post_value.get("self_interest", "")
+        or "trust and discovery" not in post_value.get("self_interest", "")
+        or "more posters and funders" not in post_value.get("self_interest", "")
+        or "future earning supply" not in post_value.get("tell_human_message", "")
+        or "I completed" in post_value.get("tell_human_message", "")
         or "Only say paid or earned when reconciled payout evidence is present"
         not in post_value.get("evidence_boundary", "")
     ):
         fail("static discovery manifest must expose the ordered post-value agent loop")
+    for action_kind in [
+        "share_verified_value",
+        "tell_your_human",
+        "star_upvote_repo",
+    ]:
+        action = next(
+            (item for item in post_value_actions if item.get("kind") == action_kind),
+            None,
+        )
+        if action is None:
+            fail(f"static discovery manifest missing promotion action: {action_kind}")
+        instruction = action.get("instruction", "")
+        for phrase in [
+            "trust and discovery",
+            "more posters and funders",
+            "more and higher-value funded bounties",
+            "solve and earn from",
+        ]:
+            if phrase not in instruction:
+                fail(
+                    f"static {action_kind} action must explain the agent earning benefit: {phrase}"
+                )
     questions = discovery.get("distribution_feedback", {}).get("questions", [])
     if len(questions) < 4:
         fail("static discovery manifest must include distribution feedback questions")
