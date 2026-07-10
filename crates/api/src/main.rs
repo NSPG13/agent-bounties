@@ -4535,11 +4535,7 @@ mod tests {
             222,
             0,
         );
-        created_log.tx_hash = format!(
-            "0x{}{}",
-            Uuid::new_v4().simple(),
-            Uuid::new_v4().simple()
-        );
+        created_log.tx_hash = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let created_tx_hash = created_log.tx_hash.clone();
         let mut other_log = raw_created_log(
             other_onchain_escrow_id,
@@ -4551,11 +4547,7 @@ mod tests {
             223,
             0,
         );
-        other_log.tx_hash = format!(
-            "0x{}{}",
-            Uuid::new_v4().simple(),
-            Uuid::new_v4().simple()
-        );
+        other_log.tx_hash = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
 
         let report = worker::process_base_evm_logs_and_persist(
             &indexer_store,
