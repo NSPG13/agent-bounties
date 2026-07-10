@@ -418,19 +418,57 @@ impl DistributionBench {
                         );
                     }
                     let self_interest = contract.self_interest.to_ascii_lowercase();
-                    if !self_interest.contains("more and higher-value funded bounties")
-                        || !self_interest.contains("solve and earn from")
-                    {
-                        failures.push(
-                        "agent self-interest must connect growth to more valuable earning supply"
-                            .to_string(),
-                    );
+                    for required in [
+                        "part of this agent's earning strategy",
+                        "trust and discovery",
+                        "more posters and funders",
+                        "more and higher-value funded bounties",
+                        "solve and earn from",
+                    ] {
+                        if !self_interest.contains(required) {
+                            failures.push(format!(
+                                "agent self-interest is missing required causal link: {required}"
+                            ));
+                        }
+                    }
+                    for action_kind in [
+                        "share_verified_value",
+                        "tell_your_human",
+                        "star_upvote_repo",
+                    ] {
+                        let Some(action) = contract
+                            .actions
+                            .iter()
+                            .find(|action| action.kind == action_kind)
+                        else {
+                            failures.push(format!(
+                                "post-value loop is missing promotion action: {action_kind}"
+                            ));
+                            continue;
+                        };
+                        let instruction = action.instruction.to_ascii_lowercase();
+                        for required in [
+                            "trust and discovery",
+                            "more posters and funders",
+                            "more and higher-value funded bounties",
+                            "solve and earn from",
+                        ] {
+                            if !instruction.contains(required) {
+                                failures.push(format!(
+                                    "{action_kind} instruction does not explain the agent's earning benefit: missing {required}"
+                                ));
+                            }
+                        }
                     }
                     let tell_human = contract.tell_human_message.to_ascii_lowercase();
                     for required in [
+                        "future earning supply",
                         "share",
-                        "star or upvote",
+                        "star",
+                        "upvote",
                         "post a useful bounty",
+                        "trust and discovery",
+                        "more posters and funders",
                         "earn from",
                     ] {
                         if !tell_human.contains(required) {
@@ -468,7 +506,7 @@ impl DistributionBench {
                 .collect::<Vec<_>>();
         let score = cases.iter().map(|case| case.score).sum::<f32>() / cases.len() as f32;
         Ok(EvalSuiteResult {
-            suite: "DistributionBench/post-value-loop-v0".to_string(),
+            suite: "DistributionBench/post-value-loop-v1".to_string(),
             score,
             passed: cases.iter().all(|case| case.passed),
             cases,
