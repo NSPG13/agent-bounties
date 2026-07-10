@@ -341,6 +341,34 @@
     "query_param_policy": "apiBaseUrl and bountyId may prefill the page; contract and token query parameters are ignored for wallet funding.",
     "settlement_authority": "wallet prompts and transaction hashes are not funding; only hosted status with indexed EscrowCreated evidence can show Base wallet funding reconciled"
   },
+  "base_operator_settlement": {
+    "page": "https://nspg13.github.io/agent-bounties/operator.html",
+    "action": "connect_settlement_wallet_then_release",
+    "provider_standard": "EIP-1193",
+    "network": "base-mainnet",
+    "chain_id": 8453,
+    "chain_id_hex": "0x2105",
+    "escrow_contract": "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce",
+    "release_plan_endpoint_template": "{api_base_url}/v1/base/release-plan",
+    "receipt_endpoint_template": "{api_base_url}/v1/base/transaction-receipt",
+    "required_plan_checks": [
+      "connected settlement signer",
+      "Base mainnet chain id",
+      "verified escrow contract",
+      "Payable bounty status",
+      "release(uint256,address[],uint256[],bytes32) selector",
+      "positive on-chain escrow id",
+      "recipient split equals hosted escrow amount",
+      "proof hash",
+      "zero ETH value"
+    ],
+    "wallet_confirmation": "release escrow payout",
+    "reconciliation_request": {
+      "network": "base-mainnet",
+      "reconcile_logs": true
+    },
+    "settlement_authority": "wallet signatures and transaction hashes are not payout; only hosted receipt reconciliation that applies an indexed EscrowReleased event can show the payout as paid"
+  },
   "base_mainnet_escrow": {
     "network": "base-mainnet",
     "chain_id": 8453,

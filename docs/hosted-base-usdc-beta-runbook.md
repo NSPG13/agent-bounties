@@ -235,6 +235,24 @@ curl -sS "$PUBLIC_BASE_URL/v1/base/release-plan" \
 Review the release target and amount before signing. The settlement signer signs
 outside the hosted app.
 
+Browser operator path:
+
+```text
+https://nspg13.github.io/agent-bounties/operator.html
+```
+
+1. Open the page from an operator workstation with an injected EIP-1193 wallet.
+2. Enter the hosted API URL, operator token if configured, bounty id, escrow
+   contract, and platform fee wallet.
+3. Connect the current settlement signer wallet on Base mainnet.
+4. Review the decoded release plan. Confirm the target escrow contract, zero ETH
+   value, `release(uint256,address[],uint256[],bytes32)` selector, proof hash,
+   on-chain escrow id, and recipient split.
+5. Sign the release transaction only if the review matches the accepted proof.
+6. Wait for receipt reconciliation. A transaction hash is not payout evidence;
+   the payout is complete only after an indexed `EscrowReleased` event is
+   reconciled.
+
 ## 7. Broadcast, Poll, and Reconcile
 
 If hosted broadcast is enabled and the operator has a signed raw transaction:

@@ -29,6 +29,9 @@ const termsHash = "0x886ef7e42d7f2968ae5b44a9f963a95b4726d8d7244a6fbe35af6f2cffb
 const amountMinor = 1_000_000;
 const escrowTxHash = `0x${"ab".repeat(32)}`;
 const otherEscrowTxHash = `0x${"cd".repeat(32)}`;
+const releaseTxHash = `0x${"ef".repeat(32)}`;
+const proofHash = `0x${"12".repeat(32)}`;
+const platformFeeWallet = "0x4444444444444444444444444444444444444444";
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -60,6 +63,10 @@ function encodeApprove(spender, amount) {
 
 function encodeCreateEscrow(id, token, amount, hash) {
   return `0x64a20554${uuidBytes32(id)}${wordAddress(token)}${wordUint(amount)}${word(hash)}`;
+}
+
+function encodeReleasePlaceholder() {
+  return `0xbfc95334${"00".repeat(160)}`;
 }
 
 function evidenceFixture(overrides = {}) {
@@ -174,6 +181,96 @@ function validPlan() {
         function: "createEscrow(bytes32,address,uint256,bytes32)",
       },
     },
+  };
+}
+
+function validReleasePlan() {
+  return {
+    network: {
+      name: "Base",
+      chain_id: config.chainId,
+      native_usdc_token_address: config.nativeUsdc,
+    },
+    bounty: bounty({ status: "Payable" }),
+    escrow: {
+      id: "escrow-7",
+      bounty_id: bountyId,
+      rail: "BaseUsdc",
+      token: config.nativeUsdc,
+      amount: { amount: amountMinor, currency: "usdc" },
+      status: "Funded",
+      external_reference: "base:7",
+    },
+    settlement: {
+      id: "settlement-7",
+      bounty_id: bountyId,
+      rail: "BaseUsdc",
+      platform_fee: { amount: 0, currency: "usdc" },
+      payout_intents: [
+        {
+          recipient_agent_id: "agent-7",
+          rail: "BaseUsdc",
+          amount: { amount: amountMinor, currency: "usdc" },
+          status: "Pending",
+        },
+      ],
+    },
+    release_call: {
+      onchain_escrow_id: 7,
+      proof_hash: proofHash,
+      recipients: [
+        {
+          address: payer,
+          amount: { amount: amountMinor, currency: "usdc" },
+        },
+      ],
+    },
+    transaction: {
+      from: null,
+      to: config.escrowContract,
+      value_wei: 0,
+      data: encodeReleasePlaceholder(),
+      function: "release(uint256,address[],uint256[],bytes32)",
+    },
+  };
+}
+
+function releaseReceiptReport({
+  receiptFound = true,
+  succeeded = true,
+  applied = true,
+  failures = [],
+} = {}) {
+  return {
+    network: {
+      name: "Base",
+      chain_id: config.chainId,
+    },
+    receipt_found: receiptFound,
+    tx_hash: releaseTxHash,
+    block_number: receiptFound ? 42 : null,
+    succeeded: receiptFound ? succeeded : null,
+    log_count: receiptFound ? 1 : 0,
+    receipt: receiptFound ? { status: succeeded ? "0x1" : "0x0", logs: [] } : null,
+    reconciliation: receiptFound
+      ? {
+          decoded_events: applied ? 1 : 0,
+          applied_events: applied
+            ? [
+                {
+                  event_id: "event-7",
+                  bounty_id: bountyId,
+                  kind: "Released",
+                  log_key: `${releaseTxHash}:0x0`,
+                  ledger_entries: 1,
+                },
+              ]
+            : [],
+          skipped_duplicate_logs: 0,
+          ledger_entries: applied ? [{ id: "ledger-7" }] : [],
+          failures,
+        }
+      : null,
   };
 }
 
@@ -303,6 +400,48 @@ async function assertBadPlanDoesNotSend(label, mutatePlan, pattern) {
   assert.strictEqual(sendCount(provider), 0, `${label} sent a transaction`);
 }
 
+async function reviewValidReleasePlan(provider = mockProvider({
+  eth_chainId: "0x2105",
+  eth_accounts: () => [payer],
+})) {
+  return wallet.prepareBaseOperatorReleasePlan({
+    apiBaseUrl: "https://api.example.com",
+    bountyId,
+    connectedAddress: payer,
+    escrowContract: config.escrowContract,
+    fetchImpl: mockFetch([validReleasePlan()]),
+    operatorToken: "operator-secret",
+    platformFeeWallet,
+    provider,
+  });
+}
+
+async function assertBadReleasePlanDoesNotSend(label, mutatePlan, pattern) {
+  const plan = validReleasePlan();
+  mutatePlan(plan);
+  const provider = mockProvider({
+    eth_chainId: "0x2105",
+    eth_accounts: () => [payer],
+    eth_sendTransaction: () => {
+      throw new Error(`unexpected release send for ${label}`);
+    },
+  });
+  await assertRejects(
+    wallet.prepareBaseOperatorReleasePlan({
+      apiBaseUrl: "https://api.example.com",
+      bountyId,
+      connectedAddress: payer,
+      escrowContract: config.escrowContract,
+      fetchImpl: mockFetch([plan]),
+      operatorToken: "operator-secret",
+      platformFeeWallet,
+      provider,
+    }),
+    pattern,
+  );
+  assert.strictEqual(sendCount(provider), 0, `${label} sent a release transaction`);
+}
+
 (async () => {
   assert(wallet, "wallet helper export missing");
   assert.strictEqual(
@@ -410,6 +549,110 @@ async function assertBadPlanDoesNotSend(label, mutatePlan, pattern) {
     },
     /terms hash/,
   );
+
+  const releaseReview = await reviewValidReleasePlan();
+  assert.strictEqual(releaseReview.heading, "ready for settlement signer wallet review");
+  assert(releaseReview.lines.includes("EscrowReleased topic"));
+  assert(releaseReview.lines.includes("No private key"));
+  assert(releaseReview.lines.includes("Post your own bounty"));
+
+  await assertBadReleasePlanDoesNotSend(
+    "release wrong chain",
+    (plan) => {
+      plan.network.chain_id = 1;
+    },
+    /Base mainnet/,
+  );
+  await assertBadReleasePlanDoesNotSend(
+    "release wrong bounty",
+    (plan) => {
+      plan.bounty.id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    },
+    /bounty id/,
+  );
+  await assertBadReleasePlanDoesNotSend(
+    "release not payable",
+    (plan) => {
+      plan.bounty.status = "Claimable";
+    },
+    /not Payable/,
+  );
+  await assertBadReleasePlanDoesNotSend(
+    "release target mismatch",
+    (plan) => {
+      plan.transaction.to = otherAddress;
+    },
+    /release transaction target/,
+  );
+  await assertBadReleasePlanDoesNotSend(
+    "release nonzero value",
+    (plan) => {
+      plan.transaction.value_wei = 1;
+    },
+    /zero ETH value/,
+  );
+  await assertBadReleasePlanDoesNotSend(
+    "release wrong function",
+    (plan) => {
+      plan.transaction.function = "refund(uint256,bytes32)";
+    },
+    /not release/,
+  );
+  await assertBadReleasePlanDoesNotSend(
+    "release wrong selector",
+    (plan) => {
+      plan.transaction.data = `0x71eedb88${"00".repeat(160)}`;
+    },
+    /selector/,
+  );
+  await assertBadReleasePlanDoesNotSend(
+    "release bad proof hash",
+    (plan) => {
+      plan.release_call.proof_hash = "0x1234";
+    },
+    /proof hash/,
+  );
+  await assertBadReleasePlanDoesNotSend(
+    "release split mismatch",
+    (plan) => {
+      plan.release_call.recipients[0].amount.amount = amountMinor - 1;
+    },
+    /recipient total/,
+  );
+
+  const operatorFetch = mockFetch([releaseReceiptReport()]);
+  const operatorProvider = mockProvider({
+    eth_chainId: "0x2105",
+    eth_accounts: () => [payer],
+    eth_sendTransaction: [releaseTxHash],
+    eth_getTransactionReceipt: [{ status: "0x1" }],
+  });
+  const operatorResult = await wallet.sendBaseOperatorRelease({
+    fetchImpl: operatorFetch,
+    provider: operatorProvider,
+    receiptDelayMs: 0,
+    review: releaseReview,
+  });
+  assert.strictEqual(operatorResult.heading, "payout reconciled");
+  assert(operatorResult.lines.includes("Applied release events: 1"));
+  assert.strictEqual(sendCount(operatorProvider), 1);
+  assert.strictEqual(operatorFetch.calls.length, 1);
+  assert.strictEqual(operatorFetch.calls[0].url, "https://api.example.com/v1/base/transaction-receipt");
+  assert.strictEqual(operatorFetch.calls[0].options.headers.authorization, "Bearer operator-secret");
+  assert.deepStrictEqual(JSON.parse(operatorFetch.calls[0].options.body), {
+    network: config.network,
+    tx_hash: releaseTxHash,
+    reconcile_logs: true,
+  });
+
+  const pendingOperator = await wallet.reconcileBaseOperatorRelease({
+    apiBaseUrl: "https://api.example.com",
+    fetchImpl: mockFetch([releaseReceiptReport({ applied: false })]),
+    operatorToken: "operator-secret",
+    releaseHash: releaseTxHash,
+  });
+  assert.strictEqual(pendingOperator.heading, "receipt confirmed, reconciliation pending");
+  assert(pendingOperator.lines.includes("Refresh reconciliation before claiming the payout is complete"));
 
   const approvalProvider = mockProvider({
     eth_chainId: "0x2105",
