@@ -4411,8 +4411,8 @@ mod tests {
                 base_network: Some("base-mainnet".to_string()),
             }),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(funding_report.0.intent.bounty_id, first.id);
         assert_eq!(
             funding_report.0.intent.status,
@@ -6177,9 +6177,8 @@ mod tests {
     }
 
     fn postgres_test_database_url() -> String {
-        std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").expect(
-            "AGENT_BOUNTIES_TEST_DATABASE_URL must be set for ignored Postgres sync tests",
-        )
+        std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL")
+            .expect("AGENT_BOUNTIES_TEST_DATABASE_URL must be set for ignored Postgres sync tests")
     }
 
     fn test_state_with_unsigned_stripe_webhooks(network: BountyNetwork) -> SharedState {
