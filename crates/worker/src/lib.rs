@@ -4,10 +4,11 @@ use app::{
 };
 use chain_base::{
     base_network_descriptor, calldata_keccak256, decode_base_release_calldata, evm_event_topic,
-    fetch_base_escrow_logs, fetch_block_number, fetch_transaction_by_hash,
-    fetch_transaction_receipt, normalize_evm_address, normalize_evm_hash, rpc_logs_to_evm_logs,
-    BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowLogDecoder, BaseEscrowLogQuery,
-    BaseNetworkDescriptor, ChainEventIndexer, EvmLog,
+    fetch_base_escrow_logs_with_transport, fetch_block_number_with_transport,
+    fetch_transaction_by_hash_with_transport, fetch_transaction_receipt_with_transport,
+    normalize_evm_address, normalize_evm_hash, rpc_logs_to_evm_logs, BaseEscrowEvent,
+    BaseEscrowEventKind, BaseEscrowLogDecoder, BaseEscrowLogQuery, BaseNetworkDescriptor,
+    ChainEventIndexer, EvmLog, JsonRpcTransport, ReqwestJsonRpcTransport,
 };
 use chrono::{DateTime, Utc};
 use db::{
@@ -340,9 +341,19 @@ fn release_attestation_record(
     verdict: &str,
     reason: &str,
 ) -> BaseReleaseAttestationRecord {
+    let decoded = if attestation.is_none() {
+        decode_base_release_calldata(&evidence.input, "usdc").ok()
+    } else {
+        None
+    };
     let recipients = attestation
         .map(|attestation| {
             serde_json::to_value(&attestation.recipients).unwrap_or_else(|_| serde_json::json!([]))
+        })
+        .or_else(|| {
+            decoded.as_ref().map(|decoded| {
+                serde_json::to_value(&decoded.recipients).unwrap_or_else(|_| serde_json::json!([]))
+            })
         })
         .unwrap_or_else(|| serde_json::json!([]));
     BaseReleaseAttestationRecord {
@@ -357,6 +368,7 @@ fn release_attestation_record(
             .or_else(|| calldata_keccak256(&evidence.input).ok()),
         proof_hash: attestation
             .map(|attestation| attestation.proof_hash.clone())
+            .or_else(|| decoded.as_ref().map(|decoded| decoded.proof_hash.clone()))
             .or_else(|| event.proof_hash.clone()),
         recipients,
         escrow_contract: normalize_evm_address(&evidence.escrow_contract)
@@ -679,8 +691,21 @@ pub async fn poll_base_indexer_once(
     store: &PostgresStore,
     config: &BaseIndexerConfig,
 ) -> anyhow::Result<BaseIndexerPollReport> {
+    let transport = ReqwestJsonRpcTransport::default();
+    poll_base_indexer_once_with_transport(store, config, &transport).await
+}
+
+async fn poll_base_indexer_once_with_transport<T>(
+    store: &PostgresStore,
+    config: &BaseIndexerConfig,
+    transport: &T,
+) -> anyhow::Result<BaseIndexerPollReport>
+where
+    T: JsonRpcTransport + ?Sized,
+{
     let descriptor = config.network_descriptor()?;
-    let latest_block = fetch_block_number(&config.rpc_url, config.request_id).await?;
+    let latest_block =
+        fetch_block_number_with_transport(&config.rpc_url, config.request_id, transport).await?;
     let confirmed_to_block = latest_block.checked_sub(config.confirmations);
     let scan_cursor = store
         .get_base_log_cursor(&config.network, &config.escrow_contract)
@@ -727,12 +752,23 @@ pub async fn poll_base_indexer_once(
 
     let to_block = bounded_to_block(from_block, confirmed_to_block, config.max_blocks_per_query);
     let query = BaseEscrowLogQuery::new(&config.escrow_contract, from_block, Some(to_block))?;
-    let response = fetch_base_escrow_logs(&config.rpc_url, &query, config.request_id + 1).await?;
+    let response = fetch_base_escrow_logs_with_transport(
+        &config.rpc_url,
+        &query,
+        config.request_id + 1,
+        transport,
+    )
+    .await?;
     let logs = rpc_logs_to_evm_logs(response.result)?;
     let fetched_logs = logs.len();
-    let release_attestation_fetch =
-        fetch_release_transaction_evidence_for_logs(&config.rpc_url, &descriptor, config, &logs)
-            .await?;
+    let release_attestation_fetch = fetch_release_transaction_evidence_for_logs_with_transport(
+        &config.rpc_url,
+        &descriptor,
+        config,
+        &logs,
+        transport,
+    )
+    .await?;
     let reconciliation = process_base_evm_logs_and_persist_with_release_evidence(
         store,
         &mut worker,
@@ -1043,12 +1079,16 @@ struct ReleaseTransactionEvidenceFetchReport {
     failures: HashMap<String, BaseReleaseAttestationFailureEvidence>,
 }
 
-async fn fetch_release_transaction_evidence_for_logs(
+async fn fetch_release_transaction_evidence_for_logs_with_transport<T>(
     rpc_url: &str,
     descriptor: &BaseNetworkDescriptor,
     config: &BaseIndexerConfig,
     logs: &[EvmLog],
-) -> anyhow::Result<ReleaseTransactionEvidenceFetchReport> {
+    transport: &T,
+) -> anyhow::Result<ReleaseTransactionEvidenceFetchReport>
+where
+    T: JsonRpcTransport + ?Sized,
+{
     let release_topic = evm_event_topic("EscrowReleased(uint256,bytes32)");
     let mut tx_hashes = Vec::new();
     let mut report = ReleaseTransactionEvidenceFetchReport::default();
@@ -1112,7 +1152,10 @@ async fn fetch_release_transaction_evidence_for_logs(
 
     for (index, tx_hash) in tx_hashes.into_iter().enumerate() {
         let request_id = config.request_id + 10 + (index as u64 * 2);
-        let receipt_response = match fetch_transaction_receipt(rpc_url, &tx_hash, request_id).await
+        let receipt_response = match fetch_transaction_receipt_with_transport(
+            rpc_url, &tx_hash, request_id, transport,
+        )
+        .await
         {
             Ok(response) => response,
             Err(error) => {
@@ -1208,23 +1251,29 @@ async fn fetch_release_transaction_evidence_for_logs(
             continue;
         }
 
-        let transaction_response =
-            match fetch_transaction_by_hash(rpc_url, &tx_hash, request_id + 1).await {
-                Ok(response) => response,
-                Err(error) => {
-                    report.failures.insert(
-                        tx_hash.clone(),
-                        failed_release_fetch(
-                            &tx_hash,
-                            descriptor,
-                            config,
-                            None,
-                            format!("release transaction fetch failed for {tx_hash}: {error}"),
-                        ),
-                    );
-                    continue;
-                }
-            };
+        let transaction_response = match fetch_transaction_by_hash_with_transport(
+            rpc_url,
+            &tx_hash,
+            request_id + 1,
+            transport,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        None,
+                        format!("release transaction fetch failed for {tx_hash}: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
         let Some(transaction) = transaction_response.result else {
             report.failures.insert(
                 tx_hash.clone(),
@@ -1466,12 +1515,17 @@ mod tests {
     };
     use chain_base::{
         evm_address_word, evm_bytes32_word, evm_event_topic, evm_uint256_word, evm_words_data,
+        ChainBaseError, RpcEvmLog,
     };
     use domain::{
         Bounty, BountyStatus, EscrowStatus, FundingMode, Money, PayoutStatus, PrivacyLevel,
         ProofRecord, VerifierKind,
     };
-    use std::collections::HashMap;
+    use serde_json::{json, Value};
+    use std::{
+        collections::{HashMap, VecDeque},
+        sync::{Arc, Mutex},
+    };
 
     #[tokio::test]
     async fn raw_base_logs_require_release_calldata_attestation() {
@@ -1489,7 +1543,10 @@ mod tests {
         assert_eq!(report.applied_events.len(), 1);
         assert!(report.ledger_entries.is_empty());
         assert_eq!(worker.indexed_events().len(), 1);
-        assert_eq!(worker.cursor().last_block_number, Some(10));
+        assert_eq!(
+            worker.cursor().last_block_number,
+            Some(logs[0].block_number)
+        );
 
         let status = network.status(bounty.id).unwrap();
         assert_eq!(status.bounty.status, BountyStatus::Payable);
@@ -1589,6 +1646,115 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
+    async fn base_indexer_poll_applies_release_with_mock_rpc() {
+        let store = postgres_store_for_worker_test().await;
+        let (network, bounty, proof) = payable_base_bounty().await;
+        let logs = raw_created_and_released_logs(&bounty, &proof);
+        let created_event = created_event_from_log(&logs[0]);
+        persist_payable_restart_fixture(&store, &network, &created_event, &logs[0].address).await;
+        let config = test_base_mainnet_indexer_config(&logs[1].address);
+        let release_plan = release_attestations_for(&network, &bounty, &logs[1]);
+        let planned = release_plan
+            .get(&release_tx_key(&logs[1].tx_hash))
+            .expect("planned release evidence");
+        let transport = MockJsonRpcTransport::new([
+            MockJsonRpcReply::value(rpc_response(
+                config.request_id,
+                latest_block_result(&logs[1], &config),
+            )),
+            MockJsonRpcReply::value(rpc_response(
+                config.request_id + 1,
+                json!([rpc_log_from_evm(&logs[1])]),
+            )),
+            MockJsonRpcReply::value(rpc_response(
+                config.request_id + 10,
+                release_receipt_result(&logs[1]),
+            )),
+            MockJsonRpcReply::value(rpc_response(
+                config.request_id + 11,
+                release_transaction_result(
+                    &logs[1],
+                    &config,
+                    &planned.input,
+                    8_453,
+                    &config.settlement_signer,
+                ),
+            )),
+        ]);
+
+        let report = poll_base_indexer_once_with_transport(&store, &config, &transport)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            transport.seen_methods(),
+            vec![
+                "eth_blockNumber",
+                "eth_getLogs",
+                "eth_getTransactionReceipt",
+                "eth_getTransactionByHash"
+            ]
+        );
+        assert_eq!(report.fetched_logs, 1);
+        assert_eq!(report.persisted_cursor_block, Some(logs[1].block_number));
+        let reconciliation = report.reconciliation.expect("reconciliation");
+        assert!(reconciliation.failures.is_empty());
+        assert_eq!(reconciliation.applied_events.len(), 1);
+        assert_eq!(reconciliation.ledger_entries.len(), 1);
+
+        let stored_bounty = stored_bounty(&store, bounty.id).await;
+        assert_eq!(stored_bounty.status, BountyStatus::Paid);
+        let records = store
+            .list_base_release_attestations_for_bounty(bounty.id)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].verdict, "passed");
+        assert_eq!(
+            records[0].reason,
+            "release calldata matches pending Base settlement plan"
+        );
+        let recipients = records[0].recipients.as_array().expect("recipients");
+        assert_eq!(recipients.len(), 1);
+        let events = store
+            .list_base_escrow_events_for_bounty(bounty.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == BaseEscrowEventKind::Released)
+                .count(),
+            1
+        );
+        let release_external_event = format!("base-release:{}", log_key_from_evm(&logs[1]));
+        let ledger_entries = store.list_ledger_entries().await.unwrap();
+        assert_eq!(
+            ledger_entries
+                .iter()
+                .filter(|entry| entry.external_event_id.as_deref()
+                    == Some(release_external_event.as_str()))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn base_indexer_poll_quarantines_release_failures_with_mock_rpc() {
+        for case in [
+            ReleasePollFailureCase::BadChain,
+            ReleasePollFailureCase::BadSigner,
+            ReleasePollFailureCase::WrongEmitter,
+            ReleasePollFailureCase::MissingTransaction,
+            ReleasePollFailureCase::RpcFailure,
+        ] {
+            assert_release_poll_failure_case(case).await;
+        }
+    }
+
+    #[tokio::test]
     async fn worker_can_resume_terminal_logs_after_created_event_restart() {
         let (mut network, bounty, proof) = payable_base_bounty().await;
         let logs = raw_created_and_released_logs(&bounty, &proof);
@@ -1601,7 +1767,10 @@ mod tests {
 
         let mut restarted_worker =
             BaseEscrowLogWorker::from_indexed_events("usdc", persisted_events).unwrap();
-        assert_eq!(restarted_worker.cursor().last_block_number, Some(10));
+        assert_eq!(
+            restarted_worker.cursor().last_block_number,
+            Some(logs[0].block_number)
+        );
 
         let release_attestations = release_attestations_for(&network, &bounty, &logs[1]);
         let second_report = restarted_worker.process_logs_with_release_attestations(
@@ -1621,7 +1790,13 @@ mod tests {
     fn terminal_log_without_create_does_not_advance_cursor() {
         let mut network = BountyNetwork::default();
         let mut worker = BaseEscrowLogWorker::default();
-        let release = raw_released_log(7, &format!("0x{}", "22".repeat(32)), 11, 0);
+        let release = raw_released_log(
+            "0x1111111111111111111111111111111111111111",
+            7,
+            &format!("0x{}", "22".repeat(32)),
+            11,
+            0,
+        );
 
         let report = worker.process_logs(vec![release], &mut network);
 
@@ -1726,6 +1901,379 @@ mod tests {
         }
     }
 
+    fn test_base_mainnet_indexer_config(escrow_contract: &str) -> BaseIndexerConfig {
+        BaseIndexerConfig {
+            network: "base-mainnet".to_string(),
+            rpc_url: "https://base-mainnet.example".to_string(),
+            escrow_contract: escrow_contract.to_string(),
+            settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+            platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
+            start_block: Some(1),
+            poll_seconds: 15,
+            confirmations: 2,
+            max_blocks_per_query: 2_000,
+            request_id: 1,
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum ReleasePollFailureCase {
+        BadChain,
+        BadSigner,
+        WrongEmitter,
+        MissingTransaction,
+        RpcFailure,
+    }
+
+    impl ReleasePollFailureCase {
+        fn expected_reason(self) -> &'static str {
+            match self {
+                Self::BadChain => {
+                    "release transaction chain 8454 does not match expected chain 8453"
+                }
+                Self::BadSigner => {
+                    "release transaction signer is not the configured settlement signer"
+                }
+                Self::WrongEmitter => "release log emitted by",
+                Self::MissingTransaction => "release transaction not found",
+                Self::RpcFailure => "release transaction receipt fetch failed",
+            }
+        }
+
+        fn has_decodable_calldata(self) -> bool {
+            matches!(self, Self::BadChain | Self::BadSigner)
+        }
+    }
+
+    async fn assert_release_poll_failure_case(case: ReleasePollFailureCase) {
+        let store = postgres_store_for_worker_test().await;
+        let (network, bounty, proof) = payable_base_bounty().await;
+        let logs = raw_created_and_released_logs(&bounty, &proof);
+        let created_event = created_event_from_log(&logs[0]);
+        persist_payable_restart_fixture(&store, &network, &created_event, &logs[0].address).await;
+        let config = test_base_mainnet_indexer_config(&logs[1].address);
+        let release_plan = release_attestations_for(&network, &bounty, &logs[1]);
+        let planned = release_plan
+            .get(&release_tx_key(&logs[1].tx_hash))
+            .expect("planned release evidence");
+        let mut polled_release = logs[1].clone();
+        if matches!(case, ReleasePollFailureCase::WrongEmitter) {
+            polled_release.address = "0x9999999999999999999999999999999999999999".to_string();
+        }
+        let mut replies = vec![
+            MockJsonRpcReply::value(rpc_response(
+                config.request_id,
+                latest_block_result(&polled_release, &config),
+            )),
+            MockJsonRpcReply::value(rpc_response(
+                config.request_id + 1,
+                json!([rpc_log_from_evm(&polled_release)]),
+            )),
+        ];
+        match case {
+            ReleasePollFailureCase::WrongEmitter => {}
+            ReleasePollFailureCase::RpcFailure => {
+                replies.push(MockJsonRpcReply::error("receipt endpoint unavailable"));
+            }
+            ReleasePollFailureCase::MissingTransaction => {
+                replies.push(MockJsonRpcReply::value(rpc_response(
+                    config.request_id + 10,
+                    release_receipt_result(&polled_release),
+                )));
+                replies.push(MockJsonRpcReply::value(rpc_response(
+                    config.request_id + 11,
+                    Value::Null,
+                )));
+            }
+            ReleasePollFailureCase::BadChain => {
+                replies.push(MockJsonRpcReply::value(rpc_response(
+                    config.request_id + 10,
+                    release_receipt_result(&polled_release),
+                )));
+                replies.push(MockJsonRpcReply::value(rpc_response(
+                    config.request_id + 11,
+                    release_transaction_result(
+                        &polled_release,
+                        &config,
+                        &planned.input,
+                        8_454,
+                        &config.settlement_signer,
+                    ),
+                )));
+            }
+            ReleasePollFailureCase::BadSigner => {
+                replies.push(MockJsonRpcReply::value(rpc_response(
+                    config.request_id + 10,
+                    release_receipt_result(&polled_release),
+                )));
+                replies.push(MockJsonRpcReply::value(rpc_response(
+                    config.request_id + 11,
+                    release_transaction_result(
+                        &polled_release,
+                        &config,
+                        &planned.input,
+                        8_453,
+                        "0x6666666666666666666666666666666666666666",
+                    ),
+                )));
+            }
+        }
+        let transport = MockJsonRpcTransport::new(replies);
+
+        let report = poll_base_indexer_once_with_transport(&store, &config, &transport)
+            .await
+            .unwrap();
+
+        assert_eq!(report.fetched_logs, 1, "{case:?}");
+        assert_eq!(
+            report.persisted_cursor_block,
+            Some(logs[0].block_number),
+            "{case:?}"
+        );
+        let reconciliation = report.reconciliation.expect("reconciliation");
+        assert_eq!(reconciliation.applied_events.len(), 0, "{case:?}");
+        assert_eq!(reconciliation.failures.len(), 1, "{case:?}");
+        assert!(
+            reconciliation.failures[0]
+                .reason
+                .contains(case.expected_reason()),
+            "{case:?}: {}",
+            reconciliation.failures[0].reason
+        );
+        let stored_bounty = stored_bounty(&store, bounty.id).await;
+        assert_eq!(stored_bounty.status, BountyStatus::Payable, "{case:?}");
+        let records = store
+            .list_base_release_attestations_for_bounty(bounty.id)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1, "{case:?}");
+        assert_eq!(records[0].verdict, "failed", "{case:?}");
+        assert!(
+            records[0].reason.contains(case.expected_reason()),
+            "{case:?}: {}",
+            records[0].reason
+        );
+        if case.has_decodable_calldata() {
+            assert!(records[0].calldata_hash.is_some(), "{case:?}");
+            let recipients = records[0].recipients.as_array().expect("recipients");
+            assert_eq!(recipients.len(), 1, "{case:?}");
+            assert_eq!(
+                recipients[0]["address"],
+                serde_json::json!("0x2222222222222222222222222222222222222222"),
+                "{case:?}"
+            );
+        }
+        let events = store
+            .list_base_escrow_events_for_bounty(bounty.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == BaseEscrowEventKind::Released)
+                .count(),
+            0,
+            "{case:?}"
+        );
+    }
+
+    async fn postgres_store_for_worker_test() -> PostgresStore {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL")
+            .expect("AGENT_BOUNTIES_TEST_DATABASE_URL must be set for ignored Postgres tests");
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        store
+    }
+
+    async fn persist_payable_restart_fixture(
+        store: &PostgresStore,
+        network: &BountyNetwork,
+        created_event: &BaseEscrowEvent,
+        escrow_contract: &str,
+    ) {
+        for agent in network.agents.values() {
+            store.upsert_agent(agent).await.unwrap();
+        }
+        for bounty in network.bounties.values() {
+            store.upsert_bounty(bounty).await.unwrap();
+        }
+        for intent in network.funding_intents.values() {
+            store.upsert_funding_intent(intent).await.unwrap();
+        }
+        for escrow in network.escrows.values() {
+            store.upsert_escrow(escrow).await.unwrap();
+        }
+        for claim in network.claims.values() {
+            store.upsert_claim(claim).await.unwrap();
+        }
+        for submission in network.submissions.values() {
+            store.upsert_submission(submission).await.unwrap();
+        }
+        for result in network.verifier_results.values() {
+            store.upsert_verifier_result(result).await.unwrap();
+        }
+        for proof in network.proofs.values() {
+            store.upsert_proof_record(proof).await.unwrap();
+        }
+        for settlement in network.settlements.values() {
+            store.upsert_settlement(settlement).await.unwrap();
+        }
+        store.upsert_base_escrow_event(created_event).await.unwrap();
+        store
+            .upsert_base_log_cursor(
+                "base-mainnet",
+                escrow_contract,
+                created_event.block_number,
+                Some(&created_event.log_key),
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn stored_bounty(store: &PostgresStore, bounty_id: Id) -> Bounty {
+        store
+            .list_bounties()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|bounty| bounty.id == bounty_id)
+            .expect("stored bounty")
+    }
+
+    fn created_event_from_log(log: &EvmLog) -> BaseEscrowEvent {
+        let mut decoder = BaseEscrowLogDecoder::default();
+        decoder.decode(log.clone()).unwrap()
+    }
+
+    fn rpc_log_from_evm(log: &EvmLog) -> RpcEvmLog {
+        RpcEvmLog {
+            address: log.address.clone(),
+            topics: log.topics.clone(),
+            data: log.data.clone(),
+            transaction_hash: log.tx_hash.clone(),
+            block_number: hex_quantity(log.block_number),
+            log_index: hex_quantity(log.log_index),
+        }
+    }
+
+    fn release_receipt_result(log: &EvmLog) -> Value {
+        json!({
+            "transactionHash": log.tx_hash.clone(),
+            "blockNumber": hex_quantity(log.block_number),
+            "status": "0x1",
+            "logs": [rpc_log_from_evm(log)]
+        })
+    }
+
+    fn release_transaction_result(
+        log: &EvmLog,
+        config: &BaseIndexerConfig,
+        input: &str,
+        chain_id: u64,
+        from: &str,
+    ) -> Value {
+        json!({
+            "hash": log.tx_hash.clone(),
+            "from": from,
+            "to": config.escrow_contract.clone(),
+            "input": input,
+            "chainId": hex_quantity(chain_id),
+            "blockNumber": hex_quantity(log.block_number),
+            "transactionIndex": "0x0"
+        })
+    }
+
+    fn latest_block_result(log: &EvmLog, config: &BaseIndexerConfig) -> Value {
+        json!(hex_quantity(log.block_number + config.confirmations))
+    }
+
+    fn rpc_response(id: u64, result: Value) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result
+        })
+    }
+
+    fn log_key_from_evm(log: &EvmLog) -> String {
+        format!("{}:{}", log.tx_hash.to_ascii_lowercase(), log.log_index)
+    }
+
+    fn hex_quantity(value: u64) -> String {
+        format!("0x{value:x}")
+    }
+
+    enum MockJsonRpcReply {
+        Value(Value),
+        Error(String),
+    }
+
+    impl MockJsonRpcReply {
+        fn value(value: Value) -> Self {
+            Self::Value(value)
+        }
+
+        fn error(message: impl Into<String>) -> Self {
+            Self::Error(message.into())
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockJsonRpcTransport {
+        replies: Arc<Mutex<VecDeque<MockJsonRpcReply>>>,
+        methods: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MockJsonRpcTransport {
+        fn new(replies: impl IntoIterator<Item = MockJsonRpcReply>) -> Self {
+            Self {
+                replies: Arc::new(Mutex::new(replies.into_iter().collect())),
+                methods: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn seen_methods(&self) -> Vec<&'static str> {
+            self.methods
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|method| match method.as_str() {
+                    "eth_blockNumber" => "eth_blockNumber",
+                    "eth_getLogs" => "eth_getLogs",
+                    "eth_getTransactionReceipt" => "eth_getTransactionReceipt",
+                    "eth_getTransactionByHash" => "eth_getTransactionByHash",
+                    _ => "unknown",
+                })
+                .collect()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl JsonRpcTransport for MockJsonRpcTransport {
+        async fn post_json_value(
+            &self,
+            _rpc_url: &str,
+            request: &Value,
+        ) -> Result<Value, ChainBaseError> {
+            let method = request
+                .get("method")
+                .and_then(Value::as_str)
+                .expect("JSON-RPC method")
+                .to_string();
+            self.methods.lock().unwrap().push(method);
+            let reply = self
+                .replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("mock JSON-RPC reply");
+            match reply {
+                MockJsonRpcReply::Value(value) => Ok(value),
+                MockJsonRpcReply::Error(message) => Err(ChainBaseError::RpcTransport(message)),
+            }
+        }
+    }
+
     #[test]
     fn base_indexer_heartbeat_marks_skipped_poll() {
         let config = test_base_indexer_config();
@@ -1794,10 +2342,6 @@ mod tests {
 
     async fn payable_base_bounty() -> (BountyNetwork, Bounty, ProofRecord) {
         let mut network = BountyNetwork::default();
-        let solver = network.register_agent(RegisterAgentRequest {
-            handle: "solver".to_string(),
-            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
-        });
         let bounty = network
             .post_funded_bounty(PostBountyRequest {
                 title: "Extract data".to_string(),
@@ -1808,10 +2352,15 @@ mod tests {
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: format!("solver-{}", bounty.id),
+            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
+        });
+        let onchain_escrow_id = test_onchain_escrow_id(bounty.id);
         network
             .apply_base_escrow_event(chain_base::simulated_created_event(
                 bounty.id,
-                7,
+                onchain_escrow_id,
                 "0x3333333333333333333333333333333333333333",
                 bounty.amount.clone(),
                 bounty.terms_hash.clone().unwrap(),
@@ -1850,19 +2399,32 @@ mod tests {
     fn raw_created_and_released_logs(bounty: &Bounty, proof: &ProofRecord) -> Vec<EvmLog> {
         let terms_hash = format!("0x{}", bounty.terms_hash.clone().unwrap());
         let proof_hash = format!("0x{}", proof.proof_hash);
-        vec![
+        let onchain_escrow_id = test_onchain_escrow_id(bounty.id);
+        let created_block = test_created_block_number(bounty.id);
+        let escrow_contract = test_escrow_contract(bounty.id);
+        let mut logs = vec![
             raw_created_log(
-                7,
+                &escrow_contract,
+                onchain_escrow_id,
                 bounty.id,
                 "0x2222222222222222222222222222222222222222",
                 "0x3333333333333333333333333333333333333333",
                 bounty.amount.clone(),
                 &terms_hash,
-                10,
+                created_block,
                 0,
             ),
-            raw_released_log(7, &proof_hash, 11, 0),
-        ]
+            raw_released_log(
+                &escrow_contract,
+                onchain_escrow_id,
+                &proof_hash,
+                created_block + 1,
+                0,
+            ),
+        ];
+        logs[0].tx_hash = format!("0x{}{}", bounty.id.simple(), "a".repeat(32));
+        logs[1].tx_hash = format!("0x{}{}", bounty.id.simple(), "b".repeat(32));
+        logs
     }
 
     fn release_attestations_for(
@@ -1870,10 +2432,11 @@ mod tests {
         bounty: &Bounty,
         release_log: &EvmLog,
     ) -> HashMap<String, BaseReleaseTransactionEvidence> {
+        let escrow_contract = release_log.address.clone();
         let release_plan = network
             .plan_base_release(PlanBaseReleaseRequest {
                 bounty_id: bounty.id,
-                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                escrow_contract: escrow_contract.clone(),
                 platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
                 network: Some("base-mainnet".to_string()),
             })
@@ -1887,7 +2450,7 @@ mod tests {
                 from: "0x5555555555555555555555555555555555555555".to_string(),
                 settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
                 to: release_plan.transaction.to.clone(),
-                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                escrow_contract,
                 input: release_plan.transaction.data,
                 receipt_succeeded: true,
                 platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
@@ -1897,6 +2460,7 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn raw_created_log(
+        escrow_contract: &str,
         escrow_id: u128,
         bounty_id: Id,
         payer: &str,
@@ -1907,7 +2471,7 @@ mod tests {
         log_index: u64,
     ) -> EvmLog {
         EvmLog {
-            address: "0x1111111111111111111111111111111111111111".to_string(),
+            address: escrow_contract.to_string(),
             topics: vec![
                 evm_event_topic("EscrowCreated(uint256,bytes32,address,address,uint256,bytes32)"),
                 evm_uint256_word(escrow_id),
@@ -1929,13 +2493,14 @@ mod tests {
     }
 
     fn raw_released_log(
+        escrow_contract: &str,
         escrow_id: u128,
         proof_hash: &str,
         block_number: u64,
         log_index: u64,
     ) -> EvmLog {
         EvmLog {
-            address: "0x1111111111111111111111111111111111111111".to_string(),
+            address: escrow_contract.to_string(),
             topics: vec![
                 evm_event_topic("EscrowReleased(uint256,bytes32)"),
                 evm_uint256_word(escrow_id),
@@ -1951,5 +2516,21 @@ mod tests {
 
     fn bounty_bytes32(bounty_id: Id) -> String {
         format!("0x{}{}", "0".repeat(32), bounty_id.simple())
+    }
+
+    fn test_onchain_escrow_id(bounty_id: Id) -> u128 {
+        let simple = bounty_id.simple().to_string();
+        u128::from_str_radix(&simple[..16], 16).unwrap().max(1)
+    }
+
+    fn test_escrow_contract(bounty_id: Id) -> String {
+        let simple = bounty_id.simple().to_string();
+        format!("0x111111111111111111111111{}", &simple[..16])
+    }
+
+    fn test_created_block_number(bounty_id: Id) -> u64 {
+        let simple = bounty_id.simple().to_string();
+        let suffix = u64::from_str_radix(&simple[16..24], 16).unwrap();
+        50_000_000 + (suffix % 1_000_000)
     }
 }

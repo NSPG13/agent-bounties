@@ -57,6 +57,12 @@ try {
         Invoke-Checked {
             cargo test -p db tests::base_log_pipeline_rolls_back_paid_state_when_cursor_commit_fails -- --ignored --exact --nocapture
         }
+        Invoke-Checked {
+            cargo test -p worker tests::base_indexer_poll_applies_release_with_mock_rpc -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
+            cargo test -p worker tests::base_indexer_poll_quarantines_release_failures_with_mock_rpc -- --ignored --exact --nocapture
+        }
     }
     finally {
         $env:AGENT_BOUNTIES_TEST_DATABASE_URL = $previousTestDatabaseUrl
