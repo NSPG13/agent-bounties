@@ -17,6 +17,7 @@ use thiserror::Error;
 
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
+const BASE_RELEASE_ATTESTATION_STATUS_LIMIT: i64 = 25;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
             VALUES ($1, $2, $3, $4, $5, $6)
@@ -1107,10 +1108,12 @@ impl PostgresStore {
             SELECT id, network, tx_hash, log_key, bounty_id, onchain_escrow_id, calldata_hash, proof_hash, recipients, escrow_contract, settlement_signer, platform_fee_wallet, verdict, reason, created_at
             FROM base_release_attestations
             WHERE bounty_id = $1
-            ORDER BY created_at, tx_hash, log_key
+            ORDER BY created_at DESC, tx_hash DESC, log_key DESC
+            LIMIT $2
             "#,
         )
         .bind(bounty_id)
+        .bind(BASE_RELEASE_ATTESTATION_STATUS_LIMIT)
         .fetch_all(&mut *tx)
         .await?
         .into_iter()
@@ -1696,6 +1699,30 @@ impl PostgresStore {
             "#,
         )
         .bind(bounty_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(base_release_attestation_from_row)
+            .collect()
+    }
+
+    pub async fn list_base_release_attestations_for_bounty_limited(
+        &self,
+        bounty_id: Id,
+        limit: usize,
+    ) -> DbResult<Vec<BaseReleaseAttestationRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, network, tx_hash, log_key, bounty_id, onchain_escrow_id, calldata_hash, proof_hash, recipients, escrow_contract, settlement_signer, platform_fee_wallet, verdict, reason, created_at
+            FROM base_release_attestations
+            WHERE bounty_id = $1
+            ORDER BY created_at DESC, tx_hash DESC, log_key DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(bounty_id)
+        .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
 

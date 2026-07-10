@@ -3,11 +3,11 @@ use app::{
     hash_artifact, stripe_secret_key_mode_from_secret, AddFundingContributionRequest,
     ApproveRiskBountyRequest, ApproveRiskPayoutRequest, BaseEscrowReconciliation,
     BaseIndexerHeartbeatStatus, BaseIndexerScanCursor, BaseIndexerStatusConfig,
-    BaseIndexerStatusReport, BaseReleaseQueueRequest, BaseReleaseTransactionEvidence,
-    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
-    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
-    LiveMoneyReadinessReport, OpenPooledBountyRequest, PlanBaseDisputeRequest,
-    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
+    BaseIndexerStatusReport, BaseReleaseAttestationStatus, BaseReleaseQueueRequest,
+    BaseReleaseTransactionEvidence, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
+    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport,
+    LiveMoneyReadinessConfig, LiveMoneyReadinessReport, OpenPooledBountyRequest,
+    PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
     PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
     PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest, RecordDiscoveryResponseRequest,
     RecordOutreachAttemptRequest, RegisterAgentRequest, RegisterCapabilityRequest,
@@ -35,7 +35,8 @@ use chain_base::{
 };
 use chrono::Utc;
 use db::{
-    BaseLogPersistenceBatch, BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore,
+    BaseLogPersistenceBatch, BaseReleaseAttestationRecord, BountyStatusScope, DbError,
+    GitHubIssueSyncBountyUpsert, PostgresStore,
 };
 use domain::{
     Agent, AudienceInteraction, AudienceMember, AudienceReport, BountyStatus, Capability,
@@ -68,7 +69,7 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 use utoipa::openapi::Components;
-use utoipa::{Modify, OpenApi, ToSchema};
+use utoipa::{IntoParams, Modify, OpenApi, ToSchema};
 use uuid::Uuid;
 use worker::BaseEscrowLogWorker;
 
@@ -124,6 +125,7 @@ use worker::BaseEscrowLogWorker;
         get_base_transaction_receipt,
         plan_base_funding,
         list_base_release_queue,
+        list_base_release_attestation_audit,
         plan_stripe_checkout_top_up,
         plan_stripe_connect_account,
         plan_stripe_connect_transfer,
@@ -180,6 +182,9 @@ use worker::BaseEscrowLogWorker;
         AudienceInteraction,
         DiscoveryResponse,
         OutreachAttempt,
+        BaseReleaseAttestationAuditReport,
+        BaseReleaseAttestationAuditRecord,
+        BaseReleaseAttestationRecipientAuditRecord,
         AudienceReport
     )),
     modifiers(&SecurityAddon)
@@ -228,6 +233,49 @@ struct AppState {
 
 type SharedState = Arc<AppState>;
 const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
+const BASE_RELEASE_ATTESTATION_STATUS_LIMIT: usize = 25;
+const BASE_RELEASE_ATTESTATION_AUDIT_DEFAULT_LIMIT: usize = 25;
+const BASE_RELEASE_ATTESTATION_AUDIT_MAX_LIMIT: usize = 100;
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+struct BaseReleaseAttestationAuditQuery {
+    /// Optional maximum number of attestation records to return. Values are capped at 100.
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct BaseReleaseAttestationAuditReport {
+    bounty_id: Uuid,
+    limit: usize,
+    returned: usize,
+    truncated: bool,
+    redacted_fields: Vec<String>,
+    evidence_boundary: String,
+    records: Vec<BaseReleaseAttestationAuditRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct BaseReleaseAttestationAuditRecord {
+    network: String,
+    tx_hash: String,
+    log_key: String,
+    bounty_id: Uuid,
+    onchain_escrow_id: String,
+    calldata_hash: Option<String>,
+    proof_hash: Option<String>,
+    recipients: Vec<BaseReleaseAttestationRecipientAuditRecord>,
+    escrow_contract: String,
+    verdict: String,
+    reason: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct BaseReleaseAttestationRecipientAuditRecord {
+    address: String,
+    amount_minor: Option<String>,
+    currency: Option<String>,
+}
 
 fn non_empty_secret(secret: String) -> Option<String> {
     let trimmed = secret.trim();
@@ -613,6 +661,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/base/log-query", post(plan_base_log_query))
         .route("/v1/base/funding-plan", post(plan_base_funding))
         .route("/v1/base/release-queue", post(list_base_release_queue))
+        .route(
+            "/v1/base/release-attestations/:bounty_id",
+            get(list_base_release_attestation_audit),
+        )
         .route("/v1/base/release-plan", post(plan_base_release))
         .route("/v1/base/refund-plan", post(plan_base_refund))
         .route("/v1/base/dispute-plan", post(plan_base_dispute))
@@ -3210,10 +3262,10 @@ fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResp
     let base_escrow_events = scope.base_escrow_events;
     let base_release_attestations = scope
         .base_release_attestations
-        .into_iter()
-        .map(serde_json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .iter()
+        .take(BASE_RELEASE_ATTESTATION_STATUS_LIMIT)
+        .map(base_release_attestation_status_from_record)
+        .collect();
     let network = BountyNetwork {
         bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
         funding_intents: scope
@@ -3279,6 +3331,168 @@ fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResp
     status.base_escrow_events = base_escrow_events;
     status.base_release_attestations = base_release_attestations;
     Ok(status)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/base/release-attestations/{bounty_id}",
+    params(
+        ("bounty_id" = Uuid, Path, description = "Hosted bounty UUID."),
+        BaseReleaseAttestationAuditQuery
+    ),
+    responses(
+        (status = 200, description = "Bounded redacted Base release attestation audit records.", body = BaseReleaseAttestationAuditReport),
+        (status = 401, description = "Operator authorization required."),
+        (status = 503, description = "Persistent store unavailable.")
+    ),
+    security(
+        ("operator_api_token" = []),
+        ("operator_bearer" = [])
+    )
+)]
+async fn list_base_release_attestation_audit(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(bounty_id): Path<Uuid>,
+    Query(query): Query<BaseReleaseAttestationAuditQuery>,
+) -> Result<Json<BaseReleaseAttestationAuditReport>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let limit = bounded_base_release_attestation_audit_limit(query.limit);
+    let mut records = store
+        .list_base_release_attestations_for_bounty_limited(bounty_id, limit + 1)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let truncated = records.len() > limit;
+    records.truncate(limit);
+    Ok(Json(base_release_attestation_audit_report(
+        bounty_id, limit, truncated, records,
+    )))
+}
+
+fn base_release_attestation_status_from_record(
+    record: &BaseReleaseAttestationRecord,
+) -> BaseReleaseAttestationStatus {
+    BaseReleaseAttestationStatus {
+        network: record.network.clone(),
+        tx_hash: record.tx_hash.clone(),
+        log_key: record.log_key.clone(),
+        bounty_id: record.bounty_id,
+        onchain_escrow_id: record.onchain_escrow_id.clone(),
+        calldata_hash: record.calldata_hash.clone(),
+        proof_hash: record.proof_hash.clone(),
+        recipient_count: record
+            .recipients
+            .as_array()
+            .map(|recipients| recipients.len())
+            .unwrap_or(0),
+        verdict: record.verdict.clone(),
+        created_at: record.created_at,
+    }
+}
+
+fn bounded_base_release_attestation_audit_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(BASE_RELEASE_ATTESTATION_AUDIT_DEFAULT_LIMIT)
+        .clamp(1, BASE_RELEASE_ATTESTATION_AUDIT_MAX_LIMIT)
+}
+
+fn base_release_attestation_audit_report(
+    bounty_id: Uuid,
+    limit: usize,
+    truncated: bool,
+    records: Vec<BaseReleaseAttestationRecord>,
+) -> BaseReleaseAttestationAuditReport {
+    let records = records
+        .into_iter()
+        .take(limit)
+        .map(base_release_attestation_audit_record)
+        .collect::<Vec<_>>();
+    BaseReleaseAttestationAuditReport {
+        bounty_id,
+        limit,
+        returned: records.len(),
+        truncated,
+        redacted_fields: vec![
+            "settlement_signer".to_string(),
+            "platform_fee_wallet".to_string(),
+        ],
+        evidence_boundary:
+            "Operator audit view; raw provider URLs, signer config, and fee-wallet config are not returned."
+                .to_string(),
+        records,
+    }
+}
+
+fn base_release_attestation_audit_record(
+    record: BaseReleaseAttestationRecord,
+) -> BaseReleaseAttestationAuditRecord {
+    BaseReleaseAttestationAuditRecord {
+        network: record.network,
+        tx_hash: record.tx_hash,
+        log_key: record.log_key,
+        bounty_id: record.bounty_id,
+        onchain_escrow_id: record.onchain_escrow_id,
+        calldata_hash: record.calldata_hash,
+        proof_hash: record.proof_hash,
+        recipients: base_release_attestation_recipients(&record.recipients),
+        escrow_contract: record.escrow_contract,
+        verdict: record.verdict,
+        reason: record.reason,
+        created_at: record.created_at.to_rfc3339(),
+    }
+}
+
+fn base_release_attestation_recipients(
+    recipients: &serde_json::Value,
+) -> Vec<BaseReleaseAttestationRecipientAuditRecord> {
+    recipients
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let address = item.get("address")?.as_str()?.to_string();
+                    Some(BaseReleaseAttestationRecipientAuditRecord {
+                        address,
+                        amount_minor: base_release_attestation_amount_minor(item.get("amount")),
+                        currency: base_release_attestation_currency(item.get("amount")),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn base_release_attestation_amount_minor(amount: Option<&serde_json::Value>) -> Option<String> {
+    let value = amount?;
+    if let Some(amount) = value.as_str() {
+        return Some(amount.to_string());
+    }
+    if let Some(amount) = value.as_i64() {
+        return Some(amount.to_string());
+    }
+    if let Some(amount) = value.as_u64() {
+        return Some(amount.to_string());
+    }
+    let nested = value.get("amount")?;
+    if let Some(amount) = nested.as_str() {
+        return Some(amount.to_string());
+    }
+    if let Some(amount) = nested.as_i64() {
+        return Some(amount.to_string());
+    }
+    nested.as_u64().map(|amount| amount.to_string())
+}
+
+fn base_release_attestation_currency(amount: Option<&serde_json::Value>) -> Option<String> {
+    amount?
+        .get("currency")
+        .and_then(|currency| currency.as_str())
+        .map(|currency| currency.to_string())
 }
 
 async fn public_proof_page(
@@ -5898,6 +6112,7 @@ mod tests {
         assert!(paths.contains_key("/v1/base/fetch-rpc-logs"));
         assert!(paths.contains_key("/v1/base/broadcast-signed-transaction"));
         assert!(paths.contains_key("/v1/base/transaction-receipt"));
+        assert!(paths.contains_key("/v1/base/release-attestations/{bounty_id}"));
         assert!(paths.contains_key("/v1/base/refund-plan"));
         assert!(paths.contains_key("/v1/base/dispute-plan"));
         assert!(paths.contains_key("/v1/stripe/live/checkout-top-ups"));
@@ -5968,6 +6183,21 @@ mod tests {
             .any(|requirement| requirement.get("operator_api_token").is_some()));
         assert!(paths["/v1/base/transaction-receipt"]["post"]["responses"]["401"].is_object());
 
+        let release_attestation_security = paths["/v1/base/release-attestations/{bounty_id}"]
+            ["get"]["security"]
+            .as_array()
+            .unwrap();
+        assert!(release_attestation_security
+            .iter()
+            .any(|requirement| requirement.get("operator_api_token").is_some()));
+        assert!(release_attestation_security
+            .iter()
+            .any(|requirement| requirement.get("operator_bearer").is_some()));
+        assert!(
+            paths["/v1/base/release-attestations/{bounty_id}"]["get"]["responses"]["401"]
+                .is_object()
+        );
+
         assert!(
             paths["/v1/stripe/live/funding-intents/{id}/checkout-session"]["post"]
                 .get("security")
@@ -5986,6 +6216,50 @@ mod tests {
             "Stripe checkout webhook must remain callable by Stripe without operator auth"
         );
         assert!(paths["/v1/stripe/checkout-webhooks"]["post"]["responses"]["503"].is_object());
+    }
+
+    #[test]
+    fn base_release_attestation_status_redacts_sensitive_fields() {
+        let record = test_base_release_attestation_record(0);
+
+        let status = base_release_attestation_status_from_record(&record);
+        let serialized = serde_json::to_string(&status).unwrap();
+
+        assert_eq!(status.recipient_count, 2);
+        assert!(serialized.contains("passed"));
+        assert!(!serialized.contains("settlement_signer"));
+        assert!(!serialized.contains("platform_fee_wallet"));
+        assert!(!serialized.contains("0x5555555555555555555555555555555555555555"));
+        assert!(!serialized.contains("0x7777777777777777777777777777777777777777"));
+    }
+
+    #[test]
+    fn base_release_attestation_audit_report_caps_and_types_recipients() {
+        let bounty_id = Uuid::new_v4();
+        let first = test_base_release_attestation_record(0);
+        let second = test_base_release_attestation_record(1);
+
+        let report = base_release_attestation_audit_report(bounty_id, 1, true, vec![first, second]);
+        let serialized = serde_json::to_string(&report).unwrap();
+
+        assert_eq!(report.bounty_id, bounty_id);
+        assert_eq!(report.limit, 1);
+        assert_eq!(report.returned, 1);
+        assert!(report.truncated);
+        assert!(report
+            .redacted_fields
+            .contains(&"settlement_signer".to_string()));
+        assert_eq!(report.records[0].recipients.len(), 2);
+        assert_eq!(
+            report.records[0].recipients[0].amount_minor.as_deref(),
+            Some("1000000")
+        );
+        assert_eq!(
+            report.records[0].recipients[0].currency.as_deref(),
+            Some("usdc")
+        );
+        assert!(!serialized.contains("0x5555555555555555555555555555555555555555"));
+        assert!(!serialized.contains("0x7777777777777777777777777777777777777777"));
     }
 
     #[tokio::test]
@@ -7521,6 +7795,42 @@ mod tests {
             service_bind_addr(None, None, "127.0.0.1:8080"),
             "127.0.0.1:8080"
         );
+    }
+
+    fn test_base_release_attestation_record(index: usize) -> BaseReleaseAttestationRecord {
+        BaseReleaseAttestationRecord {
+            id: Uuid::new_v4(),
+            network: "base-mainnet".to_string(),
+            tx_hash: format!("0x{index:064x}"),
+            log_key: format!("0x{index:064x}:7"),
+            bounty_id: Uuid::new_v4(),
+            onchain_escrow_id: "7".to_string(),
+            calldata_hash: Some(
+                "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            ),
+            proof_hash: Some(
+                "0x2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+            ),
+            recipients: serde_json::json!([
+                {
+                    "address": "0x3333333333333333333333333333333333333333",
+                    "amount": {
+                        "amount": 1000000,
+                        "currency": "usdc"
+                    }
+                },
+                {
+                    "address": "0x4444444444444444444444444444444444444444",
+                    "amount": "250000"
+                }
+            ]),
+            escrow_contract: "0x150C6dFbCe7803cc7f634f59b0624e87349CEAce".to_string(),
+            settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+            platform_fee_wallet: Some("0x7777777777777777777777777777777777777777".to_string()),
+            verdict: "passed".to_string(),
+            reason: "release calldata matches pending Base settlement plan".to_string(),
+            created_at: Utc::now(),
+        }
     }
 
     async fn payable_base_bounty() -> (BountyNetwork, Bounty, ProofRecord) {

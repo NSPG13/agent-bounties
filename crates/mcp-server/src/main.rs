@@ -2,12 +2,13 @@ use app::{
     build_base_indexer_status_report, build_live_money_readiness_report,
     stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
     ApproveRiskPayoutRequest, BaseIndexerHeartbeatStatus, BaseIndexerScanCursor,
-    BaseIndexerStatusConfig, BaseReleaseQueueRequest, BaseReleaseTransactionEvidence,
-    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
-    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
-    OpenPooledBountyRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest, PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest,
-    RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
+    BaseIndexerStatusConfig, BaseReleaseAttestationStatus, BaseReleaseQueueRequest,
+    BaseReleaseTransactionEvidence, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
+    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport,
+    LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanBaseDisputeRequest,
+    PlanBaseFundingRequest, PlanBaseRefundRequest, PlanBaseReleaseRequest,
+    PlanStripeTransferRequest, PooledFundingReport, PostBountyRequest, RegisterAgentRequest,
+    RegisterCapabilityRequest, RejectRiskEventRequest, RequestQuotesRequest,
     ReviewedBountyApproval, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
@@ -26,7 +27,7 @@ use chain_base::{
     BaseNetworkDescriptor, BaseRpcUrlConfig, EvmLog, RpcLogSubmission,
 };
 use chrono::Utc;
-use db::{BaseLogPersistenceBatch, BountyStatusScope, PostgresStore};
+use db::{BaseLogPersistenceBatch, BaseReleaseAttestationRecord, BountyStatusScope, PostgresStore};
 use domain::{
     Agent, BountyStatus, CapabilityClass, EvalRun, HelpRequest, Money, PaymentRail, PayoutStatus,
     PrivacyLevel, RiskReviewRecord,
@@ -68,6 +69,49 @@ struct AppState {
 
 type SharedState = Arc<AppState>;
 const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
+const BASE_RELEASE_ATTESTATION_STATUS_LIMIT: usize = 25;
+const BASE_RELEASE_ATTESTATION_AUDIT_DEFAULT_LIMIT: usize = 25;
+const BASE_RELEASE_ATTESTATION_AUDIT_MAX_LIMIT: usize = 100;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BaseReleaseAttestationAuditArgs {
+    bounty_id: Uuid,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BaseReleaseAttestationAuditReport {
+    bounty_id: Uuid,
+    limit: usize,
+    returned: usize,
+    truncated: bool,
+    redacted_fields: Vec<String>,
+    evidence_boundary: String,
+    records: Vec<BaseReleaseAttestationAuditRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BaseReleaseAttestationAuditRecord {
+    network: String,
+    tx_hash: String,
+    log_key: String,
+    bounty_id: Uuid,
+    onchain_escrow_id: String,
+    calldata_hash: Option<String>,
+    proof_hash: Option<String>,
+    recipients: Vec<BaseReleaseAttestationRecipientAuditRecord>,
+    escrow_contract: String,
+    verdict: String,
+    reason: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BaseReleaseAttestationRecipientAuditRecord {
+    address: String,
+    amount_minor: Option<String>,
+    currency: Option<String>,
+}
 
 fn non_empty_secret(secret: String) -> Option<String> {
     let trimmed = secret.trim();
@@ -439,6 +483,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/list_base_release_queue",
             post(list_base_release_queue),
+        )
+        .route(
+            "/tools/list_base_release_attestations",
+            post(list_base_release_attestations),
         )
         .route("/tools/plan_base_release", post(plan_base_release))
         .route("/tools/plan_base_refund", post(plan_base_refund))
@@ -1178,6 +1226,18 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &[],
             ),
+        ),
+        operator_tool(
+            "list_base_release_attestations",
+            "Read bounded redacted Base release attestation audit records for one bounty.",
+            object_tool_schema(
+                json!({
+                    "bounty_id": uuid_property("Hosted bounty UUID."),
+                    "limit": nullable_integer_property("Optional maximum number of attestation records to return, capped at 100.")
+                }),
+                &["bounty_id"],
+            ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
         tool(
             "run_bountybench",
@@ -1950,10 +2010,10 @@ fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResp
     let base_escrow_events = scope.base_escrow_events;
     let base_release_attestations = scope
         .base_release_attestations
-        .into_iter()
-        .map(serde_json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
+        .iter()
+        .take(BASE_RELEASE_ATTESTATION_STATUS_LIMIT)
+        .map(base_release_attestation_status_from_record)
+        .collect();
     let network = BountyNetwork {
         bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
         funding_intents: scope
@@ -2019,6 +2079,158 @@ fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResp
     status.base_escrow_events = base_escrow_events;
     status.base_release_attestations = base_release_attestations;
     Ok(status)
+}
+
+async fn list_base_release_attestations(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(args): Json<BaseReleaseAttestationAuditArgs>,
+) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
+    let Some(store) = &state.store else {
+        return mcp_error("persistent store unavailable");
+    };
+    let limit = bounded_base_release_attestation_audit_limit(args.limit);
+    match store
+        .list_base_release_attestations_for_bounty_limited(args.bounty_id, limit + 1)
+        .await
+    {
+        Ok(mut records) => {
+            let truncated = records.len() > limit;
+            records.truncate(limit);
+            mcp_json(base_release_attestation_audit_report(
+                args.bounty_id,
+                limit,
+                truncated,
+                records,
+            ))
+        }
+        Err(error) => mcp_error(error),
+    }
+}
+
+fn base_release_attestation_status_from_record(
+    record: &BaseReleaseAttestationRecord,
+) -> BaseReleaseAttestationStatus {
+    BaseReleaseAttestationStatus {
+        network: record.network.clone(),
+        tx_hash: record.tx_hash.clone(),
+        log_key: record.log_key.clone(),
+        bounty_id: record.bounty_id,
+        onchain_escrow_id: record.onchain_escrow_id.clone(),
+        calldata_hash: record.calldata_hash.clone(),
+        proof_hash: record.proof_hash.clone(),
+        recipient_count: record
+            .recipients
+            .as_array()
+            .map(|recipients| recipients.len())
+            .unwrap_or(0),
+        verdict: record.verdict.clone(),
+        created_at: record.created_at,
+    }
+}
+
+fn bounded_base_release_attestation_audit_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(BASE_RELEASE_ATTESTATION_AUDIT_DEFAULT_LIMIT)
+        .clamp(1, BASE_RELEASE_ATTESTATION_AUDIT_MAX_LIMIT)
+}
+
+fn base_release_attestation_audit_report(
+    bounty_id: Uuid,
+    limit: usize,
+    truncated: bool,
+    records: Vec<BaseReleaseAttestationRecord>,
+) -> BaseReleaseAttestationAuditReport {
+    let records = records
+        .into_iter()
+        .take(limit)
+        .map(base_release_attestation_audit_record)
+        .collect::<Vec<_>>();
+    BaseReleaseAttestationAuditReport {
+        bounty_id,
+        limit,
+        returned: records.len(),
+        truncated,
+        redacted_fields: vec![
+            "settlement_signer".to_string(),
+            "platform_fee_wallet".to_string(),
+        ],
+        evidence_boundary:
+            "Operator audit view; raw provider URLs, signer config, and fee-wallet config are not returned."
+                .to_string(),
+        records,
+    }
+}
+
+fn base_release_attestation_audit_record(
+    record: BaseReleaseAttestationRecord,
+) -> BaseReleaseAttestationAuditRecord {
+    BaseReleaseAttestationAuditRecord {
+        network: record.network,
+        tx_hash: record.tx_hash,
+        log_key: record.log_key,
+        bounty_id: record.bounty_id,
+        onchain_escrow_id: record.onchain_escrow_id,
+        calldata_hash: record.calldata_hash,
+        proof_hash: record.proof_hash,
+        recipients: base_release_attestation_recipients(&record.recipients),
+        escrow_contract: record.escrow_contract,
+        verdict: record.verdict,
+        reason: record.reason,
+        created_at: record.created_at.to_rfc3339(),
+    }
+}
+
+fn base_release_attestation_recipients(
+    recipients: &Value,
+) -> Vec<BaseReleaseAttestationRecipientAuditRecord> {
+    recipients
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let address = item.get("address")?.as_str()?.to_string();
+                    Some(BaseReleaseAttestationRecipientAuditRecord {
+                        address,
+                        amount_minor: base_release_attestation_amount_minor(item.get("amount")),
+                        currency: base_release_attestation_currency(item.get("amount")),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn base_release_attestation_amount_minor(amount: Option<&Value>) -> Option<String> {
+    let value = amount?;
+    if let Some(amount) = value.as_str() {
+        return Some(amount.to_string());
+    }
+    if let Some(amount) = value.as_i64() {
+        return Some(amount.to_string());
+    }
+    if let Some(amount) = value.as_u64() {
+        return Some(amount.to_string());
+    }
+    let nested = value.get("amount")?;
+    if let Some(amount) = nested.as_str() {
+        return Some(amount.to_string());
+    }
+    if let Some(amount) = nested.as_i64() {
+        return Some(amount.to_string());
+    }
+    nested.as_u64().map(|amount| amount.to_string())
+}
+
+fn base_release_attestation_currency(amount: Option<&Value>) -> Option<String> {
+    amount?
+        .get("currency")
+        .and_then(|currency| currency.as_str())
+        .map(|currency| currency.to_string())
 }
 
 async fn get_paid_status(
@@ -3330,6 +3542,7 @@ mod tests {
             "fetch_base_rpc_logs",
             "broadcast_base_signed_transaction",
             "get_base_transaction_receipt",
+            "list_base_release_attestations",
             "approve_risk_bounty",
             "approve_risk_payout",
             "reject_risk_event",

@@ -235,6 +235,12 @@ escrow id, proof hash, recipient wallets, and per-recipient amounts to match the
 pending release plan. A transaction hash or `EscrowReleased` log alone is not
 recipient-level payout evidence and cannot mark the bounty `Paid`.
 
+Operators can inspect bounded, redacted release-attestation audit records with
+`GET /v1/base/release-attestations/{bounty_id}?limit=25` or MCP
+`list_base_release_attestations`. Normal bounty status includes only capped
+attestation summaries; signer and fee-wallet configuration stay out of public
+status responses.
+
 Hosted operators should also set `OPERATOR_API_TOKEN`. When configured, API and
 MCP calls that reconcile normalized escrow events, submit settlement logs, fetch
 provider logs through server-side RPC URLs, broadcast signed transactions, or

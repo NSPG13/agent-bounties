@@ -667,6 +667,15 @@ export class AgentBountiesClient {
     });
   }
 
+  async listBaseReleaseAttestations(bountyId: string, limit?: number): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) {
+      params.set("limit", String(limit));
+    }
+    const query = params.toString();
+    return this.request(`/v1/base/release-attestations/${bountyId}${query ? `?${query}` : ""}`);
+  }
+
   async planStripeCheckoutTopUp(request: PlanStripeCheckoutTopUpRequest): Promise<unknown> {
     return this.request("/v1/stripe/checkout-top-ups", {
       method: "POST",

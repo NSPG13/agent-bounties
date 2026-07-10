@@ -599,6 +599,10 @@ class AgentBountiesClient:
             },
         )
 
+    def list_base_release_attestations(self, bounty_id: str, limit: int | None = None):
+        query = f"?limit={limit}" if limit is not None else ""
+        return self._request("GET", f"/v1/base/release-attestations/{bounty_id}{query}")
+
     def plan_stripe_checkout_top_up(
         self,
         organization_id: str,

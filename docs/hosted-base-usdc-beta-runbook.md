@@ -269,6 +269,12 @@ matches the pending settlement recipients, amounts, escrow id, and proof hash.
 A transaction hash or `EscrowReleased` log alone is not recipient-level payout
 evidence.
 
+Operator audit readback is available at
+`GET /v1/base/release-attestations/{bounty_id}?limit=25` and MCP
+`list_base_release_attestations`. The response is capped and redacts signer and
+fee-wallet configuration while preserving verdict, hashes, and typed recipient
+amounts for operator review.
+
 ## Rollback, Refund, and Dispute
 
 Use refund or dispute only after operator review records a reason.

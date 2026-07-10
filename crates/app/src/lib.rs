@@ -1145,6 +1145,20 @@ pub struct BaseReleaseQueueItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseReleaseAttestationStatus {
+    pub network: String,
+    pub tx_hash: String,
+    pub log_key: String,
+    pub bounty_id: Id,
+    pub onchain_escrow_id: String,
+    pub calldata_hash: Option<String>,
+    pub proof_hash: Option<String>,
+    pub recipient_count: usize,
+    pub verdict: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BountyStatusResponse {
     pub bounty: Bounty,
     pub funding_summary: PooledFundingSummary,
@@ -1154,7 +1168,7 @@ pub struct BountyStatusResponse {
     #[serde(default)]
     pub base_escrow_events: Vec<BaseEscrowEvent>,
     #[serde(default)]
-    pub base_release_attestations: Vec<Value>,
+    pub base_release_attestations: Vec<BaseReleaseAttestationStatus>,
     pub claims: Vec<Claim>,
     pub submissions: Vec<Submission>,
     pub verifier_results: Vec<VerifierResult>,

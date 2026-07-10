@@ -308,6 +308,7 @@ Useful REST paths:
 - `POST /v1/base/log-query`
 - `POST /v1/base/funding-plan`
 - `POST /v1/base/release-queue`
+- `GET /v1/base/release-attestations/{bounty_id}`
 - `POST /v1/base/release-plan`
 - `POST /v1/base/refund-plan`
 - `POST /v1/base/dispute-plan`
