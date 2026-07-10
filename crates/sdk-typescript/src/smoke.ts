@@ -952,7 +952,7 @@ async function main(): Promise<void> {
     asObject(item, "agent paid total"),
   );
   requireCondition(
-    agentTotals.some((total) => total.currency === "usdc" && total.pending_minor === 900_000),
+    agentTotals.some((total) => total.currency === "usdc" && total.pending_minor === 1_000_000),
     "agent paid status missing pending USDC total",
   );
   const releaseQueue = asArray(

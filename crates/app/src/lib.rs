@@ -3086,10 +3086,12 @@ impl BountyNetwork {
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
-        recipients.push(EscrowRecipient {
-            address: request.platform_fee_wallet,
-            amount: settlement.platform_fee.clone(),
-        });
+        if settlement.platform_fee.amount > 0 {
+            recipients.push(EscrowRecipient {
+                address: request.platform_fee_wallet,
+                amount: settlement.platform_fee.clone(),
+            });
+        }
         BaseEscrowRelease {
             escrow_id: escrow.id,
             recipients: recipients.clone(),
@@ -3309,22 +3311,33 @@ impl BountyNetwork {
         );
         let mut release_plan = None;
         if readiness_error.is_none() {
-            match (&request.escrow_contract, &request.platform_fee_wallet) {
-                (Some(escrow_contract), Some(platform_fee_wallet)) => {
+            match &request.escrow_contract {
+                Some(escrow_contract)
+                    if settlement.platform_fee.amount == 0
+                        || request.platform_fee_wallet.is_some() =>
+                {
                     match self.plan_base_release(PlanBaseReleaseRequest {
                         bounty_id: bounty.id,
                         escrow_contract: escrow_contract.clone(),
-                        platform_fee_wallet: platform_fee_wallet.clone(),
+                        platform_fee_wallet: request
+                            .platform_fee_wallet
+                            .clone()
+                            .unwrap_or_default(),
                         network: request.network.clone(),
                     }) {
                         Ok(plan) => release_plan = Some(plan),
                         Err(error) => readiness_error = Some(error.to_string()),
                     }
                 }
-                _ => {
+                Some(_) => {
                     readiness_error = Some(
-                        "escrow_contract and platform_fee_wallet are required to build release transaction"
+                        "platform_fee_wallet is required when the settlement has a platform fee"
                             .to_string(),
+                    );
+                }
+                None => {
+                    readiness_error = Some(
+                        "escrow_contract is required to build release transaction".to_string(),
                     );
                 }
             }
@@ -3350,7 +3363,7 @@ impl BountyNetwork {
         bounty_id: Id,
         proof: &ProofRecord,
         solver_agent_id: Id,
-        verifier_agent_id: Option<Id>,
+        _verifier_agent_id: Option<Id>,
     ) -> AppResult<Vec<Settlement>> {
         let bounty = self
             .bounties
@@ -3370,19 +3383,10 @@ impl BountyNetwork {
         for target in targets {
             let amount = target.amount.clone();
             let rail = target.rail.clone();
-            let solver_amount = Money::new(amount.amount * 90 / 100, amount.currency.clone())?;
-            let verifier_amount = verifier_agent_id
-                .map(|_| Money::new(amount.amount * 5 / 100, amount.currency.clone()))
-                .transpose()?;
-            let platform_amount = Money::new(
-                amount.amount
-                    - solver_amount.amount
-                    - verifier_amount
-                        .as_ref()
-                        .map(|amount| amount.amount)
-                        .unwrap_or_default(),
-                amount.currency.clone(),
-            )?;
+            // Until a split is disclosed and terms-hashed before funding, the
+            // advertised bounty amount is the solver's net payout.
+            let solver_amount = amount.clone();
+            let platform_amount = Money::zero(amount.currency.clone());
 
             let payout_status = match rail {
                 PaymentRail::StripeFiat => PayoutStatus::Blocked,
@@ -3391,7 +3395,7 @@ impl BountyNetwork {
             };
             all_payouts_paid &= payout_status == PayoutStatus::Paid;
 
-            let mut payout_intents = vec![PayoutIntent {
+            let payout_intents = vec![PayoutIntent {
                 id: Uuid::new_v4(),
                 bounty_id,
                 recipient_agent_id: solver_agent_id,
@@ -3407,27 +3411,10 @@ impl BountyNetwork {
                     solver_amount,
                 ));
             }
-            if let (Some(verifier_agent_id), Some(verifier_amount)) =
-                (verifier_agent_id, verifier_amount.clone())
-            {
-                payout_intents.push(PayoutIntent {
-                    id: Uuid::new_v4(),
-                    bounty_id,
-                    recipient_agent_id: verifier_agent_id,
-                    rail: rail.clone(),
-                    amount: verifier_amount.clone(),
-                    status: payout_status.clone(),
-                });
-                if payout_status == PayoutStatus::Paid {
-                    postings.push(credit(
-                        format!("agent_payable:{verifier_agent_id}"),
-                        verifier_amount,
-                    ));
-                }
+            if payout_status == PayoutStatus::Paid && platform_amount.amount > 0 {
+                postings.push(credit("platform_fee", platform_amount.clone()));
             }
             if payout_status == PayoutStatus::Paid {
-                postings.push(credit("platform_fee", platform_amount.clone()));
-
                 let external_event = if settlements.is_empty()
                     && self
                         .bounties
@@ -3582,7 +3569,9 @@ impl BountyNetwork {
                 intent.amount.clone(),
             ));
         }
-        postings.push(credit("platform_fee", settlement.platform_fee.clone()));
+        if settlement.platform_fee.amount > 0 {
+            postings.push(credit("platform_fee", settlement.platform_fee.clone()));
+        }
 
         let entry = LedgerEntry::new("base escrow released", Some(external_event_id), postings)?;
         self.ledger.append(entry.clone())?;
@@ -3755,20 +3744,24 @@ impl BountyNetwork {
         {
             return Ok(None);
         }
-        let external_event_id = format!("stripe-platform-fee:{settlement_id}");
-        if self.ledger.has_external_event(&external_event_id) {
-            return Ok(None);
-        }
+        let mut fee_entry = None;
+        if settlement.platform_fee.amount > 0 {
+            let external_event_id = format!("stripe-platform-fee:{settlement_id}");
+            if self.ledger.has_external_event(&external_event_id) {
+                return Ok(None);
+            }
 
-        let entry = LedgerEntry::new(
-            "stripe platform fee recognized",
-            Some(external_event_id),
-            vec![
-                debit("bounty_liability", settlement.platform_fee.clone()),
-                credit("platform_fee", settlement.platform_fee.clone()),
-            ],
-        )?;
-        self.ledger.append(entry.clone())?;
+            let entry = LedgerEntry::new(
+                "stripe platform fee recognized",
+                Some(external_event_id),
+                vec![
+                    debit("bounty_liability", settlement.platform_fee.clone()),
+                    credit("platform_fee", settlement.platform_fee.clone()),
+                ],
+            )?;
+            self.ledger.append(entry.clone())?;
+            fee_entry = Some(entry);
+        }
         let should_mark_paid = self
             .bounties
             .get(&settlement.bounty_id)
@@ -3778,7 +3771,7 @@ impl BountyNetwork {
         if should_mark_paid {
             self.mark_bounty_paid_if_all_settlements_paid(settlement.bounty_id)?;
         }
-        Ok(Some(entry))
+        Ok(fee_entry)
     }
 
     fn settlement_and_payout_intent(
@@ -5365,7 +5358,7 @@ mod tests {
         assert!(status.template_signals[0].success);
         let queue = network.list_base_release_queue(BaseReleaseQueueRequest {
             escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
-            platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
+            platform_fee_wallet: None,
             network: Some("base-mainnet".to_string()),
         });
         assert_eq!(queue.len(), 1);
@@ -5373,7 +5366,7 @@ mod tests {
         assert!(queue[0].readiness_error.is_none());
         assert_eq!(queue[0].onchain_escrow_id, Some(1));
         assert_eq!(queue[0].pending_payout_count, 1);
-        assert_eq!(queue[0].pending_amount.amount, 900_000);
+        assert_eq!(queue[0].pending_amount.amount, 1_000_000);
         assert!(queue[0].release_plan.is_some());
         let pending_agent_payouts = network.agent_payout_status(solver.id).unwrap();
         assert_eq!(pending_agent_payouts.agent.id, solver.id);
@@ -5385,7 +5378,7 @@ mod tests {
         );
         assert_eq!(pending_agent_payouts.totals.len(), 1);
         assert_eq!(pending_agent_payouts.totals[0].currency, "usdc");
-        assert_eq!(pending_agent_payouts.totals[0].pending_minor, 900_000);
+        assert_eq!(pending_agent_payouts.totals[0].pending_minor, 1_000_000);
         assert_eq!(pending_agent_payouts.totals[0].paid_minor, 0);
         assert_eq!(pending_agent_payouts.reputation_events.len(), 1);
         let release_plan = network
@@ -5399,18 +5392,15 @@ mod tests {
         assert_eq!(release_plan.network.name, "Base");
         assert_eq!(release_plan.network.chain_id, 8_453);
         assert_eq!(release_plan.release_call.onchain_escrow_id, 1);
-        assert_eq!(release_plan.release_call.recipients.len(), 2);
+        assert_eq!(release_plan.settlement.platform_fee.amount, 0);
+        assert_eq!(release_plan.release_call.recipients.len(), 1);
         assert_eq!(
             release_plan.release_call.recipients[0].address,
             "0x2222222222222222222222222222222222222222"
         );
         assert_eq!(
             release_plan.release_call.recipients[0].amount.amount,
-            900_000
-        );
-        assert_eq!(
-            release_plan.release_call.recipients[1].amount.amount,
-            100_000
+            1_000_000
         );
         assert!(release_plan.transaction.data.starts_with("0xbfc95334"));
         let released = chain_base::simulated_released_event(bounty.id, 1, proof.proof_hash);
@@ -5427,13 +5417,72 @@ mod tests {
         let paid_agent_payouts = network.agent_payout_status(solver.id).unwrap();
         assert_eq!(paid_agent_payouts.payouts[0].status, PayoutStatus::Paid);
         assert_eq!(paid_agent_payouts.totals[0].pending_minor, 0);
-        assert_eq!(paid_agent_payouts.totals[0].paid_minor, 900_000);
+        assert_eq!(paid_agent_payouts.totals[0].paid_minor, 1_000_000);
         assert_eq!(paid_status.template_signals.len(), 1);
         assert_eq!(network.ledger.entries().len(), 2);
 
         let replay = network.apply_base_escrow_event(released).unwrap();
         assert!(replay.ledger_entries.is_empty());
         assert_eq!(network.ledger.entries().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn open_beta_pays_even_one_minor_unit_in_full_to_solver() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "one-unit-solver".to_string(),
+            payout_wallet: None,
+        });
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Verify one unit payout".to_string(),
+                template_slug: "extract-data-to-schema".to_string(),
+                amount_minor: 1,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        let artifact = "{\"ok\":true}";
+        let submission = network
+            .submit_result(SubmitResultRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+                artifact_uri: "memory://one-unit.json".to_string(),
+                artifact_body: artifact.to_string(),
+            })
+            .unwrap();
+        network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: hash_artifact(artifact),
+                verifier_kind: Some(VerifierKind::JsonSchema),
+                rubric: None,
+                evidence: None,
+                approved_risk_event_id: None,
+            })
+            .await
+            .unwrap();
+
+        let status = network.status(bounty.id).unwrap();
+        assert_eq!(status.bounty.status, BountyStatus::Paid);
+        assert_eq!(status.settlements.len(), 1);
+        assert_eq!(status.settlements[0].payout_intents.len(), 1);
+        assert_eq!(status.settlements[0].payout_intents[0].amount.amount, 1);
+        assert_eq!(status.settlements[0].platform_fee, Money::zero("usd"));
+        assert_eq!(
+            settlement_total_amount(&status.settlements[0])
+                .unwrap()
+                .amount,
+            1
+        );
     }
 
     #[test]
@@ -6389,7 +6438,7 @@ mod tests {
             ))
             .unwrap();
         assert!(!transfer.duplicate);
-        assert_eq!(transfer.ledger_entries.len(), 2);
+        assert_eq!(transfer.ledger_entries.len(), 1);
 
         let status = network.status(bounty.id).unwrap();
         assert_eq!(status.bounty.status, BountyStatus::Paid);
@@ -6397,14 +6446,14 @@ mod tests {
             status.settlements[0].payout_intents[0].status,
             PayoutStatus::Paid
         );
-        assert_eq!(network.ledger.entries().len(), 4);
+        assert_eq!(network.ledger.entries().len(), 3);
 
         let replay = network
             .apply_stripe_transfer_evidence(transfer.evidence.clone())
             .unwrap();
         assert!(replay.duplicate);
         assert!(replay.ledger_entries.is_empty());
-        assert_eq!(network.ledger.entries().len(), 4);
+        assert_eq!(network.ledger.entries().len(), 3);
     }
 
     #[tokio::test]
@@ -6535,6 +6584,10 @@ mod tests {
             .unwrap();
         assert_eq!(stripe_settlement.platform_fee.currency, "usd");
         assert_eq!(base_settlement.platform_fee.currency, "usdc");
+        assert_eq!(stripe_settlement.platform_fee.amount, 0);
+        assert_eq!(base_settlement.platform_fee.amount, 0);
+        assert_eq!(stripe_settlement.payout_intents[0].amount.amount, 500);
+        assert_eq!(base_settlement.payout_intents[0].amount.amount, 1_000);
         assert_eq!(
             status.funding_contributions[0].settlement_id,
             Some(stripe_settlement.id)
@@ -6556,7 +6609,7 @@ mod tests {
                 network: Some("base-sepolia".to_string()),
             })
             .unwrap();
-        assert_eq!(release_plan.release_call.recipients.len(), 2);
+        assert_eq!(release_plan.release_call.recipients.len(), 1);
         network
             .apply_base_escrow_event(chain_base::simulated_released_event(
                 bounty.id,

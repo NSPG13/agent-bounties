@@ -28,9 +28,15 @@ Targets are tracked by rail and currency, for example one `StripeFiat` USD
 target and one `BaseUsdc` USDC target. The funding summary exposes each
 partition separately, and the bounty becomes claimable only when every target is
 confirmed. The platform does not net USDC and fiat into a fake single balance:
-one accepted proof can create separate Stripe and Base settlements, each with
-its own solver payout, verifier payout, and platform fee in that partition's
-currency.
+one accepted proof can create separate Stripe and Base settlements in each
+partition's currency. During open beta, each partition pays its full funded
+amount to the solver and records a zero platform fee.
+
+The advertised bounty amount is the solver's net payout. The current schema has
+no immutable pre-funding split policy, so the platform must not deduct a fee or
+verifier share after funding. A future split is valid only if it is visible to
+funders and solvers, stored per bounty, included in the terms hash, and immutable
+after the first contribution.
 
 Base funding for a mixed bounty is still escrow-indexed. Agents do not add
 `BaseUsdc` through `add_bounty_funding`; they use `plan_base_funding`, sign and
@@ -128,8 +134,8 @@ reconciliation, and mixed-rail distribution, use
 Base USDC escrow is the lowest-friction open payout rail. A bounty must be funded
 before it becomes claimable. Verification moves accepted Base-funded work to
 `Payable`; the platform marks it `Paid` only after the chain indexer reconciles
-an `EscrowReleased` event. Release splits include solver payout, verifier payout,
-and platform fee.
+an `EscrowReleased` event. Open-beta releases pay one solver recipient the full
+advertised amount and record a zero platform fee.
 
 Open automatic Base USDC flows are capped at low value by deterministic policy.
 The current default cap is `10_000_000` minor USDC units. Above that threshold,
@@ -186,13 +192,15 @@ reconciliation, RPC-log reconciliation, or receipt reconciliation must apply the
 indexed `EscrowCreated` log before the bounty appears in public claimable feeds
 or can be claimed.
 After an accepted Base-funded bounty has a funded escrow and pending settlement,
-operators can call `POST /v1/base/release-queue` with the escrow contract and
-platform fee wallet. The queue returns each payable Base settlement, pending
+operators can call `POST /v1/base/release-queue` with the escrow contract. A
+platform fee wallet is required only for a future non-zero, pre-disclosed fee.
+The queue returns each payable Base settlement, pending
 amount, on-chain escrow ID, missing payout-wallet errors, and, when ready, the
 unsigned release transaction. Operators can still call
 `POST /v1/base/release-plan` for a single bounty. Both paths validate payout
-wallets, reconstruct the solver, verifier, and platform split, check the split
-against the bounty amount, and return unsigned `release(...)` calldata. They do
+wallets, reconstruct the terms-bound split, check it against the bounty amount,
+and return unsigned `release(...)` calldata. Under the current open-beta policy,
+that calldata contains one solver recipient for the full amount. These paths do
 not sign the transaction or mark the bounty paid; payment state still changes
 only after the indexed `EscrowReleased` log is reconciled.
 Release, refund, dispute, broadcast, receipt, and RPC-fetch requests accept an

@@ -177,6 +177,12 @@ scope.
 
 ## 6. Plan Release
 
+The open-beta advertised amount is the solver's net payout. The current release
+plan must contain one solver recipient for the full escrow amount and a zero
+platform fee. The `platform_fee_wallet` field remains accepted for API
+compatibility but is not emitted as a zero-value recipient. Do not sign a plan
+that pays the solver less than the posted amount.
+
 List pending payable settlements:
 
 ```bash

@@ -1131,7 +1131,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 json!({
                     "bounty_id": uuid_property("Payable bounty UUID."),
                     "escrow_contract": string_property("Escrow contract EVM address."),
-                    "platform_fee_wallet": string_property("Platform fee recipient EVM address."),
+                    "platform_fee_wallet": string_property("Compatibility field for a future pre-disclosed platform fee. Open-beta zero-fee plans omit this address from release recipients."),
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
                 }),
                 &["bounty_id", "escrow_contract", "platform_fee_wallet"],
@@ -1169,7 +1169,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             object_tool_schema(
                 json!({
                     "escrow_contract": nullable_string_property("Optional escrow contract address for release planning."),
-                    "platform_fee_wallet": nullable_string_property("Optional platform fee recipient address."),
+                    "platform_fee_wallet": nullable_string_property("Optional recipient for a future pre-disclosed fee. Not required when the open-beta platform fee is zero."),
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network for embedded release plans; defaults to base-sepolia.")
                 }),
                 &[],

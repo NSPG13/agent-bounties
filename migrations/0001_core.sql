@@ -266,10 +266,14 @@ CREATE TABLE IF NOT EXISTS settlements (
   proof_record_id UUID NOT NULL REFERENCES proof_records(id),
   rail TEXT NOT NULL,
   payout_intents JSONB NOT NULL,
-  platform_fee BIGINT NOT NULL CHECK (platform_fee > 0),
+  platform_fee BIGINT NOT NULL CHECK (platform_fee >= 0),
   currency TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE settlements DROP CONSTRAINT IF EXISTS settlements_platform_fee_check;
+ALTER TABLE settlements
+  ADD CONSTRAINT settlements_platform_fee_check CHECK (platform_fee >= 0);
 
 CREATE TABLE IF NOT EXISTS reputation_events (
   id UUID PRIMARY KEY,

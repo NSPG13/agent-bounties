@@ -1261,16 +1261,16 @@ impl PostgresStore {
 
         rows.into_iter()
             .map(|row| {
+                let platform_fee_amount = row.try_get::<i64, _>("platform_fee")?;
+                let currency = row.try_get::<String, _>("currency")?;
+                let platform_fee = persisted_nonnegative_money(platform_fee_amount, currency)?;
                 Ok(Settlement {
                     id: row.try_get("id")?,
                     bounty_id: row.try_get("bounty_id")?,
                     proof_record_id: row.try_get("proof_record_id")?,
                     rail: parse_payment_rail(row.try_get::<String, _>("rail")?)?,
                     payout_intents: serde_json::from_value(row.try_get("payout_intents")?)?,
-                    platform_fee: Money::new(
-                        row.try_get::<i64, _>("platform_fee")?,
-                        row.try_get::<String, _>("currency")?,
-                    )?,
+                    platform_fee,
                     created_at: row.try_get("created_at")?,
                 })
             })
@@ -1634,6 +1634,14 @@ fn parse_agent_status(value: String) -> DbResult<AgentStatus> {
     }
 }
 
+fn persisted_nonnegative_money(amount: i64, currency: String) -> DbResult<Money> {
+    if amount == 0 {
+        Ok(Money::zero(currency))
+    } else {
+        Ok(Money::new(amount, currency)?)
+    }
+}
+
 fn parse_capability_class(value: String) -> DbResult<CapabilityClass> {
     match value.as_str() {
         "Coding" => Ok(CapabilityClass::Coding),
@@ -1899,6 +1907,17 @@ mod tests {
         assert!(CORE_MIGRATION.contains("github_login_normalized TEXT"));
         assert!(CORE_MIGRATION.contains("outreach_allowed BOOLEAN"));
         assert!(CORE_MIGRATION.contains("fund-contribution:"));
+        assert!(CORE_MIGRATION.contains("CHECK (platform_fee >= 0)"));
+        assert!(CORE_MIGRATION.contains("DROP CONSTRAINT IF EXISTS settlements_platform_fee_check"));
+    }
+
+    #[test]
+    fn persisted_platform_fee_allows_zero_but_rejects_negative_amounts() {
+        assert_eq!(
+            persisted_nonnegative_money(0, "USDC".to_string()).unwrap(),
+            Money::zero("usdc")
+        );
+        assert!(persisted_nonnegative_money(-1, "usdc".to_string()).is_err());
     }
 
     #[test]

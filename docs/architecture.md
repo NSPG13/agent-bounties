@@ -71,8 +71,10 @@ Postgres mode, indexed Base escrow events are stored durably and used on startup
 to rebuild the worker's duplicate set and on-chain escrow ID to bounty ID map.
 For Stripe fiat, accepted work creates blocked payout intents. Connect account
 snapshots can unblock a specific agent's payout only when requirements are clear
-and payouts are enabled; the platform fee and final bounty `Paid` state are
-recognized after all settlement payout intents are paid. Hosted mutation
+and payouts are enabled; the final bounty `Paid` state is recognized after all
+settlement payout intents are paid. Open-beta settlements pay the advertised
+amount to the solver and record a zero platform fee until a future split policy
+is disclosed and terms-hashed before funding. Hosted mutation
 surfaces that can move settlement state or create live payment objects can
 require `OPERATOR_API_TOKEN` through `Authorization: Bearer <token>` or
 `x-operator-token: <token>`. Live Stripe Checkout and Accounts v2 creation also
