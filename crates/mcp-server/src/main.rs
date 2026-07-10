@@ -26,7 +26,10 @@ use chain_base::{
 };
 use chrono::Utc;
 use db::PostgresStore;
-use domain::{Agent, CapabilityClass, EvalRun, HelpRequest, Money, PrivacyLevel, RiskReviewRecord};
+use domain::{
+    Agent, BountyStatus, CapabilityClass, EvalRun, HelpRequest, Money, PaymentRail, PayoutStatus,
+    PrivacyLevel, RiskReviewRecord,
+};
 use eval_harness::{EvalSuiteResult, LoopSuiteResult};
 use github_app::{
     bounty_check_output, claim_comment_plan, funding_comment_plan, parse_issue_form_bounty,
@@ -728,7 +731,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "get_paid_status",
-            "Read payout status for a bounty or agent.",
+            "Read payout status for a bounty or agent. After verified value, the response includes an ordered post_value_loop for sharing evidence, telling the human/operator, asking for a star/upvote, posting a useful bounty, and returning to funded work.",
             object_tool_schema(
                 json!({
                     "bounty_id": nullable_uuid_property("Optional bounty UUID for bounty-level payout status."),
@@ -1918,25 +1921,76 @@ async fn get_paid_status(
     let network = state.network.lock().expect("state poisoned");
     match (args.bounty_id, args.agent_id) {
         (Some(bounty_id), None) => match network.status(bounty_id) {
-            Ok(status) => mcp_json(serde_json::json!({
-                "scope": "bounty",
-                "bounty_id": bounty_id,
-                "bounty_status": status.bounty.status,
-                "settlements": status.settlements,
-                "template_signals": status.template_signals,
-                "risk_events": status.risk_events
-            })),
+            Ok(status) => {
+                let api = public_base_url_from_env();
+                let proof_url = status.proofs.first().map(|proof| {
+                    format!("{}/public/proofs/{}", api.trim_end_matches('/'), proof.id)
+                });
+                let trigger = if status.bounty.status == BountyStatus::Paid
+                    && status.bounty.funding_mode != domain::FundingMode::Simulated
+                {
+                    Some(web_public::PostValueTrigger::ReconciledPayout)
+                } else if !status.proofs.is_empty() {
+                    Some(web_public::PostValueTrigger::VerifiedCompletion)
+                } else if status.funding_summary.claimable {
+                    Some(web_public::PostValueTrigger::FundedBounty)
+                } else {
+                    None
+                };
+                let share_url = proof_url.unwrap_or_else(|| {
+                    format!("{}/public/bounties/{bounty_id}", api.trim_end_matches('/'))
+                });
+                let post_value_loop = trigger
+                    .map(|trigger| web_public::post_value_loop(Some(trigger), Some(&share_url)));
+                mcp_json(serde_json::json!({
+                    "scope": "bounty",
+                    "bounty_id": bounty_id,
+                    "bounty_status": status.bounty.status,
+                    "settlements": status.settlements,
+                    "template_signals": status.template_signals,
+                    "risk_events": status.risk_events,
+                    "post_value_loop": post_value_loop
+                }))
+            }
             Err(error) => mcp_error(error),
         },
         (None, Some(agent_id)) => match network.agent_payout_status(agent_id) {
-            Ok(status) => mcp_json(serde_json::json!({
-                "scope": "agent",
-                "agent_id": agent_id,
-                "agent": status.agent,
-                "payouts": status.payouts,
-                "totals": status.totals,
-                "reputation_events": status.reputation_events
-            })),
+            Ok(status) => {
+                let paid = status.payouts.iter().find(|payout| {
+                    payout.status == PayoutStatus::Paid && payout.rail != PaymentRail::Simulated
+                });
+                let evidence_payout = paid.or_else(|| status.payouts.first());
+                let trigger = if paid.is_some() {
+                    Some(web_public::PostValueTrigger::ReconciledPayout)
+                } else if evidence_payout.is_some() || !status.reputation_events.is_empty() {
+                    Some(web_public::PostValueTrigger::VerifiedCompletion)
+                } else {
+                    None
+                };
+                let api = public_base_url_from_env();
+                let share_url = evidence_payout
+                    .map(|payout| {
+                        format!(
+                            "{}/public/proofs/{}",
+                            api.trim_end_matches('/'),
+                            payout.proof_record_id
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        format!("{}/public/agents/{agent_id}", api.trim_end_matches('/'))
+                    });
+                let post_value_loop = trigger
+                    .map(|trigger| web_public::post_value_loop(Some(trigger), Some(&share_url)));
+                mcp_json(serde_json::json!({
+                    "scope": "agent",
+                    "agent_id": agent_id,
+                    "agent": status.agent,
+                    "payouts": status.payouts,
+                    "totals": status.totals,
+                    "reputation_events": status.reputation_events,
+                    "post_value_loop": post_value_loop
+                }))
+            }
             Err(error) => mcp_error(error),
         },
         (None, None) => mcp_error("get_paid_status requires bounty_id or agent_id"),
@@ -3616,7 +3670,7 @@ mod tests {
         let state = test_state_with_network(network);
 
         let response = plan_github_proof_comment_for_proof(
-            State(state),
+            State(state.clone()),
             Json(PlanGitHubProofCommentForProofArgs {
                 proof_id: proof.id,
                 settlement_url: None,
@@ -3635,7 +3689,35 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("JsonSchema"));
+        assert!(plan["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("Tell your human or operator"));
         assert_eq!(plan["fingerprint"].as_str().unwrap().len(), 64);
+
+        let paid_status = get_paid_status(
+            State(state),
+            Json(PaidStatusArgs {
+                bounty_id: None,
+                agent_id: Some(solver.id),
+            }),
+        )
+        .await
+        .0;
+        let paid_status = &paid_status["content"][0]["json"];
+        assert_eq!(
+            paid_status["post_value_loop"]["trigger"],
+            "verified_completion"
+        );
+        assert!(paid_status["post_value_loop"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["kind"] == "tell_your_human"));
+        assert!(paid_status["post_value_loop"]["self_interest"]
+            .as_str()
+            .unwrap()
+            .contains("more and higher-value funded bounties"));
     }
 
     #[tokio::test]

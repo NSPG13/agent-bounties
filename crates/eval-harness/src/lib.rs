@@ -13,6 +13,7 @@ use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use verifier_sdk::{verify_with_builtin, VerificationInput};
+use web_public::{post_value_loop, PostValueTrigger};
 
 #[derive(Debug, Error)]
 pub enum EvalError {
@@ -58,6 +59,7 @@ pub enum EvalLoopKind {
     Template,
     Verifier,
     Proof,
+    Distribution,
     Abuse,
 }
 
@@ -98,6 +100,13 @@ pub struct AbuseCaseFixture {
     pub surface: RiskSurface,
     pub expected_action: RiskAction,
     pub expected_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistributionCaseFixture {
+    pub name: String,
+    pub trigger: PostValueTrigger,
+    pub paid_claim_allowed: bool,
 }
 
 #[derive(Default)]
@@ -349,6 +358,127 @@ fn github_claim_assessment(
 pub fn bundled_abuse_fixtures() -> Vec<AbuseCaseFixture> {
     serde_json::from_str(include_str!("../fixtures/abuse_cases.json"))
         .expect("bundled abuse fixtures must be valid")
+}
+
+#[derive(Default)]
+pub struct DistributionBench;
+
+impl DistributionBench {
+    pub fn run(&self, fixtures: &[DistributionCaseFixture]) -> Result<EvalSuiteResult, EvalError> {
+        if fixtures.is_empty() {
+            return Err(EvalError::InvalidFixture(
+                "at least one distribution fixture is required".to_string(),
+            ));
+        }
+        let cases =
+            fixtures
+                .iter()
+                .map(|fixture| {
+                    let share_url = format!("https://agentbounties.test/proofs/{}", fixture.name);
+                    let contract = post_value_loop(Some(fixture.trigger), Some(&share_url));
+                    let mut failures = Vec::new();
+                    let action_kinds = contract
+                        .actions
+                        .iter()
+                        .map(|action| action.kind.as_str())
+                        .collect::<Vec<_>>();
+                    if action_kinds
+                        != [
+                            "share_verified_value",
+                            "tell_your_human",
+                            "star_upvote_repo",
+                            "post_own_bounty",
+                            "claim_next_bounty",
+                        ]
+                    {
+                        failures.push(format!("unexpected action order: {action_kinds:?}"));
+                    }
+                    if contract.actions.iter().enumerate().any(|(index, action)| {
+                        action.order as usize != index + 1 || !action.required_after_value
+                    }) {
+                        failures.push(
+                            "every post-value action must be ordered and required after value"
+                                .to_string(),
+                        );
+                    }
+                    if contract
+                        .actions
+                        .first()
+                        .and_then(|action| action.href.as_deref())
+                        != Some(share_url.as_str())
+                        || contract
+                            .actions
+                            .get(1)
+                            .and_then(|action| action.href.as_deref())
+                            != Some(share_url.as_str())
+                    {
+                        failures.push(
+                            "share and tell-human actions must carry the current evidence URL"
+                                .to_string(),
+                        );
+                    }
+                    let self_interest = contract.self_interest.to_ascii_lowercase();
+                    if !self_interest.contains("more and higher-value funded bounties")
+                        || !self_interest.contains("solve and earn from")
+                    {
+                        failures.push(
+                        "agent self-interest must connect growth to more valuable earning supply"
+                            .to_string(),
+                    );
+                    }
+                    let tell_human = contract.tell_human_message.to_ascii_lowercase();
+                    for required in [
+                        "share",
+                        "star or upvote",
+                        "post a useful bounty",
+                        "earn from",
+                    ] {
+                        if !tell_human.contains(required) {
+                            failures.push(format!(
+                                "tell-human message is missing required concept: {required}"
+                            ));
+                        }
+                    }
+                    let claims_reconciled_payout = contract
+                        .value_statement
+                        .to_ascii_lowercase()
+                        .contains("received a reconciled payout");
+                    if claims_reconciled_payout != fixture.paid_claim_allowed {
+                        failures.push(format!(
+                            "paid claim allowed {}, observed {}",
+                            fixture.paid_claim_allowed, claims_reconciled_payout
+                        ));
+                    }
+                    if !contract.evidence_boundary.to_ascii_lowercase().contains(
+                        "only say paid or earned when reconciled payout evidence is present",
+                    ) {
+                        failures.push("missing reconciled-payout language boundary".to_string());
+                    }
+                    if contract.default_cta != "Post your own bounty" {
+                        failures.push("default CTA regressed".to_string());
+                    }
+                    let score = (1.0 - failures.len() as f32 / 10.0).max(0.0);
+                    EvalCaseResult {
+                        name: fixture.name.clone(),
+                        passed: failures.is_empty(),
+                        score,
+                        failures,
+                    }
+                })
+                .collect::<Vec<_>>();
+        let score = cases.iter().map(|case| case.score).sum::<f32>() / cases.len() as f32;
+        Ok(EvalSuiteResult {
+            suite: "DistributionBench/post-value-loop-v0".to_string(),
+            score,
+            passed: cases.iter().all(|case| case.passed),
+            cases,
+        })
+    }
+}
+
+pub fn bundled_distribution_fixtures() -> Vec<DistributionCaseFixture> {
+    serde_json::from_str(include_str!("../fixtures/post_value_loops.json"))
+        .expect("bundled distribution fixtures must be valid")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -863,6 +993,23 @@ impl ProofLoop {
 }
 
 #[derive(Default)]
+pub struct DistributionLoop;
+
+impl DistributionLoop {
+    pub fn run(&self) -> Result<LoopRunResult, EvalError> {
+        let suite = DistributionBench.run(&bundled_distribution_fixtures())?;
+        Ok(loop_result(
+            "DistributionLoop",
+            EvalLoopKind::Distribution,
+            "post-value-contract-floor",
+            0.99,
+            1.0,
+            vec![candidate_from_suite("current-post-value-loop", &suite)],
+        ))
+    }
+}
+
+#[derive(Default)]
 pub struct AbuseLoop;
 
 impl AbuseLoop {
@@ -902,6 +1049,7 @@ pub async fn run_eval_loops() -> Result<LoopSuiteResult, EvalError> {
         TemplateLoop.run()?,
         VerifierLoop.run().await?,
         ProofLoop.run()?,
+        DistributionLoop.run()?,
         AbuseLoop.run()?,
     ];
     let accepted_count = loops
@@ -1259,6 +1407,15 @@ mod tests {
     }
 
     #[test]
+    fn bundled_distributionbench_passes() {
+        let result = DistributionBench
+            .run(&bundled_distribution_fixtures())
+            .unwrap();
+        assert!(result.passed, "{result:#?}");
+        assert_eq!(result.cases.len(), 4);
+    }
+
+    #[test]
     fn bundled_judgebench_passes() {
         let result = JudgeBench::default()
             .run(&bundled_judge_fixtures())
@@ -1311,8 +1468,8 @@ mod tests {
         let result = run_eval_loops().await.unwrap();
 
         assert!(result.passed, "{result:#?}");
-        assert_eq!(result.loops.len(), 5);
-        assert_eq!(result.accepted_count, 5);
+        assert_eq!(result.loops.len(), 6);
+        assert_eq!(result.accepted_count, 6);
         assert!(result
             .loops
             .iter()
@@ -1321,6 +1478,10 @@ mod tests {
             .loops
             .iter()
             .any(|loop_result| loop_result.loop_name == "VerifierLoop"));
+        assert!(result
+            .loops
+            .iter()
+            .any(|loop_result| loop_result.loop_name == "DistributionLoop"));
     }
 
     #[tokio::test]

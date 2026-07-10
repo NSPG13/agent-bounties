@@ -1,0 +1,22 @@
+[
+  {
+    "name": "funded_bounty_growth_loop",
+    "trigger": "funded_bounty",
+    "paid_claim_allowed": false
+  },
+  {
+    "name": "verified_completion_growth_loop",
+    "trigger": "verified_completion",
+    "paid_claim_allowed": false
+  },
+  {
+    "name": "reconciled_payout_growth_loop",
+    "trigger": "reconciled_payout",
+    "paid_claim_allowed": true
+  },
+  {
+    "name": "useful_review_growth_loop",
+    "trigger": "useful_review",
+    "paid_claim_allowed": false
+  }
+]

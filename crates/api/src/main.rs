@@ -33,8 +33,8 @@ use chrono::Utc;
 use db::{GitHubIssueSyncBountyUpsert, PostgresStore};
 use domain::{
     Agent, BountyStatus, Capability, CapabilityClass, ContributorContact, EvalRun, HelpRequest,
-    Money, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord, VerificationDecision,
-    VerifierKind,
+    Money, PaymentRail, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord,
+    VerificationDecision, VerifierKind,
 };
 use eval_harness::{
     bundled_abuse_fixtures, bundled_fixtures, bundled_judge_fixtures, run_eval_loops, AbuseBench,
@@ -1090,15 +1090,57 @@ async fn register_agent(
 async fn agent_paid_status(
     State(state): State<SharedState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<app::AgentPayoutStatusResponse>, StatusCode> {
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let network = state.network.lock().expect("state poisoned");
-    network
+    let status = network
         .agent_payout_status(id)
-        .map(Json)
         .map_err(|error| match error {
             app::AppError::AgentNotFound => StatusCode::NOT_FOUND,
             _ => StatusCode::BAD_REQUEST,
+        })?;
+    let paid = status.payouts.iter().find(|payout| {
+        payout.status == PayoutStatus::Paid && payout.rail != PaymentRail::Simulated
+    });
+    let evidence_payout = paid.or_else(|| status.payouts.first());
+    let trigger = if paid.is_some() {
+        Some(web_public::PostValueTrigger::ReconciledPayout)
+    } else if evidence_payout.is_some() || !status.reputation_events.is_empty() {
+        Some(web_public::PostValueTrigger::VerifiedCompletion)
+    } else {
+        None
+    };
+    let share_url = evidence_payout
+        .map(|payout| {
+            format!(
+                "{}/public/proofs/{}",
+                state.public_base_url.trim_end_matches('/'),
+                payout.proof_record_id
+            )
         })
+        .unwrap_or_else(|| {
+            format!(
+                "{}/public/agents/{id}",
+                state.public_base_url.trim_end_matches('/')
+            )
+        });
+    let mut response =
+        serde_json::to_value(status).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(object) = response.as_object_mut() {
+        object.insert(
+            "post_value_loop".to_string(),
+            trigger
+                .map(|trigger| {
+                    serde_json::to_value(web_public::post_value_loop(
+                        Some(trigger),
+                        Some(&share_url),
+                    ))
+                })
+                .transpose()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -2814,15 +2856,25 @@ async fn public_agent_profile(
         .values()
         .filter(|event| event.agent_id == id && event.delta > 0)
         .count();
-    let paid_minor = network
+    let real_paid_intents = network
         .settlements
         .values()
         .flat_map(|settlement| &settlement.payout_intents)
         .filter(|intent| {
             intent.recipient_agent_id == id
                 && intent.status == PayoutStatus::Paid
-                && intent.amount.currency == "usdc"
+                && intent.rail != PaymentRail::Simulated
         })
+        .collect::<Vec<_>>();
+    let paid_currency = real_paid_intents
+        .iter()
+        .find(|intent| intent.amount.currency == "usdc")
+        .or_else(|| real_paid_intents.first())
+        .map(|intent| intent.amount.currency.clone())
+        .unwrap_or_else(|| "usdc".to_string());
+    let paid_minor = real_paid_intents
+        .iter()
+        .filter(|intent| intent.amount.currency == paid_currency.as_str())
         .map(|intent| intent.amount.amount)
         .sum();
 
@@ -2831,7 +2883,7 @@ async fn public_agent_profile(
         accepted_count,
         reputation_score,
         paid_minor,
-        "usdc",
+        &paid_currency,
     )))
 }
 
@@ -3741,6 +3793,18 @@ mod tests {
             .await
             .unwrap()
             .0;
+        let post_value = &response["post_value_loop"];
+        assert_eq!(post_value["trigger"], "verified_completion");
+        assert!(post_value["self_interest"]
+            .as_str()
+            .unwrap()
+            .contains("more and higher-value funded bounties"));
+        assert!(post_value["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["kind"] == "tell_your_human"));
+        let response: app::AgentPayoutStatusResponse = serde_json::from_value(response).unwrap();
 
         assert_eq!(response.agent.id, solver_id);
         assert_eq!(response.payouts.len(), 1);
@@ -3748,6 +3812,67 @@ mod tests {
         assert_eq!(response.totals[0].currency, "usdc");
         assert_eq!(response.totals[0].pending_minor, 1_000_000);
         assert_eq!(response.totals[0].paid_minor, 0);
+    }
+
+    #[tokio::test]
+    async fn simulated_paid_status_uses_verified_completion_copy() {
+        let mut network = BountyNetwork::default();
+        let solver = network.register_agent(RegisterAgentRequest {
+            handle: "simulated-solver".to_string(),
+            payout_wallet: None,
+        });
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Verify simulated distribution copy".to_string(),
+                template_slug: "small-code-change".to_string(),
+                amount_minor: 1_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        network
+            .claim_bounty(ClaimBountyRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+            })
+            .unwrap();
+        let artifact = "{\"simulated\":true}";
+        let submission = network
+            .submit_result(SubmitResultRequest {
+                bounty_id: bounty.id,
+                solver_agent_id: solver.id,
+                artifact_uri: "s3://tests/simulated.json".to_string(),
+                artifact_body: artifact.to_string(),
+            })
+            .unwrap();
+        network
+            .verify_submission(VerifySubmissionRequest {
+                bounty_id: bounty.id,
+                submission_id: submission.id,
+                expected_artifact_digest: hash_artifact(artifact),
+                verifier_kind: Some(VerifierKind::JsonSchema),
+                rubric: None,
+                evidence: None,
+                approved_risk_event_id: None,
+            })
+            .await
+            .unwrap();
+        let state = test_state(network);
+
+        let response = agent_paid_status(State(state), Path(solver.id))
+            .await
+            .unwrap()
+            .0;
+
+        assert_eq!(
+            response["post_value_loop"]["trigger"],
+            "verified_completion"
+        );
+        assert!(!response["post_value_loop"]["value_statement"]
+            .as_str()
+            .unwrap()
+            .contains("received a reconciled payout"));
     }
 
     #[tokio::test]

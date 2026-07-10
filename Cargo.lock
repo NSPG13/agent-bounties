@@ -627,6 +627,7 @@ dependencies = [
  "utoipa",
  "uuid",
  "verifier-sdk",
+ "web-public",
 ]
 
 [[package]]

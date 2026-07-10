@@ -4474,9 +4474,14 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         mcp_eval_loops
             .pointer("/loops")
             .and_then(|loops| loops.as_array())
-            .map(|loops| loops.len() == 5)
+            .map(|loops| {
+                loops.len() == 6
+                    && loops.iter().any(|loop_result| {
+                        value_str(loop_result, "/loop_name") == Some("DistributionLoop")
+                    })
+            })
             .unwrap_or(false),
-        "MCP run_eval_loops must return all five loop reports",
+        "MCP run_eval_loops must return all six loop reports including DistributionLoop",
     )?;
     require(
         mcp_eval_loops
