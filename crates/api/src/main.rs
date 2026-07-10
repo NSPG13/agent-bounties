@@ -34,7 +34,9 @@ use chain_base::{
     RpcTransaction, RpcTransactionReceipt,
 };
 use chrono::Utc;
-use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
+use db::{
+    BaseLogPersistenceBatch, BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore,
+};
 use domain::{
     Agent, AudienceInteraction, AudienceMember, AudienceReport, BountyStatus, Capability,
     CapabilityClass, ContributorContact, DiscoveryResponse, EvalRun, HelpRequest, Money,
@@ -2392,43 +2394,19 @@ async fn process_base_evm_logs_with_release_attestations(
     };
 
     if let Some(store) = &state.store {
-        for bounty in &bounties {
-            store
-                .upsert_bounty(bounty)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for attestation in &report.release_attestations {
-            store
-                .upsert_base_release_attestation(attestation)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for intent in &funding_intents {
-            store
-                .upsert_funding_intent(intent)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for escrow in &escrows {
-            store
-                .upsert_escrow(escrow)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for settlement in &settlements {
-            store
-                .upsert_settlement(settlement)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for event in &indexed_events {
-            store
-                .upsert_base_escrow_event(event)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        persist_ledger_entries(store, &report.ledger_entries).await?;
+        store
+            .persist_base_log_pipeline(BaseLogPersistenceBatch {
+                bounties: &bounties,
+                release_attestations: &report.release_attestations,
+                funding_intents: &funding_intents,
+                escrows: &escrows,
+                settlements: &settlements,
+                ledger_entries: &report.ledger_entries,
+                base_escrow_events: &indexed_events,
+                cursor: None,
+            })
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     Ok(report)

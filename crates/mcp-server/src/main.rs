@@ -26,7 +26,7 @@ use chain_base::{
     BaseNetworkDescriptor, BaseRpcUrlConfig, EvmLog, RpcLogSubmission,
 };
 use chrono::Utc;
-use db::{BountyStatusScope, PostgresStore};
+use db::{BaseLogPersistenceBatch, BountyStatusScope, PostgresStore};
 use domain::{
     Agent, BountyStatus, CapabilityClass, EvalRun, HelpRequest, Money, PaymentRail, PayoutStatus,
     PrivacyLevel, RiskReviewRecord,
@@ -2878,37 +2878,19 @@ async fn process_base_evm_logs_with_release_attestations(
         )
     };
     if let Some(store) = &state.store {
-        for bounty in &bounties {
-            if let Err(error) = store.upsert_bounty(bounty).await {
-                return mcp_error(error);
-            }
-        }
-        for attestation in &report.release_attestations {
-            if let Err(error) = store.upsert_base_release_attestation(attestation).await {
-                return mcp_error(error);
-            }
-        }
-        for intent in &funding_intents {
-            if let Err(error) = store.upsert_funding_intent(intent).await {
-                return mcp_error(error);
-            }
-        }
-        for escrow in &escrows {
-            if let Err(error) = store.upsert_escrow(escrow).await {
-                return mcp_error(error);
-            }
-        }
-        for settlement in &settlements {
-            if let Err(error) = store.upsert_settlement(settlement).await {
-                return mcp_error(error);
-            }
-        }
-        for event in &indexed_events {
-            if let Err(error) = store.upsert_base_escrow_event(event).await {
-                return mcp_error(error);
-            }
-        }
-        if let Err(error) = persist_ledger_entries(store, &report.ledger_entries).await {
+        if let Err(error) = store
+            .persist_base_log_pipeline(BaseLogPersistenceBatch {
+                bounties: &bounties,
+                release_attestations: &report.release_attestations,
+                funding_intents: &funding_intents,
+                escrows: &escrows,
+                settlements: &settlements,
+                ledger_entries: &report.ledger_entries,
+                base_escrow_events: &indexed_events,
+                cursor: None,
+            })
+            .await
+        {
             return mcp_error(error);
         }
     }

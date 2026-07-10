@@ -37,6 +37,7 @@ export AGENT_BOUNTIES_TEST_DATABASE_URL="$database_url"
 cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
 cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
 cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture
+cargo test -p db tests::base_log_pipeline_rolls_back_paid_state_when_cursor_commit_fails -- --ignored --exact --nocapture
 cargo run -p cli -- service-smoke-spawn \
   --api-base-url http://127.0.0.1:18180 \
   --mcp-base-url http://127.0.0.1:18190 \

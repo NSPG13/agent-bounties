@@ -198,6 +198,26 @@ pub struct BaseReleaseAttestationRecord {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct BaseLogPersistenceCursor<'a> {
+    pub network: &'a str,
+    pub escrow_contract: &'a str,
+    pub last_scanned_block: u64,
+    pub last_log_key: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BaseLogPersistenceBatch<'a> {
+    pub bounties: &'a [Bounty],
+    pub release_attestations: &'a [BaseReleaseAttestationRecord],
+    pub funding_intents: &'a [FundingIntent],
+    pub escrows: &'a [Escrow],
+    pub settlements: &'a [Settlement],
+    pub ledger_entries: &'a [LedgerEntry],
+    pub base_escrow_events: &'a [BaseEscrowEvent],
+    pub cursor: Option<BaseLogPersistenceCursor<'a>>,
+}
+
 #[derive(Debug, Default)]
 pub struct InMemoryStore {
     pub agents: HashMap<Id, Agent>,
@@ -1740,6 +1760,268 @@ impl PostgresStore {
         Ok(())
     }
 
+    pub async fn persist_base_log_pipeline(
+        &self,
+        batch: BaseLogPersistenceBatch<'_>,
+    ) -> DbResult<()> {
+        let mut tx = self.pool.begin().await?;
+
+        for bounty in batch.bounties {
+            sqlx::query(
+                r#"
+                INSERT INTO bounties
+                  (id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (id) DO UPDATE SET
+                  help_request_id = EXCLUDED.help_request_id,
+                  title = EXCLUDED.title,
+                  template_slug = EXCLUDED.template_slug,
+                  amount = EXCLUDED.amount,
+                  currency = EXCLUDED.currency,
+                  funding_targets = EXCLUDED.funding_targets,
+                  funding_mode = EXCLUDED.funding_mode,
+                  privacy = EXCLUDED.privacy,
+                  status = EXCLUDED.status,
+                  terms_hash = EXCLUDED.terms_hash
+                "#,
+            )
+            .bind(bounty.id)
+            .bind(bounty.help_request_id)
+            .bind(&bounty.title)
+            .bind(&bounty.template_slug)
+            .bind(bounty.amount.amount)
+            .bind(&bounty.amount.currency)
+            .bind(serde_json::to_value(&bounty.funding_targets)?)
+            .bind(format!("{:?}", bounty.funding_mode))
+            .bind(format!("{:?}", bounty.privacy))
+            .bind(format!("{:?}", bounty.status))
+            .bind(&bounty.terms_hash)
+            .bind(bounty.created_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        for record in batch.release_attestations {
+            let result = sqlx::query(
+                r#"
+                INSERT INTO base_release_attestations
+                  (id, network, tx_hash, log_key, bounty_id, onchain_escrow_id, calldata_hash, proof_hash, recipients, escrow_contract, settlement_signer, platform_fee_wallet, verdict, reason, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                ON CONFLICT (network, tx_hash, log_key) DO UPDATE SET
+                  id = base_release_attestations.id
+                WHERE base_release_attestations.bounty_id = EXCLUDED.bounty_id
+                  AND base_release_attestations.onchain_escrow_id = EXCLUDED.onchain_escrow_id
+                  AND base_release_attestations.calldata_hash IS NOT DISTINCT FROM EXCLUDED.calldata_hash
+                  AND base_release_attestations.proof_hash IS NOT DISTINCT FROM EXCLUDED.proof_hash
+                  AND base_release_attestations.recipients = EXCLUDED.recipients
+                  AND base_release_attestations.escrow_contract = EXCLUDED.escrow_contract
+                  AND base_release_attestations.settlement_signer = EXCLUDED.settlement_signer
+                  AND base_release_attestations.platform_fee_wallet IS NOT DISTINCT FROM EXCLUDED.platform_fee_wallet
+                  AND base_release_attestations.verdict = EXCLUDED.verdict
+                  AND base_release_attestations.reason = EXCLUDED.reason
+                "#,
+            )
+            .bind(record.id)
+            .bind(&record.network)
+            .bind(&record.tx_hash)
+            .bind(&record.log_key)
+            .bind(record.bounty_id)
+            .bind(&record.onchain_escrow_id)
+            .bind(&record.calldata_hash)
+            .bind(&record.proof_hash)
+            .bind(&record.recipients)
+            .bind(&record.escrow_contract)
+            .bind(&record.settlement_signer)
+            .bind(&record.platform_fee_wallet)
+            .bind(&record.verdict)
+            .bind(&record.reason)
+            .bind(record.created_at)
+            .execute(&mut *tx)
+            .await?;
+            if result.rows_affected() == 0 {
+                return Err(DbError::ImmutableAttestationConflict(format!(
+                    "{} {} {}",
+                    record.network, record.tx_hash, record.log_key
+                )));
+            }
+        }
+
+        for intent in batch.funding_intents {
+            sqlx::query(
+                r#"
+                INSERT INTO funding_intents
+                  (id, bounty_id, contributor_agent_id, source_organization_id, rail, amount, currency, status, external_reference, stripe_success_url, stripe_cancel_url, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (id) DO UPDATE SET
+                  contributor_agent_id = EXCLUDED.contributor_agent_id,
+                  source_organization_id = EXCLUDED.source_organization_id,
+                  rail = EXCLUDED.rail,
+                  amount = EXCLUDED.amount,
+                  currency = EXCLUDED.currency,
+                  status = EXCLUDED.status,
+                  external_reference = EXCLUDED.external_reference,
+                  stripe_success_url = EXCLUDED.stripe_success_url,
+                  stripe_cancel_url = EXCLUDED.stripe_cancel_url
+                "#,
+            )
+            .bind(intent.id)
+            .bind(intent.bounty_id)
+            .bind(intent.contributor_agent_id)
+            .bind(intent.source_organization_id)
+            .bind(format!("{:?}", intent.rail))
+            .bind(intent.amount.amount)
+            .bind(&intent.amount.currency)
+            .bind(format!("{:?}", intent.status))
+            .bind(&intent.external_reference)
+            .bind(&intent.stripe_success_url)
+            .bind(&intent.stripe_cancel_url)
+            .bind(intent.created_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        for escrow in batch.escrows {
+            sqlx::query(
+                r#"
+                INSERT INTO escrows
+                  (id, bounty_id, rail, token, amount, currency, status, external_reference)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (id) DO UPDATE SET
+                  bounty_id = EXCLUDED.bounty_id,
+                  rail = EXCLUDED.rail,
+                  token = EXCLUDED.token,
+                  amount = EXCLUDED.amount,
+                  currency = EXCLUDED.currency,
+                  status = EXCLUDED.status,
+                  external_reference = EXCLUDED.external_reference
+                "#,
+            )
+            .bind(escrow.id)
+            .bind(escrow.bounty_id)
+            .bind(format!("{:?}", escrow.rail))
+            .bind(&escrow.token)
+            .bind(escrow.amount.amount)
+            .bind(&escrow.amount.currency)
+            .bind(format!("{:?}", escrow.status))
+            .bind(&escrow.external_reference)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        for settlement in batch.settlements {
+            sqlx::query(
+                r#"
+                INSERT INTO settlements
+                  (id, bounty_id, proof_record_id, rail, payout_intents, platform_fee, currency, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (id) DO UPDATE SET
+                  rail = EXCLUDED.rail,
+                  payout_intents = EXCLUDED.payout_intents,
+                  platform_fee = EXCLUDED.platform_fee,
+                  currency = EXCLUDED.currency
+                "#,
+            )
+            .bind(settlement.id)
+            .bind(settlement.bounty_id)
+            .bind(settlement.proof_record_id)
+            .bind(format!("{:?}", settlement.rail))
+            .bind(serde_json::to_value(&settlement.payout_intents)?)
+            .bind(settlement.platform_fee.amount)
+            .bind(&settlement.platform_fee.currency)
+            .bind(settlement.created_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        for entry in batch.ledger_entries {
+            sqlx::query(
+                r#"
+                INSERT INTO ledger_entries (id, external_event_id, memo, postings, created_at)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (external_event_id) DO NOTHING
+                "#,
+            )
+            .bind(entry.id)
+            .bind(&entry.external_event_id)
+            .bind(&entry.memo)
+            .bind(serde_json::to_value(&entry.postings)?)
+            .bind(entry.created_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        for event in batch.base_escrow_events {
+            let log_index = log_index_from_key(&event.log_key)
+                .map(i64_from_u64)
+                .transpose()?;
+            sqlx::query(
+                r#"
+                INSERT INTO base_escrow_events
+                  (id, log_key, tx_hash, block_number, log_index, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                ON CONFLICT (log_key) DO UPDATE SET
+                  tx_hash = EXCLUDED.tx_hash,
+                  block_number = EXCLUDED.block_number,
+                  log_index = EXCLUDED.log_index,
+                  onchain_escrow_id = EXCLUDED.onchain_escrow_id,
+                  bounty_id = EXCLUDED.bounty_id,
+                  kind = EXCLUDED.kind,
+                  status = EXCLUDED.status,
+                  token = EXCLUDED.token,
+                  amount = EXCLUDED.amount,
+                  currency = EXCLUDED.currency,
+                  terms_hash = EXCLUDED.terms_hash,
+                  proof_hash = EXCLUDED.proof_hash,
+                  reason_hash = EXCLUDED.reason_hash,
+                  dispute_hash = EXCLUDED.dispute_hash,
+                  occurred_at = EXCLUDED.occurred_at
+                "#,
+            )
+            .bind(event.id)
+            .bind(&event.log_key)
+            .bind(&event.tx_hash)
+            .bind(i64_from_u64(event.block_number)?)
+            .bind(log_index)
+            .bind(event.onchain_escrow_id.to_string())
+            .bind(event.bounty_id)
+            .bind(format!("{:?}", event.kind))
+            .bind(format!("{:?}", event.status))
+            .bind(&event.token)
+            .bind(event.amount.as_ref().map(|amount| amount.amount))
+            .bind(event.amount.as_ref().map(|amount| amount.currency.clone()))
+            .bind(&event.terms_hash)
+            .bind(&event.proof_hash)
+            .bind(&event.reason_hash)
+            .bind(&event.dispute_hash)
+            .bind(event.occurred_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        if let Some(cursor) = batch.cursor {
+            sqlx::query(
+                r#"
+                INSERT INTO base_log_cursors
+                  (network, escrow_contract, last_scanned_block, last_log_key, updated_at)
+                VALUES ($1, $2, $3, $4, now())
+                ON CONFLICT (network, escrow_contract) DO UPDATE SET
+                  last_scanned_block = GREATEST(base_log_cursors.last_scanned_block, EXCLUDED.last_scanned_block),
+                  last_log_key = COALESCE(EXCLUDED.last_log_key, base_log_cursors.last_log_key),
+                  updated_at = now()
+                "#,
+            )
+            .bind(cursor.network)
+            .bind(normalize_key_address(cursor.escrow_contract))
+            .bind(i64_from_u64(cursor.last_scanned_block)?)
+            .bind(cursor.last_log_key)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn get_base_indexer_heartbeat(
         &self,
         network: &str,
@@ -2757,7 +3039,8 @@ fn bounty_from_row(row: &PgRow) -> DbResult<Bounty> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::{FundingMode, Money};
+    use domain::{FundingIntentStatus, FundingMode, Money, PaymentRail};
+    use ledger::{credit, debit};
 
     #[test]
     fn store_tracks_agents_and_bounties() {
@@ -2873,5 +3156,173 @@ mod tests {
         assert!(UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("WHERE id = $1"));
         assert!(UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("RETURNING id"));
         assert!(!UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("created_at ="));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn base_log_pipeline_rolls_back_paid_state_when_cursor_commit_fails() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL")
+            .expect("AGENT_BOUNTIES_TEST_DATABASE_URL must be set for ignored Postgres tests");
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let now = Utc::now();
+        let amount = Money::new(1_000_000, "usdc").unwrap();
+        let mut bounty = Bounty::new(
+            "Atomic Base release persistence",
+            "fix-ci-failure",
+            amount.clone(),
+            FundingMode::BaseUsdcEscrow,
+            PrivacyLevel::Public,
+        );
+        bounty.status = BountyStatus::Payable;
+        store.upsert_bounty(&bounty).await.unwrap();
+
+        let mut paid_bounty = bounty.clone();
+        paid_bounty.status = BountyStatus::Paid;
+        let tx_hash = format!("0x{}aaaaaaaa", bounty.id.simple());
+        let log_key = format!("{tx_hash}:7");
+        let escrow_contract = format!("0x{}00000000", bounty.id.simple());
+        let funding_intent = FundingIntent {
+            id: Id::new_v4(),
+            bounty_id: bounty.id,
+            contributor_agent_id: None,
+            source_organization_id: None,
+            rail: PaymentRail::BaseUsdc,
+            amount: amount.clone(),
+            status: FundingIntentStatus::Applied,
+            external_reference: Some(format!("atomic-release-test:{}", bounty.id)),
+            stripe_success_url: None,
+            stripe_cancel_url: None,
+            created_at: now,
+        };
+        let escrow = Escrow {
+            id: Id::new_v4(),
+            bounty_id: bounty.id,
+            rail: PaymentRail::BaseUsdc,
+            token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
+            amount: amount.clone(),
+            status: EscrowStatus::Released,
+            external_reference: Some("base-escrow:7".to_string()),
+        };
+        let attestation = BaseReleaseAttestationRecord {
+            id: Id::new_v4(),
+            network: "base-mainnet".to_string(),
+            tx_hash: tx_hash.clone(),
+            log_key: log_key.clone(),
+            bounty_id: bounty.id,
+            onchain_escrow_id: "7".to_string(),
+            calldata_hash: Some(
+                "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            ),
+            proof_hash: Some(
+                "0x2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+            ),
+            recipients: serde_json::json!([
+                {
+                    "address": "0x3333333333333333333333333333333333333333",
+                    "amount": "1000000"
+                }
+            ]),
+            escrow_contract: escrow_contract.clone(),
+            settlement_signer: "0x5555555555555555555555555555555555555555".to_string(),
+            platform_fee_wallet: None,
+            verdict: "passed".to_string(),
+            reason: "release calldata matches pending Base settlement plan".to_string(),
+            created_at: now,
+        };
+        let ledger_entry = LedgerEntry::new(
+            "Base release paid",
+            Some(format!("base-release:{log_key}")),
+            vec![
+                debit("base_escrow", amount.clone()),
+                credit("solver_payable", amount.clone()),
+            ],
+        )
+        .unwrap();
+        let event = BaseEscrowEvent {
+            id: Id::new_v4(),
+            log_key: log_key.clone(),
+            tx_hash,
+            block_number: 48426133,
+            onchain_escrow_id: 7,
+            bounty_id: bounty.id,
+            kind: BaseEscrowEventKind::Released,
+            status: EscrowStatus::Released,
+            token: None,
+            amount: None,
+            terms_hash: None,
+            proof_hash: attestation.proof_hash.clone(),
+            reason_hash: None,
+            dispute_hash: None,
+            occurred_at: now,
+        };
+        let paid_bounties = [paid_bounty];
+        let release_attestations = [attestation];
+        let funding_intents = [funding_intent.clone()];
+        let escrows = [escrow.clone()];
+        let ledger_entries = [ledger_entry.clone()];
+        let base_escrow_events = [event];
+
+        let result = store
+            .persist_base_log_pipeline(BaseLogPersistenceBatch {
+                bounties: &paid_bounties,
+                release_attestations: &release_attestations,
+                funding_intents: &funding_intents,
+                escrows: &escrows,
+                settlements: &[],
+                ledger_entries: &ledger_entries,
+                base_escrow_events: &base_escrow_events,
+                cursor: Some(BaseLogPersistenceCursor {
+                    network: "base-mainnet",
+                    escrow_contract: &escrow_contract,
+                    last_scanned_block: u64::MAX,
+                    last_log_key: Some(&log_key),
+                }),
+            })
+            .await;
+        assert!(matches!(result, Err(DbError::IntegerOverflow(_))));
+
+        let stored_bounty = store
+            .list_bounties()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|stored| stored.id == bounty.id)
+            .unwrap();
+        assert_eq!(stored_bounty.status, BountyStatus::Payable);
+        assert!(store
+            .list_base_release_attestations_for_bounty(bounty.id)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .list_base_escrow_events_for_bounty(bounty.id)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(!store
+            .list_funding_intents()
+            .await
+            .unwrap()
+            .iter()
+            .any(|stored| stored.id == funding_intent.id));
+        assert!(!store
+            .list_escrows()
+            .await
+            .unwrap()
+            .iter()
+            .any(|stored| stored.id == escrow.id));
+        assert!(!store
+            .list_ledger_entries()
+            .await
+            .unwrap()
+            .iter()
+            .any(|stored| stored.external_event_id == ledger_entry.external_event_id));
+        assert!(store
+            .get_base_log_cursor("base-mainnet", &escrow_contract)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

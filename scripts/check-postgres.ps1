@@ -54,6 +54,9 @@ try {
         Invoke-Checked {
             cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture
         }
+        Invoke-Checked {
+            cargo test -p db tests::base_log_pipeline_rolls_back_paid_state_when_cursor_commit_fails -- --ignored --exact --nocapture
+        }
     }
     finally {
         $env:AGENT_BOUNTIES_TEST_DATABASE_URL = $previousTestDatabaseUrl

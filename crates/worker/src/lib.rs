@@ -10,7 +10,10 @@ use chain_base::{
     ChainEventIndexer, EvmLog,
 };
 use chrono::{DateTime, Utc};
-use db::{BaseIndexerHeartbeat, BaseReleaseAttestationRecord, PostgresStore};
+use db::{
+    BaseIndexerHeartbeat, BaseLogPersistenceBatch, BaseLogPersistenceCursor,
+    BaseReleaseAttestationRecord, PostgresStore,
+};
 use domain::{Id, Submission, VerifierResult};
 use ledger::{Ledger, LedgerEntry};
 use serde::{Deserialize, Serialize};
@@ -645,18 +648,15 @@ pub async fn poll_base_indexer_once(
         &mut network,
         logs,
         &release_attestations,
+        Some(BaseLogPersistenceCursor {
+            network: &config.network,
+            escrow_contract: &config.escrow_contract,
+            last_scanned_block: to_block,
+            last_log_key: None,
+        }),
     )
     .await?;
     let persisted_cursor_block = if reconciliation.failures.is_empty() {
-        let last_log_key = reconciliation.ending_cursor.last_log_key.as_deref();
-        store
-            .upsert_base_log_cursor(
-                &config.network,
-                &config.escrow_contract,
-                to_block,
-                last_log_key,
-            )
-            .await?;
         Some(to_block)
     } else {
         scan_cursor.map(|cursor| cursor.last_scanned_block)
@@ -842,6 +842,7 @@ pub async fn process_base_evm_logs_and_persist(
         network,
         logs,
         &HashMap::new(),
+        None,
     )
     .await
 }
@@ -852,6 +853,7 @@ pub async fn process_base_evm_logs_and_persist_with_release_attestations(
     network: &mut BountyNetwork,
     logs: Vec<EvmLog>,
     release_attestations: &HashMap<String, BaseReleaseTransactionEvidence>,
+    cursor_if_success: Option<BaseLogPersistenceCursor<'_>>,
 ) -> anyhow::Result<BaseLogPipelineReport> {
     let report = worker.process_logs_with_release_attestations(logs, network, release_attestations);
     let applied_event_ids = report
@@ -893,27 +895,26 @@ pub async fn process_base_evm_logs_and_persist_with_release_attestations(
         .cloned()
         .collect::<Vec<_>>();
 
-    for bounty in &bounties {
-        store.upsert_bounty(bounty).await?;
-    }
-    for attestation in &report.release_attestations {
-        store.upsert_base_release_attestation(attestation).await?;
-    }
-    for intent in &funding_intents {
-        store.upsert_funding_intent(intent).await?;
-    }
-    for escrow in &escrows {
-        store.upsert_escrow(escrow).await?;
-    }
-    for settlement in &settlements {
-        store.upsert_settlement(settlement).await?;
-    }
-    for entry in &report.ledger_entries {
-        store.insert_ledger_entry(entry).await?;
-    }
-    for event in &indexed_events {
-        store.upsert_base_escrow_event(event).await?;
-    }
+    let cursor = if report.failures.is_empty() {
+        cursor_if_success.map(|cursor| BaseLogPersistenceCursor {
+            last_log_key: report.ending_cursor.last_log_key.as_deref(),
+            ..cursor
+        })
+    } else {
+        None
+    };
+    store
+        .persist_base_log_pipeline(BaseLogPersistenceBatch {
+            bounties: &bounties,
+            release_attestations: &report.release_attestations,
+            funding_intents: &funding_intents,
+            escrows: &escrows,
+            settlements: &settlements,
+            ledger_entries: &report.ledger_entries,
+            base_escrow_events: &indexed_events,
+            cursor,
+        })
+        .await?;
 
     Ok(report)
 }

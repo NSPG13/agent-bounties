@@ -2836,8 +2836,7 @@ impl BountyNetwork {
             }
             BaseEscrowEventKind::Released => {
                 let release_event_id = format!("base-release:{}", event.log_key);
-                let already_released = self.ledger.has_external_event(&release_event_id);
-                if release_attestation.is_none() && !already_released {
+                if release_attestation.is_none() {
                     return Err(AppError::InvalidBaseEscrowEvent(
                         "released event requires matching release transaction calldata attestation"
                             .to_string(),
