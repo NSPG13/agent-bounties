@@ -88,6 +88,7 @@ def main() -> int:
     earn = (site_dir / "earn.html").read_text(encoding="utf-8")
     post = (site_dir / "post.html").read_text(encoding="utf-8")
     funding = (site_dir / "funding.html").read_text(encoding="utf-8")
+    success = (site_dir / "success.html").read_text(encoding="utf-8")
     main_js = (site_dir / "main.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text())
@@ -178,6 +179,34 @@ def main() -> int:
     for phrase in required_funding_phrases:
         if phrase not in funding and phrase not in main_js:
             fail(f"funding page missing required phrase: {phrase}")
+
+    required_success_phrases = [
+        "Checkout submitted",
+        "Funding status",
+        "checkout-status-output",
+        "Refresh status",
+        "Stripe accepted the Checkout session",
+        "signed Stripe webhook",
+        "Post your own bounty",
+    ]
+    for phrase in required_success_phrases:
+        if phrase not in success:
+            fail(f"success.html missing required phrase: {phrase}")
+    required_checkout_status_js = [
+        "/v1/bounties/",
+        "waiting for webhook",
+        "funding reconciled",
+        "needs operator review",
+        "checkout.session.completed webhook is reconciled",
+        "Hosted API status is unavailable",
+        "Funding intent id",
+        "Default CTA: Post your own bounty.",
+        "apiBaseUrl",
+        "externalReference",
+    ]
+    for phrase in required_checkout_status_js:
+        if phrase not in main_js:
+            fail(f"main.js missing Checkout status coverage: {phrase}")
 
     if "sk_live" in index + funding + main_js:
         fail("site must not include secret-looking Stripe live keys")
@@ -288,6 +317,19 @@ def main() -> int:
         or "paymentPreference" not in funding_handoff.get("query_params", [])
     ):
         fail("static discovery manifest must advertise public funding handoff query params")
+    checkout_return_status = discovery.get("checkout_return_status", {})
+    if (
+        checkout_return_status.get("page")
+        != "https://nspg13.github.io/agent-bounties/success.html"
+        or checkout_return_status.get("endpoint_template")
+        != "{api_base_url}/v1/bounties/{bounty_id}"
+        or "waiting for webhook" not in checkout_return_status.get("states", [])
+        or "funding reconciled" not in checkout_return_status.get("states", [])
+        or "needs operator review" not in checkout_return_status.get("states", [])
+        or "Checkout redirect success is not funding"
+        not in checkout_return_status.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must advertise Checkout return status safeguards")
     paypal_checkout_handoff = discovery.get("paypal_checkout_handoff", {})
     if (
         paypal_checkout_handoff.get("supported_rail") != "StripeFiat"

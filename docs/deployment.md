@@ -80,6 +80,11 @@ To deploy from the Dashboard after the PR is merged:
    `AGENT_BOUNTIES_API_BASE_URL` so GitHub funding-comment handoffs can prefill
    the public Stripe Checkout funding page. A dead or unverified API URL should
    not be advertised to funders.
+10. Verify a post-Checkout return URL in the browser:
+   `https://nspg13.github.io/agent-bounties/success.html?apiBaseUrl=<api>&bountyId=<bounty-id>&externalReference=<external-reference>`.
+   The page may show `waiting for webhook`, `funding reconciled`, or `needs
+   operator review` from `GET /v1/bounties/{id}`, but the Checkout redirect
+   itself is not funding evidence.
 
 The checked-in Base worker starts at block `48422806` for escrow
 `0x150C6dFbCe7803cc7f634f59b0624e87349CEAce`. It is read-only with respect to

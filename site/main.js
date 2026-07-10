@@ -150,6 +150,137 @@
   const readinessOutput = document.getElementById("readiness-output");
   const baseForm = document.getElementById("base-plan-form");
   const baseOutput = document.getElementById("base-plan-output");
+  const checkoutStatusOutput = document.getElementById("checkout-status-output");
+  const checkoutStatusRefresh = document.getElementById("checkout-status-refresh");
+
+  function firstCheckoutStatusParam(searchParams, names) {
+    for (const name of names) {
+      const value = searchParams.get(name);
+      if (value && value.trim()) {
+        return value.trim();
+      }
+    }
+    return "";
+  }
+
+  function displayMoney(money) {
+    if (!money || typeof money.amount !== "number") {
+      return "unknown";
+    }
+    return `${money.amount} ${money.currency || "minor units"}`;
+  }
+
+  function stripeFundingIntents(report) {
+    return Array.isArray(report.funding_intents)
+      ? report.funding_intents.filter((intent) => intent && intent.rail === "StripeFiat")
+      : [];
+  }
+
+  function matchingStripeFundingIntent(report, lookup) {
+    const intents = stripeFundingIntents(report);
+    if (lookup.fundingIntentId) {
+      const match = intents.find((intent) => intent.id === lookup.fundingIntentId);
+      if (match) return match;
+    }
+    if (lookup.externalReference) {
+      const match = intents.find((intent) => intent.external_reference === lookup.externalReference);
+      if (match) return match;
+    }
+    return intents.length === 1 ? intents[0] : null;
+  }
+
+  function checkoutStatusLines(report, lookup) {
+    const bounty = report.bounty || {};
+    const summary = report.funding_summary || {};
+    const intent = matchingStripeFundingIntent(report, lookup);
+    const status = intent && intent.status;
+    const claimable = summary.claimable === true;
+    const appliedMinor = summary.applied && typeof summary.applied.amount === "number"
+      ? summary.applied.amount
+      : 0;
+    const heading = status === "Applied" || claimable
+      ? "funding reconciled"
+      : status === "Rejected"
+        ? "needs operator review"
+        : "waiting for webhook";
+    const lines = [
+      `State: ${heading}`,
+      `Bounty status: ${bounty.status || "unknown"}`,
+      `Bounty id: ${lookup.bountyId || bounty.id || "unknown"}`,
+      `Applied funding: ${displayMoney(summary.applied)}`,
+      `Remaining funding: ${displayMoney(summary.remaining)}`,
+      `Claimable: ${claimable ? "yes" : "no"}`,
+    ];
+
+    if (intent) {
+      lines.push(`Funding intent id: ${intent.id}`);
+      lines.push(`Funding intent status: ${status || "unknown"}`);
+      lines.push(`External reference: ${intent.external_reference || "not set"}`);
+    } else {
+      lines.push(`Funding intent: not identified${lookup.externalReference ? ` for external reference ${lookup.externalReference}` : ""}`);
+    }
+
+    if (status === "Applied" || claimable) {
+      lines.push("Funding is reconciled only because the hosted API reports applied webhook evidence or a claimable bounty state.");
+      lines.push("Default CTA: Post your own bounty.");
+    } else if (status === "Rejected") {
+      lines.push("The hosted API rejected this funding intent. Contact the operator with the funding intent id if available.");
+    } else if (appliedMinor > 0) {
+      lines.push("Some funding is applied, but this return page still waits for the matching Checkout funding intent or full claimable state.");
+    } else {
+      lines.push("Checkout returned, but funding is still pending until the signed checkout.session.completed webhook is reconciled.");
+      lines.push("Refresh this page after a few seconds. If it stays pending, the hosted operator should check webhook delivery.");
+    }
+
+    return lines.join("\n");
+  }
+
+  async function refreshCheckoutStatus() {
+    if (!checkoutStatusOutput) return;
+    const params = new URLSearchParams(window.location.search);
+    const lookup = {
+      apiBaseUrl: firstCheckoutStatusParam(params, ["apiBaseUrl", "api_base_url", "api"]),
+      bountyId: firstCheckoutStatusParam(params, ["bountyId", "bounty_id"]),
+      fundingIntentId: firstCheckoutStatusParam(params, ["fundingIntentId", "funding_intent_id"]),
+      externalReference: firstCheckoutStatusParam(params, ["externalReference", "external_reference"]),
+    };
+    if (!lookup.apiBaseUrl || !lookup.bountyId) {
+      checkoutStatusOutput.textContent = [
+        "State: Checkout returned",
+        "Missing hosted API or bounty id in the return link, so this page cannot verify funding.",
+        "A Checkout redirect is not funding evidence. Open the funding page or hosted bounty status to check reconciliation.",
+      ].join("\n");
+      return;
+    }
+
+    const apiBaseUrl = lookup.apiBaseUrl.replace(/\/+$/, "");
+    checkoutStatusOutput.textContent = "Checkout returned. Reading hosted bounty status...";
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/bounties/${lookup.bountyId}`, {
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`Hosted bounty status returned ${response.status}`);
+      }
+      checkoutStatusOutput.textContent = checkoutStatusLines(await response.json(), lookup);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      checkoutStatusOutput.textContent = [
+        "State: needs operator review",
+        message,
+        "Hosted API status is unavailable, so this page cannot show funding as reconciled.",
+        "Refresh later or ask the operator to inspect webhook delivery for the funding intent.",
+      ].join("\n");
+    }
+  }
+
+  if (checkoutStatusOutput) {
+    if (checkoutStatusRefresh) {
+      checkoutStatusRefresh.addEventListener("click", refreshCheckoutStatus);
+    }
+    refreshCheckoutStatus();
+  }
+
   if (!form || !output) return;
 
   function randomUuid() {
@@ -403,7 +534,14 @@
       String(data.get("externalReference") || "").trim() ||
       `${source}-${paymentPreference === "paypal" ? "paypal-" : ""}checkout-${Date.now()}`;
     const pageBase = `${window.location.origin}${window.location.pathname.replace(/funding\.html$/, "")}`;
-    const returnQuery = `?bountyId=${encodeURIComponent(bountyId)}&source=${encodeURIComponent(source)}&paymentPreference=${encodeURIComponent(paymentPreference)}`;
+    const returnParams = new URLSearchParams({
+      apiBaseUrl,
+      bountyId,
+      source,
+      paymentPreference,
+      externalReference,
+    });
+    const returnQuery = `?${returnParams.toString()}`;
 
     try {
       if (paymentPreference === "paypal") {

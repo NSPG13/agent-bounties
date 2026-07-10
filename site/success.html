@@ -12,7 +12,19 @@
       <p class="eyebrow">Checkout</p>
       <h1>Checkout submitted</h1>
       <p>Stripe accepted the Checkout session. The bounty is not funded until the hosted API verifies the signed Stripe webhook and reconciles it to the funding intent.</p>
-      <p><a class="button primary" href="funding.html">Back to funding</a></p>
+      <section class="readiness-panel" id="checkout-status-panel" aria-labelledby="checkout-status-title">
+        <div>
+          <h2 id="checkout-status-title">Funding status</h2>
+          <p class="fine">This status reads the hosted bounty record after Checkout return. A redirect is not payment evidence; only the reconciled funding intent or bounty status can show funding.</p>
+        </div>
+        <button id="checkout-status-refresh" class="button secondary" type="button">Refresh status</button>
+        <output id="checkout-status-output" class="output readiness-output" aria-live="polite">Checkout returned. Waiting for status details.</output>
+      </section>
+      <p class="actions">
+        <a class="button primary" href="funding.html">Back to funding</a>
+        <a class="button secondary" href="post.html">Post your own bounty</a>
+      </p>
     </main>
+    <script src="main.js"></script>
   </body>
 </html>
