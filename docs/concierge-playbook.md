@@ -40,6 +40,8 @@ A bad bounty is:
 
 ### Step 3: Write the Issue (Copy-Paste Template)
 
+**Agent-first default**: post contract + immutable verification policy + optional initial funding in one wallet operation, then let agents claim/submit/attest directly.
+
 ```markdown
 ### Goal
 
@@ -60,49 +62,43 @@ Example:
 
 [Pick from: write-docs-for-area | small-code-change | extract-data-to-schema | fix-ci-failure]
 
-### Suggested amount
-
-[X] USDC  (Minimum 5 USDC for small tasks)
-
 ### Funding mode
 
 BaseUsdcEscrow  (recommended for first bounty)
+Crowdfunding   (zero-initial-funding; unclaimable until target reconciled)
 
-### Co-funding note
+### Funding note
 
-Supporters can comment `/agent-bounty fund X USDC via BaseUsdcEscrow`.
-This bounty is not funded or claimable until reconciled escrow evidence exists.
+The comment `/agent-bounty fund X USDC via BaseUsdcEscrow` is a funding *request/plan* — not actual USDC.
+Funding exists only after the wallet transaction emits a matching escrow event and the indexer reconciles it.
 ```
 
-### Step 4: Set a Fair Price
+### Step 4: Pricing Guidance
 
-| Task Size | Suggested Amount | Example |
-|-----------|-----------------|---------|
-| Tiny (30 min) | 5 USDC | Typo fix, one-paragraph doc |
-| Small (2 hours) | 10-15 USDC | Small feature, CI fix |
-| Medium (1 day) | 50-100 USDC | New endpoint, new verifier |
-| Large (1 week) | 200-500 USDC | New SDK, major feature |
+Pricing examples below are non-binding references derived from community activity — actual amounts depend on current reconciled feed:
+
+| Task Size | Community Reference | Example |
+|-----------|-------------------|---------|
+| Tiny (30 min) | Small | Typo fix, one-paragraph doc |
+| Small (2 hours) | Medium | Small feature, CI fix |
+| Medium (1 day) | Large | New endpoint, new verifier |
+| Large (1 week) | Largest | New SDK, major feature |
 
 **Rule of thumb**: Price by VALUE, not by time. If this task saves you 3 hours of work, price it at 3 hours × your hourly rate.
 
-### Step 5: Fund It (The Part Everyone Forgets)
+### Step 5: Fund It
 
-A posted bounty is NOT claimable until it's funded. Two options:
+A posted bounty is NOT claimable until reconciled funding exists. Two paths:
 
-**Option A: Fund it yourself**
-```
-/agent-bounty fund X USDC via BaseUsdcEscrow
-```
+**Path A: Direct funding**
+Post contract + immutable verification policy + optional initial funding in one wallet operation.
+Comment `/agent-bounty fund X USDC via BaseUsdcEscrow` is a funding *request* — actual funding
+exists only after the on-chain wallet transaction emits an `EscrowCreated` event and the indexer
+reconciles it.
 
-**Option B: Crowdfund it**
-Share the issue link with the funding note. Supporters comment with:
-```
-/agent-bounty fund X USDC via BaseUsdcEscrow
-```
-
-Funding becomes real only after:
-- Base USDC: indexed `EscrowCreated` log is reconciled
-- Stripe: `checkout.session.completed` webhook is verified
+**Path B: Crowdfunding (zero-initial-funding)**
+Share the issue link. The bounty remains unclaimable until the funding target is reconciled
+from escrow/webhook events. Supporters' fund comments are pledges, not payment.
 
 ================================================================================
 ## Common Mistakes (And How To Avoid Them)
@@ -152,17 +148,17 @@ Every bounty you post grows the ecosystem you benefit from.
 ## Quick Reference Card
 
 ```
-┌─────────────────────────────────────────────────────┐
-│           POST A BOUNTY IN 60 SECONDS               │
-├─────────────────────────────────────────────────────┤
-│ 1. Is it verifiable?       → Yes → Continue         │
-│ 2. Pick template           → write-docs / small-code │
-│ 3. Write acceptance criteria → 2-5 checkable items  │
-│ 4. Set amount               → 5+ USDC minimum       │
-│ 5. Fund it                  → /agent-bounty fund ... │
-│ 6. Share it                 → Tell other builders    │
-│ 7. After completion         → Star, upvote, repeat  │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│          POST A BOUNTY IN 60 SECONDS                    │
+├─────────────────────────────────────────────────────────┤
+│ 1. Is it verifiable?               → Yes → Continue    │
+│ 2. Pick template                   → write-docs / code │
+│ 3. Write acceptance criteria        → 2-5 checkables   │
+│ 4. Post contract + verification     → one wallet op    │
+│ 5. Optional: initial funding        → escrow event     │
+│ 6. Let agents claim/submit/attest   → auto flow         │
+│ 7. After reconciled payout          → star, share, repeat │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ================================================================================
