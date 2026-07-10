@@ -3,11 +3,11 @@ use app::{
     BaseEscrowReconciliation, BaseReleaseAttestation, BaseReleaseTransactionEvidence, BountyNetwork,
 };
 use chain_base::{
-    base_network_descriptor, calldata_keccak256, evm_event_topic, fetch_base_escrow_logs,
-    fetch_block_number, fetch_transaction_by_hash, fetch_transaction_receipt,
-    normalize_evm_address, normalize_evm_hash, rpc_logs_to_evm_logs, BaseEscrowEvent,
-    BaseEscrowEventKind, BaseEscrowLogDecoder, BaseEscrowLogQuery, BaseNetworkDescriptor,
-    ChainEventIndexer, EvmLog,
+    base_network_descriptor, calldata_keccak256, decode_base_release_calldata, evm_event_topic,
+    fetch_base_escrow_logs, fetch_block_number, fetch_transaction_by_hash,
+    fetch_transaction_receipt, normalize_evm_address, normalize_evm_hash, rpc_logs_to_evm_logs,
+    BaseEscrowEvent, BaseEscrowEventKind, BaseEscrowLogDecoder, BaseEscrowLogQuery,
+    BaseNetworkDescriptor, ChainEventIndexer, EvmLog,
 };
 use chrono::{DateTime, Utc};
 use db::{
@@ -72,6 +72,17 @@ pub struct BaseLogPipelineReport {
     pub ledger_entries: Vec<LedgerEntry>,
     pub release_attestations: Vec<BaseReleaseAttestationRecord>,
     pub failures: Vec<BaseLogFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseReleaseAttestationFailureEvidence {
+    pub tx_hash: String,
+    pub expected_chain_id: u64,
+    pub escrow_contract: String,
+    pub settlement_signer: String,
+    pub platform_fee_wallet: Option<String>,
+    pub input: Option<String>,
+    pub reason: String,
 }
 
 #[derive(Debug)]
@@ -152,6 +163,21 @@ impl BaseEscrowLogWorker {
         network: &mut BountyNetwork,
         release_attestations: &HashMap<String, BaseReleaseTransactionEvidence>,
     ) -> BaseLogPipelineReport {
+        self.process_logs_with_release_evidence(
+            logs,
+            network,
+            release_attestations,
+            &HashMap::new(),
+        )
+    }
+
+    pub fn process_logs_with_release_evidence(
+        &mut self,
+        logs: impl IntoIterator<Item = EvmLog>,
+        network: &mut BountyNetwork,
+        release_attestations: &HashMap<String, BaseReleaseTransactionEvidence>,
+        failed_release_attestations: &HashMap<String, BaseReleaseAttestationFailureEvidence>,
+    ) -> BaseLogPipelineReport {
         let mut logs = logs.into_iter().collect::<Vec<_>>();
         logs.sort_by_key(|log| (log.block_number, log.log_index));
 
@@ -184,6 +210,23 @@ impl BaseEscrowLogWorker {
                 self.advance_cursor(block_number, log_index, event.log_key.clone());
                 report.ending_cursor = self.cursor.clone();
                 continue;
+            }
+
+            if event.kind == BaseEscrowEventKind::Released {
+                if let Some(failure) =
+                    failed_release_attestations.get(&release_tx_key(&event.tx_hash))
+                {
+                    report
+                        .release_attestations
+                        .push(failed_release_attestation_record(&event, failure));
+                    report.failures.push(BaseLogFailure {
+                        block_number,
+                        log_index,
+                        log_key: event.log_key,
+                        reason: failure.reason.clone(),
+                    });
+                    break;
+                }
             }
 
             let reconciliation = match apply_event_with_optional_attestation(
@@ -328,6 +371,54 @@ fn release_attestation_record(
         reason: reason.to_string(),
         created_at: Utc::now(),
     }
+}
+
+fn failed_release_attestation_record(
+    event: &BaseEscrowEvent,
+    failure: &BaseReleaseAttestationFailureEvidence,
+) -> BaseReleaseAttestationRecord {
+    let decoded = failure
+        .input
+        .as_deref()
+        .and_then(|input| decode_base_release_calldata(input, "usdc").ok());
+    let recipients = decoded
+        .as_ref()
+        .map(|decoded| {
+            serde_json::to_value(&decoded.recipients).unwrap_or_else(|_| serde_json::json!([]))
+        })
+        .unwrap_or_else(|| serde_json::json!([]));
+    BaseReleaseAttestationRecord {
+        id: Id::new_v4(),
+        network: failure.expected_chain_id.to_string(),
+        tx_hash: normalize_evm_hash(&failure.tx_hash).unwrap_or_else(|_| failure.tx_hash.clone()),
+        log_key: event.log_key.clone(),
+        bounty_id: event.bounty_id,
+        onchain_escrow_id: event.onchain_escrow_id.to_string(),
+        calldata_hash: failure
+            .input
+            .as_deref()
+            .and_then(|input| calldata_keccak256(input).ok()),
+        proof_hash: decoded
+            .as_ref()
+            .map(|decoded| decoded.proof_hash.clone())
+            .or_else(|| event.proof_hash.clone()),
+        recipients,
+        escrow_contract: normalize_evm_address(&failure.escrow_contract)
+            .unwrap_or_else(|_| failure.escrow_contract.clone()),
+        settlement_signer: normalize_evm_address(&failure.settlement_signer)
+            .unwrap_or_else(|_| failure.settlement_signer.clone()),
+        platform_fee_wallet: failure
+            .platform_fee_wallet
+            .as_ref()
+            .map(|wallet| normalize_evm_address(wallet).unwrap_or_else(|_| wallet.clone())),
+        verdict: "failed".to_string(),
+        reason: failure.reason.clone(),
+        created_at: Utc::now(),
+    }
+}
+
+fn release_tx_key(tx_hash: &str) -> String {
+    normalize_evm_hash(tx_hash).unwrap_or_else(|_| tx_hash.to_ascii_lowercase())
 }
 
 fn cursor_from_events(events: &[BaseEscrowEvent]) -> BaseLogCursor {
@@ -639,15 +730,16 @@ pub async fn poll_base_indexer_once(
     let response = fetch_base_escrow_logs(&config.rpc_url, &query, config.request_id + 1).await?;
     let logs = rpc_logs_to_evm_logs(response.result)?;
     let fetched_logs = logs.len();
-    let release_attestations =
+    let release_attestation_fetch =
         fetch_release_transaction_evidence_for_logs(&config.rpc_url, &descriptor, config, &logs)
             .await?;
-    let reconciliation = process_base_evm_logs_and_persist_with_release_attestations(
+    let reconciliation = process_base_evm_logs_and_persist_with_release_evidence(
         store,
         &mut worker,
         &mut network,
         logs,
-        &release_attestations,
+        &release_attestation_fetch.attestations,
+        &release_attestation_fetch.failures,
         Some(BaseLogPersistenceCursor {
             network: &config.network,
             escrow_contract: &config.escrow_contract,
@@ -855,7 +947,33 @@ pub async fn process_base_evm_logs_and_persist_with_release_attestations(
     release_attestations: &HashMap<String, BaseReleaseTransactionEvidence>,
     cursor_if_success: Option<BaseLogPersistenceCursor<'_>>,
 ) -> anyhow::Result<BaseLogPipelineReport> {
-    let report = worker.process_logs_with_release_attestations(logs, network, release_attestations);
+    process_base_evm_logs_and_persist_with_release_evidence(
+        store,
+        worker,
+        network,
+        logs,
+        release_attestations,
+        &HashMap::new(),
+        cursor_if_success,
+    )
+    .await
+}
+
+pub async fn process_base_evm_logs_and_persist_with_release_evidence(
+    store: &PostgresStore,
+    worker: &mut BaseEscrowLogWorker,
+    network: &mut BountyNetwork,
+    logs: Vec<EvmLog>,
+    release_attestations: &HashMap<String, BaseReleaseTransactionEvidence>,
+    failed_release_attestations: &HashMap<String, BaseReleaseAttestationFailureEvidence>,
+    cursor_if_success: Option<BaseLogPersistenceCursor<'_>>,
+) -> anyhow::Result<BaseLogPipelineReport> {
+    let report = worker.process_logs_with_release_evidence(
+        logs,
+        network,
+        release_attestations,
+        failed_release_attestations,
+    );
     let applied_event_ids = report
         .applied_events
         .iter()
@@ -919,47 +1037,158 @@ pub async fn process_base_evm_logs_and_persist_with_release_attestations(
     Ok(report)
 }
 
+#[derive(Debug, Clone, Default)]
+struct ReleaseTransactionEvidenceFetchReport {
+    attestations: HashMap<String, BaseReleaseTransactionEvidence>,
+    failures: HashMap<String, BaseReleaseAttestationFailureEvidence>,
+}
+
 async fn fetch_release_transaction_evidence_for_logs(
     rpc_url: &str,
     descriptor: &BaseNetworkDescriptor,
     config: &BaseIndexerConfig,
     logs: &[EvmLog],
-) -> anyhow::Result<HashMap<String, BaseReleaseTransactionEvidence>> {
+) -> anyhow::Result<ReleaseTransactionEvidenceFetchReport> {
     let release_topic = evm_event_topic("EscrowReleased(uint256,bytes32)");
     let mut tx_hashes = Vec::new();
+    let mut report = ReleaseTransactionEvidenceFetchReport::default();
     for log in logs {
         if log.topics.first() != Some(&release_topic) {
             continue;
         }
-        let log_address = normalize_evm_address(&log.address)
-            .map_err(|error| anyhow!("invalid release log emitter address: {error}"))?;
+        let tx_key = release_tx_key(&log.tx_hash);
+        let log_address = match normalize_evm_address(&log.address) {
+            Ok(address) => address,
+            Err(error) => {
+                report.failures.insert(
+                    tx_key,
+                    failed_release_fetch(
+                        &log.tx_hash,
+                        descriptor,
+                        config,
+                        None,
+                        format!("invalid release log emitter address: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
         if log_address != config.escrow_contract {
-            return Err(anyhow!(
-                "release log emitted by {log_address}, expected configured escrow {}",
-                config.escrow_contract
-            ));
+            report.failures.insert(
+                tx_key,
+                failed_release_fetch(
+                    &log.tx_hash,
+                    descriptor,
+                    config,
+                    None,
+                    format!(
+                        "release log emitted by {log_address}, expected configured escrow {}",
+                        config.escrow_contract
+                    ),
+                ),
+            );
+            continue;
         }
-        let tx_hash = normalize_evm_hash(&log.tx_hash)
-            .map_err(|error| anyhow!("invalid release log transaction hash: {error}"))?;
+        let tx_hash = match normalize_evm_hash(&log.tx_hash) {
+            Ok(tx_hash) => tx_hash,
+            Err(error) => {
+                report.failures.insert(
+                    tx_key,
+                    failed_release_fetch(
+                        &log.tx_hash,
+                        descriptor,
+                        config,
+                        None,
+                        format!("invalid release log transaction hash: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
         if !tx_hashes.contains(&tx_hash) {
             tx_hashes.push(tx_hash);
         }
     }
 
-    let mut attestations = HashMap::new();
     for (index, tx_hash) in tx_hashes.into_iter().enumerate() {
         let request_id = config.request_id + 10 + (index as u64 * 2);
-        let receipt = fetch_transaction_receipt(rpc_url, &tx_hash, request_id)
-            .await?
-            .result
-            .ok_or_else(|| anyhow!("release transaction receipt not found for {tx_hash}"))?;
-        let receipt_tx_hash = receipt.normalized_tx_hash()?;
+        let receipt_response = match fetch_transaction_receipt(rpc_url, &tx_hash, request_id).await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        None,
+                        format!("release transaction receipt fetch failed for {tx_hash}: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
+        let Some(receipt) = receipt_response.result else {
+            report.failures.insert(
+                tx_hash.clone(),
+                failed_release_fetch(
+                    &tx_hash,
+                    descriptor,
+                    config,
+                    None,
+                    format!("release transaction receipt not found for {tx_hash}"),
+                ),
+            );
+            continue;
+        };
+        let receipt_tx_hash = match receipt.normalized_tx_hash() {
+            Ok(tx_hash) => tx_hash,
+            Err(error) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        None,
+                        format!("invalid release receipt transaction hash for {tx_hash}: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
         if receipt_tx_hash != tx_hash {
-            return Err(anyhow!(
-                "release receipt hash {receipt_tx_hash} does not match requested transaction {tx_hash}"
-            ));
+            report.failures.insert(
+                tx_hash.clone(),
+                failed_release_fetch(
+                    &tx_hash,
+                    descriptor,
+                    config,
+                    None,
+                    format!(
+                        "release receipt hash {receipt_tx_hash} does not match requested transaction {tx_hash}"
+                    ),
+                ),
+            );
+            continue;
         }
-        let receipt_logs = receipt.logs_to_evm_logs()?;
+        let receipt_logs = match receipt.logs_to_evm_logs() {
+            Ok(logs) => logs,
+            Err(error) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        None,
+                        format!("release receipt logs are invalid for {tx_hash}: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
         let receipt_has_configured_release = receipt_logs.iter().any(|log| {
             log.tx_hash == tx_hash
                 && log.topics.first() == Some(&release_topic)
@@ -968,47 +1197,206 @@ async fn fetch_release_transaction_evidence_for_logs(
                     .unwrap_or(false)
         });
         if !receipt_has_configured_release {
-            return Err(anyhow!(
+            let reason = format!(
                 "release receipt {tx_hash} has no EscrowReleased log emitted by configured escrow {}",
                 config.escrow_contract
-            ));
+            );
+            report.failures.insert(
+                tx_hash.clone(),
+                failed_release_fetch(&tx_hash, descriptor, config, None, reason),
+            );
+            continue;
         }
 
-        let transaction = fetch_transaction_by_hash(rpc_url, &tx_hash, request_id + 1)
-            .await?
-            .result
-            .ok_or_else(|| anyhow!("release transaction not found for {tx_hash}"))?;
-        let transaction_hash = transaction.normalized_hash()?;
+        let transaction_response =
+            match fetch_transaction_by_hash(rpc_url, &tx_hash, request_id + 1).await {
+                Ok(response) => response,
+                Err(error) => {
+                    report.failures.insert(
+                        tx_hash.clone(),
+                        failed_release_fetch(
+                            &tx_hash,
+                            descriptor,
+                            config,
+                            None,
+                            format!("release transaction fetch failed for {tx_hash}: {error}"),
+                        ),
+                    );
+                    continue;
+                }
+            };
+        let Some(transaction) = transaction_response.result else {
+            report.failures.insert(
+                tx_hash.clone(),
+                failed_release_fetch(
+                    &tx_hash,
+                    descriptor,
+                    config,
+                    None,
+                    format!("release transaction not found for {tx_hash}"),
+                ),
+            );
+            continue;
+        };
+        let input = Some(transaction.input.clone());
+        let transaction_hash = match transaction.normalized_hash() {
+            Ok(hash) => hash,
+            Err(error) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        input,
+                        format!("invalid release transaction hash for {tx_hash}: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
         if transaction_hash != tx_hash {
-            return Err(anyhow!(
-                "release transaction hash {transaction_hash} does not match receipt {tx_hash}"
-            ));
+            report.failures.insert(
+                tx_hash.clone(),
+                failed_release_fetch(
+                    &tx_hash,
+                    descriptor,
+                    config,
+                    input,
+                    format!(
+                        "release transaction hash {transaction_hash} does not match receipt {tx_hash}"
+                    ),
+                ),
+            );
+            continue;
         }
-        let chain_id = transaction
-            .chain_id()?
-            .ok_or_else(|| anyhow!("release transaction {tx_hash} is missing chainId"))?;
-        let to = transaction
-            .normalized_to()?
-            .ok_or_else(|| anyhow!("release transaction {tx_hash} has no target contract"))?;
+        let chain_id = match transaction.chain_id() {
+            Ok(Some(chain_id)) => chain_id,
+            Ok(None) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        input,
+                        format!("release transaction {tx_hash} is missing chainId"),
+                    ),
+                );
+                continue;
+            }
+            Err(error) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        input,
+                        format!("invalid release transaction chainId for {tx_hash}: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
+        let to = match transaction.normalized_to() {
+            Ok(Some(to)) => to,
+            Ok(None) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        input,
+                        format!("release transaction {tx_hash} has no target contract"),
+                    ),
+                );
+                continue;
+            }
+            Err(error) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        input,
+                        format!("invalid release transaction target for {tx_hash}: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
+        let from = match transaction.normalized_from() {
+            Ok(from) => from,
+            Err(error) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        input,
+                        format!("invalid release transaction sender for {tx_hash}: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
+        let receipt_succeeded = match receipt.succeeded() {
+            Ok(value) => value.unwrap_or(false),
+            Err(error) => {
+                report.failures.insert(
+                    tx_hash.clone(),
+                    failed_release_fetch(
+                        &tx_hash,
+                        descriptor,
+                        config,
+                        input,
+                        format!("invalid release receipt status for {tx_hash}: {error}"),
+                    ),
+                );
+                continue;
+            }
+        };
 
-        attestations.insert(
+        report.attestations.insert(
             tx_hash.clone(),
             BaseReleaseTransactionEvidence {
                 tx_hash,
                 chain_id,
                 expected_chain_id: descriptor.chain_id,
-                from: transaction.normalized_from()?,
+                from,
                 settlement_signer: config.settlement_signer.clone(),
                 to,
                 escrow_contract: config.escrow_contract.clone(),
                 input: transaction.input.clone(),
-                receipt_succeeded: receipt.succeeded()?.unwrap_or(false),
+                receipt_succeeded,
                 platform_fee_wallet: config.platform_fee_wallet.clone(),
             },
         );
     }
 
-    Ok(attestations)
+    Ok(report)
+}
+
+fn failed_release_fetch(
+    tx_hash: &str,
+    descriptor: &BaseNetworkDescriptor,
+    config: &BaseIndexerConfig,
+    input: Option<String>,
+    reason: String,
+) -> BaseReleaseAttestationFailureEvidence {
+    BaseReleaseAttestationFailureEvidence {
+        tx_hash: tx_hash.to_string(),
+        expected_chain_id: descriptor.chain_id,
+        escrow_contract: config.escrow_contract.clone(),
+        settlement_signer: config.settlement_signer.clone(),
+        platform_fee_wallet: config.platform_fee_wallet.clone(),
+        input,
+        reason,
+    }
 }
 
 pub fn next_indexer_from_block(
@@ -1128,6 +1516,76 @@ mod tests {
         assert_eq!(status.bounty.status, BountyStatus::Paid);
         assert_eq!(status.escrows[0].status, EscrowStatus::Released);
         assert_eq!(network.ledger.entries().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn release_fetch_failure_persists_decoded_quarantine_record() {
+        let (mut network, bounty, proof) = payable_base_bounty().await;
+        let logs = raw_created_and_released_logs(&bounty, &proof);
+        let release_attestations = release_attestations_for(&network, &bounty, &logs[1]);
+        let planned = release_attestations
+            .get(&release_tx_key(&logs[1].tx_hash))
+            .expect("planned release evidence");
+        let failures = HashMap::from([(
+            release_tx_key(&logs[1].tx_hash),
+            BaseReleaseAttestationFailureEvidence {
+                tx_hash: logs[1].tx_hash.clone(),
+                expected_chain_id: planned.expected_chain_id,
+                escrow_contract: planned.escrow_contract.clone(),
+                settlement_signer: planned.settlement_signer.clone(),
+                platform_fee_wallet: planned.platform_fee_wallet.clone(),
+                input: Some(planned.input.clone()),
+                reason: "release transaction receipt not found for quarantine test".to_string(),
+            },
+        )]);
+        let mut worker = BaseEscrowLogWorker::default();
+
+        let report = worker.process_logs_with_release_evidence(
+            logs,
+            &mut network,
+            &HashMap::new(),
+            &failures,
+        );
+
+        assert_eq!(report.applied_events.len(), 1);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(
+            report.failures[0].reason,
+            "release transaction receipt not found for quarantine test"
+        );
+        assert_eq!(report.release_attestations.len(), 1);
+        let record = &report.release_attestations[0];
+        assert_eq!(record.verdict, "failed");
+        assert_eq!(
+            record.reason,
+            "release transaction receipt not found for quarantine test"
+        );
+        assert!(record.calldata_hash.is_some());
+        let expected_proof_hash = format!("0x{}", proof.proof_hash);
+        assert_eq!(
+            record.proof_hash.as_deref(),
+            Some(expected_proof_hash.as_str())
+        );
+        let recipients = record.recipients.as_array().expect("recipients array");
+        assert_eq!(recipients.len(), 1);
+        assert_eq!(
+            recipients[0]["address"],
+            serde_json::json!("0x2222222222222222222222222222222222222222")
+        );
+        assert_eq!(
+            recipients[0]["amount"]["amount"],
+            serde_json::json!(1_000_000)
+        );
+        assert_eq!(
+            recipients[0]["amount"]["currency"],
+            serde_json::json!("usdc")
+        );
+        let status = network.status(bounty.id).unwrap();
+        assert_eq!(status.bounty.status, BountyStatus::Payable);
+        assert_eq!(
+            status.settlements[0].payout_intents[0].status,
+            PayoutStatus::Pending
+        );
     }
 
     #[tokio::test]
