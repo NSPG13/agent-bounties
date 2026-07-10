@@ -167,7 +167,26 @@
     if (!money || typeof money.amount !== "number") {
       return "unknown";
     }
-    return `${money.amount} ${money.currency || "minor units"}`;
+    const currency = String(money.currency || "").trim().toLowerCase();
+    const exponent = {
+      usd: 2,
+      eur: 2,
+      gbp: 2,
+      usdc: 6,
+    }[currency];
+    if (typeof exponent !== "number") {
+      return `${money.amount} minor units${currency ? ` ${currency.toUpperCase()}` : ""}`;
+    }
+    const minor = Math.trunc(money.amount);
+    const sign = minor < 0 ? "-" : "";
+    const absolute = Math.abs(minor);
+    const base = 10 ** exponent;
+    const whole = Math.trunc(absolute / base);
+    if (exponent === 0) {
+      return `${sign}${whole} ${currency.toUpperCase()}`;
+    }
+    const fractional = String(absolute % base).padStart(exponent, "0");
+    return `${sign}${whole}.${fractional} ${currency.toUpperCase()}`;
   }
 
   function stripeFundingIntents(report) {
@@ -179,17 +198,15 @@
   function matchingStripeFundingIntent(report, lookup) {
     const intents = stripeFundingIntents(report);
     if (lookup.fundingIntentId) {
-      const match = intents.find((intent) => intent.id === lookup.fundingIntentId);
-      if (match) return match;
+      return intents.find((intent) => intent.id === lookup.fundingIntentId) || null;
     }
     if (lookup.externalReference) {
-      const match = intents.find((intent) => intent.external_reference === lookup.externalReference);
-      if (match) return match;
+      return intents.find((intent) => intent.external_reference === lookup.externalReference) || null;
     }
     return intents.length === 1 ? intents[0] : null;
   }
 
-  function checkoutStatusLines(report, lookup) {
+  function checkoutStatusModel(report, lookup) {
     const bounty = report.bounty || {};
     const summary = report.funding_summary || {};
     const intent = matchingStripeFundingIntent(report, lookup);
@@ -198,18 +215,36 @@
     const appliedMinor = summary.applied && typeof summary.applied.amount === "number"
       ? summary.applied.amount
       : 0;
-    const heading = status === "Applied" || claimable
+    const heading = status === "Applied"
       ? "funding reconciled"
       : status === "Rejected"
         ? "needs operator review"
         : "waiting for webhook";
+    return {
+      appliedMinor,
+      bounty,
+      claimable,
+      heading,
+      intent,
+      status,
+      summary,
+    };
+  }
+
+  function checkoutStatusLines(report, lookup) {
+    const state = checkoutStatusModel(report, lookup);
+    const bounty = state.bounty;
+    const summary = state.summary;
+    const intent = state.intent;
+    const status = state.status;
+    const claimable = state.claimable;
     const lines = [
-      `State: ${heading}`,
+      `State: ${state.heading}`,
       `Bounty status: ${bounty.status || "unknown"}`,
       `Bounty id: ${lookup.bountyId || bounty.id || "unknown"}`,
       `Applied funding: ${displayMoney(summary.applied)}`,
       `Remaining funding: ${displayMoney(summary.remaining)}`,
-      `Claimable: ${claimable ? "yes" : "no"}`,
+      `Bounty claimable: ${claimable ? "yes" : "no"}`,
     ];
 
     if (intent) {
@@ -220,13 +255,13 @@
       lines.push(`Funding intent: not identified${lookup.externalReference ? ` for external reference ${lookup.externalReference}` : ""}`);
     }
 
-    if (status === "Applied" || claimable) {
-      lines.push("Funding is reconciled only because the hosted API reports applied webhook evidence or a claimable bounty state.");
+    if (status === "Applied") {
+      lines.push("Funding is reconciled only because the matching Stripe funding intent reports applied checkout.session.completed webhook evidence.");
       lines.push("Default CTA: Post your own bounty.");
     } else if (status === "Rejected") {
       lines.push("The hosted API rejected this funding intent. Contact the operator with the funding intent id if available.");
-    } else if (appliedMinor > 0) {
-      lines.push("Some funding is applied, but this return page still waits for the matching Checkout funding intent or full claimable state.");
+    } else if (state.appliedMinor > 0 || claimable) {
+      lines.push("Some bounty funding or claimability exists, but this return page still waits for the matching Checkout funding intent to show Applied webhook evidence.");
     } else {
       lines.push("Checkout returned, but funding is still pending until the signed checkout.session.completed webhook is reconciled.");
       lines.push("Refresh this page after a few seconds. If it stays pending, the hosted operator should check webhook delivery.");
@@ -234,6 +269,23 @@
 
     return lines.join("\n");
   }
+
+  function checkoutUnavailableStatusLines(message) {
+    return [
+      "State: needs operator review",
+      message,
+      "Hosted API status is unavailable, so this page cannot show funding as reconciled.",
+      "Refresh later or ask the operator to inspect webhook delivery for the funding intent.",
+    ].join("\n");
+  }
+
+  window.AgentBountiesCheckoutStatus = {
+    checkoutStatusLines,
+    checkoutStatusModel,
+    checkoutUnavailableStatusLines,
+    displayMoney,
+    matchingStripeFundingIntent,
+  };
 
   async function refreshCheckoutStatus() {
     if (!checkoutStatusOutput) return;
@@ -265,12 +317,7 @@
       checkoutStatusOutput.textContent = checkoutStatusLines(await response.json(), lookup);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      checkoutStatusOutput.textContent = [
-        "State: needs operator review",
-        message,
-        "Hosted API status is unavailable, so this page cannot show funding as reconciled.",
-        "Refresh later or ask the operator to inspect webhook delivery for the funding intent.",
-      ].join("\n");
+      checkoutStatusOutput.textContent = checkoutUnavailableStatusLines(message);
     }
   }
 

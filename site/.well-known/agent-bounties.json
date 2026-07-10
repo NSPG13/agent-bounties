@@ -208,7 +208,7 @@
       "funding_intents.status",
       "funding_intents.external_reference"
     ],
-    "settlement_authority": "Checkout redirect success is not funding; only a hosted status response showing an applied funding intent, reconciled webhook evidence, or claimable bounty can show funding as reconciled."
+    "settlement_authority": "Checkout redirect success is not funding; only a hosted status response showing the matched Stripe funding intent in Applied state can show this Checkout as reconciled. Generic bounty claimability must be displayed separately because it can come from another rail or contribution."
   },
   "paypal_checkout_handoff": {
     "page": "https://nspg13.github.io/agent-bounties/funding.html",

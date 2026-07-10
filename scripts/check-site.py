@@ -201,12 +201,26 @@ def main() -> int:
         "Hosted API status is unavailable",
         "Funding intent id",
         "Default CTA: Post your own bounty.",
+        "Bounty claimable:",
         "apiBaseUrl",
         "externalReference",
     ]
     for phrase in required_checkout_status_js:
         if phrase not in main_js:
             fail(f"main.js missing Checkout status coverage: {phrase}")
+    required_checkout_classifier_tests = [
+        "checkoutStatusLines",
+        "AwaitingEvidence",
+        "different-checkout",
+        "checkout status classifier tests passed",
+        "1.000000 USDC",
+        "5.00 USD",
+        "Hosted API status is unavailable",
+    ]
+    checkout_test = (repo_root / "scripts" / "test-checkout-status.js").read_text(encoding="utf-8")
+    for phrase in required_checkout_classifier_tests:
+        if phrase not in checkout_test:
+            fail(f"test-checkout-status.js missing classifier test coverage: {phrase}")
 
     if "sk_live" in index + funding + main_js:
         fail("site must not include secret-looking Stripe live keys")
@@ -229,6 +243,14 @@ def main() -> int:
         fail("llms.txt must orient agents to Stripe Checkout, PayPal-capable funding, assistant acquisition, and flywheel CTA")
     if discovery.get("open_source") is not True:
         fail("static discovery manifest must advertise open_source=true")
+    checkout_status = discovery.get("checkout_return_status", {})
+    if (
+        "matched Stripe funding intent in Applied state"
+        not in checkout_status.get("settlement_authority", "")
+        or "Generic bounty claimability"
+        not in checkout_status.get("settlement_authority", "")
+    ):
+        fail("static discovery manifest must keep Checkout reconciliation tied to the matched Applied Stripe intent")
     assistant_acquisition = discovery.get("assistant_acquisition", {})
     if (
         "I want to make money with AI"

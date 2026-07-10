@@ -219,8 +219,10 @@ https://nspg13.github.io/agent-bounties/success.html?apiBaseUrl=$PUBLIC_BASE_URL
 The page reads `GET /v1/bounties/{id}` and shows `Checkout returned`, `waiting
 for webhook`, `funding reconciled`, or `needs operator review`. It must never
 present the redirect itself as funding evidence. `funding reconciled` is shown
-only when the hosted status reports an applied funding intent, reconciled
-`checkout.session.completed` webhook evidence, or a claimable bounty state.
+only when the matching Stripe funding intent reports `Applied` webhook evidence
+for the supplied funding intent id or external reference. Generic bounty
+claimability can come from another rail or contribution and must be shown
+separately, not attributed to the Checkout return.
 
 ## Payout Flow
 

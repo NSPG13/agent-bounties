@@ -84,7 +84,9 @@ To deploy from the Dashboard after the PR is merged:
    `https://nspg13.github.io/agent-bounties/success.html?apiBaseUrl=<api>&bountyId=<bounty-id>&externalReference=<external-reference>`.
    The page may show `waiting for webhook`, `funding reconciled`, or `needs
    operator review` from `GET /v1/bounties/{id}`, but the Checkout redirect
-   itself is not funding evidence.
+   itself is not funding evidence. It should show `funding reconciled` only
+   when the matched Stripe funding intent is `Applied`; generic bounty
+   claimability is displayed separately.
 
 The checked-in Base worker starts at block `48422806` for escrow
 `0x150C6dFbCe7803cc7f634f59b0624e87349CEAce`. It is read-only with respect to

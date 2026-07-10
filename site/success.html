@@ -15,7 +15,7 @@
       <section class="readiness-panel" id="checkout-status-panel" aria-labelledby="checkout-status-title">
         <div>
           <h2 id="checkout-status-title">Funding status</h2>
-          <p class="fine">This status reads the hosted bounty record after Checkout return. A redirect is not payment evidence; only the reconciled funding intent or bounty status can show funding.</p>
+          <p class="fine">This status reads the hosted bounty record after Checkout return. A redirect is not payment evidence; only the matched Stripe funding intent in Applied state can show this Checkout as reconciled. Bounty claimability is displayed separately.</p>
         </div>
         <button id="checkout-status-refresh" class="button secondary" type="button">Refresh status</button>
         <output id="checkout-status-output" class="output readiness-output" aria-live="polite">Checkout returned. Waiting for status details.</output>

@@ -28,7 +28,8 @@ Start here:
 - Post-Checkout funding status:
   https://nspg13.github.io/agent-bounties/success.html?apiBaseUrl={api}&bountyId={bounty_id}&externalReference={external_reference}
   This page reads {api}/v1/bounties/{bounty_id} and can show Checkout returned,
-  waiting for webhook, funding reconciled, or needs operator review.
+  waiting for webhook, funding reconciled, or needs operator review for the
+  matched Stripe funding intent.
 - Base USDC funding plan handoff:
   https://nspg13.github.io/agent-bounties/funding.html?apiBaseUrl={api}&bountyId={bounty_id}&network=base-sepolia&escrowContract={escrow}&payer={payer}&token={usdc}&rail=BaseUsdc&source={source}
 - Hosted API health preflight: enter an API base URL on the funding page and run
@@ -171,9 +172,9 @@ Payment invariants:
 - Funding page query parameters are UI defaults only; they do not create funding
   or settlement.
 - A Checkout return/success page is not funding evidence. It may show funding
-  reconciled only after the hosted API reports an applied funding intent,
-  reconciled checkout.session.completed webhook evidence, or a claimable bounty
-  state.
+  reconciled only after the matched Stripe funding intent reports Applied
+  checkout.session.completed webhook evidence. Generic bounty claimability can
+  come from another rail or contribution and must be displayed separately.
 - Hosted health and readiness checks are informational only; they do not create
   funding intents, Checkout Sessions, transactions, ledger credits, or payout
   state.
