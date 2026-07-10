@@ -61,6 +61,54 @@ On Unix-like shells:
 python3 scripts/check-render-blueprint.py
 ```
 
+### Hosted API returns 404 (repair path)
+
+If `https://agent-bounties-api.onrender.com/health` (or your `PUBLIC_BASE_URL`)
+returns **404** for `/health`, `/v1/readiness/live-money`, and
+`/v1/bounties/funding-feed`, run:
+
+```powershell
+python scripts\diagnose_hosted_api.py
+python scripts\diagnose_hosted_api.py --base-url https://agent-bounties-api.onrender.com --json-out target/hosted-api-diagnosis.json
+```
+
+```bash
+python3 scripts/diagnose_hosted_api.py
+python3 scripts/diagnose_hosted_api.py --base-url https://agent-bounties-api.onrender.com --json-out target/hosted-api-diagnosis.json
+```
+
+Typical causes when **all** paths are HTTP **404** (at least one non-null status)
+and DNS still resolves:
+
+1. The Render Blueprint was never applied (no live `agent-bounties-api` service).
+2. Docs still advertise `agent-bounties-api.onrender.com` but Render assigned a
+   different hostname after rename/recreate.
+3. The service is running the wrong binary (`worker` instead of `api`) so
+   HTTP routes are missing.
+4. All paths return connection errors with no HTTP status (`connection_failure`) —
+   service suspended or not listening (distinct from 404).
+
+Repair sequence:
+
+1. Open
+   `https://dashboard.render.com/blueprint/new?repo=https://github.com/NSPG13/agent-bounties`
+   and apply [render.yaml](../render.yaml) on `main`.
+2. Confirm web service **`agent-bounties-api`**: Docker runtime,
+   `healthCheckPath: /health`, env `APP_PACKAGE=api`, `APP_BINARY=api`.
+3. Confirm the process listens on `0.0.0.0:$PORT` (API already falls back to
+   Render `PORT` when `API_BIND_ADDR` is unset).
+4. Wait until deploy is **Live**, then re-run `diagnose_hosted_api.py` until
+   `/health` is HTTP 200.
+5. If the hostname differs, update `PUBLIC_BASE_URL` / `MCP_BASE_URL` on the
+   service and in operator docs/vars.
+6. Only after production smoke passes, set `PRODUCTION_API_BASE_URL` and
+   `AGENT_BOUNTIES_API_BASE_URL` so funding pages do not advertise a dead API.
+
+**Payment boundary:** a healthy `/health` response does **not** create funding,
+credit balances, enable Checkout, or authorize payout. Stripe/Base rails still
+require secrets + readiness gates in
+[live-money-activation.md](live-money-activation.md).
+
 ## Base mainnet deployment attestation
 
 Replayable read-only checks compare live Base mainnet RPC state against
