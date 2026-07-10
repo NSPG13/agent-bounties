@@ -119,6 +119,31 @@
       <section class="band muted compact">
         <div class="section-grid">
           <div>
+            <h2>Fund with Base wallet</h2>
+            <p class="fine">Use an injected EIP-1193 wallet on Base mainnet for native USDC escrow funding. This page uses the verified Base mainnet escrow and native USDC addresses from the deployment manifest, requests two wallet confirmations, and shows funding as reconciled only after hosted status reports indexed <code>EscrowCreated</code> evidence.</p>
+          </div>
+          <form id="base-wallet-form" class="funding-form">
+            <label>
+              Hosted API base URL
+              <input name="walletApiBaseUrl" type="url" placeholder="https://api.example.com" required>
+            </label>
+            <label>
+              Bounty ID
+              <input name="walletBountyId" placeholder="00000000-0000-0000-0000-000000000001" required>
+            </label>
+            <p class="fine form-note">Base mainnet only: chain <code>8453</code>, escrow <code>0x150C6dFbCe7803cc7f634f59b0624e87349CEAce</code>, native USDC <code>0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913</code>. Contract and token query parameters are ignored for wallet funding.</p>
+            <div class="actions">
+              <button id="base-wallet-connect" class="button secondary" type="button">Connect wallet</button>
+              <button class="button primary" type="submit">Fund with Base wallet</button>
+            </div>
+            <output id="base-wallet-output" class="output readiness-output" aria-live="polite">Connect a Base mainnet wallet before planning or signing. No private key, seed phrase, or raw wallet history is requested.</output>
+          </form>
+        </div>
+      </section>
+
+      <section class="band muted compact">
+        <div class="section-grid">
+          <div>
             <h2>Plan Base USDC escrow</h2>
             <p class="fine">This creates unsigned transaction intents only. Review the `approve` and `createEscrow` calldata in your wallet or operator workstation, then reconcile the indexed <code>EscrowCreated</code> log after broadcast. Transaction planning does not fund a bounty.</p>
           </div>

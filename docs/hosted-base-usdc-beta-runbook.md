@@ -138,6 +138,28 @@ broadcast through the wallet or a trusted operator workstation.
 The posted bounty supplies the amount, payee, and terms hash; they are not part
 of the funding-plan request payload.
 
+For the low-value Base mainnet path, funders can use the public funding page's
+wallet-native flow instead of copying calldata into a developer tool:
+
+```text
+https://nspg13.github.io/agent-bounties/funding.html?apiBaseUrl=<api>&bountyId=<bounty-id>&rail=BaseUsdc
+```
+
+The page uses an injected EIP-1193 wallet and requires an explicit `Connect
+wallet` action before requesting Base mainnet (`0x2105`, chain `8453`). It does
+not request or store private keys, seed phrases, signatures, or wallet history.
+It uses the verified Base mainnet escrow and native USDC constants from
+`deployments/base-mainnet.json`; contract and token query parameters are not
+trusted for wallet funding. Before the two `eth_sendTransaction` prompts, it
+rejects any hosted funding plan whose chain, payer, escrow target, token, bounty
+id, amount, or terms hash does not match the connected wallet and hosted bounty.
+
+The two confirmations remain separate: USDC `approve` first, escrow
+`createEscrow` second. If a prompt is rejected or a transaction is reported
+reverted, do not start an automatic retry loop. A wallet transaction hash is
+still not funding; the public page can show funding reconciled only after hosted
+read-only status reports matching indexed `EscrowCreated` evidence.
+
 ## 4. Make the Bounty Claimable
 
 After funding transactions are mined, fetch and reconcile escrow logs from the

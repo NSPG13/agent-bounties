@@ -32,6 +32,12 @@ Start here:
   matched Stripe funding intent.
 - Base USDC funding plan handoff:
   https://nspg13.github.io/agent-bounties/funding.html?apiBaseUrl={api}&bountyId={bounty_id}&network=base-sepolia&escrowContract={escrow}&payer={payer}&token={usdc}&rail=BaseUsdc&source={source}
+- Wallet-native Base mainnet funding:
+  https://nspg13.github.io/agent-bounties/funding.html?apiBaseUrl={api}&bountyId={bounty_id}&rail=BaseUsdc&source={source}
+  Use the Connect wallet action with an EIP-1193 wallet. The page requires
+  Base mainnet chain 8453, verified native USDC and escrow deployment
+  constants, two separate wallet confirmations for approve and createEscrow,
+  and read-only hosted status polling before it can show funding reconciled.
 - Hosted API health preflight: enter an API base URL on the funding page and run
   the read-only check_health action for /health. The expected body is ok.
 - Hosted readiness preflight: after health passes, run the read-only
@@ -180,6 +186,10 @@ Payment invariants:
   state.
 - Stripe funding is credited only after a verified checkout.session.completed webhook.
 - Base USDC funding and payouts require indexed escrow logs.
+- Wallet-native Base funding uses an injected EIP-1193 wallet and ignores
+  contract/token query parameters. Before eth_sendTransaction, the hosted plan
+  must match Base mainnet chain 8453, the connected payer, verified native USDC,
+  the verified escrow contract, bounty id, amount, and terms hash.
 - Verified Base mainnet pilot escrow:
   `0x150C6dFbCe7803cc7f634f59b0624e87349CEAce` on chain `8453`, deployed at
   block `48422806`, using native USDC
@@ -189,6 +199,8 @@ Payment invariants:
   1 USDC; a deployment or transaction hash is not settlement evidence.
 - Base funding plans are unsigned transaction intents only; they do not sign,
   broadcast, fund, or settle anything.
+- Base wallet transaction hashes remain pending evidence until the hosted status
+  shows matching indexed EscrowCreated reconciliation.
 - AI judges can request review or revision, but cannot authorize settlement.
 
 Distribution feedback request:
