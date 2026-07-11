@@ -21,7 +21,9 @@
       .facts dt { color: #8f989e; }
       .facts dd { margin: 0; }
       .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
-      button { min-height: 42px; border: 1px solid #4b5358; border-radius: 6px; padding: 0 15px; background: #252a2d; color: #f8f9f9; font: inherit; font-weight: 650; cursor: pointer; }
+      button, select { min-height: 42px; border: 1px solid #4b5358; border-radius: 6px; padding: 0 15px; background: #252a2d; color: #f8f9f9; font: inherit; font-weight: 650; }
+      button { cursor: pointer; }
+      select { min-width: 220px; }
       button.primary { background: #e9f4ed; border-color: #e9f4ed; color: #152019; }
       button.warning { background: #35291e; border-color: #876a42; color: #f5dfc2; }
       button:disabled { cursor: not-allowed; opacity: .42; }
@@ -57,8 +59,9 @@
 
       <section>
         <h2>1. Inspect Wallet And Chain</h2>
-        <p>Connect the exact creator wallet. The console checks Base chain ID, nonce, predicted address occupancy, balances, and deployment gas before enabling a transaction.</p>
+        <p>Choose the wallet that controls the exact creator account. The console checks Base chain ID, nonce, predicted address occupancy, balances, and deployment gas before enabling a transaction.</p>
         <div class="actions">
+          <select id="wallet-provider" aria-label="Wallet provider" disabled></select>
           <button class="primary" id="inspect">Connect and inspect</button>
         </div>
         <output id="inspect-output">Waiting for wallet inspection.</output>

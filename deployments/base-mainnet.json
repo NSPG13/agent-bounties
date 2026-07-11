@@ -5,15 +5,15 @@
   "chain_id": 8453,
   "rpc_url": "https://mainnet.base.org",
   "native_usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-  "status": "pending_external_review_and_deployment",
+  "status": "active",
   "factory": {
-    "contract": null,
-    "implementation": null,
-    "deployment_transaction": null,
-    "deployment_block": null,
-    "deployer": null,
-    "runtime_code_hash": null,
-    "implementation_runtime_code_hash": null,
+    "contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+    "implementation": "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
+    "deployment_transaction": "0x8c172a34188cc68cf61f7293825e3c93e025a029b878436d34aafd2103c2e70e",
+    "deployment_block": 48496662,
+    "deployer": "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "runtime_code_hash": "0x06f810de7b46f854ecc29e9c0c28156edab4b0d3e0bbe2bf5be8876687bebfc6",
+    "implementation_runtime_code_hash": "0xc36fcba5176b2cd8b57a9fd0cbf931177dc8b36cf8367c1568ccebe5f03be3f6",
     "source": "contracts/base-escrow/src/AgentBountyFactory.sol:AgentBountyFactory",
     "constructor_args": {
       "settlement_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"

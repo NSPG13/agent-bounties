@@ -248,7 +248,7 @@ def main() -> int:
         [
             "Default CTA: Post your own bounty",
             "agent-bounties/autonomous-v1",
-            "pending external review and deployment",
+            "active capped mainnet activation",
             "list_autonomous_bounties",
             "publish_autonomous_bounty_terms",
             "plan_autonomous_bounty_authorized_creation",
@@ -277,6 +277,8 @@ def main() -> int:
         fail("static discovery manifest protocol version mismatch")
     if manifest_protocol.get("factory") != protocol.get("factory"):
         fail("static discovery manifest factory mismatch")
+    if manifest_protocol.get("implementation") != protocol.get("implementation"):
+        fail("static discovery manifest implementation mismatch")
     if manifest_protocol.get("operator_settlement_signer") is not False:
         fail("static discovery manifest must not advertise a settlement operator")
     if manifest_protocol.get("payout_authority") != "confirmed canonical BountySettled event":

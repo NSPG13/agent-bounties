@@ -44,9 +44,9 @@ for (const retired of [
 assert.strictEqual(protocol.protocol_version, "agent-bounties/autonomous-v1");
 assert.strictEqual(protocol.network, "base-mainnet");
 assert.strictEqual(protocol.chain_id, 8453);
-assert.strictEqual(protocol.status, "pending_external_review_and_deployment");
-assert.strictEqual(protocol.factory, null);
-assert.strictEqual(protocol.implementation, null);
+assert.strictEqual(protocol.status, "active");
+assert.strictEqual(protocol.factory, "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9");
+assert.strictEqual(protocol.implementation, "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9");
 
 for (const page of ["index.html", "post.html", "funding.html", "earn.html", "operator.html"]) {
   const html = fs.readFileSync(path.join(repoRoot, "site", page), "utf8");

@@ -7,8 +7,9 @@ review and verification.
 ## Current State
 
 `site/protocol.json` and `deployments/base-mainnet.json` are authoritative.
-They must remain `pending_external_review_and_deployment` with null contract
-addresses until all deployment gates pass.
+They report the capped autonomous-v1 deployment as `active` and pin its exact
+factory, implementation, transaction, block, and runtime hashes. Any future
+address or hash change requires a new deployment record and chain attestation.
 
 The retired operator-signed escrow is recorded only in
 `deployments/base-mainnet-legacy.json`. Do not configure it in API, MCP, worker,
@@ -108,7 +109,7 @@ Mainnet uses native USDC
 `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`. The factory constructor has no
 other argument.
 
-The current low-value activation candidate is recorded in
+The low-value activation bundle is recorded in
 [`deployments/base-mainnet-activation.json`](../deployments/base-mainnet-activation.json).
 It is generated from the committed terms under `bounties/autonomous-v1`, the
 compiled Foundry artifacts, deployer
@@ -122,6 +123,13 @@ The repeatable Base-mainnet-fork result is recorded in
 [`docs/evidence/autonomous-v1-mainnet-fork-2026-07-11.json`](evidence/autonomous-v1-mainnet-fork-2026-07-11.json).
 That file proves rehearsal only. It is not live deployment, funding, or payout
 evidence.
+
+The canonical factory deployment is recorded in
+[`docs/evidence/autonomous-v1-mainnet-deployment-2026-07-11.json`](evidence/autonomous-v1-mainnet-deployment-2026-07-11.json).
+The four capped 1 USDC canary creations and their exact safe-block state are
+recorded in
+[`docs/evidence/autonomous-v1-mainnet-canaries-2026-07-11.json`](evidence/autonomous-v1-mainnet-canaries-2026-07-11.json).
+Neither record proves completion or payout; only `BountySettled` does.
 
 After a confirmed, verified deployment:
 

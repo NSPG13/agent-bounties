@@ -3,7 +3,8 @@
 
   const BASE_CHAIN_ID = "0x2105";
   const BUNDLE_URL = "/deployments/base-mainnet-activation.json";
-  const state = { bundle: null, account: null, inspected: false, factoryVerified: false };
+  const state = { bundle: null, account: null, provider: null, providers: [], inspected: false, factoryVerified: false };
+  const announcedProviders = [];
   const byId = (id) => document.getElementById(id);
   const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -44,9 +45,62 @@
     return bundle;
   }
 
+  function isWalletProvider(provider) {
+    return Boolean(provider && typeof provider.request === "function");
+  }
+
+  function providerName(provider, info = {}) {
+    if (info.name) return info.name;
+    if (provider.isMetaMask) return "MetaMask";
+    if (provider.isCoinbaseWallet) return "Coinbase Wallet";
+    if (provider.isBraveWallet) return "Brave Wallet";
+    return "Injected wallet";
+  }
+
+  function rememberProvider(event) {
+    const detail = event && event.detail;
+    if (!detail || !detail.provider || announcedProviders.some((item) => item.provider === detail.provider)) return;
+    announcedProviders.push(detail);
+  }
+
+  window.addEventListener("eip6963:announceProvider", rememberProvider);
+
+  async function discoverProviders() {
+    window.dispatchEvent(new Event("eip6963:requestProvider"));
+    await sleep(500);
+    const candidates = [...announcedProviders];
+    const injected = window.ethereum && Array.isArray(window.ethereum.providers)
+      ? window.ethereum.providers
+      : (window.ethereum ? [window.ethereum] : []);
+    for (const provider of injected) {
+      if (isWalletProvider(provider) && !candidates.some((item) => item.provider === provider)) {
+        candidates.push({ provider, info: {} });
+      }
+    }
+    state.providers = candidates.filter((item) => isWalletProvider(item.provider));
+    const selector = byId("wallet-provider");
+    selector.replaceChildren(...state.providers.map((item, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = providerName(item.provider, item.info);
+      return option;
+    }));
+    selector.disabled = state.providers.length === 0;
+    if (state.providers.length === 0) {
+      throw new Error("No EIP-1193 wallet is exposed to this page. Unlock a browser wallet and reload.");
+    }
+  }
+
+  function selectedProvider() {
+    const item = state.providers[Number.parseInt(byId("wallet-provider").value, 10)];
+    if (!item) throw new Error("Select an available wallet provider.");
+    state.provider = item.provider;
+    return item;
+  }
+
   async function wallet(method, params = []) {
-    if (!window.ethereum) throw new Error("Open this page in a browser with MetaMask or another EIP-1193 wallet.");
-    return window.ethereum.request({ method, params });
+    const provider = state.provider || selectedProvider().provider;
+    return provider.request({ method, params });
   }
 
   async function connect() {
@@ -123,6 +177,7 @@
       state.inspected = true;
       byId("deploy").disabled = factoryExists;
       write(target, [
+        `Wallet provider: ${providerName(state.provider)}`,
         `Account: ${account}`,
         `Chain: Base mainnet (${BASE_CHAIN_ID})`,
         `Nonce: ${nonce}`,
@@ -220,6 +275,7 @@
         version: "2.0.0",
         chainId: BASE_CHAIN_ID,
         from: state.account,
+        atomicRequired: true,
         calls: state.bundle.creation_batch.wallet_calls.map((item) => ({ to: item.to, data: item.data, value: "0x0" })),
       }]);
       await showVerifiedActivation(180_000);
@@ -255,6 +311,20 @@
       byId("inspect").disabled = true;
       return;
     }
+    try {
+      await discoverProviders();
+    } catch (error) {
+      write(byId("inspect-output"), error.message || String(error), "error");
+    }
+    byId("wallet-provider").addEventListener("change", () => {
+      state.provider = null;
+      state.account = null;
+      state.inspected = false;
+      state.factoryVerified = false;
+      byId("deploy").disabled = true;
+      byId("activate").disabled = true;
+      byId("verify").disabled = true;
+    });
     byId("inspect").addEventListener("click", inspect);
     byId("deploy").addEventListener("click", deploy);
     byId("activate").addEventListener("click", activateBatch);
