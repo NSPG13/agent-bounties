@@ -1,7 +1,8 @@
 # Canonical Autonomous Bounty Terms
 
-These JSON documents are the public preimages committed by the first four
-Base mainnet autonomous-v1 bounties. `manifest.json` records their expected
+These JSON documents are public terms preimages for Base mainnet
+autonomous-v1 bounties. `manifest.json` records the first four activation
+canaries and their expected
 Keccak-256 commitments, creator, verifier set, economics, and creation nonces.
 
 The files are immutable after a matching canonical bounty is funded. Changing
@@ -32,3 +33,7 @@ deployer nonce, then reduces four funded creations to one exact 4 USDC approval
 and four factory calls. The rehearsal adds fork-only gas, impersonates the
 creator only inside Anvil, and checks USDC conservation and claimable state. It
 never signs or broadcasts a Base mainnet transaction.
+
+Issue `#187` uses the separately deployed permissionless verifier recorded in
+`deployments/leading-zero-work-verifier-base-mainnet.json`. Its terms are not
+funding evidence until a matching canonical bounty is created and indexed.

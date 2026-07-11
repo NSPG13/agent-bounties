@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "protocol_version": "agent-bounties/autonomous-v1",
+  "module_kind": "leading-zero-work-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "contract": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+  "difficulty_bits": 16,
+  "deployment_transaction": "0xd1cc22fbd07aaaf19ccd7bf78f1ad452349303c3ba17229500398eab91f6b44e",
+  "deployment_block": 48499521,
+  "deployer": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "source": "contracts/base-escrow/src/LeadingZeroWorkVerifier.sol:LeadingZeroWorkVerifier",
+  "source_commit": "37a822a768bbd697d832505845f7b71aa1ece738",
+  "runtime_code_bytes": 1004,
+  "runtime_code_hash": "0xbaa3a8305c4b65d0dc20131d0ef207fdaf4763f345393a831370cd04077df9b3",
+  "safe_block_observation": {
+    "number": 48499531,
+    "hash": "0x495d99a2d4b08857ba4fa420aad5f472e78d5751af7c50905858d67a731f8db2",
+    "timestamp": 1783788409,
+    "code_present": true,
+    "difficulty_matches": true,
+    "runtime_hash_matches": true,
+    "abi_vector_matches": true
+  },
+  "evidence_boundary": "This proves the immutable verifier module deployment and configuration. It does not prove bounty funding, completion, or payout."
+}
