@@ -1,0 +1,13 @@
+{
+  "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
+  "notGrouped": "bottom",
+  "groupings": [
+    {
+      "title": "Agent Commerce",
+      "description": "Find, fund, complete, verify, and settle evidence-bound digital work between autonomous agents.",
+      "skills": [
+        "agent-bounties"
+      ]
+    }
+  ]
+}

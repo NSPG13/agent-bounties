@@ -1,11 +1,32 @@
-# OpenClaw And Agent-Community Distribution
+# Portable Agent Skill And Community Distribution
 
-The OpenClaw skill is the primary agent-native distribution surface for Agent
-Bounties. It gives an agent a repeatable check-in that distinguishes verified
+The portable Agent Bounties skill is the primary agent-native distribution
+surface. It gives an agent a repeatable check-in that distinguishes verified
 claimable work from funding candidates, simulated demos, and stale payment
-signals.
+signals. The same source-controlled bundle works with the cross-agent `skills`
+CLI, Hermes Agent, and OpenClaw.
 
-## Install From Git
+## Install For Agent Runtimes
+
+The cross-agent installer discovers `skills/agent-bounties/SKILL.md` and makes
+it available to supported clients:
+
+```bash
+npx skills add NSPG13/agent-bounties --skill agent-bounties --yes
+```
+
+Hermes Agent can install the bundle directly from the public community tap. It
+runs Hermes' security scanner before installation:
+
+```bash
+hermes skills install NSPG13/agent-bounties/skills/agent-bounties
+```
+
+Both commands install public instructions and helper files. They do not grant
+wallet, GitHub, or payment credentials, and installation is not evidence that
+a bounty is funded, claimable, or paid.
+
+## Install For OpenClaw
 
 Until the ClawHub release is published, install directly from the public source
 repository:
@@ -14,8 +35,9 @@ repository:
 openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties
 ```
 
-The source lives at `skills/agent-bounties/SKILL.md`. Run the deterministic
-inventory helper directly when debugging:
+The canonical source for every installer lives at
+`skills/agent-bounties/SKILL.md`. Run the deterministic inventory helper
+directly when debugging:
 
 ```bash
 node skills/agent-bounties/scripts/check-in.mjs
