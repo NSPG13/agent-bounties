@@ -2207,6 +2207,44 @@ fn base_rpc_fetch_status(error: &ChainBaseError) -> StatusCode {
     }
 }
 
+const CANONICAL_BASE_MAINNET_BOUNTY_FACTORY: &str = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
+const CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION: &str =
+    "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9";
+
+fn autonomous_planner_addresses(
+    chain_id: u64,
+    configured_factory: Option<String>,
+    configured_implementation: Option<String>,
+) -> Result<(String, String), StatusCode> {
+    let configured = |value: Option<String>| {
+        value
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+    };
+    let factory = configured(configured_factory);
+    let implementation = configured(configured_implementation);
+    if chain_id == 8_453 {
+        if factory.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY)
+        }) || implementation.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION)
+        }) {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        return Ok((
+            CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_string(),
+            CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION.to_string(),
+        ));
+    }
+    if chain_id == 84_532 {
+        return Ok((
+            factory.ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
+            implementation.ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
+        ));
+    }
+    Err(StatusCode::BAD_REQUEST)
+}
+
 fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlanner, StatusCode> {
     let descriptor = base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
     let (factory_env, implementation_env) = match descriptor.chain_id {
@@ -2220,14 +2258,12 @@ fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlan
         ),
         _ => return Err(StatusCode::BAD_REQUEST),
     };
-    let required = |key: &str| {
-        env::var(key)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .ok_or(StatusCode::SERVICE_UNAVAILABLE)
-    };
-    AutonomousBountyTxPlanner::new(required(factory_env)?, required(implementation_env)?)
+    let (factory, implementation) = autonomous_planner_addresses(
+        descriptor.chain_id,
+        env::var(factory_env).ok(),
+        env::var(implementation_env).ok(),
+    )?;
+    AutonomousBountyTxPlanner::new(&factory, &implementation)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
@@ -5650,6 +5686,44 @@ mod tests {
         assert!(html.contains("/llms.txt"));
         assert!(html.contains("/schemas/discovery-manifest.v2.json"));
         assert!(html.contains("/.well-known/agent-bounties.json"));
+    }
+
+    #[test]
+    fn mainnet_planner_uses_only_the_canonical_attested_deployment() {
+        let expected = autonomous_planner_addresses(8_453, None, None).unwrap();
+        assert_eq!(expected.0, CANONICAL_BASE_MAINNET_BOUNTY_FACTORY);
+        assert_eq!(expected.1, CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION);
+
+        let matching = autonomous_planner_addresses(
+            8_453,
+            Some(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_uppercase()),
+            Some(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION.to_string()),
+        )
+        .unwrap();
+        assert_eq!(matching, expected);
+
+        assert_eq!(
+            autonomous_planner_addresses(
+                8_453,
+                Some("0x1111111111111111111111111111111111111111".to_string()),
+                None,
+            ),
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        );
+    }
+
+    #[test]
+    fn sepolia_planner_still_requires_explicit_addresses() {
+        assert_eq!(
+            autonomous_planner_addresses(84_532, None, None),
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        );
+        assert!(autonomous_planner_addresses(
+            84_532,
+            Some("0x1111111111111111111111111111111111111111".to_string()),
+            Some("0x2222222222222222222222222222222222222222".to_string()),
+        )
+        .is_ok());
     }
 
     #[tokio::test]
