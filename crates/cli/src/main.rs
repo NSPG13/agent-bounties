@@ -5178,10 +5178,25 @@ mod tests {
     }
 
     #[test]
-    fn factory_runtime_hash_includes_constructor_immutables() {
-        let artifact_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../contracts/base-escrow/out/AgentBountyFactory.sol/AgentBountyFactory.json");
-        let artifact = read_json_file(&artifact_path).unwrap();
+    fn factory_runtime_hash_patches_constructor_immutables_without_generated_files() {
+        let artifact = serde_json::json!({
+            "deployedBytecode": {
+                "object": format!("0x{}", "00".repeat(96)),
+                "immutableReferences": {
+                    "1": [
+                        { "start": 0, "length": 32 },
+                        { "start": 64, "length": 32 }
+                    ],
+                    "2": [{ "start": 32, "length": 32 }]
+                }
+            },
+            "ast": {
+                "nodes": [
+                    { "id": 1, "nodeType": "VariableDeclaration", "name": "settlementToken" },
+                    { "id": 2, "nodeType": "VariableDeclaration", "name": "implementation" }
+                ]
+            }
+        });
         let runtime = artifact_runtime_with_immutables(
             &artifact,
             &[
@@ -5194,10 +5209,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            keccak_hex(&runtime),
-            "0x06f810de7b46f854ecc29e9c0c28156edab4b0d3e0bbe2bf5be8876687bebfc6"
-        );
+        let settlement = hex::decode(&BASE_MAINNET_USDC_TOKEN_ADDRESS[2..]).unwrap();
+        let implementation = hex::decode("2fa36d2b2327642db3a6cc8cdd91544ad7484eb9").unwrap();
+        assert_eq!(&runtime[12..32], settlement);
+        assert_eq!(&runtime[44..64], implementation);
+        assert_eq!(&runtime[76..96], settlement);
     }
 
     fn active_deployment_fixture() -> serde_json::Value {
