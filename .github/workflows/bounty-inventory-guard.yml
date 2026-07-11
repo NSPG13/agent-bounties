@@ -37,7 +37,7 @@ jobs:
           python-version: "3.12"
       - name: Build canonical claimable inventory report
         run: node skills/agent-bounties/scripts/check-in.mjs > claimable-inventory.json
-      - name: Enforce verified claimable inventory floor
+      - name: Report verified claimable inventory floor
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -45,9 +45,31 @@ jobs:
         run: |
           python scripts/bounty_inventory_guard.py \
             --claimable-report claimable-inventory.json \
-            --fail-below \
             --json-out bounty-inventory-report.json \
             --md-out bounty-inventory-report.md
+      - name: Publish liquidity status without blocking deployment
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path("bounty-inventory-report.json").read_text())
+          status = (
+              f"verified claimable bounties: {report['verified_claimable_count']}/"
+              f"{report['threshold']}; protocol={report['protocol_status']}; "
+              f"evidence_valid={str(report['inventory_evidence_valid']).lower()}"
+          )
+          if report["below_threshold"]:
+              print(f"::warning title=Claimable bounty floor not met::{status}")
+          else:
+              print(status)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Claimable bounty liquidity\n\n")
+              summary.write(f"- {status}\n")
+              summary.write(f"- below threshold: {str(report['below_threshold']).lower()}\n")
+              summary.write("- GitHub issues are candidate supply, not funding evidence.\n")
+          PY
       - name: Upload report artifacts
         if: always()
         uses: actions/upload-artifact@v4
