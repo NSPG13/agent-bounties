@@ -594,11 +594,10 @@ pub fn bounty_check_output(
                     bounty.request.title
                 ),
                 text: format!(
-                    "Goal:\n{}\n\nAcceptance criteria:\n{}\n\nAmount: {} {}\n\nFunding: AutonomousV1BaseUsdc\n\n{}\n\nA GitHub issue, comment, reaction, PR, or planner result never funds or claims this bounty. `BountyBecameClaimable` proves it can be claimed; `BountySettled` alone proves payment.\n\nDistribution feedback:\n{}",
+                    "Goal:\n{}\n\nAcceptance criteria:\n{}\n\nAmount: {}\n\nFunding: AutonomousV1BaseUsdc\n\n{}\n\nA GitHub issue, comment, reaction, PR, or planner result never funds or claims this bounty. `BountyBecameClaimable` proves it can be claimed; `BountySettled` alone proves payment.\n\nDistribution feedback:\n{}",
                     bounty.goal,
                     bounty.acceptance_criteria,
-                    bounty.amount.amount,
-                    bounty.amount.currency,
+                    format_display_money(&bounty.amount),
                     state,
                     bounty
                         .discovery_feedback
@@ -615,11 +614,10 @@ pub fn bounty_check_output(
                 bounty.request.title, bounty.template_slug
             ),
             text: format!(
-                "Goal:\n{}\n\nAcceptance criteria:\n{}\n\nAmount: {} {}\n\nFunding: {:?}\n\nPrivacy: {:?}\n\nDistribution feedback:\n{}",
+                "Goal:\n{}\n\nAcceptance criteria:\n{}\n\nAmount: {}\n\nFunding: {:?}\n\nPrivacy: {:?}\n\nDistribution feedback:\n{}",
                 bounty.goal,
                 bounty.acceptance_criteria,
-                bounty.amount.amount,
-                bounty.amount.currency,
+                format_display_money(&bounty.amount),
                 bounty.funding_mode,
                 bounty.privacy,
                 bounty
@@ -1062,6 +1060,22 @@ fn format_usdc_major(amount_minor: i64) -> String {
         format!("{whole}.{fractional:06}")
             .trim_end_matches('0')
             .to_string()
+    }
+}
+
+fn format_display_money(money: &Money) -> String {
+    match money.currency.as_str() {
+        "usdc" => format!("{} USDC", format_usdc_major(money.amount)),
+        "usd" => {
+            let whole = money.amount / 100;
+            let fractional = (money.amount % 100).abs();
+            if fractional == 0 {
+                format!("{whole} USD")
+            } else {
+                format!("{whole}.{fractional:02} USD")
+            }
+        }
+        currency => format!("{} {}", money.amount, currency.to_ascii_uppercase()),
     }
 }
 
@@ -1585,6 +1599,7 @@ mod tests {
         let check = bounty_check_output(Ok(&active));
         assert_eq!(check.conclusion, GitHubCheckConclusion::Success);
         assert!(check.summary.contains("canonical contract events"));
+        assert!(check.text.contains("Amount: 1 USDC"));
         assert!(check.text.contains(STATIC_EARN_PAGE_URL));
         assert!(check.text.contains("BountySettled"));
     }
@@ -1783,6 +1798,7 @@ extract-data-to-schema
 
         assert_eq!(output.conclusion, GitHubCheckConclusion::Success);
         assert!(output.summary.contains("ready for funding"));
+        assert!(output.text.contains("Amount: 1.5 USDC"));
         assert!(output.text.contains("Distribution feedback"));
         assert!(output.text.contains("How did you find Agent Bounties?"));
         assert!(output.text.contains("Post your own bounty"));
