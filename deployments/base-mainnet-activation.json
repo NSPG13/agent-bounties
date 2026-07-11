@@ -14,7 +14,7 @@
     "expected_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     "expected_implementation": "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
     "factory_init_code_hash": "0xba3dbb77b8aafcf2bdcfc234aa1fe9711d3ee10870a4ffda66106d2faeaac122",
-    "factory_runtime_code_hash": "0x08460cbdf09ade3a42d71cb8efb4225bbbd5fb12e3f492ca3e4c25924bf68b5c",
+    "factory_runtime_code_hash": "0x06f810de7b46f854ecc29e9c0c28156edab4b0d3e0bbe2bf5be8876687bebfc6",
     "implementation_runtime_code_hash": "0xc36fcba5176b2cd8b57a9fd0cbf931177dc8b36cf8367c1568ccebe5f03be3f6",
     "settlement_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
   },

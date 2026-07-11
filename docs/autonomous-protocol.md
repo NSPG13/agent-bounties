@@ -24,6 +24,13 @@ The factory and bounty implementation are not upgradeable. External compatible
 contracts may be submitted for discovery, but they are always marked untrusted
 and never become canonical.
 
+Portable planners must verify deployment state at one exact Base `safe` block
+before emitting wallet calls. Required checks are the factory and implementation
+account code hashes plus `SUPPORTED_PROTOCOL_VERSION()`, `implementation()`,
+and `settlementToken()`. The factory runtime hash must be calculated from the
+deployed bytecode after constructor immutables are inserted; hashing the
+unpatched compiler artifact is invalid. Any mismatch fails closed.
+
 ## Committed Terms
 
 Before creation, the poster publishes canonical JSON with schema

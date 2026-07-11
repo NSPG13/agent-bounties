@@ -123,6 +123,101 @@ def validate_bundle(bundle: dict[str, Any]) -> None:
         raise ValueError("activation bundle must remain capped at 4 USDC total")
 
 
+def run_portable_creation_plan(
+    repo: Path,
+    temp: Path,
+    local_url: str,
+    bundle: dict[str, Any],
+    deploy_hash: str,
+    deploy_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    deployment = bundle["deployment"]
+    active_manifest = json.loads((repo / "deployments/base-mainnet.json").read_text(encoding="utf-8"))
+    active_manifest["status"] = "active"
+    active_manifest["factory"].update(
+        {
+            "contract": deployment["expected_factory"],
+            "implementation": deployment["expected_implementation"],
+            "deployment_transaction": deploy_hash,
+            "deployment_block": uint_result(deploy_receipt["blockNumber"]),
+            "deployer": deployment["from"],
+            "runtime_code_hash": deployment["factory_runtime_code_hash"],
+            "implementation_runtime_code_hash": deployment[
+                "implementation_runtime_code_hash"
+            ],
+        }
+    )
+    manifest_path = temp / "active-base-mainnet.json"
+    plan_path = temp / "portable-bounty-168.json"
+    manifest_path.write_text(
+        json.dumps(active_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "cli",
+        "--",
+        "autonomous-bounty-plan",
+        "--terms-file",
+        "bounties/autonomous-v1/168.json",
+        "--deployment-file",
+        str(manifest_path),
+        "--rpc-url",
+        local_url,
+        "--output",
+        str(plan_path),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"portable creation planner failed on Base fork: {detail}")
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    expected_bounty = next(item for item in bundle["bounties"] if item["issue"] == 168)
+    expected_creation = next(
+        item
+        for item in bundle["creation_batch"]["creations"]
+        if item["bounty_id"].lower() == expected_bounty["bounty_id"].lower()
+    )
+    if (
+        plan.get("schema_version")
+        != "agent-bounties/autonomous-portable-creation-plan-v1"
+        or plan["safe_chain_observation"]["factory_contract"].lower()
+        != deployment["expected_factory"].lower()
+        or plan["safe_chain_observation"]["factory_runtime_code_hash"].lower()
+        != deployment["factory_runtime_code_hash"].lower()
+        or plan["safe_chain_observation"]["implementation_runtime_code_hash"].lower()
+        != deployment["implementation_runtime_code_hash"].lower()
+        or plan["creation_plan"]["bounty_id"].lower()
+        != expected_bounty["bounty_id"].lower()
+        or plan["creation_plan"]["predicted_bounty_contract"].lower()
+        != expected_bounty["predicted_bounty_contract"].lower()
+        or plan["creation_plan"]["create_bounty"]["data"].lower()
+        != expected_creation["create_bounty"]["data"].lower()
+        or len(plan["wallet_request"]["params"][0]["calls"]) != 2
+    ):
+        raise RuntimeError("portable creation planner output drifted from activation bundle")
+    return {
+        "schema_version": plan["schema_version"],
+        "safe_block_number": plan["safe_chain_observation"]["safe_block_number"],
+        "safe_block_hash": plan["safe_chain_observation"]["safe_block_hash"],
+        "bounty_id": plan["creation_plan"]["bounty_id"],
+        "predicted_bounty_contract": plan["creation_plan"][
+            "predicted_bounty_contract"
+        ],
+        "wallet_call_count": len(plan["wallet_request"]["params"][0]["calls"]),
+        "evidence_boundary": "Unsigned planner output and fork state are rehearsal evidence only.",
+    }
+
+
 def rehearse(repo: Path, bundle_path: Path, fork_url: str, anvil_path: str | None) -> dict[str, Any]:
     bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
     validate_bundle(bundle)
@@ -131,9 +226,10 @@ def rehearse(repo: Path, bundle_path: Path, fork_url: str, anvil_path: str | Non
     port = free_port()
     local_url = f"http://127.0.0.1:{port}"
     anvil = find_anvil(repo, anvil_path)
-    with tempfile.TemporaryDirectory(prefix="agent-bounties-activation-") as temp:
-        stdout_path = Path(temp) / "anvil.stdout.log"
-        stderr_path = Path(temp) / "anvil.stderr.log"
+    with tempfile.TemporaryDirectory(prefix="agent-bounties-activation-") as temp_name:
+        temp = Path(temp_name)
+        stdout_path = temp / "anvil.stdout.log"
+        stderr_path = temp / "anvil.stderr.log"
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             process = subprocess.Popen(
@@ -189,6 +285,17 @@ def rehearse(repo: Path, bundle_path: Path, fork_url: str, anvil_path: str | Non
                 observed_token = address_result(call(local_url, observed_factory, "settlementToken()"))
                 if observed_token != deployment["settlement_token"].lower():
                     raise RuntimeError("factory settlement token mismatch")
+                # Anvil models safe/finalized tags behind latest. Advance the local fork so the
+                # deployment is visible through the same safe-block boundary used in production.
+                rpc(local_url, "anvil_mine", ["0x40"])
+                portable_plan = run_portable_creation_plan(
+                    repo,
+                    temp,
+                    local_url,
+                    bundle,
+                    deploy_hash,
+                    deploy_receipt,
+                )
 
                 transaction_summaries = []
                 for transaction in bundle["creation_batch"]["wallet_calls"]:
@@ -268,6 +375,7 @@ def rehearse(repo: Path, bundle_path: Path, fork_url: str, anvil_path: str | Non
                     "factory": observed_factory,
                     "implementation": observed_implementation,
                     "deployment_gas_used": uint_result(deploy_receipt["gasUsed"]),
+                    "portable_creation_plan": portable_plan,
                     "transactions": transaction_summaries,
                     "bounties": bounty_summaries,
                     "creator_usdc_before": wallet_usdc,

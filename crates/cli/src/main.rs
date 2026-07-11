@@ -9,13 +9,15 @@ use chain_base::{
     autonomous_bounty_create_from_terms, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_terms_record, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, fetch_transaction_receipt, keccak256_canonical_json,
-    AutonomousBountyCreationBatchPlan, AutonomousBountyTxPlanner, BaseRpcUrlConfig,
-    BASE_MAINNET_USDC_TOKEN_ADDRESS,
+    verify_autonomous_factory_safe_state, AutonomousBountyCreationBatchPlan,
+    AutonomousBountyCreationPlan, AutonomousBountyTxPlanner, AutonomousFactoryExpectedState,
+    AutonomousFactorySafeObservation, BaseRpcUrlConfig, EvmTransactionIntent,
+    AUTONOMOUS_BOUNTY_PROTOCOL_HASH, BASE_MAINNET_USDC_TOKEN_ADDRESS,
 };
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use domain::{
-    AutonomousBountyTermsDocument, CapabilityClass, FundingMode, Money, PaymentRail, PrivacyLevel,
-    VerifierKind,
+    AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, CapabilityClass, FundingMode,
+    Money, PaymentRail, PrivacyLevel, VerifierKind,
 };
 use eval_harness::{
     bundled_abuse_fixtures, bundled_fixtures, bundled_judge_fixtures, run_eval_loops, AbuseBench,
@@ -341,6 +343,20 @@ enum Command {
         #[arg(long)]
         output: Option<String>,
     },
+    AutonomousBountyPlan {
+        #[arg(long)]
+        terms_file: String,
+        #[arg(long, default_value = "deployments/base-mainnet.json")]
+        deployment_file: String,
+        #[arg(
+            long,
+            env = "BASE_MAINNET_RPC_URL",
+            default_value = "https://mainnet.base.org"
+        )]
+        rpc_url: String,
+        #[arg(long)]
+        output: Option<String>,
+    },
     ProductionSmoke {
         #[arg(long, env = "PRODUCTION_API_BASE_URL")]
         api_base_url: String,
@@ -594,6 +610,20 @@ async fn async_main() -> Result<()> {
             deployer_nonce,
             output.map(PathBuf::from),
         ),
+        Command::AutonomousBountyPlan {
+            terms_file,
+            deployment_file,
+            rpc_url,
+            output,
+        } => {
+            autonomous_bounty_plan(
+                PathBuf::from(terms_file),
+                PathBuf::from(deployment_file),
+                rpc_url,
+                output.map(PathBuf::from),
+            )
+            .await
+        }
         Command::ProductionSmoke {
             api_base_url,
             mcp_base_url,
@@ -801,7 +831,13 @@ fn autonomous_activation_bundle(
     let factory_artifact = read_json_file(&factory_artifact_path)?;
     let implementation_artifact = read_json_file(&implementation_artifact_path)?;
     let factory_creation = artifact_hex(&factory_artifact, "/bytecode/object")?;
-    let factory_runtime = artifact_hex(&factory_artifact, "/deployedBytecode/object")?;
+    let factory_runtime = artifact_runtime_with_immutables(
+        &factory_artifact,
+        &[
+            ("settlementToken", BASE_MAINNET_USDC_TOKEN_ADDRESS),
+            ("implementation", &expected_implementation),
+        ],
+    )?;
     let implementation_runtime =
         artifact_hex(&implementation_artifact, "/deployedBytecode/object")?;
     let token = BASE_MAINNET_USDC_TOKEN_ADDRESS.trim_start_matches("0x");
@@ -812,7 +848,7 @@ fn autonomous_activation_bundle(
         to: None,
         value_wei: 0,
         factory_init_code_hash: keccak_hex(&hex::decode(&deployment_data[2..])?),
-        factory_runtime_code_hash: keccak_hex(&hex::decode(factory_runtime)?),
+        factory_runtime_code_hash: keccak_hex(&factory_runtime),
         implementation_runtime_code_hash: keccak_hex(&hex::decode(implementation_runtime)?),
         data: deployment_data,
         expected_factory,
@@ -858,6 +894,361 @@ fn autonomous_activation_bundle(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct PortableDeploymentManifest {
+    schema_version: u64,
+    protocol_version: String,
+    network: String,
+    chain_id: u64,
+    native_usdc: String,
+    status: String,
+    factory: PortableDeploymentFactory,
+}
+
+#[derive(Debug, Deserialize)]
+struct PortableDeploymentFactory {
+    contract: Option<String>,
+    implementation: Option<String>,
+    deployment_transaction: Option<String>,
+    deployment_block: Option<u64>,
+    deployer: Option<String>,
+    runtime_code_hash: Option<String>,
+    implementation_runtime_code_hash: Option<String>,
+    constructor_args: PortableDeploymentConstructor,
+}
+
+#[derive(Debug, Deserialize)]
+struct PortableDeploymentConstructor {
+    settlement_token: String,
+}
+
+#[derive(Debug)]
+struct ActiveDeploymentEvidence {
+    deployment_transaction: String,
+    deployment_block: u64,
+    deployer: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PortableDeploymentReference {
+    manifest_path: String,
+    manifest_canonical_json_keccak256: String,
+    deployment_transaction: String,
+    deployment_block: u64,
+    deployer: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WalletCall {
+    to: String,
+    data: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WalletSendCallsParameters {
+    version: String,
+    chain_id: String,
+    from: String,
+    calls: Vec<WalletCall>,
+}
+
+#[derive(Debug, Serialize)]
+struct WalletSendCallsRequest {
+    method: String,
+    params: Vec<WalletSendCallsParameters>,
+}
+
+#[derive(Debug, Serialize)]
+struct PortableTermsPublicationRequest {
+    creator_wallet: String,
+    document: AutonomousBountyTermsDocument,
+}
+
+#[derive(Debug, Serialize)]
+struct PortableRegistrationArtifact {
+    source_url: Option<String>,
+    terms_hash: String,
+    policy_hash: String,
+    acceptance_criteria_hash: String,
+    benchmark_hash: String,
+    evidence_schema_hash: String,
+    bounty_id: String,
+    predicted_bounty_contract: String,
+    terms_publication_method: String,
+    terms_publication_path: String,
+    terms_publication_request: PortableTermsPublicationRequest,
+}
+
+#[derive(Debug, Serialize)]
+struct PortableAutonomousBountyPlan {
+    schema_version: String,
+    protocol_version: String,
+    network: String,
+    chain_id: u64,
+    deployment: PortableDeploymentReference,
+    safe_chain_observation: AutonomousFactorySafeObservation,
+    terms_record: AutonomousBountyTermsRecord,
+    creation_plan: AutonomousBountyCreationPlan,
+    wallet_request: WalletSendCallsRequest,
+    registration: PortableRegistrationArtifact,
+    evidence_boundary: String,
+}
+
+async fn autonomous_bounty_plan(
+    terms_path: PathBuf,
+    deployment_path: PathBuf,
+    rpc_url: String,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    let deployment_value = read_json_file(&deployment_path)?;
+    let (deployment, expected, deployment_evidence) =
+        active_factory_expected_state(&deployment_value)?;
+    let rpc_url = normalize_portable_rpc_url(&rpc_url)?;
+    let observation = verify_autonomous_factory_safe_state(&rpc_url, &expected)
+        .await
+        .context("verify canonical autonomous-v1 factory at one Base safe block")?;
+    let document: AutonomousBountyTermsDocument = serde_json::from_slice(
+        &fs::read(&terms_path)
+            .with_context(|| format!("read terms document {}", terms_path.display()))?,
+    )
+    .with_context(|| format!("parse terms document {}", terms_path.display()))?;
+    let artifact = build_portable_autonomous_bounty_plan(
+        document,
+        deployment,
+        expected,
+        observation,
+        PortableDeploymentReference {
+            manifest_path: deployment_path.to_string_lossy().replace('\\', "/"),
+            manifest_canonical_json_keccak256: keccak256_canonical_json(&deployment_value)?,
+            deployment_transaction: deployment_evidence.deployment_transaction,
+            deployment_block: deployment_evidence.deployment_block,
+            deployer: deployment_evidence.deployer,
+        },
+    )?;
+    let mut json = serde_json::to_string_pretty(&artifact)?;
+    json.push('\n');
+    if let Some(path) = output {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, json)
+            .with_context(|| format!("write portable bounty plan {}", path.display()))?;
+        println!("autonomous_bounty_plan={}", path.display());
+    } else {
+        print!("{json}");
+    }
+    Ok(())
+}
+
+fn active_factory_expected_state(
+    value: &serde_json::Value,
+) -> Result<(
+    PortableDeploymentManifest,
+    AutonomousFactoryExpectedState,
+    ActiveDeploymentEvidence,
+)> {
+    let deployment: PortableDeploymentManifest =
+        serde_json::from_value(value.clone()).context("decode Base deployment manifest")?;
+    if deployment.schema_version != 2
+        || deployment.protocol_version != "agent-bounties/autonomous-v1"
+        || deployment.network != "base-mainnet"
+        || deployment.chain_id != 8_453
+        || deployment.status != "active"
+    {
+        bail!(
+            "deployment manifest must be schema 2 autonomous-v1 Base mainnet with status `active`"
+        );
+    }
+    let token = normalize_cli_address(&deployment.native_usdc)?;
+    if !token.eq_ignore_ascii_case(BASE_MAINNET_USDC_TOKEN_ADDRESS)
+        || !normalize_cli_address(&deployment.factory.constructor_args.settlement_token)?
+            .eq_ignore_ascii_case(BASE_MAINNET_USDC_TOKEN_ADDRESS)
+    {
+        bail!("deployment manifest must use native Base USDC");
+    }
+    let factory = normalize_cli_address(
+        deployment
+            .factory
+            .contract
+            .as_deref()
+            .context("active deployment manifest is missing factory contract")?,
+    )?;
+    let implementation = normalize_cli_address(
+        deployment
+            .factory
+            .implementation
+            .as_deref()
+            .context("active deployment manifest is missing implementation contract")?,
+    )?;
+    let factory_runtime_code_hash = normalize_cli_bytes32(
+        deployment
+            .factory
+            .runtime_code_hash
+            .as_deref()
+            .context("active deployment manifest is missing factory runtime code hash")?,
+    )?;
+    let implementation_runtime_code_hash = normalize_cli_bytes32(
+        deployment
+            .factory
+            .implementation_runtime_code_hash
+            .as_deref()
+            .context("active deployment manifest is missing implementation runtime code hash")?,
+    )?;
+    let deployment_transaction = normalize_cli_bytes32(
+        deployment
+            .factory
+            .deployment_transaction
+            .as_deref()
+            .context("active deployment manifest is missing deployment transaction")?,
+    )?;
+    let deployment_block = deployment.factory.deployment_block.unwrap_or_default();
+    if deployment_block == 0 {
+        bail!("active deployment manifest is missing deployment block");
+    }
+    let deployer = normalize_cli_address(
+        deployment
+            .factory
+            .deployer
+            .as_deref()
+            .context("active deployment manifest is missing deployer")?,
+    )?;
+
+    let expected = AutonomousFactoryExpectedState {
+        protocol_version: deployment.protocol_version.clone(),
+        network: deployment.network.clone(),
+        chain_id: deployment.chain_id,
+        factory_contract: factory,
+        implementation_contract: implementation,
+        native_usdc_token_address: token,
+        protocol_hash: AUTONOMOUS_BOUNTY_PROTOCOL_HASH.to_string(),
+        factory_runtime_code_hash,
+        implementation_runtime_code_hash,
+    };
+    Ok((
+        deployment,
+        expected,
+        ActiveDeploymentEvidence {
+            deployment_transaction,
+            deployment_block,
+            deployer,
+        },
+    ))
+}
+
+fn build_portable_autonomous_bounty_plan(
+    document: AutonomousBountyTermsDocument,
+    deployment: PortableDeploymentManifest,
+    expected: AutonomousFactoryExpectedState,
+    observation: AutonomousFactorySafeObservation,
+    deployment_reference: PortableDeploymentReference,
+) -> Result<PortableAutonomousBountyPlan> {
+    if observation.factory_contract != expected.factory_contract
+        || observation.implementation_contract != expected.implementation_contract
+        || observation.factory_runtime_code_hash != expected.factory_runtime_code_hash
+        || observation.implementation_runtime_code_hash != expected.implementation_runtime_code_hash
+        || observation.protocol_hash != expected.protocol_hash
+        || observation.native_usdc_token_address != expected.native_usdc_token_address
+    {
+        bail!("safe chain observation does not match the active deployment manifest");
+    }
+    let creator = document
+        .contract_terms
+        .get("creator_wallet")
+        .and_then(serde_json::Value::as_str)
+        .context("terms contract_terms.creator_wallet must be a string")?
+        .to_string();
+    let observed_at = chrono::DateTime::from_timestamp(observation.safe_block_timestamp as i64, 0)
+        .context("safe block timestamp is outside the supported range")?;
+    let record = build_autonomous_bounty_terms_record(&creator, document, observed_at)
+        .context("validate portable bounty terms against safe block time")?;
+    let create = autonomous_bounty_create_from_terms(&record)
+        .context("derive autonomous-v1 creation input from terms")?;
+    let planner = AutonomousBountyTxPlanner::new(
+        &expected.factory_contract,
+        &expected.implementation_contract,
+    )?;
+    let creation_plan = planner.plan_creation(&deployment.network, &create)?;
+    let wallet_calls = creation_plan
+        .wallet_calls
+        .iter()
+        .map(wallet_call)
+        .collect::<Vec<_>>();
+    let wallet_request = WalletSendCallsRequest {
+        method: "wallet_sendCalls".to_string(),
+        params: vec![WalletSendCallsParameters {
+            version: "2.0.0".to_string(),
+            chain_id: format!("0x{:x}", deployment.chain_id),
+            from: create.creator.clone(),
+            calls: wallet_calls,
+        }],
+    };
+    let registration = PortableRegistrationArtifact {
+        source_url: record.document.source_url.clone(),
+        terms_hash: record.terms_hash.clone(),
+        policy_hash: record.policy_hash.clone(),
+        acceptance_criteria_hash: record.acceptance_criteria_hash.clone(),
+        benchmark_hash: record.benchmark_hash.clone(),
+        evidence_schema_hash: record.evidence_schema_hash.clone(),
+        bounty_id: creation_plan.bounty_id.clone(),
+        predicted_bounty_contract: creation_plan.predicted_bounty_contract.clone(),
+        terms_publication_method: "POST".to_string(),
+        terms_publication_path: "/v1/base/autonomous-bounties/terms".to_string(),
+        terms_publication_request: PortableTermsPublicationRequest {
+            creator_wallet: create.creator,
+            document: record.document.clone(),
+        },
+    };
+
+    Ok(PortableAutonomousBountyPlan {
+        schema_version: "agent-bounties/autonomous-portable-creation-plan-v1".to_string(),
+        protocol_version: deployment.protocol_version,
+        network: deployment.network,
+        chain_id: deployment.chain_id,
+        deployment: deployment_reference,
+        safe_chain_observation: observation,
+        terms_record: record,
+        creation_plan,
+        wallet_request,
+        registration,
+        evidence_boundary: "This artifact contains validated public terms and unsigned wallet calls. It is not wallet authorization, broadcast, funding, claimability, acceptance, payout, or settlement evidence. Reconcile confirmed canonical factory and bounty events before changing lifecycle state.".to_string(),
+    })
+}
+
+fn wallet_call(intent: &EvmTransactionIntent) -> WalletCall {
+    WalletCall {
+        to: intent.to.clone(),
+        data: intent.data.clone(),
+        value: format!("0x{:x}", intent.value_wei),
+    }
+}
+
+fn normalize_cli_bytes32(value: &str) -> Result<String> {
+    let trimmed = value.strip_prefix("0x").unwrap_or(value);
+    if trimmed.len() != 64 || !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("invalid bytes32 value: {value}");
+    }
+    Ok(format!("0x{}", trimmed.to_ascii_lowercase()))
+}
+
+fn normalize_portable_rpc_url(value: &str) -> Result<String> {
+    let mut url = reqwest::Url::parse(value).context("Base RPC URL is invalid")?;
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("Base RPC URL must not contain credentials");
+    }
+    let host = url.host_str().context("Base RPC URL is missing a host")?;
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+        bail!("Base RPC URL must use HTTPS except for loopback development");
+    }
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
 fn read_json_file(path: &Path) -> Result<serde_json::Value> {
     serde_json::from_slice(&fs::read(path).with_context(|| format!("read {}", path.display()))?)
         .with_context(|| format!("parse {}", path.display()))
@@ -882,6 +1273,85 @@ fn artifact_hex<'a>(artifact: &'a serde_json::Value, pointer: &str) -> Result<&'
         bail!("contract artifact {pointer} is not non-empty hex");
     }
     Ok(value)
+}
+
+fn artifact_runtime_with_immutables(
+    artifact: &serde_json::Value,
+    immutable_addresses: &[(&str, &str)],
+) -> Result<Vec<u8>> {
+    let mut runtime = hex::decode(artifact_hex(artifact, "/deployedBytecode/object")?)?;
+    let references = artifact
+        .pointer("/deployedBytecode/immutableReferences")
+        .and_then(serde_json::Value::as_object)
+        .context("contract artifact is missing immutable references")?;
+    let ast = artifact
+        .get("ast")
+        .context("contract artifact is missing AST")?;
+    let mut patched = BTreeSet::new();
+    for (declaration_id, locations) in references {
+        let declaration_id = declaration_id
+            .parse::<u64>()
+            .with_context(|| format!("invalid immutable declaration id {declaration_id}"))?;
+        let name = ast_variable_name(ast, declaration_id).ok_or_else(|| {
+            anyhow!("immutable declaration {declaration_id} is absent from the artifact AST")
+        })?;
+        let address = immutable_addresses
+            .iter()
+            .find_map(|(candidate, value)| (*candidate == name).then_some(*value))
+            .ok_or_else(|| anyhow!("no immutable value supplied for {name}"))?;
+        let normalized = normalize_cli_address(address)?;
+        let mut word = [0u8; 32];
+        word[12..].copy_from_slice(&hex::decode(&normalized[2..])?);
+        let locations = locations
+            .as_array()
+            .ok_or_else(|| anyhow!("immutable references for {name} are not an array"))?;
+        if locations.is_empty() {
+            bail!("immutable {name} has no runtime references");
+        }
+        for location in locations {
+            let start = location
+                .get("start")
+                .and_then(serde_json::Value::as_u64)
+                .context("immutable reference is missing start")? as usize;
+            let length = location
+                .get("length")
+                .and_then(serde_json::Value::as_u64)
+                .context("immutable reference is missing length")?
+                as usize;
+            if length != 32
+                || start
+                    .checked_add(length)
+                    .is_none_or(|end| end > runtime.len())
+            {
+                bail!("immutable reference for {name} is outside runtime bytecode");
+            }
+            runtime[start..start + length].copy_from_slice(&word);
+        }
+        patched.insert(name.to_string());
+    }
+    for (name, _) in immutable_addresses {
+        if !patched.contains(*name) {
+            bail!("contract artifact has no immutable references for {name}");
+        }
+    }
+    Ok(runtime)
+}
+
+fn ast_variable_name(value: &serde_json::Value, declaration_id: u64) -> Option<&str> {
+    if value.get("id").and_then(serde_json::Value::as_u64) == Some(declaration_id)
+        && value.get("nodeType").and_then(serde_json::Value::as_str) == Some("VariableDeclaration")
+    {
+        return value.get("name").and_then(serde_json::Value::as_str);
+    }
+    match value {
+        serde_json::Value::Array(values) => values
+            .iter()
+            .find_map(|value| ast_variable_name(value, declaration_id)),
+        serde_json::Value::Object(values) => values
+            .values()
+            .find_map(|value| ast_variable_name(value, declaration_id)),
+        _ => None,
+    }
 }
 
 fn normalize_cli_address(value: &str) -> Result<String> {
@@ -4704,6 +5174,147 @@ mod tests {
         assert_eq!(
             create_address(&factory, 1).expect("implementation address should derive"),
             "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
+        );
+    }
+
+    #[test]
+    fn factory_runtime_hash_includes_constructor_immutables() {
+        let artifact_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../contracts/base-escrow/out/AgentBountyFactory.sol/AgentBountyFactory.json");
+        let artifact = read_json_file(&artifact_path).unwrap();
+        let runtime = artifact_runtime_with_immutables(
+            &artifact,
+            &[
+                ("settlementToken", BASE_MAINNET_USDC_TOKEN_ADDRESS),
+                (
+                    "implementation",
+                    "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
+                ),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            keccak_hex(&runtime),
+            "0x06f810de7b46f854ecc29e9c0c28156edab4b0d3e0bbe2bf5be8876687bebfc6"
+        );
+    }
+
+    fn active_deployment_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 2,
+            "protocol_version": "agent-bounties/autonomous-v1",
+            "network": "base-mainnet",
+            "chain_id": 8453,
+            "native_usdc": BASE_MAINNET_USDC_TOKEN_ADDRESS,
+            "status": "active",
+            "factory": {
+                "contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+                "implementation": "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
+                "deployment_transaction": format!("0x{}", "55".repeat(32)),
+                "deployment_block": 48_000_000,
+                "deployer": "0x884834E884d6e93462655A2820140aD03E6747bC",
+                "runtime_code_hash": "0x06f810de7b46f854ecc29e9c0c28156edab4b0d3e0bbe2bf5be8876687bebfc6",
+                "implementation_runtime_code_hash": "0xc36fcba5176b2cd8b57a9fd0cbf931177dc8b36cf8367c1568ccebe5f03be3f6",
+                "constructor_args": {
+                    "settlement_token": BASE_MAINNET_USDC_TOKEN_ADDRESS
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn portable_creation_plan_reproduces_activation_commitments_and_wallet_calls() {
+        let deployment_value = active_deployment_fixture();
+        let (deployment, expected, _) = active_factory_expected_state(&deployment_value).unwrap();
+        let safe_block_timestamp = chrono::DateTime::parse_from_rfc3339("2026-07-10T00:00:00Z")
+            .unwrap()
+            .timestamp() as u64;
+        let observation = AutonomousFactorySafeObservation {
+            protocol_version: expected.protocol_version.clone(),
+            network: expected.network.clone(),
+            chain_id: expected.chain_id,
+            safe_block_number: 48_000_100,
+            safe_block_hash: format!("0x{}", "66".repeat(32)),
+            safe_block_timestamp,
+            block_tag: "safe".to_string(),
+            factory_contract: expected.factory_contract.clone(),
+            implementation_contract: expected.implementation_contract.clone(),
+            native_usdc_token_address: expected.native_usdc_token_address.clone(),
+            protocol_hash: expected.protocol_hash.clone(),
+            factory_runtime_code_hash: expected.factory_runtime_code_hash.clone(),
+            implementation_runtime_code_hash: expected.implementation_runtime_code_hash.clone(),
+            evidence_boundary: "fixture observation".to_string(),
+        };
+        let document: AutonomousBountyTermsDocument =
+            serde_json::from_str(include_str!("../../../bounties/autonomous-v1/168.json")).unwrap();
+        let artifact = build_portable_autonomous_bounty_plan(
+            document,
+            deployment,
+            expected,
+            observation,
+            PortableDeploymentReference {
+                manifest_path: "deployment.json".to_string(),
+                manifest_canonical_json_keccak256: keccak256_canonical_json(&deployment_value)
+                    .unwrap(),
+                deployment_transaction: format!("0x{}", "55".repeat(32)),
+                deployment_block: 48_000_000,
+                deployer: "0x884834e884d6e93462655a2820140ad03e6747bc".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            artifact.schema_version,
+            "agent-bounties/autonomous-portable-creation-plan-v1"
+        );
+        assert_eq!(
+            artifact.creation_plan.bounty_id,
+            "0xb6f8d6983db3d16237cd896730ec8ac3d20734f5612744f60a15a3bc4c030a27"
+        );
+        assert_eq!(
+            artifact.creation_plan.predicted_bounty_contract,
+            "0x786be3f994365fcd417a1b502a83300ea87d9b34"
+        );
+        assert_eq!(artifact.creation_plan.wallet_calls.len(), 2);
+        assert_eq!(artifact.wallet_request.method, "wallet_sendCalls");
+        assert_eq!(artifact.wallet_request.params[0].chain_id, "0x2105");
+        assert_eq!(artifact.wallet_request.params[0].calls.len(), 2);
+        assert_eq!(artifact.wallet_request.params[0].calls[0].value, "0x0");
+        assert_eq!(
+            artifact.registration.terms_hash,
+            "0x83d7f1c75921cf11a3eb7530d72f26272b3a031c1ed73380b7d41e2bdb82c878"
+        );
+        assert_eq!(
+            artifact
+                .registration
+                .terms_publication_request
+                .creator_wallet,
+            "0x884834e884d6e93462655a2820140ad03e6747bc"
+        );
+    }
+
+    #[test]
+    fn portable_creation_plan_rejects_non_active_deployment_manifest() {
+        let mut deployment = active_deployment_fixture();
+        deployment["status"] = serde_json::json!("pending_external_review_and_deployment");
+
+        let error = active_factory_expected_state(&deployment).unwrap_err();
+
+        assert!(error.to_string().contains("status `active`"));
+    }
+
+    #[test]
+    fn portable_creation_planner_rejects_credential_bearing_or_insecure_rpc_urls() {
+        assert!(normalize_portable_rpc_url("https://key@example.com/rpc").is_err());
+        assert!(normalize_portable_rpc_url("http://rpc.example.com").is_err());
+        assert_eq!(
+            normalize_portable_rpc_url("http://127.0.0.1:8545/#ignored").unwrap(),
+            "http://127.0.0.1:8545/"
+        );
+        assert_eq!(
+            normalize_portable_rpc_url("https://rpc.example.com/v1?key=secret#ignored").unwrap(),
+            "https://rpc.example.com/v1?key=secret"
         );
     }
 

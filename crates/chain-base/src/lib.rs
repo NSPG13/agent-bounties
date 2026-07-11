@@ -997,6 +997,39 @@ pub struct BaseNetworkDescriptor {
 
 pub const BASE_MAINNET_USDC_TOKEN_ADDRESS: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 pub const BASE_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+pub const AUTONOMOUS_BOUNTY_PROTOCOL_HASH: &str =
+    "0x0afcbf01041498cc301207aa5cd21a838c522d8c057d9b29c2dd83d7d94053e7";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutonomousFactoryExpectedState {
+    pub protocol_version: String,
+    pub network: String,
+    pub chain_id: u64,
+    pub factory_contract: String,
+    pub implementation_contract: String,
+    pub native_usdc_token_address: String,
+    pub protocol_hash: String,
+    pub factory_runtime_code_hash: String,
+    pub implementation_runtime_code_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutonomousFactorySafeObservation {
+    pub protocol_version: String,
+    pub network: String,
+    pub chain_id: u64,
+    pub safe_block_number: u64,
+    pub safe_block_hash: String,
+    pub safe_block_timestamp: u64,
+    pub block_tag: String,
+    pub factory_contract: String,
+    pub implementation_contract: String,
+    pub native_usdc_token_address: String,
+    pub protocol_hash: String,
+    pub factory_runtime_code_hash: String,
+    pub implementation_runtime_code_hash: String,
+    pub evidence_boundary: String,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BaseRpcUrlConfig {
@@ -1395,7 +1428,18 @@ impl JsonRpcTransport for ReqwestJsonRpcTransport {
             .json(request)
             .send()
             .await
-            .map_err(|error| ChainBaseError::RpcTransport(error.to_string()))?;
+            .map_err(|error| {
+                let message = if error.is_timeout() {
+                    "request timed out"
+                } else if error.is_connect() {
+                    "connection failed"
+                } else if error.is_request() {
+                    "request could not be constructed"
+                } else {
+                    "request failed"
+                };
+                ChainBaseError::RpcTransport(message.to_string())
+            })?;
         let status = response.status();
         if !status.is_success() {
             return Err(ChainBaseError::RpcHttpStatus(status.as_u16()));
@@ -1405,6 +1449,293 @@ impl JsonRpcTransport for ReqwestJsonRpcTransport {
             .await
             .map_err(|error| ChainBaseError::InvalidRpcResponse(error.to_string()))
     }
+}
+
+pub async fn verify_autonomous_factory_safe_state(
+    rpc_url: &str,
+    expected: &AutonomousFactoryExpectedState,
+) -> Result<AutonomousFactorySafeObservation, ChainBaseError> {
+    verify_autonomous_factory_safe_state_with_transport(
+        rpc_url,
+        expected,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn verify_autonomous_factory_safe_state_with_transport<T>(
+    rpc_url: &str,
+    expected: &AutonomousFactoryExpectedState,
+    transport: &T,
+) -> Result<AutonomousFactorySafeObservation, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let network = base_network_descriptor(&expected.network)?;
+    if expected.protocol_version != "agent-bounties/autonomous-v1"
+        || network.chain_id != expected.chain_id
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "canonical factory manifest has an unsupported protocol or chain".to_string(),
+        ));
+    }
+
+    let factory_contract = normalize_address(&expected.factory_contract)?;
+    let implementation_contract = normalize_address(&expected.implementation_contract)?;
+    let native_usdc_token_address = normalize_address(&expected.native_usdc_token_address)?;
+    if native_usdc_token_address != normalize_address(&network.native_usdc_token_address)? {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "canonical factory manifest settlement token does not match the Base network"
+                .to_string(),
+        ));
+    }
+    let protocol_hash = normalize_hash(&expected.protocol_hash)?;
+    if protocol_hash != AUTONOMOUS_BOUNTY_PROTOCOL_HASH {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "canonical factory manifest protocol hash is not autonomous-v1".to_string(),
+        ));
+    }
+    let factory_runtime_code_hash = normalize_hash(&expected.factory_runtime_code_hash)?;
+    let implementation_runtime_code_hash =
+        normalize_hash(&expected.implementation_runtime_code_hash)?;
+
+    let safe_block = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "eth_getBlockByNumber",
+                    "params": ["safe", false]
+                }),
+            )
+            .await?,
+        1,
+        "eth_getBlockByNumber",
+    )?;
+    let safe_block_number_hex = safe_block
+        .get("number")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse("safe block response is missing number".to_string())
+        })?;
+    let safe_block_number = parse_rpc_quantity(safe_block_number_hex)?;
+    let safe_block_hash = normalize_hash(
+        safe_block
+            .get("hash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing hash".to_string(),
+                )
+            })?,
+    )?;
+    let safe_block_timestamp = parse_rpc_quantity(
+        safe_block
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing timestamp".to_string(),
+                )
+            })?,
+    )?;
+    let exact_block = hex_quantity(safe_block_number);
+
+    let factory_proof =
+        fetch_account_code_hash(rpc_url, &factory_contract, &exact_block, 2, transport).await?;
+    require_canonical_match(
+        "factory runtime code hash",
+        &factory_proof,
+        &factory_runtime_code_hash,
+    )?;
+
+    let implementation_proof = fetch_account_code_hash(
+        rpc_url,
+        &implementation_contract,
+        &exact_block,
+        3,
+        transport,
+    )
+    .await?;
+    require_canonical_match(
+        "implementation runtime code hash",
+        &implementation_proof,
+        &implementation_runtime_code_hash,
+    )?;
+
+    let observed_protocol_hash = fetch_contract_word(
+        rpc_url,
+        &factory_contract,
+        &encode_call("SUPPORTED_PROTOCOL_VERSION()", Vec::new()),
+        &exact_block,
+        4,
+        transport,
+    )
+    .await?;
+    require_canonical_match(
+        "factory protocol hash",
+        &observed_protocol_hash,
+        &protocol_hash,
+    )?;
+
+    let observed_implementation_word = fetch_contract_word(
+        rpc_url,
+        &factory_contract,
+        &encode_call("implementation()", Vec::new()),
+        &exact_block,
+        5,
+        transport,
+    )
+    .await?;
+    let observed_implementation = address_from_word(parse_bytes32(&observed_implementation_word)?);
+    require_canonical_match(
+        "factory implementation",
+        &observed_implementation,
+        &implementation_contract,
+    )?;
+
+    let observed_token_word = fetch_contract_word(
+        rpc_url,
+        &factory_contract,
+        &encode_call("settlementToken()", Vec::new()),
+        &exact_block,
+        6,
+        transport,
+    )
+    .await?;
+    let observed_token = address_from_word(parse_bytes32(&observed_token_word)?);
+    require_canonical_match(
+        "factory settlement token",
+        &observed_token,
+        &native_usdc_token_address,
+    )?;
+
+    Ok(AutonomousFactorySafeObservation {
+        protocol_version: expected.protocol_version.clone(),
+        network: expected.network.clone(),
+        chain_id: expected.chain_id,
+        safe_block_number,
+        safe_block_hash,
+        safe_block_timestamp,
+        block_tag: "safe".to_string(),
+        factory_contract,
+        implementation_contract,
+        native_usdc_token_address,
+        protocol_hash,
+        factory_runtime_code_hash,
+        implementation_runtime_code_hash,
+        evidence_boundary: "This observation proves exact factory code and immutable configuration at one Base safe block. It does not prove that any wallet call was authorized, broadcast, funded, claimable, accepted, paid, or settled.".to_string(),
+    })
+}
+
+fn rpc_result(value: Value, request_id: u64, method: &str) -> Result<Value, ChainBaseError> {
+    let object = value.as_object().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse(format!("{method} response is not an object"))
+    })?;
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || object.get("id").and_then(Value::as_u64) != Some(request_id)
+    {
+        return Err(ChainBaseError::InvalidRpcResponse(format!(
+            "{method} response has the wrong JSON-RPC version or id"
+        )));
+    }
+    if let Some(error) = object.get("error") {
+        let code = error.get("code").and_then(Value::as_i64).ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse(format!("{method} provider error is missing code"))
+        })?;
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("provider error")
+            .to_string();
+        return Err(ChainBaseError::RpcProviderError { code, message });
+    }
+    object.get("result").cloned().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse(format!("{method} response is missing result"))
+    })
+}
+
+async fn fetch_account_code_hash<T>(
+    rpc_url: &str,
+    address: &str,
+    block: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<String, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let result = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_getProof",
+                    "params": [address, [], block]
+                }),
+            )
+            .await?,
+        request_id,
+        "eth_getProof",
+    )?;
+    normalize_hash(
+        result
+            .get("codeHash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "eth_getProof response is missing codeHash".to_string(),
+                )
+            })?,
+    )
+}
+
+async fn fetch_contract_word<T>(
+    rpc_url: &str,
+    contract: &str,
+    data: &str,
+    block: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<String, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let result = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_call",
+                    "params": [{ "to": contract, "data": data }, block]
+                }),
+            )
+            .await?,
+        request_id,
+        "eth_call",
+    )?;
+    normalize_hash(result.as_str().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("eth_call result is not one ABI word".to_string())
+    })?)
+}
+
+fn require_canonical_match(
+    field: &str,
+    observed: &str,
+    expected: &str,
+) -> Result<(), ChainBaseError> {
+    if observed != expected {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(format!(
+            "canonical {field} mismatch: expected {expected}, observed {observed}"
+        )));
+    }
+    Ok(())
 }
 
 pub async fn fetch_base_contract_logs(
@@ -3982,6 +4313,7 @@ fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, ChainBaseError> {
 mod tests {
     use super::*;
     use domain::Money;
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -5185,6 +5517,149 @@ mod tests {
         let request = seen_request.lock().unwrap().clone().unwrap();
         assert_eq!(request["method"], "eth_getTransactionReceipt");
         assert_eq!(request["params"][0], format!("0x{}", "ef".repeat(32)));
+    }
+
+    fn canonical_factory_expected_state() -> AutonomousFactoryExpectedState {
+        AutonomousFactoryExpectedState {
+            protocol_version: "agent-bounties/autonomous-v1".to_string(),
+            network: "base-mainnet".to_string(),
+            chain_id: 8_453,
+            factory_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            implementation_contract: "0x2222222222222222222222222222222222222222".to_string(),
+            native_usdc_token_address: BASE_MAINNET_USDC_TOKEN_ADDRESS.to_string(),
+            protocol_hash: AUTONOMOUS_BOUNTY_PROTOCOL_HASH.to_string(),
+            factory_runtime_code_hash: format!("0x{}", "33".repeat(32)),
+            implementation_runtime_code_hash: format!("0x{}", "44".repeat(32)),
+        }
+    }
+
+    fn canonical_factory_rpc_responses(
+        expected: &AutonomousFactoryExpectedState,
+    ) -> VecDeque<Value> {
+        let implementation_word = format!(
+            "0x{:0>64}",
+            expected.implementation_contract.trim_start_matches("0x")
+        );
+        let token_word = format!(
+            "0x{:0>64}",
+            expected.native_usdc_token_address.trim_start_matches("0x")
+        );
+        VecDeque::from(vec![
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "number": "0x10",
+                    "hash": format!("0x{}", "aa".repeat(32)),
+                    "timestamp": "0x669b8f00"
+                }
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": { "codeHash": expected.factory_runtime_code_hash }
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "result": { "codeHash": expected.implementation_runtime_code_hash }
+            }),
+            json!({ "jsonrpc": "2.0", "id": 4, "result": expected.protocol_hash }),
+            json!({ "jsonrpc": "2.0", "id": 5, "result": implementation_word }),
+            json!({ "jsonrpc": "2.0", "id": 6, "result": token_word }),
+        ])
+    }
+
+    struct SequenceTransport {
+        seen_requests: Arc<Mutex<Vec<Value>>>,
+        responses: Mutex<VecDeque<Value>>,
+    }
+
+    #[async_trait::async_trait]
+    impl JsonRpcTransport for SequenceTransport {
+        async fn post_json_value(
+            &self,
+            _rpc_url: &str,
+            request: &Value,
+        ) -> Result<Value, ChainBaseError> {
+            self.seen_requests.lock().unwrap().push(request.clone());
+            self.responses.lock().unwrap().pop_front().ok_or_else(|| {
+                ChainBaseError::RpcTransport("mock response queue exhausted".to_string())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn safe_factory_verification_pins_exact_code_and_getters_to_one_block() {
+        let expected = canonical_factory_expected_state();
+        let seen_requests = Arc::new(Mutex::new(Vec::new()));
+        let transport = SequenceTransport {
+            seen_requests: seen_requests.clone(),
+            responses: Mutex::new(canonical_factory_rpc_responses(&expected)),
+        };
+
+        let observation = verify_autonomous_factory_safe_state_with_transport(
+            "https://mainnet.base.org",
+            &expected,
+            &transport,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(observation.safe_block_number, 16);
+        assert_eq!(
+            observation.safe_block_timestamp,
+            u64::from_str_radix("669b8f00", 16).unwrap()
+        );
+        assert_eq!(observation.block_tag, "safe");
+        assert_eq!(observation.factory_contract, expected.factory_contract);
+        assert_eq!(
+            observation.implementation_contract,
+            expected.implementation_contract
+        );
+        assert_eq!(
+            observation.factory_runtime_code_hash,
+            expected.factory_runtime_code_hash
+        );
+
+        let requests = seen_requests.lock().unwrap();
+        assert_eq!(requests.len(), 6);
+        assert_eq!(requests[0]["method"], "eth_getBlockByNumber");
+        assert_eq!(requests[0]["params"], json!(["safe", false]));
+        assert_eq!(requests[1]["method"], "eth_getProof");
+        assert_eq!(requests[1]["params"][2], "0x10");
+        assert_eq!(requests[2]["params"][2], "0x10");
+        for request in &requests[3..] {
+            assert_eq!(request["method"], "eth_call");
+            assert_eq!(request["params"][1], "0x10");
+        }
+    }
+
+    #[tokio::test]
+    async fn safe_factory_verification_fails_closed_on_token_mismatch() {
+        let expected = canonical_factory_expected_state();
+        let mut responses = canonical_factory_rpc_responses(&expected);
+        let wrong_token = format!("0x{:0>64}", "5555555555555555555555555555555555555555");
+        *responses.back_mut().unwrap() =
+            json!({ "jsonrpc": "2.0", "id": 6, "result": wrong_token });
+        let transport = SequenceTransport {
+            seen_requests: Arc::new(Mutex::new(Vec::new())),
+            responses: Mutex::new(responses),
+        };
+
+        let error = verify_autonomous_factory_safe_state_with_transport(
+            "https://mainnet.base.org",
+            &expected,
+            &transport,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ChainBaseError::InvalidVerificationConfiguration(message)
+                if message.contains("factory settlement token mismatch")
+        ));
     }
 
     struct MockTransport {
