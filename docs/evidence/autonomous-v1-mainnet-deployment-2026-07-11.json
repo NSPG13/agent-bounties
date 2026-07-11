@@ -1,0 +1,28 @@
+{
+  "schema_version": "agent-bounties/deployment-evidence-v1",
+  "protocol_version": "agent-bounties/autonomous-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "source_commit": "86623e777f03419db2cefe5b85e746308a8b67b7",
+  "deployer": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "deployer_nonce": 4,
+  "transaction": "0x8c172a34188cc68cf61f7293825e3c93e025a029b878436d34aafd2103c2e70e",
+  "transaction_status": "0x1",
+  "deployment_block": 48496662,
+  "deployment_block_hash": "0x8fe4fb95c155b9208e00e35d1471727a27123dc0bdbef276d62e68fb8fd6f53a",
+  "deployment_timestamp_utc": "2026-07-11T15:11:11Z",
+  "gas_used": 5733968,
+  "factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "factory_runtime_code_hash": "0x06f810de7b46f854ecc29e9c0c28156edab4b0d3e0bbe2bf5be8876687bebfc6",
+  "implementation": "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
+  "implementation_runtime_code_hash": "0xc36fcba5176b2cd8b57a9fd0cbf931177dc8b36cf8367c1568ccebe5f03be3f6",
+  "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "verification": {
+    "receipt_contract_matches": true,
+    "factory_runtime_hash_matches_activation_bundle": true,
+    "implementation_getter_matches_activation_bundle": true,
+    "implementation_runtime_hash_matches_activation_bundle": true,
+    "settlement_token_getter_matches_native_base_usdc": true
+  },
+  "boundary": "This proves factory deployment and immutable configuration. It does not prove that any bounty is created, funded, claimable, completed, or paid."
+}

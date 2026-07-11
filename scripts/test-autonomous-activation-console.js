@@ -12,6 +12,9 @@ const bundle = JSON.parse(fs.readFileSync(path.join(root, "deployments", "base-m
 for (const required of [
   "/deployments/base-mainnet-activation.json",
   "wallet_sendCalls",
+  "atomicRequired: true",
+  "eip6963:requestProvider",
+  "Coinbase Wallet",
   "eth_estimateGas",
   "eth_getTransactionCount",
   "eth_getCode",
@@ -30,6 +33,7 @@ for (const forbidden of ["privateKey", "private_key", "seed phrase", "mnemonic",
 }
 
 assert.ok(html.includes("Content-Security-Policy"));
+assert.ok(html.includes('id="wallet-provider"'));
 assert.ok(html.includes("Use sequential fallback"));
 assert.ok(!html.includes("https://cdn."));
 assert.ok(!html.includes("<input"), "activation console must not accept transaction overrides");

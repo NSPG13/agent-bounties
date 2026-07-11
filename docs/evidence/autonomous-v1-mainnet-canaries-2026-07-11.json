@@ -1,0 +1,59 @@
+{
+  "schema_version": "agent-bounties/canary-activation-evidence-v1",
+  "protocol_version": "agent-bounties/autonomous-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "approval": {
+    "transaction": "0xd89de11e2d5c983b9b051c7ed114440a2bf7bbbcf5d42669f3934b5ad0282ec4",
+    "block": 48496972,
+    "status": "0x1",
+    "amount_minor": 4000000,
+    "spender": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
+  },
+  "creations": [
+    {
+      "issue": 168,
+      "transaction": "0x331c2d5b073a51949f6d4dadc214fbd165c9740765d02b30797ec5660d98d768",
+      "block": 48496996,
+      "contract": "0x786be3f994365fcd417a1b502a83300ea87d9b34",
+      "bounty_id": "0xb6f8d6983db3d16237cd896730ec8ac3d20734f5612744f60a15a3bc4c030a27"
+    },
+    {
+      "issue": 169,
+      "transaction": "0x5e56a803bc82da2c58f74427f79e76fd49c013451eb565dbcb509dde27c708f5",
+      "block": 48497036,
+      "contract": "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8",
+      "bounty_id": "0x01f058453a0eabf14ea67205d0e794be022f718bb9c133f8e507269dec9f1f38"
+    },
+    {
+      "issue": 170,
+      "transaction": "0xce3146574538e8ab2ec6d1eea9ae036bedc7f7dc3a39f04dc9ef562e033733f2",
+      "block": 48497052,
+      "contract": "0x481dfc6f45d43b89dfcc1a84fd6d9b5f73a6a0b9",
+      "bounty_id": "0xaaa22dec47f2a728044e684029e369ae4a58072592bf3edecf587be6ddc4fb6b"
+    },
+    {
+      "issue": 171,
+      "transaction": "0x18535546463283577e778b3cdd5aa79b1d5f254a2e81096e03ffbaa185141479",
+      "block": 48497069,
+      "contract": "0x3195aebfc39a069bf1a4420951d0babc99b2b612",
+      "bounty_id": "0xd97bb783629a6bf3991011ec94742ebbfbad6b24d289092351062a2713d5d362"
+    }
+  ],
+  "safe_block_observation": {
+    "number": 48497185,
+    "hash": "0x043cac69cdc27cb02ffc839df1803db8b558bdb7f667efbbe6783f521d89487c",
+    "timestamp_utc": "2026-07-11T15:28:37Z",
+    "all_factory_registrations": 1,
+    "all_bounty_ids_match": true,
+    "all_funded_minor": 1000000,
+    "all_targets_minor": 1000000,
+    "all_token_balances_minor": 1000000,
+    "all_statuses": 1,
+    "status_meaning": "claimable"
+  },
+  "boundary": "This proves four canonical, fully funded, claimable bounties at one Base safe block. It does not prove a claim, completion, verification verdict, payout, or BountySettled event."
+}
