@@ -221,8 +221,8 @@ def main() -> int:
             fail(f"{service_name} must build from the root Dockerfile")
         if "dockerContext: ." not in block:
             fail(f"{service_name} must build from the repo root context")
-        if "autoDeployTrigger: checksPass" not in block:
-            fail(f"{service_name} must deploy only after checks pass")
+        if "autoDeployTrigger: commit" not in block:
+            fail(f"{service_name} must deploy each reviewed main commit")
         require_database_ref(block)
 
     api = named_block(services, "agent-bounties-api")
