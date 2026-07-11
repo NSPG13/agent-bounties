@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Count open public GitHub issues labeled `bounty` and report inventory health.
+"""Report candidate bounty supply and verified claimable earning inventory.
 
-Does not claim any issue is funded, claimable, accepted, payable, or paid.
+The threshold applies only to fail-closed output from the portable skill's
+canonical inventory verifier. GitHub issue labels remain candidate telemetry.
 """
 
 from __future__ import annotations
@@ -9,11 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,8 +30,14 @@ NON_ACTIONABLE_LABELS = frozenset(
         "not actionable",
         "spam",
         "closed",
+        "activation-blocked",
     }
 )
+
+ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+BYTES32 = re.compile(r"^0x[0-9a-fA-F]{64}$")
+CLAIMABLE_EVIDENCE = "confirmed_canonical_autonomous_bounty"
+MAX_REPORT_AGE_SECONDS = 900
 
 
 @dataclass
@@ -36,10 +45,14 @@ class InventoryReport:
     repository: str
     threshold: int
     open_bounty_count: int
+    verified_claimable_count: int
     missing_count: int
     below_threshold: bool
     issue_urls: list[str]
+    claimable_bounty_ids: list[str]
     excluded_count: int
+    protocol_status: str
+    inventory_evidence_valid: bool
     suggested_next_action: str
     disclaimer: str
 
@@ -49,15 +62,23 @@ class InventoryReport:
             f"# Bounty inventory guard — {status}",
             "",
             f"- Repository: `{self.repository}`",
-            f"- Open actionable `bounty` issues: **{self.open_bounty_count}**",
-            f"- Threshold: **{self.threshold}**",
-            f"- Missing to threshold: **{self.missing_count}**",
+            f"- Open actionable `bounty` issues (candidate supply): **{self.open_bounty_count}**",
+            f"- Verified canonical claimable bounties: **{self.verified_claimable_count}**",
+            f"- Claimable threshold: **{self.threshold}**",
+            f"- Missing claimable bounties: **{self.missing_count}**",
             f"- Excluded (non-actionable labels): **{self.excluded_count}**",
+            f"- Protocol status: `{self.protocol_status}`",
+            f"- Inventory evidence valid: **{str(self.inventory_evidence_valid).lower()}**",
             "",
             "## Issue URLs",
         ]
         if self.issue_urls:
             lines.extend(f"- {url}" for url in self.issue_urls)
+        else:
+            lines.append("- _(none)_")
+        lines.extend(["", "## Verified claimable bounty IDs"])
+        if self.claimable_bounty_ids:
+            lines.extend(f"- `{bounty_id}`" for bounty_id in self.claimable_bounty_ids)
         else:
             lines.append("- _(none)_")
         lines.extend(
@@ -87,7 +108,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--threshold",
         type=int,
         default=int(os.environ.get("BOUNTY_INVENTORY_THRESHOLD", "5")),
-        help="Minimum open actionable bounty issues (default 5)",
+        help="Minimum verified canonical claimable bounties (default 5)",
+    )
+    p.add_argument(
+        "--claimable-report",
+        type=Path,
+        default=None,
+        help="JSON output from skills/agent-bounties/scripts/check-in.mjs",
     )
     p.add_argument(
         "--fixture",
@@ -146,6 +173,91 @@ def issue_url(issue: dict[str, Any], repository: str) -> str:
     return f"https://github.com/{repository}/issues/{number}"
 
 
+def _credential_free_https(value: object) -> bool:
+    try:
+        url = urllib.parse.urlparse(str(value))
+        return (
+            url.scheme == "https"
+            and bool(url.hostname)
+            and url.username is None
+            and url.password is None
+        )
+    except ValueError:
+        return False
+
+
+def verified_claimable_entries(report: object) -> tuple[list[dict[str, Any]], bool, str]:
+    if not isinstance(report, dict):
+        return [], False, "unavailable"
+    protocol_status = str(report.get("protocol_status") or "unavailable")
+    try:
+        observed_at = datetime.fromisoformat(
+            str(report.get("observed_at") or "").replace("Z", "+00:00")
+        )
+        if observed_at.tzinfo is None:
+            return [], False, protocol_status
+        age_seconds = (datetime.now(timezone.utc) - observed_at).total_seconds()
+    except ValueError:
+        return [], False, protocol_status
+    if age_seconds < -60 or age_seconds > MAX_REPORT_AGE_SECONDS:
+        return [], False, protocol_status
+    raw_warnings = report.get("warnings") or []
+    if not isinstance(raw_warnings, list) or not all(
+        isinstance(item, str) for item in raw_warnings
+    ):
+        return [], False, protocol_status
+    warnings = set(raw_warnings)
+    if (
+        report.get("hosted_api_healthy") is not True
+        or protocol_status != "active"
+        or not ADDRESS.fullmatch(str(report.get("active_factory") or ""))
+        or warnings
+        & {
+            "hosted_api_health_not_confirmed",
+            "autonomous_feed_unavailable",
+            "autonomous_protocol_not_active",
+        }
+    ):
+        return [], False, protocol_status
+
+    items = report.get("verified_claimable_bounties")
+    if not isinstance(items, list):
+        return [], False, protocol_status
+    ids: set[str] = set()
+    contracts: set[str] = set()
+    verified: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            return [], False, protocol_status
+        bounty_id = str(item.get("id") or "").lower()
+        contract = str(item.get("contract") or "").lower()
+        solver_reward = item.get("solver_reward_minor")
+        claim_bond = item.get("claim_bond_minor")
+        valid = (
+            BYTES32.fullmatch(bounty_id)
+            and ADDRESS.fullmatch(contract)
+            and bounty_id not in ids
+            and contract not in contracts
+            and item.get("status") == "claimable"
+            and item.get("evidence") == CLAIMABLE_EVIDENCE
+            and item.get("currency") == "usdc"
+            and isinstance(solver_reward, int)
+            and not isinstance(solver_reward, bool)
+            and solver_reward > 0
+            and isinstance(claim_bond, int)
+            and not isinstance(claim_bond, bool)
+            and claim_bond > 0
+            and _credential_free_https(item.get("terms_url"))
+            and _credential_free_https(item.get("claim_plan_url"))
+        )
+        if not valid:
+            return [], False, protocol_status
+        ids.add(bounty_id)
+        contracts.add(contract)
+        verified.append(item)
+    return verified, True, protocol_status
+
+
 def fetch_open_issues(repository: str, token: str | None) -> list[dict[str, Any]]:
     """Paginate GitHub REST issues with label bounty, state open."""
     owner, _, repo = repository.partition("/")
@@ -191,6 +303,7 @@ def build_report(
     repository: str,
     threshold: int,
     issues: list[dict[str, Any]],
+    claimable_report: object = None,
 ) -> InventoryReport:
     actionable: list[dict[str, Any]] = []
     excluded = 0
@@ -203,33 +316,46 @@ def build_report(
                 excluded += 1
 
     urls = [issue_url(i, repository) for i in actionable]
-    count = len(actionable)
-    missing = max(0, threshold - count)
-    below = count < threshold
-    if below:
+    issue_count = len(actionable)
+    claimable, evidence_valid, protocol_status = verified_claimable_entries(claimable_report)
+    claimable_count = len(claimable)
+    missing = max(0, threshold - claimable_count)
+    below = not evidence_valid or claimable_count < threshold
+    if not evidence_valid:
         action = (
-            f"Open or fund at least {missing} more public actionable bounty issue(s) "
-            f"(label `bounty`, keep open, avoid non-actionable labels) so organic "
-            f"solvers have inventory. This report does not mark any issue as funded."
+            "Restore a fresh, active protocol and canonical inventory feed before "
+            "counting liquidity. Candidate issues cannot substitute for missing or "
+            "invalid on-chain evidence."
+        )
+    elif below:
+        action = (
+            f"Activate, fund, and canonically index at least {missing} more claimable "
+            f"bounty contract(s). Open GitHub issues are candidate supply and do not "
+            f"satisfy this liquidity threshold."
         )
     else:
         action = (
-            "Inventory is at or above threshold. Keep monitoring; this report does "
-            "not imply any listed issue is funded or claimable."
+            "Verified canonical claimable inventory is at or above threshold. Keep "
+            "monitoring funding, claims, deadlines, and settlement events."
         )
     disclaimer = (
-        "Counts open GitHub issues labeled `bounty` only. This report does not "
-        "imply any bounty is funded, claimable, accepted, payable, or paid unless "
-        "verified platform payment evidence exists separately."
+        "The GitHub candidate issue count does not imply funding or claimability. "
+        "Claimable inventory requires an active canonical factory plus matching "
+        "terms, economics, funding, and events. Only a confirmed canonical "
+        "BountySettled event proves payout."
     )
     return InventoryReport(
         repository=repository,
         threshold=threshold,
-        open_bounty_count=count,
+        open_bounty_count=issue_count,
+        verified_claimable_count=claimable_count,
         missing_count=missing,
         below_threshold=below,
         issue_urls=urls,
+        claimable_bounty_ids=[str(item["id"]) for item in claimable],
         excluded_count=excluded,
+        protocol_status=protocol_status,
+        inventory_evidence_valid=evidence_valid,
         suggested_next_action=action,
         disclaimer=disclaimer,
     )
@@ -244,6 +370,12 @@ def load_fixture(path: Path) -> list[dict[str, Any]]:
     return data
 
 
+def load_claimable_report(path: Path | None) -> object:
+    if path is None:
+        return None
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.threshold < 0:
@@ -255,7 +387,12 @@ def main(argv: list[str] | None = None) -> int:
         token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
         issues = fetch_open_issues(args.repository, token)
 
-    report = build_report(args.repository, args.threshold, issues)
+    report = build_report(
+        args.repository,
+        args.threshold,
+        issues,
+        load_claimable_report(args.claimable_report),
+    )
     payload = asdict(report)
     md = report.to_markdown()
 

@@ -1,0 +1,7 @@
+{
+  "hosted_api_healthy": true,
+  "protocol_status": "pending_external_review_and_deployment",
+  "active_factory": null,
+  "warnings": ["autonomous_feed_unavailable", "autonomous_protocol_not_active"],
+  "verified_claimable_bounties": []
+}

@@ -9,6 +9,7 @@ on:
       - "scripts/bounty_inventory_guard.py"
       - "scripts/test_bounty_inventory_guard.py"
       - "scripts/fixtures/bounty_inventory_*.json"
+      - "skills/agent-bounties/scripts/check-in.mjs"
       - ".github/workflows/bounty-inventory-guard.yml"
 
 permissions:
@@ -34,19 +35,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Count open bounty issues
+      - name: Build canonical claimable inventory report
+        run: node skills/agent-bounties/scripts/check-in.mjs > claimable-inventory.json
+      - name: Enforce verified claimable inventory floor
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           BOUNTY_INVENTORY_THRESHOLD: "5"
         run: |
           python scripts/bounty_inventory_guard.py \
+            --claimable-report claimable-inventory.json \
+            --fail-below \
             --json-out bounty-inventory-report.json \
             --md-out bounty-inventory-report.md
       - name: Upload report artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bounty-inventory-report
           path: |
             bounty-inventory-report.json
             bounty-inventory-report.md
+            claimable-inventory.json
