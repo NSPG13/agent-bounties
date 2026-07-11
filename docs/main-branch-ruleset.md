@@ -37,3 +37,21 @@ gh api repos/NSPG13/agent-bounties/rulesets
 If a ruleset with this name already exists, update its numeric endpoint with
 `PUT` instead of creating a duplicate. Any future required check must first run
 successfully on a pull request and must be bound to its expected GitHub App.
+
+## Drift Check
+
+`scripts/ruleset_drift_check.py` is a read-only checker that confirms the live
+ruleset still matches this canonical file. It authenticates through `gh`, reads
+(never writes) the live ruleset, ignores only server-owned fields (ids,
+timestamps, and source links), and semantically validates every protection
+listed above. A maintainer with `gh` authenticated runs:
+
+```bash
+python scripts/ruleset_drift_check.py
+```
+
+It exits non-zero and prints each difference when the live ruleset drifts from
+the canonical file or when either side stops encoding a documented protection.
+Offline fixture coverage runs on every pull request via the `ruleset-drift` CI
+job (`python scripts/test_ruleset_drift_check.py`), so no live credentials are
+needed in CI.
