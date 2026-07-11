@@ -773,6 +773,7 @@
     if (!form) return;
     const params = new URLSearchParams(location.search);
     if (params.get("bountyContract")) form.elements.bountyContract.value = params.get("bountyContract");
+    if (params.get("amount")) form.elements.amount.value = params.get("amount");
   }
 
   async function initialize() {

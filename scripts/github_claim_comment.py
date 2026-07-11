@@ -16,7 +16,7 @@ from typing import Dict, List, Mapping, Optional, TextIO, Tuple
 
 
 MARKER = "<!-- agent-bounties-claim-comment -->"
-CLAIM_COMMAND_RE = re.compile(r"(?im)^\s*/agent-bounty\s+(claim|attempt)\b")
+CLAIM_COMMAND_RE = re.compile(r"(?im)^\s*/(?:agent-bounty\s+)?(claim|attempt)\b")
 COMMENT_ID_RE = re.compile(r"Claim comment id:\s*`?([0-9]+)`?")
 RESERVATION_RE = re.compile(r"Reservation id:\s*`?([^\s`]+)`?")
 CONTRIBUTOR_RE = re.compile(r"Contributor:\s*`?([^\s`]+)`?")
@@ -118,7 +118,7 @@ def write_issue_files(
     if missing:
         raise UserError(f"claim comment event missing required metadata: {', '.join(missing)}")
     if not CLAIM_COMMAND_RE.search(str(meta["comment_body"])):
-        raise UserError("comment does not contain an /agent-bounty claim or /agent-bounty attempt command")
+        raise UserError("comment does not contain a /claim, /attempt, or /agent-bounty claim command")
 
     return meta, body_file
 
@@ -247,15 +247,17 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
     details = str(read_json_field(plan, "check.text"))
     ready = bool(plan.get("ready"))
     signal = plan.get("signal") if isinstance(plan.get("signal"), dict) else {}
+    decision = str(signal.get("decision") or "")
     reservation = str(signal.get("reservation_id") or "none")
     contributor = str(meta.get("contributor_login") or "unknown")
     comment_url = str(meta.get("comment_url") or "").strip()
     comment_ref = comment_url or f"issue comment {meta['comment_id']}"
-    status_line = (
-        "This claim is a temporary coordination signal only; it never authorizes bounty acceptance, escrow release, or payout."
-        if ready
-        else "This claim comment needs a concrete progress signal before it should reserve attention."
-    )
+    if decision == "OnChainClaimRequired":
+        status_line = "GitHub cannot reserve this autonomous bounty. Claim only through the canonical funded contract."
+    elif ready:
+        status_line = "This claim is a temporary coordination signal only; it never authorizes bounty acceptance, escrow release, or payout."
+    else:
+        status_line = "This claim comment needs a concrete progress signal before it should reserve attention."
 
     return "\n".join(
         [
@@ -434,6 +436,31 @@ def run_self_test() -> int:
     missing = [needle for needle in required if needle not in output]
     if missing:
         raise UserError(f"self-test output missing: {', '.join(missing)}")
+
+    if not CLAIM_COMMAND_RE.search("/attempt #187"):
+        raise UserError("self-test short autonomous attempt command was not recognized")
+    routed = render_comment(
+        {
+            "comment_id": "1873",
+            "comment_url": "",
+            "contributor_login": "organic-agent",
+        },
+        {
+            "ready": False,
+            "signal": {
+                "decision": "OnChainClaimRequired",
+                "reservation_id": "routing-only",
+            },
+            "check": {
+                "conclusion": "ActionRequired",
+                "title": "Autonomous bounty requires an on-chain claim",
+                "summary": "GitHub cannot reserve this bounty.",
+                "text": "Wait for the canonical funded contract.",
+            },
+        },
+    )
+    if "Claim only through the canonical funded contract" not in routed:
+        raise UserError("self-test autonomous route did not suppress GitHub reservation")
 
     print(f"GitHub claim comment dry-run passed: {output_path}")
     return 0

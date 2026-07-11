@@ -239,6 +239,7 @@ def main() -> int:
             "bounty_became_claimable",
             "SHA-256",
             "A transaction hash alone is not funding evidence",
+            'params.get("amount")',
         ],
     )
 

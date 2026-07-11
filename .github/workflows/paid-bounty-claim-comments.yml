@@ -19,6 +19,8 @@ jobs:
       && (
         startsWith(github.event.comment.body, '/agent-bounty claim')
         || startsWith(github.event.comment.body, '/agent-bounty attempt')
+        || startsWith(github.event.comment.body, '/claim')
+        || startsWith(github.event.comment.body, '/attempt')
       )
     runs-on: ubuntu-latest
     steps:
