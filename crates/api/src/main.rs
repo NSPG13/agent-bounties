@@ -11,13 +11,6 @@ use app::{
     StripeTransferPlan, StripeTransferReconciliation, SubmitResultRequest,
     UpsertAudienceMemberRequest, UpsertContributorContactRequest, VerifySubmissionRequest,
 };
-#[cfg(test)]
-use app::{
-    build_base_indexer_status_report, BaseEscrowReconciliation, BaseIndexerHeartbeatStatus,
-    BaseIndexerScanCursor, BaseIndexerStatusConfig, BaseIndexerStatusReport,
-    BaseReleaseQueueRequest, PlanBaseDisputeRequest, PlanBaseFundingRequest, PlanBaseRefundRequest,
-    PlanBaseReleaseRequest,
-};
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
@@ -43,11 +36,6 @@ use chain_base::{
     AutonomousVerificationJob, BaseNetworkDescriptor, BaseRpcUrlConfig, ChainBaseError,
     EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent,
     RpcTransactionReceipt,
-};
-#[cfg(test)]
-use chain_base::{
-    fetch_base_escrow_logs, rpc_logs_to_evm_logs, BaseEscrowEvent, BaseEscrowLogQuery,
-    EthGetLogsRequest, RpcLogSubmission,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
@@ -77,8 +65,6 @@ use payments_stripe::{
 };
 use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use std::collections::HashSet;
 use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
@@ -86,7 +72,6 @@ use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, Secur
 use utoipa::openapi::Components;
 use utoipa::{Modify, OpenApi, ToSchema};
 use uuid::Uuid;
-use worker::BaseEscrowLogWorker;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -235,7 +220,6 @@ impl Modify for SecurityAddon {
 #[derive(Clone)]
 struct AppState {
     network: Arc<Mutex<BountyNetwork>>,
-    base_log_worker: Arc<Mutex<BaseEscrowLogWorker>>,
     eval_runs: Arc<Mutex<Vec<EvalRun>>>,
     stripe_webhook_secret: Option<Vec<u8>>,
     allow_unsigned_stripe_webhooks: bool,
@@ -324,13 +308,6 @@ struct RouteRequest {
 #[derive(Debug, Deserialize)]
 struct LiveMoneyReadinessQuery {
     network: Option<String>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Deserialize)]
-struct BaseIndexerStatusQuery {
-    network: Option<String>,
-    escrow_contract: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -430,15 +407,6 @@ struct SearchCapabilitiesRequest {
     template_slug: Option<String>,
     currency: Option<String>,
     max_price_minor: Option<i64>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct PlanBaseLogQueryRequest {
-    escrow_contract: String,
-    from_block: u64,
-    to_block: Option<u64>,
-    request_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -572,16 +540,6 @@ struct AutonomousVerificationJobsQuery {
     verifier: Option<String>,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct FetchBaseRpcLogsRequest {
-    escrow_contract: String,
-    from_block: u64,
-    to_block: Option<u64>,
-    request_id: Option<u64>,
-    network: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct BroadcastBaseSignedTransactionRequest {
     signed_transaction: String,
@@ -594,15 +552,6 @@ struct GetBaseTransactionReceiptRequest {
     tx_hash: String,
     request_id: Option<u64>,
     network: Option<String>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BaseRpcLogFetchReport {
-    network: BaseNetworkDescriptor,
-    request: EthGetLogsRequest,
-    fetched_logs: usize,
-    reconciliation: worker::BaseLogPipelineReport,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -635,13 +584,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(_) => None,
     };
-    let (network, base_log_worker) = if let Some(store) = &store {
-        (
-            hydrate_network(store).await?,
-            hydrate_base_log_worker(store).await?,
-        )
+    let network = if let Some(store) = &store {
+        hydrate_network(store).await?
     } else {
-        (BountyNetwork::default(), BaseEscrowLogWorker::default())
+        BountyNetwork::default()
     };
     let eval_runs = if let Some(store) = &store {
         store.list_eval_runs().await?
@@ -650,7 +596,6 @@ async fn main() -> anyhow::Result<()> {
     };
     let state: SharedState = Arc::new(AppState {
         network: Arc::new(Mutex::new(network)),
-        base_log_worker: Arc::new(Mutex::new(base_log_worker)),
         eval_runs: Arc::new(Mutex::new(eval_runs)),
         stripe_webhook_secret: env::var("STRIPE_WEBHOOK_SECRET")
             .ok()
@@ -1037,94 +982,6 @@ async fn live_money_readiness(
     build_live_money_readiness_report(live_money_readiness_config(&state, &network))
         .map(Json)
         .map_err(|_| StatusCode::BAD_REQUEST)
-}
-
-#[cfg(test)]
-#[utoipa::path(
-    get,
-    path = "/v1/base/indexer-status",
-    params(
-        ("network" = Option<String>, Query, description = "Base network, defaults to base-mainnet"),
-        ("escrow_contract" = Option<String>, Query, description = "Base escrow contract address; defaults to the configured contract for the selected network")
-    ),
-    responses(
-        (status = 200, description = "Read-only Base indexer cursor status"),
-        (status = 400, description = "Unknown Base network"),
-        (status = 500, description = "Failed to read persisted indexer cursor")
-    )
-)]
-async fn base_indexer_status(
-    State(state): State<SharedState>,
-    Query(query): Query<BaseIndexerStatusQuery>,
-) -> Result<Json<BaseIndexerStatusReport>, StatusCode> {
-    let network = query
-        .network
-        .and_then(non_empty_secret)
-        .unwrap_or_else(|| "base-mainnet".to_string());
-    let descriptor = base_network_descriptor(&network).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let escrow_contract = query
-        .escrow_contract
-        .and_then(non_empty_secret)
-        .or_else(|| autonomous_factory_for_chain(descriptor.chain_id));
-    let cursor = match (&state.store, escrow_contract.as_deref()) {
-        (Some(store), Some(escrow_contract)) => store
-            .get_base_log_cursor(&network, escrow_contract)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .map(base_indexer_scan_cursor_from_db),
-        _ => None,
-    };
-    let heartbeat = match (&state.store, escrow_contract.as_deref()) {
-        (Some(store), Some(escrow_contract)) => store
-            .get_base_indexer_heartbeat(&network, escrow_contract)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .map(base_indexer_heartbeat_from_db),
-        _ => None,
-    };
-
-    build_base_indexer_status_report(BaseIndexerStatusConfig {
-        network,
-        escrow_contract,
-        database_configured: state.store.is_some(),
-        cursor,
-        heartbeat,
-    })
-    .map(Json)
-    .map_err(|_| StatusCode::BAD_REQUEST)
-}
-
-#[cfg(test)]
-fn base_indexer_scan_cursor_from_db(cursor: db::BaseLogScanCursor) -> BaseIndexerScanCursor {
-    BaseIndexerScanCursor {
-        network: cursor.network,
-        escrow_contract: cursor.escrow_contract,
-        last_scanned_block: cursor.last_scanned_block,
-        last_log_key: cursor.last_log_key,
-        updated_at: cursor.updated_at,
-    }
-}
-
-#[cfg(test)]
-fn base_indexer_heartbeat_from_db(
-    heartbeat: db::BaseIndexerHeartbeat,
-) -> BaseIndexerHeartbeatStatus {
-    BaseIndexerHeartbeatStatus {
-        network: heartbeat.network,
-        escrow_contract: heartbeat.escrow_contract,
-        status: heartbeat.status,
-        started_at: heartbeat.started_at,
-        completed_at: heartbeat.completed_at,
-        latest_block: heartbeat.latest_block,
-        confirmed_to_block: heartbeat.confirmed_to_block,
-        from_block: heartbeat.from_block,
-        to_block: heartbeat.to_block,
-        fetched_logs: heartbeat.fetched_logs,
-        persisted_cursor_block: heartbeat.persisted_cursor_block,
-        skipped_reason: heartbeat.skipped_reason,
-        error_message: heartbeat.error_message,
-        updated_at: heartbeat.updated_at,
-    }
 }
 
 fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
@@ -2214,155 +2071,6 @@ async fn verify_submission(
     Ok(Json(proof))
 }
 
-#[cfg(test)]
-#[utoipa::path(
-    post,
-    path = "/v1/base/escrow-events",
-    responses(
-        (status = 200, description = "Reconciled normalized Base escrow event"),
-        (status = 400, description = "Invalid escrow event or state transition"),
-        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
-    ),
-    security(("operator_api_token" = []), ("operator_bearer" = []))
-)]
-async fn reconcile_base_escrow_event(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Json(event): Json<BaseEscrowEvent>,
-) -> Result<Json<BaseEscrowReconciliation>, StatusCode> {
-    require_operator(&state, &headers)?;
-    let indexed_event = event.clone();
-    let reconciliation = {
-        let mut network = state.network.lock().expect("state poisoned");
-        let reconciliation = network
-            .apply_base_escrow_event(event)
-            .map_err(|_| StatusCode::BAD_REQUEST)?;
-        state
-            .base_log_worker
-            .lock()
-            .expect("state poisoned")
-            .ingest_indexed_event(indexed_event.clone())
-            .map_err(|_| StatusCode::BAD_REQUEST)?;
-        reconciliation
-    };
-    if let Some(store) = &state.store {
-        store
-            .upsert_bounty(&reconciliation.bounty)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .upsert_base_escrow_event(&indexed_event)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .upsert_escrow(&reconciliation.escrow)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        for intent in &reconciliation.funding_intents {
-            store
-                .upsert_funding_intent(intent)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for settlement in &reconciliation.settlements {
-            store
-                .upsert_settlement(settlement)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        persist_ledger_entries(store, &reconciliation.ledger_entries).await?;
-    }
-    Ok(Json(reconciliation))
-}
-
-#[cfg(test)]
-#[utoipa::path(
-    post,
-    path = "/v1/base/evm-logs",
-    responses(
-        (status = 200, description = "Decoded and reconciled raw Base escrow EVM logs"),
-        (status = 400, description = "Invalid log payload or escrow event order"),
-        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
-    ),
-    security(("operator_api_token" = []), ("operator_bearer" = []))
-)]
-async fn reconcile_base_evm_logs(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Json(logs): Json<Vec<chain_base::EvmLog>>,
-) -> Result<Json<worker::BaseLogPipelineReport>, StatusCode> {
-    require_operator(&state, &headers)?;
-    process_base_evm_logs(&state, logs).await.map(Json)
-}
-
-#[cfg(test)]
-#[utoipa::path(
-    post,
-    path = "/v1/base/rpc-logs",
-    responses(
-        (status = 200, description = "Reconcile provider-shaped Base eth_getLogs results"),
-        (status = 400, description = "Invalid provider log payload"),
-        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured")
-    ),
-    security(("operator_api_token" = []), ("operator_bearer" = []))
-)]
-async fn reconcile_base_rpc_logs(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Json(submission): Json<RpcLogSubmission>,
-) -> Result<Json<worker::BaseLogPipelineReport>, StatusCode> {
-    require_operator(&state, &headers)?;
-    let logs = rpc_logs_to_evm_logs(submission.into_logs()).map_err(|_| StatusCode::BAD_REQUEST)?;
-    process_base_evm_logs(&state, logs).await.map(Json)
-}
-
-#[cfg(test)]
-#[utoipa::path(
-    post,
-    path = "/v1/base/fetch-rpc-logs",
-    request_body = FetchBaseRpcLogsRequest,
-    responses(
-        (status = 200, description = "Fetch Base escrow logs from configured RPC and reconcile them"),
-        (status = 400, description = "Invalid fetch request"),
-        (status = 401, description = "Operator token required when OPERATOR_API_TOKEN is configured"),
-        (status = 503, description = "Requested Base RPC URL is not configured")
-    ),
-    security(("operator_api_token" = []), ("operator_bearer" = []))
-)]
-async fn fetch_base_rpc_logs(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Json(request): Json<FetchBaseRpcLogsRequest>,
-) -> Result<Json<BaseRpcLogFetchReport>, StatusCode> {
-    require_operator(&state, &headers)?;
-    let query = BaseEscrowLogQuery::new(
-        request.escrow_contract,
-        request.from_block,
-        request.to_block,
-    )
-    .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let request_id = request.request_id.unwrap_or(1);
-    let network_name = request.network.as_deref().unwrap_or("base-sepolia");
-    let (network, rpc_url) = state
-        .base_rpc_urls
-        .resolve(network_name)
-        .map_err(|error| base_rpc_fetch_status(&error))?;
-    let rpc_request = query.rpc_request(request_id);
-    let response = fetch_base_escrow_logs(&rpc_url, &query, request_id)
-        .await
-        .map_err(|error| base_rpc_fetch_status(&error))?;
-    let logs = rpc_logs_to_evm_logs(response.result).map_err(|_| StatusCode::BAD_GATEWAY)?;
-    let fetched_logs = logs.len();
-    let reconciliation = process_base_evm_logs(&state, logs).await?;
-
-    Ok(Json(BaseRpcLogFetchReport {
-        network,
-        request: rpc_request,
-        fetched_logs,
-        reconciliation,
-    }))
-}
-
 #[utoipa::path(
     post,
     path = "/v1/base/broadcast-signed-transaction",
@@ -2475,114 +2183,6 @@ fn base_rpc_fetch_status(error: &ChainBaseError) -> StatusCode {
         ChainBaseError::MissingRpcUrl { .. } => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::BAD_GATEWAY,
     }
-}
-
-#[cfg(test)]
-async fn process_base_evm_logs(
-    state: &SharedState,
-    logs: Vec<chain_base::EvmLog>,
-) -> Result<worker::BaseLogPipelineReport, StatusCode> {
-    let (report, indexed_events, bounties, funding_intents, escrows, settlements) = {
-        let mut network = state.network.lock().expect("state poisoned");
-        let mut worker = state.base_log_worker.lock().expect("state poisoned");
-        let report = worker.process_logs(logs, &mut network);
-        let applied_event_ids = report
-            .applied_events
-            .iter()
-            .map(|event| event.event_id)
-            .collect::<HashSet<_>>();
-        let indexed_events = worker
-            .indexed_events()
-            .iter()
-            .filter(|event| applied_event_ids.contains(&event.id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let bounty_ids = report
-            .applied_events
-            .iter()
-            .map(|event| event.bounty_id)
-            .collect::<HashSet<_>>();
-        let bounties = bounty_ids
-            .iter()
-            .filter_map(|id| network.bounties.get(id).cloned())
-            .collect::<Vec<_>>();
-        let funding_intents = network
-            .funding_intents
-            .values()
-            .filter(|intent| bounty_ids.contains(&intent.bounty_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let escrows = network
-            .escrows
-            .values()
-            .filter(|escrow| bounty_ids.contains(&escrow.bounty_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let settlements = network
-            .settlements
-            .values()
-            .filter(|settlement| bounty_ids.contains(&settlement.bounty_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        (
-            report,
-            indexed_events,
-            bounties,
-            funding_intents,
-            escrows,
-            settlements,
-        )
-    };
-
-    if let Some(store) = &state.store {
-        for bounty in &bounties {
-            store
-                .upsert_bounty(bounty)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for event in &indexed_events {
-            store
-                .upsert_base_escrow_event(event)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for intent in &funding_intents {
-            store
-                .upsert_funding_intent(intent)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for escrow in &escrows {
-            store
-                .upsert_escrow(escrow)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for settlement in &settlements {
-            store
-                .upsert_settlement(settlement)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        persist_ledger_entries(store, &report.ledger_entries).await?;
-    }
-
-    Ok(report)
-}
-
-#[cfg(test)]
-#[utoipa::path(post, path = "/v1/base/log-query", request_body = PlanBaseLogQueryRequest, responses((status = 200, description = "Base eth_getLogs request for escrow events")))]
-async fn plan_base_log_query(
-    Json(request): Json<PlanBaseLogQueryRequest>,
-) -> Result<Json<EthGetLogsRequest>, StatusCode> {
-    BaseEscrowLogQuery::new(
-        request.escrow_contract,
-        request.from_block,
-        request.to_block,
-    )
-    .map(|query| Json(query.rpc_request(request.request_id.unwrap_or(1))))
-    .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
 fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlanner, StatusCode> {
@@ -3179,68 +2779,6 @@ async fn autonomous_verification_jobs(
         });
     }
     Ok(Json(jobs))
-}
-
-#[cfg(test)]
-#[utoipa::path(post, path = "/v1/base/funding-plan", responses((status = 200, description = "Unsigned Base escrow funding transaction plan")))]
-async fn plan_base_funding(
-    State(state): State<SharedState>,
-    Json(request): Json<PlanBaseFundingRequest>,
-) -> Result<Json<app::BaseFundingPlan>, StatusCode> {
-    let network = state.network.lock().expect("state poisoned");
-    network
-        .plan_base_funding(request)
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
-}
-
-#[cfg(test)]
-#[utoipa::path(post, path = "/v1/base/release-plan", responses((status = 200, description = "Unsigned Base escrow release transaction plan")))]
-async fn plan_base_release(
-    State(state): State<SharedState>,
-    Json(request): Json<PlanBaseReleaseRequest>,
-) -> Result<Json<app::BaseReleasePlan>, StatusCode> {
-    let network = state.network.lock().expect("state poisoned");
-    network
-        .plan_base_release(request)
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
-}
-
-#[cfg(test)]
-#[utoipa::path(post, path = "/v1/base/refund-plan", responses((status = 200, description = "Unsigned Base escrow refund transaction plan")))]
-async fn plan_base_refund(
-    State(state): State<SharedState>,
-    Json(request): Json<PlanBaseRefundRequest>,
-) -> Result<Json<app::BaseRefundPlan>, StatusCode> {
-    let network = state.network.lock().expect("state poisoned");
-    network
-        .plan_base_refund(request)
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
-}
-
-#[cfg(test)]
-#[utoipa::path(post, path = "/v1/base/dispute-plan", responses((status = 200, description = "Unsigned Base escrow dispute transaction plan")))]
-async fn plan_base_dispute(
-    State(state): State<SharedState>,
-    Json(request): Json<PlanBaseDisputeRequest>,
-) -> Result<Json<app::BaseDisputePlan>, StatusCode> {
-    let network = state.network.lock().expect("state poisoned");
-    network
-        .plan_base_dispute(request)
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
-}
-
-#[cfg(test)]
-#[utoipa::path(post, path = "/v1/base/release-queue", responses((status = 200, description = "Pending Base release queue")))]
-async fn list_base_release_queue(
-    State(state): State<SharedState>,
-    Json(request): Json<BaseReleaseQueueRequest>,
-) -> Json<Vec<app::BaseReleaseQueueItem>> {
-    let network = state.network.lock().expect("state poisoned");
-    Json(network.list_base_release_queue(request))
 }
 
 #[utoipa::path(
@@ -3950,25 +3488,15 @@ async fn bounty_status_snapshot(
         return bounty_status_from_scope(scope);
     }
 
-    let mut status = {
+    let status = {
         let network = state.network.lock().expect("state poisoned");
         network.status(id).map_err(|_| StatusCode::NOT_FOUND)?
     };
-    status.base_escrow_events = state
-        .base_log_worker
-        .lock()
-        .expect("state poisoned")
-        .indexed_events()
-        .iter()
-        .filter(|event| event.bounty_id == id)
-        .cloned()
-        .collect();
     Ok(status)
 }
 
 fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResponse, StatusCode> {
     let bounty_id = scope.bounty.id;
-    let base_escrow_events = scope.base_escrow_events;
     let network = BountyNetwork {
         bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
         funding_intents: scope
@@ -4028,10 +3556,9 @@ fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResp
             .collect(),
         ..BountyNetwork::default()
     };
-    let mut status = network
+    let status = network
         .status(bounty_id)
         .map_err(|_| StatusCode::NOT_FOUND)?;
-    status.base_escrow_events = base_escrow_events;
     Ok(status)
 }
 
@@ -4685,13 +4212,6 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
     })
 }
 
-async fn hydrate_base_log_worker(store: &PostgresStore) -> anyhow::Result<BaseEscrowLogWorker> {
-    Ok(BaseEscrowLogWorker::from_indexed_events(
-        "usdc",
-        store.list_base_escrow_events().await?,
-    )?)
-}
-
 async fn persist_bounty_and_ledger(
     state: &SharedState,
     bounty: &domain::Bounty,
@@ -4832,12 +4352,8 @@ mod tests {
         OpenPooledBountyRequest, PostBountyRequest, RegisterAgentRequest,
         RegisterCapabilityRequest, SubmitResultRequest, VerifySubmissionRequest,
     };
-    use chain_base::{
-        evm_address_word, evm_bytes32_word, evm_event_topic, evm_uint256_word, evm_words_data,
-        EvmLog,
-    };
     use domain::{
-        Bounty, BountyStatus, CapabilityClass, FundingIntentStatus, FundingMode, Money,
+        Bounty, BountyStatus, CapabilityClass, FundingIntentStatus, FundingMode,
         PaymentEventStatus, PaymentRail, PayoutStatus, ProofRecord, VerifierKind,
     };
     use github_app::GitHubCheckConclusion;
@@ -4852,180 +4368,8 @@ mod tests {
     type TestHmacSha256 = Hmac<Sha256>;
 
     #[tokio::test]
-    async fn base_funding_plan_endpoint_builds_bounty_bound_transactions() {
-        let mut network = BountyNetwork::default();
-        let bounty = network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Fund API bounty on Base".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-            })
-            .unwrap();
-        let state = test_state(network);
-
-        let funding_plan = plan_base_funding(
-            State(state.clone()),
-            Json(PlanBaseFundingRequest {
-                bounty_id: bounty.id,
-                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
-                payer: "0x2222222222222222222222222222222222222222".to_string(),
-                token: "0x3333333333333333333333333333333333333333".to_string(),
-                network: Some("base-mainnet".to_string()),
-            }),
-        )
-        .await
-        .unwrap()
-        .0;
-
-        assert_eq!(funding_plan.network.chain_id, 8_453);
-        assert_eq!(funding_plan.bounty.id, bounty.id);
-        assert_eq!(
-            funding_plan.create.terms_hash,
-            bounty.terms_hash.clone().unwrap()
-        );
-        assert_eq!(funding_plan.funding.network.chain_id, 8_453);
-        assert_eq!(
-            funding_plan.funding.approve.function,
-            "approve(address,uint256)"
-        );
-        assert_eq!(
-            funding_plan.funding.create_escrow.function,
-            "createEscrow(bytes32,address,uint256,bytes32)"
-        );
-
-        let created = chain_base::simulated_created_event(
-            bounty.id,
-            7,
-            "0x3333333333333333333333333333333333333333",
-            bounty.amount.clone(),
-            bounty.terms_hash.clone().unwrap(),
-        );
-        let _ = reconcile_base_escrow_event(State(state.clone()), HeaderMap::new(), Json(created))
-            .await
-            .unwrap();
-        let rejected = plan_base_funding(
-            State(state),
-            Json(PlanBaseFundingRequest {
-                bounty_id: bounty.id,
-                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
-                payer: "0x2222222222222222222222222222222222222222".to_string(),
-                token: "0x3333333333333333333333333333333333333333".to_string(),
-                network: None,
-            }),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(rejected, StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn raw_base_evm_log_endpoint_marks_bounty_paid() {
-        let (network, bounty, proof) = payable_base_bounty().await;
-        let state = test_state(network);
-        let logs = raw_created_and_released_logs(&bounty, &proof);
-
-        let report = reconcile_base_evm_logs(State(state.clone()), HeaderMap::new(), Json(logs))
-            .await
-            .unwrap()
-            .0;
-
-        assert!(report.failures.is_empty());
-        assert_eq!(report.applied_events.len(), 2);
-        assert_eq!(report.ledger_entries.len(), 1);
-        let network = state.network.lock().expect("state poisoned");
-        let status = network.status(bounty.id).unwrap();
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
-        assert_eq!(
-            status.settlements[0].payout_intents[0].status,
-            PayoutStatus::Paid
-        );
-    }
-
-    #[tokio::test]
-    async fn normalized_created_event_seeds_raw_log_endpoint() {
-        let (network, bounty, proof) = payable_base_bounty().await;
-        let state = test_state(network);
-        let created = chain_base::simulated_created_event(
-            bounty.id,
-            7,
-            "0x3333333333333333333333333333333333333333",
-            bounty.amount.clone(),
-            bounty.terms_hash.clone().unwrap(),
-        );
-
-        let _ = reconcile_base_escrow_event(State(state.clone()), HeaderMap::new(), Json(created))
-            .await
-            .unwrap();
-        let release_plan = plan_base_release(
-            State(state.clone()),
-            Json(PlanBaseReleaseRequest {
-                bounty_id: bounty.id,
-                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
-                platform_fee_wallet: "0x4444444444444444444444444444444444444444".to_string(),
-                network: Some("base-mainnet".to_string()),
-            }),
-        )
-        .await
-        .unwrap()
-        .0;
-        assert_eq!(release_plan.network.chain_id, 8_453);
-        assert_eq!(release_plan.release_call.onchain_escrow_id, 7);
-        assert_eq!(release_plan.release_call.recipients.len(), 1);
-        let release_log = raw_released_log(7, &format!("0x{}", proof.proof_hash), 11, 0);
-        let report = reconcile_base_evm_logs(
-            State(state.clone()),
-            HeaderMap::new(),
-            Json(vec![release_log]),
-        )
-        .await
-        .unwrap()
-        .0;
-
-        assert!(report.failures.is_empty());
-        assert_eq!(report.applied_events.len(), 1);
-        let network = state.network.lock().expect("state poisoned");
-        let status = network.status(bounty.id).unwrap();
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
-    }
-
-    #[tokio::test]
-    async fn base_release_queue_endpoint_returns_ready_plan() {
-        let (network, bounty, _proof) = payable_base_bounty().await;
-        let state = test_state(network);
-        let created = chain_base::simulated_created_event(
-            bounty.id,
-            7,
-            "0x3333333333333333333333333333333333333333",
-            bounty.amount.clone(),
-            bounty.terms_hash.clone().unwrap(),
-        );
-        let _ = reconcile_base_escrow_event(State(state.clone()), HeaderMap::new(), Json(created))
-            .await
-            .unwrap();
-
-        let queue = list_base_release_queue(
-            State(state),
-            Json(BaseReleaseQueueRequest {
-                escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
-                platform_fee_wallet: Some("0x4444444444444444444444444444444444444444".to_string()),
-                network: None,
-            }),
-        )
-        .await
-        .0;
-
-        assert_eq!(queue.len(), 1);
-        assert!(queue[0].ready);
-        assert_eq!(queue[0].onchain_escrow_id, Some(7));
-        assert!(queue[0].release_plan.is_some());
-    }
-
-    #[tokio::test]
     async fn agent_paid_status_endpoint_summarizes_solver_receivables() {
-        let (network, _bounty, _proof) = payable_base_bounty().await;
+        let (network, _bounty, _proof) = completed_simulated_bounty().await;
         let solver_id = network
             .settlements
             .values()
@@ -5054,10 +4398,10 @@ mod tests {
 
         assert_eq!(response.agent.id, solver_id);
         assert_eq!(response.payouts.len(), 1);
-        assert_eq!(response.payouts[0].status, PayoutStatus::Pending);
+        assert_eq!(response.payouts[0].status, PayoutStatus::Paid);
         assert_eq!(response.totals[0].currency, "usdc");
-        assert_eq!(response.totals[0].pending_minor, 1_000_000);
-        assert_eq!(response.totals[0].paid_minor, 0);
+        assert_eq!(response.totals[0].pending_minor, 0);
+        assert_eq!(response.totals[0].paid_minor, 1_000_000);
     }
 
     #[tokio::test]
@@ -5119,84 +4463,6 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("received a reconciled payout"));
-    }
-
-    #[tokio::test]
-    async fn base_refund_and_dispute_plan_endpoints_build_unsigned_transactions() {
-        let mut network = BountyNetwork::default();
-        let solver = network.register_agent(RegisterAgentRequest {
-            handle: "solver".to_string(),
-            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
-        });
-        let bounty = network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Dispute API bounty".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-            })
-            .unwrap();
-        network
-            .apply_base_escrow_event(chain_base::simulated_created_event(
-                bounty.id,
-                7,
-                "0x3333333333333333333333333333333333333333",
-                bounty.amount.clone(),
-                bounty.terms_hash.clone().unwrap(),
-            ))
-            .unwrap();
-        network
-            .claim_bounty(ClaimBountyRequest {
-                bounty_id: bounty.id,
-                solver_agent_id: solver.id,
-            })
-            .unwrap();
-        network
-            .submit_result(SubmitResultRequest {
-                bounty_id: bounty.id,
-                solver_agent_id: solver.id,
-                artifact_uri: "s3://api/disputed.json".to_string(),
-                artifact_body: "{\"ok\":false}".to_string(),
-            })
-            .unwrap();
-        let state = test_state(network);
-
-        let refund_plan = plan_base_refund(
-            State(state.clone()),
-            Json(PlanBaseRefundRequest {
-                bounty_id: bounty.id,
-                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
-                reason_hash: format!("0x{}", "aa".repeat(32)),
-                network: None,
-            }),
-        )
-        .await
-        .unwrap()
-        .0;
-        assert_eq!(refund_plan.network.chain_id, 84_532);
-        assert_eq!(refund_plan.onchain_escrow_id, 7);
-        assert_eq!(refund_plan.transaction.function, "refund(uint256,bytes32)");
-
-        let dispute_plan = plan_base_dispute(
-            State(state),
-            Json(PlanBaseDisputeRequest {
-                bounty_id: bounty.id,
-                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
-                dispute_hash: format!("0x{}", "bb".repeat(32)),
-                network: Some("base-mainnet".to_string()),
-            }),
-        )
-        .await
-        .unwrap()
-        .0;
-        assert_eq!(dispute_plan.network.chain_id, 8_453);
-        assert_eq!(dispute_plan.onchain_escrow_id, 7);
-        assert_eq!(
-            dispute_plan.transaction.function,
-            "markDisputed(uint256,bytes32)"
-        );
     }
 
     #[tokio::test]
@@ -5481,10 +4747,6 @@ mod tests {
                     stripe_cancel_url: Some(
                         "https://nspg13.github.io/agent-bounties/cancel.html".to_string(),
                     ),
-                    base_escrow_contract: None,
-                    base_payer: None,
-                    base_token: None,
-                    base_network: None,
                 },
                 "http://127.0.0.1:8080",
             )
@@ -5929,19 +5191,13 @@ mod tests {
             Json(CreateFundingIntentRequest {
                 bounty_id: first.id,
                 contributor_agent_id: None,
-                source_organization_id: None,
+                source_organization_id: Some(Uuid::new_v4()),
                 amount_minor: first.amount.amount,
                 currency: first.amount.currency.clone(),
-                rail: PaymentRail::BaseUsdc,
+                rail: PaymentRail::StripeFiat,
                 external_reference: Some(format!("stale-sync-{issue_number}")),
                 stripe_success_url: None,
                 stripe_cancel_url: None,
-                base_escrow_contract: Some(
-                    "0x1111111111111111111111111111111111111111".to_string(),
-                ),
-                base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
-                base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
-                base_network: Some("base-mainnet".to_string()),
             }),
         )
         .await
@@ -5995,140 +5251,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
-    async fn bounty_status_reads_base_events_from_postgres_after_cross_process_indexing() {
-        let database_url = postgres_test_database_url();
-        let api_store = PostgresStore::connect(&database_url).await.unwrap();
-        api_store.migrate().await.unwrap();
-
-        let mut api_network = BountyNetwork::default();
-        let bounty = api_network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Expose separately indexed Base evidence".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-            })
-            .unwrap();
-        let other_bounty = api_network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Filter unrelated Base evidence".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-            })
-            .unwrap();
-        api_store.upsert_bounty(&bounty).await.unwrap();
-        api_store.upsert_bounty(&other_bounty).await.unwrap();
-        let api_state =
-            test_state_with_operator_token_and_store(api_network, "secret-token", api_store);
-
-        let initial_status = bounty_status(State(api_state.clone()), Path(bounty.id))
-            .await
-            .unwrap()
-            .0;
-        assert_eq!(initial_status.bounty.status, BountyStatus::Unfunded);
-        assert!(!initial_status.funding_summary.claimable);
-        assert!(initial_status.base_escrow_events.is_empty());
-        let funding_intent = create_funding_intent(
-            State(api_state.clone()),
-            Path(bounty.id),
-            Json(CreateFundingIntentRequest {
-                bounty_id: bounty.id,
-                contributor_agent_id: None,
-                source_organization_id: None,
-                amount_minor: bounty.amount.amount,
-                currency: bounty.amount.currency.clone(),
-                rail: PaymentRail::BaseUsdc,
-                external_reference: Some("base-tx-before-indexer".to_string()),
-                stripe_success_url: None,
-                stripe_cancel_url: None,
-                base_escrow_contract: Some(
-                    "0x1111111111111111111111111111111111111111".to_string(),
-                ),
-                base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
-                base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
-                base_network: Some("base-mainnet".to_string()),
-            }),
-        )
-        .await
-        .unwrap()
-        .0
-        .intent;
-        assert_eq!(funding_intent.status, FundingIntentStatus::AwaitingEvidence);
-
-        let indexer_store = PostgresStore::connect(&database_url).await.unwrap();
-        let mut indexer_network = hydrate_network(&indexer_store).await.unwrap();
-        let mut indexer_worker = worker::hydrate_base_log_worker(&indexer_store)
-            .await
-            .unwrap();
-        let terms_hash = format!("0x{}", bounty.terms_hash.clone().unwrap());
-        let other_terms_hash = format!("0x{}", other_bounty.terms_hash.clone().unwrap());
-        let onchain_escrow_id = bounty.id.as_u128() % 1_000_000_000_000 + 10_000;
-        let other_onchain_escrow_id = onchain_escrow_id + 1;
-        let mut created_log = raw_created_log(
-            onchain_escrow_id,
-            bounty.id,
-            "0x2222222222222222222222222222222222222222",
-            "0x3333333333333333333333333333333333333333",
-            bounty.amount.clone(),
-            &terms_hash,
-            222,
-            0,
-        );
-        created_log.tx_hash = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-        let created_tx_hash = created_log.tx_hash.clone();
-        let mut other_log = raw_created_log(
-            other_onchain_escrow_id,
-            other_bounty.id,
-            "0x2222222222222222222222222222222222222222",
-            "0x3333333333333333333333333333333333333333",
-            other_bounty.amount,
-            &other_terms_hash,
-            223,
-            0,
-        );
-        other_log.tx_hash = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-
-        let report = worker::process_base_evm_logs_and_persist(
-            &indexer_store,
-            &mut indexer_worker,
-            &mut indexer_network,
-            vec![created_log, other_log],
-        )
-        .await
-        .unwrap();
-        assert_eq!(report.applied_events.len(), 2);
-
-        let status = bounty_status(State(api_state), Path(bounty.id))
-            .await
-            .unwrap()
-            .0;
-
-        assert_eq!(status.bounty.status, BountyStatus::Claimable);
-        assert!(status.funding_summary.claimable);
-        assert_eq!(status.funding_intents.len(), 1);
-        assert_eq!(status.funding_intents[0].id, funding_intent.id);
-        assert_eq!(
-            status.funding_intents[0].status,
-            FundingIntentStatus::Applied
-        );
-        assert_eq!(status.escrows.len(), 1);
-        assert_eq!(status.escrows[0].status, domain::EscrowStatus::Funded);
-        assert_eq!(status.base_escrow_events.len(), 1);
-        assert_eq!(status.base_escrow_events[0].bounty_id, bounty.id);
-        assert_eq!(
-            status.base_escrow_events[0].onchain_escrow_id,
-            onchain_escrow_id
-        );
-        assert_eq!(status.base_escrow_events[0].tx_hash, created_tx_hash);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn github_issue_api_sync_postgres_serializes_concurrent_initial_sync() {
         let database_url = postgres_test_database_url();
@@ -6335,7 +5457,7 @@ mod tests {
 
     #[tokio::test]
     async fn github_proof_comment_plan_from_proof_uses_stored_public_proof() {
-        let (network, bounty, proof) = payable_base_bounty().await;
+        let (network, bounty, proof) = completed_simulated_bounty().await;
         let state = test_state(network);
         let plan = plan_github_proof_comment_from_proof(
             State(state),
@@ -6361,7 +5483,7 @@ mod tests {
 
     #[tokio::test]
     async fn github_proof_comment_plan_from_proof_rejects_private_proofs() {
-        let (mut network, _bounty, mut proof) = payable_base_bounty().await;
+        let (mut network, _bounty, mut proof) = completed_simulated_bounty().await;
         proof.privacy = PrivacyLevel::Private;
         network.proofs.insert(proof.id, proof.clone());
         let state = test_state(network);
@@ -6380,112 +5502,6 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(public_error, StatusCode::NOT_FOUND);
-    }
-
-    #[cfg(any())]
-    #[tokio::test]
-    async fn discovery_endpoint_advertises_mcp_and_payment_entrypoints() {
-        let state = test_state(BountyNetwork::default());
-        let manifest = agent_bounties_discovery(State(state)).await.0;
-
-        assert_eq!(
-            manifest.endpoints.discovery,
-            "http://127.0.0.1:8080/.well-known/agent-bounties.json"
-        );
-        assert_eq!(
-            manifest.endpoints.llms_txt,
-            "http://127.0.0.1:8080/llms.txt"
-        );
-        assert!(manifest
-            .endpoints
-            .agent_quickstart
-            .contains("docs/agent-quickstart.md"));
-        assert_eq!(
-            manifest.endpoints.public_bounties,
-            "http://127.0.0.1:8080/public/bounties"
-        );
-        assert_eq!(
-            manifest.endpoints.public_bounty,
-            "http://127.0.0.1:8080/public/bounties/{bounty_id}"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_policy,
-            "http://127.0.0.1:8080/v1/risk/policy"
-        );
-        assert_eq!(
-            manifest.endpoints.live_money_readiness,
-            "http://127.0.0.1:8080/v1/readiness/live-money"
-        );
-        assert_eq!(
-            manifest.endpoints.base_indexer_status,
-            "http://127.0.0.1:8080/v1/base/indexer-status"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_events,
-            "http://127.0.0.1:8080/v1/risk/events"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_reviews,
-            "http://127.0.0.1:8080/v1/risk/reviews"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_bounty_approvals,
-            "http://127.0.0.1:8080/v1/risk/bounty-approvals"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_payout_approvals,
-            "http://127.0.0.1:8080/v1/risk/payout-approvals"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_event_rejections,
-            "http://127.0.0.1:8080/v1/risk/events/{risk_event_id}/reject"
-        );
-        assert_eq!(
-            manifest.endpoints.agent_paid_status,
-            "http://127.0.0.1:8080/v1/agents/{agent_id}/paid-status"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_live_funding_intent_checkouts,
-            "http://127.0.0.1:8080/v1/stripe/live/funding-intents/{funding_intent_id}/checkout-session"
-        );
-        assert_eq!(
-            manifest.endpoints.github_proof_comment_from_proof_plan,
-            "http://127.0.0.1:8080/v1/github/proof-comment-plan-from-proof"
-        );
-        assert_eq!(
-            manifest.endpoints.github_funding_comment_plan,
-            "http://127.0.0.1:8080/v1/github/funding-comment-plan"
-        );
-        assert_eq!(
-            manifest.endpoints.github_claim_comment_plan,
-            "http://127.0.0.1:8080/v1/github/claim-comment-plan"
-        );
-        assert_eq!(
-            manifest.funding_handoff.page,
-            "https://nspg13.github.io/agent-bounties/funding.html"
-        );
-        assert_eq!(manifest.funding_handoff.supported_rail, "StripeFiat");
-        assert!(manifest
-            .funding_handoff
-            .settlement_authority
-            .contains("verified Stripe webhook"));
-        assert_eq!(manifest.risk_policy.low_value_usdc_cap_minor, 10_000_000);
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "route_blocked_goal"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "check_live_money_readiness"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "check_base_indexer_status"));
-        assert!(manifest
-            .payment_rails
-            .iter()
-            .any(|rail| rail.name == "Base Sepolia USDC escrow"));
     }
 
     #[tokio::test]
@@ -6582,50 +5598,6 @@ mod tests {
             State(state),
             Query(LiveMoneyReadinessQuery {
                 network: Some("optimism".to_string()),
-            }),
-        )
-        .await
-        .unwrap_err();
-
-        assert_eq!(error, StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn base_indexer_status_reports_missing_database_without_settlement_side_effects() {
-        let state = test_state(BountyNetwork::default());
-        let report = base_indexer_status(
-            State(state),
-            Query(BaseIndexerStatusQuery {
-                network: Some("base-mainnet".to_string()),
-                escrow_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
-            }),
-        )
-        .await
-        .unwrap()
-        .0;
-
-        assert_eq!(report.status, "persistence_unavailable");
-        assert!(!report.indexer_ready);
-        assert!(!report.database_configured);
-        assert!(report.escrow_contract_configured);
-        assert_eq!(report.network_chain_id, 8_453);
-        assert!(report.last_scanned_block.is_none());
-        assert!(!report.heartbeat_found);
-        assert_eq!(report.worker_healthy, None);
-        assert_eq!(report.last_poll_status, None);
-        assert!(report.evidence_boundaries.iter().any(|boundary| {
-            boundary.contains("does not fund, verify, cancel, refund, or authorize settlement")
-        }));
-    }
-
-    #[tokio::test]
-    async fn base_indexer_status_rejects_unknown_network() {
-        let state = test_state(BountyNetwork::default());
-        let error = base_indexer_status(
-            State(state),
-            Query(BaseIndexerStatusQuery {
-                network: Some("optimism".to_string()),
-                escrow_contract: None,
             }),
         )
         .await
@@ -7014,8 +5986,8 @@ mod tests {
                 title: "Fix deterministic payout reconciliation failure".to_string(),
                 template_slug: "fix-ci-failure".to_string(),
                 amount_minor: 25_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Public,
                 operator_id: "operator-1".to_string(),
                 note: "Approved after manual scope review".to_string(),
@@ -7028,123 +6000,8 @@ mod tests {
         assert_eq!(approval.bounty.status, BountyStatus::Unfunded);
         assert!(approval.bounty.terms_hash.is_some());
         assert_eq!(approval.review.outcome, domain::RiskReviewOutcome::Approved);
-        let funded = reconcile_base_escrow_event(
-            State(state.clone()),
-            HeaderMap::new(),
-            Json(chain_base::simulated_created_event(
-                approval.bounty.id,
-                99,
-                "0x3333333333333333333333333333333333333333",
-                approval.bounty.amount.clone(),
-                approval.bounty.terms_hash.clone().unwrap(),
-            )),
-        )
-        .await
-        .unwrap()
-        .0;
-        assert_eq!(funded.bounty.status, BountyStatus::Claimable);
-        assert_eq!(funded.ledger_entries.len(), 1);
         let reviews = list_risk_reviews(State(state)).await.0;
         assert_eq!(reviews.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn risk_payout_approval_endpoint_records_review_for_verification() {
-        let mut network = BountyNetwork::default();
-        let solver = network.register_agent(RegisterAgentRequest {
-            handle: "solver".to_string(),
-            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
-        });
-        let result = network.post_funded_bounty(PostBountyRequest {
-            title: "Fix deterministic payout reconciliation failure".to_string(),
-            template_slug: "fix-ci-failure".to_string(),
-            amount_minor: 25_000_000,
-            currency: "usdc".to_string(),
-            funding_mode: FundingMode::BaseUsdcEscrow,
-            privacy: PrivacyLevel::Public,
-        });
-        assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
-        let bounty_event_id = network
-            .list_risk_events(RiskEventFilter {
-                action: Some(domain::RiskAction::NeedsReview),
-                surface: Some(domain::RiskSurface::Bounty),
-                limit: Some(1),
-                ..RiskEventFilter::default()
-            })
-            .first()
-            .unwrap()
-            .id;
-        let approval = network
-            .approve_risk_bounty(ApproveRiskBountyRequest {
-                risk_event_id: bounty_event_id,
-                title: "Fix deterministic payout reconciliation failure".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 25_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-                operator_id: "operator-1".to_string(),
-                note: "Approved bounty scope".to_string(),
-            })
-            .unwrap();
-        apply_base_funding_event(&mut network, &approval.bounty, 99);
-        network
-            .claim_bounty(ClaimBountyRequest {
-                bounty_id: approval.bounty.id,
-                solver_agent_id: solver.id,
-            })
-            .unwrap();
-        let submission = network
-            .submit_result(SubmitResultRequest {
-                bounty_id: approval.bounty.id,
-                solver_agent_id: solver.id,
-                artifact_uri: "https://github.com/example/repo/pull/1".to_string(),
-                artifact_body: "{\"check\":\"green\"}".to_string(),
-            })
-            .unwrap();
-        let result = network
-            .verify_submission(VerifySubmissionRequest {
-                bounty_id: approval.bounty.id,
-                submission_id: submission.id,
-                expected_artifact_digest: "not-used-by-github-ci".to_string(),
-                verifier_kind: None,
-                rubric: None,
-                evidence: Some(github_ci_evidence()),
-                approved_risk_event_id: None,
-            })
-            .await;
-        assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
-        let payout_event_id = network
-            .list_risk_events(RiskEventFilter {
-                action: Some(domain::RiskAction::NeedsReview),
-                surface: Some(domain::RiskSurface::Payout),
-                bounty_id: Some(approval.bounty.id),
-                limit: Some(1),
-                ..RiskEventFilter::default()
-            })
-            .first()
-            .unwrap()
-            .id;
-        let state = test_state(network);
-
-        let review = approve_risk_payout(
-            State(state.clone()),
-            HeaderMap::new(),
-            Json(ApproveRiskPayoutRequest {
-                risk_event_id: payout_event_id,
-                operator_id: "operator-1".to_string(),
-                note: "Approved payout after verifier scope review".to_string(),
-            }),
-        )
-        .await
-        .unwrap()
-        .0;
-
-        assert_eq!(review.outcome, domain::RiskReviewOutcome::Approved);
-        assert_eq!(review.surface, domain::RiskSurface::Payout);
-        assert_eq!(review.bounty_id, Some(approval.bounty.id));
-        let reviews = list_risk_reviews(State(state)).await.0;
-        assert_eq!(reviews.len(), 2);
     }
 
     #[tokio::test]
@@ -7216,11 +6073,10 @@ mod tests {
                 template_slug: "fix-ci-failure".to_string(),
                 amount_minor: 1_000_000,
                 currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
+                funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
-        apply_base_funding_event(&mut network, &public, 1);
         let private = network
             .post_funded_bounty(PostBountyRequest {
                 title: "Private ledger work".to_string(),
@@ -7284,29 +6140,18 @@ mod tests {
         .await
         .unwrap()
         .0;
-        let mixed = open_pooled_bounty(
+        let stripe = open_pooled_bounty(
             State(state.clone()),
             Json(OpenPooledBountyRequest {
                 bounty_id: None,
                 idempotency_key: None,
-                title: "Fund mixed public work".to_string(),
+                title: "Fund public Stripe work".to_string(),
                 template_slug: "payment-state-machine".to_string(),
                 target_amount_minor: 500,
                 currency: "usd".to_string(),
-                funding_mode: FundingMode::MixedRails,
+                funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Public,
-                funding_targets: vec![
-                    app::FundingPartitionTargetRequest {
-                        rail: PaymentRail::StripeFiat,
-                        amount_minor: 500,
-                        currency: "usd".to_string(),
-                    },
-                    app::FundingPartitionTargetRequest {
-                        rail: PaymentRail::BaseUsdc,
-                        amount_minor: 1_000,
-                        currency: "usdc".to_string(),
-                    },
-                ],
+                funding_targets: vec![],
             }),
         )
         .await
@@ -7370,7 +6215,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(ids.contains(&partial.id.to_string()));
-        assert!(ids.contains(&mixed.id.to_string()));
+        assert!(ids.contains(&stripe.id.to_string()));
         assert!(!ids.contains(&private.id.to_string()));
         assert!(!ids.contains(&funded.id.to_string()));
         let partial_item = feed
@@ -7401,11 +6246,10 @@ mod tests {
                 template_slug: "fix-ci-failure".to_string(),
                 amount_minor: 1_000_000,
                 currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
+                funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
-        apply_base_funding_event(&mut network, &bounty, 1);
         let state = test_state(network);
 
         let html = public_bounty_page(State(state), Path(bounty.id))
@@ -7507,162 +6351,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn base_log_query_endpoint_plans_eth_getlogs_request() {
-        let request = plan_base_log_query(Json(PlanBaseLogQueryRequest {
-            escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
-            from_block: 123,
-            to_block: Some(456),
-            request_id: Some(9),
-        }))
-        .await
-        .unwrap()
-        .0;
-
-        assert_eq!(request.method, "eth_getLogs");
-        assert_eq!(request.id, 9);
-        assert_eq!(request.params[0].from_block, "0x7b");
-        assert_eq!(request.params[0].to_block, "0x1c8");
-        assert_eq!(request.params[0].topics[0].len(), 4);
-    }
-
-    #[tokio::test]
-    async fn base_rpc_log_endpoint_normalizes_provider_logs_and_marks_bounty_paid() {
-        let (network, bounty, proof) = payable_base_bounty().await;
-        let state = test_state(network);
-        let logs = raw_created_and_released_logs(&bounty, &proof)
-            .into_iter()
-            .map(rpc_log_from_evm_log)
-            .collect::<Vec<_>>();
-
-        let report = reconcile_base_rpc_logs(
-            State(state.clone()),
-            HeaderMap::new(),
-            Json(chain_base::RpcLogSubmission::Response(
-                chain_base::EthGetLogsResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: 1,
-                    result: logs,
-                },
-            )),
-        )
-        .await
-        .unwrap()
-        .0;
-
-        assert_eq!(report.applied_events.len(), 2);
-        let status = bounty_status(State(state), Path(bounty.id))
-            .await
-            .unwrap()
-            .0;
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
-        assert_eq!(
-            status.settlements[0].payout_intents[0].status,
-            PayoutStatus::Paid
-        );
-    }
-
-    #[tokio::test]
-    async fn bounty_status_uses_local_base_worker_events_without_store() {
-        let mut network = BountyNetwork::default();
-        let bounty = network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Expose local Base escrow evidence".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-            })
-            .unwrap();
-        let other_bounty = network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Keep other Base escrow evidence out".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-            })
-            .unwrap();
-        let state = test_state(network);
-        let event = chain_base::simulated_created_event(
-            bounty.id,
-            21,
-            "0x3333333333333333333333333333333333333333",
-            bounty.amount.clone(),
-            bounty.terms_hash.clone().unwrap(),
-        );
-        let other_event = chain_base::simulated_created_event(
-            other_bounty.id,
-            22,
-            "0x3333333333333333333333333333333333333333",
-            other_bounty.amount,
-            other_bounty.terms_hash.unwrap(),
-        );
-
-        {
-            let mut worker = state.base_log_worker.lock().expect("state poisoned");
-            worker.ingest_indexed_event(event.clone()).unwrap();
-            worker.ingest_indexed_event(other_event).unwrap();
-        }
-
-        let status = bounty_status(State(state), Path(bounty.id))
-            .await
-            .unwrap()
-            .0;
-
-        assert_eq!(status.base_escrow_events.len(), 1);
-        assert_eq!(status.base_escrow_events[0].id, event.id);
-        assert_eq!(status.base_escrow_events[0].bounty_id, bounty.id);
-        assert_eq!(status.base_escrow_events[0].onchain_escrow_id, 21);
-    }
-
-    #[tokio::test]
-    async fn base_fetch_rpc_logs_endpoint_fetches_provider_logs_and_marks_bounty_paid() {
-        let (network, bounty, proof) = payable_base_bounty().await;
-        let logs = raw_created_and_released_logs(&bounty, &proof)
-            .into_iter()
-            .map(rpc_log_from_evm_log)
-            .collect::<Vec<_>>();
-        let rpc_url = spawn_rpc_response(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 5,
-            "result": logs
-        }));
-        let state = test_state_with_base_rpc(network, rpc_url);
-
-        let report = fetch_base_rpc_logs(
-            State(state.clone()),
-            HeaderMap::new(),
-            Json(FetchBaseRpcLogsRequest {
-                escrow_contract: "0x1111111111111111111111111111111111111111".to_string(),
-                from_block: 10,
-                to_block: Some(11),
-                request_id: Some(5),
-                network: Some("base-sepolia".to_string()),
-            }),
-        )
-        .await
-        .unwrap()
-        .0;
-
-        assert_eq!(report.network.chain_id, 84_532);
-        assert_eq!(report.request.method, "eth_getLogs");
-        assert_eq!(report.request.params[0].from_block, "0xa");
-        assert_eq!(report.fetched_logs, 2);
-        assert_eq!(report.reconciliation.applied_events.len(), 2);
-        let status = bounty_status(State(state), Path(bounty.id))
-            .await
-            .unwrap()
-            .0;
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
-        assert_eq!(
-            status.settlements[0].payout_intents[0].status,
-            PayoutStatus::Paid
-        );
-    }
-
-    #[tokio::test]
     async fn base_broadcast_signed_transaction_endpoint_returns_tx_hash() {
         let rpc_url = spawn_rpc_response(serde_json::json!({
             "jsonrpc": "2.0",
@@ -7722,49 +6410,6 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error, StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    #[tokio::test]
-    async fn base_transaction_receipt_endpoint_is_read_only() {
-        let (network, bounty, proof) = payable_base_bounty().await;
-        let release_log = raw_released_log(7, &format!("0x{}", proof.proof_hash), 11, 0);
-        let receipt_tx_hash = release_log.tx_hash.clone();
-        let rpc_url = spawn_rpc_response(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 14,
-            "result": {
-                "transactionHash": receipt_tx_hash.clone(),
-                "blockNumber": "0xb",
-                "status": "0x1",
-                "logs": [rpc_log_from_evm_log(release_log)]
-            }
-        }));
-        let state = test_state_with_base_rpc(network, rpc_url);
-        let report = get_base_transaction_receipt(
-            State(state.clone()),
-            Json(GetBaseTransactionReceiptRequest {
-                tx_hash: receipt_tx_hash,
-                request_id: Some(14),
-                network: Some("base-sepolia".to_string()),
-            }),
-        )
-        .await
-        .unwrap()
-        .0;
-
-        assert!(report.receipt_found);
-        assert_eq!(report.block_number, Some(11));
-        assert_eq!(report.succeeded, Some(true));
-        assert_eq!(report.log_count, 1);
-        let status = bounty_status(State(state), Path(bounty.id))
-            .await
-            .unwrap()
-            .0;
-        assert_eq!(status.bounty.status, BountyStatus::Payable);
-        assert_eq!(
-            status.settlements[0].payout_intents[0].status,
-            PayoutStatus::Pending
-        );
     }
 
     #[tokio::test]
@@ -7893,24 +6538,13 @@ mod tests {
             Json(OpenPooledBountyRequest {
                 bounty_id: None,
                 idempotency_key: None,
-                title: "Fund mixed API intent".to_string(),
+                title: "Fund Stripe API intent".to_string(),
                 template_slug: "extract-data-to-schema".to_string(),
                 target_amount_minor: 500,
                 currency: "usd".to_string(),
-                funding_mode: FundingMode::MixedRails,
+                funding_mode: FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Public,
-                funding_targets: vec![
-                    app::FundingPartitionTargetRequest {
-                        rail: PaymentRail::StripeFiat,
-                        amount_minor: 500,
-                        currency: "usd".to_string(),
-                    },
-                    app::FundingPartitionTargetRequest {
-                        rail: PaymentRail::BaseUsdc,
-                        amount_minor: 1_000,
-                        currency: "usdc".to_string(),
-                    },
-                ],
+                funding_targets: vec![],
             }),
         )
         .await
@@ -7930,10 +6564,6 @@ mod tests {
                 external_reference: Some("api-stripe-intent".to_string()),
                 stripe_success_url: None,
                 stripe_cancel_url: None,
-                base_escrow_contract: None,
-                base_payer: None,
-                base_token: None,
-                base_network: None,
             }),
         )
         .await
@@ -7982,12 +6612,12 @@ mod tests {
             .0;
         assert_eq!(status_after.funding_contributions.len(), 1);
         assert_eq!(status_after.funding_summary.applied.amount, 500);
-        assert!(!status_after.funding_summary.claimable);
+        assert!(status_after.funding_summary.claimable);
     }
 
     #[tokio::test]
     async fn public_verifier_profile_summarizes_verifier_results() {
-        let (network, _bounty, _proof) = payable_base_bounty().await;
+        let (network, _bounty, _proof) = completed_simulated_bounty().await;
         let state = test_state(network);
 
         let html = public_verifier_profile(State(state), Path("JsonSchema".to_string()))
@@ -8003,7 +6633,6 @@ mod tests {
     fn test_state(network: BountyNetwork) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
-            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
             allow_unsigned_stripe_webhooks: false,
@@ -8029,7 +6658,6 @@ mod tests {
     fn test_state_with_unsigned_stripe_webhooks(network: BountyNetwork) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
-            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
             allow_unsigned_stripe_webhooks: true,
@@ -8050,7 +6678,6 @@ mod tests {
     fn test_state_with_stripe_webhook_secret(network: BountyNetwork, secret: &[u8]) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
-            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: Some(secret.to_vec()),
             allow_unsigned_stripe_webhooks: false,
@@ -8071,7 +6698,6 @@ mod tests {
     fn test_state_with_operator_token(network: BountyNetwork, token: &str) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
-            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
             allow_unsigned_stripe_webhooks: false,
@@ -8096,7 +6722,6 @@ mod tests {
     ) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
-            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
             allow_unsigned_stripe_webhooks: false,
@@ -8120,7 +6745,6 @@ mod tests {
     ) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
-            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
             allow_unsigned_stripe_webhooks: false,
@@ -8147,7 +6771,6 @@ mod tests {
     ) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
-            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
             allow_unsigned_stripe_webhooks: false,
@@ -8171,7 +6794,6 @@ mod tests {
     ) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
-            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
             allow_unsigned_stripe_webhooks: false,
@@ -8196,7 +6818,6 @@ mod tests {
     ) -> SharedState {
         Arc::new(AppState {
             network: Arc::new(Mutex::new(network)),
-            base_log_worker: Arc::new(Mutex::new(BaseEscrowLogWorker::default())),
             eval_runs: Arc::new(Mutex::new(Vec::new())),
             stripe_webhook_secret: None,
             allow_unsigned_stripe_webhooks: false,
@@ -8252,7 +6873,7 @@ mod tests {
         );
     }
 
-    async fn payable_base_bounty() -> (BountyNetwork, Bounty, ProofRecord) {
+    async fn completed_simulated_bounty() -> (BountyNetwork, Bounty, ProofRecord) {
         let mut network = BountyNetwork::default();
         let solver = network.register_agent(RegisterAgentRequest {
             handle: "solver".to_string(),
@@ -8264,11 +6885,10 @@ mod tests {
                 template_slug: "extract-data-to-schema".to_string(),
                 amount_minor: 1_000_000,
                 currency: "usdc".to_string(),
-                funding_mode: FundingMode::BaseUsdcEscrow,
+                funding_mode: FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
             })
             .unwrap();
-        apply_base_funding_event(&mut network, &bounty, 7);
         network
             .claim_bounty(ClaimBountyRequest {
                 bounty_id: bounty.id,
@@ -8297,109 +6917,6 @@ mod tests {
             .await
             .unwrap();
         (network, bounty, proof)
-    }
-
-    fn apply_base_funding_event(
-        network: &mut BountyNetwork,
-        bounty: &Bounty,
-        onchain_escrow_id: u128,
-    ) {
-        network
-            .apply_base_escrow_event(chain_base::simulated_created_event(
-                bounty.id,
-                onchain_escrow_id,
-                "0x3333333333333333333333333333333333333333",
-                bounty.amount.clone(),
-                bounty.terms_hash.clone().unwrap(),
-            ))
-            .unwrap();
-    }
-
-    fn raw_created_and_released_logs(bounty: &Bounty, proof: &ProofRecord) -> Vec<EvmLog> {
-        let terms_hash = format!("0x{}", bounty.terms_hash.clone().unwrap());
-        let proof_hash = format!("0x{}", proof.proof_hash);
-        vec![
-            raw_created_log(
-                7,
-                bounty.id,
-                "0x2222222222222222222222222222222222222222",
-                "0x3333333333333333333333333333333333333333",
-                bounty.amount.clone(),
-                &terms_hash,
-                10,
-                0,
-            ),
-            raw_released_log(7, &proof_hash, 11, 0),
-        ]
-    }
-
-    fn rpc_log_from_evm_log(log: EvmLog) -> chain_base::RpcEvmLog {
-        chain_base::RpcEvmLog {
-            address: log.address,
-            topics: log.topics,
-            data: log.data,
-            transaction_hash: log.tx_hash,
-            block_number: format!("0x{:x}", log.block_number),
-            log_index: format!("0x{:x}", log.log_index),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn raw_created_log(
-        escrow_id: u128,
-        bounty_id: Uuid,
-        payer: &str,
-        token: &str,
-        amount: Money,
-        terms_hash: &str,
-        block_number: u64,
-        log_index: u64,
-    ) -> EvmLog {
-        EvmLog {
-            address: "0x1111111111111111111111111111111111111111".to_string(),
-            topics: vec![
-                evm_event_topic("EscrowCreated(uint256,bytes32,address,address,uint256,bytes32)"),
-                evm_uint256_word(escrow_id),
-                evm_bytes32_word(&bounty_bytes32(bounty_id)).unwrap(),
-                evm_address_word(payer).unwrap(),
-            ],
-            data: evm_words_data(&[
-                evm_address_word(token).unwrap(),
-                evm_uint256_word(amount.amount.try_into().unwrap()),
-                evm_bytes32_word(terms_hash).unwrap(),
-            ])
-            .unwrap(),
-            tx_hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                .to_string(),
-            block_number,
-            log_index,
-            occurred_at: None,
-        }
-    }
-
-    fn raw_released_log(
-        escrow_id: u128,
-        proof_hash: &str,
-        block_number: u64,
-        log_index: u64,
-    ) -> EvmLog {
-        EvmLog {
-            address: "0x1111111111111111111111111111111111111111".to_string(),
-            topics: vec![
-                evm_event_topic("EscrowReleased(uint256,bytes32)"),
-                evm_uint256_word(escrow_id),
-            ],
-            data: evm_words_data(&[evm_bytes32_word(proof_hash).unwrap()]).unwrap(),
-            tx_hash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                .to_string(),
-            block_number,
-            log_index,
-            occurred_at: None,
-        }
-    }
-
-    fn bounty_bytes32(bounty_id: Uuid) -> String {
-        format!("0x{}{}", "0".repeat(32), bounty_id.simple())
     }
 
     fn stripe_checkout_event_body(
@@ -8436,27 +6953,8 @@ mod tests {
         )
     }
 
-    fn github_ci_evidence() -> serde_json::Value {
-        serde_json::json!({
-            "repository": "example/repo",
-            "pull_request_url": "https://github.com/example/repo/pull/1",
-            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "check_run": {
-                "id": 123456789_u64,
-                "name": "full-check",
-                "status": "completed",
-                "conclusion": "success",
-                "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "html_url": "https://github.com/example/repo/actions/runs/123456789",
-                "repository": {
-                    "full_name": "example/repo"
-                }
-            }
-        })
-    }
-
     fn valid_github_issue_body() -> String {
-        valid_github_issue_body_with_funding_mode("BaseUsdcEscrow")
+        valid_github_issue_body_with_funding_mode("StripeFiatLedger")
     }
 
     fn github_issue_api_sync_request(
@@ -8492,7 +6990,7 @@ fix-ci-failure
 10 USDC
 
 ### Funding mode
-BaseUsdcEscrow
+StripeFiatLedger
 "#
         )
     }

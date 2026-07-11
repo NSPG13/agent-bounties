@@ -1,6 +1,4 @@
-use chain_base::{
-    AutonomousBountyEvent, AutonomousBountyEventKind, BaseEscrowEvent, BaseEscrowEventKind,
-};
+use chain_base::{AutonomousBountyEvent, AutonomousBountyEventKind};
 use chrono::{DateTime, Utc};
 use domain::{
     Agent, AgentStatus, AudienceInteraction, AudienceInteractionKind, AudienceLifecycleStage,
@@ -172,7 +170,6 @@ pub struct BountyStatusScope {
     pub funding_intents: Vec<FundingIntent>,
     pub funding_contributions: Vec<FundingContribution>,
     pub escrows: Vec<Escrow>,
-    pub base_escrow_events: Vec<BaseEscrowEvent>,
     pub claims: Vec<Claim>,
     pub submissions: Vec<Submission>,
     pub verifier_results: Vec<VerifierResult>,
@@ -1054,21 +1051,6 @@ impl PostgresStore {
         })
         .collect::<DbResult<Vec<_>>>()?;
 
-        let base_escrow_events = sqlx::query(
-            r#"
-            SELECT id, log_key, tx_hash, block_number, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at
-            FROM base_escrow_events
-            WHERE bounty_id = $1
-            ORDER BY block_number, COALESCE(log_index, 0), occurred_at
-            "#,
-        )
-        .bind(bounty_id)
-        .fetch_all(&mut *tx)
-        .await?
-        .into_iter()
-        .map(base_escrow_event_from_row)
-        .collect::<DbResult<Vec<_>>>()?;
-
         let claims = sqlx::query(
             r#"
             SELECT id, bounty_id, solver_agent_id, claimed_at
@@ -1292,7 +1274,6 @@ impl PostgresStore {
             funding_intents,
             funding_contributions,
             escrows,
-            base_escrow_events,
             claims,
             submissions,
             verifier_results,
@@ -1501,88 +1482,6 @@ impl PostgresStore {
                 })
             })
             .collect()
-    }
-
-    pub async fn upsert_base_escrow_event(&self, event: &BaseEscrowEvent) -> DbResult<()> {
-        let log_index = log_index_from_key(&event.log_key)
-            .map(i64_from_u64)
-            .transpose()?;
-        sqlx::query(
-            r#"
-            INSERT INTO base_escrow_events
-              (id, log_key, tx_hash, block_number, log_index, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-            ON CONFLICT (log_key) DO UPDATE SET
-              tx_hash = EXCLUDED.tx_hash,
-              block_number = EXCLUDED.block_number,
-              log_index = EXCLUDED.log_index,
-              onchain_escrow_id = EXCLUDED.onchain_escrow_id,
-              bounty_id = EXCLUDED.bounty_id,
-              kind = EXCLUDED.kind,
-              status = EXCLUDED.status,
-              token = EXCLUDED.token,
-              amount = EXCLUDED.amount,
-              currency = EXCLUDED.currency,
-              terms_hash = EXCLUDED.terms_hash,
-              proof_hash = EXCLUDED.proof_hash,
-              reason_hash = EXCLUDED.reason_hash,
-              dispute_hash = EXCLUDED.dispute_hash,
-              occurred_at = EXCLUDED.occurred_at
-            "#,
-        )
-        .bind(event.id)
-        .bind(&event.log_key)
-        .bind(&event.tx_hash)
-        .bind(i64_from_u64(event.block_number)?)
-        .bind(log_index)
-        .bind(event.onchain_escrow_id.to_string())
-        .bind(event.bounty_id)
-        .bind(format!("{:?}", event.kind))
-        .bind(format!("{:?}", event.status))
-        .bind(&event.token)
-        .bind(event.amount.as_ref().map(|amount| amount.amount))
-        .bind(event.amount.as_ref().map(|amount| amount.currency.clone()))
-        .bind(&event.terms_hash)
-        .bind(&event.proof_hash)
-        .bind(&event.reason_hash)
-        .bind(&event.dispute_hash)
-        .bind(event.occurred_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn list_base_escrow_events(&self) -> DbResult<Vec<BaseEscrowEvent>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, log_key, tx_hash, block_number, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at
-            FROM base_escrow_events
-            ORDER BY block_number, COALESCE(log_index, 0), occurred_at
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        rows.into_iter().map(base_escrow_event_from_row).collect()
-    }
-
-    pub async fn list_base_escrow_events_for_bounty(
-        &self,
-        bounty_id: Id,
-    ) -> DbResult<Vec<BaseEscrowEvent>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, log_key, tx_hash, block_number, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at
-            FROM base_escrow_events
-            WHERE bounty_id = $1
-            ORDER BY block_number, COALESCE(log_index, 0), occurred_at
-            "#,
-        )
-        .bind(bounty_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        rows.into_iter().map(base_escrow_event_from_row).collect()
     }
 
     pub async fn upsert_autonomous_bounty_event(
@@ -2750,47 +2649,6 @@ fn parse_funding_intent_status(value: String) -> DbResult<FundingIntentStatus> {
     }
 }
 
-fn parse_base_escrow_event_kind(value: String) -> DbResult<BaseEscrowEventKind> {
-    match value.as_str() {
-        "Created" => Ok(BaseEscrowEventKind::Created),
-        "Released" => Ok(BaseEscrowEventKind::Released),
-        "Refunded" => Ok(BaseEscrowEventKind::Refunded),
-        "Disputed" => Ok(BaseEscrowEventKind::Disputed),
-        "Paused" => Ok(BaseEscrowEventKind::Paused),
-        _ => Err(DbError::InvalidEnum(value)),
-    }
-}
-
-fn base_escrow_event_from_row(row: PgRow) -> DbResult<BaseEscrowEvent> {
-    let amount = match (
-        row.try_get::<Option<i64>, _>("amount")?,
-        row.try_get::<Option<String>, _>("currency")?,
-    ) {
-        (Some(amount), Some(currency)) => Some(Money::new(amount, currency)?),
-        _ => None,
-    };
-    Ok(BaseEscrowEvent {
-        id: row.try_get("id")?,
-        log_key: row.try_get("log_key")?,
-        tx_hash: row.try_get("tx_hash")?,
-        block_number: u64_from_i64(row.try_get("block_number")?)?,
-        onchain_escrow_id: row
-            .try_get::<String, _>("onchain_escrow_id")?
-            .parse()
-            .map_err(|_| DbError::InvalidEnum("onchain_escrow_id".to_string()))?,
-        bounty_id: row.try_get("bounty_id")?,
-        kind: parse_base_escrow_event_kind(row.try_get::<String, _>("kind")?)?,
-        status: parse_escrow_status(row.try_get::<String, _>("status")?)?,
-        token: row.try_get("token")?,
-        amount,
-        terms_hash: row.try_get("terms_hash")?,
-        proof_hash: row.try_get("proof_hash")?,
-        reason_hash: row.try_get("reason_hash")?,
-        dispute_hash: row.try_get("dispute_hash")?,
-        occurred_at: row.try_get("occurred_at")?,
-    })
-}
-
 fn autonomous_event_from_row(row: PgRow) -> DbResult<AutonomousBountyEvent> {
     let kind_value = serde_json::Value::String(row.try_get::<String, _>("kind")?);
     let kind: AutonomousBountyEventKind = serde_json::from_value(kind_value)?;
@@ -2868,10 +2726,6 @@ fn optional_u64_from_i64(value: Option<i64>) -> DbResult<Option<u64>> {
 
 fn normalize_key_address(address: &str) -> String {
     address.trim().to_ascii_lowercase()
-}
-
-fn log_index_from_key(log_key: &str) -> Option<u64> {
-    log_key.rsplit_once(':')?.1.parse().ok()
 }
 
 fn parse_risk_action(value: String) -> DbResult<RiskAction> {

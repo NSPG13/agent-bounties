@@ -554,6 +554,7 @@ contract AgentBounty is IAgentBountyV1 {
     function _prepareClaim(address solver_) private view {
         require(_status == BountyStatus.Claimable, "not claimable");
         require(solver_ != address(0), "solver zero");
+        require(solver_ != creator, "creator cannot solve");
         require(activeClaimBond == 0, "claim bond active");
     }
 

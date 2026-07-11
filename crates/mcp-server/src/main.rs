@@ -49,12 +49,10 @@ use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
-use worker::BaseEscrowLogWorker;
 
 #[derive(Debug)]
 struct AppState {
     network: Mutex<BountyNetwork>,
-    base_log_worker: Mutex<BaseEscrowLogWorker>,
     eval_runs: Mutex<Vec<EvalRun>>,
     base_rpc_urls: BaseRpcUrlConfig,
     base_broadcast_enabled: bool,
@@ -401,13 +399,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(_) => None,
     };
-    let (network, base_log_worker) = if let Some(store) = &store {
-        (
-            hydrate_network(store).await?,
-            hydrate_base_log_worker(store).await?,
-        )
+    let network = if let Some(store) = &store {
+        hydrate_network(store).await?
     } else {
-        (BountyNetwork::default(), BaseEscrowLogWorker::default())
+        BountyNetwork::default()
     };
     let eval_runs = if let Some(store) = &store {
         store.list_eval_runs().await?
@@ -416,7 +411,6 @@ async fn main() -> anyhow::Result<()> {
     };
     let state: SharedState = Arc::new(AppState {
         network: Mutex::new(network),
-        base_log_worker: Mutex::new(base_log_worker),
         eval_runs: Mutex::new(eval_runs),
         base_rpc_urls: BaseRpcUrlConfig::from_env(),
         base_broadcast_enabled: env::var("ENABLE_BASE_TX_BROADCAST")
@@ -767,19 +761,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "target_amount_minor": integer_property("Target amount in minor units before the bounty becomes claimable."),
                     "currency": string_property("Currency code."),
                     "funding_mode": funding_mode_property(),
-                    "privacy": privacy_property(),
-                    "funding_targets": array_property(
-                        json!({
-                            "type": "object",
-                            "properties": {
-                                "rail": enum_property(&["StripeFiat", "BaseUsdc"], "Real payment rail for this target."),
-                                "amount_minor": integer_property("Target amount in minor units for this rail/currency partition."),
-                                "currency": string_property("Currency code for this rail partition.")
-                            },
-                            "required": ["rail", "amount_minor", "currency"]
-                        }),
-                        "Required for MixedRails bounties. Each target is settled separately by rail and currency."
-                    )
+                    "privacy": privacy_property()
                 }),
                 &[
                     "title",
@@ -793,7 +775,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "create_funding_intent",
-            "Create a real-rail funding intent for a bounty and return the Stripe Checkout or Base escrow next action. The intent does not confirm funding until webhook or escrow-log evidence is reconciled.",
+            "Create a Stripe funding intent for a bounty. Base USDC funding uses the autonomous-v1 contract flow. The intent does not confirm funding until a verified webhook is reconciled.",
             object_tool_schema(
                 json!({
                     "bounty_id": uuid_property("Bounty UUID."),
@@ -801,14 +783,10 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "source_organization_id": nullable_uuid_property("Stripe-funded organization UUID. Required for StripeFiat intents."),
                     "amount_minor": integer_property("Intent amount in minor units."),
                     "currency": string_property("Currency code for the rail partition."),
-                    "rail": enum_property(&["StripeFiat", "BaseUsdc"], "Real payment rail for this intent."),
+                    "rail": enum_property(&["StripeFiat"], "Stripe funding rail for this intent."),
                     "external_reference": nullable_string_property("Optional per-bounty idempotency reference for duplicate detection."),
                     "stripe_success_url": nullable_string_property("Optional Stripe Checkout success URL."),
                     "stripe_cancel_url": nullable_string_property("Optional Stripe Checkout cancel URL."),
-                    "base_escrow_contract": nullable_string_property("Base escrow contract address. Required for BaseUsdc intents."),
-                    "base_payer": nullable_string_property("Base payer wallet address. Required for BaseUsdc intents."),
-                    "base_token": nullable_string_property("USDC token address. Required for BaseUsdc intents."),
-                    "base_network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Base network. Defaults to base-sepolia.")
                 }),
                 &["bounty_id", "amount_minor", "currency", "rail"],
             ),
@@ -958,7 +936,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 json!({
                     "quote_id": uuid_property("Quote UUID."),
                     "title": nullable_string_property("Optional bounty title override."),
-                    "funding_mode": nullable_enum_property(&["Simulated", "BaseUsdcEscrow", "StripeFiatLedger", "MixedRails"], "Optional funding mode override.")
+                    "funding_mode": nullable_enum_property(&["Simulated", "StripeFiatLedger"], "Optional off-chain funding mode override. Base USDC uses autonomous-v1 tools.")
                 }),
                 &["quote_id"],
             ),
@@ -1859,13 +1837,8 @@ fn privacy_property() -> Value {
 
 fn funding_mode_property() -> Value {
     enum_property(
-        &[
-            "Simulated",
-            "BaseUsdcEscrow",
-            "StripeFiatLedger",
-            "MixedRails",
-        ],
-        "Funding mode. MixedRails requires funding_targets.",
+        &["Simulated", "StripeFiatLedger"],
+        "Off-chain funding mode. Base USDC uses autonomous-v1 tools.",
     )
 }
 
@@ -2371,27 +2344,17 @@ async fn bounty_status_snapshot(
         return bounty_status_from_scope(scope);
     }
 
-    let mut status = {
+    let status = {
         let network = state.network.lock().expect("state poisoned");
         network
             .status(bounty_id)
             .map_err(|error| error.to_string())?
     };
-    status.base_escrow_events = state
-        .base_log_worker
-        .lock()
-        .expect("state poisoned")
-        .indexed_events()
-        .iter()
-        .filter(|event| event.bounty_id == bounty_id)
-        .cloned()
-        .collect();
     Ok(status)
 }
 
 fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResponse, String> {
     let bounty_id = scope.bounty.id;
-    let base_escrow_events = scope.base_escrow_events;
     let network = BountyNetwork {
         bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
         funding_intents: scope
@@ -2451,10 +2414,9 @@ fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResp
             .collect(),
         ..BountyNetwork::default()
     };
-    let mut status = network
+    let status = network
         .status(bounty_id)
         .map_err(|error| error.to_string())?;
-    status.base_escrow_events = base_escrow_events;
     Ok(status)
 }
 
@@ -4135,12 +4097,9 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "target_amount_minor"));
-        assert_eq!(
-            open_pooled.input_schema["properties"]["funding_targets"]["type"],
-            "array"
-        );
+        assert!(open_pooled.input_schema["properties"]["funding_targets"].is_null());
         assert!(
-            open_pooled.input_schema["properties"]["funding_mode"]["enum"]
+            !open_pooled.input_schema["properties"]["funding_mode"]["enum"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -4156,11 +4115,10 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "bounty_id"));
-        assert!(create_intent.input_schema["properties"]["rail"]["enum"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "BaseUsdc"));
+        assert_eq!(
+            create_intent.input_schema["properties"]["rail"]["enum"],
+            json!(["StripeFiat"])
+        );
 
         let add_funding = descriptors
             .iter()
@@ -4395,18 +4353,9 @@ mod tests {
                 template_slug: "small-code-change".to_string(),
                 amount_minor: 1_000_000,
                 currency: "usdc".to_string(),
-                funding_mode: domain::FundingMode::BaseUsdcEscrow,
+                funding_mode: domain::FundingMode::Simulated,
                 privacy: PrivacyLevel::Public,
             })
-            .unwrap();
-        network
-            .apply_base_escrow_event(chain_base::simulated_created_event(
-                bounty.id,
-                77,
-                "0x3333333333333333333333333333333333333333",
-                bounty.amount.clone(),
-                bounty.terms_hash.clone().unwrap(),
-            ))
             .unwrap();
         network
             .claim_bounty(ClaimBountyRequest {
@@ -4668,7 +4617,7 @@ mod tests {
                 template_slug: "fix-ci-failure".to_string(),
                 amount_minor: 25_000_000,
                 currency: "usdc".to_string(),
-                funding_mode: domain::FundingMode::BaseUsdcEscrow,
+                funding_mode: domain::FundingMode::StripeFiatLedger,
                 privacy: PrivacyLevel::Public,
                 operator_id: "operator-1".to_string(),
                 note: "Approved after manual scope review".to_string(),
@@ -4685,122 +4634,10 @@ mod tests {
             approval["content"][0]["json"]["review"]["outcome"],
             "Approved"
         );
-        let bounty = &approval["content"][0]["json"]["bounty"];
-        {
-            let mut network = state.network.lock().expect("state poisoned");
-            let funded = network
-                .apply_base_escrow_event(chain_base::simulated_created_event(
-                    Uuid::parse_str(bounty["id"].as_str().unwrap()).unwrap(),
-                    99,
-                    "0x3333333333333333333333333333333333333333",
-                    domain::Money::new(25_000_000, "usdc").unwrap(),
-                    bounty["terms_hash"].as_str().unwrap(),
-                ))
-                .unwrap();
-            assert_eq!(funded.bounty.status, BountyStatus::Claimable);
-        }
-
         let reviews = list_risk_reviews(State(state)).await.0;
         let review_items = reviews["content"][0]["json"].as_array().unwrap();
         assert_eq!(review_items.len(), 1);
         assert_eq!(review_items[0]["outcome"], "Approved");
-    }
-
-    #[tokio::test]
-    async fn payout_review_tool_approves_verification_risk_event() {
-        let mut network = BountyNetwork::default();
-        let solver = network.register_agent(RegisterAgentRequest {
-            handle: "solver".to_string(),
-            payout_wallet: Some("0x2222222222222222222222222222222222222222".to_string()),
-        });
-        let result = network.post_funded_bounty(PostBountyRequest {
-            title: "Fix deterministic payout reconciliation failure".to_string(),
-            template_slug: "fix-ci-failure".to_string(),
-            amount_minor: 25_000_000,
-            currency: "usdc".to_string(),
-            funding_mode: domain::FundingMode::BaseUsdcEscrow,
-            privacy: PrivacyLevel::Public,
-        });
-        assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
-        let bounty_event_id = network.risk_events.values().next().unwrap().id;
-        let approval = network
-            .approve_risk_bounty(ApproveRiskBountyRequest {
-                risk_event_id: bounty_event_id,
-                title: "Fix deterministic payout reconciliation failure".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 25_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: domain::FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-                operator_id: "operator-1".to_string(),
-                note: "Approved bounty scope".to_string(),
-            })
-            .unwrap();
-        network
-            .apply_base_escrow_event(chain_base::simulated_created_event(
-                approval.bounty.id,
-                99,
-                "0x3333333333333333333333333333333333333333",
-                approval.bounty.amount.clone(),
-                approval.bounty.terms_hash.clone().unwrap(),
-            ))
-            .unwrap();
-        network
-            .claim_bounty(ClaimBountyRequest {
-                bounty_id: approval.bounty.id,
-                solver_agent_id: solver.id,
-            })
-            .unwrap();
-        let submission = network
-            .submit_result(SubmitResultRequest {
-                bounty_id: approval.bounty.id,
-                solver_agent_id: solver.id,
-                artifact_uri: "https://github.com/example/repo/pull/1".to_string(),
-                artifact_body: "{\"check\":\"green\"}".to_string(),
-            })
-            .unwrap();
-        let result = network
-            .verify_submission(VerifySubmissionRequest {
-                bounty_id: approval.bounty.id,
-                submission_id: submission.id,
-                expected_artifact_digest: "not-used-by-github-ci".to_string(),
-                verifier_kind: None,
-                rubric: None,
-                evidence: Some(github_ci_evidence()),
-                approved_risk_event_id: None,
-            })
-            .await;
-        assert!(matches!(result, Err(app::AppError::RiskNeedsReview(_))));
-        let payout_event_id = network
-            .list_risk_events(RiskEventFilter {
-                action: Some(domain::RiskAction::NeedsReview),
-                surface: Some(domain::RiskSurface::Payout),
-                bounty_id: Some(approval.bounty.id),
-                limit: Some(1),
-                ..RiskEventFilter::default()
-            })
-            .first()
-            .unwrap()
-            .id;
-        let state = test_state_with_network(network);
-
-        let review = approve_risk_payout(
-            State(state.clone()),
-            HeaderMap::new(),
-            Json(ApproveRiskPayoutRequest {
-                risk_event_id: payout_event_id,
-                operator_id: "operator-1".to_string(),
-                note: "Approved payout after verifier scope review".to_string(),
-            }),
-        )
-        .await
-        .0;
-
-        assert_eq!(review["content"][0]["json"]["surface"], "Payout");
-        assert_eq!(review["content"][0]["json"]["outcome"], "Approved");
-        let reviews = list_risk_reviews(State(state)).await.0;
-        let review_items = reviews["content"][0]["json"].as_array().unwrap();
-        assert_eq!(review_items.len(), 2);
     }
 
     #[tokio::test]
@@ -4926,213 +4763,13 @@ mod tests {
         assert!(body.get("payment_method_types").is_none());
     }
 
-    #[tokio::test]
-    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
-    async fn mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding() {
-        let database_url = postgres_test_database_url();
-        let reader_store = PostgresStore::connect(&database_url).await.unwrap();
-        reader_store.migrate().await.unwrap();
-
-        let mut reader_network = BountyNetwork::default();
-        let bounty = reader_network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Expose MCP scoped Base evidence".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: domain::FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-            })
-            .unwrap();
-        let other_bounty = reader_network
-            .post_funded_bounty(PostBountyRequest {
-                title: "Filter unrelated MCP Base evidence".to_string(),
-                template_slug: "fix-ci-failure".to_string(),
-                amount_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                funding_mode: domain::FundingMode::BaseUsdcEscrow,
-                privacy: PrivacyLevel::Public,
-            })
-            .unwrap();
-        reader_store.upsert_bounty(&bounty).await.unwrap();
-        reader_store.upsert_bounty(&other_bounty).await.unwrap();
-        let reader_state =
-            test_state_with_operator_token_and_store(reader_network, "secret-token", reader_store);
-
-        let initial_status = get_bounty_status(
-            State(reader_state.clone()),
-            Json(BountyIdArgs {
-                bounty_id: bounty.id,
-            }),
-        )
-        .await
-        .0;
-        let initial_json = &initial_status["content"][0]["json"];
-        assert_eq!(initial_json["bounty"]["status"], "Unfunded");
-        assert_eq!(initial_json["funding_summary"]["claimable"], false);
-        assert_eq!(
-            initial_json["base_escrow_events"].as_array().unwrap().len(),
-            0
-        );
-
-        let funding_intent = create_funding_intent(
-            State(reader_state.clone()),
-            Json(CreateFundingIntentRequest {
-                bounty_id: bounty.id,
-                contributor_agent_id: None,
-                source_organization_id: None,
-                amount_minor: bounty.amount.amount,
-                currency: bounty.amount.currency.clone(),
-                rail: PaymentRail::BaseUsdc,
-                external_reference: Some("mcp-base-tx-before-indexer".to_string()),
-                stripe_success_url: None,
-                stripe_cancel_url: None,
-                base_escrow_contract: Some(
-                    "0x1111111111111111111111111111111111111111".to_string(),
-                ),
-                base_payer: Some("0x2222222222222222222222222222222222222222".to_string()),
-                base_token: Some("0x3333333333333333333333333333333333333333".to_string()),
-                base_network: Some("base-mainnet".to_string()),
-            }),
-        )
-        .await
-        .0;
-        let funding_json = &funding_intent["content"][0]["json"]["intent"];
-        assert_eq!(funding_json["status"], "AwaitingEvidence");
-
-        let indexer_store = PostgresStore::connect(&database_url).await.unwrap();
-        let indexer_network = hydrate_network(&indexer_store).await.unwrap();
-        let indexer_state = test_state_with_operator_token_and_store(
-            indexer_network,
-            "secret-token",
-            indexer_store,
-        );
-        let onchain_escrow_id = bounty.id.as_u128() % 1_000_000_000_000 + 20_000;
-        let event = chain_base::simulated_created_event(
-            bounty.id,
-            onchain_escrow_id,
-            "0x3333333333333333333333333333333333333333",
-            bounty.amount.clone(),
-            bounty.terms_hash.clone().unwrap(),
-        );
-        let event_tx_hash = event.tx_hash.clone();
-        let other_event = chain_base::simulated_created_event(
-            other_bounty.id,
-            onchain_escrow_id + 1,
-            "0x3333333333333333333333333333333333333333",
-            other_bounty.amount.clone(),
-            other_bounty.terms_hash.clone().unwrap(),
-        );
-        persist_historical_escrow_event_for_migration_test(&indexer_state, event)
-            .await
-            .unwrap();
-        persist_historical_escrow_event_for_migration_test(&indexer_state, other_event)
-            .await
-            .unwrap();
-
-        let status = get_bounty_status(
-            State(reader_state.clone()),
-            Json(BountyIdArgs {
-                bounty_id: bounty.id,
-            }),
-        )
-        .await
-        .0;
-        let status_json = &status["content"][0]["json"];
-        assert_eq!(status_json["bounty"]["status"], "Claimable");
-        assert_eq!(status_json["funding_summary"]["claimable"], true);
-        assert_eq!(status_json["funding_intents"].as_array().unwrap().len(), 1);
-        assert_eq!(status_json["funding_intents"][0]["status"], "Applied");
-        assert_eq!(status_json["escrows"].as_array().unwrap().len(), 1);
-        assert_eq!(status_json["escrows"][0]["status"], "Funded");
-        assert_eq!(
-            status_json["base_escrow_events"].as_array().unwrap().len(),
-            1
-        );
-        assert_eq!(
-            status_json["base_escrow_events"][0]["bounty_id"]
-                .as_str()
-                .unwrap(),
-            bounty.id.to_string().as_str()
-        );
-        assert_eq!(
-            status_json["base_escrow_events"][0]["tx_hash"]
-                .as_str()
-                .unwrap(),
-            event_tx_hash.as_str()
-        );
-
-        let paid_status = get_paid_status(
-            State(reader_state),
-            Json(PaidStatusArgs {
-                bounty_id: Some(bounty.id),
-                agent_id: None,
-            }),
-        )
-        .await
-        .0;
-        let paid_json = &paid_status["content"][0]["json"];
-        assert_eq!(paid_json["bounty_status"], "Claimable");
-        assert_eq!(paid_json["post_value_loop"]["trigger"], "funded_bounty");
-    }
-
     fn test_state() -> SharedState {
         test_state_with_network(BountyNetwork::default())
-    }
-
-    async fn persist_historical_escrow_event_for_migration_test(
-        state: &SharedState,
-        event: chain_base::BaseEscrowEvent,
-    ) -> Result<(), String> {
-        let indexed_event = event.clone();
-        let reconciliation = {
-            let mut network = state.network.lock().expect("state poisoned");
-            let reconciliation = network
-                .apply_base_escrow_event(event)
-                .map_err(|error| error.to_string())?;
-            state
-                .base_log_worker
-                .lock()
-                .expect("state poisoned")
-                .ingest_indexed_event(indexed_event.clone())
-                .map_err(|error| error.to_string())?;
-            reconciliation
-        };
-        let store = state
-            .store
-            .as_ref()
-            .ok_or_else(|| "migration test store unavailable".to_string())?;
-        store
-            .upsert_bounty(&reconciliation.bounty)
-            .await
-            .map_err(|error| error.to_string())?;
-        store
-            .upsert_base_escrow_event(&indexed_event)
-            .await
-            .map_err(|error| error.to_string())?;
-        store
-            .upsert_escrow(&reconciliation.escrow)
-            .await
-            .map_err(|error| error.to_string())?;
-        for intent in &reconciliation.funding_intents {
-            store
-                .upsert_funding_intent(intent)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        for settlement in &reconciliation.settlements {
-            store
-                .upsert_settlement(settlement)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        persist_ledger_entries(store, &reconciliation.ledger_entries).await
     }
 
     fn test_state_with_network(network: BountyNetwork) -> SharedState {
         Arc::new(AppState {
             network: Mutex::new(network),
-            base_log_worker: Mutex::new(BaseEscrowLogWorker::default()),
             eval_runs: Mutex::new(Vec::new()),
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
@@ -5150,7 +4787,6 @@ mod tests {
     ) -> SharedState {
         Arc::new(AppState {
             network: Mutex::new(BountyNetwork::default()),
-            base_log_worker: Mutex::new(BaseEscrowLogWorker::default()),
             eval_runs: Mutex::new(Vec::new()),
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
@@ -5166,7 +4802,6 @@ mod tests {
     fn test_state_with_operator_token(token: &str) -> SharedState {
         Arc::new(AppState {
             network: Mutex::new(BountyNetwork::default()),
-            base_log_worker: Mutex::new(BaseEscrowLogWorker::default()),
             eval_runs: Mutex::new(Vec::new()),
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
@@ -5179,64 +4814,8 @@ mod tests {
         })
     }
 
-    fn test_state_with_operator_token_and_store(
-        network: BountyNetwork,
-        token: &str,
-        store: PostgresStore,
-    ) -> SharedState {
-        Arc::new(AppState {
-            network: Mutex::new(network),
-            base_log_worker: Mutex::new(BaseEscrowLogWorker::default()),
-            eval_runs: Mutex::new(Vec::new()),
-            base_rpc_urls: BaseRpcUrlConfig::default(),
-            base_broadcast_enabled: false,
-            stripe_secret_key: None,
-            stripe_live_execution_enabled: false,
-            stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
-            stripe_payment_method_configuration: None,
-            operator_api_token: Some(token.to_string()),
-            store: Some(store),
-        })
-    }
-
-    fn postgres_test_database_url() -> String {
-        std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .expect("set AGENT_BOUNTIES_TEST_DATABASE_URL or DATABASE_URL")
-    }
-
     fn valid_github_issue_body() -> String {
         "### Goal\nFix the failing CI check.\n\n### Acceptance criteria\nThe test job is green and the patch explains the failure.\n\n### Template\nfix-ci-failure\n\n### Suggested amount\n10 USDC\n".to_string()
-    }
-
-    fn github_ci_evidence() -> serde_json::Value {
-        json!({
-            "repository": "example/repo",
-            "pull_request_url": "https://github.com/example/repo/pull/1",
-            "pull_request": {
-                "author_login": "solver-agent",
-                "merged": true,
-                "merged_by_login": "maintainer",
-                "reviews": [
-                    {
-                        "author_login": "maintainer",
-                        "state": "APPROVED"
-                    }
-                ]
-            },
-            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "check_run": {
-                "id": 123456789_u64,
-                "name": "full-check",
-                "status": "completed",
-                "conclusion": "success",
-                "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "html_url": "https://github.com/example/repo/actions/runs/123456789",
-                "repository": {
-                    "full_name": "example/repo"
-                }
-            }
-        })
     }
 
     fn stripe_checkout_event(
@@ -5422,13 +5001,6 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
         ledger: Ledger::from_entries(store.list_ledger_entries().await?)?,
         ..BountyNetwork::default()
     })
-}
-
-async fn hydrate_base_log_worker(store: &PostgresStore) -> anyhow::Result<BaseEscrowLogWorker> {
-    Ok(BaseEscrowLogWorker::from_indexed_events(
-        "usdc",
-        store.list_base_escrow_events().await?,
-    )?)
 }
 
 async fn persist_bounty_and_ledger(

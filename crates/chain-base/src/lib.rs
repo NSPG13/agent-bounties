@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use domain::{
     AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord,
-    EscrowStatus, Id, Money, PaymentRail,
+    Id, Money,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -78,35 +78,6 @@ pub enum ChainBaseError {
     RpcProviderError { code: i64, message: String },
     #[error("invalid Base RPC response: {0}")]
     InvalidRpcResponse(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BaseEscrowCreate {
-    pub bounty_id: Id,
-    pub payer: String,
-    pub token: String,
-    pub amount: Money,
-    pub terms_hash: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EscrowRecipient {
-    pub address: String,
-    pub amount: Money,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BaseEscrowRelease {
-    pub escrow_id: Id,
-    pub recipients: Vec<EscrowRecipient>,
-    pub proof_hash: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BaseEscrowReleaseCall {
-    pub onchain_escrow_id: u128,
-    pub recipients: Vec<EscrowRecipient>,
-    pub proof_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -907,211 +878,6 @@ impl AutonomousBountyTxPlanner {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BaseEscrowFundingPlan {
-    pub network: BaseNetworkDescriptor,
-    pub approve: EvmTransactionIntent,
-    pub create_escrow: EvmTransactionIntent,
-}
-
-#[derive(Debug, Clone)]
-pub struct BaseEscrowTxPlanner {
-    pub escrow_contract: String,
-}
-
-impl BaseEscrowTxPlanner {
-    pub fn new(escrow_contract: impl Into<String>) -> Result<Self, ChainBaseError> {
-        let escrow_contract = normalize_address(escrow_contract.into())?;
-        Ok(Self { escrow_contract })
-    }
-
-    pub fn plan_funding(
-        &self,
-        create: &BaseEscrowCreate,
-    ) -> Result<BaseEscrowFundingPlan, ChainBaseError> {
-        self.plan_funding_for_network("base-sepolia", create)
-    }
-
-    pub fn plan_funding_for_network(
-        &self,
-        network: &str,
-        create: &BaseEscrowCreate,
-    ) -> Result<BaseEscrowFundingPlan, ChainBaseError> {
-        let network = base_network_descriptor(network)?;
-        let token = normalize_address(&create.token)?;
-        let payer = normalize_address(&create.payer)?;
-        let amount = money_to_uint256(&create.amount)?;
-        let approve = EvmTransactionIntent {
-            from: Some(payer),
-            to: token.clone(),
-            value_wei: 0,
-            data: encode_call(
-                "approve(address,uint256)",
-                vec![
-                    encode_address(&self.escrow_contract)?,
-                    encode_uint256(amount)?,
-                ],
-            ),
-            function: "approve(address,uint256)".to_string(),
-        };
-        let create_escrow = self.create_escrow(create)?;
-        Ok(BaseEscrowFundingPlan {
-            network,
-            approve,
-            create_escrow,
-        })
-    }
-
-    pub fn create_escrow(
-        &self,
-        create: &BaseEscrowCreate,
-    ) -> Result<EvmTransactionIntent, ChainBaseError> {
-        let token = normalize_address(&create.token)?;
-        let payer = normalize_address(&create.payer)?;
-        let terms_hash = parse_bytes32(&create.terms_hash)?;
-        let bounty_id = bytes32_from_uuid(create.bounty_id);
-        let amount = money_to_uint256(&create.amount)?;
-        Ok(EvmTransactionIntent {
-            from: Some(payer),
-            to: self.escrow_contract.clone(),
-            value_wei: 0,
-            data: encode_call(
-                "createEscrow(bytes32,address,uint256,bytes32)",
-                vec![
-                    bounty_id,
-                    encode_address(&token)?,
-                    encode_uint256(amount)?,
-                    terms_hash,
-                ],
-            ),
-            function: "createEscrow(bytes32,address,uint256,bytes32)".to_string(),
-        })
-    }
-
-    pub fn release(
-        &self,
-        release: &BaseEscrowReleaseCall,
-    ) -> Result<EvmTransactionIntent, ChainBaseError> {
-        if release.onchain_escrow_id == 0 {
-            return Err(ChainBaseError::InvalidEscrowId);
-        }
-        validate_release_recipients(&release.recipients)?;
-        let proof_hash = parse_bytes32(&release.proof_hash)?;
-        let recipient_words = release
-            .recipients
-            .iter()
-            .map(|recipient| encode_address(&recipient.address))
-            .collect::<Result<Vec<_>, _>>()?;
-        let amount_words = release
-            .recipients
-            .iter()
-            .map(|recipient| money_to_uint256(&recipient.amount).and_then(encode_uint256))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(EvmTransactionIntent {
-            from: None,
-            to: self.escrow_contract.clone(),
-            value_wei: 0,
-            data: encode_dynamic_call(
-                "release(uint256,address[],uint256[],bytes32)",
-                encode_uint256(release.onchain_escrow_id)?,
-                recipient_words,
-                amount_words,
-                proof_hash,
-            ),
-            function: "release(uint256,address[],uint256[],bytes32)".to_string(),
-        })
-    }
-
-    pub fn refund(
-        &self,
-        onchain_escrow_id: u128,
-        reason_hash: &str,
-    ) -> Result<EvmTransactionIntent, ChainBaseError> {
-        if onchain_escrow_id == 0 {
-            return Err(ChainBaseError::InvalidEscrowId);
-        }
-        Ok(EvmTransactionIntent {
-            from: None,
-            to: self.escrow_contract.clone(),
-            value_wei: 0,
-            data: encode_call(
-                "refund(uint256,bytes32)",
-                vec![
-                    encode_uint256(onchain_escrow_id)?,
-                    parse_bytes32(reason_hash)?,
-                ],
-            ),
-            function: "refund(uint256,bytes32)".to_string(),
-        })
-    }
-
-    pub fn mark_disputed(
-        &self,
-        onchain_escrow_id: u128,
-        dispute_hash: &str,
-    ) -> Result<EvmTransactionIntent, ChainBaseError> {
-        if onchain_escrow_id == 0 {
-            return Err(ChainBaseError::InvalidEscrowId);
-        }
-        Ok(EvmTransactionIntent {
-            from: None,
-            to: self.escrow_contract.clone(),
-            value_wei: 0,
-            data: encode_call(
-                "markDisputed(uint256,bytes32)",
-                vec![
-                    encode_uint256(onchain_escrow_id)?,
-                    parse_bytes32(dispute_hash)?,
-                ],
-            ),
-            function: "markDisputed(uint256,bytes32)".to_string(),
-        })
-    }
-}
-
-impl BaseEscrowRelease {
-    pub fn validate_split(&self, total: &Money) -> Result<(), ChainBaseError> {
-        let sum: i64 = self
-            .recipients
-            .iter()
-            .filter(|recipient| recipient.amount.currency == total.currency)
-            .map(|recipient| recipient.amount.amount)
-            .sum();
-        if sum != total.amount {
-            return Err(ChainBaseError::InvalidReleaseSplit);
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BaseEscrowEventKind {
-    Created,
-    Released,
-    Refunded,
-    Disputed,
-    Paused,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BaseEscrowEvent {
-    pub id: Id,
-    pub log_key: String,
-    pub tx_hash: String,
-    pub block_number: u64,
-    pub onchain_escrow_id: u128,
-    pub bounty_id: Id,
-    pub kind: BaseEscrowEventKind,
-    pub status: EscrowStatus,
-    pub token: Option<String>,
-    pub amount: Option<Money>,
-    pub terms_hash: Option<String>,
-    pub proof_hash: Option<String>,
-    pub reason_hash: Option<String>,
-    pub dispute_hash: Option<String>,
-    pub occurred_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmLog {
     pub address: String,
     pub topics: Vec<String>,
@@ -1120,13 +886,6 @@ pub struct EvmLog {
     pub block_number: u64,
     pub log_index: u64,
     pub occurred_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BaseEscrowLogQuery {
-    pub escrow_contract: String,
-    pub from_block: u64,
-    pub to_block: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1565,35 +1324,6 @@ impl JsonRpcTransport for ReqwestJsonRpcTransport {
     }
 }
 
-pub async fn fetch_base_escrow_logs(
-    rpc_url: &str,
-    query: &BaseEscrowLogQuery,
-    request_id: u64,
-) -> Result<EthGetLogsResponse, ChainBaseError> {
-    fetch_base_escrow_logs_with_transport(
-        rpc_url,
-        query,
-        request_id,
-        &ReqwestJsonRpcTransport::default(),
-    )
-    .await
-}
-
-pub async fn fetch_base_escrow_logs_with_transport<T>(
-    rpc_url: &str,
-    query: &BaseEscrowLogQuery,
-    request_id: u64,
-    transport: &T,
-) -> Result<EthGetLogsResponse, ChainBaseError>
-where
-    T: JsonRpcTransport + ?Sized,
-{
-    let request = query.rpc_request(request_id);
-    let request_value = serde_json::to_value(&request)
-        .map_err(|error| ChainBaseError::InvalidRpcResponse(error.to_string()))?;
-    parse_eth_get_logs_response(transport.post_json_value(rpc_url, &request_value).await?)
-}
-
 pub async fn fetch_base_contract_logs(
     rpc_url: &str,
     query: &BaseContractLogQuery,
@@ -1731,51 +1461,6 @@ fn non_empty_env(key: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-impl BaseEscrowLogQuery {
-    pub fn new(
-        escrow_contract: impl Into<String>,
-        from_block: u64,
-        to_block: Option<u64>,
-    ) -> Result<Self, ChainBaseError> {
-        if let Some(to_block) = to_block {
-            if from_block > to_block {
-                return Err(ChainBaseError::InvalidBlockRange {
-                    from_block,
-                    to_block,
-                });
-            }
-        }
-        Ok(Self {
-            escrow_contract: normalize_address(escrow_contract.into())?,
-            from_block,
-            to_block,
-        })
-    }
-
-    pub fn rpc_request(&self, id: u64) -> EthGetLogsRequest {
-        EthGetLogsRequest {
-            jsonrpc: "2.0".to_string(),
-            id,
-            method: "eth_getLogs".to_string(),
-            params: vec![EthGetLogsFilter {
-                from_block: hex_quantity(self.from_block),
-                to_block: self
-                    .to_block
-                    .map(hex_quantity)
-                    .unwrap_or_else(|| "latest".to_string()),
-                address: EthGetLogsAddressFilter::One(self.escrow_contract.clone()),
-                topics: vec![base_escrow_event_topics()],
-            }],
-        }
-    }
-
-    pub fn next_from_block(last_indexed_block: Option<u64>) -> u64 {
-        last_indexed_block
-            .and_then(|block| block.checked_add(1))
-            .unwrap_or(0)
-    }
 }
 
 impl BaseContractLogQuery {
@@ -1939,151 +1624,6 @@ pub fn rpc_logs_to_evm_logs(
     logs: impl IntoIterator<Item = RpcEvmLog>,
 ) -> Result<Vec<EvmLog>, ChainBaseError> {
     logs.into_iter().map(|log| log.to_evm_log()).collect()
-}
-
-pub fn base_escrow_event_topics() -> Vec<String> {
-    vec![
-        event_topic("EscrowCreated(uint256,bytes32,address,address,uint256,bytes32)"),
-        event_topic("EscrowReleased(uint256,bytes32)"),
-        event_topic("EscrowRefunded(uint256,bytes32)"),
-        event_topic("EscrowDisputed(uint256,bytes32)"),
-    ]
-}
-
-#[derive(Debug, Clone)]
-pub struct BaseEscrowLogDecoder {
-    currency: String,
-    escrow_bounties: HashMap<u128, Id>,
-}
-
-impl Default for BaseEscrowLogDecoder {
-    fn default() -> Self {
-        Self::new("usdc")
-    }
-}
-
-impl BaseEscrowLogDecoder {
-    pub fn new(currency: impl Into<String>) -> Self {
-        Self {
-            currency: currency.into().to_lowercase(),
-            escrow_bounties: HashMap::new(),
-        }
-    }
-
-    pub fn remember_event(&mut self, event: &BaseEscrowEvent) {
-        if event.kind == BaseEscrowEventKind::Created {
-            self.escrow_bounties
-                .insert(event.onchain_escrow_id, event.bounty_id);
-        }
-    }
-
-    pub fn decode(&mut self, log: EvmLog) -> Result<BaseEscrowEvent, ChainBaseError> {
-        let topic0 = log
-            .topics
-            .first()
-            .ok_or_else(|| ChainBaseError::InvalidLogTopics("missing topic0".to_string()))?;
-        let signature = event_signature(topic0)
-            .ok_or_else(|| ChainBaseError::UnknownEventTopic(topic0.clone()))?;
-        match signature {
-            EscrowEventSignature::Created => self.decode_created(log),
-            EscrowEventSignature::Released => {
-                self.decode_terminal(log, BaseEscrowEventKind::Released, EscrowStatus::Released)
-            }
-            EscrowEventSignature::Refunded => {
-                self.decode_terminal(log, BaseEscrowEventKind::Refunded, EscrowStatus::Refunded)
-            }
-            EscrowEventSignature::Disputed => {
-                self.decode_terminal(log, BaseEscrowEventKind::Disputed, EscrowStatus::Disputed)
-            }
-        }
-    }
-
-    fn decode_created(&mut self, log: EvmLog) -> Result<BaseEscrowEvent, ChainBaseError> {
-        if log.topics.len() != 4 {
-            return Err(ChainBaseError::InvalidLogTopics(
-                "EscrowCreated".to_string(),
-            ));
-        }
-        let escrow_id = word_to_u128(parse_bytes32(&log.topics[1])?)
-            .map_err(|_| ChainBaseError::InvalidEscrowId)?;
-        if escrow_id == 0 {
-            return Err(ChainBaseError::InvalidEscrowId);
-        }
-        let bounty_id = uuid_from_bytes32(parse_bytes32(&log.topics[2])?);
-        let words = decode_words(&log.data, 3, "EscrowCreated")?;
-        let token = address_from_word(words[0]);
-        let amount =
-            i64::try_from(word_to_u128(words[1])?).map_err(|_| ChainBaseError::InvalidAmount)?;
-        let terms_hash = word_hex(words[2]);
-        self.escrow_bounties.insert(escrow_id, bounty_id);
-
-        Ok(BaseEscrowEvent {
-            id: deterministic_log_id(&log),
-            log_key: log_key(&log),
-            tx_hash: log.tx_hash,
-            block_number: log.block_number,
-            onchain_escrow_id: escrow_id,
-            bounty_id,
-            kind: BaseEscrowEventKind::Created,
-            status: EscrowStatus::Funded,
-            token: Some(token),
-            amount: Some(
-                Money::new(amount, self.currency.clone())
-                    .map_err(|_| ChainBaseError::InvalidAmount)?,
-            ),
-            terms_hash: Some(terms_hash),
-            proof_hash: None,
-            reason_hash: None,
-            dispute_hash: None,
-            occurred_at: log.occurred_at.unwrap_or_else(Utc::now),
-        })
-    }
-
-    fn decode_terminal(
-        &mut self,
-        log: EvmLog,
-        kind: BaseEscrowEventKind,
-        status: EscrowStatus,
-    ) -> Result<BaseEscrowEvent, ChainBaseError> {
-        if log.topics.len() != 2 {
-            return Err(ChainBaseError::InvalidLogTopics(format!("{kind:?}")));
-        }
-        let escrow_id = word_to_u128(parse_bytes32(&log.topics[1])?)
-            .map_err(|_| ChainBaseError::InvalidEscrowId)?;
-        if escrow_id == 0 {
-            return Err(ChainBaseError::InvalidEscrowId);
-        }
-        let bounty_id = *self
-            .escrow_bounties
-            .get(&escrow_id)
-            .ok_or(ChainBaseError::UnknownEscrowForTerminalLog)?;
-        let words = decode_words(&log.data, 1, &format!("{kind:?}"))?;
-        let hash = word_hex(words[0]);
-        let (proof_hash, reason_hash, dispute_hash) = match kind {
-            BaseEscrowEventKind::Released => (Some(hash), None, None),
-            BaseEscrowEventKind::Refunded => (None, Some(hash), None),
-            BaseEscrowEventKind::Disputed => (None, None, Some(hash)),
-            BaseEscrowEventKind::Created | BaseEscrowEventKind::Paused => (None, None, None),
-        };
-
-        Ok(BaseEscrowEvent {
-            id: deterministic_log_id(&log),
-            log_key: log_key(&log),
-            tx_hash: log.tx_hash,
-            block_number: log.block_number,
-            onchain_escrow_id: escrow_id,
-            bounty_id,
-            kind,
-            status,
-            token: None,
-            amount: None,
-            terms_hash: None,
-            proof_hash,
-            reason_hash,
-            dispute_hash,
-            occurred_at: log.occurred_at.unwrap_or_else(Utc::now),
-        })
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3147,174 +2687,6 @@ pub fn build_autonomous_bounty_feed(
     Ok(feed)
 }
 
-#[derive(Debug, Default)]
-pub struct ChainEventIndexer {
-    seen_log_keys: HashSet<String>,
-    events: Vec<BaseEscrowEvent>,
-}
-
-impl ChainEventIndexer {
-    pub fn from_events(
-        events: impl IntoIterator<Item = BaseEscrowEvent>,
-    ) -> Result<Self, ChainBaseError> {
-        let mut indexer = Self::default();
-        for event in events {
-            indexer.ingest(event)?;
-        }
-        Ok(indexer)
-    }
-
-    pub fn has_seen_log_key(&self, log_key: &str) -> bool {
-        self.seen_log_keys.contains(log_key)
-    }
-
-    pub fn ingest(&mut self, event: BaseEscrowEvent) -> Result<(), ChainBaseError> {
-        if self.seen_log_keys.contains(&event.log_key) {
-            return Err(ChainBaseError::DuplicateLog);
-        }
-        self.seen_log_keys.insert(event.log_key.clone());
-        self.events.push(event);
-        Ok(())
-    }
-
-    pub fn events(&self) -> &[BaseEscrowEvent] {
-        &self.events
-    }
-}
-
-pub trait WalletPolicy {
-    fn can_sign_release(
-        &self,
-        bounty_id: Id,
-        amount: &Money,
-        recipients: &[EscrowRecipient],
-    ) -> bool;
-}
-
-#[derive(Debug, Clone)]
-pub struct LowValuePolicy {
-    pub max_amount: i64,
-    pub currency: String,
-}
-
-impl WalletPolicy for LowValuePolicy {
-    fn can_sign_release(
-        &self,
-        _bounty_id: Id,
-        amount: &Money,
-        recipients: &[EscrowRecipient],
-    ) -> bool {
-        amount.currency == self.currency
-            && amount.amount <= self.max_amount
-            && !recipients.is_empty()
-            && recipients
-                .iter()
-                .all(|recipient| recipient.amount.amount > 0)
-    }
-}
-
-pub fn simulated_created_event(
-    bounty_id: Id,
-    onchain_escrow_id: u128,
-    token: impl Into<String>,
-    amount: Money,
-    terms_hash: impl Into<String>,
-) -> BaseEscrowEvent {
-    BaseEscrowEvent {
-        id: Uuid::new_v4(),
-        log_key: format!("base:{onchain_escrow_id}:created"),
-        tx_hash: format!("0x{}", Uuid::new_v4().simple()),
-        block_number: 1,
-        onchain_escrow_id,
-        bounty_id,
-        kind: BaseEscrowEventKind::Created,
-        status: EscrowStatus::Funded,
-        token: Some(token.into()),
-        amount: Some(amount),
-        terms_hash: Some(terms_hash.into()),
-        proof_hash: None,
-        reason_hash: None,
-        dispute_hash: None,
-        occurred_at: Utc::now(),
-    }
-}
-
-pub fn simulated_released_event(
-    bounty_id: Id,
-    onchain_escrow_id: u128,
-    proof_hash: impl Into<String>,
-) -> BaseEscrowEvent {
-    BaseEscrowEvent {
-        id: Uuid::new_v4(),
-        log_key: format!("base:{onchain_escrow_id}:released"),
-        tx_hash: format!("0x{}", Uuid::new_v4().simple()),
-        block_number: 2,
-        onchain_escrow_id,
-        bounty_id,
-        kind: BaseEscrowEventKind::Released,
-        status: EscrowStatus::Released,
-        token: None,
-        amount: None,
-        terms_hash: None,
-        proof_hash: Some(proof_hash.into()),
-        reason_hash: None,
-        dispute_hash: None,
-        occurred_at: Utc::now(),
-    }
-}
-
-pub fn simulated_refunded_event(
-    bounty_id: Id,
-    onchain_escrow_id: u128,
-    reason_hash: impl Into<String>,
-) -> BaseEscrowEvent {
-    BaseEscrowEvent {
-        id: Uuid::new_v4(),
-        log_key: format!("base:{onchain_escrow_id}:refunded"),
-        tx_hash: format!("0x{}", Uuid::new_v4().simple()),
-        block_number: 2,
-        onchain_escrow_id,
-        bounty_id,
-        kind: BaseEscrowEventKind::Refunded,
-        status: EscrowStatus::Refunded,
-        token: None,
-        amount: None,
-        terms_hash: None,
-        proof_hash: None,
-        reason_hash: Some(reason_hash.into()),
-        dispute_hash: None,
-        occurred_at: Utc::now(),
-    }
-}
-
-pub fn simulated_disputed_event(
-    bounty_id: Id,
-    onchain_escrow_id: u128,
-    dispute_hash: impl Into<String>,
-) -> BaseEscrowEvent {
-    BaseEscrowEvent {
-        id: Uuid::new_v4(),
-        log_key: format!("base:{onchain_escrow_id}:disputed"),
-        tx_hash: format!("0x{}", Uuid::new_v4().simple()),
-        block_number: 2,
-        onchain_escrow_id,
-        bounty_id,
-        kind: BaseEscrowEventKind::Disputed,
-        status: EscrowStatus::Disputed,
-        token: None,
-        amount: None,
-        terms_hash: None,
-        proof_hash: None,
-        reason_hash: None,
-        dispute_hash: Some(dispute_hash.into()),
-        occurred_at: Utc::now(),
-    }
-}
-
-pub fn base_usdc_rail() -> PaymentRail {
-    PaymentRail::BaseUsdc
-}
-
 pub fn evm_event_topic(signature: &str) -> String {
     event_topic(signature)
 }
@@ -3559,14 +2931,6 @@ pub fn evm_words_data(words: &[String]) -> Result<String, ChainBaseError> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EscrowEventSignature {
-    Created,
-    Released,
-    Refunded,
-    Disputed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AutonomousEventSignature {
     CanonicalBountyCreated,
     CanonicalBountyTermsCommitted,
@@ -3652,21 +3016,6 @@ fn autonomous_event_signature(topic: &str) -> Option<AutonomousEventSignature> {
     signatures
         .into_iter()
         .find_map(|(signature, kind)| (normalized == event_topic(signature)).then_some(kind))
-}
-
-fn event_signature(topic: &str) -> Option<EscrowEventSignature> {
-    let normalized = normalize_topic(topic).ok()?;
-    if normalized == event_topic("EscrowCreated(uint256,bytes32,address,address,uint256,bytes32)") {
-        Some(EscrowEventSignature::Created)
-    } else if normalized == event_topic("EscrowReleased(uint256,bytes32)") {
-        Some(EscrowEventSignature::Released)
-    } else if normalized == event_topic("EscrowRefunded(uint256,bytes32)") {
-        Some(EscrowEventSignature::Refunded)
-    } else if normalized == event_topic("EscrowDisputed(uint256,bytes32)") {
-        Some(EscrowEventSignature::Disputed)
-    } else {
-        None
-    }
 }
 
 fn require_topic_count(
@@ -3819,12 +3168,6 @@ fn word_to_u128(word: [u8; 32]) -> Result<u128, ChainBaseError> {
     Ok(u128::from_be_bytes(value))
 }
 
-fn uuid_from_bytes32(word: [u8; 32]) -> Id {
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&word[16..]);
-    Uuid::from_bytes(bytes)
-}
-
 fn address_from_word(word: [u8; 32]) -> String {
     format!("0x{}", hex::encode(&word[12..]))
 }
@@ -3839,20 +3182,6 @@ fn log_key(log: &EvmLog) -> String {
 
 fn deterministic_log_id(log: &EvmLog) -> Id {
     Uuid::new_v5(&Uuid::NAMESPACE_URL, log_key(log).as_bytes())
-}
-
-fn validate_release_recipients(recipients: &[EscrowRecipient]) -> Result<(), ChainBaseError> {
-    if recipients.is_empty() {
-        return Err(ChainBaseError::EmptyRecipients);
-    }
-    let currency = &recipients[0].amount.currency;
-    if recipients
-        .iter()
-        .any(|recipient| recipient.amount.currency != *currency)
-    {
-        return Err(ChainBaseError::MixedRecipientCurrencies);
-    }
-    Ok(())
 }
 
 fn normalize_address(address: impl AsRef<str>) -> Result<String, ChainBaseError> {
@@ -3881,12 +3210,6 @@ fn parse_bytes32(value: &str) -> Result<[u8; 32], ChainBaseError> {
     bytes
         .try_into()
         .map_err(|_| ChainBaseError::InvalidBytes32(value.to_string()))
-}
-
-fn bytes32_from_uuid(id: Id) -> [u8; 32] {
-    let mut word = [0u8; 32];
-    word[16..].copy_from_slice(id.as_bytes());
-    word
 }
 
 fn money_to_uint256(amount: &Money) -> Result<u128, ChainBaseError> {
@@ -4422,32 +3745,6 @@ fn encode_attestation_array_call(attestations: &[EncodedAutonomousAttestation]) 
     format!("0x{}", hex::encode(bytes))
 }
 
-fn encode_dynamic_call(
-    signature: &str,
-    escrow_id: [u8; 32],
-    recipients: Vec<[u8; 32]>,
-    amounts: Vec<[u8; 32]>,
-    proof_hash: [u8; 32],
-) -> String {
-    let recipients_offset = 32u128 * 4;
-    let amounts_offset = recipients_offset + 32 + (recipients.len() as u128 * 32);
-
-    let mut bytes = selector(signature).to_vec();
-    bytes.extend_from_slice(&escrow_id);
-    bytes.extend_from_slice(&encode_uint256(recipients_offset).expect("constant fits"));
-    bytes.extend_from_slice(&encode_uint256(amounts_offset).expect("constant fits"));
-    bytes.extend_from_slice(&proof_hash);
-    bytes.extend_from_slice(&encode_uint256(recipients.len() as u128).expect("length fits"));
-    for recipient in recipients {
-        bytes.extend_from_slice(&recipient);
-    }
-    bytes.extend_from_slice(&encode_uint256(amounts.len() as u128).expect("length fits"));
-    for amount in amounts {
-        bytes.extend_from_slice(&amount);
-    }
-    format!("0x{}", hex::encode(bytes))
-}
-
 fn selector(signature: &str) -> [u8; 4] {
     let mut hasher = Keccak256::new();
     hasher.update(signature.as_bytes());
@@ -4493,71 +3790,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
-    fn duplicate_chain_logs_are_rejected() {
-        let bounty_id = Uuid::new_v4();
-        let event = simulated_created_event(
-            bounty_id,
-            1,
-            "0x3333333333333333333333333333333333333333",
-            Money::new(1_000_000, "usdc").unwrap(),
-            format!("0x{}", "ab".repeat(32)),
-        );
-        let mut indexer = ChainEventIndexer::default();
-
-        indexer.ingest(event.clone()).unwrap();
-        assert_eq!(
-            indexer.ingest(event).unwrap_err(),
-            ChainBaseError::DuplicateLog
-        );
-    }
-
-    #[test]
-    fn release_split_must_match_escrow_total() {
-        let release = BaseEscrowRelease {
-            escrow_id: Uuid::new_v4(),
-            proof_hash: "proof".to_string(),
-            recipients: vec![
-                EscrowRecipient {
-                    address: "0xsolver".to_string(),
-                    amount: Money::new(90, "usdc").unwrap(),
-                },
-                EscrowRecipient {
-                    address: "0xplatform".to_string(),
-                    amount: Money::new(10, "usdc").unwrap(),
-                },
-            ],
-        };
-
-        release
-            .validate_split(&Money::new(100, "usdc").unwrap())
-            .unwrap();
-        assert_eq!(
-            release
-                .validate_split(&Money::new(101, "usdc").unwrap())
-                .unwrap_err(),
-            ChainBaseError::InvalidReleaseSplit
-        );
-    }
-
-    #[test]
     fn function_selectors_match_solidity_contract() {
-        assert_eq!(
-            hex::encode(selector("createEscrow(bytes32,address,uint256,bytes32)")),
-            "64a20554"
-        );
-        assert_eq!(
-            hex::encode(selector("release(uint256,address[],uint256[],bytes32)")),
-            "bfc95334"
-        );
-        assert_eq!(hex::encode(selector("refund(uint256,bytes32)")), "71eedb88");
-        assert_eq!(
-            hex::encode(selector("markDisputed(uint256,bytes32)")),
-            "4dcc33b8"
-        );
-        assert_eq!(
-            hex::encode(selector("approve(address,uint256)")),
-            "095ea7b3"
-        );
         assert_eq!(
             hex::encode(selector("createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)")),
             "9d2e414c"
@@ -5304,143 +4537,6 @@ mod tests {
     }
 
     #[test]
-    fn plans_funding_transactions_for_base_escrow() {
-        let planner =
-            BaseEscrowTxPlanner::new("0x1111111111111111111111111111111111111111").unwrap();
-        let create = BaseEscrowCreate {
-            bounty_id: Uuid::from_u128(42),
-            payer: "0x2222222222222222222222222222222222222222".to_string(),
-            token: "0x3333333333333333333333333333333333333333".to_string(),
-            amount: Money::new(1_000_000, "usdc").unwrap(),
-            terms_hash: format!("0x{}", "ab".repeat(32)),
-        };
-
-        let plan = planner.plan_funding(&create).unwrap();
-
-        assert_eq!(plan.network.name, "Base Sepolia");
-        assert_eq!(plan.network.chain_id, 84_532);
-        assert_eq!(
-            plan.network.native_usdc_token_address,
-            BASE_SEPOLIA_USDC_TOKEN_ADDRESS
-        );
-        assert_eq!(plan.approve.from, Some(create.payer.clone()));
-        assert_eq!(plan.approve.to, create.token);
-        assert!(plan.approve.data.starts_with("0x095ea7b3"));
-        assert_eq!(plan.create_escrow.from, Some(create.payer));
-        assert_eq!(plan.create_escrow.to, planner.escrow_contract);
-        assert!(plan.create_escrow.data.starts_with("0x64a20554"));
-        assert!(plan.create_escrow.data.contains(&"ab".repeat(32)));
-    }
-
-    #[test]
-    fn funding_plan_can_target_base_mainnet() {
-        let planner =
-            BaseEscrowTxPlanner::new("0x1111111111111111111111111111111111111111").unwrap();
-        let create = BaseEscrowCreate {
-            bounty_id: Uuid::from_u128(42),
-            payer: "0x2222222222222222222222222222222222222222".to_string(),
-            token: "0x3333333333333333333333333333333333333333".to_string(),
-            amount: Money::new(1_000_000, "usdc").unwrap(),
-            terms_hash: format!("0x{}", "ab".repeat(32)),
-        };
-
-        let plan = planner
-            .plan_funding_for_network("base-mainnet", &create)
-            .unwrap();
-
-        assert_eq!(plan.network.name, "Base");
-        assert_eq!(plan.network.chain_id, 8_453);
-        assert_eq!(plan.network.rpc_url_env, "BASE_MAINNET_RPC_URL");
-        assert_eq!(
-            plan.network.native_usdc_token_address,
-            BASE_MAINNET_USDC_TOKEN_ADDRESS
-        );
-        assert_eq!(plan.approve.to, create.token);
-        assert_eq!(plan.create_escrow.to, planner.escrow_contract);
-    }
-
-    #[test]
-    fn plans_release_with_dynamic_arrays() {
-        let planner =
-            BaseEscrowTxPlanner::new("0x1111111111111111111111111111111111111111").unwrap();
-        let release = BaseEscrowReleaseCall {
-            onchain_escrow_id: 7,
-            proof_hash: format!("0x{}", "cd".repeat(32)),
-            recipients: vec![
-                EscrowRecipient {
-                    address: "0x2222222222222222222222222222222222222222".to_string(),
-                    amount: Money::new(900, "usdc").unwrap(),
-                },
-                EscrowRecipient {
-                    address: "0x3333333333333333333333333333333333333333".to_string(),
-                    amount: Money::new(100, "usdc").unwrap(),
-                },
-            ],
-        };
-
-        let tx = planner.release(&release).unwrap();
-
-        assert_eq!(tx.to, planner.escrow_contract);
-        assert!(tx.data.starts_with("0xbfc95334"));
-        assert!(tx.data.contains(&"cd".repeat(32)));
-        assert!(tx
-            .data
-            .contains("0000000000000000000000000000000000000000000000000000000000000080"));
-        assert!(tx
-            .data
-            .contains("00000000000000000000000000000000000000000000000000000000000000e0"));
-    }
-
-    #[test]
-    fn rejects_invalid_transaction_inputs() {
-        assert_eq!(
-            BaseEscrowTxPlanner::new("0x123").unwrap_err(),
-            ChainBaseError::InvalidAddress("0x123".to_string())
-        );
-
-        let planner =
-            BaseEscrowTxPlanner::new("0x1111111111111111111111111111111111111111").unwrap();
-        let err = planner
-            .refund(1, "not-a-bytes32")
-            .expect_err("bad hash should fail");
-        assert_eq!(
-            err,
-            ChainBaseError::InvalidBytes32("not-a-bytes32".to_string())
-        );
-        let err = planner
-            .release(&BaseEscrowReleaseCall {
-                onchain_escrow_id: 1,
-                recipients: vec![],
-                proof_hash: format!("0x{}", "00".repeat(32)),
-            })
-            .expect_err("empty recipients should fail");
-        assert_eq!(err, ChainBaseError::EmptyRecipients);
-    }
-
-    #[test]
-    fn plans_eth_get_logs_query_for_all_escrow_topics() {
-        let query =
-            BaseEscrowLogQuery::new("0x1111111111111111111111111111111111111111", 123, None)
-                .unwrap();
-
-        let request = query.rpc_request(42);
-        let filter = &request.params[0];
-
-        assert_eq!(request.jsonrpc, "2.0");
-        assert_eq!(request.id, 42);
-        assert_eq!(request.method, "eth_getLogs");
-        assert_eq!(filter.from_block, "0x7b");
-        assert_eq!(filter.to_block, "latest");
-        assert_eq!(
-            filter.address,
-            EthGetLogsAddressFilter::One("0x1111111111111111111111111111111111111111".to_string())
-        );
-        assert_eq!(filter.topics.len(), 1);
-        assert_eq!(filter.topics[0], base_escrow_event_topics());
-        assert_eq!(filter.topics[0].len(), 4);
-    }
-
-    #[test]
     fn plans_contract_log_query_for_autonomous_protocol_topics() {
         let query = BaseContractLogQuery::new(
             "0x1111111111111111111111111111111111111111",
@@ -5527,9 +4623,13 @@ mod tests {
 
     #[test]
     fn rejects_reversed_log_query_range() {
-        let error =
-            BaseEscrowLogQuery::new("0x1111111111111111111111111111111111111111", 200, Some(199))
-                .unwrap_err();
+        let error = BaseContractLogQuery::new(
+            "0x1111111111111111111111111111111111111111",
+            200,
+            Some(199),
+            autonomous_bounty_event_topics(),
+        )
+        .unwrap_err();
 
         assert_eq!(
             error,
@@ -5605,44 +4705,6 @@ mod tests {
                 message: "block range too large".to_string()
             }
         );
-    }
-
-    #[tokio::test]
-    async fn fetches_base_logs_through_mock_transport() {
-        let query =
-            BaseEscrowLogQuery::new("0x1111111111111111111111111111111111111111", 10, Some(12))
-                .unwrap();
-        let seen_request = Arc::new(Mutex::new(None));
-        let transport = MockTransport {
-            seen_request: seen_request.clone(),
-            response: serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 99,
-                "result": [{
-                    "address": "0x1111111111111111111111111111111111111111",
-                    "topics": [event_topic("EscrowReleased(uint256,bytes32)")],
-                    "data": format!("0x{}", "22".repeat(32)),
-                    "transactionHash": format!("0x{}", "ab".repeat(32)),
-                    "blockNumber": "0xc",
-                    "logIndex": "0x1"
-                }]
-            }),
-        };
-
-        let response =
-            fetch_base_escrow_logs_with_transport("https://rpc.example", &query, 99, &transport)
-                .await
-                .unwrap();
-
-        assert_eq!(response.id, 99);
-        assert_eq!(response.result.len(), 1);
-        assert_eq!(response.result[0].block_number, "0xc");
-        let seen = seen_request.lock().unwrap();
-        let request = seen.as_ref().expect("request was captured");
-        assert_eq!(request["id"], 99);
-        assert_eq!(request["method"], "eth_getLogs");
-        assert_eq!(request["params"][0]["fromBlock"], "0xa");
-        assert_eq!(request["params"][0]["toBlock"], "0xc");
     }
 
     #[test]
@@ -5804,107 +4866,6 @@ mod tests {
         let request = seen_request.lock().unwrap().clone().unwrap();
         assert_eq!(request["method"], "eth_getTransactionReceipt");
         assert_eq!(request["params"][0], format!("0x{}", "ef".repeat(32)));
-    }
-
-    #[test]
-    fn decodes_created_and_released_evm_logs() {
-        let bounty_id = Uuid::from_u128(42);
-        let terms_hash = parse_bytes32(&format!("0x{}", "11".repeat(32))).unwrap();
-        let proof_hash = parse_bytes32(&format!("0x{}", "22".repeat(32))).unwrap();
-        let terms_hash_hex = word_hex(terms_hash);
-        let proof_hash_hex = word_hex(proof_hash);
-        let mut decoder = BaseEscrowLogDecoder::default();
-
-        let created = decoder
-            .decode(EvmLog {
-                address: "0x1111111111111111111111111111111111111111".to_string(),
-                topics: vec![
-                    event_topic("EscrowCreated(uint256,bytes32,address,address,uint256,bytes32)"),
-                    word_hex(encode_uint256(7).unwrap()),
-                    word_hex(bytes32_from_uuid(bounty_id)),
-                    word_hex(encode_address("0x2222222222222222222222222222222222222222").unwrap()),
-                ],
-                data: words_data(vec![
-                    encode_address("0x3333333333333333333333333333333333333333").unwrap(),
-                    encode_uint256(1_000_000).unwrap(),
-                    terms_hash,
-                ]),
-                tx_hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    .to_string(),
-                block_number: 10,
-                log_index: 0,
-                occurred_at: None,
-            })
-            .unwrap();
-
-        assert_eq!(created.kind, BaseEscrowEventKind::Created);
-        assert_eq!(created.onchain_escrow_id, 7);
-        assert_eq!(created.bounty_id, bounty_id);
-        assert_eq!(
-            created.token.as_deref(),
-            Some("0x3333333333333333333333333333333333333333")
-        );
-        assert_eq!(created.amount, Some(Money::new(1_000_000, "usdc").unwrap()));
-        assert_eq!(created.terms_hash.as_deref(), Some(terms_hash_hex.as_str()));
-
-        let released = decoder
-            .decode(EvmLog {
-                address: "0x1111111111111111111111111111111111111111".to_string(),
-                topics: vec![
-                    event_topic("EscrowReleased(uint256,bytes32)"),
-                    word_hex(encode_uint256(7).unwrap()),
-                ],
-                data: words_data(vec![proof_hash]),
-                tx_hash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    .to_string(),
-                block_number: 11,
-                log_index: 0,
-                occurred_at: None,
-            })
-            .unwrap();
-
-        assert_eq!(released.kind, BaseEscrowEventKind::Released);
-        assert_eq!(released.status, EscrowStatus::Released);
-        assert_eq!(released.bounty_id, bounty_id);
-        assert_eq!(
-            released.proof_hash.as_deref(),
-            Some(proof_hash_hex.as_str())
-        );
-    }
-
-    #[test]
-    fn terminal_log_requires_prior_created_log() {
-        let proof_hash = parse_bytes32(&format!("0x{}", "22".repeat(32))).unwrap();
-        let mut decoder = BaseEscrowLogDecoder::default();
-
-        let err = decoder
-            .decode(EvmLog {
-                address: "0x1111111111111111111111111111111111111111".to_string(),
-                topics: vec![
-                    event_topic("EscrowReleased(uint256,bytes32)"),
-                    word_hex(encode_uint256(7).unwrap()),
-                ],
-                data: words_data(vec![proof_hash]),
-                tx_hash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    .to_string(),
-                block_number: 11,
-                log_index: 0,
-                occurred_at: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(err, ChainBaseError::UnknownEscrowForTerminalLog);
-    }
-
-    fn words_data(words: Vec<[u8; 32]>) -> String {
-        format!(
-            "0x{}",
-            words
-                .into_iter()
-                .map(hex::encode)
-                .collect::<Vec<_>>()
-                .join("")
-        )
     }
 
     struct MockTransport {

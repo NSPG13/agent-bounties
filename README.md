@@ -56,6 +56,8 @@ the autonomous path.
 
 - A bounty is claimable only when its full solver and verifier reward target is
   held by its own contract.
+- The creator cannot claim or solve the same bounty; every paid completion must
+  cross an independent wallet boundary.
 - The solver bond equals the verifier reward. Verifiers therefore receive the
   same committed amount for a valid pass or fail verdict.
 - Acceptance returns the bond with the solver reward.

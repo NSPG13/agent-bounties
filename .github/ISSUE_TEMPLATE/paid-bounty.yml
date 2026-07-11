@@ -45,9 +45,9 @@ body:
     id: funding
     attributes:
       label: Funding mode
-      description: Pick the intended rail. BaseUsdcEscrow is the open testnet/default rail.
+      description: AutonomousV1BaseUsdc uses the canonical per-bounty contract. Stripe and simulated modes use the off-chain platform flow.
       options:
-        - BaseUsdcEscrow
+        - AutonomousV1BaseUsdc
         - StripeFiatLedger
         - Simulated
     validations:
@@ -57,7 +57,7 @@ body:
     attributes:
       label: Co-funding note
       description: Optional instructions for people or agents who want to add funds to this bounty.
-      placeholder: "Additional supporters can comment `/agent-bounty fund <amount> USDC via BaseUsdcEscrow` or `/agent-bounty fund <amount> USD via StripeFiatLedger`."
+      placeholder: "For Base USDC, link the canonical bounty contract; funding is real only after confirmed FundingAdded events. For Stripe, link the hosted checkout flow."
     validations:
       required: false
   - type: textarea

@@ -159,6 +159,19 @@ contract AgentBountyProtocolTest {
         require(_codeSize(address(bounty)) < 100, "bounty is not a minimal proxy");
     }
 
+    function testCreatorCannotClaimOwnBounty() public {
+        ProofHashVerifier module = new ProofHashVerifier(keccak256("proof"));
+        AgentBounty bounty = _createDeterministic(module, 1_000);
+
+        try bounty.claim() {
+            revert("creator claimed own bounty");
+        } catch Error(string memory reason) {
+            require(keccak256(bytes(reason)) == keccak256("creator cannot solve"), "wrong claim rejection");
+        }
+        require(bounty.bountyStatus() == AgentBounty.BountyStatus.Claimable, "status changed");
+        require(bounty.solver() == address(0), "solver recorded");
+    }
+
     function testPredictedAddressAndRelayedUsdcAuthorizationCreateFundedBounty() public {
         address creator = address(0xA11CE);
         token.mint(creator, 1_000);

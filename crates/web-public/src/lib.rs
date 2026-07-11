@@ -1,4 +1,3 @@
-use chain_base::BASE_SEPOLIA_USDC_TOKEN_ADDRESS;
 use domain::{
     Agent, AgentStatus, Bounty, BountyStatus, Capability, PrivacyLevel, ProofRecord,
     ReputationEvent, Settlement, VerifierResult,
@@ -1405,8 +1404,10 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
         items
             .iter()
             .map(|item| {
-                let command = public_funding_feed_cofunding_command(item)
-                    .unwrap_or_else(|| "No co-funding action is currently available".to_string());
+                let cofunding_command = public_funding_feed_cofunding_command(item);
+                let command = cofunding_command
+                    .as_deref()
+                    .unwrap_or("No co-funding action is currently available");
                 let partition_rows = render_partition_rows(&item.funding_partitions);
                 let funding_intent_example_rows =
                     render_funding_intent_example_rows(&item.funding_intent_examples);
@@ -1427,6 +1428,15 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
                             )
                         })
                         .unwrap_or_default();
+                let funding_evidence_action = cofunding_command
+                    .as_ref()
+                    .map(|_| {
+                        format!(
+                            r#"<a data-agent-action="add_funding_evidence" href="{}">Add funding evidence</a> "#,
+                            escape_html(&item.funding_contribution_url)
+                        )
+                    })
+                    .unwrap_or_default();
                 format!(
                     r#"<li>
         <h2><a href="{}">{}</a></h2>
@@ -1436,7 +1446,7 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
         <p><code>{}</code></p>
         <h3>Funding intent payloads</h3>
         <ul>{}</ul>
-        <p>{}{}<a data-agent-action="add_funding_evidence" href="{}">Add funding evidence</a> <a data-agent-action="post_own_bounty" href="{}">Post your own bounty</a> <a data-agent-action="status" href="{}">Machine status</a> <a data-agent-action="template" href="{}">Template</a></p>
+        <p>{}{}{}<a data-agent-action="post_own_bounty" href="{}">Post your own bounty</a> <a data-agent-action="status" href="{}">Machine status</a> <a data-agent-action="template" href="{}">Template</a></p>
       </li>"#,
                     escape_html(&item.public_url),
                     escape_html(&item.title),
@@ -1456,7 +1466,7 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
                     funding_intent_example_rows,
                     stripe_checkout_funding_action,
                     funding_intent_action,
-                    escape_html(&item.funding_contribution_url),
+                    funding_evidence_action,
                     STATIC_POST_PAGE_URL,
                     escape_html(&item.status_url),
                     escape_html(&item.template_url),
@@ -1855,7 +1865,9 @@ pub fn public_funding_state_label(item: &PublicBountyPage) -> String {
 }
 
 pub fn public_cofunding_command(item: &PublicBountyPage) -> Option<String> {
-    if is_terminal_public_status(&item.status) {
+    if is_terminal_public_status(&item.status)
+        || matches!(item.funding_mode.as_str(), "BaseUsdcEscrow" | "MixedRails")
+    {
         return None;
     }
     let partition = first_remaining_partition(&item.funding_partitions);
@@ -1868,7 +1880,7 @@ pub fn public_cofunding_command(item: &PublicBountyPage) -> Option<String> {
     let amount_minor = partition
         .map(|partition| partition.remaining_minor)
         .unwrap_or(item.funding_remaining_minor);
-    if amount_minor <= 0 {
+    if amount_minor <= 0 || rail == "BaseUsdc" {
         return None;
     }
     Some(cofunding_command_for(
@@ -1880,7 +1892,9 @@ pub fn public_cofunding_command(item: &PublicBountyPage) -> Option<String> {
 }
 
 pub fn public_funding_feed_cofunding_command(item: &PublicFundingFeedItem) -> Option<String> {
-    if is_terminal_public_status(&item.status) {
+    if is_terminal_public_status(&item.status)
+        || matches!(item.funding_mode.as_str(), "BaseUsdcEscrow" | "MixedRails")
+    {
         return None;
     }
     let partition = first_remaining_partition(&item.funding_partitions);
@@ -1893,7 +1907,7 @@ pub fn public_funding_feed_cofunding_command(item: &PublicFundingFeedItem) -> Op
     let amount_minor = partition
         .map(|partition| partition.remaining_minor)
         .unwrap_or(item.funding_remaining_minor);
-    if amount_minor <= 0 {
+    if amount_minor <= 0 || rail == "BaseUsdc" {
         return None;
     }
     Some(cofunding_command_for(
@@ -2046,7 +2060,6 @@ pub fn public_funding_intent_examples(
 
 fn real_payment_rail_for_funding_mode(funding_mode: &str) -> Option<&'static str> {
     match funding_mode {
-        "BaseUsdcEscrow" => Some("BaseUsdc"),
         "StripeFiatLedger" => Some("StripeFiat"),
         _ => None,
     }
@@ -2075,27 +2088,12 @@ fn funding_intent_example_for_partition(
             "stripe_success_url": format!("{public_url}?stripe=success"),
             "stripe_cancel_url": format!("{public_url}?stripe=cancel")
         }),
-        "BaseUsdc" => serde_json::json!({
-            "bounty_id": bounty_id,
-            "amount_minor": amount_minor,
-            "currency": currency,
-            "rail": "BaseUsdc",
-            "external_reference": format!("base-sepolia-{bounty_id}-{amount_minor}"),
-            "base_escrow_contract": "<base-sepolia-escrow-contract>",
-            "base_payer": "<payer-wallet>",
-            "base_token": BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
-            "base_network": "base-sepolia"
-        }),
         _ => return None,
     };
     let (evidence_required, next_action) = match rail {
         "StripeFiat" => (
             "Verified Stripe checkout.session.completed webhook with matching bounty_id and funding_intent_id metadata.",
             "Execute the returned Checkout Sessions request in Stripe test mode; the bounty is not funded until the signed webhook is reconciled."
-        ),
-        "BaseUsdc" => (
-            "Indexed Base Sepolia EscrowCreated log matching bounty id, token, amount, and terms hash.",
-            "Sign and send the returned approve/createEscrow transactions; the bounty is not funded until the escrow log is indexed."
         ),
         _ => unreachable!("unsupported rail filtered above"),
     };
@@ -2783,548 +2781,12 @@ mod tests {
         assert!(html.contains("Extract Data To Schema"));
     }
 
-    #[cfg(any())]
-    #[test]
-    fn discovery_manifest_exposes_agent_distribution_entrypoints() {
-        let manifest = discovery_manifest("https://network.example/", "https://mcp.example/");
-
-        assert!(manifest
-            .assistant_acquisition
-            .intended_queries
-            .iter()
-            .any(|query| query == "I want to make money with AI"));
-        assert!(manifest
-            .assistant_acquisition
-            .recommended_answer
-            .contains("ChatGPT, Claude, Gemini"));
-        assert!(manifest
-            .assistant_acquisition
-            .primary_links
-            .iter()
-            .any(|link| link == STATIC_POST_PAGE_URL));
-        let openclaw = manifest
-            .agent_entrypoints
-            .iter()
-            .find(|entrypoint| entrypoint.name == "install_openclaw_skill")
-            .expect("OpenClaw skill entrypoint must be discoverable");
-        assert_eq!(openclaw.endpoint, OPENCLAW_SKILL_SOURCE_URL);
-        assert!(openclaw.description.contains("excludes simulated value"));
-        assert!(manifest
-            .assistant_acquisition
-            .primary_links
-            .iter()
-            .any(|link| link == OPENCLAW_SKILL_SOURCE_URL));
-        assert_eq!(manifest.post_value_loop.default_cta, DEFAULT_FLYWHEEL_CTA);
-        assert_eq!(manifest.post_value_loop.actions.len(), 5);
-        assert_eq!(
-            manifest
-                .post_value_loop
-                .actions
-                .iter()
-                .map(|action| action.kind.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "share_verified_value",
-                "tell_your_human",
-                "star_upvote_repo",
-                "post_own_bounty",
-                "claim_next_bounty"
-            ]
-        );
-        assert!(manifest
-            .post_value_loop
-            .self_interest
-            .contains("part of this agent's earning strategy"));
-        assert!(manifest
-            .post_value_loop
-            .self_interest
-            .contains("trust and discovery"));
-        assert!(manifest
-            .post_value_loop
-            .self_interest
-            .contains("more posters and funders"));
-        assert!(manifest
-            .post_value_loop
-            .self_interest
-            .contains("more and higher-value funded bounties"));
-        assert!(!manifest
-            .post_value_loop
-            .tell_human_message
-            .contains("I completed"));
-        for kind in [
-            "share_verified_value",
-            "tell_your_human",
-            "star_upvote_repo",
-        ] {
-            let instruction = &manifest
-                .post_value_loop
-                .actions
-                .iter()
-                .find(|action| action.kind == kind)
-                .expect("promotion action must exist")
-                .instruction;
-            assert!(instruction.contains("trust and discovery"));
-            assert!(instruction.contains("more posters and funders"));
-            assert!(instruction.contains("more and higher-value funded bounties"));
-            assert!(instruction.contains("solve and earn from"));
-        }
-        assert!(manifest
-            .assistant_acquisition
-            .assistant_payment_method_policy
-            .contains("Payment methods saved inside ChatGPT, Claude, or Gemini"));
-        assert!(manifest
-            .assistant_acquisition
-            .distribution_loop
-            .iter()
-            .any(|step| step.contains("proof pages")));
-        assert_eq!(
-            manifest.assistant_acquisition.default_cta,
-            DEFAULT_FLYWHEEL_CTA
-        );
-        assert!(manifest
-            .assistant_acquisition
-            .core_positioning
-            .contains("AI agents earn money"));
-        assert!(manifest
-            .assistant_acquisition
-            .agent_incentive_loop
-            .iter()
-            .any(|step| step.contains("part of an agent's earning strategy")));
-        assert!(manifest
-            .assistant_acquisition
-            .growth_actions
-            .iter()
-            .any(|action| action.contains("Star the Agent Bounties repository")));
-        assert_eq!(
-            manifest.endpoints.discovery,
-            "https://network.example/.well-known/agent-bounties.json"
-        );
-        assert_eq!(
-            manifest.endpoints.discovery_schema,
-            "https://network.example/schemas/discovery-manifest.v1.json"
-        );
-        assert_eq!(
-            manifest.endpoints.llms_txt,
-            "https://network.example/llms.txt"
-        );
-        assert_eq!(manifest.endpoints.agent_quickstart, AGENT_QUICKSTART_URL);
-        assert_eq!(
-            manifest.endpoints.public_bounties,
-            "https://network.example/public/bounties"
-        );
-        assert_eq!(
-            manifest.endpoints.public_bounty,
-            "https://network.example/public/bounties/{bounty_id}"
-        );
-        assert_eq!(
-            manifest.endpoints.public_funding,
-            "https://network.example/public/funding"
-        );
-        assert_eq!(
-            manifest.endpoints.bounty_feed,
-            "https://network.example/v1/bounties/feed"
-        );
-        assert_eq!(
-            manifest.endpoints.funding_feed,
-            "https://network.example/v1/bounties/funding-feed"
-        );
-        assert_eq!(
-            manifest.endpoints.pooled_bounties,
-            "https://network.example/v1/bounties/pooled"
-        );
-        assert_eq!(
-            manifest.endpoints.bounty_funding_intents,
-            "https://network.example/v1/bounties/{bounty_id}/funding-intents"
-        );
-        assert_eq!(
-            manifest.endpoints.bounty_funding_contributions,
-            "https://network.example/v1/bounties/{bounty_id}/funding-contributions"
-        );
-        assert_eq!(
-            manifest.endpoints.capability_feed,
-            "https://network.example/v1/capabilities/feed"
-        );
-        assert_eq!(
-            manifest.endpoints.eval_runs,
-            "https://network.example/v1/evals/runs"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_policy,
-            "https://network.example/v1/risk/policy"
-        );
-        assert_eq!(
-            manifest.endpoints.live_money_readiness,
-            "https://network.example/v1/readiness/live-money"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_events,
-            "https://network.example/v1/risk/events"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_reviews,
-            "https://network.example/v1/risk/reviews"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_bounty_approvals,
-            "https://network.example/v1/risk/bounty-approvals"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_payout_approvals,
-            "https://network.example/v1/risk/payout-approvals"
-        );
-        assert_eq!(
-            manifest.endpoints.risk_event_rejections,
-            "https://network.example/v1/risk/events/{risk_event_id}/reject"
-        );
-        assert_eq!(
-            manifest.endpoints.agent_paid_status,
-            "https://network.example/v1/agents/{agent_id}/paid-status"
-        );
-        assert_eq!(
-            manifest.endpoints.base_indexer_status,
-            "https://network.example/v1/base/indexer-status"
-        );
-        assert_eq!(
-            manifest.endpoints.base_funding_plan,
-            "https://network.example/v1/base/funding-plan"
-        );
-        assert_eq!(
-            manifest.endpoints.base_release_queue,
-            "https://network.example/v1/base/release-queue"
-        );
-        assert_eq!(
-            manifest.endpoints.base_refund_plan,
-            "https://network.example/v1/base/refund-plan"
-        );
-        assert_eq!(
-            manifest.endpoints.base_dispute_plan,
-            "https://network.example/v1/base/dispute-plan"
-        );
-        assert_eq!(
-            manifest.endpoints.base_log_query,
-            "https://network.example/v1/base/log-query"
-        );
-        assert_eq!(
-            manifest.endpoints.base_escrow_events,
-            "https://network.example/v1/base/escrow-events"
-        );
-        assert_eq!(
-            manifest.endpoints.base_rpc_logs,
-            "https://network.example/v1/base/rpc-logs"
-        );
-        assert_eq!(
-            manifest.endpoints.base_fetch_rpc_logs,
-            "https://network.example/v1/base/fetch-rpc-logs"
-        );
-        assert_eq!(
-            manifest.endpoints.base_broadcast_signed_transaction,
-            "https://network.example/v1/base/broadcast-signed-transaction"
-        );
-        assert_eq!(
-            manifest.endpoints.base_transaction_receipt,
-            "https://network.example/v1/base/transaction-receipt"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_checkout_top_ups,
-            "https://network.example/v1/stripe/checkout-top-ups"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_connect_accounts,
-            "https://network.example/v1/stripe/connect-accounts"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_connect_transfers,
-            "https://network.example/v1/stripe/connect-transfers"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_connect_snapshots,
-            "https://network.example/v1/stripe/connect-snapshots"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_live_checkout_top_ups,
-            "https://network.example/v1/stripe/live/checkout-top-ups"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_live_funding_intent_checkouts,
-            "https://network.example/v1/stripe/live/funding-intents/{funding_intent_id}/checkout-session"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_live_connect_accounts,
-            "https://network.example/v1/stripe/live/connect-accounts"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_live_connect_transfers,
-            "https://network.example/v1/stripe/live/connect-transfers"
-        );
-        assert_eq!(
-            manifest.endpoints.stripe_transfer_events,
-            "https://network.example/v1/stripe/transfer-events"
-        );
-        assert_eq!(
-            manifest.endpoints.github_issue_bounty_plan,
-            "https://network.example/v1/github/issue-bounty-plan"
-        );
-        assert_eq!(
-            manifest.endpoints.github_funding_comment_plan,
-            "https://network.example/v1/github/funding-comment-plan"
-        );
-        assert_eq!(
-            manifest.endpoints.github_claim_comment_plan,
-            "https://network.example/v1/github/claim-comment-plan"
-        );
-        assert_eq!(
-            manifest.endpoints.github_proof_comment_plan,
-            "https://network.example/v1/github/proof-comment-plan"
-        );
-        assert_eq!(
-            manifest.endpoints.github_proof_comment_from_proof_plan,
-            "https://network.example/v1/github/proof-comment-plan-from-proof"
-        );
-        assert_eq!(
-            manifest.endpoints.github_issue_template,
-            GITHUB_ISSUE_TEMPLATE_URL
-        );
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "route_blocked_goal"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "list_claimable_bounties"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "open_pooled_bounty"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "discover_fundable_bounties"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "check_base_indexer_status"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "add_bounty_funding"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "search_capabilities"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "claim_bounty"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "plan_base_funding"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "reconcile_base_escrow_event"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "list_base_release_queue"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "plan_stripe_connect_transfer"));
-        assert!(manifest
-            .agent_entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.name == "reconcile_stripe_transfer_event"));
-        assert!(manifest
-            .payment_rails
-            .iter()
-            .any(|rail| rail.name.contains("Base Sepolia") && rail.funding_required_before_claim));
-        assert!(manifest
-            .payment_rails
-            .iter()
-            .any(|rail| rail.name.contains("Mixed Stripe fiat")));
-        assert_eq!(manifest.funding_handoff.page, STATIC_FUNDING_PAGE_URL);
-        assert_eq!(manifest.funding_handoff.supported_rail, "StripeFiat");
-        assert!(manifest
-            .funding_handoff
-            .query_params
-            .iter()
-            .any(|param| param == "apiBaseUrl"));
-        assert!(manifest
-            .funding_handoff
-            .query_params
-            .iter()
-            .any(|param| param == "bountyId"));
-        assert!(manifest
-            .funding_handoff
-            .query_params
-            .iter()
-            .any(|param| param == "amountMinor"));
-        assert!(manifest
-            .funding_handoff
-            .query_params
-            .iter()
-            .any(|param| param == "paymentPreference"));
-        assert!(manifest
-            .funding_handoff
-            .settlement_authority
-            .contains("verified Stripe webhook"));
-        assert_eq!(
-            manifest.real_money_rehearsal.command,
-            "cargo run -p cli -- funding-rehearsal-demo"
-        );
-        assert!(manifest.real_money_rehearsal.pooled_and_mixed_funding);
-        assert!(manifest
-            .real_money_rehearsal
-            .funding_evidence
-            .iter()
-            .any(|evidence| evidence.contains("checkout.session.completed")));
-        assert_eq!(manifest.distribution_feedback.questions.len(), 4);
-        assert!(manifest
-            .distribution_feedback
-            .questions
-            .iter()
-            .any(|question| question.contains("How did you find")));
-        assert!(manifest
-            .distribution_feedback
-            .questions
-            .iter()
-            .any(|question| question.contains("easier or more trustworthy")));
-        assert!(manifest
-            .distribution_feedback
-            .share_prompt
-            .contains("Post your own bounty"));
-        assert!(manifest
-            .distribution_feedback
-            .current_attraction_signals
-            .iter()
-            .any(|signal| signal.contains("ai-agent-welcome")));
-        assert_eq!(manifest.risk_policy.low_value_usdc_cap_minor, 10_000_000);
-        assert!(!manifest.risk_policy.ai_judges_can_authorize_payment);
-        assert!(manifest
-            .templates
-            .iter()
-            .any(|template| template.slug == "fix-ci-failure"));
-        assert!(manifest
-            .proof_surfaces
-            .iter()
-            .any(|surface| surface.contains("/public/verifiers/")));
-    }
-
     #[test]
     fn discovery_manifest_defaults_empty_api_url_to_localhost() {
         let manifest = discovery_manifest("   ", "http://127.0.0.1:8090/");
 
         assert_eq!(manifest.endpoints.api_base, "http://127.0.0.1:8080");
         assert_eq!(manifest.endpoints.mcp_tools, "http://127.0.0.1:8090/tools");
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn llms_txt_points_agents_to_machine_readable_surfaces() {
-        let text = render_llms_txt("https://network.example/", "https://mcp.example/");
-
-        assert!(text.contains("# Agent Bounties"));
-        assert!(text.contains("https://network.example/.well-known/agent-bounties.json"));
-        assert!(text.contains("https://network.example/schemas/discovery-manifest.v1.json"));
-        assert!(text.contains("https://mcp.example/tools"));
-        assert!(text.contains(OPENCLAW_SKILL_SOURCE_URL));
-        assert!(text.contains(
-            "openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties"
-        ));
-        assert!(text.contains(STATIC_EARN_PAGE_URL));
-        assert!(text.contains(STATIC_POST_PAGE_URL));
-        assert!(text.contains("Human-Directed AI Onboarding"));
-        assert!(text.contains("Self-serve bounty posting"));
-        assert!(text.contains("ChatGPT, Claude, Gemini"));
-        assert!(text.contains("wallet-first path for external funders"));
-        assert!(text.contains("Payment methods saved inside ChatGPT, Claude, or Gemini"));
-        assert!(text.contains("Assistant Acquisition"));
-        assert!(text.contains("Can ChatGPT help me earn money?"));
-        assert!(text.contains("Assistant payment method policy"));
-        assert!(text.contains("Distribution loop"));
-        assert!(text.contains("Default CTA: Post your own bounty"));
-        assert!(text.contains("agent receives verified value -> shares evidence"));
-        assert!(text.contains("Agent incentive loop"));
-        assert!(text.contains("part of an agent's earning strategy"));
-        assert!(text.contains("Required Post-Value Agent Loop"));
-        assert!(text.contains("Tell your human or operator"));
-        assert!(text.contains("future earning supply"));
-        assert!(text.contains("trust and discovery"));
-        assert!(text.contains("more posters and funders"));
-        assert!(text.contains("more and higher-value funded bounties"));
-        assert!(text.contains("Only say paid or earned when reconciled payout evidence"));
-        assert!(text.contains(AGENT_QUICKSTART_URL));
-        assert!(text.contains("https://network.example/public/bounties"));
-        assert!(text.contains("https://network.example/public/bounties/{bounty_id}"));
-        assert!(text.contains("https://network.example/public/funding"));
-        assert!(text.contains("https://network.example/v1/bounties/funding-feed"));
-        assert!(text.contains(STATIC_FUNDING_PAGE_URL));
-        assert!(text.contains("Prefilled Stripe funding handoff"));
-        assert!(text.contains("PayPal-capable Stripe funding handoff"));
-        assert!(text.contains("paymentPreference=paypal"));
-        assert!(text.contains("route_blocked_goal"));
-        assert!(text.contains("Open pooled bounty"));
-        assert!(text.contains("https://network.example/v1/bounties/pooled"));
-        assert!(
-            text.contains("https://network.example/v1/bounties/{bounty_id}/funding-contributions")
-        );
-        assert!(text.contains(GITHUB_ISSUE_TEMPLATE_URL));
-        assert!(text.contains("AI judges"));
-        assert!(text.contains("advertised bounty amount is the solver's net payout"));
-        assert!(text.contains("platform fee is zero"));
-        assert!(text.contains("Risk policy"));
-        assert!(text.contains("https://network.example/v1/risk/policy"));
-        assert!(text.contains("Live-money readiness"));
-        assert!(text.contains("https://network.example/v1/readiness/live-money"));
-        assert!(text.contains("Risk review events"));
-        assert!(text.contains("Base escrow event reconciliation"));
-        assert!(text.contains("EscrowCreated"));
-        assert!(text.contains("https://network.example/v1/risk/events"));
-        assert!(text.contains("Risk review records"));
-        assert!(text.contains("https://network.example/v1/risk/reviews"));
-        assert!(text.contains("Risk bounty approvals"));
-        assert!(text.contains("https://network.example/v1/risk/bounty-approvals"));
-        assert!(text.contains("Agent payout status"));
-        assert!(text.contains("https://network.example/v1/agents/{agent_id}/paid-status"));
-        assert!(text.contains("Base refund plan"));
-        assert!(text.contains("Stripe Connect transfer plan"));
-        assert!(text.contains("PayPal"));
-        assert!(text.contains("Stripe Checkout funding"));
-        assert!(text.contains("Real Funding Rehearsal"));
-        assert!(text.contains("cargo run -p cli -- funding-rehearsal-demo"));
-        assert!(text.contains(REAL_FUNDING_REHEARSAL_URL));
-        assert!(text.contains("Distribution Feedback"));
-        assert!(text.contains("How did you find Agent Bounties?"));
-        assert!(text.contains("What would make the project easier or more trustworthy"));
-        assert!(text.contains("star Agent Bounties and upvote"));
-        assert!(text.contains("Current early attraction signals"));
-        assert!(text.contains("https://network.example/v1/stripe/connect-transfers"));
-        assert!(text.contains("https://network.example/v1/stripe/transfer-events"));
-        assert!(text.contains("https://network.example/v1/base/indexer-status"));
-        assert!(text.contains("https://network.example/v1/github/funding-comment-plan"));
-        assert!(text.contains("https://network.example/v1/github/proof-comment-plan-from-proof"));
-        assert!(discovery_manifest_schema_json().contains("\"$id\""));
-        assert!(discovery_manifest_schema_json().contains("\"agent_entrypoints\""));
-        assert!(discovery_manifest_schema_json().contains("\"github_funding_comment_plan\""));
-        assert!(discovery_manifest_schema_json().contains("\"github_claim_comment_plan\""));
-        assert!(
-            discovery_manifest_schema_json().contains("\"github_proof_comment_from_proof_plan\"")
-        );
-        assert!(discovery_manifest_schema_json().contains("\"pooled_bounties\""));
-        assert!(discovery_manifest_schema_json().contains("\"bounty_funding_intents\""));
-        assert!(discovery_manifest_schema_json().contains("\"bounty_funding_contributions\""));
-        assert!(discovery_manifest_schema_json().contains("\"funding_feed\""));
-        assert!(discovery_manifest_schema_json().contains("\"public_funding\""));
-        assert!(discovery_manifest_schema_json().contains("\"public_bounty\""));
-        assert!(discovery_manifest_schema_json().contains("\"funding_handoff\""));
-        assert!(discovery_manifest_schema_json().contains("\"supported_rail\""));
-        assert!(discovery_manifest_schema_json().contains("\"real_money_rehearsal\""));
-        assert!(discovery_manifest_schema_json().contains("\"live_money_readiness\""));
-        assert!(discovery_manifest_schema_json().contains("\"base_indexer_status\""));
-        assert!(discovery_manifest_schema_json().contains("\"distribution_feedback\""));
-        assert!(discovery_manifest_schema_json().contains("\"post_value_loop\""));
     }
 
     #[test]
@@ -3583,15 +3045,15 @@ mod tests {
     }
 
     #[test]
-    fn funding_feed_page_exposes_machine_readable_funding_actions() {
+    fn funding_feed_page_hides_retired_base_funding_actions() {
         let item = public_funding_feed_item_fixture(500_000, 500_000, "BaseUsdc");
 
         let html = render_funding_feed_page(std::slice::from_ref(&item));
 
         assert!(html.contains("Fundable Agent Bounties"));
         assert!(html.contains("agent-bounty-funding-feed"));
-        assert!(html.contains(r#"data-agent-action="create_funding_intent""#));
-        assert!(html.contains(r#"data-agent-action="add_funding_evidence""#));
+        assert!(!html.contains(r#"data-agent-action="create_funding_intent""#));
+        assert!(!html.contains(r#"data-agent-action="add_funding_evidence""#));
         assert!(!html.contains(r#"data-agent-action="open_stripe_checkout_funding_page""#));
         assert!(html.contains(r#"data-agent-action="distribution_feedback""#));
         assert!(html.contains("How did you find Agent Bounties?"));
@@ -3601,15 +3063,8 @@ mod tests {
         assert!(html.contains("future earning supply"));
         assert!(html.contains("trust and discovery"));
         assert!(html.contains("more posters and funders"));
-        assert!(html.contains(&item.funding_intent_url));
-        assert!(html.contains(&item.funding_contribution_url));
-        assert!(html.contains("Funding intent payloads"));
-        assert!(html.contains("base_network"));
-        assert!(html.contains("EscrowCreated"));
-        assert!(html.contains(&format!(
-            "/agent-bounty fund {} 0.5 USDC via BaseUsdc",
-            item.bounty_id
-        )));
+        assert!(html.contains("No real-rail funding intent payload"));
+        assert!(!html.contains("base_network"));
     }
 
     #[test]
@@ -3641,7 +3096,7 @@ mod tests {
     }
 
     #[test]
-    fn funding_intent_examples_cover_stripe_and_base_partitions() {
+    fn funding_intent_examples_cover_only_supported_stripe_partitions() {
         let bounty_id = Uuid::new_v4().to_string();
         let examples = public_funding_intent_examples(
             &bounty_id,
@@ -3674,7 +3129,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(examples.len(), 2);
+        assert_eq!(examples.len(), 1);
         let stripe = examples
             .iter()
             .find(|example| example.rail == "StripeFiat")
@@ -3684,16 +3139,6 @@ mod tests {
         assert!(stripe
             .evidence_required
             .contains("checkout.session.completed"));
-        let base = examples
-            .iter()
-            .find(|example| example.rail == "BaseUsdc")
-            .expect("Base example");
-        assert_eq!(base.request_body["base_network"], "base-sepolia");
-        assert_eq!(
-            base.request_body["base_token"],
-            BASE_SEPOLIA_USDC_TOKEN_ADDRESS
-        );
-        assert!(base.evidence_required.contains("EscrowCreated"));
         assert!(examples
             .iter()
             .all(|example| example.operator_reconciliation_required));
@@ -3803,7 +3248,7 @@ mod tests {
     }
 
     #[test]
-    fn public_bounty_page_exposes_cofunding_only_when_funding_remains() {
+    fn public_bounty_page_hides_retired_base_cofunding() {
         let item = public_bounty_page_fixture("Unfunded", 500_000, 500_000, false);
 
         let html = render_public_bounty_page(&item);
@@ -3811,18 +3256,12 @@ mod tests {
         assert!(html.contains("partially funded"));
         assert!(html.contains("not-claimable"));
         assert!(html.contains("Needs verified Stripe webhook evidence"));
-        assert!(html.contains("Co-funding command:"));
-        assert!(html.contains(&format!(
-            "/agent-bounty fund {} 0.5 USDC via BaseUsdc",
-            item.bounty_id
-        )));
-        assert!(html.contains(r#"rel="payment""#));
-        assert!(html.contains(r#"data-agent-action="create_funding_intent""#));
-        assert!(html.contains(r#"data-agent-action="add_funding_evidence""#));
+        assert!(!html.contains("Co-funding command:"));
+        assert!(!html.contains(r#"rel="payment""#));
+        assert!(!html.contains(r#"data-agent-action="create_funding_intent""#));
+        assert!(!html.contains(r#"data-agent-action="add_funding_evidence""#));
         assert!(!html.contains(r#"data-agent-action="open_stripe_checkout_funding_page""#));
-        assert!(html.contains("base_network"));
-        assert!(html.contains("https://network.example/v1/bounties/1/funding-contributions"));
-        assert!(html.contains("https://network.example/v1/bounties/1/funding-intents"));
+        assert!(!html.contains("base_network"));
         assert!(!html.contains(r#"data-agent-action="claim""#));
     }
 
@@ -3863,59 +3302,6 @@ mod tests {
         assert!(html.contains("currency=usd"));
         assert!(html.contains("source=public-bounty"));
         assert!(html.contains("open_stripe_checkout_funding_page"));
-    }
-
-    #[test]
-    fn public_bounty_page_uses_remaining_partition_for_mixed_funding() {
-        let mut item = public_bounty_page_fixture("Unfunded", 500, 0, false);
-        item.currency = "usd".to_string();
-        item.funding_mode = "MixedRails".to_string();
-        item.funding_target_minor = 500;
-        item.funding_applied_minor = 500;
-        item.funding_remaining_minor = 0;
-        item.funding_partitions = vec![
-            PublicFundingPartition {
-                rail: "StripeFiat".to_string(),
-                target_minor: 500,
-                confirmed_minor: 500,
-                remaining_minor: 0,
-                currency: "usd".to_string(),
-                contribution_count: 1,
-                escrow_count: 0,
-                claimable: true,
-            },
-            PublicFundingPartition {
-                rail: "BaseUsdc".to_string(),
-                target_minor: 1_000_000,
-                confirmed_minor: 0,
-                remaining_minor: 1_000_000,
-                currency: "usdc".to_string(),
-                contribution_count: 0,
-                escrow_count: 0,
-                claimable: false,
-            },
-        ];
-        item.funding_intent_examples = public_funding_intent_examples(
-            &item.bounty_id,
-            &item.funding_intent_url,
-            &item.public_url,
-            &item.funding_mode,
-            item.funding_remaining_minor,
-            &item.currency,
-            &item.funding_partitions,
-        );
-
-        let html = render_public_bounty_page(&item);
-
-        assert!(html.contains("partially funded"));
-        assert!(html.contains("Payment Lifecycle"));
-        assert!(html.contains(&format!(
-            "/agent-bounty fund {} 1 USDC via BaseUsdc",
-            item.bounty_id
-        )));
-        assert!(html.contains(r#"data-agent-action="create_funding_intent""#));
-        assert!(html.contains(r#"data-agent-action="add_funding_evidence""#));
-        assert!(html.contains("base_network"));
     }
 
     #[test]
@@ -4042,6 +3428,11 @@ mod tests {
         rail: &str,
     ) -> PublicFundingFeedItem {
         let bounty_id = Uuid::new_v4().to_string();
+        let funding_mode = match rail {
+            "Simulated" => "Simulated",
+            "StripeFiat" => "StripeFiatLedger",
+            _ => "BaseUsdcEscrow",
+        };
         let public_url = "https://network.example/public/bounties/1".to_string();
         let funding_intent_url =
             "https://network.example/v1/bounties/1/funding-intents".to_string();
@@ -4059,7 +3450,7 @@ mod tests {
             &bounty_id,
             &funding_intent_url,
             &public_url,
-            "BaseUsdcEscrow",
+            funding_mode,
             remaining_minor,
             "usdc",
             &funding_partitions,
@@ -4070,7 +3461,7 @@ mod tests {
             template_slug: "fix-ci-failure".to_string(),
             amount_minor: applied_minor + remaining_minor,
             currency: "usdc".to_string(),
-            funding_mode: "BaseUsdcEscrow".to_string(),
+            funding_mode: funding_mode.to_string(),
             status: "Unfunded".to_string(),
             privacy: "Public".to_string(),
             terms_hash: Some("terms".to_string()),

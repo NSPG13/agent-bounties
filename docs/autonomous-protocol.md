@@ -86,6 +86,10 @@ it through:
 - `claimWithSignature` after token approval for EOA or ERC-1271 solvers,
 - `claimWithAuthorization` using a relayed EIP-3009 authorization.
 
+The creator wallet is ineligible to claim its own bounty across all three claim
+paths. This contract invariant prevents self-posted work from counting as a
+completed marketplace loop.
+
 This bond removes the verifier's financial preference for accepting work:
 
 - pass: verifiers receive the bounty's verifier reserve; the solver receives
