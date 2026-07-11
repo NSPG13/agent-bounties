@@ -196,9 +196,11 @@ class RulesetDriftCheckTests(unittest.TestCase):
         completed = CompletedProcess(
             args=["gh", "api"], returncode=0, stdout="not-json", stderr=""
         )
-        with patch.object(MODULE.subprocess, "run", return_value=completed):
+        with patch.object(MODULE.subprocess, "run", return_value=completed) as run:
             with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
                 MODULE._gh_json(["repos/owner/repo/rulesets"])
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.kwargs["errors"], "strict")
 
 
 if __name__ == "__main__":

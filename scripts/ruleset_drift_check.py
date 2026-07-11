@@ -233,6 +233,8 @@ def _gh_json(args: list[str]) -> Any:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="strict",
             timeout=GH_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
