@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "../src/AgentBountyFactory.sol";
+import "../src/LeadingZeroWorkVerifier.sol";
 
 interface Vm {
     function warp(uint256) external;
@@ -157,6 +158,51 @@ contract AgentBountyProtocolTest {
         require(bounty.contributions(address(this)) == 1_000, "creator contribution missing");
         require(factory.isCanonicalBounty(address(bounty)), "not canonical");
         require(_codeSize(address(bounty)) < 100, "bounty is not a minimal proxy");
+    }
+
+    function testLeadingZeroWorkProofCompletesFullPaidLoop() public {
+        LeadingZeroWorkVerifier module = new LeadingZeroWorkVerifier(8);
+        AgentBounty bounty = _createDeterministic(module, 1_000);
+        _prepareSolverBond(bounty, 100);
+
+        solver.claim(bounty);
+        solver.submit(bounty, SUBMISSION_HASH, EVIDENCE_HASH);
+
+        uint256 nonce;
+        bytes32 responseHash;
+        do {
+            responseHash = module.workHash(
+                bounty.bountyId(),
+                bounty.round(),
+                address(solver),
+                SUBMISSION_HASH,
+                EVIDENCE_HASH,
+                POLICY_HASH,
+                nonce
+            );
+            nonce += 1;
+        } while (uint256(responseHash) >> 248 != 0);
+
+        bounty.verifyAndSettle(abi.encode(nonce - 1));
+
+        require(bounty.bountyStatus() == AgentBounty.BountyStatus.Settled, "not settled");
+        require(token.balanceOf(address(solver)) == 1_000, "solver payout mismatch");
+        require(token.balanceOf(address(verifierRecipient)) == 100, "verifier payout mismatch");
+        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
+    }
+
+    function testLeadingZeroWorkVerifierRejectsMalformedProof() public {
+        LeadingZeroWorkVerifier module = new LeadingZeroWorkVerifier(8);
+        (bool passed,) = module.verify(
+            bytes32(uint256(1)),
+            1,
+            address(solver),
+            SUBMISSION_HASH,
+            EVIDENCE_HASH,
+            POLICY_HASH,
+            hex"01"
+        );
+        require(!passed, "malformed proof passed");
     }
 
     function testCreatorCannotClaimOwnBounty() public {
@@ -606,7 +652,7 @@ contract AgentBountyProtocolTest {
         require(!factory.isCanonicalBounty(address(externalBounty)), "external marked canonical");
     }
 
-    function _createDeterministic(ProofHashVerifier module, uint256 initialFunding)
+    function _createDeterministic(IAgentBountyVerifier module, uint256 initialFunding)
         private
         returns (AgentBounty bounty)
     {
@@ -620,7 +666,7 @@ contract AgentBountyProtocolTest {
         solver.approve(token, address(bounty), amount);
     }
 
-    function _deterministicParams(ProofHashVerifier module)
+    function _deterministicParams(IAgentBountyVerifier module)
         private
         view
         returns (AgentBountyFactory.CreateBountyParams memory)

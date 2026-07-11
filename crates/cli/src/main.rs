@@ -362,6 +362,30 @@ enum Command {
         #[arg(long)]
         output: Option<String>,
     },
+    AutonomousMineWorkProof {
+        #[arg(long)]
+        bounty_id: String,
+        #[arg(long)]
+        round: u64,
+        #[arg(long)]
+        solver: String,
+        #[arg(long)]
+        submission_hash: String,
+        #[arg(long)]
+        evidence_hash: String,
+        #[arg(long)]
+        policy_hash: String,
+        #[arg(long, default_value_t = 16)]
+        difficulty_bits: u8,
+        #[arg(long, default_value_t = 0)]
+        start_nonce: u64,
+        #[arg(long, default_value_t = 10_000_000)]
+        max_attempts: u64,
+        #[arg(long)]
+        bounty_contract: Option<String>,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+    },
     ProductionSmoke {
         #[arg(long, env = "PRODUCTION_API_BASE_URL")]
         api_base_url: String,
@@ -629,6 +653,31 @@ async fn async_main() -> Result<()> {
             )
             .await
         }
+        Command::AutonomousMineWorkProof {
+            bounty_id,
+            round,
+            solver,
+            submission_hash,
+            evidence_hash,
+            policy_hash,
+            difficulty_bits,
+            start_nonce,
+            max_attempts,
+            bounty_contract,
+            network,
+        } => autonomous_mine_work_proof(
+            bounty_id,
+            round,
+            solver,
+            submission_hash,
+            evidence_hash,
+            policy_hash,
+            difficulty_bits,
+            start_nonce,
+            max_attempts,
+            bounty_contract,
+            network,
+        ),
         Command::ProductionSmoke {
             api_base_url,
             mcp_base_url,
@@ -1387,6 +1436,152 @@ fn create_address(deployer: &str, nonce: u64) -> Result<String> {
 
 fn keccak_hex(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(Keccak256::digest(bytes)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn autonomous_mine_work_proof(
+    bounty_id: String,
+    round: u64,
+    solver: String,
+    submission_hash: String,
+    evidence_hash: String,
+    policy_hash: String,
+    difficulty_bits: u8,
+    start_nonce: u64,
+    max_attempts: u64,
+    bounty_contract: Option<String>,
+    network: String,
+) -> Result<()> {
+    if !(1..=32).contains(&difficulty_bits) {
+        bail!("difficulty bits must be between 1 and 32");
+    }
+    if max_attempts == 0 {
+        bail!("max attempts must be positive");
+    }
+    let bounty_id_word = parse_cli_bytes32(&bounty_id, "bounty id")?;
+    let solver_word = parse_cli_address_word(&solver)?;
+    let submission_word = parse_cli_bytes32(&submission_hash, "submission hash")?;
+    let evidence_word = parse_cli_bytes32(&evidence_hash, "evidence hash")?;
+    let policy_word = parse_cli_bytes32(&policy_hash, "policy hash")?;
+    let normalized_solver = normalize_cli_address(&solver)?;
+    let normalized_contract = bounty_contract
+        .as_deref()
+        .map(normalize_cli_address)
+        .transpose()?;
+
+    let mut nonce = start_nonce;
+    let mut attempts = 0_u64;
+    let (proof, response_hash) = loop {
+        if attempts >= max_attempts {
+            bail!(
+                "no proof found after {max_attempts} attempts; continue from --start-nonce {}",
+                nonce
+            );
+        }
+        let encoded = leading_zero_work_preimage(
+            bounty_id_word,
+            round,
+            solver_word,
+            submission_word,
+            evidence_word,
+            policy_word,
+            nonce,
+        );
+        let digest = Keccak256::digest(encoded);
+        attempts += 1;
+        if has_leading_zero_bits(&digest, difficulty_bits) {
+            let mut proof = [0_u8; 32];
+            proof[24..].copy_from_slice(&nonce.to_be_bytes());
+            break (proof, digest.to_vec());
+        }
+        nonce = nonce
+            .checked_add(1)
+            .context("nonce overflow while mining work proof")?;
+    };
+
+    let proof_hex = format!("0x{}", hex::encode(proof));
+    let response_hash_hex = format!("0x{}", hex::encode(response_hash));
+    let module_settlement_request = normalized_contract.map(|contract| {
+        serde_json::json!({
+            "network": network.clone(),
+            "bounty_contract": contract,
+            "proof": proof_hex.clone(),
+        })
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "agent-bounties/leading-zero-work-proof-v1",
+            "bounty_id": format!("0x{}", hex::encode(bounty_id_word)),
+            "round": round,
+            "solver": normalized_solver,
+            "submission_hash": format!("0x{}", hex::encode(submission_word)),
+            "evidence_hash": format!("0x{}", hex::encode(evidence_word)),
+            "policy_hash": format!("0x{}", hex::encode(policy_word)),
+            "difficulty_bits": difficulty_bits,
+            "nonce": nonce.to_string(),
+            "proof": proof_hex,
+            "response_hash": response_hash_hex,
+            "attempts": attempts,
+            "module_settlement_request": module_settlement_request,
+            "evidence_boundary": "This proves only that the deterministic work target is met. Payment requires a confirmed canonical BountySettled event.",
+        }))?
+    );
+    Ok(())
+}
+
+fn parse_cli_bytes32(value: &str, label: &str) -> Result<[u8; 32]> {
+    let raw = value.strip_prefix("0x").unwrap_or(value);
+    if raw.len() != 64 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("{label} must be exactly 32 hex bytes");
+    }
+    let decoded = hex::decode(raw)?;
+    let mut word = [0_u8; 32];
+    word.copy_from_slice(&decoded);
+    Ok(word)
+}
+
+fn parse_cli_address_word(value: &str) -> Result<[u8; 32]> {
+    let normalized = normalize_cli_address(value)?;
+    let decoded = hex::decode(&normalized[2..])?;
+    let mut word = [0_u8; 32];
+    word[12..].copy_from_slice(&decoded);
+    Ok(word)
+}
+
+fn leading_zero_work_preimage(
+    bounty_id: [u8; 32],
+    round: u64,
+    solver: [u8; 32],
+    submission_hash: [u8; 32],
+    evidence_hash: [u8; 32],
+    policy_hash: [u8; 32],
+    nonce: u64,
+) -> Vec<u8> {
+    let mut encoded = Vec::with_capacity(32 * 7);
+    encoded.extend_from_slice(&bounty_id);
+    let mut round_word = [0_u8; 32];
+    round_word[24..].copy_from_slice(&round.to_be_bytes());
+    encoded.extend_from_slice(&round_word);
+    encoded.extend_from_slice(&solver);
+    encoded.extend_from_slice(&submission_hash);
+    encoded.extend_from_slice(&evidence_hash);
+    encoded.extend_from_slice(&policy_hash);
+    let mut nonce_word = [0_u8; 32];
+    nonce_word[24..].copy_from_slice(&nonce.to_be_bytes());
+    encoded.extend_from_slice(&nonce_word);
+    encoded
+}
+
+fn has_leading_zero_bits(hash: &[u8], difficulty_bits: u8) -> bool {
+    let full_bytes = usize::from(difficulty_bits / 8);
+    let remaining_bits = difficulty_bits % 8;
+    hash.get(..full_bytes)
+        .is_some_and(|prefix| prefix.iter().all(|byte| *byte == 0))
+        && (remaining_bits == 0
+            || hash
+                .get(full_bytes)
+                .is_some_and(|byte| byte >> (8 - remaining_bits) == 0))
 }
 
 async fn demo() -> Result<()> {
@@ -5168,6 +5363,54 @@ mod tests {
             create_address(&factory, 1).expect("implementation address should derive"),
             "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
         );
+    }
+
+    #[test]
+    fn leading_zero_work_hash_matches_solidity_abi_vector() {
+        let bounty_id = parse_cli_bytes32(
+            "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "bounty id",
+        )
+        .unwrap();
+        let solver = parse_cli_address_word("0x1111111111111111111111111111111111111111").unwrap();
+        let submission_hash = parse_cli_bytes32(
+            "0x2222222222222222222222222222222222222222222222222222222222222222",
+            "submission hash",
+        )
+        .unwrap();
+        let evidence_hash = parse_cli_bytes32(
+            "0x3333333333333333333333333333333333333333333333333333333333333333",
+            "evidence hash",
+        )
+        .unwrap();
+        let policy_hash = parse_cli_bytes32(
+            "0x4444444444444444444444444444444444444444444444444444444444444444",
+            "policy hash",
+        )
+        .unwrap();
+
+        let encoded = leading_zero_work_preimage(
+            bounty_id,
+            7,
+            solver,
+            submission_hash,
+            evidence_hash,
+            policy_hash,
+            42,
+        );
+
+        assert_eq!(
+            keccak_hex(&encoded),
+            "0x13b1a8b50c41287e8cbb49b66f5327c7cef3fefb33e6428c7588368eb1ef8fbe"
+        );
+    }
+
+    #[test]
+    fn leading_zero_bit_check_handles_partial_bytes() {
+        assert!(has_leading_zero_bits(&[0x00, 0x0f, 0xff], 12));
+        assert!(!has_leading_zero_bits(&[0x00, 0x10, 0x00], 12));
+        assert!(has_leading_zero_bits(&[0x00, 0x00, 0xff], 16));
+        assert!(!has_leading_zero_bits(&[0x00, 0x01, 0x00], 16));
     }
 
     #[test]
