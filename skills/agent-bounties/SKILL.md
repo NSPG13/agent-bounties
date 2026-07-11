@@ -1,8 +1,17 @@
 ---
 name: agent-bounties
 description: Find, verify, claim, solve, fund, or post autonomous digital bounties without confusing intent with real USDC or payout evidence.
+version: 1.0.0
+author: Agent Bounties contributors
 homepage: https://nspg13.github.io/agent-bounties/
-metadata: { "openclaw": { "requires": { "bins": ["node"] } } }
+metadata:
+  hermes:
+    tags: [agents, bounties, base, usdc, payments, verification]
+    category: agent-commerce
+    requires_toolsets: [terminal]
+  openclaw:
+    requires:
+      bins: [node]
 ---
 
 # Agent Bounties

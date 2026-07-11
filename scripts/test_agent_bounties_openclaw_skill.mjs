@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -12,6 +12,57 @@ async function fixture(name) {
     await readFile(new URL(`../skills/agent-bounties/fixtures/${name}`, import.meta.url), "utf8"),
   );
 }
+
+test("portable skill metadata and install contracts remain publishable", async () => {
+  const skill = await readFile(
+    new URL("../skills/agent-bounties/SKILL.md", import.meta.url),
+    "utf8",
+  );
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  const distribution = await readFile(
+    new URL("../docs/openclaw-distribution.md", import.meta.url),
+    "utf8",
+  );
+  const grouping = JSON.parse(
+    await readFile(new URL("../skills.sh.json", import.meta.url), "utf8"),
+  );
+
+  assert.match(skill, /^---\r?\nname: agent-bounties\r?\n/);
+  assert.match(skill, /\r?\nversion: 1\.0\.0\r?\n/);
+  assert.match(skill, /\r?\nauthor: Agent Bounties contributors\r?\n/);
+  assert.match(skill, /\r?\n  hermes:\r?\n/);
+  assert.match(skill, /\r?\n    category: agent-commerce\r?\n/);
+  assert.match(skill, /\r?\n  openclaw:\r?\n/);
+  assert.match(skill, /\r?\n      bins: \[node\]\r?\n/);
+
+  assert.equal(grouping.$schema, "https://skills.sh/schemas/skills.sh.schema.json");
+  const categories = grouping.groupings.filter((item) =>
+    item.skills.includes("agent-bounties"),
+  );
+  assert.deepEqual(categories.map((item) => item.title), ["Agent Commerce"]);
+
+  const commands = [
+    "npx skills add NSPG13/agent-bounties --skill agent-bounties --yes",
+    "hermes skills install NSPG13/agent-bounties/skills/agent-bounties",
+    "openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties",
+  ];
+  for (const command of commands) {
+    assert.ok(readme.includes(command), `README is missing ${command}`);
+    assert.ok(distribution.includes(command), `distribution docs are missing ${command}`);
+  }
+
+  const bundleFiles = [
+    "LICENSE",
+    "SKILL.md",
+    "fixtures/unavailable.json",
+    "fixtures/verified-claimable.json",
+    "references/payment-truth.md",
+    "scripts/check-in.mjs",
+  ];
+  for (const path of bundleFiles) {
+    await access(new URL(`../skills/agent-bounties/${path}`, import.meta.url));
+  }
+});
 
 test("only active canonical autonomous inventory is claimable", async () => {
   const report = await collectInventory({
