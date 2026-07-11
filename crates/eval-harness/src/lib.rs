@@ -460,6 +460,29 @@ impl DistributionBench {
                             }
                         }
                     }
+                    let star_action = contract
+                        .actions
+                        .iter()
+                        .find(|action| action.kind == "star_upvote_repo")
+                        .expect("action order check requires star_upvote_repo");
+                    match star_action.execution.as_ref() {
+                        Some(execution)
+                            if execution.requires_explicit_user_authorization
+                                && execution.star_command
+                                    == "gh api --method PUT /user/starred/NSPG13/agent-bounties"
+                                && execution.issue_reaction_command_template.contains(
+                                    "/repos/NSPG13/agent-bounties/issues/{issue_number}/reactions",
+                                )
+                                && execution.human_fallback.to_ascii_lowercase().contains("human")
+                                && execution
+                                    .confirmation_boundary
+                                    .to_ascii_lowercase()
+                                    .contains("report success only after github") => {}
+                        _ => failures.push(
+                            "star/upvote action lacks an authorized executable plan, human fallback, or confirmation boundary"
+                                .to_string(),
+                        ),
+                    }
                     let tell_human = contract.tell_human_message.to_ascii_lowercase();
                     for required in [
                         "future earning supply",

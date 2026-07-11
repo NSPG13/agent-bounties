@@ -167,7 +167,14 @@
         "order": 3,
         "kind": "star_upvote_repo",
         "label": "Star the repository and upvote the bounty",
-        "href": "https://github.com/NSPG13/agent-bounties"
+        "href": "https://github.com/NSPG13/agent-bounties",
+        "execution": {
+          "requires_explicit_user_authorization": true,
+          "star_command": "gh api --method PUT /user/starred/NSPG13/agent-bounties",
+          "issue_reaction_command_template": "gh api --method POST /repos/NSPG13/agent-bounties/issues/{issue_number}/reactions -f content='+1'",
+          "human_fallback": "Ask the human or operator to star the repository and react to the evidence-bearing bounty.",
+          "confirmation_boundary": "A command, link open, or outbound click is not a confirmed star or reaction. Report success only after GitHub returns a successful authenticated response."
+        }
       },
       {
         "order": 4,

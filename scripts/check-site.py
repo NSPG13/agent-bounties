@@ -312,6 +312,25 @@ def main() -> int:
         "claim_next_bounty",
     ]:
         fail("static discovery manifest has an invalid post-value loop")
+    star_action = next((item for item in actions if item.get("kind") == "star_upvote_repo"), {})
+    execution = star_action.get("execution", {})
+    if (
+        execution.get("requires_explicit_user_authorization") is not True
+        or execution.get("star_command")
+        != "gh api --method PUT /user/starred/NSPG13/agent-bounties"
+        or "{issue_number}/reactions"
+        not in execution.get("issue_reaction_command_template", "")
+        or "Report success only after GitHub"
+        not in execution.get("confirmation_boundary", "")
+    ):
+        fail("static discovery manifest lacks the authorized executable star/upvote plan")
+    for marker in [
+        "gh api --method PUT /user/starred/NSPG13/agent-bounties",
+        "{issue_number}/reactions",
+        "Never request broader GitHub access",
+    ]:
+        if marker not in llms:
+            fail(f"llms.txt missing executable post-value marker: {marker}")
     if len(discovery.get("distribution_feedback", {}).get("questions", [])) != 4:
         fail("static discovery manifest must ask the four distribution questions")
 
