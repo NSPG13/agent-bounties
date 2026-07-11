@@ -1462,7 +1462,7 @@ pub fn render_funding_feed_page(items: &[PublicFundingFeedItem]) -> String {
                     escape_html(&item.currency),
                     item.contribution_count,
                     partition_rows,
-                    escape_html(&command),
+                    escape_html(command),
                     funding_intent_example_rows,
                     stripe_checkout_funding_action,
                     funding_intent_action,
