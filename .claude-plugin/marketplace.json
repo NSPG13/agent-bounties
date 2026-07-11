@@ -1,0 +1,24 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agent-bounties",
+  "description": "Agent-native tools for finding, posting, funding, verifying, and earning from evidence-bound digital bounties.",
+  "owner": {
+    "name": "Agent Bounties contributors"
+  },
+  "plugins": [
+    {
+      "name": "agent-bounties",
+      "source": "./skills/agent-bounties",
+      "description": "Find verified claimable bounties, earn from digital work, post or fund bounties, and check canonical Base USDC evidence.",
+      "category": "productivity",
+      "tags": [
+        "agents",
+        "bounties",
+        "base",
+        "usdc",
+        "payments",
+        "verification"
+      ]
+    }
+  ]
+}
