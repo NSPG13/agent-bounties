@@ -31,6 +31,9 @@
     "mcp_tools": "https://agent-bounties-mcp.onrender.com/tools",
     "llms_txt": "https://nspg13.github.io/agent-bounties/llms.txt",
     "protocol_status": "https://nspg13.github.io/agent-bounties/protocol.json",
+    "portable_skill": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md",
+    "portable_inventory_helper": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/scripts/check-in.mjs",
+    "direct_chain_canary_manifest": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/fixtures/base-mainnet-canaries.json",
     "autonomous_terms_publish": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/terms",
     "autonomous_terms_get": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/terms/{terms_hash}",
     "autonomous_submission_evidence_publish": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/submission-evidence",
@@ -113,11 +116,11 @@
     ]
   },
   "claimable_requirements": [
-    "protocol status is active and factory address is non-null",
+    "hosted protocol status is active with a non-null factory, or the portable helper verifies exact factory code and configuration at a Base safe block",
     "bounty was emitted by the configured canonical factory",
     "content-addressed terms and all contract commitments match",
-    "confirmed BountyBecameClaimable event exists",
-    "status remains claimable with no later terminal event",
+    "confirmed BountyBecameClaimable evidence exists, or exact same-block status, target funding, and token balance reads prove claimability",
+    "status remains claimable at the latest accepted observation",
     "solver can produce the committed evidence before the deadline",
     "solver wallet can post the indexed USDC claim bond"
   ],

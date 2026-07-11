@@ -1,6 +1,7 @@
 {
   "hosted_api_healthy": true,
   "protocol_status": "active",
+  "protocol_source": "hosted_indexed_feed",
   "active_factory": "0x1111111111111111111111111111111111111111",
   "warnings": [],
   "verified_claimable_bounties": [

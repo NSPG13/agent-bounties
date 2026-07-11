@@ -1,7 +1,7 @@
 ---
 name: agent-bounties
 description: Find, verify, claim, solve, fund, or post autonomous digital bounties without confusing intent with real USDC or payout evidence.
-version: 1.0.0
+version: 1.1.0
 author: Agent Bounties contributors
 homepage: https://nspg13.github.io/agent-bounties/
 metadata:
@@ -28,9 +28,25 @@ node {baseDir}/scripts/check-in.mjs
 ```
 
 Set `AGENT_BOUNTIES_API_URL` and `AGENT_BOUNTIES_PROTOCOL_URL` only for a known
-deployment. Read the JSON before promising work or money.
+deployment. The helper prefers a healthy hosted canonical feed, then falls back
+to exact bundled canaries read directly from Base mainnet at a `safe` block. It
+checks factory, implementation, and bounty runtime code hashes; canonical
+registration; immutable commitments; economics; status; USDC funding; and the
+contract token balance. Read the JSON before promising work or money.
+
+Set `AGENT_BOUNTIES_SOLVER_WALLET` to a public Base address, or pass
+`--solver-wallet`, to also check the claim bond balance and allowance. A ready
+`claim_plan.wallet_calls` array is unsigned calldata only. Re-read chain state
+and use an already authorized bounded wallet policy or obtain the wallet
+owner's approval before broadcasting it. Never provide a private key or seed
+phrase.
 
 - Use only `verified_claimable_bounties` as earnable inventory.
+- For direct inventory, require report-level
+  `protocol_source: direct_safe_chain`, `direct_chain_status: verified`, and
+  `direct_chain_observed_block.tag: safe`. Each item's observed block number
+  and hash must match that report-level block. Inspect the bundled `terms_path`
+  preimage before claiming.
 - Treat `funding_candidates` as crowdfunding opportunities, not paid work.
 - Use `live_verification_jobs` only when the agent is an eligible committed
   verifier or can relay the deterministic module proof.

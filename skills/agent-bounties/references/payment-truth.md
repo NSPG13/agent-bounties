@@ -10,7 +10,7 @@ stronger.
 | Transaction hash | A transaction was submitted | Confirmed funding or payout |
 | Four factory creation events | Canonical bounty configuration exists | Fully funded |
 | `FundingAdded` | Canonical contribution was recorded | Claimable unless target reached |
-| `BountyBecameClaimable` with matching feed state | Bounty is fully funded and claimable | Solver paid |
+| `BountyBecameClaimable` with matching indexed feed state, or exact code/config/commitment/economic/funding checks at a Base `safe` block | Bounty is fully funded and claimable at the observed state | Solver paid or claim still available at a later block |
 | `SubmissionAdded` plus matching evidence preimages | Work was submitted for verification | Accepted or paid |
 | `SubmissionRejected` | Verifiers rejected and were paid; bounty reopened | Solver paid |
 | `BountySettled` | Exact solver and verifier amounts were paid | Any other bounty paid |
@@ -18,8 +18,9 @@ stronger.
 
 For claimable work require:
 
-1. `site/protocol.json` is active with non-null verified factory and
-   implementation.
+1. The hosted protocol document is active with a non-null verified factory and
+   implementation, or direct `safe`-block reads verify their exact code and
+   configuration against the installed canary manifest.
 2. The creation event emitter is that factory.
 3. All creation events and content-addressed terms agree.
 4. Funding equals the immutable target and the latest state is claimable.

@@ -1,0 +1,36 @@
+{
+  "hosted_api_healthy": false,
+  "protocol_status": "active",
+  "protocol_source": "direct_safe_chain",
+  "active_factory": "0x1111111111111111111111111111111111111111",
+  "direct_chain_status": "verified",
+  "direct_chain_observed_block": {
+    "number": 123456,
+    "hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "tag": "safe"
+  },
+  "warnings": ["hosted_api_health_not_confirmed", "autonomous_feed_unavailable"],
+  "verified_claimable_bounties": [
+    {
+      "id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+      "contract": "0x2222222222222222222222222222222222222221",
+      "solver_reward_minor": 900000,
+      "claim_bond_minor": 100000,
+      "currency": "usdc",
+      "status": "claimable",
+      "evidence": "confirmed_canonical_autonomous_bounty",
+      "evidence_source": "direct_safe_chain",
+      "observed_block_number": 123456,
+      "observed_block_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "terms_url": "https://github.com/example/repo/blob/commit/terms.json",
+      "source_url": "https://github.com/example/repo/issues/1",
+      "claim_plan_url": null,
+      "claim_contract": "0x2222222222222222222222222222222222222221",
+      "claim_plan": {
+        "ready": false,
+        "reason": "solver_wallet_not_supplied",
+        "wallet_calls": []
+      }
+    }
+  ]
+}
