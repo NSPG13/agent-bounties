@@ -92,6 +92,8 @@ cargo run -p cli -- discovery-report \
 node --check skills/agent-bounties/scripts/check-in.mjs
 node --test scripts/test_agent_bounties_openclaw_skill.mjs
 node scripts/test-autonomous-wallet-flow.js
+node --check tools/autonomous-activation.js
+node scripts/test-autonomous-activation-console.js
 "${python_cmd[@]}" -m pip install -r scripts/requirements-attest.txt
 "${python_cmd[@]}" scripts/test_base_deployment_attest.py -v
 "${python_cmd[@]}" scripts/check-render-blueprint.py
