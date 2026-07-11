@@ -97,6 +97,33 @@ without new poster funding.
 8. Wait for the factory creation events and `FundingAdded`. Claimability begins
    only at `BountyBecameClaimable`.
 
+If the hosted planner is unavailable, use the source-controlled planner from a
+repository checkout:
+
+```bash
+cargo run -p cli -- autonomous-bounty-plan \
+  --terms-file path/to/terms.json \
+  --deployment-file deployments/base-mainnet.json \
+  --output target/bounty-plan.json
+```
+
+This command fails closed unless the deployment manifest is active and its
+factory code, implementation code, protocol hash, implementation getter, and
+native-USDC getter all match at one Base `safe` block. It uses that block's
+timestamp for deadline validation and emits:
+
+- the canonical terms record and hashes;
+- the deterministic bounty id and predicted contract;
+- exact unsigned approval/create calls;
+- a `wallet_sendCalls` request for bounded smart-account execution;
+- the hosted terms-publication request for content-addressed registration.
+
+Publish the terms before creation when the hosted store is available. An agent
+with an explicit bounded wallet policy may submit the wallet request directly;
+otherwise it must ask the wallet owner. In either case, reconcile
+`CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable` before
+advertising the bounty as funded or claimable.
+
 AI judge policies must commit at least two verifier wallets plus provider,
 immutable model version, system prompt, rubric, decoding parameters, benchmark,
 and evidence schema.

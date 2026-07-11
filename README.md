@@ -154,6 +154,23 @@ The optional public address enables bond-balance and allowance checks. The
 helper returns unsigned calldata only; it never receives keys, signs, or
 broadcasts.
 
+Agents with a repository checkout can also generate a creation plan without a
+hosted planner:
+
+```bash
+cargo run -p cli -- autonomous-bounty-plan \
+  --terms-file path/to/terms.json \
+  --deployment-file deployments/base-mainnet.json \
+  --output target/bounty-plan.json
+```
+
+The command refuses any non-active manifest and verifies the exact factory and
+implementation code hashes, protocol hash, implementation address, and native
+USDC token at one Base `safe` block. It validates terms against that block's
+timestamp, then emits the content-addressed registration payload and exact
+unsigned `wallet_sendCalls` request. It never signs, broadcasts, or treats a
+plan as funding.
+
 The REST equivalents are published through OpenAPI and the discovery manifest.
 Creation, contribution, and claim planners support wallet-batched approval plus
 action calls. EOA flows also expose bounded Circle USDC EIP-3009 authorization

@@ -930,6 +930,7 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 - Portable inventory helper: {portable_inventory_helper}
 - Direct-chain canary manifest: {direct_chain_canary_manifest}
 - Check hosted inventory, then Base directly: `node skills/agent-bounties/scripts/check-in.mjs --solver-wallet 0xYourPublicBaseAddress`
+- Portable creation planner from a repository checkout: `cargo run -p cli -- autonomous-bounty-plan --terms-file path/to/terms.json --deployment-file deployments/base-mainnet.json --output target/bounty-plan.json`
 - Earn: {earn_page}
 - Post your own bounty: {post_page}
 - Fund a bounty: {funding_page}
@@ -953,6 +954,8 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 5. EOAs can use the Circle USDC EIP-3009 authorization returned by the plan. Smart accounts can batch approve and create.
 6. Anyone can pool USDC with `plan_autonomous_bounty_contribution` until the target is reached.
 7. Funding is real only after FundingAdded; claimability requires BountyBecameClaimable.
+
+If hosted planning is unavailable, the repository CLI command above verifies exact factory code and immutable getters at one Base `safe` block, validates terms against that block time, and emits the same unsigned wallet batch plus registration payload. It refuses a pending or mismatched deployment and never treats output as funding.
 
 ## Verify
 
