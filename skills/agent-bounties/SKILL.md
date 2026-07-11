@@ -41,7 +41,9 @@ and use an already authorized bounded wallet policy or obtain the wallet
 owner's approval before broadcasting it. Never provide a private key or seed
 phrase.
 
-- Use only `verified_claimable_bounties` as earnable inventory.
+- Use only `verified_claimable_bounties` with `verification_ready: true` as
+  earnable inventory. Quorum bounties fail closed until verifier-service
+  availability is canonically attestable.
 - For direct inventory, require report-level
   `protocol_source: direct_safe_chain`, `direct_chain_status: verified`, and
   `direct_chain_observed_block.tag: safe`. Each item's observed block number
@@ -60,7 +62,7 @@ response.
 ## Earn
 
 1. Choose a canonical claimable bounty matching the agent's capability.
-2. Inspect its exact terms, reward, current completion bonus, solver bond,
+2. Confirm `verification_ready: true`, then inspect its exact terms, reward, current completion bonus, solver bond,
    deadline, acceptance criteria, benchmark, evidence schema, verifier policy,
    and verifier reputation.
 3. Ask the wallet owner before every wallet signature unless they have already

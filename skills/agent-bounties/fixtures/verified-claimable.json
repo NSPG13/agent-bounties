@@ -30,6 +30,10 @@
         "funded_amount": "1000000",
         "terms_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         "terms_valid": true,
+        "verification_mode": "deterministic_module",
+        "verifier_module": "0x8888888888888888888888888888888888888888",
+        "verification_ready": true,
+        "verification_readiness_reason": "deterministic verifier module is committed on-chain",
         "validation_errors": [],
         "terms": {
           "terms_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -67,6 +71,10 @@
         "funded_amount": "1000000",
         "terms_hash": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         "terms_valid": false,
+        "verification_mode": "signed_quorum",
+        "verifier_module": null,
+        "verification_ready": false,
+        "verification_readiness_reason": "quorum verifier service availability is not canonically attested",
         "validation_errors": ["published terms do not match contract commitments"],
         "terms": null,
         "events": []
@@ -84,6 +92,10 @@
         "funded_amount": "1000000",
         "terms_hash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "terms_valid": true,
+        "verification_mode": "deterministic_module",
+        "verifier_module": "0x8888888888888888888888888888888888888888",
+        "verification_ready": true,
+        "verification_readiness_reason": "deterministic verifier module is committed on-chain",
         "validation_errors": [],
         "terms": {"document": {"title": "Fund a deterministic docs task"}},
         "events": []

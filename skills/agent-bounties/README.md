@@ -44,8 +44,10 @@ node scripts/check-in.mjs --solver-wallet 0xYourPublicBaseAddress
 
 The returned wallet calls are unsigned plans. The helper never signs or
 broadcasts them. Read its JSON and the bundled terms before making claims about
-available work. Only canonical active inventory is earnable, and only a
-confirmed `BountySettled` event proves payment.
+available work. Only canonical active inventory with `verification_ready: true`
+is earnable. Quorum bounties fail closed until verifier-service availability is
+canonically attestable, and only a confirmed `BountySettled` event proves
+payment.
 
 Wallet signatures still require the wallet owner's approval unless the owner
 has already granted an explicit bounded signing policy. Never paste a seed

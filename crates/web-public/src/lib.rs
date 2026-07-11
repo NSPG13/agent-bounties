@@ -495,15 +495,18 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         verification_modes: vec![
             serde_json::json!({
                 "name": "deterministic_module",
+                "earning_inventory": "ready when terms are valid and a nonzero module is committed on-chain",
                 "settlement": "Any caller supplies proof to the immutable on-chain verifier module; pass settles and fail reopens atomically. The verifier receives the same committed reward for either verdict."
             }),
             serde_json::json!({
                 "name": "signed_quorum",
+                "earning_inventory": "fails closed until verifier-service availability is canonically attestable",
                 "settlement": "Committed verifier wallets sign the exact round, solver, submission, evidence, result, response, and deadline. A valid pass or fail quorum receives the same reward."
             }),
             serde_json::json!({
                 "name": "ai_judge_quorum",
                 "minimum_threshold": 2,
+                "earning_inventory": "fails closed until every required judge service is canonically attestable",
                 "settlement": "At least two independent committed judge wallets sign under the model, prompt, rubric, decoding, benchmark, and evidence commitments fixed before funding. A valid pass or fail quorum receives the same reward."
             }),
         ],
@@ -522,6 +525,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "Content-addressed terms and all contract commitments match.",
             "Confirmed BountyBecameClaimable evidence exists, or exact same-block status, target funding, and token balance reads prove claimability.",
             "Status remains claimable at the latest accepted observation.",
+            "The feed reports verification_ready=true for an executable committed verification path.",
             "The solver can produce the committed evidence before the deadline.",
             "The solver wallet can post the indexed USDC claim bond.",
         ]
@@ -939,7 +943,7 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 ## Earn
 
 1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`.
-2. Validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy.
+2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
 3. Ask the wallet owner before every signature.
 4. Use `plan_autonomous_bounty_claim`; verify the indexed solver bond and sign either its wallet batch or bounded EIP-3009 authorization.
 5. Complete the task and use `plan_autonomous_bounty_submission`.

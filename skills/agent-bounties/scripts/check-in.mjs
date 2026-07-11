@@ -35,6 +35,8 @@ const SELECTOR = Object.freeze({
   termsHash: "0xb311d9fd",
   timeoutBondPool: "0xca279823",
   verifierReward: "0xb49e80f4",
+  verificationMode: "0x402c51b8",
+  verifierModule: "0x41506fc1",
   verifierSetHash: "0xae8e71a6",
 });
 
@@ -232,6 +234,10 @@ function validateChainManifest(manifest) {
       || !HASH.test(bounty.bounty_id || "")
       || !ADDRESS.test(bounty.contract || "")
       || !ADDRESS.test(bounty.creator || "")
+      || !["deterministic_module", "signed_quorum", "ai_judge_quorum"]
+        .includes(bounty.verification_mode)
+      || (bounty.verification_mode === "deterministic_module"
+        && !ADDRESS.test(bounty.verifier_module || ""))
       || amounts.some((amount) => !Number.isSafeInteger(amount) || amount <= 0)
       || bounty.claim_bond_minor !== bounty.verifier_reward_minor
       || bounty.target_minor !== bounty.solver_reward_minor + bounty.verifier_reward_minor
@@ -305,6 +311,9 @@ function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, c
     claim_plan_url: null,
     claim_plan: claimPlan,
     claim_contract: bounty.contract.toLowerCase(),
+    verification_mode: bounty.verification_mode,
+    verifier_module: bounty.verifier_module?.toLowerCase() || null,
+    verification_ready: true,
   };
 }
 
@@ -393,6 +402,8 @@ export async function verifyDirectChainInventory({
         callRequest(`${prefix}_benchmark`, bounty.contract, SELECTOR.benchmarkHash, blockNumber),
         callRequest(`${prefix}_evidence`, bounty.contract, SELECTOR.evidenceSchemaHash, blockNumber),
         callRequest(`${prefix}_verifier_set`, bounty.contract, SELECTOR.verifierSetHash, blockNumber),
+        callRequest(`${prefix}_verification_mode`, bounty.contract, SELECTOR.verificationMode, blockNumber),
+        callRequest(`${prefix}_verifier_module`, bounty.contract, SELECTOR.verifierModule, blockNumber),
         callRequest(`${prefix}_token_balance`, checked.native_usdc, calldata(SELECTOR.balanceOf, addressWord(bounty.contract)), blockNumber),
       );
       if (solver) {
@@ -416,6 +427,13 @@ export async function verifyDirectChainInventory({
         const timeoutBonus = decodedUint(results.get(`${prefix}_timeout_bonus`), "timeout bond pool");
         const funded = decodedUint(results.get(`${prefix}_funded`), "funded amount");
         const tokenBalance = decodedUint(results.get(`${prefix}_token_balance`), "bounty token balance");
+        const expectedMode = {
+          deterministic_module: 0n,
+          signed_quorum: 1n,
+          ai_judge_quorum: 2n,
+        }[bounty.verification_mode];
+        const expectedModule = bounty.verifier_module?.toLowerCase()
+          || "0x0000000000000000000000000000000000000000";
         const matches = [
           proofCodeHash(results.get(`${prefix}_proof`), `bounty #${bounty.issue}`)
             === checked.bounty_proxy_runtime_code_hash.toLowerCase(),
@@ -436,9 +454,19 @@ export async function verifyDirectChainInventory({
           decodedHash(results.get(`${prefix}_benchmark`), "benchmark hash") === bounty.benchmark_hash.toLowerCase(),
           decodedHash(results.get(`${prefix}_evidence`), "evidence schema hash") === bounty.evidence_schema_hash.toLowerCase(),
           decodedHash(results.get(`${prefix}_verifier_set`), "verifier set hash") === checked.verifier_set_hash.toLowerCase(),
+          decodedUint(results.get(`${prefix}_verification_mode`), "verification mode") === expectedMode,
+          decodedAddress(results.get(`${prefix}_verifier_module`), "verifier module") === expectedModule,
           tokenBalance >= funded + timeoutBonus,
         ];
         if (!matches.every(Boolean)) throw new Error("safe chain state does not match committed bounty");
+        if (bounty.verification_mode !== "deterministic_module") {
+          excluded.push({
+            id: bounty.bounty_id.toLowerCase(),
+            reason: "quorum_verifier_service_not_attested",
+            detail: "direct earning inventory requires a permissionless deterministic module",
+          });
+          continue;
+        }
         const solverBalance = solver
           ? decodedUint(results.get(`${prefix}_solver_balance`), "solver USDC balance")
           : 0n;
@@ -526,6 +554,13 @@ export function verifyClaimableItem(item, protocol) {
   }
   if (!item.terms_valid || !item.terms?.document?.contract_terms) {
     return { ok: false, reason: "terms_or_contract_commitments_invalid" };
+  }
+  if (
+    item.verification_ready !== true
+    || item.verification_mode !== "deterministic_module"
+    || !ADDRESS.test(item.verifier_module || "")
+  ) {
+    return { ok: false, reason: "verification_path_not_executable" };
   }
   if (!ADDRESS.test(item.bounty_contract || "") || !ADDRESS.test(item.creator || "")) {
     return { ok: false, reason: "invalid_canonical_identity" };

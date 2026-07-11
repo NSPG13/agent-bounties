@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   collectInventory,
   normalizeApiBaseUrl,
+  verifyClaimableItem,
   verifyDirectChainInventory,
 } from "../skills/agent-bounties/scripts/check-in.mjs";
 
@@ -33,6 +34,15 @@ async function directManifest() {
       "utf8",
     ),
   );
+}
+
+async function permissionlessDirectManifest() {
+  const manifest = await directManifest();
+  for (const bounty of manifest.bounties) {
+    bounty.verification_mode = "deterministic_module";
+    bounty.verifier_module = "0x8888888888888888888888888888888888888888";
+  }
+  return manifest;
 }
 
 function directTransport(manifest, mutate = null) {
@@ -82,6 +92,14 @@ function directTransport(manifest, mutate = null) {
           benchmark: bounty.benchmark_hash,
           evidence: bounty.evidence_schema_hash,
           verifier_set: manifest.verifier_set_hash,
+          verification_mode: abiWord({
+            deterministic_module: 0,
+            signed_quorum: 1,
+            ai_judge_quorum: 2,
+          }[bounty.verification_mode]),
+          verifier_module: abiAddress(
+            bounty.verifier_module || "0x0000000000000000000000000000000000000000",
+          ),
           token_balance: abiWord(bounty.target_minor),
           solver_balance: abiWord(500000),
           allowance: abiWord(0),
@@ -247,7 +265,7 @@ test("portable skill metadata and install contracts remain publishable", async (
   }
 });
 
-test("direct safe-chain verifier accepts exact code, commitments, funding, and claim bond", async () => {
+test("direct safe-chain verifier excludes quorum canaries without service attestations", async () => {
   const manifest = await directManifest();
   const solver = "0x7777777777777777777777777777777777777777";
   const report = await verifyDirectChainInventory({
@@ -257,8 +275,24 @@ test("direct safe-chain verifier accepts exact code, commitments, funding, and c
     solverWallet: solver,
   });
 
-  assert.equal(report.status, "verified");
+  assert.equal(report.status, "no_claimable_bounties");
   assert.equal(report.observed_block.tag, "safe");
+  assert.equal(report.verified.length, 0);
+  assert.equal(report.excluded.length, 4);
+  assert.ok(report.excluded.every((item) => item.reason === "quorum_verifier_service_not_attested"));
+});
+
+test("direct safe-chain verifier accepts deterministic module earning inventory", async () => {
+  const manifest = await permissionlessDirectManifest();
+  const solver = "0x7777777777777777777777777777777777777777";
+  const report = await verifyDirectChainInventory({
+    manifest,
+    rpcUrl: "https://rpc.example.test",
+    rpcTransport: directTransport(manifest),
+    solverWallet: solver,
+  });
+
+  assert.equal(report.status, "verified");
   assert.equal(report.verified.length, 4);
   assert.equal(report.excluded.length, 0);
   for (const item of report.verified) {
@@ -291,7 +325,7 @@ test("direct safe-chain verifier fails closed on factory code mismatch", async (
 });
 
 test("direct safe-chain verifier excludes one bounty with altered terms", async () => {
-  const manifest = await directManifest();
+  const manifest = await permissionlessDirectManifest();
   const report = await verifyDirectChainInventory({
     manifest,
     rpcUrl: "https://rpc.example.test",
@@ -308,7 +342,7 @@ test("direct safe-chain verifier excludes one bounty with altered terms", async 
 });
 
 test("unavailable hosted services fall back to direct safe-chain inventory", async () => {
-  const manifest = await directManifest();
+  const manifest = await permissionlessDirectManifest();
   const report = await collectInventory({
     apiBaseUrl: "https://api.example.test",
     fixture: await fixture("unavailable.json"),
@@ -328,7 +362,7 @@ test("unavailable hosted services fall back to direct safe-chain inventory", asy
 });
 
 test("verified direct factory stays active when no bundled bounty is claimable", async () => {
-  const manifest = await directManifest();
+  const manifest = await permissionlessDirectManifest();
   const report = await collectInventory({
     apiBaseUrl: "https://api.example.test",
     fixture: await fixture("unavailable.json"),
@@ -381,6 +415,21 @@ test("only active canonical autonomous inventory is claimable", async () => {
   assert.equal(report.recommended_action, "claim_verified_bounty");
   assert.equal(report.funding_candidates.length, 1);
   assert.equal(report.live_verification_jobs.length, 1);
+});
+
+test("hosted quorum bounty is excluded without a service availability attestation", async () => {
+  const input = await fixture("verified-claimable.json");
+  const item = structuredClone(input.autonomous_feed.body[0]);
+  item.verification_mode = "signed_quorum";
+  item.verifier_module = null;
+  item.verification_ready = false;
+  item.verification_readiness_reason =
+    "quorum verifier service availability is not canonically attested";
+
+  assert.deepEqual(verifyClaimableItem(item, input.protocol.body), {
+    ok: false,
+    reason: "verification_path_not_executable",
+  });
 });
 
 test("unavailable hosted API cannot create imaginary inventory", async () => {

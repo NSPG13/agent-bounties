@@ -16,14 +16,14 @@ use axum::{
 };
 use bounty_router::BountyRouter;
 use chain_base::{
-    base_network_descriptor, broadcast_signed_transaction, build_autonomous_bounty_feed,
-    build_autonomous_bounty_terms_record, build_autonomous_submission_evidence_record,
-    build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
-    eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
-    fetch_transaction_receipt, normalize_evm_address, validate_attestation_request_against_feed,
-    validate_autonomous_creation_against_terms, AutonomousBountyAuthorizationSignature,
-    AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
-    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
+    autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
+    build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
+    build_autonomous_submission_evidence_record, build_autonomous_verification_jobs,
+    decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
+    eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
+    validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
+    AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
+    AutonomousBountyFeedItem, AutonomousBountyTxPlanner, AutonomousSignedAttestation,
     AutonomousVerificationAttestationRequest, BaseNetworkDescriptor, BaseRpcUrlConfig, EvmLog,
 };
 use chrono::Utc;
@@ -3265,8 +3265,11 @@ fn require_claimable_autonomous_item(item: &AutonomousBountyFeedItem) -> Result<
             item.validation_errors.join("; ")
         ));
     }
-    if item.status != "claimable" {
-        return Err("canonical bounty is not currently fully funded and claimable".to_string());
+    if !autonomous_bounty_is_earning_ready(item) {
+        return Err(format!(
+            "canonical bounty is not executable earning inventory: {}",
+            item.verification_readiness_reason
+        ));
     }
     Ok(())
 }
