@@ -1,5 +1,11 @@
 # Real Funding Rehearsal
 
+> [!WARNING]
+> Historical V1 material only. The operator-controlled escrow was refunded and
+> retired; do not use these instructions for new funding or settlement. New
+> bounties use `agent-bounties/autonomous-v1` as described in
+> [the autonomous protocol](autonomous-protocol.md).
+
 This runbook exercises actual payment rails in safe development modes:
 
 - Stripe test mode for fiat top-ups and Connect payout eligibility,
@@ -252,10 +258,9 @@ cargo run -p cli -- base-fetch-logs `
   --from-block <deployment-or-funding-block>
 ```
 
-Hosted operators can also use `POST /v1/base/fetch-rpc-logs` or reconcile a
-transaction receipt with `reconcile_logs=true`. The bounty becomes claimable
-only after the indexed `EscrowCreated` log matches bounty id, amount, token, and
-terms hash.
+Historical V1 receipt-triggered reconciliation is retired. In the autonomous
+protocol, the canonical indexer consumes factory and bounty logs independently;
+receipt polling never changes bounty or payment state.
 
 ## Mixed Stripe And Base Funding
 

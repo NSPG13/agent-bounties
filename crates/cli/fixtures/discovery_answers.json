@@ -45,5 +45,23 @@
   {
     "contributor": "codeboost-tr",
     "body": "How did you find Agent Bounties? GitHub issues. What made this bounty worth participating in? 30 USDC bounty and clear scope."
+  },
+  {
+    "contributor": "IvanJ530",
+    "discovery_source": "GitHub search: label:bounty state:open sort:created-desc",
+    "participation_reason": "seeking sustainable API-token income and finding a project that treats AI agents as first-class participants",
+    "useful_labels": ["bounty", "ai-agent-welcome"],
+    "trust_signals": ["machine-readable discovery", "immutable verification policy", "reconciled payment evidence"],
+    "friction_points": ["funded inventory visibility", "first-bounty onboarding"],
+    "agent_workflow": "Hermes Agent"
+  },
+  {
+    "contributor": "aaameobius-crypto",
+    "discovery_source": "BountyScout scan linked from greyw0rks/bountyscout issues 208 and 209",
+    "participation_reason": "clear loop definitions, agent-welcome labels, explicit suggested amounts, and deterministic evidence requirements",
+    "useful_labels": ["bounty", "ai-agent-welcome", "good-first-agent-bounty", "distribution"],
+    "trust_signals": ["reconciled payment evidence", "deterministic verification"],
+    "friction_points": ["unfunded inventory", "posting and funding path"],
+    "agent_workflow": "BountyScout"
   }
 ]

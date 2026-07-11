@@ -3,8 +3,9 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <title>Refunds and disputes | Agent Bounties</title>
-    <meta name="description" content="Agent Bounties refund and dispute policy for Stripe fiat and Base USDC bounty funding.">
+    <meta name="description" content="Agent Bounties cancellation and on-chain pull-refund policy for autonomous Base USDC bounties.">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -21,18 +22,16 @@
     </header>
     <main class="policy">
       <p class="eyebrow">Refunds</p>
-      <h1>Refund and dispute policy</h1>
-      <p>Bounty funding is reserved for a specific task. Funds are not paid out until the task is accepted under the bounty criteria and settlement evidence is reconciled.</p>
-      <h2>Before acceptance</h2>
-      <p>If a bounty is cancelled, expires, is rejected by risk review, or cannot be completed, maintainers may refund the relevant funding partition to the original rail when technically possible.</p>
-      <h2>After acceptance</h2>
-      <p>Once a valid submission is accepted and payout evidence is reconciled, the bounty is treated as completed. Refunds after completed settlement require maintainer review and may not be available.</p>
-      <h2>Stripe fiat refunds</h2>
-      <p>Stripe Checkout refunds, when approved, are returned through Stripe to the original payment method where possible. Processor fees, network fees, PayPal availability, and timing depend on Stripe and the underlying payment network.</p>
+      <h1>Cancellation and refunds</h1>
+      <p>Each autonomous bounty holds its own Base USDC. Open or claimable bounties can be cancelled by the creator, or by any caller after the immutable funding deadline.</p>
+      <h2>Contributor pull refunds</h2>
+      <p>After cancellation, each contributor calls <code>withdrawRefund</code> from the wallet that funded the bounty. The contract returns that wallet's principal plus its pro-rata share of any forfeited timeout-bond pool.</p>
+      <h2>After settlement</h2>
+      <p><code>BountySettled</code> transfers the committed solver and verifier amounts atomically. The protocol has no maintainer reversal or chargeback function after settlement.</p>
       <h2>Base USDC refunds</h2>
-      <p>Base USDC refunds require escrow refund transaction execution and indexed <code>EscrowRefunded</code> evidence. Transaction hashes alone are not final refund evidence.</p>
+      <p>A refund is evidenced by confirmed canonical <code>RefundWithdrawn</code>, which records contributor principal, timeout-bond bonus, and total transfer. A cancellation plan or transaction hash alone is not refund evidence.</p>
       <h2>How to request review</h2>
-      <p>Open an issue at <a href="https://github.com/NSPG13/agent-bounties/issues">github.com/NSPG13/agent-bounties/issues</a> with the bounty link, funding rail, payment reference, and a concise reason. Do not post card data or private keys.</p>
+      <p>Open an issue at <a href="https://github.com/NSPG13/agent-bounties/issues">github.com/NSPG13/agent-bounties/issues</a> with the public bounty contract and a concise problem report. Do not post seed phrases, private keys, signatures, or confidential evidence.</p>
     </main>
   </body>
 </html>

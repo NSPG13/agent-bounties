@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -84,6 +85,196 @@ pub enum VerifierKind {
     GitHubCi,
     HttpCallback,
     AiJudgeFilter,
+}
+
+pub const AUTONOMOUS_BOUNTY_PROTOCOL_VERSION: &str = "agent-bounties/autonomous-v1";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutonomousBountyTermsDocument {
+    pub schema_version: String,
+    pub contract_terms: Value,
+    pub title: String,
+    pub goal: String,
+    pub acceptance_criteria: Vec<String>,
+    pub benchmark: Value,
+    pub evidence_schema: Value,
+    pub verification_policy: Value,
+    pub source_url: Option<String>,
+    pub discovery_source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutonomousBountyTermsRecord {
+    pub terms_hash: String,
+    pub policy_hash: String,
+    pub acceptance_criteria_hash: String,
+    pub benchmark_hash: String,
+    pub evidence_schema_hash: String,
+    pub creator_wallet: String,
+    pub document: AutonomousBountyTermsDocument,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutonomousSubmissionEvidenceRecord {
+    pub network: String,
+    pub bounty_contract: String,
+    pub bounty_id: String,
+    pub round: u64,
+    pub solver_wallet: String,
+    pub artifact_reference: String,
+    pub artifact_hash: String,
+    pub evidence: Value,
+    pub evidence_hash: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub enum VerificationMechanism {
+    DeterministicModule,
+    SignedQuorum,
+    AiJudgeQuorum,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub enum VerificationEngine {
+    JsonSchema,
+    DockerCommand,
+    GitHubCi,
+    HttpCallback,
+    AiJudge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AiJudgePolicyCommitment {
+    pub provider: String,
+    pub model: String,
+    pub model_version: String,
+    pub system_prompt_hash: String,
+    pub rubric_hash: String,
+    pub benchmark_hash: String,
+    pub decoding_parameters_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AutomaticVerificationPolicy {
+    pub protocol_version: String,
+    pub mechanism: VerificationMechanism,
+    pub engine: VerificationEngine,
+    pub terms_hash: String,
+    pub policy_hash: String,
+    pub acceptance_criteria_hash: String,
+    pub benchmark_hash: String,
+    pub evidence_schema_hash: String,
+    pub verifier_set_hash: Option<String>,
+    pub verifier_count: u8,
+    pub threshold: u8,
+    pub max_automatic_payout: Money,
+    pub ai_judge: Option<AiJudgePolicyCommitment>,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum VerificationPolicyError {
+    #[error("unsupported autonomous bounty protocol version")]
+    UnsupportedVersion,
+    #[error("verification policy contains an invalid hash commitment")]
+    InvalidHash,
+    #[error("automatic settlement payout must be positive USDC")]
+    InvalidAutomaticPayout,
+    #[error("verification quorum must contain one to eight verifiers and meet threshold")]
+    InvalidQuorum,
+    #[error("deterministic module policy must use a one-of-one verifier and no AI commitment")]
+    InvalidDeterministicPolicy,
+    #[error("signed quorum policy requires a verifier-set commitment and no AI commitment")]
+    InvalidSignedQuorumPolicy,
+    #[error("AI judge settlement requires a committed model policy and at least two verifier signatures")]
+    InvalidAiJudgePolicy,
+}
+
+impl AutomaticVerificationPolicy {
+    pub fn validate(&self) -> Result<(), VerificationPolicyError> {
+        if self.protocol_version != AUTONOMOUS_BOUNTY_PROTOCOL_VERSION {
+            return Err(VerificationPolicyError::UnsupportedVersion);
+        }
+        if !is_bytes32_hash(&self.terms_hash)
+            || !is_bytes32_hash(&self.policy_hash)
+            || !is_bytes32_hash(&self.acceptance_criteria_hash)
+            || !is_bytes32_hash(&self.benchmark_hash)
+            || !is_bytes32_hash(&self.evidence_schema_hash)
+            || self
+                .verifier_set_hash
+                .as_ref()
+                .is_some_and(|value| !is_bytes32_hash(value))
+        {
+            return Err(VerificationPolicyError::InvalidHash);
+        }
+        if self.max_automatic_payout.amount <= 0
+            || !self
+                .max_automatic_payout
+                .currency
+                .eq_ignore_ascii_case("usdc")
+        {
+            return Err(VerificationPolicyError::InvalidAutomaticPayout);
+        }
+        if self.verifier_count == 0
+            || self.verifier_count > 8
+            || self.threshold == 0
+            || self.threshold > self.verifier_count
+        {
+            return Err(VerificationPolicyError::InvalidQuorum);
+        }
+
+        match self.mechanism {
+            VerificationMechanism::DeterministicModule => {
+                if self.threshold != 1
+                    || self.verifier_count != 1
+                    || self.ai_judge.is_some()
+                    || self.engine == VerificationEngine::AiJudge
+                {
+                    return Err(VerificationPolicyError::InvalidDeterministicPolicy);
+                }
+            }
+            VerificationMechanism::SignedQuorum => {
+                if self.verifier_set_hash.is_none()
+                    || self.ai_judge.is_some()
+                    || self.engine == VerificationEngine::AiJudge
+                {
+                    return Err(VerificationPolicyError::InvalidSignedQuorumPolicy);
+                }
+            }
+            VerificationMechanism::AiJudgeQuorum => {
+                let Some(ai_judge) = self.ai_judge.as_ref() else {
+                    return Err(VerificationPolicyError::InvalidAiJudgePolicy);
+                };
+                if self.engine != VerificationEngine::AiJudge
+                    || self.verifier_set_hash.is_none()
+                    || self.threshold < 2
+                    || ai_judge.provider.trim().is_empty()
+                    || ai_judge.model.trim().is_empty()
+                    || ai_judge.model_version.trim().is_empty()
+                    || !is_bytes32_hash(&ai_judge.system_prompt_hash)
+                    || !is_bytes32_hash(&ai_judge.rubric_hash)
+                    || !is_bytes32_hash(&ai_judge.benchmark_hash)
+                    || !is_bytes32_hash(&ai_judge.decoding_parameters_hash)
+                    || ai_judge.benchmark_hash != self.benchmark_hash
+                {
+                    return Err(VerificationPolicyError::InvalidAiJudgePolicy);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn permits_automatic_settlement(&self) -> bool {
+        self.validate().is_ok()
+    }
+}
+
+fn is_bytes32_hash(value: &str) -> bool {
+    value.len() == 66
+        && value.starts_with("0x")
+        && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+        && value[2..].bytes().any(|byte| byte != b'0')
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -958,5 +1149,94 @@ mod tests {
         bounty.mark_payment_disputed().unwrap();
 
         assert_eq!(bounty.status, BountyStatus::Disputed);
+    }
+
+    #[test]
+    fn deterministic_policy_allows_one_committed_verifier() {
+        let policy = deterministic_policy();
+
+        assert_eq!(policy.validate(), Ok(()));
+        assert!(policy.permits_automatic_settlement());
+    }
+
+    #[test]
+    fn ai_judge_requires_model_benchmark_and_two_signature_quorum() {
+        let mut policy = ai_judge_policy();
+        assert_eq!(policy.validate(), Ok(()));
+
+        policy.threshold = 1;
+        assert_eq!(
+            policy.validate(),
+            Err(VerificationPolicyError::InvalidAiJudgePolicy)
+        );
+
+        policy.threshold = 2;
+        policy.ai_judge.as_mut().unwrap().benchmark_hash = "0x00".to_string();
+        assert_eq!(
+            policy.validate(),
+            Err(VerificationPolicyError::InvalidAiJudgePolicy)
+        );
+    }
+
+    #[test]
+    fn policy_rejects_non_usdc_or_uncommitted_hashes() {
+        let mut policy = deterministic_policy();
+        policy.max_automatic_payout = Money::new(100, "usd").unwrap();
+        assert_eq!(
+            policy.validate(),
+            Err(VerificationPolicyError::InvalidAutomaticPayout)
+        );
+
+        policy.max_automatic_payout = Money::new(100, "usdc").unwrap();
+        policy.policy_hash = format!("0x{}", "0".repeat(64));
+        assert_eq!(policy.validate(), Err(VerificationPolicyError::InvalidHash));
+    }
+
+    fn deterministic_policy() -> AutomaticVerificationPolicy {
+        AutomaticVerificationPolicy {
+            protocol_version: AUTONOMOUS_BOUNTY_PROTOCOL_VERSION.to_string(),
+            mechanism: VerificationMechanism::DeterministicModule,
+            engine: VerificationEngine::DockerCommand,
+            terms_hash: test_hash('1'),
+            policy_hash: test_hash('2'),
+            acceptance_criteria_hash: test_hash('3'),
+            benchmark_hash: test_hash('5'),
+            evidence_schema_hash: test_hash('4'),
+            verifier_set_hash: None,
+            verifier_count: 1,
+            threshold: 1,
+            max_automatic_payout: Money::new(1_000_000, "usdc").unwrap(),
+            ai_judge: None,
+        }
+    }
+
+    fn ai_judge_policy() -> AutomaticVerificationPolicy {
+        AutomaticVerificationPolicy {
+            protocol_version: AUTONOMOUS_BOUNTY_PROTOCOL_VERSION.to_string(),
+            mechanism: VerificationMechanism::AiJudgeQuorum,
+            engine: VerificationEngine::AiJudge,
+            terms_hash: test_hash('1'),
+            policy_hash: test_hash('2'),
+            acceptance_criteria_hash: test_hash('3'),
+            benchmark_hash: test_hash('8'),
+            evidence_schema_hash: test_hash('4'),
+            verifier_set_hash: Some(test_hash('5')),
+            verifier_count: 3,
+            threshold: 2,
+            max_automatic_payout: Money::new(1_000_000, "usdc").unwrap(),
+            ai_judge: Some(AiJudgePolicyCommitment {
+                provider: "provider".to_string(),
+                model: "judge-model".to_string(),
+                model_version: "2026-07-10".to_string(),
+                system_prompt_hash: test_hash('6'),
+                rubric_hash: test_hash('7'),
+                benchmark_hash: test_hash('8'),
+                decoding_parameters_hash: test_hash('9'),
+            }),
+        }
+    }
+
+    fn test_hash(character: char) -> String {
+        format!("0x{}", character.to_string().repeat(64))
     }
 }

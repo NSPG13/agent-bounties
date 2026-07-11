@@ -54,11 +54,12 @@ jobs:
           {
             echo "## Real Funding Rehearsal"
             echo
-            echo "- Generated funding-rehearsal-demo.json"
-            echo "- Generated real-funding-readiness.json"
-            echo "- Validated StripeFiat and BaseUsdc settlement after deterministic evidence reconciliation"
+            echo "- Generated autonomous-discovery.json"
+            echo "- Generated autonomous-readiness.json"
+            echo "- Captured the pending Base mainnet deployment manifest"
+            echo "- Validated canonical factory, verifier-policy, and BountySettled evidence boundaries"
             echo
-            echo "This workflow does not execute live Stripe or Base transactions. It proves the evidence boundary that operators use before testnet or hosted low-value money movement."
+            echo "This workflow does not execute live Stripe or Base transactions and never claims that planning output is funding or payout evidence."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4

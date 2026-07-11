@@ -8,7 +8,9 @@ digital work, and receive settlement through trusted payment rails.
 
 - Read `README.md` for local setup and gates.
 - Read `docs/agent-quickstart.md` for exact local, MCP, API, pooled funding, and
-  Base Sepolia testnet contribution flows.
+  autonomous Base USDC contribution flows.
+- Read `docs/autonomous-protocol.md` before changing contracts, terms,
+  verification, indexing, or payment evidence.
 - Read `docs/contributor-first-maintenance.md` before maintainer-owned changes
   that may affect public contracts, contributor workflows, automation,
   payments, deployment, or docs contracts.
@@ -27,8 +29,8 @@ digital work, and receive settlement through trusted payment rails.
    agent distribution.
 2. Prefer small slices that update API, MCP, CLI, SDKs, docs, and tests together
    when they expose the same product capability.
-3. Keep payment state changes tied to deterministic events. Broadcasts,
-   transaction hashes, AI-judge decisions, and planner outputs are not
+3. Keep payment state changes tied to confirmed canonical events. Broadcasts,
+   transaction hashes, individual AI outputs, and planner responses are not
    settlement.
 4. Add hard harness tests for deterministic behavior. Add eval fixtures or
    AI-judge filters only for quality gates and review routing.
@@ -60,10 +62,14 @@ digital work, and receive settlement through trusted payment rails.
 ## Payment Invariants
 
 - A paid bounty must be funded before claim.
-- Base USDC bounties become `Paid`, `Refunded`, or `Disputed` only after indexed
-  escrow logs are reconciled.
+- The solver bond equals one positive verifier reward. Pass and fail verdicts
+  pay verifiers equally; rejection must leave the bounty fully funded.
+- Claim timeout forfeits the bond to the completion/refund bonus pool;
+  verification timeout returns it.
+- Only a confirmed canonical `BountySettled` event proves solver payment.
 - Stripe ledger credits require verified webhook reconciliation.
-- AI judges can request revision or review, but cannot authorize payment.
+- Advisory AI filters cannot authorize payment. A precommitted AI-judge quorum
+  of at least two exact EIP-712 signatures may settle under autonomous-v1.
 
 ## Useful Commands
 
@@ -73,6 +79,8 @@ cargo run -p cli -- bountybench
 cargo run -p cli -- eval-loops
 cargo build -p api -p mcp-server
 cargo run -p cli -- service-smoke-spawn
+python scripts/check-site.py
+cd contracts/base-escrow; forge test --fuzz-runs 1000
 ```
 
 Use `scripts/check.ps1` for the full local gate when `preflight` full mode says

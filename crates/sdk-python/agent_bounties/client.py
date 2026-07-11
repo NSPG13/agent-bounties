@@ -62,7 +62,7 @@ class AgentBountiesClient:
         return self._request("GET", "/.well-known/agent-bounties.json")
 
     def get_discovery_manifest_schema(self):
-        return self._request("GET", "/schemas/discovery-manifest.v1.json")
+        return self._request("GET", "/schemas/discovery-manifest.v2.json")
 
     def get_risk_policy(self):
         return self._request("GET", "/v1/risk/policy")
@@ -72,17 +72,6 @@ class AgentBountiesClient:
             "GET",
             "/v1/readiness/live-money",
             params={"network": network},
-        )
-
-    def get_base_indexer_status(
-        self,
-        network: str | None = None,
-        escrow_contract: str | None = None,
-    ):
-        return self._request(
-            "GET",
-            "/v1/base/indexer-status",
-            params={"network": network, "escrow_contract": escrow_contract},
         )
 
     def get_risk_events(
@@ -428,51 +417,279 @@ class AgentBountiesClient:
     def get_agent_paid_status(self, agent_id: str):
         return self._request("GET", f"/v1/agents/{agent_id}/paid-status")
 
-    def reconcile_base_escrow_event(self, event: dict):
-        return self._request("POST", "/v1/base/escrow-events", json=event)
-
-    def reconcile_base_evm_logs(self, logs: list[dict]):
-        return self._request("POST", "/v1/base/evm-logs", json=logs)
-
-    def reconcile_base_rpc_logs(self, submission):
-        return self._request("POST", "/v1/base/rpc-logs", json=submission)
-
-    def plan_base_log_query(
-        self,
-        escrow_contract: str,
-        from_block: int,
-        to_block: int | None = None,
-        request_id: int | None = None,
-    ):
+    def publish_autonomous_bounty_terms(self, creator_wallet: str, document: dict):
         return self._request(
             "POST",
-            "/v1/base/log-query",
-            json={
-                "escrow_contract": escrow_contract,
-                "from_block": from_block,
-                "to_block": to_block,
-                "request_id": request_id,
-            },
+            "/v1/base/autonomous-bounties/terms",
+            json={"creator_wallet": creator_wallet, "document": document},
         )
 
-    def fetch_base_rpc_logs(
+    def get_autonomous_bounty_terms(self, terms_hash: str):
+        return self._request(
+            "GET", f"/v1/base/autonomous-bounties/terms/{terms_hash}"
+        )
+
+    def publish_autonomous_submission_evidence(
         self,
-        escrow_contract: str,
-        from_block: int,
-        to_block: int | None = None,
-        request_id: int | None = None,
+        bounty_contract: str,
+        bounty_id: str,
+        round: int,
+        solver_wallet: str,
+        artifact_reference: str,
+        evidence: dict,
         network: str | None = None,
     ):
         return self._request(
             "POST",
-            "/v1/base/fetch-rpc-logs",
+            "/v1/base/autonomous-bounties/submission-evidence",
             json={
-                "escrow_contract": escrow_contract,
-                "from_block": from_block,
-                "to_block": to_block,
-                "request_id": request_id,
                 "network": network,
+                "bounty_contract": bounty_contract,
+                "bounty_id": bounty_id,
+                "round": round,
+                "solver_wallet": solver_wallet,
+                "artifact_reference": artifact_reference,
+                "evidence": evidence,
             },
+        )
+
+    def get_autonomous_submission_evidence(
+        self, bounty_contract: str, round: int, network: str | None = None
+    ):
+        return self._request(
+            "GET",
+            f"/v1/base/autonomous-bounties/submission-evidence/{bounty_contract}/{round}",
+            params={"network": network},
+        )
+
+    def list_autonomous_bounties(
+        self, network: str | None = None, claimable_only: bool | None = None
+    ):
+        return self._request(
+            "GET",
+            "/v1/base/autonomous-bounties/feed",
+            params={"network": network, "claimable_only": claimable_only},
+        )
+
+    def list_autonomous_verification_jobs(
+        self, network: str | None = None, verifier: str | None = None
+    ):
+        return self._request(
+            "GET",
+            "/v1/base/autonomous-bounties/verification-jobs",
+            params={"network": network, "verifier": verifier},
+        )
+
+    def list_autonomous_bounty_events(
+        self, network: str | None = None, bounty_id: str | None = None
+    ):
+        return self._request(
+            "GET",
+            "/v1/base/autonomous-bounties/events",
+            params={"network": network, "bounty_id": bounty_id},
+        )
+
+    def decode_autonomous_bounty_events(self, logs: list[dict]):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/decode-events",
+            json={"logs": logs},
+        )
+
+    def plan_autonomous_bounty_creation(
+        self, create: dict, network: str | None = None
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/creation-plan",
+            json={"network": network, "create": create},
+        )
+
+    def plan_autonomous_bounty_authorized_creation(
+        self,
+        create: dict,
+        signature: dict,
+        network: str | None = None,
+        relayer: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/authorized-creation-plan",
+            json={
+                "network": network,
+                "create": create,
+                "signature": signature,
+                "relayer": relayer,
+            },
+        )
+
+    def plan_autonomous_bounty_contribution(
+        self, contribution: dict, network: str | None = None
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/contribution-plan",
+            json={"network": network, "contribution": contribution},
+        )
+
+    def plan_autonomous_bounty_authorized_contribution(
+        self,
+        contribution: dict,
+        signature: dict,
+        network: str | None = None,
+        relayer: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/authorized-contribution-plan",
+            json={
+                "network": network,
+                "contribution": contribution,
+                "signature": signature,
+                "relayer": relayer,
+            },
+        )
+
+    def plan_autonomous_bounty_claim(
+        self,
+        bounty_contract: str,
+        solver: str,
+        network: str | None = None,
+        authorization_nonce: str | None = None,
+        authorization_valid_before: int | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/claim-plan",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "solver": solver,
+                "authorization_nonce": authorization_nonce,
+                "authorization_valid_before": authorization_valid_before,
+            },
+        )
+
+    def plan_autonomous_bounty_authorized_claim(
+        self,
+        bounty_contract: str,
+        solver: str,
+        authorization_nonce: str,
+        authorization_valid_before: int,
+        signature: dict,
+        network: str | None = None,
+        relayer: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/authorized-claim-plan",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "solver": solver,
+                "authorization_nonce": authorization_nonce,
+                "authorization_valid_before": authorization_valid_before,
+                "signature": signature,
+                "relayer": relayer,
+            },
+        )
+
+    def plan_autonomous_bounty_submission(
+        self,
+        bounty_contract: str,
+        solver: str,
+        submission_hash: str,
+        evidence_hash: str,
+        network: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/submission-plan",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "solver": solver,
+                "submission_hash": submission_hash,
+                "evidence_hash": evidence_hash,
+            },
+        )
+
+    def plan_autonomous_verification_attestation(
+        self, attestation: dict, network: str | None = None
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/verification-attestation-plan",
+            json={"network": network, "attestation": attestation},
+        )
+
+    def plan_autonomous_module_settlement(
+        self,
+        bounty_contract: str,
+        proof: str,
+        network: str | None = None,
+        caller: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/module-settlement-plan",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "caller": caller,
+                "proof": proof,
+            },
+        )
+
+    def plan_autonomous_attestation_settlement(
+        self,
+        bounty_contract: str,
+        attestations: list[dict],
+        network: str | None = None,
+        caller: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/attestation-settlement-plan",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "caller": caller,
+                "attestations": attestations,
+            },
+        )
+
+    def _plan_autonomous_lifecycle(
+        self,
+        action: str,
+        bounty_contract: str,
+        network: str | None = None,
+        caller: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            f"/v1/base/autonomous-bounties/{action}-plan",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "caller": caller,
+            },
+        )
+
+    def plan_autonomous_expire_claim(self, bounty_contract: str, **kwargs):
+        return self._plan_autonomous_lifecycle("expire-claim", bounty_contract, **kwargs)
+
+    def plan_autonomous_expire_submission(self, bounty_contract: str, **kwargs):
+        return self._plan_autonomous_lifecycle(
+            "expire-submission", bounty_contract, **kwargs
+        )
+
+    def plan_autonomous_cancel(self, bounty_contract: str, **kwargs):
+        return self._plan_autonomous_lifecycle("cancel", bounty_contract, **kwargs)
+
+    def plan_autonomous_refund_withdrawal(self, bounty_contract: str, **kwargs):
+        return self._plan_autonomous_lifecycle(
+            "refund-withdrawal", bounty_contract, **kwargs
         )
 
     def broadcast_base_signed_transaction(
@@ -496,7 +713,6 @@ class AgentBountiesClient:
         tx_hash: str,
         request_id: int | None = None,
         network: str | None = None,
-        reconcile_logs: bool | None = None,
     ):
         return self._request(
             "POST",
@@ -504,97 +720,6 @@ class AgentBountiesClient:
             json={
                 "tx_hash": tx_hash,
                 "request_id": request_id,
-                "network": network,
-                "reconcile_logs": reconcile_logs,
-            },
-        )
-
-    def plan_base_funding(
-        self,
-        bounty_id: str,
-        escrow_contract: str,
-        payer: str,
-        token: str,
-        network: str | None = None,
-    ):
-        return self._request(
-            "POST",
-            "/v1/base/funding-plan",
-            json={
-                "bounty_id": bounty_id,
-                "escrow_contract": escrow_contract,
-                "payer": payer,
-                "token": token,
-                "network": network,
-            },
-        )
-
-    def plan_base_release(
-        self,
-        bounty_id: str,
-        escrow_contract: str,
-        platform_fee_wallet: str,
-        network: str | None = None,
-    ):
-        return self._request(
-            "POST",
-            "/v1/base/release-plan",
-            json={
-                "bounty_id": bounty_id,
-                "escrow_contract": escrow_contract,
-                "platform_fee_wallet": platform_fee_wallet,
-                "network": network,
-            },
-        )
-
-    def plan_base_refund(
-        self,
-        bounty_id: str,
-        escrow_contract: str,
-        reason_hash: str,
-        network: str | None = None,
-    ):
-        return self._request(
-            "POST",
-            "/v1/base/refund-plan",
-            json={
-                "bounty_id": bounty_id,
-                "escrow_contract": escrow_contract,
-                "reason_hash": reason_hash,
-                "network": network,
-            },
-        )
-
-    def plan_base_dispute(
-        self,
-        bounty_id: str,
-        escrow_contract: str,
-        dispute_hash: str,
-        network: str | None = None,
-    ):
-        return self._request(
-            "POST",
-            "/v1/base/dispute-plan",
-            json={
-                "bounty_id": bounty_id,
-                "escrow_contract": escrow_contract,
-                "dispute_hash": dispute_hash,
-                "network": network,
-            },
-        )
-
-    def list_base_release_queue(
-        self,
-        escrow_contract: str | None = None,
-        platform_fee_wallet: str | None = None,
-        network: str | None = None,
-    ):
-        return self._request(
-            "POST",
-            "/v1/base/release-queue",
-            json={
-                "escrow_contract": escrow_contract,
-                "platform_fee_wallet": platform_fee_wallet,
                 "network": network,
             },
         )

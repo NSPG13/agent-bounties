@@ -87,9 +87,15 @@ class StageReviewContractRootTests(unittest.TestCase):
         )
 
         self.assertIn("stage_review_contract_root.py", powershell)
+        self.assertIn("baseRefOid", powershell)
+        self.assertIn("--worktree $baseWorktreeFull", powershell)
+        self.assertIn('Join-Path $baseWorktreeFull "Cargo.toml"', powershell)
         self.assertIn('"--contract-root", $contractRootFull', powershell)
         self.assertNotIn('"--contract-root", $repoRoot', powershell)
         self.assertIn("stage_review_contract_root.py", shell)
+        self.assertIn("baseRefOid", shell)
+        self.assertIn('--worktree "$base_worktree"', shell)
+        self.assertIn('--manifest-path "$base_worktree/Cargo.toml"', shell)
         self.assertIn('--contract-root "$contract_root"', shell)
         self.assertNotIn('--contract-root "$repo_root"', shell)
 

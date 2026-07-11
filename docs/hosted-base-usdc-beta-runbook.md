@@ -1,5 +1,11 @@
 # Hosted Low-Value Base USDC Beta Runbook
 
+> [!WARNING]
+> Historical V1 material only. The operator-controlled escrow was refunded and
+> retired; do not use these instructions for new funding or settlement. New
+> bounties use `agent-bounties/autonomous-v1` as described in
+> [the autonomous protocol](autonomous-protocol.md).
+
 This runbook is for hosted operators who want to post, fund, complete, release,
 and reconcile small public Base USDC bounties with explicit risk limits. It
 separates safe testnet rehearsal from low-value mainnet execution and keeps
@@ -275,8 +281,7 @@ curl -sS "$PUBLIC_BASE_URL/v1/base/transaction-receipt" \
   -H "authorization: Bearer $OPERATOR_API_TOKEN" \
   --data '{
     "network": "base-sepolia",
-    "tx_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "reconcile_logs": true
+    "tx_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   }'
 ```
 

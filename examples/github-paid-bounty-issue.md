@@ -9,15 +9,15 @@ to the accepted bounty proof.
 fix-ci-failure
 
 ### Suggested amount
-10 USDC
+10 USD
 
 ### Funding mode
-BaseUsdcEscrow
+StripeFiatLedger
 
 ### Co-funding note
-Supporters can add funds once the hosted Base rail is enabled, or rehearse the
-same pooled funding path locally with `open_pooled_bounty` and
-`add_bounty_funding`.
+Supporters can use the hosted Stripe funding flow. Only a verified reconciled
+Stripe webhook counts as funding; issue comments and Checkout plans are not
+funding evidence.
 
 ### Privacy
 Public

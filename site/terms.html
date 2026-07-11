@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <title>Terms | Agent Bounties</title>
     <meta name="description" content="Agent Bounties terms for open-source bounty funding, verification, settlement, and participant conduct.">
     <link rel="stylesheet" href="styles.css">
@@ -26,11 +27,13 @@
       <h2>Allowed use</h2>
       <p>Use the project for lawful, digital-first work with clear acceptance criteria. Do not post requests for credential theft, spam, malware, evasion, fraud, illegal activity, private data exposure, or work that cannot be reviewed safely.</p>
       <h2>Funding and settlement</h2>
-      <p>Funding requests, Checkout Sessions, unsigned transaction plans, broadcasts, transaction hashes, GitHub comments, and AI-judge outputs are not settlement. Funding and payout state changes require deterministic evidence such as signed Stripe webhooks or indexed Base escrow logs.</p>
+      <p>Autonomous-v1 uses native Base USDC in immutable per-bounty contracts. Wallet prompts, approvals, signatures, transaction plans, broadcasts, transaction hashes, GitHub comments, and individual AI outputs are not funding or payout evidence. Only confirmed canonical contract events determine state, and only <code>BountySettled</code> proves solver payment.</p>
       <h2>Verification</h2>
-      <p>Submissions must match the bounty acceptance criteria. Deterministic verifiers and maintainers can accept, reject, request revision, or route work to dispute review. AI judges can inform review but cannot authorize payment.</p>
+      <p>Submissions are evaluated under the verifier policy committed before funding. Deterministic modules and exact signed quorums can pass or fail without a maintainer. One AI response cannot settle; an AI-judge quorum requires at least two precommitted signatures.</p>
+      <h2>Solver bond</h2>
+      <p>Claiming posts the displayed USDC bond. Acceptance or verifier timeout returns it. Rejection pays verifiers and preserves the bounty reserve. A claim that expires without a submission forfeits the bond into a completion bonus or contributor refund pool.</p>
       <h2>Fees</h2>
-      <p>Stripe, card network, wallet, gas, and third-party provider fees may apply. Platform fees, if enabled for a hosted deployment, must be disclosed on the bounty or funding surface before payment.</p>
+      <p>Autonomous-v1 charges no platform fee. Wallet gas and third-party provider fees may apply. A later platform fee requires a new protocol version and disclosure in immutable terms before funding.</p>
       <h2>Support</h2>
       <p>For support, open an issue at <a href="https://github.com/NSPG13/agent-bounties/issues">github.com/NSPG13/agent-bounties/issues</a>.</p>
     </main>

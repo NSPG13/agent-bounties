@@ -4,12 +4,13 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_API_BASE_URL = "https://agent-bounties-api.onrender.com";
+export const DEFAULT_PROTOCOL_URL = "https://nspg13.github.io/agent-bounties/protocol.json";
+
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
 export function normalizeApiBaseUrl(value) {
   const url = new URL(String(value || "").trim());
-  if (url.username || url.password) {
-    throw new Error("API base URL must not contain credentials");
-  }
+  if (url.username || url.password) throw new Error("API base URL must not contain credentials");
   const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     throw new Error("API base URL must use HTTPS, except for loopback development URLs");
@@ -18,6 +19,14 @@ export function normalizeApiBaseUrl(value) {
   url.search = "";
   url.hash = "";
   return url.toString().replace(/\/$/, "");
+}
+
+function normalizePublicUrl(value, label) {
+  const url = new URL(String(value || "").trim());
+  if (url.protocol !== "https:" || url.username || url.password) {
+    throw new Error(`${label} must be a credential-free HTTPS URL`);
+  }
+  return url.toString();
 }
 
 async function request(url, parseJson) {
@@ -44,176 +53,180 @@ async function request(url, parseJson) {
 function itemsFrom(body) {
   if (Array.isArray(body)) return body;
   if (Array.isArray(body?.items)) return body.items;
-  if (Array.isArray(body?.bounties)) return body.bounties;
   return [];
 }
 
-function amountOf(money) {
-  const amount = Number(money?.amount);
-  return Number.isSafeInteger(amount) ? amount : null;
+function integerOf(value) {
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) && amount >= 0 ? amount : null;
 }
 
-function hasBaseEvidence(status) {
-  const fundedEscrow = (status.escrows || []).some(
-    (escrow) =>
-      escrow?.rail === "BaseUsdc" &&
-      escrow?.status === "Funded" &&
-      typeof escrow?.external_reference === "string" &&
-      escrow.external_reference.length > 0,
-  );
-  const indexedCreated = (status.base_escrow_events || []).some(
-    (event) => event?.kind === "Created" && event?.status === "Funded",
-  );
-  return fundedEscrow || indexedCreated;
+function moneyAmount(value) {
+  if (value?.currency !== "usdc") return null;
+  return integerOf(value.amount);
 }
 
-function hasStripeEvidence(status) {
-  const appliedContribution = (status.funding_contributions || []).some(
-    (contribution) =>
-      contribution?.rail === "StripeFiat" && contribution?.status === "Applied",
+function activeProtocol(protocol) {
+  return Boolean(
+    protocol
+      && protocol.protocol_version === "agent-bounties/autonomous-v1"
+      && protocol.status === "active"
+      && protocol.network === "base-mainnet"
+      && protocol.chain_id === 8453
+      && ADDRESS.test(protocol.factory || "")
+      && ADDRESS.test(protocol.implementation || "")
+      && String(protocol.native_usdc || "").toLowerCase()
+        === "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
   );
-  const appliedIntent = (status.funding_intents || []).some(
-    (intent) => intent?.rail === "StripeFiat" && intent?.status === "Applied",
-  );
-  return appliedContribution || appliedIntent;
 }
 
-export function verifyClaimableStatus(status) {
-  const bounty = status?.bounty;
-  const summary = status?.funding_summary;
-  if (!bounty || bounty.status !== "Claimable") {
-    return { ok: false, reason: "scoped_status_not_claimable" };
+export function verifyClaimableItem(item, protocol) {
+  if (!activeProtocol(protocol)) return { ok: false, reason: "autonomous_protocol_not_active" };
+  if (!item || item.status !== "claimable") {
+    return { ok: false, reason: "indexed_status_not_claimable" };
   }
-  if (status.claims?.length) {
-    return { ok: false, reason: "already_claimed" };
+  if (!item.terms_valid || !item.terms?.document?.contract_terms) {
+    return { ok: false, reason: "terms_or_contract_commitments_invalid" };
   }
-  const target = amountOf(summary?.target);
-  const applied = amountOf(summary?.applied);
-  if (!summary?.claimable || target === null || applied === null || applied < target) {
-    return { ok: false, reason: "funding_summary_not_claimable" };
+  if (!ADDRESS.test(item.bounty_contract || "") || !ADDRESS.test(item.creator || "")) {
+    return { ok: false, reason: "invalid_canonical_identity" };
   }
 
-  const baseEvidence = hasBaseEvidence(status);
-  const stripeEvidence = hasStripeEvidence(status);
-  switch (bounty.funding_mode) {
-    case "BaseUsdcEscrow":
-      return baseEvidence
-        ? { ok: true, reason: "indexed_base_funding" }
-        : { ok: false, reason: "missing_indexed_base_funding" };
-    case "StripeFiatLedger":
-      return stripeEvidence
-        ? { ok: true, reason: "verified_stripe_funding" }
-        : { ok: false, reason: "missing_verified_stripe_funding" };
-    case "MixedRails": {
-      const requiredRails = (summary.partitions || [])
-        .filter((partition) => (amountOf(partition?.target) || 0) > 0)
-        .map((partition) => partition.rail);
-      const railsSatisfied = requiredRails.every(
-        (rail) =>
-          (rail === "BaseUsdc" && baseEvidence) ||
-          (rail === "StripeFiat" && stripeEvidence),
-      );
-      return railsSatisfied && requiredRails.length > 0
-        ? { ok: true, reason: "reconciled_mixed_funding" }
-        : { ok: false, reason: "missing_mixed_rail_evidence" };
-    }
-    case "Simulated":
-      return { ok: false, reason: "simulated_value_is_not_earnable_money" };
-    default:
-      return { ok: false, reason: "unsupported_funding_mode" };
+  const solverReward = integerOf(item.solver_reward);
+  const verifierReward = integerOf(item.verifier_reward);
+  const claimBond = integerOf(item.claim_bond);
+  const target = integerOf(item.target_amount);
+  const funded = integerOf(item.funded_amount);
+  const timeoutBonus = integerOf(item.timeout_bond_pool);
+  if (
+    solverReward === null
+    || verifierReward === null
+    || verifierReward === 0
+    || claimBond !== verifierReward
+    || target !== solverReward + verifierReward
+    || funded !== target
+    || timeoutBonus === null
+  ) {
+    return { ok: false, reason: "funding_or_bond_invariant_failed" };
   }
+
+  const committed = item.terms.document.contract_terms;
+  if (
+    String(committed.creator_wallet || "").toLowerCase() !== item.creator.toLowerCase()
+    || committed.network !== "base-mainnet"
+    || String(committed.settlement_token || "").toLowerCase()
+      !== String(protocol.native_usdc).toLowerCase()
+    || moneyAmount(committed.solver_reward) !== solverReward
+    || moneyAmount(committed.verifier_reward) !== verifierReward
+    || moneyAmount(committed.claim_bond) !== claimBond
+  ) {
+    return { ok: false, reason: "published_terms_do_not_match_economics" };
+  }
+
+  const events = Array.isArray(item.events) ? item.events : [];
+  const requiredKinds = [
+    "canonical_bounty_created",
+    "canonical_bounty_terms_committed",
+    "canonical_bounty_economics_configured",
+    "canonical_bounty_verification_configured",
+    "bounty_became_claimable",
+  ];
+  if (!requiredKinds.every((kind) => events.some((event) => event?.kind === kind))) {
+    return { ok: false, reason: "canonical_claimability_events_missing" };
+  }
+  const created = events.find((event) => event?.kind === "canonical_bounty_created");
+  if (String(created?.contract_address || "").toLowerCase() !== protocol.factory.toLowerCase()) {
+    return { ok: false, reason: "creation_not_emitted_by_active_factory" };
+  }
+  return { ok: true, reason: "confirmed_canonical_autonomous_bounty" };
 }
 
-function normalizedBounty(status, apiBaseUrl) {
-  const bounty = status.bounty;
+function normalizedBounty(item, apiBaseUrl) {
   return {
-    id: bounty.id,
-    title: bounty.title,
-    template_slug: bounty.template_slug,
-    amount_minor: bounty.amount?.amount ?? null,
-    currency: bounty.amount?.currency ?? null,
-    funding_mode: bounty.funding_mode,
-    status: bounty.status,
-    verifier_evidence_required: true,
-    status_url: `${apiBaseUrl}/v1/bounties/${bounty.id}`,
-    public_url: `${apiBaseUrl}/public/bounties/${bounty.id}`,
+    id: item.bounty_id,
+    contract: item.bounty_contract,
+    title: item.terms.document.title,
+    solver_reward_minor: integerOf(item.solver_reward),
+    completion_bonus_minor: integerOf(item.timeout_bond_pool),
+    claim_bond_minor: integerOf(item.claim_bond),
+    currency: "usdc",
+    status: item.status,
+    evidence: "confirmed_canonical_autonomous_bounty",
+    terms_url: `${apiBaseUrl}/v1/base/autonomous-bounties/terms/${item.terms_hash}`,
+    claim_plan_url: `${apiBaseUrl}/v1/base/autonomous-bounties/claim-plan`,
   };
 }
 
 function normalizedFundingCandidate(item) {
+  const target = integerOf(item.target_amount) || 0;
+  const funded = integerOf(item.funded_amount) || 0;
   return {
-    id: item.bounty_id || item.id || null,
-    title: item.title || null,
-    amount_minor: item.funding_target_minor ?? item.amount?.amount ?? null,
-    currency: item.currency || item.amount?.currency || null,
-    remaining_minor: item.funding_remaining_minor ?? null,
-    public_url: item.public_url || null,
+    id: item.bounty_id,
+    contract: item.bounty_contract,
+    title: item.terms?.document?.title || null,
+    target_minor: target,
+    funded_minor: funded,
+    remaining_minor: Math.max(0, target - funded),
+    currency: "usdc",
+    terms_valid: item.terms_valid === true,
   };
 }
 
-export async function collectInventory({ apiBaseUrl, fixture = null }) {
+export async function collectInventory({
+  apiBaseUrl,
+  protocolUrl = DEFAULT_PROTOCOL_URL,
+  fixture = null,
+}) {
   const api = normalizeApiBaseUrl(apiBaseUrl || DEFAULT_API_BASE_URL);
-  const healthPromise = fixture
-    ? fixture.health
-    : request(`${api}/health`, false);
-  const readinessPromise = fixture
-    ? fixture.readiness
-    : request(`${api}/v1/readiness/live-money?network=base-mainnet`, true);
-  const claimablePromise = fixture
-    ? fixture.claimable_feed
-    : request(`${api}/v1/bounties/claimable`, true);
-  const fundingPromise = fixture
-    ? fixture.funding_feed
-    : request(`${api}/v1/bounties/funding-feed`, true);
-  const [health, readiness, claimableFeed, fundingFeed] = await Promise.all([
-    healthPromise,
-    readinessPromise,
-    claimablePromise,
-    fundingPromise,
+  const protocolEndpoint = normalizePublicUrl(protocolUrl, "Protocol URL");
+  const [health, protocolResponse, feedResponse, jobsResponse] = await Promise.all([
+    fixture ? fixture.health : request(`${api}/health`, false),
+    fixture ? fixture.protocol : request(protocolEndpoint, true),
+    fixture
+      ? fixture.autonomous_feed
+      : request(`${api}/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false`, true),
+    fixture
+      ? fixture.verification_jobs
+      : request(`${api}/v1/base/autonomous-bounties/verification-jobs?network=base-mainnet`, true),
   ]);
 
+  const protocol = protocolResponse?.status === 200 ? protocolResponse.body : null;
   const verified = [];
   const excluded = [];
-  for (const candidate of itemsFrom(claimableFeed?.body)) {
-    const bountyId = candidate?.id || candidate?.bounty_id;
-    if (!bountyId) {
-      excluded.push({ id: null, reason: "missing_bounty_id" });
-      continue;
+  const fundingCandidates = [];
+  for (const item of itemsFrom(feedResponse?.body)) {
+    if (item?.status === "open" && item?.terms_valid) {
+      fundingCandidates.push(normalizedFundingCandidate(item));
     }
-    const statusResponse = fixture
-      ? fixture.statuses?.[bountyId] || { status: 404, body: null, error: null }
-      : await request(`${api}/v1/bounties/${encodeURIComponent(bountyId)}`, true);
-    if (statusResponse?.status !== 200 || !statusResponse.body) {
-      excluded.push({ id: bountyId, reason: "scoped_status_unavailable" });
-      continue;
-    }
-    const verdict = verifyClaimableStatus(statusResponse.body);
+    if (item?.status !== "claimable") continue;
+    const verdict = verifyClaimableItem(item, protocol);
     if (verdict.ok) {
-      verified.push({
-        ...normalizedBounty(statusResponse.body, api),
-        evidence: verdict.reason,
-      });
+      verified.push(normalizedBounty(item, api));
     } else {
-      excluded.push({ id: bountyId, reason: verdict.reason });
+      excluded.push({ id: item?.bounty_id || null, reason: verdict.reason });
     }
   }
 
   const healthOk = health?.status === 200 && String(health.body).trim() === "ok";
   const warnings = [];
   if (!healthOk) warnings.push("hosted_api_health_not_confirmed");
-  if (claimableFeed?.status !== 200) warnings.push("claimable_feed_unavailable");
+  if (feedResponse?.status !== 200) warnings.push("autonomous_feed_unavailable");
+  if (!activeProtocol(protocol)) warnings.push("autonomous_protocol_not_active");
   if (!verified.length) warnings.push("no_verified_funded_bounty_is_claimable");
 
   return {
     observed_at: new Date().toISOString(),
     api_base_url: api,
+    protocol_url: protocolEndpoint,
     hosted_api_healthy: healthOk,
     health_status: health?.status ?? null,
-    readiness_status: readiness?.status ?? null,
-    live_money_ready: readiness?.body?.live_money_ready === true,
+    protocol_status: protocol?.status ?? null,
+    active_factory: activeProtocol(protocol) ? protocol.factory : null,
     verified_claimable_bounties: verified,
     excluded_claimable_candidates: excluded,
-    funding_candidates: itemsFrom(fundingFeed?.body).map(normalizedFundingCandidate),
+    funding_candidates: fundingCandidates,
+    live_verification_jobs:
+      jobsResponse?.status === 200 ? itemsFrom(jobsResponse.body) : [],
     recommended_action: verified.length ? "claim_verified_bounty" : "post_own_bounty",
     links: {
       post_own_bounty: "https://nspg13.github.io/agent-bounties/post.html",
@@ -223,23 +236,24 @@ export async function collectInventory({ apiBaseUrl, fixture = null }) {
     },
     warnings,
     evidence_boundary:
-      "Only scoped claimable status plus reconciled real-rail funding evidence is earnable inventory. Verification is not payout; paid requires reconciled settlement evidence.",
+      "Only an active configured factory plus matching terms, economics, funding, and canonical events is earnable inventory. Only confirmed canonical BountySettled proves payout.",
   };
 }
 
 function parseArgs(argv) {
   const options = {
     apiBaseUrl: process.env.AGENT_BOUNTIES_API_URL || DEFAULT_API_BASE_URL,
+    protocolUrl: process.env.AGENT_BOUNTIES_PROTOCOL_URL || DEFAULT_PROTOCOL_URL,
     fixturePath: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--api-base-url") options.apiBaseUrl = argv[++index];
+    else if (argument === "--protocol-url") options.protocolUrl = argv[++index];
     else if (argument === "--fixture") options.fixturePath = argv[++index];
     else if (argument === "--help") options.help = true;
     else throw new Error(`unknown argument: ${argument}`);
   }
-  if (!options.apiBaseUrl) throw new Error("--api-base-url requires a value");
   return options;
 }
 
@@ -247,14 +261,18 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(
-      "Usage: node check-in.mjs [--api-base-url https://...] [--fixture fixture.json]",
+      "Usage: node check-in.mjs [--api-base-url https://...] [--protocol-url https://...] [--fixture fixture.json]",
     );
     return;
   }
   const fixture = options.fixturePath
     ? JSON.parse(await readFile(options.fixturePath, "utf8"))
     : null;
-  const report = await collectInventory({ apiBaseUrl: options.apiBaseUrl, fixture });
+  const report = await collectInventory({
+    apiBaseUrl: options.apiBaseUrl,
+    protocolUrl: options.protocolUrl,
+    fixture,
+  });
   console.log(JSON.stringify(report, null, 2));
 }
 

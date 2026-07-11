@@ -112,64 +112,48 @@ def load_mainnet_deployment(repo_root: Path) -> dict[str, object]:
     except (OSError, json.JSONDecodeError) as error:
         fail(f"invalid Base mainnet deployment manifest: {error}")
 
-    if deployment.get("schema_version") != 1:
-        fail("Base mainnet deployment schema_version must be 1")
+    if deployment.get("schema_version") != 2:
+        fail("Base mainnet deployment schema_version must be 2")
+    if deployment.get("protocol_version") != "agent-bounties/autonomous-v1":
+        fail("Base mainnet deployment must use autonomous-v1")
     if deployment.get("network") != "base-mainnet" or deployment.get("chain_id") != 8453:
         fail("Base mainnet deployment must target chain 8453")
     if deployment.get("rpc_url") != "https://mainnet.base.org":
         fail("Base mainnet deployment must use the official bootstrap RPC URL")
     require_address(deployment.get("native_usdc"), "native_usdc")
 
-    escrow = deployment.get("escrow")
-    if not isinstance(escrow, dict):
-        fail("Base mainnet deployment must contain escrow metadata")
-    for key in (
-        "contract",
-        "deployer",
-        "owner_at_deployment",
-        "settlement_signer_at_deployment",
-    ):
-        require_address(escrow.get(key), f"escrow.{key}")
-    transaction = escrow.get("deployment_transaction")
-    if not isinstance(transaction, str) or not re.fullmatch(r"0x[0-9a-fA-F]{64}", transaction):
-        fail("deployment manifest escrow.deployment_transaction must be a transaction hash")
-    code_hash = escrow.get("runtime_code_hash")
-    if not isinstance(code_hash, str) or not re.fullmatch(r"0x[0-9a-fA-F]{64}", code_hash):
-        fail("deployment manifest escrow.runtime_code_hash must be a bytes32 hash")
-    if not isinstance(escrow.get("deployment_block"), int) or escrow["deployment_block"] <= 0:
-        fail("deployment manifest escrow.deployment_block must be positive")
-    if escrow.get("deployer") != escrow.get("owner_at_deployment"):
-        fail("deployment manifest must identify the deployment owner")
+    status = deployment.get("status")
+    if status not in {"pending_external_review_and_deployment", "active"}:
+        fail("Base mainnet autonomous deployment status is invalid")
+    factory = deployment.get("factory")
+    if not isinstance(factory, dict):
+        fail("Base mainnet deployment must contain factory metadata")
+    if factory.get("source") != "contracts/base-escrow/src/AgentBountyFactory.sol:AgentBountyFactory":
+        fail("deployment factory source does not identify the autonomous factory")
+    constructor_args = factory.get("constructor_args")
+    if not isinstance(constructor_args, dict) or constructor_args.get("settlement_token") != deployment.get("native_usdc"):
+        fail("autonomous factory constructor must use Base native USDC")
+    if status == "active":
+        require_address(factory.get("contract"), "factory.contract")
+        require_address(factory.get("implementation"), "factory.implementation")
+        require_address(factory.get("deployer"), "factory.deployer")
+        transaction = factory.get("deployment_transaction")
+        if not isinstance(transaction, str) or not re.fullmatch(r"0x[0-9a-fA-F]{64}", transaction):
+            fail("factory deployment_transaction must be a transaction hash")
+        for key in ("runtime_code_hash", "implementation_runtime_code_hash"):
+            value = factory.get(key)
+            if not isinstance(value, str) or not re.fullmatch(r"0x[0-9a-fA-F]{64}", value):
+                fail(f"factory.{key} must be a bytes32 hash")
+        if not isinstance(factory.get("deployment_block"), int) or factory["deployment_block"] <= 0:
+            fail("factory.deployment_block must be positive")
 
-    compiler = escrow.get("compiler")
-    if not isinstance(compiler, dict):
-        fail("deployment manifest must contain compiler metadata")
-    expected_compiler = {
-        "version": "0.8.26+commit.8a97fa7a",
-        "optimizer_enabled": True,
-        "optimizer_runs": 200,
-        "evm_version": "cancun",
-    }
-    if compiler != expected_compiler:
-        fail("deployment manifest compiler settings do not match the verified contract")
-
-    verification = escrow.get("verification")
-    if not isinstance(verification, dict):
-        fail("deployment manifest must contain verification metadata")
-    if verification.get("sourcify_match") != "exact_match":
-        fail("Base mainnet escrow must have an exact Sourcify match")
-    if verification.get("blockscout_verified") is not True:
-        fail("Base mainnet escrow must be verified on Blockscout")
-
-    pilot_policy = deployment.get("pilot_policy")
-    if not isinstance(pilot_policy, dict):
-        fail("deployment manifest must contain pilot_policy")
-    if pilot_policy.get("automatic_release_cap_minor") != 10_000_000:
-        fail("deployment pilot policy must match the 10 USDC automatic-release cap")
-    if pilot_policy.get("first_end_to_end_bounty_cap_minor") != 1_000_000:
-        fail("first Base mainnet loop must stay capped at 1 USDC")
-    if pilot_policy.get("hosted_transaction_broadcast") is not False:
-        fail("hosted Base transaction broadcast must remain disabled")
+    policy = deployment.get("policy")
+    if not isinstance(policy, dict):
+        fail("deployment manifest must contain autonomous policy metadata")
+    if policy.get("operator_settlement_signer") is not False:
+        fail("autonomous protocol cannot configure an operator settlement signer")
+    if policy.get("hosted_paid_state_requires_confirmed_bounty_settled_event") is not True:
+        fail("hosted paid state must require confirmed BountySettled evidence")
 
     return deployment
 
@@ -177,12 +161,10 @@ def load_mainnet_deployment(repo_root: Path) -> dict[str, object]:
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     deployment = load_mainnet_deployment(repo_root)
-    escrow = deployment["escrow"]
-    assert isinstance(escrow, dict)
     rpc_url = str(deployment["rpc_url"])
-    contract = str(escrow["contract"])
-    signer = str(escrow["settlement_signer_at_deployment"])
-    deployment_block = int(escrow["deployment_block"])
+    factory = deployment["factory"]
+    assert isinstance(factory, dict)
+    active = deployment["status"] == "active"
 
     blueprint = repo_root / "render.yaml"
     if not blueprint.exists():
@@ -212,19 +194,23 @@ def main() -> int:
             "BASE_MAINNET_RPC_URL",
             "BASE_SEPOLIA_USDC_TOKEN",
             "BASE_MAINNET_USDC_TOKEN",
-            "BASE_SEPOLIA_ESCROW_CONTRACT",
-            "BASE_MAINNET_ESCROW_CONTRACT",
-            "BASE_SETTLEMENT_SIGNER",
-            "BASE_PLATFORM_FEE_WALLET",
+            "BASE_SEPOLIA_BOUNTY_FACTORY",
+            "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION",
+            "BASE_MAINNET_BOUNTY_FACTORY",
+            "BASE_MAINNET_BOUNTY_IMPLEMENTATION",
         ],
     )
     require_env_sync_false(base_group, "BASE_SEPOLIA_RPC_URL")
-    require_env_sync_false(base_group, "BASE_SEPOLIA_ESCROW_CONTRACT")
+    require_env_sync_false(base_group, "BASE_SEPOLIA_BOUNTY_FACTORY")
+    require_env_sync_false(base_group, "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION")
     require_env_value(base_group, "BASE_MAINNET_RPC_URL", rpc_url)
     require_env_value(base_group, "BASE_MAINNET_USDC_TOKEN", str(deployment["native_usdc"]))
-    require_env_value(base_group, "BASE_MAINNET_ESCROW_CONTRACT", contract)
-    require_env_value(base_group, "BASE_SETTLEMENT_SIGNER", signer)
-    require_env_value(base_group, "BASE_PLATFORM_FEE_WALLET", signer)
+    if active:
+        require_env_value(base_group, "BASE_MAINNET_BOUNTY_FACTORY", str(factory["contract"]))
+        require_env_value(base_group, "BASE_MAINNET_BOUNTY_IMPLEMENTATION", str(factory["implementation"]))
+    else:
+        require_env_sync_false(base_group, "BASE_MAINNET_BOUNTY_FACTORY")
+        require_env_sync_false(base_group, "BASE_MAINNET_BOUNTY_IMPLEMENTATION")
 
     services = section(text, "services")
     for service_name in SERVICE_NAMES:
@@ -263,22 +249,24 @@ def main() -> int:
     require_env_value(worker, "APP_PACKAGE", "worker")
     require_env_value(worker, "APP_BINARY", "worker")
     require_env_value(worker, "BASE_INDEXER_NETWORK", "base-mainnet")
+    require_env_value(worker, "BASE_INDEXER_PROTOCOL", "autonomous-v1")
     require_env_value(worker, "BASE_INDEXER_RPC_URL", rpc_url)
-    require_env_value(worker, "BASE_INDEXER_ESCROW_CONTRACT", contract)
-    require_env_value(worker, "BASE_INDEXER_START_BLOCK", f'"{deployment_block}"')
+    if active:
+        require_env_value(worker, "BASE_INDEXER_START_BLOCK", f'"{factory["deployment_block"]}"')
+    else:
+        require_env_sync_false(worker, "BASE_INDEXER_START_BLOCK")
 
     env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
     required_env_lines = [
         "ENABLE_BASE_TX_BROADCAST=false",
         f"BASE_MAINNET_RPC_URL={rpc_url}",
         f"BASE_MAINNET_USDC_TOKEN={deployment['native_usdc']}",
-        f"BASE_MAINNET_ESCROW_CONTRACT={contract}",
+        "BASE_MAINNET_BOUNTY_FACTORY=",
+        "BASE_MAINNET_BOUNTY_IMPLEMENTATION=",
         "BASE_INDEXER_NETWORK=base-mainnet",
+        "BASE_INDEXER_PROTOCOL=autonomous-v1",
         f"BASE_INDEXER_RPC_URL={rpc_url}",
-        f"BASE_INDEXER_ESCROW_CONTRACT={contract}",
-        f"BASE_INDEXER_START_BLOCK={deployment_block}",
-        f"BASE_SETTLEMENT_SIGNER={signer}",
-        f"BASE_PLATFORM_FEE_WALLET={signer}",
+        "BASE_INDEXER_START_BLOCK=",
     ]
     env_lines = set(env_example.splitlines())
     for required in required_env_lines:

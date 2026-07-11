@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic read-only attestation for deployments/base-mainnet.json.
+"""Deterministic read-only attestation for the retired legacy Base escrow.
 
 Compares on-chain Base mainnet escrow state against the checked-in manifest.
 Does not sign, broadcast, fund, release, or mutate any state.
@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from Crypto.Hash import keccak
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = ROOT / "deployments" / "base-mainnet.json"
+DEFAULT_MANIFEST = ROOT / "deployments" / "base-mainnet-legacy.json"
 
 SELECTORS = {
     "owner()": keccak.new(digest_bits=256, data=b"owner()").hexdigest()[:8],
@@ -338,7 +338,7 @@ def run_attestation(
     return {
         "schema_version": 1,
         "network": manifest.get("network", "base-mainnet"),
-        "manifest_path": "deployments/base-mainnet.json",
+        "manifest_path": "deployments/base-mainnet-legacy.json",
         "observation_timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "rpc_url_redacted": redact_rpc_url(rpc_url),
         "escrow_contract": contract,

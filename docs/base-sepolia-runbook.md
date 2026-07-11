@@ -1,5 +1,11 @@
 # Base Sepolia Runbook
 
+> [!WARNING]
+> Historical V1 material only. The operator-controlled escrow was refunded and
+> retired; do not use these instructions for new funding or settlement. New
+> bounties use `agent-bounties/autonomous-v1` as described in
+> [the autonomous protocol](autonomous-protocol.md).
+
 Base Sepolia is the first open testnet rail for escrow and payout rehearsal.
 This runbook keeps signing outside the app: the platform generates deterministic
 transaction intent and operator commands, while Foundry signs and broadcasts.
@@ -96,10 +102,9 @@ The output includes:
    `POST /v1/base/broadcast-signed-transaction`, or MCP
    `broadcast_base_signed_transaction`. Hosted broadcast requires
    `ENABLE_BASE_TX_BROADCAST=true`.
-10. Poll the release transaction receipt. If using the API/MCP receipt endpoint,
-    pass `reconcile_logs=true` so emitted escrow logs run through the indexer.
-    The CLI prints normalized logs that can be submitted to
-    `POST /v1/base/evm-logs`.
+10. Historical V1 only: receipt-triggered reconciliation is retired. The
+    autonomous protocol indexer independently consumes canonical factory and
+    bounty logs; receipt polling is read-only.
 11. Fetch/reconcile logs again from the last indexed block if receipt polling was
     not used. The response must include the emitted `EscrowReleased` log, whether
     ingested through `/v1/base/fetch-rpc-logs`, MCP `fetch_base_rpc_logs`, or the

@@ -1,8 +1,9 @@
-use chain_base::{BaseEscrowEvent, BaseEscrowEventKind};
+use chain_base::{AutonomousBountyEvent, AutonomousBountyEventKind};
 use chrono::{DateTime, Utc};
 use domain::{
     Agent, AgentStatus, AudienceInteraction, AudienceInteractionKind, AudienceLifecycleStage,
-    AudienceMember, AudienceProvider, Bounty, BountyStatus, Capability, CapabilityClass, Claim,
+    AudienceMember, AudienceProvider, AutonomousBountyTermsDocument, AutonomousBountyTermsRecord,
+    AutonomousSubmissionEvidenceRecord, Bounty, BountyStatus, Capability, CapabilityClass, Claim,
     ContributorContact, DiscoveryResponse, Escrow, EscrowStatus, EvalRun, FundingContribution,
     FundingContributionStatus, FundingIntent, FundingIntentStatus, FundingMode, HelpRequest, Id,
     Money, OutreachAttempt, OutreachChannel, OutreachStatus, PaymentEvent, PaymentEventStatus,
@@ -16,6 +17,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
+pub const AUTONOMOUS_PROTOCOL_MIGRATION: &str =
+    include_str!("../../../migrations/0002_autonomous_protocol.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -83,6 +86,8 @@ pub enum DbError {
     IntegerOverflow(String),
     #[error("conflicting audience event replay: {0}")]
     AudienceConflict(String),
+    #[error("conflicting autonomous submission evidence replay: {0}")]
+    AutonomousEvidenceConflict(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -165,7 +170,6 @@ pub struct BountyStatusScope {
     pub funding_intents: Vec<FundingIntent>,
     pub funding_contributions: Vec<FundingContribution>,
     pub escrows: Vec<Escrow>,
-    pub base_escrow_events: Vec<BaseEscrowEvent>,
     pub claims: Vec<Claim>,
     pub submissions: Vec<Submission>,
     pub verifier_results: Vec<VerifierResult>,
@@ -215,12 +219,14 @@ impl PostgresStore {
             .await?;
 
         let migration_result = async {
-            for statement in CORE_MIGRATION
-                .split(';')
-                .map(str::trim)
-                .filter(|statement| !statement.is_empty())
-            {
-                sqlx::query(statement).execute(&mut *connection).await?;
+            for migration in [CORE_MIGRATION, AUTONOMOUS_PROTOCOL_MIGRATION] {
+                for statement in migration
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|statement| !statement.is_empty())
+                {
+                    sqlx::query(statement).execute(&mut *connection).await?;
+                }
             }
             Ok::<(), sqlx::Error>(())
         }
@@ -1045,21 +1051,6 @@ impl PostgresStore {
         })
         .collect::<DbResult<Vec<_>>>()?;
 
-        let base_escrow_events = sqlx::query(
-            r#"
-            SELECT id, log_key, tx_hash, block_number, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at
-            FROM base_escrow_events
-            WHERE bounty_id = $1
-            ORDER BY block_number, COALESCE(log_index, 0), occurred_at
-            "#,
-        )
-        .bind(bounty_id)
-        .fetch_all(&mut *tx)
-        .await?
-        .into_iter()
-        .map(base_escrow_event_from_row)
-        .collect::<DbResult<Vec<_>>>()?;
-
         let claims = sqlx::query(
             r#"
             SELECT id, bounty_id, solver_agent_id, claimed_at
@@ -1283,7 +1274,6 @@ impl PostgresStore {
             funding_intents,
             funding_contributions,
             escrows,
-            base_escrow_events,
             claims,
             submissions,
             verifier_results,
@@ -1494,86 +1484,259 @@ impl PostgresStore {
             .collect()
     }
 
-    pub async fn upsert_base_escrow_event(&self, event: &BaseEscrowEvent) -> DbResult<()> {
-        let log_index = log_index_from_key(&event.log_key)
-            .map(i64_from_u64)
-            .transpose()?;
+    pub async fn upsert_autonomous_bounty_event(
+        &self,
+        network: &str,
+        event: &AutonomousBountyEvent,
+    ) -> DbResult<()> {
+        let kind = serde_json::to_value(event.kind)?
+            .as_str()
+            .ok_or_else(|| DbError::InvalidEnum("autonomous bounty event kind".to_string()))?
+            .to_string();
         sqlx::query(
             r#"
-            INSERT INTO base_escrow_events
-              (id, log_key, tx_hash, block_number, log_index, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            INSERT INTO autonomous_bounty_events
+              (id, log_key, network, tx_hash, block_number, log_index, contract_address, bounty_id, kind, data, occurred_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (log_key) DO UPDATE SET
+              network = EXCLUDED.network,
               tx_hash = EXCLUDED.tx_hash,
               block_number = EXCLUDED.block_number,
               log_index = EXCLUDED.log_index,
-              onchain_escrow_id = EXCLUDED.onchain_escrow_id,
+              contract_address = EXCLUDED.contract_address,
               bounty_id = EXCLUDED.bounty_id,
               kind = EXCLUDED.kind,
-              status = EXCLUDED.status,
-              token = EXCLUDED.token,
-              amount = EXCLUDED.amount,
-              currency = EXCLUDED.currency,
-              terms_hash = EXCLUDED.terms_hash,
-              proof_hash = EXCLUDED.proof_hash,
-              reason_hash = EXCLUDED.reason_hash,
-              dispute_hash = EXCLUDED.dispute_hash,
+              data = EXCLUDED.data,
               occurred_at = EXCLUDED.occurred_at
             "#,
         )
         .bind(event.id)
         .bind(&event.log_key)
+        .bind(network)
         .bind(&event.tx_hash)
         .bind(i64_from_u64(event.block_number)?)
-        .bind(log_index)
-        .bind(event.onchain_escrow_id.to_string())
-        .bind(event.bounty_id)
-        .bind(format!("{:?}", event.kind))
-        .bind(format!("{:?}", event.status))
-        .bind(&event.token)
-        .bind(event.amount.as_ref().map(|amount| amount.amount))
-        .bind(event.amount.as_ref().map(|amount| amount.currency.clone()))
-        .bind(&event.terms_hash)
-        .bind(&event.proof_hash)
-        .bind(&event.reason_hash)
-        .bind(&event.dispute_hash)
+        .bind(i64_from_u64(event.log_index)?)
+        .bind(normalize_key_address(&event.contract_address))
+        .bind(&event.bounty_id)
+        .bind(kind)
+        .bind(&event.data)
         .bind(event.occurred_at)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    pub async fn list_base_escrow_events(&self) -> DbResult<Vec<BaseEscrowEvent>> {
+    pub async fn list_autonomous_bounty_events(
+        &self,
+        network: &str,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, log_key, tx_hash, block_number, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at
-            FROM base_escrow_events
-            ORDER BY block_number, COALESCE(log_index, 0), occurred_at
+            SELECT id, log_key, tx_hash, block_number, log_index, contract_address,
+                   bounty_id, kind, data, occurred_at
+            FROM autonomous_bounty_events
+            WHERE network = $1
+            ORDER BY block_number, log_index
             "#,
         )
+        .bind(network)
         .fetch_all(&self.pool)
         .await?;
-
-        rows.into_iter().map(base_escrow_event_from_row).collect()
+        rows.into_iter().map(autonomous_event_from_row).collect()
     }
 
-    pub async fn list_base_escrow_events_for_bounty(
+    pub async fn list_canonical_autonomous_bounty_contracts(
         &self,
-        bounty_id: Id,
-    ) -> DbResult<Vec<BaseEscrowEvent>> {
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<String>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, log_key, tx_hash, block_number, onchain_escrow_id, bounty_id, kind, status, token, amount, currency, terms_hash, proof_hash, reason_hash, dispute_hash, occurred_at
-            FROM base_escrow_events
-            WHERE bounty_id = $1
-            ORDER BY block_number, COALESCE(log_index, 0), occurred_at
+            SELECT DISTINCT data->>'bounty_contract' AS bounty_contract
+            FROM autonomous_bounty_events
+            WHERE network = $1
+              AND contract_address = $2
+              AND kind = 'canonical_bounty_created'
+              AND data ? 'bounty_contract'
+            ORDER BY bounty_contract
             "#,
         )
-        .bind(bounty_id)
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
         .fetch_all(&self.pool)
         .await?;
+        rows.into_iter()
+            .map(|row| {
+                let address: String = row.try_get("bounty_contract")?;
+                Ok(normalize_key_address(&address))
+            })
+            .collect()
+    }
 
-        rows.into_iter().map(base_escrow_event_from_row).collect()
+    pub async fn upsert_autonomous_bounty_terms(
+        &self,
+        record: &AutonomousBountyTermsRecord,
+    ) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO autonomous_bounty_terms
+              (terms_hash, policy_hash, acceptance_criteria_hash, benchmark_hash,
+               evidence_schema_hash, creator_wallet, document, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (terms_hash) DO UPDATE SET
+              policy_hash = EXCLUDED.policy_hash,
+              acceptance_criteria_hash = EXCLUDED.acceptance_criteria_hash,
+              benchmark_hash = EXCLUDED.benchmark_hash,
+              evidence_schema_hash = EXCLUDED.evidence_schema_hash,
+              creator_wallet = EXCLUDED.creator_wallet,
+              document = EXCLUDED.document,
+              created_at = LEAST(autonomous_bounty_terms.created_at, EXCLUDED.created_at)
+            "#,
+        )
+        .bind(&record.terms_hash)
+        .bind(&record.policy_hash)
+        .bind(&record.acceptance_criteria_hash)
+        .bind(&record.benchmark_hash)
+        .bind(&record.evidence_schema_hash)
+        .bind(normalize_key_address(&record.creator_wallet))
+        .bind(serde_json::to_value(&record.document)?)
+        .bind(record.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_autonomous_bounty_terms(
+        &self,
+        terms_hash: &str,
+    ) -> DbResult<Option<AutonomousBountyTermsRecord>> {
+        let row = sqlx::query(
+            r#"
+            SELECT terms_hash, policy_hash, acceptance_criteria_hash, benchmark_hash,
+                   evidence_schema_hash, creator_wallet, document, created_at
+            FROM autonomous_bounty_terms
+            WHERE terms_hash = $1
+            "#,
+        )
+        .bind(terms_hash.to_ascii_lowercase())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(autonomous_terms_from_row).transpose()
+    }
+
+    pub async fn list_autonomous_bounty_terms(&self) -> DbResult<Vec<AutonomousBountyTermsRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT terms_hash, policy_hash, acceptance_criteria_hash, benchmark_hash,
+                   evidence_schema_hash, creator_wallet, document, created_at
+            FROM autonomous_bounty_terms
+            ORDER BY created_at DESC, terms_hash
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(autonomous_terms_from_row).collect()
+    }
+
+    pub async fn upsert_autonomous_submission_evidence(
+        &self,
+        record: &AutonomousSubmissionEvidenceRecord,
+    ) -> DbResult<AutonomousSubmissionEvidenceRecord> {
+        sqlx::query(
+            r#"
+            INSERT INTO autonomous_submission_evidence
+              (network, bounty_contract, bounty_id, round, solver_wallet,
+               artifact_reference, artifact_hash, evidence, evidence_hash, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (network, bounty_contract, round) DO NOTHING
+            "#,
+        )
+        .bind(&record.network)
+        .bind(normalize_key_address(&record.bounty_contract))
+        .bind(record.bounty_id.to_ascii_lowercase())
+        .bind(i64_from_u64(record.round)?)
+        .bind(normalize_key_address(&record.solver_wallet))
+        .bind(&record.artifact_reference)
+        .bind(record.artifact_hash.to_ascii_lowercase())
+        .bind(&record.evidence)
+        .bind(record.evidence_hash.to_ascii_lowercase())
+        .bind(record.created_at)
+        .execute(&self.pool)
+        .await?;
+        let persisted = self
+            .get_autonomous_submission_evidence(
+                &record.network,
+                &record.bounty_contract,
+                record.round,
+            )
+            .await?
+            .ok_or_else(|| {
+                DbError::AutonomousEvidenceConflict(
+                    "record disappeared after immutable upsert".to_string(),
+                )
+            })?;
+        if !persisted.bounty_id.eq_ignore_ascii_case(&record.bounty_id)
+            || !persisted
+                .solver_wallet
+                .eq_ignore_ascii_case(&record.solver_wallet)
+            || persisted.artifact_reference != record.artifact_reference
+            || !persisted
+                .artifact_hash
+                .eq_ignore_ascii_case(&record.artifact_hash)
+            || persisted.evidence != record.evidence
+            || !persisted
+                .evidence_hash
+                .eq_ignore_ascii_case(&record.evidence_hash)
+        {
+            return Err(DbError::AutonomousEvidenceConflict(format!(
+                "{} round {}",
+                record.bounty_contract, record.round
+            )));
+        }
+        Ok(persisted)
+    }
+
+    pub async fn get_autonomous_submission_evidence(
+        &self,
+        network: &str,
+        bounty_contract: &str,
+        round: u64,
+    ) -> DbResult<Option<AutonomousSubmissionEvidenceRecord>> {
+        let row = sqlx::query(
+            r#"
+            SELECT network, bounty_contract, bounty_id, round, solver_wallet,
+                   artifact_reference, artifact_hash, evidence, evidence_hash, created_at
+            FROM autonomous_submission_evidence
+            WHERE network = $1 AND bounty_contract = $2 AND round = $3
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(bounty_contract))
+        .bind(i64_from_u64(round)?)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(autonomous_submission_evidence_from_row).transpose()
+    }
+
+    pub async fn list_autonomous_submission_evidence(
+        &self,
+        network: &str,
+    ) -> DbResult<Vec<AutonomousSubmissionEvidenceRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT network, bounty_contract, bounty_id, round, solver_wallet,
+                   artifact_reference, artifact_hash, evidence, evidence_hash, created_at
+            FROM autonomous_submission_evidence
+            WHERE network = $1
+            ORDER BY created_at, bounty_contract, round
+            "#,
+        )
+        .bind(network)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(autonomous_submission_evidence_from_row)
+            .collect()
     }
 
     pub async fn get_base_log_cursor(
@@ -2486,44 +2649,51 @@ fn parse_funding_intent_status(value: String) -> DbResult<FundingIntentStatus> {
     }
 }
 
-fn parse_base_escrow_event_kind(value: String) -> DbResult<BaseEscrowEventKind> {
-    match value.as_str() {
-        "Created" => Ok(BaseEscrowEventKind::Created),
-        "Released" => Ok(BaseEscrowEventKind::Released),
-        "Refunded" => Ok(BaseEscrowEventKind::Refunded),
-        "Disputed" => Ok(BaseEscrowEventKind::Disputed),
-        "Paused" => Ok(BaseEscrowEventKind::Paused),
-        _ => Err(DbError::InvalidEnum(value)),
-    }
-}
-
-fn base_escrow_event_from_row(row: PgRow) -> DbResult<BaseEscrowEvent> {
-    let amount = match (
-        row.try_get::<Option<i64>, _>("amount")?,
-        row.try_get::<Option<String>, _>("currency")?,
-    ) {
-        (Some(amount), Some(currency)) => Some(Money::new(amount, currency)?),
-        _ => None,
-    };
-    Ok(BaseEscrowEvent {
+fn autonomous_event_from_row(row: PgRow) -> DbResult<AutonomousBountyEvent> {
+    let kind_value = serde_json::Value::String(row.try_get::<String, _>("kind")?);
+    let kind: AutonomousBountyEventKind = serde_json::from_value(kind_value)?;
+    Ok(AutonomousBountyEvent {
         id: row.try_get("id")?,
         log_key: row.try_get("log_key")?,
         tx_hash: row.try_get("tx_hash")?,
         block_number: u64_from_i64(row.try_get("block_number")?)?,
-        onchain_escrow_id: row
-            .try_get::<String, _>("onchain_escrow_id")?
-            .parse()
-            .map_err(|_| DbError::InvalidEnum("onchain_escrow_id".to_string()))?,
+        log_index: u64_from_i64(row.try_get("log_index")?)?,
+        contract_address: row.try_get("contract_address")?,
         bounty_id: row.try_get("bounty_id")?,
-        kind: parse_base_escrow_event_kind(row.try_get::<String, _>("kind")?)?,
-        status: parse_escrow_status(row.try_get::<String, _>("status")?)?,
-        token: row.try_get("token")?,
-        amount,
-        terms_hash: row.try_get("terms_hash")?,
-        proof_hash: row.try_get("proof_hash")?,
-        reason_hash: row.try_get("reason_hash")?,
-        dispute_hash: row.try_get("dispute_hash")?,
+        kind,
+        data: row.try_get("data")?,
         occurred_at: row.try_get("occurred_at")?,
+    })
+}
+
+fn autonomous_terms_from_row(row: PgRow) -> DbResult<AutonomousBountyTermsRecord> {
+    let document: serde_json::Value = row.try_get("document")?;
+    Ok(AutonomousBountyTermsRecord {
+        terms_hash: row.try_get("terms_hash")?,
+        policy_hash: row.try_get("policy_hash")?,
+        acceptance_criteria_hash: row.try_get("acceptance_criteria_hash")?,
+        benchmark_hash: row.try_get("benchmark_hash")?,
+        evidence_schema_hash: row.try_get("evidence_schema_hash")?,
+        creator_wallet: row.try_get("creator_wallet")?,
+        document: serde_json::from_value::<AutonomousBountyTermsDocument>(document)?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn autonomous_submission_evidence_from_row(
+    row: PgRow,
+) -> DbResult<AutonomousSubmissionEvidenceRecord> {
+    Ok(AutonomousSubmissionEvidenceRecord {
+        network: row.try_get("network")?,
+        bounty_contract: row.try_get("bounty_contract")?,
+        bounty_id: row.try_get("bounty_id")?,
+        round: u64_from_i64(row.try_get("round")?)?,
+        solver_wallet: row.try_get("solver_wallet")?,
+        artifact_reference: row.try_get("artifact_reference")?,
+        artifact_hash: row.try_get("artifact_hash")?,
+        evidence: row.try_get("evidence")?,
+        evidence_hash: row.try_get("evidence_hash")?,
+        created_at: row.try_get("created_at")?,
     })
 }
 
@@ -2556,10 +2726,6 @@ fn optional_u64_from_i64(value: Option<i64>) -> DbResult<Option<u64>> {
 
 fn normalize_key_address(address: &str) -> String {
     address.trim().to_ascii_lowercase()
-}
-
-fn log_index_from_key(log_key: &str) -> Option<u64> {
-    log_key.rsplit_once(':')?.1.parse().ok()
 }
 
 fn parse_risk_action(value: String) -> DbResult<RiskAction> {
@@ -2700,6 +2866,31 @@ mod tests {
         assert!(CORE_MIGRATION.contains("fund-contribution:"));
         assert!(CORE_MIGRATION.contains("CHECK (platform_fee >= 0)"));
         assert!(CORE_MIGRATION.contains("DROP CONSTRAINT IF EXISTS settlements_platform_fee_check"));
+    }
+
+    #[test]
+    fn autonomous_migration_contains_protocol_tables_and_indexes() {
+        for table in [
+            "autonomous_bounty_events",
+            "autonomous_bounty_terms",
+            "autonomous_submission_evidence",
+        ] {
+            assert!(
+                AUTONOMOUS_PROTOCOL_MIGRATION.contains(table),
+                "missing {table}"
+            );
+        }
+        for index in [
+            "idx_autonomous_bounty_events_bounty",
+            "idx_autonomous_bounty_events_contract",
+            "idx_autonomous_bounty_terms_creator",
+            "idx_autonomous_submission_evidence_bounty",
+        ] {
+            assert!(
+                AUTONOMOUS_PROTOCOL_MIGRATION.contains(index),
+                "missing {index}"
+            );
+        }
     }
 
     #[test]
