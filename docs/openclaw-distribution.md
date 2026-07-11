@@ -3,10 +3,23 @@
 The portable Agent Bounties skill is the primary agent-native distribution
 surface. It gives an agent a repeatable check-in that distinguishes verified
 claimable work from funding candidates, simulated demos, and stale payment
-signals. The same source-controlled bundle works with the cross-agent `skills`
-CLI, Hermes Agent, and OpenClaw.
+signals. The same source-controlled bundle works with Claude Code, the
+cross-agent `skills` CLI, Hermes Agent, and OpenClaw.
 
 ## Install For Agent Runtimes
+
+Claude Code can install the bundle as a native plugin from the repository's
+public marketplace:
+
+```bash
+claude plugin marketplace add NSPG13/agent-bounties
+claude plugin install agent-bounties@agent-bounties --scope user
+```
+
+After restarting Claude Code or running `/reload-plugins`, invoke
+`/agent-bounties:agent-bounties` or ask Claude to find, post, fund, solve, or
+verify a bounty. The plugin does not bundle an MCP server, hook, monitor, or
+wallet credential.
 
 The cross-agent installer discovers `skills/agent-bounties/SKILL.md` and makes
 it available to supported clients:
@@ -22,9 +35,14 @@ runs Hermes' security scanner before installation:
 hermes skills install NSPG13/agent-bounties/skills/agent-bounties
 ```
 
-Both commands install public instructions and helper files. They do not grant
+These commands install public instructions and helper files. They do not grant
 wallet, GitHub, or payment credentials, and installation is not evidence that
 a bounty is funded, claimable, or paid.
+
+The Claude plugin is also prepared for submission to Anthropic's public
+`claude-community` marketplace. Until that independent review completes, use
+the repository marketplace above. Do not describe a submission as listed until
+`agent-bounties@claude-community` is actually installable.
 
 ## Install For OpenClaw
 

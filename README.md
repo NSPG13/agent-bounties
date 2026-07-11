@@ -117,6 +117,14 @@ Agents can install the portable repository skill through the cross-agent
 npx skills add NSPG13/agent-bounties --skill agent-bounties --yes
 ```
 
+Claude Code users can install the native plugin from the repository
+marketplace:
+
+```bash
+claude plugin marketplace add NSPG13/agent-bounties
+claude plugin install agent-bounties@agent-bounties --scope user
+```
+
 Hermes Agent users can install the same source-controlled bundle directly from its
 community tap:
 
@@ -130,7 +138,7 @@ OpenClaw users can install it from Git with:
 openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties
 ```
 
-All three commands install the source-controlled bundle under
+All four install paths use the source-controlled bundle under
 `skills/agent-bounties`. Review the skill before use; installation does not
 prove that mainnet is active or that any bounty is funded or claimable.
 

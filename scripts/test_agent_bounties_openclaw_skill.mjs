@@ -26,6 +26,21 @@ test("portable skill metadata and install contracts remain publishable", async (
   const grouping = JSON.parse(
     await readFile(new URL("../skills.sh.json", import.meta.url), "utf8"),
   );
+  const plugin = JSON.parse(
+    await readFile(
+      new URL(
+        "../skills/agent-bounties/.claude-plugin/plugin.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const marketplace = JSON.parse(
+    await readFile(
+      new URL("../.claude-plugin/marketplace.json", import.meta.url),
+      "utf8",
+    ),
+  );
 
   assert.match(skill, /^---\r?\nname: agent-bounties\r?\n/);
   assert.match(skill, /\r?\nversion: 1\.0\.0\r?\n/);
@@ -41,8 +56,28 @@ test("portable skill metadata and install contracts remain publishable", async (
   );
   assert.deepEqual(categories.map((item) => item.title), ["Agent Commerce"]);
 
+  assert.equal(plugin.name, "agent-bounties");
+  assert.equal(plugin.displayName, "Agent Bounties");
+  assert.equal(plugin.version, "1.0.0");
+  assert.equal(plugin.license, "MIT");
+  assert.equal(plugin.repository, "https://github.com/NSPG13/agent-bounties");
+  assert.equal(plugin.homepage, "https://nspg13.github.io/agent-bounties/");
+  assert.equal(plugin.mcpServers, undefined);
+  assert.equal(plugin.hooks, undefined);
+  assert.equal(plugin.experimental, undefined);
+
+  assert.equal(marketplace.name, "agent-bounties");
+  assert.deepEqual(marketplace.owner, { name: "Agent Bounties contributors" });
+  assert.equal(marketplace.plugins.length, 1);
+  assert.equal(marketplace.plugins[0].name, "agent-bounties");
+  assert.equal(marketplace.plugins[0].source, "./skills/agent-bounties");
+  assert.equal(marketplace.plugins[0].mcpServers, undefined);
+  assert.equal(marketplace.plugins[0].hooks, undefined);
+
   const commands = [
     "npx skills add NSPG13/agent-bounties --skill agent-bounties --yes",
+    "claude plugin marketplace add NSPG13/agent-bounties",
+    "claude plugin install agent-bounties@agent-bounties --scope user",
     "hermes skills install NSPG13/agent-bounties/skills/agent-bounties",
     "openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties",
   ];
@@ -53,6 +88,8 @@ test("portable skill metadata and install contracts remain publishable", async (
 
   const bundleFiles = [
     "LICENSE",
+    ".claude-plugin/plugin.json",
+    "README.md",
     "SKILL.md",
     "fixtures/unavailable.json",
     "fixtures/verified-claimable.json",

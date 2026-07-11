@@ -1,0 +1,36 @@
+name: Claude plugin
+
+on:
+  pull_request:
+    paths:
+      - ".claude-plugin/**"
+      - "skills/agent-bounties/**"
+      - "scripts/test_agent_bounties_openclaw_skill.mjs"
+      - ".github/workflows/claude-plugin.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".claude-plugin/**"
+      - "skills/agent-bounties/**"
+      - "scripts/test_agent_bounties_openclaw_skill.mjs"
+      - ".github/workflows/claude-plugin.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run portable skill contract tests
+        run: node --test scripts/test_agent_bounties_openclaw_skill.mjs
+      - name: Validate Claude plugin
+        run: npx --yes @anthropic-ai/claude-code@2.1.207 plugin validate skills/agent-bounties --strict
+      - name: Validate Claude marketplace
+        run: npx --yes @anthropic-ai/claude-code@2.1.207 plugin validate . --strict
