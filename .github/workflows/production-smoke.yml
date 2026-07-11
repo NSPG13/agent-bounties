@@ -11,36 +11,17 @@ on:
         description: "Deployed MCP base URL, for example https://agent-bounties-mcp.onrender.com"
         required: false
         type: string
+      expected_revision:
+        description: "Exact deployed Git revision; defaults to the checked-out main revision"
+        required: false
+        type: string
       require_eval_history:
         description: "Require persisted eval-run history on the deployed API"
         required: false
         type: boolean
         default: false
   schedule:
-    - cron: "43 10 * * *"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/production-smoke.yml"
-      - "README.md"
-      - "docs/deployment.md"
-      - "docs/production-smoke.md"
-      - "scripts/check-production-smoke.*"
-      - "crates/api/**"
-      - "crates/cli/**"
-      - "crates/mcp-server/**"
-      - "crates/web-public/**"
-  pull_request:
-    paths:
-      - ".github/workflows/production-smoke.yml"
-      - "README.md"
-      - "docs/deployment.md"
-      - "docs/production-smoke.md"
-      - "scripts/check-production-smoke.*"
-      - "crates/api/**"
-      - "crates/cli/**"
-      - "crates/mcp-server/**"
-      - "crates/web-public/**"
+    - cron: "43 * * * *"
 
 permissions:
   contents: read
@@ -52,9 +33,11 @@ concurrency:
 jobs:
   production-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
-      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL }}
-      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL }}
+      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
+      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://agent-bounties-mcp.onrender.com' }}
+      PRODUCTION_EXPECTED_REVISION: ${{ inputs.expected_revision || github.sha }}
       REQUIRE_EVAL_HISTORY_INPUT: ${{ inputs.require_eval_history || 'false' }}
       REQUIRE_EVAL_HISTORY_VAR: ${{ vars.PRODUCTION_SMOKE_REQUIRE_EVAL_HISTORY || 'false' }}
     steps:
@@ -64,49 +47,35 @@ jobs:
         id: config
         shell: bash
         run: |
-          if [[ -z "${PRODUCTION_API_BASE_URL}" || -z "${PRODUCTION_MCP_BASE_URL}" ]]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            {
-              echo "## Production Smoke"
-              echo
-              echo "Skipped because PRODUCTION_API_BASE_URL and PRODUCTION_MCP_BASE_URL are not both configured."
-              echo
-              echo "Set repository variables for scheduled/push smoke, or pass workflow_dispatch inputs for a one-off hosted deploy check."
-              echo "Do not set AGENT_BOUNTIES_API_BASE_URL for GitHub funding-comment handoffs until this smoke passes for the same API URL."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
           require_eval_history="false"
           if [[ "${REQUIRE_EVAL_HISTORY_INPUT,,}" == "true" || "${REQUIRE_EVAL_HISTORY_VAR,,}" == "true" ]]; then
             require_eval_history="true"
           fi
 
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
           echo "require_eval_history=${require_eval_history}" >> "$GITHUB_OUTPUT"
           {
             echo "## Production Smoke"
             echo
             echo "- API: ${PRODUCTION_API_BASE_URL}"
             echo "- MCP: ${PRODUCTION_MCP_BASE_URL}"
+            echo "- Expected revision: ${PRODUCTION_EXPECTED_REVISION}"
             echo "- Require eval history: ${require_eval_history}"
             echo
-            echo "This workflow is read-only. It does not create funding intents, Checkout Sessions, Base transactions, ledger credits, or payout state."
+            echo "This workflow cannot silently skip. It verifies the exact deployed revision and is read-only."
+            echo "It runs after deployment by schedule or manual dispatch, not as a pre-deploy branch check."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.config.outputs.enabled == 'true'
 
       - uses: Swatinem/rust-cache@v2
-        if: steps.config.outputs.enabled == 'true'
 
       - name: Run read-only hosted production smoke
-        if: steps.config.outputs.enabled == 'true'
         shell: bash
         run: |
           args=(
             --api-base-url "${PRODUCTION_API_BASE_URL}"
             --mcp-base-url "${PRODUCTION_MCP_BASE_URL}"
+            --expected-revision "${PRODUCTION_EXPECTED_REVISION}"
           )
           if [[ "${{ steps.config.outputs.require_eval_history }}" == "true" ]]; then
             args+=(--require-eval-history)

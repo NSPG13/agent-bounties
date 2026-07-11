@@ -346,6 +346,8 @@ enum Command {
         api_base_url: String,
         #[arg(long, env = "PRODUCTION_MCP_BASE_URL")]
         mcp_base_url: String,
+        #[arg(long, env = "PRODUCTION_EXPECTED_REVISION")]
+        expected_revision: Option<String>,
         #[arg(long, default_value_t = false)]
         require_eval_history: bool,
     },
@@ -595,8 +597,17 @@ async fn async_main() -> Result<()> {
         Command::ProductionSmoke {
             api_base_url,
             mcp_base_url,
+            expected_revision,
             require_eval_history,
-        } => production_smoke(api_base_url, mcp_base_url, require_eval_history).await,
+        } => {
+            production_smoke(
+                api_base_url,
+                mcp_base_url,
+                expected_revision,
+                require_eval_history,
+            )
+            .await
+        }
         Command::ServiceSmoke {
             api_base_url,
             mcp_base_url,
@@ -2303,11 +2314,18 @@ fn write_report_file(path: &Path, contents: &str) -> Result<()> {
 async fn production_smoke(
     api_base_url: String,
     mcp_base_url: String,
+    expected_revision: Option<String>,
     require_eval_history: bool,
 ) -> Result<()> {
     let api = normalize_base_url(&api_base_url);
     let mcp = normalize_base_url(&mcp_base_url);
-    let report = production_smoke_check(&api, &mcp, require_eval_history).await?;
+    let report = production_smoke_check(
+        &api,
+        &mcp,
+        require_eval_history,
+        expected_revision.as_deref(),
+    )
+    .await?;
     print_production_smoke_report(&report)
 }
 
@@ -2315,6 +2333,9 @@ async fn production_smoke(
 struct ProductionSmokeReport {
     api_base_url: String,
     mcp_base_url: String,
+    api_revision: String,
+    mcp_revision: String,
+    expected_revision: Option<String>,
     verification_modes: usize,
     payment_rails: usize,
     claimable_requirements: usize,
@@ -2328,21 +2349,15 @@ async fn production_smoke_check(
     api: &str,
     mcp: &str,
     require_eval_history: bool,
+    expected_revision: Option<&str>,
 ) -> Result<ProductionSmokeReport> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()?;
 
-    let api_health = production_get_text(&client, &format!("{api}/health")).await?;
-    require(
-        api_health.trim() == "ok",
-        "API health endpoint must return ok",
-    )?;
-    let mcp_health = production_get_text(&client, &format!("{mcp}/health")).await?;
-    require(
-        mcp_health.trim() == "ok",
-        "MCP health endpoint must return ok",
-    )?;
+    let api_health = production_get_health(&client, &format!("{api}/health")).await?;
+    let mcp_health = production_get_health(&client, &format!("{mcp}/health")).await?;
+    validate_production_health(&api_health, &mcp_health, expected_revision)?;
 
     let discovery =
         production_get_json(&client, &format!("{api}/.well-known/agent-bounties.json")).await?;
@@ -2735,6 +2750,9 @@ async fn production_smoke_check(
     Ok(ProductionSmokeReport {
         api_base_url: api.to_string(),
         mcp_base_url: mcp.to_string(),
+        api_revision: api_health.revision,
+        mcp_revision: mcp_health.revision,
+        expected_revision: expected_revision.map(str::to_string),
         verification_modes: verification_modes.len(),
         payment_rails: payment_rails.len(),
         claimable_requirements: claimable_requirements.len(),
@@ -2752,6 +2770,9 @@ fn print_production_smoke_report(report: &ProductionSmokeReport) -> Result<()> {
             "production_smoke": "ok",
             "api_base_url": report.api_base_url,
             "mcp_base_url": report.mcp_base_url,
+            "api_revision": report.api_revision,
+            "mcp_revision": report.mcp_revision,
+            "expected_revision": report.expected_revision,
             "verification_modes": report.verification_modes,
             "payment_rails": report.payment_rails,
             "claimable_requirements": report.claimable_requirements,
@@ -2785,7 +2806,7 @@ struct ServiceSmokeReport {
 async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport> {
     wait_for_health(&format!("{api}/health"))?;
     wait_for_health(&format!("{mcp}/health"))?;
-    let _production_contract = production_smoke_check(api, mcp, false).await?;
+    let _production_contract = production_smoke_check(api, mcp, false, None).await?;
 
     let discovery = get_json(&format!("{api}/.well-known/agent-bounties.json"))?;
     require(
@@ -3220,6 +3241,83 @@ async fn production_get_json(client: &reqwest::Client, url: &str) -> Result<serd
     Ok(serde_json::from_str(
         &production_get_text(client, url).await?,
     )?)
+}
+
+#[derive(Debug, Clone)]
+struct ProductionHealth {
+    body: String,
+    revision: String,
+    protocol: String,
+}
+
+fn validate_production_health(
+    api: &ProductionHealth,
+    mcp: &ProductionHealth,
+    expected_revision: Option<&str>,
+) -> Result<()> {
+    for (service, health) in [("API", api), ("MCP", mcp)] {
+        require(
+            health.body.trim() == "ok",
+            &format!("{service} health endpoint must return ok"),
+        )?;
+        require(
+            health.protocol == "agent-bounties/autonomous-v1",
+            &format!("{service} health must advertise autonomous-v1"),
+        )?;
+        require(
+            !health.revision.trim().is_empty(),
+            &format!("{service} health missing x-agent-bounties-revision"),
+        )?;
+    }
+    require(
+        api.revision.eq_ignore_ascii_case(&mcp.revision),
+        "API and MCP must serve the same deployed revision",
+    )?;
+    if let Some(expected) = expected_revision
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        require(
+            api.revision.eq_ignore_ascii_case(expected),
+            &format!(
+                "hosted revision {} does not match expected revision {expected}",
+                api.revision
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+async fn production_get_health(client: &reqwest::Client, url: &str) -> Result<ProductionHealth> {
+    let response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/plain")
+        .send()
+        .await
+        .with_context(|| format!("GET {url} failed"))?;
+    let status = response.status();
+    require(
+        status.is_success(),
+        &format!("GET {url} failed with HTTP {status}"),
+    )?;
+    let revision = response
+        .headers()
+        .get("x-agent-bounties-revision")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let protocol = response
+        .headers()
+        .get("x-agent-bounties-protocol")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let body = response.text().await?;
+    Ok(ProductionHealth {
+        body,
+        revision,
+        protocol,
+    })
 }
 
 async fn production_get_text(client: &reqwest::Client, url: &str) -> Result<String> {
@@ -4558,6 +4656,45 @@ fn stop_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn production_health(revision: &str) -> ProductionHealth {
+        ProductionHealth {
+            body: "ok".to_string(),
+            revision: revision.to_string(),
+            protocol: "agent-bounties/autonomous-v1".to_string(),
+        }
+    }
+
+    #[test]
+    fn production_health_requires_matching_expected_revision() {
+        let revision = "0123456789abcdef0123456789abcdef01234567";
+        let api = production_health(revision);
+        let mcp = production_health(revision);
+
+        validate_production_health(&api, &mcp, Some(revision))
+            .expect("matching deployed revision should pass");
+        let error = validate_production_health(
+            &api,
+            &mcp,
+            Some("89abcdef0123456789abcdef0123456789abcdef"),
+        )
+        .expect_err("stale deployed revision must fail");
+        assert!(error
+            .to_string()
+            .contains("does not match expected revision"));
+    }
+
+    #[test]
+    fn production_health_rejects_split_service_revisions() {
+        let api = production_health("0123456789abcdef0123456789abcdef01234567");
+        let mcp = production_health("89abcdef0123456789abcdef0123456789abcdef");
+
+        let error = validate_production_health(&api, &mcp, None)
+            .expect_err("split API and MCP revisions must fail");
+        assert!(error
+            .to_string()
+            .contains("API and MCP must serve the same deployed revision"));
+    }
 
     #[test]
     fn create_address_matches_base_activation_vectors() {

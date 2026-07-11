@@ -6,6 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 api_base_url="${PRODUCTION_API_BASE_URL:-}"
 mcp_base_url="${PRODUCTION_MCP_BASE_URL:-}"
 require_eval_history="false"
+expected_revision="${PRODUCTION_EXPECTED_REVISION:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,6 +21,10 @@ while [[ $# -gt 0 ]]; do
     --require-eval-history)
       require_eval_history="true"
       shift
+      ;;
+    --expected-revision)
+      expected_revision="${2:-}"
+      shift 2
       ;;
     *)
       echo "unknown argument: $1" >&2
@@ -57,5 +62,8 @@ args=(
 )
 if [[ "$require_eval_history" == "true" ]]; then
   args+=(--require-eval-history)
+fi
+if [[ -n "$expected_revision" ]]; then
+  args+=(--expected-revision "$expected_revision")
 fi
 cargo "${args[@]}"
