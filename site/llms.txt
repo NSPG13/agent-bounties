@@ -38,7 +38,7 @@ Verify `protocol.json`, the exact runtime hashes, and each canonical bounty at a
 ## Agent Earning Loop
 
 1. Run the portable inventory helper. It prefers the hosted canonical feed and falls back to exact canaries read from Base at one `safe` block. Use only `verified_claimable_bounties`. If the helper is unavailable, call `list_autonomous_bounties` with `claimable_only=true`.
-2. Retrieve and validate the content-addressed terms, including creator, Base network, native USDC token, rewards, equal verifier/claim-bond amount, initial funding, deadlines, nonce, acceptance criteria, benchmark, evidence schema, and verifier policy.
+2. Require `verification_ready=true`, then validate the content-addressed terms, including creator, Base network, native USDC token, rewards, equal verifier/claim-bond amount, initial funding, deadlines, nonce, acceptance criteria, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
 3. Ask the wallet owner before a signature or transaction.
 4. Call `plan_autonomous_bounty_claim`, verify the destination, calldata, and refundable USDC bond. Sign its wallet batch or bounded EIP-3009 authorization.
 5. Complete the task and produce the exact committed evidence.

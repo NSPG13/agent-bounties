@@ -2089,8 +2089,16 @@ pub struct AutonomousBountyFeedItem {
     pub terms_hash: String,
     pub terms: Option<AutonomousBountyTermsRecord>,
     pub terms_valid: bool,
+    pub verification_mode: String,
+    pub verifier_module: Option<String>,
+    pub verification_ready: bool,
+    pub verification_readiness_reason: String,
     pub validation_errors: Vec<String>,
     pub events: Vec<AutonomousBountyEvent>,
+}
+
+pub fn autonomous_bounty_is_earning_ready(item: &AutonomousBountyFeedItem) -> bool {
+    item.status == "claimable" && item.terms_valid && item.verification_ready
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3060,14 +3068,37 @@ pub fn build_autonomous_bounty_feed(
                 | AutonomousBountyEventKind::RefundWithdrawn => {}
             }
         }
+        let verification_mode = match creation_data["verification_mode"].as_u64() {
+            Some(0) => "deterministic_module",
+            Some(1) => "signed_quorum",
+            Some(2) => "ai_judge_quorum",
+            _ => {
+                return Err(ChainBaseError::InvalidLogData(
+                    "canonical bounty has an unknown verification mode".to_string(),
+                ));
+            }
+        };
+        let zero_address = "0x0000000000000000000000000000000000000000";
+        let verifier_module = required_string("verifier_module")?;
+        let verifier_module =
+            (!verifier_module.eq_ignore_ascii_case(zero_address)).then_some(verifier_module);
         let terms_record = terms.get(&terms_hash.to_ascii_lowercase()).cloned();
         let validation_errors =
             validate_autonomous_terms_against_creation(&creation_data, terms_record.as_ref());
         let terms_valid = validation_errors.is_empty();
-        if claimable_only && (status != "claimable" || !terms_valid) {
-            continue;
-        }
-        feed.push(AutonomousBountyFeedItem {
+        let (verification_ready, verification_readiness_reason) = if !terms_valid {
+            (false, "content-addressed terms are invalid or unavailable")
+        } else if verification_mode != "deterministic_module" {
+            (
+                false,
+                "quorum verifier service availability is not canonically attested",
+            )
+        } else if verifier_module.is_none() {
+            (false, "deterministic verifier module is not configured")
+        } else {
+            (true, "deterministic verifier module is committed on-chain")
+        };
+        let item = AutonomousBountyFeedItem {
             bounty_id,
             bounty_contract,
             creator,
@@ -3081,9 +3112,17 @@ pub fn build_autonomous_bounty_feed(
             terms_hash: terms_hash.clone(),
             terms: terms_record,
             terms_valid,
+            verification_mode: verification_mode.to_string(),
+            verifier_module,
+            verification_ready,
+            verification_readiness_reason: verification_readiness_reason.to_string(),
             validation_errors,
             events,
-        });
+        };
+        if claimable_only && !autonomous_bounty_is_earning_ready(&item) {
+            continue;
+        }
+        feed.push(item);
     }
     feed.sort_by(|left, right| {
         let left_block = left
@@ -4778,6 +4817,8 @@ mod tests {
         assert_eq!(feed.len(), 1);
         assert_eq!(feed[0].status, "paid");
         assert_eq!(feed[0].funded_amount, "1000000");
+        assert_eq!(feed[0].verification_mode, "ai_judge_quorum");
+        assert!(!feed[0].verification_ready);
     }
 
     #[test]
@@ -5036,6 +5077,11 @@ mod tests {
                 created_at: Utc::now(),
             }),
             terms_valid: true,
+            verification_mode: "signed_quorum".to_string(),
+            verifier_module: None,
+            verification_ready: false,
+            verification_readiness_reason:
+                "quorum verifier service availability is not canonically attested".to_string(),
             validation_errors: vec![],
             events: vec![AutonomousBountyEvent {
                 id: Uuid::new_v4(),
@@ -5068,6 +5114,14 @@ mod tests {
             response_hash: format!("0x{}", "ee".repeat(32)),
             deadline: 150,
         };
+
+        assert!(!autonomous_bounty_is_earning_ready(&item));
+        item.status = "claimable".to_string();
+        assert!(!autonomous_bounty_is_earning_ready(&item));
+        item.verification_ready = true;
+        assert!(autonomous_bounty_is_earning_ready(&item));
+        item.status = "submitted".to_string();
+        item.verification_ready = false;
 
         validate_attestation_request_against_feed(&item, &request, 100).unwrap();
         item.terms_valid = false;
@@ -5133,6 +5187,11 @@ mod tests {
             terms_hash: format!("0x{}", "aa".repeat(32)),
             terms: None,
             terms_valid: false,
+            verification_mode: "signed_quorum".to_string(),
+            verifier_module: None,
+            verification_ready: false,
+            verification_readiness_reason: "content-addressed terms are invalid or unavailable"
+                .to_string(),
             validation_errors: vec!["fixture omits terms".to_string()],
             events: vec![AutonomousBountyEvent {
                 id: Uuid::new_v4(),

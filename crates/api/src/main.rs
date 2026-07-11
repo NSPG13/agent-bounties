@@ -21,17 +21,17 @@ use axum::{
 };
 use bounty_router::{BountyRouter, RouteDecision};
 use chain_base::{
-    base_network_descriptor, broadcast_signed_transaction, build_autonomous_bounty_feed,
-    build_autonomous_bounty_terms_record, build_autonomous_submission_evidence_record,
-    build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
-    eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
-    fetch_transaction_receipt, normalize_evm_address, validate_attestation_request_against_feed,
-    validate_autonomous_creation_against_terms, AutonomousBountyAuthorizationSignature,
-    AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
-    AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
-    AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
-    AutonomousBountyCreationPlan, AutonomousBountyEvent, AutonomousBountyFeedItem,
-    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
+    autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
+    build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
+    build_autonomous_submission_evidence_record, build_autonomous_verification_jobs,
+    decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
+    eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
+    validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
+    AutonomousBountyAuthorizationSignature, AutonomousBountyAuthorizedClaimPlan,
+    AutonomousBountyAuthorizedContributionPlan, AutonomousBountyAuthorizedCreationPlan,
+    AutonomousBountyClaimPlan, AutonomousBountyContribution, AutonomousBountyContributionPlan,
+    AutonomousBountyCreate, AutonomousBountyCreationPlan, AutonomousBountyEvent,
+    AutonomousBountyFeedItem, AutonomousBountyTxPlanner, AutonomousSignedAttestation,
     AutonomousVerificationAttestationRequest, AutonomousVerificationAttestationTypedData,
     AutonomousVerificationJob, BaseNetworkDescriptor, BaseRpcUrlConfig, ChainBaseError,
     EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent,
@@ -2448,7 +2448,7 @@ async fn plan_autonomous_bounty_authorized_claim(
 }
 
 fn require_claimable_autonomous_item(item: &AutonomousBountyFeedItem) -> Result<(), StatusCode> {
-    if !item.terms_valid || item.status != "claimable" {
+    if !autonomous_bounty_is_earning_ready(item) {
         return Err(StatusCode::CONFLICT);
     }
     Ok(())
