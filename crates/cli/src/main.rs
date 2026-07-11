@@ -46,6 +46,11 @@ use std::{
 };
 use uuid::Uuid;
 
+// Solc 0.8.26 keys immutable references by declaration id. Pinning both ids
+// makes compiler/source drift fail closed instead of swapping constructor values.
+const FACTORY_SETTLEMENT_TOKEN_IMMUTABLE_ID: &str = "2738";
+const FACTORY_IMPLEMENTATION_IMMUTABLE_ID: &str = "2740";
+
 #[derive(Parser)]
 #[command(name = "agent-bounties")]
 #[command(about = "Open-source agent bounty network CLI")]
@@ -834,8 +839,16 @@ fn autonomous_activation_bundle(
     let factory_runtime = artifact_runtime_with_immutables(
         &factory_artifact,
         &[
-            ("settlementToken", BASE_MAINNET_USDC_TOKEN_ADDRESS),
-            ("implementation", &expected_implementation),
+            (
+                FACTORY_SETTLEMENT_TOKEN_IMMUTABLE_ID,
+                "settlementToken",
+                BASE_MAINNET_USDC_TOKEN_ADDRESS,
+            ),
+            (
+                FACTORY_IMPLEMENTATION_IMMUTABLE_ID,
+                "implementation",
+                &expected_implementation,
+            ),
         ],
     )?;
     let implementation_runtime =
@@ -1277,28 +1290,25 @@ fn artifact_hex<'a>(artifact: &'a serde_json::Value, pointer: &str) -> Result<&'
 
 fn artifact_runtime_with_immutables(
     artifact: &serde_json::Value,
-    immutable_addresses: &[(&str, &str)],
+    immutable_addresses: &[(&str, &str, &str)],
 ) -> Result<Vec<u8>> {
     let mut runtime = hex::decode(artifact_hex(artifact, "/deployedBytecode/object")?)?;
     let references = artifact
         .pointer("/deployedBytecode/immutableReferences")
         .and_then(serde_json::Value::as_object)
         .context("contract artifact is missing immutable references")?;
-    let ast = artifact
-        .get("ast")
-        .context("contract artifact is missing AST")?;
+    if references.len() != immutable_addresses.len() {
+        bail!(
+            "contract artifact immutable count drifted: expected {}, observed {}",
+            immutable_addresses.len(),
+            references.len()
+        );
+    }
     let mut patched = BTreeSet::new();
-    for (declaration_id, locations) in references {
-        let declaration_id = declaration_id
-            .parse::<u64>()
-            .with_context(|| format!("invalid immutable declaration id {declaration_id}"))?;
-        let name = ast_variable_name(ast, declaration_id).ok_or_else(|| {
-            anyhow!("immutable declaration {declaration_id} is absent from the artifact AST")
+    for (declaration_id, name, address) in immutable_addresses {
+        let locations = references.get(*declaration_id).ok_or_else(|| {
+            anyhow!("contract artifact has no immutable declaration {declaration_id} for {name}")
         })?;
-        let address = immutable_addresses
-            .iter()
-            .find_map(|(candidate, value)| (*candidate == name).then_some(*value))
-            .ok_or_else(|| anyhow!("no immutable value supplied for {name}"))?;
         let normalized = normalize_cli_address(address)?;
         let mut word = [0u8; 32];
         word[12..].copy_from_slice(&hex::decode(&normalized[2..])?);
@@ -1329,29 +1339,12 @@ fn artifact_runtime_with_immutables(
         }
         patched.insert(name.to_string());
     }
-    for (name, _) in immutable_addresses {
+    for (_, name, _) in immutable_addresses {
         if !patched.contains(*name) {
             bail!("contract artifact has no immutable references for {name}");
         }
     }
     Ok(runtime)
-}
-
-fn ast_variable_name(value: &serde_json::Value, declaration_id: u64) -> Option<&str> {
-    if value.get("id").and_then(serde_json::Value::as_u64) == Some(declaration_id)
-        && value.get("nodeType").and_then(serde_json::Value::as_str) == Some("VariableDeclaration")
-    {
-        return value.get("name").and_then(serde_json::Value::as_str);
-    }
-    match value {
-        serde_json::Value::Array(values) => values
-            .iter()
-            .find_map(|value| ast_variable_name(value, declaration_id)),
-        serde_json::Value::Object(values) => values
-            .values()
-            .find_map(|value| ast_variable_name(value, declaration_id)),
-        _ => None,
-    }
 }
 
 fn normalize_cli_address(value: &str) -> Result<String> {
@@ -5189,19 +5182,14 @@ mod tests {
                     ],
                     "2": [{ "start": 32, "length": 32 }]
                 }
-            },
-            "ast": {
-                "nodes": [
-                    { "id": 1, "nodeType": "VariableDeclaration", "name": "settlementToken" },
-                    { "id": 2, "nodeType": "VariableDeclaration", "name": "implementation" }
-                ]
             }
         });
         let runtime = artifact_runtime_with_immutables(
             &artifact,
             &[
-                ("settlementToken", BASE_MAINNET_USDC_TOKEN_ADDRESS),
+                ("1", "settlementToken", BASE_MAINNET_USDC_TOKEN_ADDRESS),
                 (
+                    "2",
                     "implementation",
                     "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
                 ),
