@@ -144,8 +144,21 @@ def main() -> int:
     require_phrases(
         "autonomous.js",
         javascript,
-        ["requireActiveProtocol", "No transaction was requested", "[data-protocol-action]"],
+        [
+            "requireActiveProtocol",
+            "No transaction was requested",
+            "[data-protocol-action]",
+            "eth_requestAccounts",
+        ],
     )
+
+    public_wallet_surface = pages["earn.html"] + pages["post.html"] + pages["funding.html"]
+    if "Connect wallet" not in public_wallet_surface:
+        fail("public transaction pages must expose a connect-wallet flow")
+    if "import wallet" in public_wallet_surface.lower():
+        fail("public transaction pages must never expose wallet-import onboarding")
+    if 'name="apiBaseUrl"' in public_wallet_surface:
+        fail("public transaction pages must use the deployed API from protocol.json")
 
     require_phrases("home.js", home_javascript, ["network-canvas", "requestAnimationFrame"])
 

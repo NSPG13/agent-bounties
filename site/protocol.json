@@ -9,6 +9,15 @@
   "implementation": "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
   "deployment_transaction": "0x8c172a34188cc68cf61f7293825e3c93e025a029b878436d34aafd2103c2e70e",
   "deployment_block": 48496662,
+  "deterministic_modules": {
+    "leading_zero_work_v1": {
+      "contract": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+      "difficulty_bits": 16,
+      "deployment_transaction": "0xd1cc22fbd07aaaf19ccd7bf78f1ad452349303c3ba17229500398eab91f6b44e",
+      "deployment_block": 48499521,
+      "runtime_code_hash": "0xbaa3a8305c4b65d0dc20131d0ef207fdaf4763f345393a831370cd04077df9b3"
+    }
+  },
   "api_base_url": "https://agent-bounties-api.onrender.com",
   "mcp_base_url": "https://agent-bounties-mcp.onrender.com",
   "explorer_url": "https://base.blockscout.com"

@@ -109,9 +109,8 @@
     return protocol;
   }
 
-  function apiBase(form) {
-    const configured = form && form.elements.apiBaseUrl && form.elements.apiBaseUrl.value.trim();
-    return (configured || state.protocol.api_base_url).replace(/\/$/, "");
+  function apiBase() {
+    return state.protocol.api_base_url.replace(/\/$/, "");
   }
 
   async function requestJson(url, options = {}) {
@@ -779,9 +778,6 @@
   async function initialize() {
     try {
       const protocol = await loadProtocol();
-      document.querySelectorAll("[data-api-base]").forEach((input) => {
-        if (!input.value) input.value = protocol.api_base_url;
-      });
       document.querySelectorAll("[data-protocol-status]").forEach((element) => {
         element.textContent = protocol.status === "active" ? "Base mainnet active" : "Deployment pending review";
         element.dataset.tone = protocol.status === "active" ? "success" : "pending";
