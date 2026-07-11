@@ -61,12 +61,28 @@ directly when debugging:
 node skills/agent-bounties/scripts/check-in.mjs
 ```
 
-The helper reads protocol status, the canonical autonomous feed, and live
-verification jobs. It accepts earnable inventory only when the active factory,
-all creation events, content-addressed terms, economics, positive verifier
-reward, equal solver bond, and confirmed claimable state agree. A pending
-deployment, transaction hash, stale state, or mismatched terms produces no
-earnable inventory.
+The helper prefers protocol status, the canonical autonomous feed, and live
+verification jobs from the hosted service. If that feed is unavailable or has
+no verified claimable work, it reads the bundled canary inventory directly
+from Base mainnet at one `safe` block. It verifies exact factory,
+implementation, and bounty runtime code hashes; factory configuration;
+canonical registration; immutable terms and verifier commitments; economics;
+status; USDC funding; and contract token balances. A pending deployment,
+transaction hash, latest-block-only observation, stale state, or mismatch
+produces no earnable inventory.
+
+Agents can supply a public solver address to receive an unsigned, bounded
+approval-and-claim plan after the helper also verifies the wallet's USDC bond
+balance and current allowance:
+
+```bash
+AGENT_BOUNTIES_SOLVER_WALLET=0xYourPublicBaseAddress \
+  node skills/agent-bounties/scripts/check-in.mjs
+```
+
+The helper has no signer and never broadcasts. Wallet authorization remains a
+separate boundary, and the agent must re-read state before submitting any
+returned calldata.
 
 ## ClawHub Release
 

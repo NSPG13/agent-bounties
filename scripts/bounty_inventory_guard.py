@@ -207,21 +207,45 @@ def verified_claimable_entries(report: object) -> tuple[list[dict[str, Any]], bo
     ):
         return [], False, protocol_status
     warnings = set(raw_warnings)
-    if (
-        report.get("hosted_api_healthy") is not True
-        or protocol_status != "active"
+    source = report.get("protocol_source")
+    hosted_source = source == "hosted_indexed_feed"
+    direct_source = source == "direct_safe_chain"
+    common_invalid = (
+        protocol_status != "active"
         or not ADDRESS.fullmatch(str(report.get("active_factory") or ""))
-        or warnings
-        & {
-            "hosted_api_health_not_confirmed",
-            "autonomous_feed_unavailable",
-            "autonomous_protocol_not_active",
-        }
+        or "autonomous_protocol_not_active" in warnings
+    )
+    hosted_invalid = hosted_source and (
+        report.get("hosted_api_healthy") is not True
+        or bool(
+            warnings
+            & {"hosted_api_health_not_confirmed", "autonomous_feed_unavailable"}
+        )
+    )
+    direct_block = report.get("direct_chain_observed_block")
+    direct_status = report.get("direct_chain_status")
+    direct_invalid = direct_source and (
+        direct_status not in {"verified", "no_claimable_bounties"}
+        or not isinstance(direct_block, dict)
+        or direct_block.get("tag") != "safe"
+        or not isinstance(direct_block.get("number"), int)
+        or isinstance(direct_block.get("number"), bool)
+        or direct_block.get("number") <= 0
+        or not BYTES32.fullmatch(str(direct_block.get("hash") or ""))
+        or "direct_safe_chain_verification_failed" in warnings
+    )
+    if common_invalid or hosted_invalid or direct_invalid or not (
+        hosted_source or direct_source
     ):
         return [], False, protocol_status
 
     items = report.get("verified_claimable_bounties")
     if not isinstance(items, list):
+        return [], False, protocol_status
+    if direct_source and (
+        (direct_status == "verified" and not items)
+        or (direct_status == "no_claimable_bounties" and items)
+    ):
         return [], False, protocol_status
     ids: set[str] = set()
     contracts: set[str] = set()
@@ -233,7 +257,7 @@ def verified_claimable_entries(report: object) -> tuple[list[dict[str, Any]], bo
         contract = str(item.get("contract") or "").lower()
         solver_reward = item.get("solver_reward_minor")
         claim_bond = item.get("claim_bond_minor")
-        valid = (
+        common_valid = (
             BYTES32.fullmatch(bounty_id)
             and ADDRESS.fullmatch(contract)
             and bounty_id not in ids
@@ -248,8 +272,20 @@ def verified_claimable_entries(report: object) -> tuple[list[dict[str, Any]], bo
             and not isinstance(claim_bond, bool)
             and claim_bond > 0
             and _credential_free_https(item.get("terms_url"))
-            and _credential_free_https(item.get("claim_plan_url"))
         )
+        hosted_valid = hosted_source and _credential_free_https(
+            item.get("claim_plan_url")
+        )
+        direct_valid = direct_source and (
+            item.get("evidence_source") == "direct_safe_chain"
+            and item.get("observed_block_number") == direct_block["number"]
+            and item.get("observed_block_hash") == direct_block["hash"]
+            and ADDRESS.fullmatch(str(item.get("claim_contract") or ""))
+            and item.get("claim_contract", "").lower() == contract
+            and isinstance(item.get("claim_plan"), dict)
+            and _credential_free_https(item.get("source_url"))
+        )
+        valid = common_valid and (hosted_valid or direct_valid)
         if not valid:
             return [], False, protocol_status
         ids.add(bounty_id)
@@ -341,7 +377,8 @@ def build_report(
     disclaimer = (
         "The GitHub candidate issue count does not imply funding or claimability. "
         "Claimable inventory requires an active canonical factory plus matching "
-        "terms, economics, funding, and events. Only a confirmed canonical "
+        "terms, economics, funding, and canonical indexed events or exact safe-block "
+        "state. Only a confirmed canonical "
         "BountySettled event proves payout."
     )
     return InventoryReport(

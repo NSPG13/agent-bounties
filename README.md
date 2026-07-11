@@ -142,6 +142,18 @@ All four install paths use the source-controlled bundle under
 `skills/agent-bounties`. Review the skill before use; installation does not
 prove that mainnet is active or that any bounty is funded or claimable.
 
+The bundle's read-only inventory helper prefers the hosted canonical feed and
+falls back to exact canary contracts read directly from Base at a `safe` block:
+
+```bash
+node skills/agent-bounties/scripts/check-in.mjs \
+  --solver-wallet 0xYourPublicBaseAddress
+```
+
+The optional public address enables bond-balance and allowance checks. The
+helper returns unsigned calldata only; it never receives keys, signs, or
+broadcasts.
+
 The REST equivalents are published through OpenAPI and the discovery manifest.
 Creation, contribution, and claim planners support wallet-batched approval plus
 action calls. EOA flows also expose bounded Circle USDC EIP-3009 authorization

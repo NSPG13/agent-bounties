@@ -92,6 +92,99 @@ class BountyInventoryGuardTests(unittest.TestCase):
         self.assertTrue(payload["below_threshold"])
         self.assertEqual(payload["missing_count"], 3)
 
+    def test_direct_safe_chain_evidence_does_not_require_hosted_health(self) -> None:
+        proc = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "1",
+            "--claimable-report",
+            str(current_claimable_report("bounty_inventory_claimable_direct.json")),
+            "--fail-below",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        payload = json.loads(proc.stdout.split("--- JSON ---", 1)[1])
+        self.assertEqual(payload["verified_claimable_count"], 1)
+        self.assertTrue(payload["inventory_evidence_valid"])
+
+    def test_direct_latest_block_evidence_fails_closed(self) -> None:
+        report = json.loads(
+            (FIXTURES / "bounty_inventory_claimable_direct.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        report["observed_at"] = datetime.now(timezone.utc).isoformat()
+        report["direct_chain_observed_block"]["tag"] = "latest"
+        target = ROOT / "target" / "tmp" / "direct-latest-inventory.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report), encoding="utf-8")
+        proc = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "1",
+            "--claimable-report",
+            str(target),
+            "--fail-below",
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr + proc.stdout)
+        payload = json.loads(proc.stdout.split("--- JSON ---", 1)[1])
+        self.assertEqual(payload["verified_claimable_count"], 0)
+        self.assertFalse(payload["inventory_evidence_valid"])
+
+    def test_direct_active_factory_with_no_claimable_inventory_is_valid_below(self) -> None:
+        report = json.loads(
+            (FIXTURES / "bounty_inventory_claimable_direct.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        report["observed_at"] = datetime.now(timezone.utc).isoformat()
+        report["direct_chain_status"] = "no_claimable_bounties"
+        report["verified_claimable_bounties"] = []
+        report["warnings"].append("no_verified_funded_bounty_is_claimable")
+        target = ROOT / "target" / "tmp" / "direct-empty-inventory.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report), encoding="utf-8")
+        proc = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "5",
+            "--claimable-report",
+            str(target),
+            "--fail-below",
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr + proc.stdout)
+        payload = json.loads(proc.stdout.split("--- JSON ---", 1)[1])
+        self.assertEqual(payload["verified_claimable_count"], 0)
+        self.assertTrue(payload["inventory_evidence_valid"])
+        self.assertTrue(payload["below_threshold"])
+        self.assertEqual(payload["missing_count"], 5)
+
+    def test_direct_status_and_items_must_agree(self) -> None:
+        report = json.loads(
+            (FIXTURES / "bounty_inventory_claimable_direct.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        report["observed_at"] = datetime.now(timezone.utc).isoformat()
+        report["direct_chain_status"] = "no_claimable_bounties"
+        target = ROOT / "target" / "tmp" / "direct-inconsistent-inventory.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report), encoding="utf-8")
+        proc = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "1",
+            "--claimable-report",
+            str(target),
+            "--fail-below",
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr + proc.stdout)
+        payload = json.loads(proc.stdout.split("--- JSON ---", 1)[1])
+        self.assertFalse(payload["inventory_evidence_valid"])
+
     def test_noisy_excludes_non_actionable(self) -> None:
         proc = run_guard(
             "--fixture",

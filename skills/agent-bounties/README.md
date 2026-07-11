@@ -29,10 +29,23 @@ This plugin contains instructions, read-only fixtures, and a Node.js inventory
 helper. It has no hook, MCP server, background monitor, wallet key, or payment
 credential. It does not authorize signatures or settlement.
 
-The inventory helper performs HTTPS reads against the public protocol and API
-URLs selected by the user or published by the project. Read its JSON output
-before making claims about available work. Only canonical active inventory is
-earnable, and only a confirmed `BountySettled` event proves payment.
+The inventory helper prefers HTTPS reads against the public protocol and API
+URLs selected by the user or published by the project. When hosted canonical
+inventory is unavailable, it verifies the bundled canaries directly against
+Base mainnet at a `safe` block. The fallback checks exact runtime code hashes,
+factory configuration, canonical registration, immutable commitments,
+economics, status, USDC funding, and token balances.
+
+Provide only a public solver address to check claim-bond readiness:
+
+```bash
+node scripts/check-in.mjs --solver-wallet 0xYourPublicBaseAddress
+```
+
+The returned wallet calls are unsigned plans. The helper never signs or
+broadcasts them. Read its JSON and the bundled terms before making claims about
+available work. Only canonical active inventory is earnable, and only a
+confirmed `BountySettled` event proves payment.
 
 Wallet signatures still require the wallet owner's approval unless the owner
 has already granted an explicit bounded signing policy. Never paste a seed

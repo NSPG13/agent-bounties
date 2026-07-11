@@ -5,8 +5,38 @@ import { pathToFileURL } from "node:url";
 
 export const DEFAULT_API_BASE_URL = "https://agent-bounties-api.onrender.com";
 export const DEFAULT_PROTOCOL_URL = "https://nspg13.github.io/agent-bounties/protocol.json";
+export const DEFAULT_BASE_RPC_URL = "https://mainnet.base.org";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+const HASH = /^0x[0-9a-fA-F]{64}$/;
+const EMPTY_CODE_HASH = "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
+const CHAIN_MANIFEST_URL = new URL("../fixtures/base-mainnet-canaries.json", import.meta.url);
+const SELECTOR = Object.freeze({
+  acceptanceCriteriaHash: "0x8a2b02be",
+  allowance: "0xdd62ed3e",
+  approve: "0x095ea7b3",
+  balanceOf: "0x70a08231",
+  benchmarkHash: "0x13e4873c",
+  bountyId: "0xc17bd75e",
+  claim: "0x4e71d92d",
+  creator: "0x02d05d3f",
+  evidenceSchemaHash: "0x858c99ee",
+  factory: "0xc45a0155",
+  factoryImplementation: "0x5c60da1b",
+  factoryProtocolVersion: "0xc6532cbe",
+  fundedAmount: "0x820a5f50",
+  isCanonicalBounty: "0xdb021126",
+  policyHash: "0x098fb624",
+  protocolVersion: "0x2ae9c600",
+  settlementToken: "0x7b9e618d",
+  solverReward: "0x798d5bef",
+  status: "0x200d2ed2",
+  targetAmount: "0x953b8fb8",
+  termsHash: "0xb311d9fd",
+  timeoutBondPool: "0xca279823",
+  verifierReward: "0xb49e80f4",
+  verifierSetHash: "0xae8e71a6",
+});
 
 export function normalizeApiBaseUrl(value) {
   const url = new URL(String(value || "").trim());
@@ -19,6 +49,17 @@ export function normalizeApiBaseUrl(value) {
   url.search = "";
   url.hash = "";
   return url.toString().replace(/\/$/, "");
+}
+
+export function normalizeRpcUrl(value) {
+  const url = new URL(String(value || "").trim());
+  if (url.username || url.password) throw new Error("Base RPC URL must not contain credentials");
+  const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error("Base RPC URL must use HTTPS, except for loopback development URLs");
+  }
+  url.hash = "";
+  return url.toString();
 }
 
 function normalizePublicUrl(value, label) {
@@ -47,6 +88,404 @@ async function request(url, parseJson) {
     return { status: response.status, body, error: null };
   } catch (error) {
     return { status: null, body: null, error: String(error?.message || error) };
+  }
+}
+
+async function rpcBatchTransport(rpcUrl, calls) {
+  const payload = calls.map((call, index) => ({
+    jsonrpc: "2.0",
+    id: index + 1,
+    method: call.method,
+    params: call.params,
+  }));
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) {
+      if (attempt < 3 && response.status === 429) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
+        continue;
+      }
+      throw new Error(`Base RPC returned HTTP ${response.status}`);
+    }
+    const body = await response.json();
+    if (!Array.isArray(body)) throw new Error("Base RPC did not return a batch response");
+    const byId = new Map(body.map((item) => [item?.id, item]));
+    const rateLimited = calls.some((_, index) => byId.get(index + 1)?.error?.code === -32016);
+    if (rateLimited && attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
+      continue;
+    }
+    const results = new Map();
+    for (let index = 0; index < calls.length; index += 1) {
+      const item = byId.get(index + 1);
+      if (!item || item.error || item.result === undefined) {
+        throw new Error(`Base RPC failed ${calls[index].key}`);
+      }
+      results.set(calls[index].key, item.result);
+    }
+    return results;
+  }
+  throw new Error("Base RPC retry budget exhausted");
+}
+
+function addressWord(value) {
+  if (!ADDRESS.test(value || "")) throw new Error("invalid address in chain inventory");
+  return value.toLowerCase().slice(2).padStart(64, "0");
+}
+
+function uintWord(value) {
+  const amount = typeof value === "bigint" ? value : BigInt(value);
+  if (amount < 0n || amount >= (1n << 256n)) throw new Error("invalid uint256 in chain inventory");
+  return amount.toString(16).padStart(64, "0");
+}
+
+function calldata(selector, ...words) {
+  return `${selector}${words.join("")}`;
+}
+
+function decodedWord(value, label) {
+  const normalized = String(value || "").toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(normalized)) throw new Error(`${label} is not one ABI word`);
+  return normalized;
+}
+
+function decodedHash(value, label) {
+  const word = decodedWord(value, label);
+  if (!HASH.test(word)) throw new Error(`${label} is not bytes32`);
+  return word;
+}
+
+function decodedAddress(value, label) {
+  return `0x${decodedWord(value, label).slice(-40)}`;
+}
+
+function decodedUint(value, label) {
+  return BigInt(decodedWord(value, label));
+}
+
+function safeNumber(value, label) {
+  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${label} exceeds safe integer range`);
+  }
+  return Number(value);
+}
+
+function proofCodeHash(value, label) {
+  const hash = String(value?.codeHash || "").toLowerCase();
+  if (!HASH.test(hash)) throw new Error(`${label} proof has no code hash`);
+  return hash;
+}
+
+function callRequest(key, to, data, blockNumber) {
+  return { key, method: "eth_call", params: [{ to, data }, blockNumber] };
+}
+
+function proofRequest(key, address, blockNumber) {
+  return { key, method: "eth_getProof", params: [address, [], blockNumber] };
+}
+
+function validateChainManifest(manifest) {
+  if (
+    manifest?.schema_version !== "agent-bounties/chain-inventory-v1"
+    || manifest.protocol_version !== "agent-bounties/autonomous-v1"
+    || manifest.network !== "base-mainnet"
+    || manifest.chain_id !== 8453
+    || !HASH.test(manifest.protocol_hash || "")
+    || !ADDRESS.test(manifest.native_usdc || "")
+    || !ADDRESS.test(manifest.factory || "")
+    || !HASH.test(manifest.factory_runtime_code_hash || "")
+    || !ADDRESS.test(manifest.implementation || "")
+    || !HASH.test(manifest.implementation_runtime_code_hash || "")
+    || !HASH.test(manifest.bounty_proxy_runtime_code_hash || "")
+    || !HASH.test(manifest.verifier_set_hash || "")
+    || !Array.isArray(manifest.bounties)
+    || manifest.bounties.length === 0
+    || manifest.bounties.length > 100
+  ) {
+    throw new Error("invalid direct-chain inventory manifest");
+  }
+  const ids = new Set();
+  const contracts = new Set();
+  for (const bounty of manifest.bounties) {
+    const amounts = [
+      bounty?.solver_reward_minor,
+      bounty?.verifier_reward_minor,
+      bounty?.claim_bond_minor,
+      bounty?.target_minor,
+    ];
+    if (
+      !Number.isSafeInteger(bounty?.issue)
+      || bounty.issue <= 0
+      || typeof bounty.title !== "string"
+      || !normalizePublicUrl(bounty.source_url, "Bounty source URL")
+      || !/^fixtures\/terms\/[0-9]+\.json$/.test(bounty.terms_path || "")
+      || !HASH.test(bounty.terms_hash || "")
+      || !HASH.test(bounty.policy_hash || "")
+      || !HASH.test(bounty.acceptance_criteria_hash || "")
+      || !HASH.test(bounty.benchmark_hash || "")
+      || !HASH.test(bounty.evidence_schema_hash || "")
+      || !HASH.test(bounty.bounty_id || "")
+      || !ADDRESS.test(bounty.contract || "")
+      || !ADDRESS.test(bounty.creator || "")
+      || amounts.some((amount) => !Number.isSafeInteger(amount) || amount <= 0)
+      || bounty.claim_bond_minor !== bounty.verifier_reward_minor
+      || bounty.target_minor !== bounty.solver_reward_minor + bounty.verifier_reward_minor
+    ) {
+      throw new Error(`invalid direct-chain bounty manifest entry #${bounty?.issue || "unknown"}`);
+    }
+    const id = bounty.bounty_id.toLowerCase();
+    const contract = bounty.contract.toLowerCase();
+    if (ids.has(id) || contracts.has(contract)) throw new Error("duplicate direct-chain bounty identity");
+    ids.add(id);
+    contracts.add(contract);
+  }
+  return manifest;
+}
+
+function directClaimPlan(manifest, bounty, solverWallet, solverBalance, allowance) {
+  if (!solverWallet) return { ready: false, reason: "solver_wallet_not_supplied", wallet_calls: [] };
+  if (solverWallet.toLowerCase() === bounty.creator.toLowerCase()) {
+    return { ready: false, reason: "creator_cannot_claim", wallet_calls: [] };
+  }
+  const bond = BigInt(bounty.claim_bond_minor);
+  if (solverBalance < bond) {
+    return { ready: false, reason: "insufficient_usdc_for_claim_bond", wallet_calls: [] };
+  }
+  const calls = [];
+  if (allowance < bond) {
+    calls.push({
+      from: solverWallet.toLowerCase(),
+      to: manifest.native_usdc.toLowerCase(),
+      value_wei: 0,
+      data: calldata(SELECTOR.approve, addressWord(bounty.contract), uintWord(bond)),
+      function: "approve(address,uint256)",
+    });
+  }
+  calls.push({
+    from: solverWallet.toLowerCase(),
+    to: bounty.contract.toLowerCase(),
+    value_wei: 0,
+    data: SELECTOR.claim,
+    function: "claim()",
+  });
+  return {
+    ready: true,
+    reason: "safe_chain_state_and_solver_bond_confirmed",
+    solver_usdc_balance_minor: safeNumber(solverBalance, "solver USDC balance"),
+    current_allowance_minor: safeNumber(allowance, "solver allowance"),
+    wallet_calls: calls,
+    evidence_boundary: "This is unsigned calldata, not a claim. Re-read chain state and obtain bounded wallet authorization before broadcast.",
+  };
+}
+
+function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, claimPlan) {
+  return {
+    id: bounty.bounty_id.toLowerCase(),
+    contract: bounty.contract.toLowerCase(),
+    issue: bounty.issue,
+    title: bounty.title,
+    solver_reward_minor: bounty.solver_reward_minor,
+    completion_bonus_minor: safeNumber(timeoutBonus, "timeout bond pool"),
+    claim_bond_minor: bounty.claim_bond_minor,
+    currency: "usdc",
+    status: "claimable",
+    evidence: "confirmed_canonical_autonomous_bounty",
+    evidence_source: "direct_safe_chain",
+    observed_block_number: observedBlock.number,
+    observed_block_hash: observedBlock.hash,
+    terms_hash: bounty.terms_hash.toLowerCase(),
+    terms_path: bounty.terms_path,
+    terms_url: `https://github.com/NSPG13/agent-bounties/blob/dbfc94cca3c582b89126869d80bc42a004c927ed/bounties/autonomous-v1/${bounty.issue}.json`,
+    source_url: bounty.source_url,
+    claim_plan_url: null,
+    claim_plan: claimPlan,
+    claim_contract: bounty.contract.toLowerCase(),
+  };
+}
+
+export async function verifyDirectChainInventory({
+  manifest,
+  rpcUrl = DEFAULT_BASE_RPC_URL,
+  rpcTransport = rpcBatchTransport,
+  solverWallet = null,
+}) {
+  try {
+    const checked = validateChainManifest(manifest);
+    const rpc = normalizeRpcUrl(rpcUrl);
+    const solver = solverWallet ? String(solverWallet).toLowerCase() : null;
+    if (solver && !ADDRESS.test(solver)) throw new Error("solver wallet is not an address");
+
+    const blockResults = await rpcTransport(rpc, [
+      { key: "safe_block", method: "eth_getBlockByNumber", params: ["safe", false] },
+    ]);
+    const block = blockResults.get("safe_block");
+    const blockNumber = String(block?.number || "").toLowerCase();
+    const blockHash = String(block?.hash || "").toLowerCase();
+    if (!/^0x[0-9a-f]+$/.test(blockNumber) || !HASH.test(blockHash)) {
+      throw new Error("Base RPC did not return a safe block identity");
+    }
+    const observedBlock = {
+      number: safeNumber(BigInt(blockNumber), "safe block number"),
+      hash: blockHash,
+      tag: "safe",
+    };
+
+    const factoryProof = await rpcTransport(rpc, [
+      proofRequest("factory_proof", checked.factory, blockNumber),
+    ]);
+    const factoryCodeHash = proofCodeHash(factoryProof.get("factory_proof"), "factory");
+    if (factoryCodeHash === EMPTY_CODE_HASH) {
+      return {
+        status: "not_deployed",
+        observed_block: observedBlock,
+        protocol: null,
+        verified: [],
+        excluded: [],
+        warning: "canonical_factory_not_deployed_at_safe_block",
+      };
+    }
+    const implementationProof = await rpcTransport(rpc, [
+      proofRequest("implementation_proof", checked.implementation, blockNumber),
+    ]);
+    const globalResults = await rpcTransport(rpc, [
+      callRequest("factory_protocol", checked.factory, SELECTOR.factoryProtocolVersion, blockNumber),
+      callRequest("factory_implementation", checked.factory, SELECTOR.factoryImplementation, blockNumber),
+      callRequest("factory_token", checked.factory, SELECTOR.settlementToken, blockNumber),
+    ]);
+    if (
+      factoryCodeHash !== checked.factory_runtime_code_hash.toLowerCase()
+      || proofCodeHash(implementationProof.get("implementation_proof"), "implementation")
+        !== checked.implementation_runtime_code_hash.toLowerCase()
+      || decodedHash(globalResults.get("factory_protocol"), "factory protocol")
+        !== checked.protocol_hash.toLowerCase()
+      || decodedAddress(globalResults.get("factory_implementation"), "factory implementation")
+        !== checked.implementation.toLowerCase()
+      || decodedAddress(globalResults.get("factory_token"), "factory token")
+        !== checked.native_usdc.toLowerCase()
+    ) {
+      throw new Error("canonical factory code or configuration mismatch");
+    }
+
+    const requests = [];
+    for (const bounty of checked.bounties) {
+      const prefix = `bounty_${bounty.issue}`;
+      requests.push(
+        callRequest(`${prefix}_canonical`, checked.factory, calldata(SELECTOR.isCanonicalBounty, addressWord(bounty.contract)), blockNumber),
+        callRequest(`${prefix}_protocol`, bounty.contract, SELECTOR.protocolVersion, blockNumber),
+        callRequest(`${prefix}_id`, bounty.contract, SELECTOR.bountyId, blockNumber),
+        callRequest(`${prefix}_creator`, bounty.contract, SELECTOR.creator, blockNumber),
+        callRequest(`${prefix}_factory`, bounty.contract, SELECTOR.factory, blockNumber),
+        callRequest(`${prefix}_token`, bounty.contract, SELECTOR.settlementToken, blockNumber),
+        callRequest(`${prefix}_solver_reward`, bounty.contract, SELECTOR.solverReward, blockNumber),
+        callRequest(`${prefix}_verifier_reward`, bounty.contract, SELECTOR.verifierReward, blockNumber),
+        callRequest(`${prefix}_target`, bounty.contract, SELECTOR.targetAmount, blockNumber),
+        callRequest(`${prefix}_funded`, bounty.contract, SELECTOR.fundedAmount, blockNumber),
+        callRequest(`${prefix}_status`, bounty.contract, SELECTOR.status, blockNumber),
+        callRequest(`${prefix}_timeout_bonus`, bounty.contract, SELECTOR.timeoutBondPool, blockNumber),
+        callRequest(`${prefix}_terms`, bounty.contract, SELECTOR.termsHash, blockNumber),
+        callRequest(`${prefix}_policy`, bounty.contract, SELECTOR.policyHash, blockNumber),
+        callRequest(`${prefix}_acceptance`, bounty.contract, SELECTOR.acceptanceCriteriaHash, blockNumber),
+        callRequest(`${prefix}_benchmark`, bounty.contract, SELECTOR.benchmarkHash, blockNumber),
+        callRequest(`${prefix}_evidence`, bounty.contract, SELECTOR.evidenceSchemaHash, blockNumber),
+        callRequest(`${prefix}_verifier_set`, bounty.contract, SELECTOR.verifierSetHash, blockNumber),
+        callRequest(`${prefix}_token_balance`, checked.native_usdc, calldata(SELECTOR.balanceOf, addressWord(bounty.contract)), blockNumber),
+      );
+      if (solver) {
+        requests.push(
+          callRequest(`${prefix}_solver_balance`, checked.native_usdc, calldata(SELECTOR.balanceOf, addressWord(solver)), blockNumber),
+          callRequest(`${prefix}_allowance`, checked.native_usdc, calldata(SELECTOR.allowance, addressWord(solver), addressWord(bounty.contract)), blockNumber),
+        );
+      }
+    }
+    const results = await rpcTransport(rpc, requests);
+    for (const bounty of checked.bounties) {
+      const key = `bounty_${bounty.issue}_proof`;
+      const proof = await rpcTransport(rpc, [proofRequest(key, bounty.contract, blockNumber)]);
+      results.set(key, proof.get(key));
+    }
+    const verified = [];
+    const excluded = [];
+    for (const bounty of checked.bounties) {
+      const prefix = `bounty_${bounty.issue}`;
+      try {
+        const timeoutBonus = decodedUint(results.get(`${prefix}_timeout_bonus`), "timeout bond pool");
+        const funded = decodedUint(results.get(`${prefix}_funded`), "funded amount");
+        const tokenBalance = decodedUint(results.get(`${prefix}_token_balance`), "bounty token balance");
+        const matches = [
+          proofCodeHash(results.get(`${prefix}_proof`), `bounty #${bounty.issue}`)
+            === checked.bounty_proxy_runtime_code_hash.toLowerCase(),
+          decodedUint(results.get(`${prefix}_canonical`), "canonical registration") === 1n,
+          decodedHash(results.get(`${prefix}_protocol`), "bounty protocol") === checked.protocol_hash.toLowerCase(),
+          decodedHash(results.get(`${prefix}_id`), "bounty id") === bounty.bounty_id.toLowerCase(),
+          decodedAddress(results.get(`${prefix}_creator`), "bounty creator") === bounty.creator.toLowerCase(),
+          decodedAddress(results.get(`${prefix}_factory`), "bounty factory") === checked.factory.toLowerCase(),
+          decodedAddress(results.get(`${prefix}_token`), "bounty token") === checked.native_usdc.toLowerCase(),
+          decodedUint(results.get(`${prefix}_solver_reward`), "solver reward") === BigInt(bounty.solver_reward_minor),
+          decodedUint(results.get(`${prefix}_verifier_reward`), "verifier reward") === BigInt(bounty.verifier_reward_minor),
+          decodedUint(results.get(`${prefix}_target`), "target amount") === BigInt(bounty.target_minor),
+          funded === BigInt(bounty.target_minor),
+          decodedUint(results.get(`${prefix}_status`), "bounty status") === 1n,
+          decodedHash(results.get(`${prefix}_terms`), "terms hash") === bounty.terms_hash.toLowerCase(),
+          decodedHash(results.get(`${prefix}_policy`), "policy hash") === bounty.policy_hash.toLowerCase(),
+          decodedHash(results.get(`${prefix}_acceptance`), "acceptance hash") === bounty.acceptance_criteria_hash.toLowerCase(),
+          decodedHash(results.get(`${prefix}_benchmark`), "benchmark hash") === bounty.benchmark_hash.toLowerCase(),
+          decodedHash(results.get(`${prefix}_evidence`), "evidence schema hash") === bounty.evidence_schema_hash.toLowerCase(),
+          decodedHash(results.get(`${prefix}_verifier_set`), "verifier set hash") === checked.verifier_set_hash.toLowerCase(),
+          tokenBalance >= funded + timeoutBonus,
+        ];
+        if (!matches.every(Boolean)) throw new Error("safe chain state does not match committed bounty");
+        const solverBalance = solver
+          ? decodedUint(results.get(`${prefix}_solver_balance`), "solver USDC balance")
+          : 0n;
+        const allowance = solver
+          ? decodedUint(results.get(`${prefix}_allowance`), "solver allowance")
+          : 0n;
+        verified.push(normalizedDirectBounty(
+          checked,
+          bounty,
+          observedBlock,
+          timeoutBonus,
+          directClaimPlan(checked, bounty, solver, solverBalance, allowance),
+        ));
+      } catch (error) {
+        excluded.push({
+          id: bounty.bounty_id.toLowerCase(),
+          reason: "direct_safe_chain_invariant_failed",
+          detail: String(error?.message || error),
+        });
+      }
+    }
+    return {
+      status: verified.length ? "verified" : "no_claimable_bounties",
+      observed_block: observedBlock,
+      protocol: {
+        protocol_version: checked.protocol_version,
+        status: "active",
+        network: checked.network,
+        chain_id: checked.chain_id,
+        native_usdc: checked.native_usdc.toLowerCase(),
+        factory: checked.factory.toLowerCase(),
+        implementation: checked.implementation.toLowerCase(),
+      },
+      verified,
+      excluded,
+      warning: verified.length ? null : "no_direct_safe_chain_bounty_is_claimable",
+    };
+  } catch (error) {
+    return {
+      status: "verification_failed",
+      observed_block: null,
+      protocol: null,
+      verified: [],
+      excluded: [],
+      warning: "direct_safe_chain_verification_failed",
+      error: String(error?.message || error),
+    };
   }
 }
 
@@ -175,6 +614,10 @@ function normalizedFundingCandidate(item) {
 export async function collectInventory({
   apiBaseUrl,
   protocolUrl = DEFAULT_PROTOCOL_URL,
+  baseRpcUrl = DEFAULT_BASE_RPC_URL,
+  chainManifest = null,
+  rpcTransport = rpcBatchTransport,
+  solverWallet = null,
   fixture = null,
 }) {
   const api = normalizeApiBaseUrl(apiBaseUrl || DEFAULT_API_BASE_URL);
@@ -207,11 +650,41 @@ export async function collectInventory({
     }
   }
 
+  let direct = {
+    status: "not_checked",
+    observed_block: null,
+    protocol: null,
+    verified: [],
+    excluded: [],
+    warning: null,
+  };
+  if (verified.length === 0 && (!fixture || chainManifest)) {
+    const manifest = chainManifest || JSON.parse(await readFile(CHAIN_MANIFEST_URL, "utf8"));
+    direct = await verifyDirectChainInventory({
+      manifest,
+      rpcUrl: baseRpcUrl,
+      rpcTransport,
+      solverWallet,
+    });
+    const existingIds = new Set(verified.map((item) => item.id.toLowerCase()));
+    for (const item of direct.verified) {
+      if (!existingIds.has(item.id.toLowerCase())) {
+        verified.push(item);
+        existingIds.add(item.id.toLowerCase());
+      }
+    }
+    excluded.push(...direct.excluded);
+  }
+
   const healthOk = health?.status === 200 && String(health.body).trim() === "ok";
+  const hostedProtocolActive = activeProtocol(protocol);
+  const directProtocolActive = activeProtocol(direct.protocol);
+  const effectiveProtocol = hostedProtocolActive ? protocol : (directProtocolActive ? direct.protocol : null);
   const warnings = [];
   if (!healthOk) warnings.push("hosted_api_health_not_confirmed");
   if (feedResponse?.status !== 200) warnings.push("autonomous_feed_unavailable");
-  if (!activeProtocol(protocol)) warnings.push("autonomous_protocol_not_active");
+  if (!effectiveProtocol) warnings.push("autonomous_protocol_not_active");
+  if (direct.warning) warnings.push(direct.warning);
   if (!verified.length) warnings.push("no_verified_funded_bounty_is_claimable");
 
   return {
@@ -220,8 +693,13 @@ export async function collectInventory({
     protocol_url: protocolEndpoint,
     hosted_api_healthy: healthOk,
     health_status: health?.status ?? null,
-    protocol_status: protocol?.status ?? null,
-    active_factory: activeProtocol(protocol) ? protocol.factory : null,
+    protocol_status: effectiveProtocol?.status ?? protocol?.status ?? null,
+    protocol_source: hostedProtocolActive
+      ? "hosted_indexed_feed"
+      : (directProtocolActive ? "direct_safe_chain" : "unavailable"),
+    active_factory: effectiveProtocol?.factory ?? null,
+    direct_chain_status: direct.status,
+    direct_chain_observed_block: direct.observed_block,
     verified_claimable_bounties: verified,
     excluded_claimable_candidates: excluded,
     funding_candidates: fundingCandidates,
@@ -236,7 +714,7 @@ export async function collectInventory({
     },
     warnings,
     evidence_boundary:
-      "Only an active configured factory plus matching terms, economics, funding, and canonical events is earnable inventory. Only confirmed canonical BountySettled proves payout.",
+      "Only an active exact-code factory plus matching terms, economics, funding, and canonical registration at a Base safe block, or the equivalent indexed canonical events, is earnable inventory. Only confirmed canonical BountySettled proves payout.",
   };
 }
 
@@ -244,12 +722,16 @@ function parseArgs(argv) {
   const options = {
     apiBaseUrl: process.env.AGENT_BOUNTIES_API_URL || DEFAULT_API_BASE_URL,
     protocolUrl: process.env.AGENT_BOUNTIES_PROTOCOL_URL || DEFAULT_PROTOCOL_URL,
+    baseRpcUrl: process.env.AGENT_BOUNTIES_BASE_RPC_URL || DEFAULT_BASE_RPC_URL,
+    solverWallet: process.env.AGENT_BOUNTIES_SOLVER_WALLET || null,
     fixturePath: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--api-base-url") options.apiBaseUrl = argv[++index];
     else if (argument === "--protocol-url") options.protocolUrl = argv[++index];
+    else if (argument === "--base-rpc-url") options.baseRpcUrl = argv[++index];
+    else if (argument === "--solver-wallet") options.solverWallet = argv[++index];
     else if (argument === "--fixture") options.fixturePath = argv[++index];
     else if (argument === "--help") options.help = true;
     else throw new Error(`unknown argument: ${argument}`);
@@ -261,7 +743,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(
-      "Usage: node check-in.mjs [--api-base-url https://...] [--protocol-url https://...] [--fixture fixture.json]",
+      "Usage: node check-in.mjs [--api-base-url https://...] [--protocol-url https://...] [--base-rpc-url https://...] [--solver-wallet 0x...] [--fixture fixture.json]",
     );
     return;
   }
@@ -271,6 +753,8 @@ async function main() {
   const report = await collectInventory({
     apiBaseUrl: options.apiBaseUrl,
     protocolUrl: options.protocolUrl,
+    baseRpcUrl: options.baseRpcUrl,
+    solverWallet: options.solverWallet,
     fixture,
   });
   console.log(JSON.stringify(report, null, 2));
