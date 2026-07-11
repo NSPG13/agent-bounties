@@ -9,15 +9,15 @@ to the accepted bounty proof.
 fix-ci-failure
 
 ### Suggested amount
-10 USDC
+10 USD
 
 ### Funding mode
-AutonomousV1BaseUsdc
+StripeFiatLedger
 
 ### Co-funding note
-Supporters can fund the canonical bounty contract after autonomous-v1 is active.
-Only confirmed `FundingAdded` events count; issue comments and transaction plans
-are not funding evidence.
+Supporters can use the hosted Stripe funding flow. Only a verified reconciled
+Stripe webhook counts as funding; issue comments and Checkout plans are not
+funding evidence.
 
 ### Privacy
 Public

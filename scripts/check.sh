@@ -57,7 +57,7 @@ cargo run -p cli -- github-funding-comment-plan \
   --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 \
   --title "[bounty]: Fix CI" \
   --body-file examples/github-paid-bounty-issue.md \
-  --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" \
+  --comment-body "/agent-bounty fund 5 USD via StripeFiatLedger" \
   --contributor-login check-script \
   --comment-id 12345
 cargo run -p cli -- github-claim-comment-plan \
