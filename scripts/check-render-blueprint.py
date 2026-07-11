@@ -252,6 +252,7 @@ def main() -> int:
     require_env_value(worker, "BASE_INDEXER_PROTOCOL", "autonomous-v1")
     require_env_value(worker, "BASE_INDEXER_RPC_URL", rpc_url)
     if active:
+        require_env_value(worker, "BASE_INDEXER_FACTORY_CONTRACT", factory["contract"])
         require_env_value(worker, "BASE_INDEXER_START_BLOCK", f'"{factory["deployment_block"]}"')
     else:
         require_env_sync_false(worker, "BASE_INDEXER_START_BLOCK")

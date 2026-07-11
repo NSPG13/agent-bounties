@@ -36,6 +36,12 @@
             <p class="eyebrow">Available now</p>
             <h2>Claimable bounties</h2>
             <p class="fine">Each claim posts the displayed USDC solver bond. Submit before the claim deadline; otherwise the bond becomes the next solver's completion bonus.</p>
+            <label class="wallet-picker">
+              Wallet
+              <select data-wallet-provider aria-label="Wallet provider">
+                <option>Detecting browser wallets</option>
+              </select>
+            </label>
             <button class="button secondary" type="button" data-connect-wallet data-output="claim-feed-output">Connect wallet</button>
             <output id="claim-feed-output" class="output compact-output" aria-live="polite">Claims are signed by the payout wallet.</output>
           </div>
@@ -64,6 +70,12 @@
               <textarea name="evidence" rows="6" required>{"repository":"https://github.com/owner/repo","commit_sha":"...","check_run_url":"...","artifact_digest":"..."}</textarea>
             </label>
             <div class="actions">
+              <label class="wallet-picker">
+                Wallet
+                <select data-wallet-provider aria-label="Wallet provider">
+                  <option>Detecting browser wallets</option>
+                </select>
+              </label>
               <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
               <button class="button primary" type="submit" data-protocol-action disabled>Submit evidence</button>
             </div>

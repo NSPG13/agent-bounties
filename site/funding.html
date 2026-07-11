@@ -48,6 +48,12 @@
             </label>
           </details>
           <div class="actions">
+            <label class="wallet-picker">
+              Wallet
+              <select data-wallet-provider aria-label="Wallet provider">
+                <option>Detecting browser wallets</option>
+              </select>
+            </label>
             <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-fund-output">Connect wallet</button>
             <button class="button primary" type="submit" data-protocol-action disabled>Sign and fund bounty</button>
           </div>

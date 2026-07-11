@@ -4,10 +4,90 @@
   const state = {
     protocol: null,
     account: null,
+    provider: null,
+    providers: [],
   };
+
+  const announcedProviders = [];
 
   const byId = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function isWalletProvider(provider) {
+    return Boolean(provider && typeof provider.request === "function");
+  }
+
+  function providerName(provider, info = {}) {
+    if (info.name) return info.name;
+    if (provider.isMetaMask) return "MetaMask";
+    if (provider.isCoinbaseWallet) return "Coinbase Wallet";
+    if (provider.isBraveWallet) return "Brave Wallet";
+    return "Browser wallet";
+  }
+
+  function rememberProvider(event) {
+    const detail = event && event.detail;
+    if (!detail || !isWalletProvider(detail.provider)) return;
+    if (!announcedProviders.some((item) => item.provider === detail.provider)) {
+      announcedProviders.push(detail);
+    }
+  }
+
+  window.addEventListener("eip6963:announceProvider", rememberProvider);
+
+  function populateProviderSelectors() {
+    document.querySelectorAll("[data-wallet-provider]").forEach((selector) => {
+      const selectedProvider = state.provider;
+      selector.replaceChildren(...state.providers.map((item, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = providerName(item.provider, item.info);
+        option.selected = item.provider === selectedProvider;
+        return option;
+      }));
+      selector.disabled = state.providers.length === 0;
+      if (state.providers.length === 0) {
+        const option = document.createElement("option");
+        option.textContent = "No browser wallet detected";
+        selector.append(option);
+      }
+    });
+  }
+
+  async function discoverProviders() {
+    window.dispatchEvent(new Event("eip6963:requestProvider"));
+    await sleep(250);
+    const candidates = [...announcedProviders];
+    const injected = window.ethereum && Array.isArray(window.ethereum.providers)
+      ? window.ethereum.providers
+      : (window.ethereum ? [window.ethereum] : []);
+    for (const provider of injected) {
+      if (isWalletProvider(provider) && !candidates.some((item) => item.provider === provider)) {
+        candidates.push({ provider, info: {} });
+      }
+    }
+    state.providers = candidates;
+    populateProviderSelectors();
+    return state.providers;
+  }
+
+  function selectProvider(context = document) {
+    const selector = (context.querySelector && context.querySelector("[data-wallet-provider]"))
+      || document.querySelector("[data-wallet-provider]");
+    const item = state.providers[Number.parseInt(selector && selector.value, 10)];
+    if (!item) throw new Error("Unlock a browser wallet, reload, and select it here.");
+    state.provider = item.provider;
+    const index = String(state.providers.findIndex((provider) => provider.provider === item.provider));
+    document.querySelectorAll("[data-wallet-provider]").forEach((candidate) => {
+      candidate.value = index;
+    });
+    return item.provider;
+  }
+
+  function walletRequest(method, params = []) {
+    const provider = state.provider || selectProvider();
+    return provider.request({ method, params });
+  }
 
   async function loadProtocol() {
     if (state.protocol) return state.protocol;
@@ -139,33 +219,28 @@
     return JSON.stringify(canonicalJsonValue(value));
   }
 
-  async function connectWallet() {
-    if (!window.ethereum) throw new Error("Install or open a wallet that provides EIP-1193.");
+  async function connectWallet(context = document) {
+    await discoverProviders();
+    selectProvider(context);
     const protocol = await loadProtocol();
-    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    const accounts = await walletRequest("eth_requestAccounts");
     if (!accounts || !accounts[0]) throw new Error("No wallet account was returned.");
     state.account = accounts[0];
-    const current = await window.ethereum.request({ method: "eth_chainId" });
+    const current = await walletRequest("eth_chainId");
     if (String(current).toLowerCase() !== protocol.chain_id_hex.toLowerCase()) {
       try {
-        await window.ethereum.request({
-          method: "wallet_switchEthereumChain",
-          params: [{ chainId: protocol.chain_id_hex }],
-        });
+        await walletRequest("wallet_switchEthereumChain", [{ chainId: protocol.chain_id_hex }]);
       } catch (error) {
         if (error && error.code === 4902) {
-          await window.ethereum.request({
-            method: "wallet_addEthereumChain",
-            params: [
-              {
-                chainId: protocol.chain_id_hex,
-                chainName: "Base",
-                nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-                rpcUrls: ["https://mainnet.base.org"],
-                blockExplorerUrls: [protocol.explorer_url],
-              },
-            ],
-          });
+          await walletRequest("wallet_addEthereumChain", [
+            {
+              chainId: protocol.chain_id_hex,
+              chainName: "Base",
+              nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+              rpcUrls: ["https://mainnet.base.org"],
+              blockExplorerUrls: [protocol.explorer_url],
+            },
+          ]);
         } else {
           throw error;
         }
@@ -175,10 +250,7 @@
   }
 
   async function isContractAccount(account) {
-    const code = await window.ethereum.request({
-      method: "eth_getCode",
-      params: [account, "latest"],
-    });
+    const code = await walletRequest("eth_getCode", [account, "latest"]);
     return code && code !== "0x" && code !== "0x0";
   }
 
@@ -193,34 +265,25 @@
   }
 
   async function signTypedData(account, typedData) {
-    const signature = await window.ethereum.request({
-      method: "eth_signTypedData_v4",
-      params: [account, JSON.stringify(typedData)],
-    });
+    const signature = await walletRequest("eth_signTypedData_v4", [account, JSON.stringify(typedData)]);
     return signatureParts(signature);
   }
 
   async function sendTransaction(transaction, from) {
-    return window.ethereum.request({
-      method: "eth_sendTransaction",
-      params: [
-        {
-          from,
-          to: transaction.to,
-          data: transaction.data,
-          value: "0x0",
-        },
-      ],
-    });
+    return walletRequest("eth_sendTransaction", [
+      {
+        from,
+        to: transaction.to,
+        data: transaction.data,
+        value: "0x0",
+      },
+    ]);
   }
 
   async function waitReceipt(txHash, timeoutMs = 120_000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
-      const receipt = await window.ethereum.request({
-        method: "eth_getTransactionReceipt",
-        params: [txHash],
-      });
+      const receipt = await walletRequest("eth_getTransactionReceipt", [txHash]);
       if (receipt) {
         if (receipt.status !== "0x1") throw new Error(`Transaction reverted: ${txHash}`);
         return receipt;
@@ -232,17 +295,14 @@
 
   async function sendWalletCalls(calls, account, protocol) {
     try {
-      const bundleId = await window.ethereum.request({
-        method: "wallet_sendCalls",
-        params: [
-          {
-            version: "2.0.0",
-            chainId: protocol.chain_id_hex,
-            from: account,
-            calls: calls.map((call) => ({ to: call.to, data: call.data, value: "0x0" })),
-          },
-        ],
-      });
+      const bundleId = await walletRequest("wallet_sendCalls", [
+        {
+          version: "2.0.0",
+          chainId: protocol.chain_id_hex,
+          from: account,
+          calls: calls.map((call) => ({ to: call.to, data: call.data, value: "0x0" })),
+        },
+      ]);
       return { kind: "bundle", id: bundleId };
     } catch (_error) {
       const hashes = [];
@@ -417,7 +477,7 @@
     const result = byId("autonomous-post-output");
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
-      const account = await connectWallet();
+      const account = await connectWallet(form);
       const api = apiBase(form);
       output(result, ["Publishing content-addressed terms...", `Creator: ${account}`]);
       const committed = contractTerms(form, account, protocol);
@@ -499,7 +559,7 @@
     const result = byId("autonomous-fund-output");
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
-      const account = await connectWallet();
+      const account = await connectWallet(form);
       const api = apiBase(form);
       const contribution = {
         bounty_contract: requiredAddress(form.elements.bountyContract.value, "Bounty contract"),
@@ -545,7 +605,7 @@
     const result = byId("autonomous-submit-output");
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
-      const account = await connectWallet();
+      const account = await connectWallet(form);
       const api = apiBase(form);
       const bountyContract = requiredAddress(form.elements.bountyContract.value, "Bounty contract");
       const artifact = form.elements.artifact.value.trim();
@@ -628,7 +688,7 @@
       const result = byId("claim-feed-output");
       try {
         const protocol = requireActiveProtocol(await loadProtocol());
-        const account = await connectWallet();
+        const account = await connectWallet(document);
         const authorizationNonce = randomBytes32();
         const authorizationValidBefore = Math.floor(Date.now() / 1000) + 3_600;
         const plan = await requestJson(`${api}/v1/base/autonomous-bounties/claim-plan`, {
@@ -744,13 +804,17 @@
       button.addEventListener("click", async () => {
         const target = byId(button.dataset.output);
         try {
-          const account = await connectWallet();
+          const account = await connectWallet(button.closest("form") || document);
           output(target, `Connected: ${account}`, "success");
         } catch (error) {
           output(target, error.message || String(error), "error");
         }
       });
     });
+    document.querySelectorAll("[data-wallet-provider]").forEach((selector) => {
+      selector.addEventListener("change", () => selectProvider(selector.closest("form") || document));
+    });
+    discoverProviders().catch(() => populateProviderSelectors());
     prefillFunding();
     loadClaimableFeed();
   }

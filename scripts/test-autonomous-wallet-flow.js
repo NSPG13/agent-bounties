@@ -14,6 +14,8 @@ new vm.Script(source, { filename: "site/autonomous.js" });
 for (const required of [
   "eth_signTypedData_v4",
   "wallet_sendCalls",
+  "eip6963:requestProvider",
+  "data-wallet-provider",
   "create_bounty",
   "eip3009_authorization",
   "/v1/base/autonomous-bounties/creation-plan",
@@ -32,6 +34,9 @@ for (const required of [
 }
 
 for (const retired of [
+  "import wallet",
+  "seed phrase",
+  "private key",
   "createEscrow",
   "EscrowReleased",
   "/v1/base/funding-plan",
@@ -52,6 +57,12 @@ for (const page of ["index.html", "post.html", "funding.html", "earn.html", "ope
   const html = fs.readFileSync(path.join(repoRoot, "site", page), "utf8");
   assert(html.includes("autonomous.js"), `${page} does not load autonomous.js`);
   assert(!html.includes("main.js"), `${page} loads the retired browser bundle`);
+}
+
+for (const page of ["post.html", "funding.html", "earn.html"]) {
+  const html = fs.readFileSync(path.join(repoRoot, "site", page), "utf8");
+  assert(html.includes("data-wallet-provider"), `${page} does not offer explicit wallet-provider selection`);
+  assert(html.includes("Connect wallet"), `${page} does not use connect-wallet onboarding`);
 }
 
 console.log("autonomous wallet flow contract passed");
