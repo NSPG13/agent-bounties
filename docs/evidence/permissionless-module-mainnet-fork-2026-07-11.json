@@ -1,0 +1,67 @@
+{
+  "schema_version": "agent-bounties/mainnet-fork-evidence-v1",
+  "result": "pass",
+  "executed_at": "2026-07-11T17:46:03Z",
+  "network": "base-mainnet-fork",
+  "chain_id": 8453,
+  "fork": {
+    "block_number": 48501308,
+    "block_hash": "0xeb9547e6ad5869b5cf8b92c2bd8dc4f8593cab2a2255fe529e1048f3519508f0",
+    "state_root": "0x79798ccd0800ffbec0dc8bd0d6e083a8ce35e8012e0a7ba11e4b87f057ecb36a",
+    "timestamp": 1783791963
+  },
+  "test": {
+    "path": "contracts/base-escrow/test/AgentBountyMainnetFork.t.sol",
+    "contract": "AgentBountyMainnetForkTest",
+    "function": "testCanonicalMainnetPermissionlessPaidLoop",
+    "gas": 157251969,
+    "command": "RUN_MAINNET_FORK=true BASE_MAINNET_RPC_URL=<base-mainnet-rpc> forge test --match-contract AgentBountyMainnetForkTest --match-test testCanonicalMainnetPermissionlessPaidLoop -vv"
+  },
+  "contracts": {
+    "factory": {
+      "address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "runtime_code_hash": "0x06f810de7b46f854ecc29e9c0c28156edab4b0d3e0bbe2bf5be8876687bebfc6"
+    },
+    "implementation": {
+      "address": "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
+      "runtime_code_hash": "0xc36fcba5176b2cd8b57a9fd0cbf931177dc8b36cf8367c1568ccebe5f03be3f6"
+    },
+    "native_usdc": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "verifier_module": {
+      "address": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+      "runtime_code_hash": "0xbaa3a8305c4b65d0dc20131d0ef207fdaf4763f345393a831370cd04077df9b3",
+      "difficulty_bits": 16
+    }
+  },
+  "terms_commitments": {
+    "terms_hash": "0xd970470bb6adaaa98139740db3362dfd40b00110561dda9c1c7a9e1659ab915e",
+    "policy_hash": "0xb9aaf9ae7bc757288fc72119f1230a82a4c592519cddeb69bea4ab7790e40dc7",
+    "acceptance_criteria_hash": "0x8788ae8d44013e65172f494c054361906cc4974eda69f0e184211c7032d8bc78",
+    "benchmark_hash": "0xf561db43183cd283b1ed059eeb64f6524ff92de33001616882d31071e2086d2c",
+    "evidence_schema_hash": "0x21521c3eac6143dc56fd2c8d1aaf9831057d6c40c18b542fea77102a6c6d2244"
+  },
+  "economics_minor_usdc": {
+    "initial_funding": 1000000,
+    "solver_reward": 900000,
+    "verifier_reward": 100000,
+    "claim_bond": 100000,
+    "solver_final_receipt": 1000000
+  },
+  "flow": [
+    "assert exact mainnet runtime hashes and immutable factory/module configuration",
+    "source test USDC from two already-funded contracts on the isolated fork",
+    "create and fully fund one canonical deterministic-module bounty",
+    "post the solver bond and claim from an independent address",
+    "submit nonzero artifact and evidence hashes",
+    "mine a scope-bound 16-leading-zero-bit nonce",
+    "relay verifyAndSettle(bytes) from an unrelated address",
+    "assert Settled, zero bounty balance, full solver reward plus bond return, and verifier reward"
+  ],
+  "funding_fixture": {
+    "fork_only": true,
+    "initial_funding_source": "0x786be3f994365fcd417a1b502a83300ea87d9b34",
+    "claim_bond_source": "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8"
+  },
+  "broadcast_transactions": 0,
+  "evidence_boundary": "This proves the full permissionless protocol loop against exact Base mainnet bytecode and state on an isolated fork. Fork transfers, transactions, and settlement are not live funding or payout evidence. Only confirmed canonical mainnet events can prove a live bounty was funded or paid."
+}

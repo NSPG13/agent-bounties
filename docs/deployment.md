@@ -131,6 +131,26 @@ recorded in
 [`docs/evidence/autonomous-v1-mainnet-canaries-2026-07-11.json`](evidence/autonomous-v1-mainnet-canaries-2026-07-11.json).
 Neither record proves completion or payout; only `BountySettled` does.
 
+The permissionless deterministic verifier has a separate full-loop fork test in
+[`contracts/base-escrow/test/AgentBountyMainnetFork.t.sol`](../contracts/base-escrow/test/AgentBountyMainnetFork.t.sol).
+It forks current Base mainnet state, checks the exact deployed runtime hashes,
+creates and funds a canonical bounty with native USDC, claims from an independent
+address, submits hashes, mines the committed 16-bit proof, and settles from an
+unrelated relayer. It is opt-in so routine offline test runs do not depend on a
+public RPC:
+
+```powershell
+$env:RUN_MAINNET_FORK = "true"
+$env:BASE_MAINNET_RPC_URL = "https://your-base-mainnet-rpc"
+cd contracts/base-escrow
+forge test --match-contract AgentBountyMainnetForkTest `
+  --match-test testCanonicalMainnetPermissionlessPaidLoop -vv
+```
+
+The reproducible run record is
+[`docs/evidence/permissionless-module-mainnet-fork-2026-07-11.json`](evidence/permissionless-module-mainnet-fork-2026-07-11.json).
+The harness never broadcasts and fork settlement is not live payout evidence.
+
 After a confirmed, verified deployment:
 
 1. Update `deployments/base-mainnet.json` with factory, implementation,
