@@ -87,9 +87,11 @@ The guard prints Markdown and JSON. Open GitHub issues are candidate supply and
 never satisfy the threshold. Claimable entries must pass the portable skill's
 active-factory, terms, economics, funding, and canonical-event checks. The
 threshold defaults to `5` and can be set with `--threshold` or
-`BOUNTY_INVENTORY_THRESHOLD`. The scheduled workflow fails below that floor but
-still uploads both the raw verified inventory and summary reports. Only a
-confirmed canonical `BountySettled` event proves payout.
+`BOUNTY_INVENTORY_THRESHOLD`. The scheduled workflow emits a warning below the
+floor and uploads both the raw verified inventory and summary reports without
+blocking Render's `checksPass` deployment trigger. Use explicit `--fail-below`
+for local or release enforcement. Only a confirmed canonical `BountySettled`
+event proves payout.
 
 ## Picking Work
 
