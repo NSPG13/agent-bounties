@@ -168,6 +168,12 @@
           </details>
 
           <div class="actions sticky-actions">
+            <label class="wallet-picker">
+              Wallet
+              <select data-wallet-provider aria-label="Wallet provider">
+                <option>Detecting browser wallets</option>
+              </select>
+            </label>
             <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-post-output">Connect wallet</button>
             <button class="button primary" type="submit" data-protocol-action disabled>Sign and post bounty</button>
           </div>

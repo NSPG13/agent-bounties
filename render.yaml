@@ -139,6 +139,8 @@ services:
         value: base-mainnet
       - key: BASE_INDEXER_PROTOCOL
         value: autonomous-v1
+      - key: BASE_INDEXER_FACTORY_CONTRACT
+        value: 0x082c52131aaf0c56e76b075f895eab6fcab6d2f9
       - key: BASE_INDEXER_RPC_URL
         value: https://mainnet.base.org
       - key: BASE_INDEXER_START_BLOCK
