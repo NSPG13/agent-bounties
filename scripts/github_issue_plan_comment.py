@@ -149,14 +149,16 @@ def run_github_plan(
 
 def render_comment(plan: Mapping[str, object]) -> str:
     conclusion = str(read_json_field(plan, "check.conclusion"))
+    title = str(read_json_field(plan, "check.title"))
     summary = str(read_json_field(plan, "check.summary"))
     details = str(read_json_field(plan, "check.text"))
     ready = conclusion == "Success"
-    status_line = (
-        "This issue can be routed into a funded bounty."
-        if ready
-        else "This issue needs edits before it can be routed into a funded bounty."
-    )
+    if ready and title == "Autonomous bounty metadata ready":
+        status_line = "This metadata is valid. Canonical contract events, not GitHub, control funding and claimability."
+    elif ready:
+        status_line = "This issue can be routed into a funded bounty."
+    else:
+        status_line = "This issue needs edits before it can be routed into a funded bounty."
     return "\n".join(
         [
             MARKER,
@@ -310,6 +312,21 @@ def run_self_test() -> int:
     missing = [needle for needle in required if needle not in output]
     if missing:
         raise UserError(f"self-test output missing: {', '.join(missing)}")
+
+    autonomous = render_comment(
+        {
+            "check": {
+                "conclusion": "Success",
+                "title": "Autonomous bounty metadata ready",
+                "summary": "Canonical contract events control funding and claims.",
+                "text": "Amount: 1 USDC\nCanonical contract: funding pending.",
+            }
+        }
+    )
+    if "Canonical contract events, not GitHub" not in autonomous:
+        raise UserError("self-test autonomous metadata implied that funding was ready")
+    if "can be routed into a funded bounty" in autonomous:
+        raise UserError("self-test autonomous metadata used legacy funding-ready copy")
 
     print(f"GitHub issue plan comment dry-run passed: {output_path}")
     return 0
