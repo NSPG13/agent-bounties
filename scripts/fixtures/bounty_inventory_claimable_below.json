@@ -1,0 +1,10 @@
+{
+  "hosted_api_healthy": true,
+  "protocol_status": "active",
+  "active_factory": "0x1111111111111111111111111111111111111111",
+  "warnings": [],
+  "verified_claimable_bounties": [
+    {"id":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1","contract":"0x3333333333333333333333333333333333333331","solver_reward_minor":900000,"claim_bond_minor":100000,"currency":"usdc","status":"claimable","evidence":"confirmed_canonical_autonomous_bounty","terms_url":"https://api.example.test/terms/1","claim_plan_url":"https://api.example.test/claim"},
+    {"id":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2","contract":"0x3333333333333333333333333333333333333332","solver_reward_minor":900000,"claim_bond_minor":100000,"currency":"usdc","status":"claimable","evidence":"confirmed_canonical_autonomous_bounty","terms_url":"https://api.example.test/terms/2","claim_plan_url":"https://api.example.test/claim"}
+  ]
+}

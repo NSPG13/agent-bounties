@@ -64,28 +64,32 @@ at `/public/bounties`, `GET /v1/bounties/feed`, and MCP
 
 ## Bounty inventory guard (distribution)
 
-Maintainers and agents can check whether the repository has enough **open public
-issues labeled `bounty`** for organic solver traffic:
+Maintainers and agents can separately inspect open candidate issues and enforce
+a floor of **verified canonical claimable bounties** for organic solver traffic:
 
 ```powershell
-python scripts/bounty_inventory_guard.py
-python scripts/bounty_inventory_guard.py --threshold 5 --fail-below
+node skills/agent-bounties/scripts/check-in.mjs > target/tmp/claimable-inventory.json
+python scripts/bounty_inventory_guard.py --claimable-report target/tmp/claimable-inventory.json
+python scripts/bounty_inventory_guard.py --claimable-report target/tmp/claimable-inventory.json --threshold 5 --fail-below
 python scripts/test_bounty_inventory_guard.py -v
 ```
 
 On Unix-like shells:
 
 ```bash
-python scripts/bounty_inventory_guard.py
-python scripts/bounty_inventory_guard.py --threshold 5 --fail-below
+node skills/agent-bounties/scripts/check-in.mjs > target/tmp/claimable-inventory.json
+python scripts/bounty_inventory_guard.py --claimable-report target/tmp/claimable-inventory.json
+python scripts/bounty_inventory_guard.py --claimable-report target/tmp/claimable-inventory.json --threshold 5 --fail-below
 python scripts/test_bounty_inventory_guard.py -v
 ```
 
-The guard prints Markdown and JSON. It **does not** mark any issue as funded,
-claimable, accepted, payable, or paid. Threshold defaults to `5` and can be set
-with `--threshold` or `BOUNTY_INVENTORY_THRESHOLD`. A scheduled workflow
-`.github/workflows/bounty-inventory-guard.yml` runs unit tests on PRs and a live
-report on a schedule / manual dispatch.
+The guard prints Markdown and JSON. Open GitHub issues are candidate supply and
+never satisfy the threshold. Claimable entries must pass the portable skill's
+active-factory, terms, economics, funding, and canonical-event checks. The
+threshold defaults to `5` and can be set with `--threshold` or
+`BOUNTY_INVENTORY_THRESHOLD`. The scheduled workflow fails below that floor but
+still uploads both the raw verified inventory and summary reports. Only a
+confirmed canonical `BountySettled` event proves payout.
 
 ## Picking Work
 

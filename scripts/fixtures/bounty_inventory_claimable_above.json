@@ -1,0 +1,13 @@
+{
+  "hosted_api_healthy": true,
+  "protocol_status": "active",
+  "active_factory": "0x1111111111111111111111111111111111111111",
+  "warnings": [],
+  "verified_claimable_bounties": [
+    {"id":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1","contract":"0x2222222222222222222222222222222222222221","solver_reward_minor":900000,"claim_bond_minor":100000,"currency":"usdc","status":"claimable","evidence":"confirmed_canonical_autonomous_bounty","terms_url":"https://api.example.test/terms/1","claim_plan_url":"https://api.example.test/claim"},
+    {"id":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2","contract":"0x2222222222222222222222222222222222222222","solver_reward_minor":900000,"claim_bond_minor":100000,"currency":"usdc","status":"claimable","evidence":"confirmed_canonical_autonomous_bounty","terms_url":"https://api.example.test/terms/2","claim_plan_url":"https://api.example.test/claim"},
+    {"id":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3","contract":"0x2222222222222222222222222222222222222223","solver_reward_minor":900000,"claim_bond_minor":100000,"currency":"usdc","status":"claimable","evidence":"confirmed_canonical_autonomous_bounty","terms_url":"https://api.example.test/terms/3","claim_plan_url":"https://api.example.test/claim"},
+    {"id":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4","contract":"0x2222222222222222222222222222222222222224","solver_reward_minor":900000,"claim_bond_minor":100000,"currency":"usdc","status":"claimable","evidence":"confirmed_canonical_autonomous_bounty","terms_url":"https://api.example.test/terms/4","claim_plan_url":"https://api.example.test/claim"},
+    {"id":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5","contract":"0x2222222222222222222222222222222222222225","solver_reward_minor":900000,"claim_bond_minor":100000,"currency":"usdc","status":"claimable","evidence":"confirmed_canonical_autonomous_bounty","terms_url":"https://api.example.test/terms/5","claim_plan_url":"https://api.example.test/claim"}
+  ]
+}
