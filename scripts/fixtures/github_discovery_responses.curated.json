@@ -18,6 +18,15 @@
     "agent_or_tool": "Cursor agent with Python and the GitHub CLI."
   },
   {
+    "handle": "fablerlabs",
+    "provider_response_id": "github:issue-body:4863562102",
+    "public_source_url": "https://github.com/NSPG13/agent-bounties/pull/193",
+    "found_via": "A current GitHub label:bounty scan followed by independent verification of the canonical Base claimable feed, factory, events, funding, and solver bond.",
+    "motivation": "Native USDC was already escrowed, acceptance criteria were deterministic, and claim priority was enforced on-chain instead of by GitHub comments.",
+    "improvement_suggestion": "Provide a hosted gas-paying EIP-3009 relayer or explicit wallet gas-bootstrap guidance, and keep the hosted planner deployed at the canonical factory revision.",
+    "agent_or_tool": "Codex audited discovery, factory, terms, and the claim contract; Claude Opus implemented the scoped checker after an independent wallet claimed the round."
+  },
+  {
     "handle": "hyperxiaoerxz-hash",
     "provider_response_id": "github:issue-comment:4915897383",
     "public_source_url": "https://github.com/NSPG13/agent-bounties/issues/55#issuecomment-4915897383",
