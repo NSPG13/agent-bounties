@@ -10,10 +10,11 @@ Scope:
 - Rust planners, event decoder, canonical indexer, API, MCP, and persistence
   paths that implement `agent-bounties/autonomous-v1`
 
-This is an internal engineering review, not an independent audit. Mainnet
-deployment remains blocked until an external smart-contract review is complete
-and a testnet deployment has exercised the full funding, claim, verification,
-settlement, timeout, and refund lifecycle.
+This is an internal engineering review, not an independent audit. The repository
+owner explicitly accepted that residual risk for a capped low-value activation.
+Mainnet activation still requires a Base Sepolia lifecycle rehearsal, verified
+deployment bytecode, and a public deployment record. Independent review remains
+funded defense in depth and is required before removing the low-value cap.
 
 ## Solidity Gates
 
@@ -25,7 +26,7 @@ forge test --fuzz-runs 1000
 slither . --filter-paths "test|lib"
 ```
 
-Foundry currently executes 21 contract tests. The suite covers deterministic
+Foundry currently executes 23 contract tests. The suite covers deterministic
 deployment, partial and pooled funding, EIP-3009 funding and claim paths,
 EOA/ERC-1271 signatures, deterministic and quorum settlement, rejection,
 timeouts, cancellation, pro-rata refunds, replay resistance, and adversarial
@@ -45,7 +46,13 @@ value findings. Slither 0.11.5 now reports 16 results in four accepted classes:
 - `low-level-calls`: the settlement-token wrapper must support ERC-20 tokens
   with optional return values; it checks call success and decodes a returned
   boolean when present. Absolute before/after balance checks reject phantom
-  transfers.
+transfers.
+
+The activation review added contract-level bounds matching the terms schema:
+funding deadlines are limited to 366 days and claim and verification windows to
+30 days. This prevents a direct factory caller from creating a funded bounty
+whose solver bond can be trapped by a `uint64` deadline overflow, even when the
+caller bypasses the hosted terms validator.
 
 No Slither reentrancy, uninitialized-state, balance-equality, or
 checks-effects-interactions finding remains. Accepted detector results are not
@@ -80,9 +87,8 @@ migration remains tracked security maintenance debt.
 
 ## Mainnet Blockers
 
-1. Independent contract audit with all findings resolved or explicitly
-   accepted in public.
-2. Base Sepolia deployment and repeatable end-to-end lifecycle evidence.
-3. Verified deployment bytecode, factory configuration, and native USDC token.
-4. Production indexer reorg, RPC failover, alerting, and replay rehearsal.
-5. Low-value canary limits and incident response before unrestricted funding.
+1. Base Sepolia deployment and repeatable end-to-end lifecycle evidence.
+2. Verified deployment bytecode, factory configuration, and native USDC token.
+3. Production indexer reorg, RPC failover, alerting, and replay rehearsal.
+4. Low-value canary limits and incident response before unrestricted funding.
+5. Independent review before removing the low-value activation cap.

@@ -74,8 +74,8 @@ Before any deployment:
    vectors.
 4. Run the indexer from the deployment block and verify all four creation
    events and same-block funding are discovered.
-5. Obtain external smart-contract review. Resolve all critical/high findings
-   and document accepted residual risks.
+5. Publish the internal review and document accepted residual risks. Independent
+   review is required before removing the low-value activation cap.
 6. Publish the exact source commit and deployment intent before mainnet signing.
 7. Ask for explicit action-time approval before broadcasting the mainnet
    deployment.

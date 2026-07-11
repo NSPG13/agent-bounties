@@ -499,6 +499,29 @@ contract AgentBountyProtocolTest {
         require(!success, "zero verifier reward accepted");
     }
 
+    function testCanonicalDeadlinesAndWorkWindowsAreBounded() public {
+        ProofHashVerifier module = new ProofHashVerifier(keccak256("proof"));
+        AgentBountyFactory.CreateBountyParams memory params = _deterministicParams(module);
+        address[] memory noVerifiers = new address[](0);
+
+        params.fundingDeadline = uint64(block.timestamp + 366 days + 1);
+        (bool fundingSuccess,) = address(factory)
+            .call(abi.encodeCall(AgentBountyFactory.createBounty, (params, noVerifiers, 0, _nextNonce())));
+        require(!fundingSuccess, "unbounded funding deadline accepted");
+
+        params = _deterministicParams(module);
+        params.claimWindowSeconds = 30 days + 1;
+        (bool claimSuccess,) = address(factory)
+            .call(abi.encodeCall(AgentBountyFactory.createBounty, (params, noVerifiers, 0, _nextNonce())));
+        require(!claimSuccess, "unbounded claim window accepted");
+
+        params = _deterministicParams(module);
+        params.verificationWindowSeconds = 30 days + 1;
+        (bool verificationSuccess,) = address(factory)
+            .call(abi.encodeCall(AgentBountyFactory.createBounty, (params, noVerifiers, 0, _nextNonce())));
+        require(!verificationSuccess, "unbounded verification window accepted");
+    }
+
     function testCanonicalTargetMustFitIndexerAmountRange() public {
         ProofHashVerifier module = new ProofHashVerifier(keccak256("proof"));
         AgentBountyFactory.CreateBountyParams memory params = _deterministicParams(module);

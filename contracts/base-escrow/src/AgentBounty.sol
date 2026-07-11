@@ -10,6 +10,8 @@ contract AgentBounty is IAgentBountyV1 {
     bytes32 public constant PROTOCOL_VERSION = keccak256("agent-bounties/autonomous-v1");
     bytes4 private constant ERC1271_MAGIC_VALUE = 0x1626ba7e;
     uint256 private constant ERC1271_GAS_LIMIT = 200_000;
+    uint256 private constant MAX_FUNDING_WINDOW = 366 days;
+    uint64 private constant MAX_WORK_WINDOW = 30 days;
     bytes32 private constant EIP712_DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant NAME_HASH = keccak256("Agent Bounties");
@@ -204,9 +206,17 @@ contract AgentBounty is IAgentBountyV1 {
         require(config.acceptanceCriteriaHash != bytes32(0), "criteria hash zero");
         require(config.benchmarkHash != bytes32(0), "benchmark hash zero");
         require(config.evidenceSchemaHash != bytes32(0), "evidence schema hash zero");
-        require(config.fundingDeadline > block.timestamp, "funding deadline elapsed");
-        require(config.claimWindowSeconds > 0, "claim window zero");
-        require(config.verificationWindowSeconds > 0, "verification window zero");
+        require(
+            config.fundingDeadline > block.timestamp && config.fundingDeadline <= block.timestamp + MAX_FUNDING_WINDOW,
+            "funding deadline out of bounds"
+        );
+        require(
+            config.claimWindowSeconds > 0 && config.claimWindowSeconds <= MAX_WORK_WINDOW, "claim window out of bounds"
+        );
+        require(
+            config.verificationWindowSeconds > 0 && config.verificationWindowSeconds <= MAX_WORK_WINDOW,
+            "verification window out of bounds"
+        );
 
         if (config.verificationMode == VerificationMode.DeterministicModule) {
             require(config.verifierModule != address(0), "verifier module zero");

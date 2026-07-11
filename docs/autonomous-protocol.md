@@ -237,6 +237,7 @@ contract registration never crosses this boundary.
 - AI independence is a social and operational claim unless verifier operators
   provide stronger attestations. Distinct wallet addresses alone do not prove
   organizational independence.
-- Smart-contract review, static analysis, testnet deployment, and an external
-  audit remain mandatory before mainnet activation. See the
-  [autonomous-v1 security review](security/autonomous-v1-review.md).
+- Smart-contract review, static analysis, testnet deployment, verified bytecode,
+  and a public risk decision are mandatory before mainnet activation. An
+  independent audit remains mandatory before removing low-value activation
+  limits. See the [autonomous-v1 security review](security/autonomous-v1-review.md).
