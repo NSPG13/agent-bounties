@@ -121,7 +121,8 @@ cargo run -p cli -- pooled-funding-demo
   scripts/validate_real_funding_rehearsal.py \
   scripts/base_deployment_attest.py \
   scripts/test_base_deployment_attest.py \
-  scripts/build_base_attest_fixtures.py
+  scripts/build_base_attest_fixtures.py \
+  scripts/rehearse_autonomous_activation.py
 
 cd "$repo_root/crates/sdk-typescript"
 npm ci
@@ -130,3 +131,10 @@ npm run check:examples
 
 cd "$repo_root/contracts/base-escrow"
 forge test --fuzz-runs 1000
+
+cd "$repo_root"
+cargo run -p cli -- autonomous-activation-bundle \
+  --deployer 0x884834E884d6e93462655A2820140aD03E6747bC \
+  --deployer-nonce 4 \
+  --output target/tmp/base-mainnet-activation.json
+cmp deployments/base-mainnet-activation.json target/tmp/base-mainnet-activation.json

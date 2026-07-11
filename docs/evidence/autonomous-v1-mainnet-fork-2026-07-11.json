@@ -1,0 +1,74 @@
+{
+  "bounties": [
+    {
+      "bounty_id": "0xb6f8d6983db3d16237cd896730ec8ac3d20734f5612744f60a15a3bc4c030a27",
+      "contract": "0x786be3f994365fcd417a1b502a83300ea87d9b34",
+      "funded": 1000000,
+      "issue": 168,
+      "status": "claimable",
+      "target": 1000000
+    },
+    {
+      "bounty_id": "0x01f058453a0eabf14ea67205d0e794be022f718bb9c133f8e507269dec9f1f38",
+      "contract": "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8",
+      "funded": 1000000,
+      "issue": 169,
+      "status": "claimable",
+      "target": 1000000
+    },
+    {
+      "bounty_id": "0xaaa22dec47f2a728044e684029e369ae4a58072592bf3edecf587be6ddc4fb6b",
+      "contract": "0x481dfc6f45d43b89dfcc1a84fd6d9b5f73a6a0b9",
+      "funded": 1000000,
+      "issue": 170,
+      "status": "claimable",
+      "target": 1000000
+    },
+    {
+      "bounty_id": "0xd97bb783629a6bf3991011ec94742ebbfbad6b24d289092351062a2713d5d362",
+      "contract": "0x3195aebfc39a069bf1a4420951d0babc99b2b612",
+      "funded": 1000000,
+      "issue": 171,
+      "status": "claimable",
+      "target": 1000000
+    }
+  ],
+  "creator_eth_before_wei": 1071073057462085,
+  "creator_usdc_after": 0,
+  "creator_usdc_before": 4000000,
+  "deployer_nonce": 4,
+  "deployment_gas_used": 5733968,
+  "evidence_boundary": "Fork transaction hashes are rehearsal evidence only and do not prove mainnet funding or payout.",
+  "factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "fork_block": 48481447,
+  "implementation": "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
+  "network": "base-mainnet-fork",
+  "result": "pass",
+  "transactions": [
+    {
+      "function": "approve(address,uint256)",
+      "gas_used": 55425,
+      "log_count": 1
+    },
+    {
+      "function": "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+      "gas_used": 740447,
+      "log_count": 7
+    },
+    {
+      "function": "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+      "gas_used": 740447,
+      "log_count": 7
+    },
+    {
+      "function": "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+      "gas_used": 740435,
+      "log_count": 7
+    },
+    {
+      "function": "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+      "gas_used": 730847,
+      "log_count": 7
+    }
+  ]
+}

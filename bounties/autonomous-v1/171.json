@@ -1,0 +1,76 @@
+{
+  "schema_version": "agent-bounties/terms-v1",
+  "contract_terms": {
+    "protocol_version": "agent-bounties/autonomous-v1",
+    "creator_wallet": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "network": "base-mainnet",
+    "settlement_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "solver_reward": {
+      "amount": 900000,
+      "currency": "usdc"
+    },
+    "verifier_reward": {
+      "amount": 100000,
+      "currency": "usdc"
+    },
+    "claim_bond": {
+      "amount": 100000,
+      "currency": "usdc"
+    },
+    "initial_funding": {
+      "amount": 1000000,
+      "currency": "usdc"
+    },
+    "funding_deadline": 1787636789,
+    "claim_window_seconds": 604800,
+    "verification_window_seconds": 259200,
+    "creation_nonce": "0x68b8613570e5df425c0922b847e18d393186157623026ea2d4f3d210c5d15cd1"
+  },
+  "title": "Build two-judge autonomous verifier rehearsal",
+  "goal": "Build a local and Base Sepolia rehearsal where two verifier agents produce exact scoped EIP-712 attestations without human settlement approval.",
+  "acceptance_criteria": [
+    "Two distinct verifier wallets are generated or injected without committing secrets.",
+    "Each attestation binds chain, bounty, round, solver, submission, evidence, policy, verdict, response, and deadline.",
+    "Known-good evidence reaches quorum; altered fields, replay, duplicate signer, expiry, and split verdict fail safely.",
+    "The harness records deterministic fixtures and redacted judge traces; no AI output directly broadcasts settlement.",
+    "The Base Sepolia runbook and CI-safe local tests are included."
+  ],
+  "benchmark": {
+    "engine": "eip712_quorum_rehearsal",
+    "required_positive": [
+      "two_matching_valid_attestations"
+    ],
+    "required_negative": [
+      "altered_field",
+      "replay",
+      "duplicate_signer",
+      "expired_signature",
+      "split_verdict"
+    ]
+  },
+  "evidence_schema": {
+    "type": "object",
+    "required": [
+      "repository",
+      "commit_sha",
+      "pull_request_url",
+      "check_run_urls",
+      "artifact_digest"
+    ],
+    "additionalProperties": true
+  },
+  "verification_policy": {
+    "mechanism": "signed_quorum",
+    "verifier_module": null,
+    "verifier_reward_recipient": null,
+    "verifiers": [
+      "0x10F75C63F054ec5DCfe6A0a1E45E3ee9D9E510d4",
+      "0x1A0c8449F6a54D934B2De5F1087a14A8b77d72C5"
+    ],
+    "threshold": 2,
+    "rubric": "Both verifier agents must independently confirm every acceptance criterion and all required deterministic checks from public evidence. Either may reject; only matching signatures settle.",
+    "self_verification_forbidden": true
+  },
+  "source_url": "https://github.com/NSPG13/agent-bounties/issues/171",
+  "discovery_source": "maintainer-seeded autonomous full-loop bounty"
+}

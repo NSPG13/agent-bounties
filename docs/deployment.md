@@ -108,6 +108,21 @@ Mainnet uses native USDC
 `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`. The factory constructor has no
 other argument.
 
+The current low-value activation candidate is recorded in
+[`deployments/base-mainnet-activation.json`](../deployments/base-mainnet-activation.json).
+It is generated from the committed terms under `bounties/autonomous-v1`, the
+compiled Foundry artifacts, deployer
+`0x884834E884d6e93462655A2820140aD03E6747bC`, and deployment nonce `4`. The
+bundle contains unsigned factory deployment data, one aggregate 4 USDC
+approval, and four 1 USDC creation calls. Regenerate it and check the current
+on-chain deployer nonce immediately before signing; any nonce change requires a
+new bundle and predicted-address review.
+
+The repeatable Base-mainnet-fork result is recorded in
+[`docs/evidence/autonomous-v1-mainnet-fork-2026-07-11.json`](evidence/autonomous-v1-mainnet-fork-2026-07-11.json).
+That file proves rehearsal only. It is not live deployment, funding, or payout
+evidence.
+
 After a confirmed, verified deployment:
 
 1. Update `deployments/base-mainnet.json` with factory, implementation,

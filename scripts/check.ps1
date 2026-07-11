@@ -68,7 +68,7 @@ Invoke-Checked { cargo run -p cli -- demo }
 Invoke-Checked { cargo run -p cli -- pooled-funding-demo }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\diagnose_hosted_api.py scripts\test_diagnose_hosted_api.py scripts\github_audience_audit.py scripts\test_github_audience_audit.py scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py scripts\sync_hosted_bounty_inventory.py scripts\test_sync_hosted_bounty_inventory.py scripts\validate_real_funding_rehearsal.py }
-Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py scripts\check-migration-history.py scripts\check-render-blueprint.py scripts\stage_review_contract_root.py scripts\test_stage_review_contract_root.py scripts\base_deployment_attest.py scripts\test_base_deployment_attest.py scripts\build_base_attest_fixtures.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py scripts\check-migration-history.py scripts\check-render-blueprint.py scripts\stage_review_contract_root.py scripts\test_stage_review_contract_root.py scripts\base_deployment_attest.py scripts\test_base_deployment_attest.py scripts\build_base_attest_fixtures.py scripts\rehearse_autonomous_activation.py }
 Pop-Location
 
 Push-Location (Join-Path $repoRoot "crates\sdk-typescript")
@@ -80,3 +80,14 @@ Pop-Location
 Push-Location (Join-Path $repoRoot "contracts\base-escrow")
 Invoke-Checked { forge test --fuzz-runs 1000 }
 Pop-Location
+
+$activationCheck = Join-Path $repoRoot "target\tmp\base-mainnet-activation.json"
+Invoke-Checked {
+    cargo run -p cli -- autonomous-activation-bundle `
+        --deployer 0x884834E884d6e93462655A2820140aD03E6747bC `
+        --deployer-nonce 4 `
+        --output $activationCheck
+}
+if ((Get-Content $activationCheck -Raw) -ne (Get-Content (Join-Path $repoRoot "deployments\base-mainnet-activation.json") -Raw)) {
+    throw "deployments/base-mainnet-activation.json is stale; regenerate it with the autonomous-activation-bundle command"
+}
