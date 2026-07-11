@@ -6,6 +6,8 @@ import json
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from subprocess import CompletedProcess, TimeoutExpired
+from unittest.mock import patch
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -127,6 +129,76 @@ class RulesetDriftCheckTests(unittest.TestCase):
             "pull request rule must require latest-push approval",
             result["live_semantic_problems"],
         )
+
+    def test_fetch_requires_one_repository_owned_match(self) -> None:
+        owned = {
+            "id": 10,
+            "name": self.canonical["name"],
+            "source_type": "Repository",
+            "source": "NSPG13/agent-bounties",
+        }
+        with patch.object(MODULE, "_gh_json", return_value=[owned, {**owned, "id": 11}]):
+            with self.assertRaisesRegex(RuntimeError, "found 2"):
+                MODULE.fetch_live_ruleset("NSPG13/agent-bounties", self.canonical["name"])
+
+    def test_fetch_rejects_zero_repository_owned_matches(self) -> None:
+        inherited = {
+            "id": 10,
+            "name": self.canonical["name"],
+            "source_type": "Organization",
+            "source": "NSPG13",
+        }
+        with patch.object(MODULE, "_gh_json", return_value=[inherited]):
+            with self.assertRaisesRegex(RuntimeError, "found 0"):
+                MODULE.fetch_live_ruleset("NSPG13/agent-bounties", self.canonical["name"])
+
+    def test_fetch_ignores_same_named_inherited_ruleset(self) -> None:
+        owned = {
+            "id": 10,
+            "name": self.canonical["name"],
+            "source_type": "Repository",
+            "source": "nspg13/AGENT-BOUNTIES",
+        }
+        inherited = {
+            "id": 20,
+            "name": self.canonical["name"],
+            "source_type": "Organization",
+            "source": "NSPG13",
+        }
+        detail = {**self.live, "source_type": "Repository", "source": "NSPG13/agent-bounties"}
+        with patch.object(MODULE, "_gh_json", side_effect=[[inherited, owned], detail]) as gh_json:
+            result = MODULE.fetch_live_ruleset("NSPG13/agent-bounties", self.canonical["name"])
+        self.assertIs(result, detail)
+        self.assertEqual(
+            gh_json.call_args_list[1].args[0],
+            ["repos/NSPG13/agent-bounties/rulesets/10"],
+        )
+
+    def test_gh_timeout_fails_closed(self) -> None:
+        with patch.object(
+            MODULE.subprocess,
+            "run",
+            side_effect=TimeoutExpired(cmd=["gh", "api"], timeout=MODULE.GH_TIMEOUT_SECONDS),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                MODULE._gh_json(["repos/owner/repo/rulesets"])
+
+    def test_gh_nonzero_exit_fails_closed_without_stderr(self) -> None:
+        completed = CompletedProcess(
+            args=["gh", "api"], returncode=7, stdout="", stderr="sensitive detail"
+        )
+        with patch.object(MODULE.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(RuntimeError, "exit code 7") as error:
+                MODULE._gh_json(["repos/owner/repo/rulesets"])
+        self.assertNotIn("sensitive", str(error.exception))
+
+    def test_gh_invalid_json_fails_closed(self) -> None:
+        completed = CompletedProcess(
+            args=["gh", "api"], returncode=0, stdout="not-json", stderr=""
+        )
+        with patch.object(MODULE.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
+                MODULE._gh_json(["repos/owner/repo/rulesets"])
 
 
 if __name__ == "__main__":

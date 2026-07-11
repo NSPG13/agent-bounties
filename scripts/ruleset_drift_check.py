@@ -58,6 +58,7 @@ GITHUB_ACTIONS_INTEGRATION_ID = 15368
 ADMIN_REPOSITORY_ROLE_ID = 5
 REQUIRED_STATUS_CONTEXTS = ("full-check", "postgres-sync")
 DEFAULT_BRANCH_TARGET = "~DEFAULT_BRANCH"
+GH_TIMEOUT_SECONDS = 30
 
 
 def normalize_ruleset(ruleset: dict[str, Any]) -> dict[str, Any]:
@@ -226,10 +227,26 @@ def is_clean(result: dict[str, list[str]]) -> bool:
 
 
 def _gh_json(args: list[str]) -> Any:
-    completed = subprocess.run(
-        ["gh", "api", *args], check=True, capture_output=True, text=True
-    )
-    return json.loads(completed.stdout)
+    try:
+        completed = subprocess.run(
+            ["gh", "api", *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=GH_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        raise RuntimeError("gh command is unavailable") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"gh api timed out after {GH_TIMEOUT_SECONDS} seconds"
+        ) from None
+    if completed.returncode != 0:
+        raise RuntimeError(f"gh api failed with exit code {completed.returncode}")
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError("gh api returned invalid JSON") from None
 
 
 def fetch_live_ruleset(repository: str, name: str) -> dict[str, Any]:
@@ -237,16 +254,34 @@ def fetch_live_ruleset(repository: str, name: str) -> dict[str, Any]:
     listing = _gh_json([f"repos/{repository}/rulesets"])
     if not isinstance(listing, list):
         raise RuntimeError("unexpected rulesets listing response")
-    match = next(
-        (item for item in listing if isinstance(item, dict) and item.get("name") == name),
-        None,
-    )
-    if match is None:
-        raise RuntimeError(f"no live ruleset named {name!r} on {repository}")
+    repository_key = repository.strip().casefold()
+    matches = [
+        item
+        for item in listing
+        if isinstance(item, dict)
+        and item.get("name") == name
+        and item.get("source_type") == "Repository"
+        and isinstance(item.get("source"), str)
+        and item["source"].strip().casefold() == repository_key
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected exactly one repository-owned live ruleset named {name!r} "
+            f"on {repository}, found {len(matches)}"
+        )
+    match = matches[0]
     ruleset_id = match.get("id")
     if not isinstance(ruleset_id, int):
         raise RuntimeError("live ruleset is missing a numeric id")
-    return _gh_json([f"repos/{repository}/rulesets/{ruleset_id}"])
+    live = _gh_json([f"repos/{repository}/rulesets/{ruleset_id}"])
+    if (
+        not isinstance(live, dict)
+        or live.get("source_type") != "Repository"
+        or not isinstance(live.get("source"), str)
+        or live["source"].strip().casefold() != repository_key
+    ):
+        raise RuntimeError("fetched ruleset source does not match the requested repository")
+    return live
 
 
 def format_report(result: dict[str, list[str]]) -> str:
@@ -279,11 +314,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    canonical = json.loads(args.canonical.read_text(encoding="utf-8"))
-    if args.live_fixture:
-        live = json.loads(args.live_fixture.read_text(encoding="utf-8"))
-    else:
-        live = fetch_live_ruleset(args.repository, canonical["name"])
+    try:
+        canonical = json.loads(args.canonical.read_text(encoding="utf-8"))
+        if args.live_fixture:
+            live = json.loads(args.live_fixture.read_text(encoding="utf-8"))
+        else:
+            live = fetch_live_ruleset(args.repository, canonical["name"])
+    except (OSError, json.JSONDecodeError, KeyError, RuntimeError) as error:
+        print(f"ruleset drift check failed: {error}", file=sys.stderr)
+        return 2
 
     result = evaluate(canonical, live)
     print(format_report(result))
