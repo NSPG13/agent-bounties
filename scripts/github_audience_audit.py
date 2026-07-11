@@ -62,7 +62,14 @@ def gh_api(repository: str, suffix: str, *, accept: str | None = None) -> list[d
     ]
     if accept:
         command.extend(["-H", f"Accept: {accept}"])
-    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    completed = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
     return flatten_pages(json.loads(completed.stdout))
 
 

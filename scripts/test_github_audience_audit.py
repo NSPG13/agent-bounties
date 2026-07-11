@@ -6,6 +6,8 @@ import json
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -22,6 +24,19 @@ class GitHubAudienceAuditTests(unittest.TestCase):
         fixture = SCRIPT_DIR / "fixtures" / "github_audience_audit.json"
         self.snapshot = json.loads(fixture.read_text(encoding="utf-8"))
         self.audit = MODULE.build_audit(self.snapshot, "NSPG13")
+
+    def test_github_api_output_is_decoded_as_utf8_on_every_platform(self) -> None:
+        response = '[[{"id":1,"body":"autonomous café"}]]'
+        with patch.object(
+            MODULE.subprocess,
+            "run",
+            return_value=SimpleNamespace(stdout=response),
+        ) as run:
+            records = MODULE.gh_api("NSPG13/agent-bounties", "issues")
+
+        self.assertEqual(records[0]["body"], "autonomous café")
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.kwargs["errors"], "strict")
 
     def test_public_activity_is_deduplicated_and_bots_are_excluded(self) -> None:
         handles = [participant["handle"] for participant in self.audit["participants"]]
@@ -214,7 +229,7 @@ class GitHubAudienceAuditTests(unittest.TestCase):
             SCRIPT_DIR / "fixtures" / "github_discovery_responses.curated.json"
         )
         curated = json.loads(curated_path.read_text(encoding="utf-8"))
-        self.assertEqual(len(curated), 7)
+        self.assertEqual(len(curated), 8)
         self.assertEqual(
             len({response["provider_response_id"] for response in curated}), len(curated)
         )
