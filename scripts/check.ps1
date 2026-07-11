@@ -90,6 +90,8 @@ Invoke-Checked {
         --deployer-nonce 4 `
         --output $activationCheck
 }
-if ((Get-Content $activationCheck -Raw) -ne (Get-Content (Join-Path $repoRoot "deployments\base-mainnet-activation.json") -Raw)) {
+$generatedActivation = Get-Content $activationCheck -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+$committedActivation = Get-Content (Join-Path $repoRoot "deployments\base-mainnet-activation.json") -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+if ($generatedActivation -ne $committedActivation) {
     throw "deployments/base-mainnet-activation.json is stale; regenerate it with the autonomous-activation-bundle command"
 }

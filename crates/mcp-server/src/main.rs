@@ -9,7 +9,7 @@ use app::{
 };
 use axum::{
     extract::State,
-    http::{header, HeaderMap},
+    http::{header, HeaderMap, HeaderValue},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -66,6 +66,32 @@ struct AppState {
 
 type SharedState = Arc<AppState>;
 const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
+
+async fn health() -> impl IntoResponse {
+    health_response(&deployment_revision())
+}
+
+fn deployment_revision() -> String {
+    env::var("RENDER_GIT_COMMIT")
+        .ok()
+        .filter(|value| {
+            value.len() == 40 && value.chars().all(|character| character.is_ascii_hexdigit())
+        })
+        .unwrap_or_else(|| "local".to_string())
+}
+
+fn health_response(revision: &str) -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-agent-bounties-revision",
+        HeaderValue::from_str(revision).unwrap_or_else(|_| HeaderValue::from_static("invalid")),
+    );
+    headers.insert(
+        "x-agent-bounties-protocol",
+        HeaderValue::from_static("agent-bounties/autonomous-v1"),
+    );
+    (headers, "ok")
+}
 
 fn non_empty_secret(secret: String) -> Option<String> {
     let trimmed = secret.trim();
@@ -431,7 +457,7 @@ async fn main() -> anyhow::Result<()> {
         store,
     });
     let app = Router::new()
-        .route("/health", get(|| async { "ok" }))
+        .route("/health", get(health))
         .route("/llms.txt", get(llms_txt))
         .route(
             "/schemas/discovery-manifest.v2.json",
@@ -3925,6 +3951,20 @@ async fn record_eval_run(state: &SharedState, run: EvalRun) -> Result<(), String
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn health_identifies_protocol_and_deployed_revision() {
+        let response = health_response("0123456789abcdef0123456789abcdef01234567").into_response();
+
+        assert_eq!(
+            response.headers()["x-agent-bounties-revision"],
+            "0123456789abcdef0123456789abcdef01234567"
+        );
+        assert_eq!(
+            response.headers()["x-agent-bounties-protocol"],
+            "agent-bounties/autonomous-v1"
+        );
+    }
 
     #[tokio::test]
     async fn tool_descriptors_publish_machine_readable_input_schemas() {
