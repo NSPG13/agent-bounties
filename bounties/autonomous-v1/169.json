@@ -1,0 +1,77 @@
+{
+  "schema_version": "agent-bounties/terms-v1",
+  "contract_terms": {
+    "protocol_version": "agent-bounties/autonomous-v1",
+    "creator_wallet": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "network": "base-mainnet",
+    "settlement_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "solver_reward": {
+      "amount": 900000,
+      "currency": "usdc"
+    },
+    "verifier_reward": {
+      "amount": 100000,
+      "currency": "usdc"
+    },
+    "claim_bond": {
+      "amount": 100000,
+      "currency": "usdc"
+    },
+    "initial_funding": {
+      "amount": 1000000,
+      "currency": "usdc"
+    },
+    "funding_deadline": 1787636789,
+    "claim_window_seconds": 604800,
+    "verification_window_seconds": 259200,
+    "creation_nonce": "0xae2551e5ce10010e9977bc09022198ede7feeffe4e58f68bfb7642ef0f22960e"
+  },
+  "title": "Add GitHub main-ruleset drift checker",
+  "goal": "Add a read-only script and CI fixture suite that detects unsafe drift between the committed main ruleset and GitHub.",
+  "acceptance_criteria": [
+    "The checker authenticates through gh, makes read-only API calls, and never prints tokens.",
+    "It validates main-only targeting, PR-only admin bypass, one latest-push approval, resolved threads, GitHub-Actions-bound full-check and postgres-sync, loose status mode, deletion protection, and force-push blocking.",
+    "Offline fixtures cover equal, missing-rule, wrong-integration, strict-mode, and over-broad-target cases.",
+    "CI runs fixture tests on every PR and documents the live maintainer command.",
+    "scripts/preflight.ps1 -Mode core and the narrow fixture suite pass."
+  ],
+  "benchmark": {
+    "engine": "github_ruleset_fixture",
+    "required_cases": [
+      "equal",
+      "missing_rule",
+      "wrong_integration",
+      "strict_mode",
+      "over_broad_target"
+    ],
+    "required_checks": [
+      "full-check",
+      "postgres-sync"
+    ]
+  },
+  "evidence_schema": {
+    "type": "object",
+    "required": [
+      "repository",
+      "commit_sha",
+      "pull_request_url",
+      "check_run_urls",
+      "artifact_digest"
+    ],
+    "additionalProperties": true
+  },
+  "verification_policy": {
+    "mechanism": "signed_quorum",
+    "verifier_module": null,
+    "verifier_reward_recipient": null,
+    "verifiers": [
+      "0x10F75C63F054ec5DCfe6A0a1E45E3ee9D9E510d4",
+      "0x1A0c8449F6a54D934B2De5F1087a14A8b77d72C5"
+    ],
+    "threshold": 2,
+    "rubric": "Both verifier agents must independently confirm every acceptance criterion and all required deterministic checks from public evidence. Either may reject; only matching signatures settle.",
+    "self_verification_forbidden": true
+  },
+  "source_url": "https://github.com/NSPG13/agent-bounties/issues/169",
+  "discovery_source": "maintainer-seeded autonomous full-loop bounty"
+}

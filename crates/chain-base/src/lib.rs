@@ -184,6 +184,19 @@ pub struct AutonomousBountyCreationPlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomousBountyCreationBatchPlan {
+    pub protocol_version: String,
+    pub network: BaseNetworkDescriptor,
+    pub creator: String,
+    pub total_initial_funding: String,
+    pub approve: Option<EvmTransactionIntent>,
+    pub creations: Vec<AutonomousBountyCreationPlan>,
+    pub wallet_calls: Vec<EvmTransactionIntent>,
+    pub supports_single_wallet_batch: bool,
+    pub evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutonomousBountyAuthorizationSignature {
     pub v: u8,
     pub r: String,
@@ -400,6 +413,76 @@ impl AutonomousBountyTxPlanner {
             supports_single_wallet_batch: true,
             eip3009_authorization,
             evidence_boundary: "A transaction plan or signature is not funding. Funding is applied only after a confirmed canonical factory event and matching FundingAdded event from the predicted bounty contract.".to_string(),
+        })
+    }
+
+    pub fn plan_creation_batch(
+        &self,
+        network: &str,
+        creates: &[AutonomousBountyCreate],
+    ) -> Result<AutonomousBountyCreationBatchPlan, ChainBaseError> {
+        if creates.is_empty() {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "creation batch must contain at least one bounty".to_string(),
+            ));
+        }
+        let network = base_network_descriptor(network)?;
+        let creator = normalize_address(&creates[0].creator)?;
+        let mut bounty_ids = HashSet::new();
+        let mut total_initial_funding = 0u128;
+        let mut creations = Vec::with_capacity(creates.len());
+
+        for create in creates {
+            if normalize_address(&create.creator)? != creator {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "every creation in a wallet batch must use the same creator".to_string(),
+                ));
+            }
+            let plan = self.plan_creation(&network.name, create)?;
+            if !bounty_ids.insert(plan.bounty_id.clone()) {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "creation batch contains a duplicate bounty id".to_string(),
+                ));
+            }
+            total_initial_funding = total_initial_funding
+                .checked_add(autonomous_money_to_uint256(&create.initial_funding, true)?)
+                .ok_or(ChainBaseError::InvalidAmount)?;
+            creations.push(plan);
+        }
+
+        let approve = if total_initial_funding == 0 {
+            None
+        } else {
+            Some(EvmTransactionIntent {
+                from: Some(creator.clone()),
+                to: network.native_usdc_token_address.clone(),
+                value_wei: 0,
+                data: encode_call(
+                    "approve(address,uint256)",
+                    vec![
+                        encode_address(&self.factory_contract)?,
+                        encode_uint256(total_initial_funding)?,
+                    ],
+                ),
+                function: "approve(address,uint256)".to_string(),
+            })
+        };
+        let mut wallet_calls = Vec::with_capacity(creations.len() + usize::from(approve.is_some()));
+        if let Some(approve) = approve.clone() {
+            wallet_calls.push(approve);
+        }
+        wallet_calls.extend(creations.iter().map(|plan| plan.create_bounty.clone()));
+
+        Ok(AutonomousBountyCreationBatchPlan {
+            protocol_version: "agent-bounties/autonomous-v1".to_string(),
+            network,
+            creator,
+            total_initial_funding: total_initial_funding.to_string(),
+            approve,
+            creations,
+            wallet_calls,
+            supports_single_wallet_batch: true,
+            evidence_boundary: "This unsigned batch is not deployment or funding evidence. Each bounty is live only after confirmed canonical creation, FundingAdded, and BountyBecameClaimable events from the configured factory and predicted bounty contract.".to_string(),
         })
     }
 
@@ -3562,6 +3645,118 @@ pub fn validate_autonomous_creation_against_terms(
     Ok(())
 }
 
+pub fn autonomous_bounty_create_from_terms(
+    terms: &AutonomousBountyTermsRecord,
+) -> Result<AutonomousBountyCreate, ChainBaseError> {
+    let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
+        ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
+    })?;
+    let policy = terms
+        .document
+        .verification_policy
+        .as_object()
+        .ok_or_else(|| {
+            ChainBaseError::InvalidTermsDocument(
+                "published verification_policy is unavailable".to_string(),
+            )
+        })?;
+    let mechanism = policy
+        .get("mechanism")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidTermsDocument(
+                "verification_policy mechanism is required".to_string(),
+            )
+        })?;
+    let verification_mode = match mechanism {
+        "deterministic_module" => AutonomousVerificationMode::DeterministicModule,
+        "signed_quorum" => AutonomousVerificationMode::SignedQuorum,
+        "ai_judge_quorum" => AutonomousVerificationMode::AiJudgeQuorum,
+        _ => {
+            return Err(ChainBaseError::InvalidTermsDocument(
+                "verification_policy mechanism is unsupported".to_string(),
+            ))
+        }
+    };
+    let optional_policy_address = |field: &str| -> Result<Option<String>, ChainBaseError> {
+        match policy.get(field) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(normalize_address(value)?)),
+            _ => Err(ChainBaseError::InvalidTermsDocument(format!(
+                "verification_policy {field} must be an address or null"
+            ))),
+        }
+    };
+    let verifiers = policy
+        .get("verifiers")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidTermsDocument(
+                "verification_policy verifiers must be an array".to_string(),
+            )
+        })?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| {
+                    ChainBaseError::InvalidTermsDocument(
+                        "verification_policy verifier must be an address".to_string(),
+                    )
+                })
+                .and_then(normalize_address)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let threshold = policy
+        .get("threshold")
+        .and_then(Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .ok_or_else(|| {
+            ChainBaseError::InvalidTermsDocument(
+                "verification_policy threshold must fit uint8".to_string(),
+            )
+        })?;
+    let money = |field: &str, allow_zero: bool| -> Result<Money, ChainBaseError> {
+        let amount = contract_terms_money(contract_terms, field, allow_zero)?;
+        let amount = i64::try_from(amount).map_err(|_| {
+            ChainBaseError::InvalidTermsDocument(format!(
+                "contract_terms {field} exceeds the supported amount range"
+            ))
+        })?;
+        Ok(if amount == 0 {
+            Money::zero("usdc")
+        } else {
+            Money::new(amount, "usdc").map_err(|_| ChainBaseError::InvalidAmount)?
+        })
+    };
+    let create = AutonomousBountyCreate {
+        creator: normalize_address(&terms.creator_wallet)?,
+        solver_reward: money("solver_reward", false)?,
+        verifier_reward: money("verifier_reward", false)?,
+        terms_hash: terms.terms_hash.clone(),
+        policy_hash: terms.policy_hash.clone(),
+        acceptance_criteria_hash: terms.acceptance_criteria_hash.clone(),
+        benchmark_hash: terms.benchmark_hash.clone(),
+        evidence_schema_hash: terms.evidence_schema_hash.clone(),
+        funding_deadline: contract_terms_u64(contract_terms, "funding_deadline")?,
+        claim_window_seconds: contract_terms_u64(contract_terms, "claim_window_seconds")?,
+        verification_window_seconds: contract_terms_u64(
+            contract_terms,
+            "verification_window_seconds",
+        )?,
+        verification_mode,
+        verifier_module: optional_policy_address("verifier_module")?,
+        verifier_reward_recipient: optional_policy_address("verifier_reward_recipient")?,
+        verifiers,
+        threshold,
+        initial_funding: money("initial_funding", true)?,
+        creation_nonce: contract_terms_string(contract_terms, "creation_nonce")?.to_string(),
+    };
+    let network = contract_terms_string(contract_terms, "network")?;
+    validate_autonomous_creation_against_terms(network, &create, terms)?;
+    Ok(create)
+}
+
 fn encode_autonomous_create_call(
     params: &[[u8; 32]],
     verifiers: &[[u8; 32]],
@@ -4320,10 +4515,134 @@ mod tests {
             creation_nonce: format!("0x{}", "11".repeat(32)),
         };
         validate_autonomous_creation_against_terms("base-mainnet", &create, &record).unwrap();
+        let derived = autonomous_bounty_create_from_terms(&record).unwrap();
+        assert_eq!(derived.creator, create.creator);
+        assert_eq!(derived.solver_reward, create.solver_reward);
+        assert_eq!(derived.verifier_reward, create.verifier_reward);
+        assert_eq!(derived.verification_mode, create.verification_mode);
+        assert_eq!(derived.verifiers, create.verifiers);
+        assert_eq!(derived.threshold, create.threshold);
         create.solver_reward = Money::new(800_000, "usdc").unwrap();
         assert!(
             validate_autonomous_creation_against_terms("base-mainnet", &create, &record).is_err()
         );
+    }
+
+    #[test]
+    fn creation_batch_uses_one_exact_aggregate_approval() {
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+        )
+        .unwrap();
+        let first = AutonomousBountyCreate {
+            creator: "0x3333333333333333333333333333333333333333".to_string(),
+            solver_reward: Money::new(900_000, "usdc").unwrap(),
+            verifier_reward: Money::new(100_000, "usdc").unwrap(),
+            terms_hash: format!("0x{}", "aa".repeat(32)),
+            policy_hash: format!("0x{}", "bb".repeat(32)),
+            acceptance_criteria_hash: format!("0x{}", "cc".repeat(32)),
+            benchmark_hash: format!("0x{}", "dd".repeat(32)),
+            evidence_schema_hash: format!("0x{}", "ee".repeat(32)),
+            funding_deadline: 2_000_000_000,
+            claim_window_seconds: 3_600,
+            verification_window_seconds: 1_800,
+            verification_mode: AutonomousVerificationMode::SignedQuorum,
+            verifier_module: None,
+            verifier_reward_recipient: None,
+            verifiers: vec!["0x4444444444444444444444444444444444444444".to_string()],
+            threshold: 1,
+            initial_funding: Money::new(1_000_000, "usdc").unwrap(),
+            creation_nonce: format!("0x{}", "01".repeat(32)),
+        };
+        let mut second = first.clone();
+        second.terms_hash = format!("0x{}", "ab".repeat(32));
+        second.creation_nonce = format!("0x{}", "02".repeat(32));
+
+        let batch = planner
+            .plan_creation_batch("base-mainnet", &[first.clone(), second])
+            .unwrap();
+        assert_eq!(batch.total_initial_funding, "2000000");
+        assert_eq!(batch.creations.len(), 2);
+        assert_eq!(batch.wallet_calls.len(), 3);
+        assert_eq!(batch.wallet_calls[0].function, "approve(address,uint256)");
+        assert!(batch.wallet_calls[1].data.starts_with("0x9d2e414c"));
+        assert!(batch.wallet_calls[2].data.starts_with("0x9d2e414c"));
+        assert!(batch
+            .approve
+            .as_ref()
+            .unwrap()
+            .data
+            .ends_with("00000000000000000000000000000000000000000000000000000000001e8480"));
+
+        assert!(matches!(
+            planner.plan_creation_batch("base-mainnet", &[first.clone(), first]),
+            Err(ChainBaseError::InvalidVerificationConfiguration(message))
+                if message.contains("duplicate bounty id")
+        ));
+    }
+
+    #[test]
+    fn seeded_mainnet_bounty_terms_match_committed_manifest_hashes() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let creator = "0x884834E884d6e93462655A2820140aD03E6747bC";
+        let cases = [
+            (
+                168,
+                include_str!("../../../bounties/autonomous-v1/168.json"),
+                "0x83d7f1c75921cf11a3eb7530d72f26272b3a031c1ed73380b7d41e2bdb82c878",
+                "0x82da5ff5c09dd827ec70a45328d86f5b8d35ba4313afd8d058737d68d8ddfbeb",
+                "0xa795332930322a841d1c608d39df8b29e3b21a664dadaf0780ee3d5c9e2a6f2b",
+            ),
+            (
+                169,
+                include_str!("../../../bounties/autonomous-v1/169.json"),
+                "0x8c5090db8abad4d7ae34d0286a1c2e28fd4d672c0556abccaa2e9b5194995013",
+                "0x804552709a19c26b6b15f4674e24c9aec95d06882558bfe28167c7cf4dc49bf4",
+                "0xc908d8f36c9ec2899e0512496ef463957f5e5694c5ce65f277deddf6b14d624d",
+            ),
+            (
+                170,
+                include_str!("../../../bounties/autonomous-v1/170.json"),
+                "0xe20033e97249d4fa480bf46043b0523c3ee4305bba578e8425568086c7908d31",
+                "0x735d12ea387942bfbcd22acdecbbf905fe41a5159c5f09c1512dd27deb53700d",
+                "0x0f5426744d1aa813e40c6ce3728db06977255d60384cd19e384397ec9de2dd13",
+            ),
+            (
+                171,
+                include_str!("../../../bounties/autonomous-v1/171.json"),
+                "0x0942c645d944a488d463ceb4ffa53021798dd20293d5afe47730d009508f7944",
+                "0xdb47ed8b500dc305c960c4872f02ee71ccf99c846b206eeae890416b0d778ab6",
+                "0x749b4c3fa113ff74f0209862100988562d30184d453135a98ba649e81e453336",
+            ),
+        ];
+
+        for (issue, json, terms_hash, criteria_hash, benchmark_hash) in cases {
+            let document = serde_json::from_str::<AutonomousBountyTermsDocument>(json).unwrap();
+            let record =
+                build_autonomous_bounty_terms_record(creator, document, created_at).unwrap();
+            assert_eq!(record.terms_hash, terms_hash, "issue {issue} terms");
+            assert_eq!(
+                record.policy_hash,
+                "0x9b3cf2179e1a858d94198e9f03f439b5479a519910430541199178114d790dc1",
+                "issue {issue} policy"
+            );
+            assert_eq!(
+                record.acceptance_criteria_hash, criteria_hash,
+                "issue {issue} criteria"
+            );
+            assert_eq!(
+                record.benchmark_hash, benchmark_hash,
+                "issue {issue} benchmark"
+            );
+            assert_eq!(
+                record.evidence_schema_hash,
+                "0x1aca62507de0bcde1a36e353b228321e6d35b4eaafe64a8fa5027f20b3a2f4e5",
+                "issue {issue} evidence schema"
+            );
+        }
     }
 
     #[test]

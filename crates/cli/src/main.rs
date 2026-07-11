@@ -6,11 +6,17 @@ use app::{
     RegisterCapabilityRequest, RequestQuotesRequest, SubmitResultRequest, VerifySubmissionRequest,
 };
 use chain_base::{
-    base_network_descriptor, broadcast_signed_transaction, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_transaction_receipt, BaseRpcUrlConfig,
+    autonomous_bounty_create_from_terms, base_network_descriptor, broadcast_signed_transaction,
+    build_autonomous_bounty_terms_record, eth_get_transaction_receipt_request,
+    eth_send_raw_transaction_request, fetch_transaction_receipt, keccak256_canonical_json,
+    AutonomousBountyCreationBatchPlan, AutonomousBountyTxPlanner, BaseRpcUrlConfig,
+    BASE_MAINNET_USDC_TOKEN_ADDRESS,
 };
 use clap::{Args as ClapArgs, Parser, Subcommand};
-use domain::{CapabilityClass, FundingMode, Money, PaymentRail, PrivacyLevel, VerifierKind};
+use domain::{
+    AutonomousBountyTermsDocument, CapabilityClass, FundingMode, Money, PaymentRail, PrivacyLevel,
+    VerifierKind,
+};
 use eval_harness::{
     bundled_abuse_fixtures, bundled_fixtures, bundled_judge_fixtures, run_eval_loops, AbuseBench,
     BountyBench, JudgeBench,
@@ -25,6 +31,7 @@ use payments_stripe::{
     STRIPE_API_BASE_URL,
 };
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Keccak256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
@@ -314,6 +321,26 @@ enum Command {
         #[arg(long, default_value = ".")]
         contract_root: String,
     },
+    AutonomousActivationBundle {
+        #[arg(long, default_value = "bounties/autonomous-v1/manifest.json")]
+        manifest: String,
+        #[arg(
+            long,
+            default_value = "contracts/base-escrow/out/AgentBountyFactory.sol/AgentBountyFactory.json"
+        )]
+        factory_artifact: String,
+        #[arg(
+            long,
+            default_value = "contracts/base-escrow/out/AgentBounty.sol/AgentBounty.json"
+        )]
+        implementation_artifact: String,
+        #[arg(long)]
+        deployer: String,
+        #[arg(long)]
+        deployer_nonce: u64,
+        #[arg(long)]
+        output: Option<String>,
+    },
     ProductionSmoke {
         #[arg(long, env = "PRODUCTION_API_BASE_URL")]
         api_base_url: String,
@@ -550,6 +577,21 @@ async fn async_main() -> Result<()> {
             root,
             contract_root,
         } => docs_contract_check(PathBuf::from(root), PathBuf::from(contract_root)),
+        Command::AutonomousActivationBundle {
+            manifest,
+            factory_artifact,
+            implementation_artifact,
+            deployer,
+            deployer_nonce,
+            output,
+        } => autonomous_activation_bundle(
+            PathBuf::from(manifest),
+            PathBuf::from(factory_artifact),
+            PathBuf::from(implementation_artifact),
+            deployer,
+            deployer_nonce,
+            output.map(PathBuf::from),
+        ),
         Command::ProductionSmoke {
             api_base_url,
             mcp_base_url,
@@ -574,6 +616,303 @@ async fn async_main() -> Result<()> {
             .await
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ActivationManifest {
+    schema_version: String,
+    creator: String,
+    verifiers: Vec<String>,
+    created_at: String,
+    economics: ActivationEconomics,
+    bounties: Vec<ActivationManifestBounty>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActivationEconomics {
+    solver_reward: i64,
+    verifier_reward: i64,
+    claim_bond: i64,
+    initial_funding: i64,
+    currency: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct ActivationCommitments {
+    terms_hash: String,
+    policy_hash: String,
+    acceptance_criteria_hash: String,
+    benchmark_hash: String,
+    evidence_schema_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActivationManifestBounty {
+    issue: u64,
+    document: String,
+    commitments: ActivationCommitments,
+    creation_nonce: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ActivationDeploymentIntent {
+    from: String,
+    deployer_nonce: u64,
+    to: Option<String>,
+    value_wei: u64,
+    data: String,
+    expected_factory: String,
+    expected_implementation: String,
+    factory_init_code_hash: String,
+    factory_runtime_code_hash: String,
+    implementation_runtime_code_hash: String,
+    settlement_token: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ActivationBountySummary {
+    issue: u64,
+    document: String,
+    commitments: ActivationCommitments,
+    bounty_id: String,
+    predicted_bounty_contract: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ActivationBundle {
+    schema_version: String,
+    protocol_version: String,
+    network: String,
+    chain_id: u64,
+    manifest_canonical_json_keccak256: String,
+    manifest_created_at: String,
+    deployment: ActivationDeploymentIntent,
+    bounties: Vec<ActivationBountySummary>,
+    creation_batch: AutonomousBountyCreationBatchPlan,
+    evidence_boundary: String,
+}
+
+fn autonomous_activation_bundle(
+    manifest_path: PathBuf,
+    factory_artifact_path: PathBuf,
+    implementation_artifact_path: PathBuf,
+    deployer: String,
+    deployer_nonce: u64,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    let manifest_bytes = fs::read(&manifest_path)
+        .with_context(|| format!("read activation manifest {}", manifest_path.display()))?;
+    let manifest_value: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+        .with_context(|| format!("parse activation manifest {}", manifest_path.display()))?;
+    let manifest: ActivationManifest = serde_json::from_value(manifest_value.clone())
+        .with_context(|| format!("decode activation manifest {}", manifest_path.display()))?;
+    if manifest.schema_version != "agent-bounties/canonical-terms-manifest-v1" {
+        bail!("unsupported activation manifest schema");
+    }
+    if manifest.bounties.is_empty() {
+        bail!("activation manifest must contain at least one bounty");
+    }
+    if manifest.economics.currency != "usdc"
+        || manifest.economics.claim_bond != manifest.economics.verifier_reward
+        || manifest.economics.solver_reward <= 0
+        || manifest.economics.verifier_reward <= 0
+        || manifest.economics.initial_funding
+            != manifest.economics.solver_reward + manifest.economics.verifier_reward
+    {
+        bail!("activation manifest economics violate autonomous-v1 invariants");
+    }
+    let created_at = chrono::DateTime::parse_from_rfc3339(&manifest.created_at)
+        .context("parse activation manifest created_at")?
+        .with_timezone(&chrono::Utc);
+    let mut issues = BTreeSet::new();
+    let mut creates = Vec::with_capacity(manifest.bounties.len());
+
+    for bounty in &manifest.bounties {
+        if !issues.insert(bounty.issue) {
+            bail!(
+                "activation manifest contains duplicate issue {}",
+                bounty.issue
+            );
+        }
+        let document_path = Path::new(&bounty.document);
+        if document_path.is_absolute()
+            || document_path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            bail!("activation document path is not repository-relative");
+        }
+        let document: AutonomousBountyTermsDocument = serde_json::from_slice(
+            &fs::read(document_path)
+                .with_context(|| format!("read terms document {}", document_path.display()))?,
+        )
+        .with_context(|| format!("parse terms document {}", document_path.display()))?;
+        let record = build_autonomous_bounty_terms_record(&manifest.creator, document, created_at)
+            .with_context(|| format!("validate terms for issue {}", bounty.issue))?;
+        let observed = ActivationCommitments {
+            terms_hash: record.terms_hash.clone(),
+            policy_hash: record.policy_hash.clone(),
+            acceptance_criteria_hash: record.acceptance_criteria_hash.clone(),
+            benchmark_hash: record.benchmark_hash.clone(),
+            evidence_schema_hash: record.evidence_schema_hash.clone(),
+        };
+        if observed != bounty.commitments {
+            bail!(
+                "commitment drift in activation terms for issue {}",
+                bounty.issue
+            );
+        }
+        let create = autonomous_bounty_create_from_terms(&record)
+            .with_context(|| format!("derive creation input for issue {}", bounty.issue))?;
+        if !create
+            .creation_nonce
+            .eq_ignore_ascii_case(&bounty.creation_nonce)
+            || create.solver_reward.amount != manifest.economics.solver_reward
+            || create.verifier_reward.amount != manifest.economics.verifier_reward
+            || create.initial_funding.amount != manifest.economics.initial_funding
+            || create.verifiers.len() != manifest.verifiers.len()
+            || !create
+                .verifiers
+                .iter()
+                .zip(&manifest.verifiers)
+                .all(|(left, right)| left.eq_ignore_ascii_case(right))
+        {
+            bail!("manifest configuration drift for issue {}", bounty.issue);
+        }
+        creates.push(create);
+    }
+
+    let expected_factory = create_address(&deployer, deployer_nonce)?;
+    let expected_implementation = create_address(&expected_factory, 1)?;
+    let planner = AutonomousBountyTxPlanner::new(&expected_factory, &expected_implementation)?;
+    let creation_batch = planner.plan_creation_batch("base-mainnet", &creates)?;
+
+    let factory_artifact = read_json_file(&factory_artifact_path)?;
+    let implementation_artifact = read_json_file(&implementation_artifact_path)?;
+    let factory_creation = artifact_hex(&factory_artifact, "/bytecode/object")?;
+    let factory_runtime = artifact_hex(&factory_artifact, "/deployedBytecode/object")?;
+    let implementation_runtime =
+        artifact_hex(&implementation_artifact, "/deployedBytecode/object")?;
+    let token = BASE_MAINNET_USDC_TOKEN_ADDRESS.trim_start_matches("0x");
+    let deployment_data = format!("0x{factory_creation}{:0>24}{token}", "");
+    let deployment = ActivationDeploymentIntent {
+        from: normalize_cli_address(&deployer)?,
+        deployer_nonce,
+        to: None,
+        value_wei: 0,
+        factory_init_code_hash: keccak_hex(&hex::decode(&deployment_data[2..])?),
+        factory_runtime_code_hash: keccak_hex(&hex::decode(factory_runtime)?),
+        implementation_runtime_code_hash: keccak_hex(&hex::decode(implementation_runtime)?),
+        data: deployment_data,
+        expected_factory,
+        expected_implementation,
+        settlement_token: BASE_MAINNET_USDC_TOKEN_ADDRESS.to_string(),
+    };
+    let bounties = manifest
+        .bounties
+        .iter()
+        .zip(&creation_batch.creations)
+        .map(|(manifest_bounty, plan)| ActivationBountySummary {
+            issue: manifest_bounty.issue,
+            document: manifest_bounty.document.clone(),
+            commitments: manifest_bounty.commitments.clone(),
+            bounty_id: plan.bounty_id.clone(),
+            predicted_bounty_contract: plan.predicted_bounty_contract.clone(),
+        })
+        .collect();
+    let bundle = ActivationBundle {
+        schema_version: "agent-bounties/autonomous-activation-bundle-v1".to_string(),
+        protocol_version: "agent-bounties/autonomous-v1".to_string(),
+        network: "base-mainnet".to_string(),
+        chain_id: 8_453,
+        manifest_canonical_json_keccak256: keccak256_canonical_json(&manifest_value)?,
+        manifest_created_at: manifest.created_at,
+        deployment,
+        bounties,
+        creation_batch,
+        evidence_boundary: "This file contains unsigned deterministic transaction inputs. It is not deployment, funding, claimability, acceptance, payout, or settlement evidence. Confirm canonical chain events before changing public protocol status.".to_string(),
+    };
+    let mut json = serde_json::to_string_pretty(&bundle)?;
+    json.push('\n');
+    if let Some(path) = output {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, json)
+            .with_context(|| format!("write activation bundle {}", path.display()))?;
+        println!("activation_bundle={}", path.display());
+    } else {
+        print!("{json}");
+    }
+    Ok(())
+}
+
+fn read_json_file(path: &Path) -> Result<serde_json::Value> {
+    serde_json::from_slice(&fs::read(path).with_context(|| format!("read {}", path.display()))?)
+        .with_context(|| format!("parse {}", path.display()))
+}
+
+fn artifact_hex<'a>(artifact: &'a serde_json::Value, pointer: &str) -> Result<&'a str> {
+    let value = artifact
+        .pointer(pointer)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("contract artifact is missing {pointer}"))?
+        .strip_prefix("0x")
+        .unwrap_or_else(|| {
+            artifact
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .expect("checked above")
+        });
+    if value.is_empty()
+        || value.len() % 2 != 0
+        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        bail!("contract artifact {pointer} is not non-empty hex");
+    }
+    Ok(value)
+}
+
+fn normalize_cli_address(value: &str) -> Result<String> {
+    let raw = value.strip_prefix("0x").unwrap_or(value);
+    if raw.len() != 40 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("invalid EVM address: {value}");
+    }
+    Ok(format!("0x{}", raw.to_ascii_lowercase()))
+}
+
+fn create_address(deployer: &str, nonce: u64) -> Result<String> {
+    let normalized = normalize_cli_address(deployer)?;
+    let address = hex::decode(&normalized[2..])?;
+    let mut payload = Vec::with_capacity(30);
+    payload.push(0x94);
+    payload.extend_from_slice(&address);
+    if nonce == 0 {
+        payload.push(0x80);
+    } else if nonce < 0x80 {
+        payload.push(nonce as u8);
+    } else {
+        let bytes = nonce.to_be_bytes();
+        let first = bytes
+            .iter()
+            .position(|byte| *byte != 0)
+            .unwrap_or(bytes.len() - 1);
+        let compact = &bytes[first..];
+        payload.push(0x80 + compact.len() as u8);
+        payload.extend_from_slice(compact);
+    }
+    if payload.len() > 55 {
+        bail!("CREATE address RLP payload is unexpectedly large");
+    }
+    let mut encoded = Vec::with_capacity(payload.len() + 1);
+    encoded.push(0xc0 + payload.len() as u8);
+    encoded.extend_from_slice(&payload);
+    let digest = Keccak256::digest(encoded);
+    Ok(format!("0x{}", hex::encode(&digest[12..])))
+}
+
+fn keccak_hex(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(Keccak256::digest(bytes)))
 }
 
 async fn demo() -> Result<()> {
@@ -4219,6 +4558,17 @@ fn stop_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_address_matches_base_activation_vectors() {
+        let factory = create_address("0x884834E884d6e93462655A2820140aD03E6747bC", 4)
+            .expect("factory address should derive");
+        assert_eq!(factory, "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9");
+        assert_eq!(
+            create_address(&factory, 1).expect("implementation address should derive"),
+            "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
+        );
+    }
 
     #[test]
     fn discovery_report_handles_structured_noisy_partial_and_duplicate_records() {
