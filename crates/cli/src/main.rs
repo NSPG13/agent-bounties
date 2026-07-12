@@ -5426,6 +5426,7 @@ fn docs_contract_check(root: PathBuf, contract_root: PathBuf) -> Result<()> {
     check_agent_quickstart_contract(&root, &mut issues);
     check_production_env_contract(&root, &mut issues);
     check_contributor_first_protocol_contract(&root, &mut issues);
+    check_concierge_playbook_contract(&root, &mut issues);
     for file in &files {
         let text = fs::read_to_string(file)
             .with_context(|| format!("failed to read docs file {}", file.display()))?;
@@ -5508,6 +5509,51 @@ fn check_agent_quickstart_contract(root: &Path, issues: &mut Vec<DocsContractIss
                 &PathBuf::from("docs/agent-quickstart.md"),
                 1,
                 &format!("agent quickstart missing required marker `{marker}`"),
+            );
+        }
+    }
+}
+
+fn check_concierge_playbook_contract(root: &Path, issues: &mut Vec<DocsContractIssue>) {
+    let path = root.join("docs").join("concierge-playbook.md");
+    if !path.exists() {
+        push_doc_issue(
+            issues,
+            &PathBuf::from("docs/concierge-playbook.md"),
+            1,
+            "concierge playbook is required for bounty-poster onboarding",
+        );
+        return;
+    }
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            push_doc_issue(
+                issues,
+                &PathBuf::from("docs/concierge-playbook.md"),
+                1,
+                &format!("failed to read concierge playbook: {error}"),
+            );
+            return;
+        }
+    };
+    for marker in [
+        "CanonicalBountyCreated",
+        "FundingAdded",
+        "BountyBecameClaimable",
+        "BountySettled",
+        "creator wallet cannot claim its own bounty",
+        "independent solver wallet is a contract invariant",
+        "Post your own bounty",
+        "reconciled funding",
+        "BaseUsdcEscrow",
+    ] {
+        if !text.contains(marker) {
+            push_doc_issue(
+                issues,
+                &PathBuf::from("docs/concierge-playbook.md"),
+                1,
+                &format!("concierge playbook missing required marker `{marker}`"),
             );
         }
     }
