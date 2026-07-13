@@ -5,7 +5,7 @@
   const BUNDLE_URL = "/deployments/canonical-child-seeds-base-mainnet.json";
   const VERIFIER_BUNDLE_URL = "/deployments/canonical-child-verifier-base-mainnet-deployment.json";
   const VERIFIER_MODULE = "0x40adac5a1d00a725f77682f8940b893eaed31ecf";
-  const ACCEPTANCE_CRITERIA_HASH = "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553";
+  const ACCEPTANCE_CRITERIA_HASH = "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de";
   const EXPECTED_ISSUES = [217, 218, 219, 220];
   const state = { bundle: null, account: null, provider: null, providers: [], pendingBounties: [], inspected: false };
   const announcedProviders = [];
@@ -36,7 +36,7 @@
       bundle.schema_version !== "agent-bounties/autonomous-activation-bundle-v1"
       || bundle.network !== "base-mainnet"
       || bundle.chain_id !== 8453
-      || bundle.manifest_canonical_json_keccak256 !== "0x67e77578481d2ef5015643c880a3810b018681ccb2f1d7571d4b573601095a74"
+      || bundle.manifest_canonical_json_keccak256 !== "0x5247f873889a63c273ec0531137c7723463d9943251b32c49b0843e39433c3b6"
       || bundle.creation_batch.total_initial_funding !== "4000000"
       || bundle.bounties.length !== 4
       || bundle.creation_batch.wallet_calls.length !== 5

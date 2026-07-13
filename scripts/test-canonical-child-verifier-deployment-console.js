@@ -39,6 +39,7 @@ assert.equal(bundle.chain_id, 8453);
 assert.equal(bundle.canonical_factory, "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9");
 assert.equal(bundle.settlement_token, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
 assert.equal(bundle.acceptance_criteria_hash, "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de");
+assert.ok(script.includes(`const ACCEPTANCE_CRITERIA_HASH = "${bundle.acceptance_criteria_hash}";`));
 assert.equal(bundle.deployment.to, null);
 assert.equal(bundle.deployment.value_wei, 0);
 assert.ok(bundle.deployment.data.startsWith("0x60c06040"));
