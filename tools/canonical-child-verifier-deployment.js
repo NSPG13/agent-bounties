@@ -4,7 +4,7 @@
   const BASE_CHAIN_ID = "0x2105";
   const FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
   const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
-  const ACCEPTANCE_CRITERIA_HASH = "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553";
+  const ACCEPTANCE_CRITERIA_HASH = "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de";
   const BUNDLE_URL = "/deployments/canonical-child-verifier-base-mainnet-deployment.json";
   const state = { bundle: null, account: null, provider: null, providers: [], inspected: false, deployed: false };
   const announcedProviders = [];

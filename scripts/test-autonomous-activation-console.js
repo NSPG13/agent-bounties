@@ -51,6 +51,8 @@ assert.equal(bundle.deployment.expected_factory, "0x082c52131aaf0c56e76b075f895e
 assert.equal(bundle.deployment.expected_implementation, "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9");
 assert.deepEqual(bundle.bounties.map((item) => item.issue), [217, 218, 219, 220]);
 assert.equal(verifierBundle.deployment.expected_contract, "0x40adac5a1d00a725f77682f8940b893eaed31ecf");
+assert.ok(script.includes(`const ACCEPTANCE_CRITERIA_HASH = "${verifierBundle.acceptance_criteria_hash}";`));
+assert.ok(script.includes(`bundle.manifest_canonical_json_keccak256 !== "${bundle.manifest_canonical_json_keccak256}"`));
 assert.equal(bundle.creation_batch.wallet_calls.length, 5);
 assert.equal(bundle.creation_batch.wallet_calls[0].function, "approve(address,uint256)");
 assert.ok(bundle.creation_batch.wallet_calls[0].data.startsWith("0x095ea7b3"));
