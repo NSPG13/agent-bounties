@@ -16,8 +16,13 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def run_guard(*args: str) -> subprocess.CompletedProcess[str]:
+    resolved = list(args)
+    if "--meta-threshold" not in resolved:
+        resolved.extend(["--meta-threshold", "0"])
+    if "--meta-replenishment-target" not in resolved:
+        resolved.extend(["--meta-replenishment-target", "0"])
     return subprocess.run(
-        [sys.executable, str(SCRIPT), *args],
+        [sys.executable, str(SCRIPT), *resolved],
         cwd=str(ROOT),
         capture_output=True,
         text=True,
@@ -34,6 +39,46 @@ def current_claimable_report(name: str, *, bom: bool = False) -> Path:
         json.dumps(data),
         encoding="utf-8-sig" if bom else "utf-8",
     )
+    return target
+
+
+def standing_meta_report(*, corrupt_code_hash: bool = False) -> Path:
+    data = json.loads(
+        (FIXTURES / "bounty_inventory_claimable_above.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    data["observed_at"] = datetime.now(timezone.utc).isoformat()
+    item = data["verified_claimable_bounties"][0]
+    item.update(
+        {
+            "verification_mode": "deterministic_module",
+            "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+            "verification_ready": True,
+            "standing_meta_bounty": {
+                "schema_version": "agent-bounties/standing-meta-bounty-v1",
+                "inventory_class": "post_bounty_third_party_completion",
+                "verifier_protocol": "agent-bounties/canonical-child-v1",
+                "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+                "verifier_runtime_code_hash": (
+                    "0x" + "66" * 32
+                    if corrupt_code_hash
+                    else "0xbb6d6df11b85f59b5010aa61f4caf499fb27b94a0f5978aff85fa97ed2bbd2c3"
+                ),
+                "acceptance_criteria_hash": "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
+                "requires_funded_canonical_child": True,
+                "requires_different_solver_wallet": True,
+                "required_child_status": "settled",
+                "observed_block_number": 74565,
+                "observed_block_hash": "0x" + "dd" * 32,
+            },
+        }
+    )
+    target = ROOT / "target" / "tmp" / (
+        "standing-meta-corrupt.json" if corrupt_code_hash else "standing-meta.json"
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data), encoding="utf-8")
     return target
 
 
@@ -74,6 +119,67 @@ class BountyInventoryGuardTests(unittest.TestCase):
         self.assertFalse(payload["below_threshold"])
         self.assertEqual(payload["missing_count"], 0)
         self.assertIn("does not imply", payload["disclaimer"].lower())
+
+    def test_standing_meta_floor_and_replenishment_buffer(self) -> None:
+        proc = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "5",
+            "--meta-threshold",
+            "1",
+            "--meta-replenishment-target",
+            "2",
+            "--claimable-report",
+            str(standing_meta_report()),
+            "--fail-below",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        payload = json.loads(proc.stdout.split("--- JSON ---", 1)[1])
+        self.assertEqual(payload["verified_meta_claimable_count"], 1)
+        self.assertFalse(payload["meta_below_threshold"])
+        self.assertTrue(payload["meta_replenishment_required"])
+        self.assertEqual(payload["meta_replenishment_count"], 1)
+        self.assertFalse(payload["below_threshold"])
+
+    def test_general_inventory_cannot_substitute_for_standing_meta_floor(self) -> None:
+        proc = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "5",
+            "--meta-threshold",
+            "1",
+            "--meta-replenishment-target",
+            "2",
+            "--claimable-report",
+            str(current_claimable_report("bounty_inventory_claimable_above.json")),
+            "--fail-below",
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr + proc.stdout)
+        payload = json.loads(proc.stdout.split("--- JSON ---", 1)[1])
+        self.assertEqual(payload["verified_claimable_count"], 5)
+        self.assertEqual(payload["verified_meta_claimable_count"], 0)
+        self.assertTrue(payload["meta_below_threshold"])
+
+    def test_spoofed_standing_meta_descriptor_invalidates_evidence(self) -> None:
+        proc = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "5",
+            "--meta-threshold",
+            "1",
+            "--meta-replenishment-target",
+            "2",
+            "--claimable-report",
+            str(standing_meta_report(corrupt_code_hash=True)),
+            "--fail-below",
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr + proc.stdout)
+        payload = json.loads(proc.stdout.split("--- JSON ---", 1)[1])
+        self.assertFalse(payload["inventory_evidence_valid"])
+        self.assertEqual(payload["verified_meta_claimable_count"], 0)
 
     def test_below_threshold_fail_below(self) -> None:
         proc = run_guard(

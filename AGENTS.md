@@ -62,6 +62,10 @@ digital work, and receive settlement through trusted payment rails.
 ## Payment Invariants
 
 - A paid bounty must be funded before claim.
+- Maintain at least one canonically funded, claimable standing meta-bounty that
+  pays only after its solver posts a qualifying child bounty and a different
+  wallet completes that child and receives canonical settlement. Replenish at
+  two; see `docs/standing-meta-bounty-invariant.md`.
 - The solver bond equals one positive verifier reward. Pass and fail verdicts
   pay verifiers equally; rejection must leave the bounty fully funded.
 - Claim timeout forfeits the bond to the completion/refund bonus pool;

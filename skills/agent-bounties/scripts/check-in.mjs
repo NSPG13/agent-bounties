@@ -10,6 +10,21 @@ export const DEFAULT_BASE_RPC_URL = "https://mainnet.base.org";
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const EMPTY_CODE_HASH = "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
+const TERMS_SOURCE_COMMIT = "eea06e72dbdc1f647ad4aa3dac2a9f5ed93f67c8";
+export const STANDING_META_BOUNTY = Object.freeze({
+  schemaVersion: "agent-bounties/standing-meta-bounty-v1",
+  inventoryClass: "post_bounty_third_party_completion",
+  verifierProtocol: "agent-bounties/canonical-child-v1",
+  verifierModule: "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+  verifierRuntimeCodeHash: "0xbb6d6df11b85f59b5010aa61f4caf499fb27b94a0f5978aff85fa97ed2bbd2c3",
+  acceptanceCriteriaHash: "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
+  acceptanceCriteria: Object.freeze([
+    "Post a canonical autonomous-v1 child bounty whose creator is the active solver.",
+    "Fully fund the child to at least the parent solver reward; pooled contributors are allowed.",
+    "Bind the child benchmark to the parent bounty ID and round and use an explicit deterministic verifier.",
+    "Have a different wallet complete the child and receive canonical settlement before the parent verification deadline.",
+  ]),
+});
 const CHAIN_MANIFEST_URL = new URL("../fixtures/base-mainnet-canaries.json", import.meta.url);
 const SELECTOR = Object.freeze({
   acceptanceCriteriaHash: "0x8a2b02be",
@@ -237,7 +252,10 @@ function validateChainManifest(manifest) {
       || !["deterministic_module", "signed_quorum", "ai_judge_quorum"]
         .includes(bounty.verification_mode)
       || (bounty.verification_mode === "deterministic_module"
-        && !ADDRESS.test(bounty.verifier_module || ""))
+        && (
+          !ADDRESS.test(bounty.verifier_module || "")
+          || !HASH.test(bounty.verifier_runtime_code_hash || "")
+        ))
       || amounts.some((amount) => !Number.isSafeInteger(amount) || amount <= 0)
       || bounty.claim_bond_minor !== bounty.verifier_reward_minor
       || bounty.target_minor !== bounty.solver_reward_minor + bounty.verifier_reward_minor
@@ -290,7 +308,7 @@ function directClaimPlan(manifest, bounty, solverWallet, solverBalance, allowanc
 }
 
 function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, claimPlan) {
-  return {
+  const normalized = {
     id: bounty.bounty_id.toLowerCase(),
     contract: bounty.contract.toLowerCase(),
     issue: bounty.issue,
@@ -306,7 +324,7 @@ function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, c
     observed_block_hash: observedBlock.hash,
     terms_hash: bounty.terms_hash.toLowerCase(),
     terms_path: bounty.terms_path,
-    terms_url: `https://github.com/NSPG13/agent-bounties/blob/dbfc94cca3c582b89126869d80bc42a004c927ed/bounties/autonomous-v1/${bounty.issue}.json`,
+    terms_url: `https://github.com/NSPG13/agent-bounties/blob/${TERMS_SOURCE_COMMIT}/bounties/autonomous-v1/${bounty.issue}.json`,
     source_url: bounty.source_url,
     claim_plan_url: null,
     claim_plan: claimPlan,
@@ -315,6 +333,14 @@ function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, c
     verifier_module: bounty.verifier_module?.toLowerCase() || null,
     verification_ready: true,
   };
+  const standingMeta = standingMetaDescriptor({
+    verifierModule: bounty.verifier_module,
+    verifierRuntimeCodeHash: bounty.verifier_runtime_code_hash,
+    acceptanceCriteriaHash: bounty.acceptance_criteria_hash,
+    observedBlock,
+  });
+  if (standingMeta) normalized.standing_meta_bounty = standingMeta;
+  return normalized;
 }
 
 export async function verifyDirectChainInventory({
@@ -416,8 +442,16 @@ export async function verifyDirectChainInventory({
     const results = await rpcTransport(rpc, requests);
     for (const bounty of checked.bounties) {
       const key = `bounty_${bounty.issue}_proof`;
-      const proof = await rpcTransport(rpc, [proofRequest(key, bounty.contract, blockNumber)]);
-      results.set(key, proof.get(key));
+      const proofRequests = [proofRequest(key, bounty.contract, blockNumber)];
+      if (bounty.verification_mode === "deterministic_module") {
+        proofRequests.push(proofRequest(
+          `bounty_${bounty.issue}_verifier_proof`,
+          bounty.verifier_module,
+          blockNumber,
+        ));
+      }
+      const proofs = await rpcTransport(rpc, proofRequests);
+      for (const request of proofRequests) results.set(request.key, proofs.get(request.key));
     }
     const verified = [];
     const excluded = [];
@@ -458,6 +492,12 @@ export async function verifyDirectChainInventory({
           decodedAddress(results.get(`${prefix}_verifier_module`), "verifier module") === expectedModule,
           tokenBalance >= funded + timeoutBonus,
         ];
+        if (bounty.verification_mode === "deterministic_module") {
+          matches.push(
+            proofCodeHash(results.get(`${prefix}_verifier_proof`), `bounty #${bounty.issue} verifier`)
+              === bounty.verifier_runtime_code_hash.toLowerCase(),
+          );
+        }
         if (!matches.every(Boolean)) throw new Error("safe chain state does not match committed bounty");
         if (bounty.verification_mode !== "deterministic_module") {
           excluded.push({
@@ -547,6 +587,106 @@ function activeProtocol(protocol) {
   );
 }
 
+function exactStrings(actual, expected) {
+  return Array.isArray(actual)
+    && actual.length === expected.length
+    && actual.every((value, index) => value === expected[index]);
+}
+
+function hostedStandingMetaCandidate(item) {
+  const document = item?.terms?.document;
+  const policy = document?.verification_policy;
+  const benchmark = document?.benchmark;
+  const requiredEvidence = document?.evidence_schema?.required;
+  return Boolean(
+    item?.verification_mode === "deterministic_module"
+      && String(item?.verifier_module || "").toLowerCase() === STANDING_META_BOUNTY.verifierModule
+      && exactStrings(document?.acceptance_criteria, STANDING_META_BOUNTY.acceptanceCriteria)
+      && policy?.mechanism === "deterministic_module"
+      && String(policy?.verifier_module || "").toLowerCase() === STANDING_META_BOUNTY.verifierModule
+      && policy?.threshold === 1
+      && benchmark?.engine === "canonical_child_loop_v1"
+      && benchmark?.required_child_status === "settled"
+      && String(benchmark?.verifier_module || "").toLowerCase() === STANDING_META_BOUNTY.verifierModule
+      && Array.isArray(requiredEvidence)
+      && requiredEvidence.includes("child_bounty_contract"),
+  );
+}
+
+function standingMetaDescriptor({
+  verifierModule,
+  verifierRuntimeCodeHash,
+  acceptanceCriteriaHash,
+  observedBlock,
+}) {
+  if (
+    String(verifierModule || "").toLowerCase() !== STANDING_META_BOUNTY.verifierModule
+    || String(verifierRuntimeCodeHash || "").toLowerCase()
+      !== STANDING_META_BOUNTY.verifierRuntimeCodeHash
+    || String(acceptanceCriteriaHash || "").toLowerCase()
+      !== STANDING_META_BOUNTY.acceptanceCriteriaHash
+    || !Number.isSafeInteger(observedBlock?.number)
+    || observedBlock.number <= 0
+    || !HASH.test(observedBlock?.hash || "")
+  ) return null;
+  return {
+    schema_version: STANDING_META_BOUNTY.schemaVersion,
+    inventory_class: STANDING_META_BOUNTY.inventoryClass,
+    verifier_protocol: STANDING_META_BOUNTY.verifierProtocol,
+    verifier_module: STANDING_META_BOUNTY.verifierModule,
+    verifier_runtime_code_hash: STANDING_META_BOUNTY.verifierRuntimeCodeHash,
+    acceptance_criteria_hash: STANDING_META_BOUNTY.acceptanceCriteriaHash,
+    requires_funded_canonical_child: true,
+    requires_different_solver_wallet: true,
+    required_child_status: "settled",
+    observed_block_number: observedBlock.number,
+    observed_block_hash: observedBlock.hash.toLowerCase(),
+  };
+}
+
+async function attestStandingMetaVerifier(rpcUrl, rpcTransport) {
+  try {
+    const rpc = normalizeRpcUrl(rpcUrl);
+    const blocks = await rpcTransport(rpc, [
+      { key: "standing_meta_safe_block", method: "eth_getBlockByNumber", params: ["safe", false] },
+    ]);
+    const block = blocks.get("standing_meta_safe_block");
+    const blockNumber = String(block?.number || "").toLowerCase();
+    const blockHash = String(block?.hash || "").toLowerCase();
+    if (!/^0x[0-9a-f]+$/.test(blockNumber) || !HASH.test(blockHash)) {
+      throw new Error("Base RPC did not return a safe block identity");
+    }
+    const proofs = await rpcTransport(rpc, [
+      proofRequest("standing_meta_verifier_proof", STANDING_META_BOUNTY.verifierModule, blockNumber),
+    ]);
+    const codeHash = proofCodeHash(
+      proofs.get("standing_meta_verifier_proof"),
+      "standing meta verifier",
+    );
+    const observedBlock = {
+      tag: "safe",
+      number: safeNumber(BigInt(blockNumber), "safe block number"),
+      hash: blockHash,
+    };
+    return {
+      ready: codeHash === STANDING_META_BOUNTY.verifierRuntimeCodeHash,
+      codeHash,
+      observedBlock,
+      warning: codeHash === STANDING_META_BOUNTY.verifierRuntimeCodeHash
+        ? null
+        : "standing_meta_verifier_code_mismatch",
+    };
+  } catch (error) {
+    return {
+      ready: false,
+      codeHash: null,
+      observedBlock: null,
+      warning: "standing_meta_verifier_attestation_failed",
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export function verifyClaimableItem(item, protocol) {
   if (!activeProtocol(protocol)) return { ok: false, reason: "autonomous_protocol_not_active" };
   if (!item || item.status !== "claimable") {
@@ -615,8 +755,8 @@ export function verifyClaimableItem(item, protocol) {
   return { ok: true, reason: "confirmed_canonical_autonomous_bounty" };
 }
 
-function normalizedBounty(item, apiBaseUrl) {
-  return {
+function normalizedBounty(item, apiBaseUrl, standingMetaAttestation = null) {
+  const normalized = {
     id: item.bounty_id,
     contract: item.bounty_contract,
     title: item.terms.document.title,
@@ -628,7 +768,19 @@ function normalizedBounty(item, apiBaseUrl) {
     evidence: "confirmed_canonical_autonomous_bounty",
     terms_url: `${apiBaseUrl}/v1/base/autonomous-bounties/terms/${item.terms_hash}`,
     claim_plan_url: `${apiBaseUrl}/v1/base/autonomous-bounties/claim-plan`,
+    verification_mode: item.verification_mode,
+    verifier_module: item.verifier_module?.toLowerCase() || null,
+    verification_ready: item.verification_ready === true,
   };
+  if (hostedStandingMetaCandidate(item) && standingMetaAttestation?.ready) {
+    normalized.standing_meta_bounty = standingMetaDescriptor({
+      verifierModule: item.verifier_module,
+      verifierRuntimeCodeHash: standingMetaAttestation.codeHash,
+      acceptanceCriteriaHash: STANDING_META_BOUNTY.acceptanceCriteriaHash,
+      observedBlock: standingMetaAttestation.observedBlock,
+    });
+  }
+  return normalized;
 }
 
 function normalizedFundingCandidate(item) {
@@ -670,6 +822,7 @@ export async function collectInventory({
 
   const protocol = protocolResponse?.status === 200 ? protocolResponse.body : null;
   const verified = [];
+  const hostedVerified = [];
   const excluded = [];
   const fundingCandidates = [];
   for (const item of itemsFrom(feedResponse?.body)) {
@@ -679,10 +832,18 @@ export async function collectInventory({
     if (item?.status !== "claimable") continue;
     const verdict = verifyClaimableItem(item, protocol);
     if (verdict.ok) {
-      verified.push(normalizedBounty(item, api));
+      hostedVerified.push(item);
     } else {
       excluded.push({ id: item?.bounty_id || null, reason: verdict.reason });
     }
+  }
+
+  const hasStandingMetaCandidate = hostedVerified.some(hostedStandingMetaCandidate);
+  const standingMetaAttestation = hasStandingMetaCandidate
+    ? await attestStandingMetaVerifier(baseRpcUrl, rpcTransport)
+    : null;
+  for (const item of hostedVerified) {
+    verified.push(normalizedBounty(item, api, standingMetaAttestation));
   }
 
   let direct = {
@@ -720,6 +881,7 @@ export async function collectInventory({
   if (feedResponse?.status !== 200) warnings.push("autonomous_feed_unavailable");
   if (!effectiveProtocol) warnings.push("autonomous_protocol_not_active");
   if (direct.warning) warnings.push(direct.warning);
+  if (standingMetaAttestation?.warning) warnings.push(standingMetaAttestation.warning);
   if (!verified.length) warnings.push("no_verified_funded_bounty_is_claimable");
 
   return {

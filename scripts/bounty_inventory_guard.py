@@ -38,18 +38,36 @@ ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32 = re.compile(r"^0x[0-9a-fA-F]{64}$")
 CLAIMABLE_EVIDENCE = "confirmed_canonical_autonomous_bounty"
 MAX_REPORT_AGE_SECONDS = 900
+STANDING_META_SCHEMA = "agent-bounties/standing-meta-bounty-v1"
+STANDING_META_CLASS = "post_bounty_third_party_completion"
+STANDING_META_PROTOCOL = "agent-bounties/canonical-child-v1"
+STANDING_META_VERIFIER = "0x40adac5a1d00a725f77682f8940b893eaed31ecf"
+STANDING_META_VERIFIER_CODE_HASH = (
+    "0xbb6d6df11b85f59b5010aa61f4caf499fb27b94a0f5978aff85fa97ed2bbd2c3"
+)
+STANDING_META_ACCEPTANCE_HASH = (
+    "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de"
+)
 
 
 @dataclass
 class InventoryReport:
     repository: str
     threshold: int
+    meta_threshold: int
+    meta_replenishment_target: int
     open_bounty_count: int
     verified_claimable_count: int
+    verified_meta_claimable_count: int
     missing_count: int
+    meta_missing_count: int
+    meta_replenishment_count: int
     below_threshold: bool
+    meta_below_threshold: bool
+    meta_replenishment_required: bool
     issue_urls: list[str]
     claimable_bounty_ids: list[str]
+    meta_claimable_bounty_ids: list[str]
     excluded_count: int
     protocol_status: str
     inventory_evidence_valid: bool
@@ -59,13 +77,18 @@ class InventoryReport:
     def to_markdown(self) -> str:
         status = "BELOW THRESHOLD" if self.below_threshold else "OK"
         lines = [
-            f"# Bounty inventory guard — {status}",
+            f"# Bounty inventory guard - {status}",
             "",
             f"- Repository: `{self.repository}`",
             f"- Open actionable `bounty` issues (candidate supply): **{self.open_bounty_count}**",
             f"- Verified canonical claimable bounties: **{self.verified_claimable_count}**",
             f"- Claimable threshold: **{self.threshold}**",
             f"- Missing claimable bounties: **{self.missing_count}**",
+            f"- Verified standing meta-bounties: **{self.verified_meta_claimable_count}**",
+            f"- Standing meta-bounty floor: **{self.meta_threshold}**",
+            f"- Standing meta-bounty replenishment target: **{self.meta_replenishment_target}**",
+            f"- Missing from hard meta floor: **{self.meta_missing_count}**",
+            f"- Missing from meta replenishment target: **{self.meta_replenishment_count}**",
             f"- Excluded (non-actionable labels): **{self.excluded_count}**",
             f"- Protocol status: `{self.protocol_status}`",
             f"- Inventory evidence valid: **{str(self.inventory_evidence_valid).lower()}**",
@@ -79,6 +102,11 @@ class InventoryReport:
         lines.extend(["", "## Verified claimable bounty IDs"])
         if self.claimable_bounty_ids:
             lines.extend(f"- `{bounty_id}`" for bounty_id in self.claimable_bounty_ids)
+        else:
+            lines.append("- _(none)_")
+        lines.extend(["", "## Verified standing meta-bounty IDs"])
+        if self.meta_claimable_bounty_ids:
+            lines.extend(f"- `{bounty_id}`" for bounty_id in self.meta_claimable_bounty_ids)
         else:
             lines.append("- _(none)_")
         lines.extend(
@@ -109,6 +137,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=int(os.environ.get("BOUNTY_INVENTORY_THRESHOLD", "5")),
         help="Minimum verified canonical claimable bounties (default 5)",
+    )
+    p.add_argument(
+        "--meta-threshold",
+        type=int,
+        default=int(os.environ.get("META_BOUNTY_INVENTORY_THRESHOLD", "1")),
+        help="Hard floor for funded, claimable standing meta-bounties (default 1)",
+    )
+    p.add_argument(
+        "--meta-replenishment-target",
+        type=int,
+        default=int(os.environ.get("META_BOUNTY_REPLENISHMENT_TARGET", "2")),
+        help="Target that creates a buffer above the standing meta-bounty floor (default 2)",
     )
     p.add_argument(
         "--claimable-report",
@@ -294,6 +334,55 @@ def verified_claimable_entries(report: object) -> tuple[list[dict[str, Any]], bo
     return verified, True, protocol_status
 
 
+def standing_meta_entries(
+    claimable: list[dict[str, Any]],
+    *,
+    direct_block: object = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return exact-code canonical child-loop inventory; reject malformed claims."""
+    direct = direct_block if isinstance(direct_block, dict) else None
+    meta: list[dict[str, Any]] = []
+    for item in claimable:
+        descriptor = item.get("standing_meta_bounty")
+        if descriptor is None:
+            continue
+        if not isinstance(descriptor, dict):
+            return [], False
+        block_number = descriptor.get("observed_block_number")
+        block_hash = str(descriptor.get("observed_block_hash") or "").lower()
+        valid = (
+            descriptor.get("schema_version") == STANDING_META_SCHEMA
+            and descriptor.get("inventory_class") == STANDING_META_CLASS
+            and descriptor.get("verifier_protocol") == STANDING_META_PROTOCOL
+            and str(descriptor.get("verifier_module") or "").lower()
+            == STANDING_META_VERIFIER
+            and str(descriptor.get("verifier_runtime_code_hash") or "").lower()
+            == STANDING_META_VERIFIER_CODE_HASH
+            and str(descriptor.get("acceptance_criteria_hash") or "").lower()
+            == STANDING_META_ACCEPTANCE_HASH
+            and descriptor.get("requires_funded_canonical_child") is True
+            and descriptor.get("requires_different_solver_wallet") is True
+            and descriptor.get("required_child_status") == "settled"
+            and item.get("verification_mode") == "deterministic_module"
+            and str(item.get("verifier_module") or "").lower()
+            == STANDING_META_VERIFIER
+            and item.get("verification_ready") is True
+            and isinstance(block_number, int)
+            and not isinstance(block_number, bool)
+            and block_number > 0
+            and BYTES32.fullmatch(block_hash)
+        )
+        if direct is not None:
+            valid = valid and (
+                block_number == direct.get("number")
+                and block_hash == str(direct.get("hash") or "").lower()
+            )
+        if not valid:
+            return [], False
+        meta.append(item)
+    return meta, True
+
+
 def fetch_open_issues(repository: str, token: str | None) -> list[dict[str, Any]]:
     """Paginate GitHub REST issues with label bounty, state open."""
     owner, _, repo = repository.partition("/")
@@ -338,6 +427,8 @@ def fetch_open_issues(repository: str, token: str | None) -> list[dict[str, Any]
 def build_report(
     repository: str,
     threshold: int,
+    meta_threshold: int,
+    meta_replenishment_target: int,
     issues: list[dict[str, Any]],
     claimable_report: object = None,
 ) -> InventoryReport:
@@ -354,20 +445,47 @@ def build_report(
     urls = [issue_url(i, repository) for i in actionable]
     issue_count = len(actionable)
     claimable, evidence_valid, protocol_status = verified_claimable_entries(claimable_report)
+    direct_block = (
+        claimable_report.get("direct_chain_observed_block")
+        if isinstance(claimable_report, dict)
+        and claimable_report.get("protocol_source") == "direct_safe_chain"
+        else None
+    )
+    meta_claimable, meta_evidence_valid = standing_meta_entries(
+        claimable, direct_block=direct_block
+    )
+    evidence_valid = evidence_valid and meta_evidence_valid
     claimable_count = len(claimable)
+    meta_claimable_count = len(meta_claimable)
     missing = max(0, threshold - claimable_count)
-    below = not evidence_valid or claimable_count < threshold
+    meta_missing = max(0, meta_threshold - meta_claimable_count)
+    meta_replenishment = max(0, meta_replenishment_target - meta_claimable_count)
+    meta_below = not evidence_valid or meta_claimable_count < meta_threshold
+    below = not evidence_valid or claimable_count < threshold or meta_below
     if not evidence_valid:
         action = (
             "Restore a fresh, active protocol and canonical inventory feed before "
             "counting liquidity. Candidate issues cannot substitute for missing or "
             "invalid on-chain evidence."
         )
-    elif below:
+    elif meta_below:
+        action = (
+            f"Activate, fully fund, and canonically index at least {meta_missing} "
+            "standing meta-bounty contract(s). Each must use the exact canonical "
+            "child-loop verifier and pay only after a different wallet completes "
+            "the solver-created child bounty and receives canonical settlement."
+        )
+    elif claimable_count < threshold:
         action = (
             f"Activate, fund, and canonically index at least {missing} more claimable "
             f"bounty contract(s). Open GitHub issues are candidate supply and do not "
             f"satisfy this liquidity threshold."
+        )
+    elif meta_replenishment:
+        action = (
+            f"The hard standing meta-bounty floor is satisfied. Replenish "
+            f"{meta_replenishment} additional standing meta-bounty contract(s) to "
+            "restore the buffer before the live one is claimed."
         )
     else:
         action = (
@@ -384,12 +502,20 @@ def build_report(
     return InventoryReport(
         repository=repository,
         threshold=threshold,
+        meta_threshold=meta_threshold,
+        meta_replenishment_target=meta_replenishment_target,
         open_bounty_count=issue_count,
         verified_claimable_count=claimable_count,
+        verified_meta_claimable_count=meta_claimable_count,
         missing_count=missing,
+        meta_missing_count=meta_missing,
+        meta_replenishment_count=meta_replenishment,
         below_threshold=below,
+        meta_below_threshold=meta_below,
+        meta_replenishment_required=meta_replenishment > 0,
         issue_urls=urls,
         claimable_bounty_ids=[str(item["id"]) for item in claimable],
+        meta_claimable_bounty_ids=[str(item["id"]) for item in meta_claimable],
         excluded_count=excluded,
         protocol_status=protocol_status,
         inventory_evidence_valid=evidence_valid,
@@ -417,6 +543,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.threshold < 0:
         raise SystemExit("threshold must be >= 0")
+    if args.meta_threshold < 0:
+        raise SystemExit("meta-threshold must be >= 0")
+    if args.meta_replenishment_target < args.meta_threshold:
+        raise SystemExit("meta-replenishment-target must be >= meta-threshold")
 
     if args.fixture:
         issues = load_fixture(args.fixture)
@@ -427,6 +557,8 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(
         args.repository,
         args.threshold,
+        args.meta_threshold,
+        args.meta_replenishment_target,
         issues,
         load_claimable_report(args.claimable_report),
     )

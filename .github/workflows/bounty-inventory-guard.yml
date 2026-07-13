@@ -2,7 +2,7 @@ name: Bounty inventory guard
 
 on:
   schedule:
-    - cron: "0 */12 * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
   pull_request:
     paths:
@@ -10,6 +10,7 @@ on:
       - "scripts/test_bounty_inventory_guard.py"
       - "scripts/fixtures/bounty_inventory_*.json"
       - "skills/agent-bounties/scripts/check-in.mjs"
+      - "docs/standing-meta-bounty-invariant.md"
       - ".github/workflows/bounty-inventory-guard.yml"
 
 permissions:
@@ -42,12 +43,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           BOUNTY_INVENTORY_THRESHOLD: "5"
+          META_BOUNTY_INVENTORY_THRESHOLD: "1"
+          META_BOUNTY_REPLENISHMENT_TARGET: "2"
         run: |
           python scripts/bounty_inventory_guard.py \
             --claimable-report claimable-inventory.json \
             --json-out bounty-inventory-report.json \
             --md-out bounty-inventory-report.md
-      - name: Publish liquidity status without blocking deployment
+      - name: Enforce claimable and standing meta-bounty floors
         run: |
           python - <<'PY'
           import json
@@ -60,15 +63,29 @@ jobs:
               f"{report['threshold']}; protocol={report['protocol_status']}; "
               f"evidence_valid={str(report['inventory_evidence_valid']).lower()}"
           )
+          meta_status = (
+              f"standing meta-bounties: {report['verified_meta_claimable_count']}/"
+              f"{report['meta_threshold']} floor; "
+              f"target={report['meta_replenishment_target']}"
+          )
           if report["below_threshold"]:
-              print(f"::warning title=Claimable bounty floor not met::{status}")
+              print(f"::error title=Bounty inventory invariant not met::{status}; {meta_status}")
+          elif report["meta_replenishment_required"]:
+              print(f"::warning title=Standing meta-bounty buffer needs replenishment::{meta_status}")
           else:
-              print(status)
+              print(f"{status}; {meta_status}")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write("## Claimable bounty liquidity\n\n")
               summary.write(f"- {status}\n")
+              summary.write(f"- {meta_status}\n")
               summary.write(f"- below threshold: {str(report['below_threshold']).lower()}\n")
+              summary.write(
+                  "- meta replenishment required: "
+                  f"{str(report['meta_replenishment_required']).lower()}\n"
+              )
               summary.write("- GitHub issues are candidate supply, not funding evidence.\n")
+          if report["below_threshold"]:
+              raise SystemExit(2)
           PY
       - name: Upload report artifacts
         if: always()
