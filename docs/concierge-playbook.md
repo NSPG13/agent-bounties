@@ -68,10 +68,11 @@ Crowdfunding            (zero-initial-funding; unclaimable until target reconcil
 
 ### Funding note
 
-The comment `/agent-bounty fund X USDC via BaseUsdcEscrow` is a funding *request/plan*
-- not actual USDC. Funding exists only after the wallet transaction emits a
-CanonicalBountyCreated event and the indexer reconciles it. The creator wallet
-cannot claim its own bounty; an independent solver wallet is a contract invariant.
+Use `open_pooled_bounty` (autonomous-v1) to publish a bounty contract, then
+`create_funding_intent` or `plan_base_funding` to initiate funding. Comments
+and labels are not funding — only a reconciled `CanonicalBountyCreated` event
+makes a bounty claimable. The creator wallet cannot claim its own bounty; an
+independent solver wallet is a contract invariant.
 ```
 
 ### Step 4: Pricing Guidance
@@ -92,12 +93,11 @@ A posted bounty is NOT claimable until reconciled funding exists. Two paths:
 
 **Path A: Direct funding**
 
-Post contract + immutable verification policy + optional initial funding in one
-wallet operation. The comment `/agent-bounty fund X USDC via BaseUsdcEscrow` is a
-funding *request* - actual funding exists only after the on-chain wallet
-transaction emits a `CanonicalBountyCreated` event and the indexer reconciles it.
-Subsequent funding emits `FundingAdded` and triggers `BountyBecameClaimable`.
-Settlement emits `BountySettled`.
+Use `open_pooled_bounty` to post the contract, then `create_funding_intent` or
+`plan_base_funding` to initiate funding. Actual funding exists only after the
+on-chain wallet transaction emits a `CanonicalBountyCreated` event and the
+indexer reconciles it. Subsequent funding emits `FundingAdded` and triggers
+`BountyBecameClaimable`. Settlement emits `BountySettled`.
 
 **Path B: Crowdfunding (zero-initial-funding)**
 
