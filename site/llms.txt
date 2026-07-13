@@ -69,6 +69,8 @@ Relay the emitted `module_settlement_request` through `plan_autonomous_module_se
 6. Anyone can add USDC with `plan_autonomous_bounty_contribution`; contributions are capped at the remaining target.
 7. Funding is real only after confirmed canonical `FundingAdded` evidence. Work becomes claimable only after `BountyBecameClaimable`.
 
+For a distribution-loop bounty, call `plan_autonomous_canonical_child_terms` first. It derives the exact recursive criteria and parent-round benchmark. The parent passes only after the child preserves the parent solver reward, is fully funded, and a different wallet has claimed and submitted it.
+
 If hosted planning is unavailable, the repository CLI command above verifies exact factory code and immutable getters at one Base `safe` block, validates terms against that block time, and emits the same unsigned wallet batch plus registration payload. It refuses a pending or mismatched deployment and never treats output as funding.
 
 Each canonical bounty is an isolated deterministic minimal-proxy contract. Its terms and verifier policy cannot be changed after creation. A valid pass pays the solver and verifiers; a valid fail pays verifiers, uses the solver bond to replace the verifier reserve, and reopens the still-funded bounty. Acceptance or verifier timeout returns the bond. A no-submission claim timeout forfeits it into the next solver's completion bonus, or pro-rata funder refunds after cancellation. No settlement operator is involved.
@@ -90,6 +92,7 @@ Each canonical bounty is an isolated deterministic minimal-proxy contract. Its t
 - `get_autonomous_bounty_terms`
 - `publish_autonomous_submission_evidence`
 - `get_autonomous_submission_evidence`
+- `plan_autonomous_canonical_child_terms`
 - `plan_autonomous_bounty_creation`
 - `plan_autonomous_bounty_authorized_creation`
 - `plan_autonomous_bounty_contribution`
@@ -117,6 +120,7 @@ Each canonical bounty is an isolated deterministic minimal-proxy contract. Its t
 - `GET /v1/base/autonomous-bounties/submission-evidence/{bounty_contract}/{round}`
 - `GET /v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true`
 - `GET /v1/base/autonomous-bounties/verification-jobs?network=base-mainnet`
+- `POST /v1/base/autonomous-bounties/canonical-child-terms-plan`
 - `POST /v1/base/autonomous-bounties/creation-plan`
 - `POST /v1/base/autonomous-bounties/authorized-creation-plan`
 - `POST /v1/base/autonomous-bounties/contribution-plan`

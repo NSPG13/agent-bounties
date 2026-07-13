@@ -2,10 +2,12 @@
 pragma solidity ^0.8.26;
 
 import "../src/AgentBountyFactory.sol";
+import "../src/CanonicalChildBountyVerifier.sol";
 import "../src/LeadingZeroWorkVerifier.sol";
 
 interface VmFork {
     function createSelectFork(string calldata urlOrAlias) external returns (uint256 forkId);
+    function createSelectFork(string calldata urlOrAlias, uint256 blockNumber) external returns (uint256 forkId);
     function envOr(string calldata name, bool defaultValue) external returns (bool value);
     function envString(string calldata name) external returns (string memory value);
     function prank(address sender) external;
@@ -29,11 +31,14 @@ contract AgentBountyMainnetForkTest {
     address private constant IMPLEMENTATION = 0x2fa36D2b2327642db3a6Cc8CDD91544ad7484EB9;
     address private constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
     address private constant MODULE = 0xcc6059cEedA5bc4ba8a97ecFbFFa7488C8FD579E;
-    address private constant FUNDING_SOURCE = 0x786be3f994365fCD417a1b502A83300ea87d9b34;
-    address private constant BOND_SOURCE = 0x680030aBf3FffFBc8d0A550b6355A8713C54d3C8;
+    address private constant FUNDING_SOURCE = 0x884834E884d6e93462655A2820140aD03E6747bC;
+    address private constant BOND_SOURCE = 0x884834E884d6e93462655A2820140aD03E6747bC;
     address private constant CREATOR = 0x1000000000000000000000000000000000000001;
     address private constant SOLVER = 0x2000000000000000000000000000000000000002;
     address private constant RELAYER = 0x3000000000000000000000000000000000000003;
+    address private constant CHILD_SOLVER = 0x4000000000000000000000000000000000000004;
+    address private constant POOL_CONTRIBUTOR = 0x5000000000000000000000000000000000000005;
+    uint256 private constant MAINNET_FORK_BLOCK = 48_567_240;
 
     bytes32 private constant FACTORY_RUNTIME_HASH = 0x06f810de7b46f854ecc29e9c0c28156edab4b0d3e0bbe2bf5be8876687bebfc6;
     bytes32 private constant IMPLEMENTATION_RUNTIME_HASH =
@@ -66,12 +71,85 @@ contract AgentBountyMainnetForkTest {
         uint256 solverBefore;
     }
 
+    function testCanonicalMainnetRecursiveChildLoop() public {
+        if (!vm.envOr("RUN_MAINNET_FORK", false)) {
+            vm.skip(true);
+            return;
+        }
+        _selectMainnetFork();
+
+        require(block.chainid == 8453, "wrong chain");
+        require(keccak256(FACTORY.code) == FACTORY_RUNTIME_HASH, "factory code drift");
+        require(keccak256(IMPLEMENTATION.code) == IMPLEMENTATION_RUNTIME_HASH, "implementation code drift");
+
+        AgentBountyFactory factory = AgentBountyFactory(FACTORY);
+        MainnetUsdc usdc = MainnetUsdc(USDC);
+        CanonicalChildBountyVerifier childModule = new CanonicalChildBountyVerifier(FACTORY);
+        require(childModule.settlementToken() == USDC, "child module token drift");
+
+        vm.prank(FUNDING_SOURCE);
+        require(usdc.transfer(CREATOR, 1_000_000), "root funding transfer failed");
+        vm.prank(FUNDING_SOURCE);
+        require(usdc.transfer(SOLVER, 500_000), "parent solver funding transfer failed");
+        vm.prank(FUNDING_SOURCE);
+        require(usdc.transfer(POOL_CONTRIBUTOR, 500_000), "pooled funding transfer failed");
+        vm.prank(FUNDING_SOURCE);
+        require(usdc.transfer(CHILD_SOLVER, 100_000), "child bond transfer failed");
+
+        AgentBountyFactory.CreateBountyParams memory rootParams =
+            _childLoopParams(childModule, keccak256("mainnet-fork-child-loop-root"), 900_000, 100_000);
+        vm.prank(CREATOR);
+        require(usdc.approve(FACTORY, 1_000_000), "root approval failed");
+        vm.prank(CREATOR);
+        (address rootAddress,) = factory.createBounty(
+            rootParams, new address[](0), 1_000_000, keccak256("mainnet-fork-child-loop-root-nonce")
+        );
+        AgentBounty root = AgentBounty(rootAddress);
+
+        vm.prank(SOLVER);
+        require(usdc.approve(rootAddress, 100_000), "parent bond approval failed");
+        vm.prank(SOLVER);
+        root.claim();
+        vm.prank(SOLVER);
+        root.submit(keccak256("parent-loop-submission"), keccak256("parent-loop-evidence"));
+
+        AgentBountyFactory.CreateBountyParams memory childParams = _childLoopParams(
+            childModule, childModule.expectedBenchmarkHash(root.bountyId(), root.round()), 800_000, 100_000
+        );
+        vm.prank(SOLVER);
+        require(usdc.approve(FACTORY, 400_000), "child initial approval failed");
+        vm.prank(SOLVER);
+        (address childAddress,) = factory.createBounty(
+            childParams, new address[](0), 400_000, keccak256("mainnet-fork-child-loop-child-nonce")
+        );
+        AgentBounty child = AgentBounty(childAddress);
+
+        vm.prank(POOL_CONTRIBUTOR);
+        require(usdc.approve(childAddress, 500_000), "pool approval failed");
+        vm.prank(POOL_CONTRIBUTOR);
+        child.fund(500_000);
+        vm.prank(CHILD_SOLVER);
+        require(usdc.approve(childAddress, 100_000), "child bond approval failed");
+        vm.prank(CHILD_SOLVER);
+        child.claim();
+        vm.prank(CHILD_SOLVER);
+        child.submit(keccak256("child-loop-submission"), keccak256("child-loop-evidence"));
+
+        vm.prank(RELAYER);
+        root.verifyAndSettle(abi.encode(childAddress));
+
+        require(root.bountyStatus() == AgentBounty.BountyStatus.Settled, "root not settled");
+        require(child.bountyStatus() == AgentBounty.BountyStatus.Submitted, "child loop not live");
+        require(usdc.balanceOf(rootAddress) == 0, "root retained funds");
+        require(usdc.balanceOf(childAddress) == 1_000_000, "child target or bond missing");
+    }
+
     function testCanonicalMainnetPermissionlessPaidLoop() public {
         if (!vm.envOr("RUN_MAINNET_FORK", false)) {
             vm.skip(true);
             return;
         }
-        vm.createSelectFork(vm.envString("BASE_MAINNET_RPC_URL"));
+        _selectMainnetFork();
 
         require(block.chainid == 8453, "wrong chain");
         require(keccak256(FACTORY.code) == FACTORY_RUNTIME_HASH, "factory code drift");
@@ -129,17 +207,10 @@ contract AgentBountyMainnetForkTest {
         vm.prank(SOLVER);
         bounty.submit(SUBMISSION_HASH, EVIDENCE_HASH);
 
-        uint256 nonce;
-        bytes32 responseHash;
-        do {
-            responseHash = keccak256(
-                abi.encode(bountyId, bounty.round(), SOLVER, SUBMISSION_HASH, EVIDENCE_HASH, POLICY_HASH, nonce)
-            );
-            nonce += 1;
-        } while (uint256(responseHash) >> 240 != 0);
+        uint256 nonce = _mineLeadingZeroNonce(bountyId, bounty.round(), SOLVER);
 
         vm.prank(RELAYER);
-        bounty.verifyAndSettle(abi.encode(nonce - 1));
+        bounty.verifyAndSettle(abi.encode(nonce));
 
         require(bounty.bountyStatus() == AgentBounty.BountyStatus.Settled, "not settled");
         require(usdc.balanceOf(bountyAddress) == 0, "settled balance remains");
@@ -153,7 +224,7 @@ contract AgentBountyMainnetForkTest {
             vm.skip(true);
             return;
         }
-        vm.createSelectFork(vm.envString("BASE_MAINNET_RPC_URL"));
+        _selectMainnetFork();
 
         require(block.chainid == 8453, "wrong chain");
         require(keccak256(FACTORY.code) == FACTORY_RUNTIME_HASH, "factory code drift");
@@ -237,17 +308,63 @@ contract AgentBountyMainnetForkTest {
     }
 
     function _relaySettlement(AgentBounty bounty, bytes32 bountyId, address solver) private {
-        uint256 nonce;
-        bytes32 responseHash;
-        do {
-            responseHash = keccak256(
-                abi.encode(bountyId, bounty.round(), solver, SUBMISSION_HASH, EVIDENCE_HASH, POLICY_HASH, nonce)
-            );
-            nonce += 1;
-        } while (uint256(responseHash) >> 240 != 0);
+        uint256 nonce = _mineLeadingZeroNonce(bountyId, bounty.round(), solver);
 
         vm.prank(RELAYER);
-        bounty.verifyAndSettle(abi.encode(nonce - 1));
+        bounty.verifyAndSettle(abi.encode(nonce));
+    }
+
+    function _selectMainnetFork() private {
+        vm.createSelectFork(vm.envString("BASE_MAINNET_RPC_URL"), MAINNET_FORK_BLOCK);
+        require(block.number == MAINNET_FORK_BLOCK, "fork block drift");
+    }
+
+    function _mineLeadingZeroNonce(bytes32 bountyId, uint64 currentRound, address solver)
+        private
+        pure
+        returns (uint256 nonce)
+    {
+        bytes32 submissionHash = SUBMISSION_HASH;
+        bytes32 evidenceHash = EVIDENCE_HASH;
+        bytes32 policyHash = POLICY_HASH;
+        assembly ("memory-safe") {
+            let pointer := mload(0x40)
+            mstore(pointer, bountyId)
+            mstore(add(pointer, 0x20), currentRound)
+            mstore(add(pointer, 0x40), solver)
+            mstore(add(pointer, 0x60), submissionHash)
+            mstore(add(pointer, 0x80), evidenceHash)
+            mstore(add(pointer, 0xa0), policyHash)
+            for {} lt(nonce, 1000000) { nonce := add(nonce, 1) } {
+                mstore(add(pointer, 0xc0), nonce)
+                if iszero(shr(240, keccak256(pointer, 0xe0))) { break }
+            }
+        }
+        require(nonce < 1_000_000, "proof search cap reached");
+    }
+
+    function _childLoopParams(
+        CanonicalChildBountyVerifier childModule,
+        bytes32 benchmarkHash,
+        uint256 solverReward,
+        uint256 verifierReward
+    ) private view returns (AgentBountyFactory.CreateBountyParams memory) {
+        return AgentBountyFactory.CreateBountyParams({
+            solverReward: solverReward,
+            verifierReward: verifierReward,
+            termsHash: keccak256("mainnet-fork-child-loop-terms"),
+            policyHash: keccak256("mainnet-fork-child-loop-policy"),
+            acceptanceCriteriaHash: childModule.ACCEPTANCE_CRITERIA_HASH(),
+            benchmarkHash: benchmarkHash,
+            evidenceSchemaHash: keccak256("mainnet-fork-child-loop-evidence-schema"),
+            fundingDeadline: uint64(block.timestamp + 30 days),
+            claimWindowSeconds: 1 days,
+            verificationWindowSeconds: 2 hours,
+            verificationMode: AgentBounty.VerificationMode.DeterministicModule,
+            verifierModule: address(childModule),
+            verifierRewardRecipient: CREATOR,
+            threshold: 1
+        });
     }
 
     function _usdcAuthorizationDigest(

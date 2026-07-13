@@ -104,6 +104,7 @@ pub struct DiscoveryEndpoints {
     pub autonomous_bounty_feed: String,
     pub autonomous_verification_jobs: String,
     pub autonomous_events: String,
+    pub autonomous_canonical_child_terms_plan: String,
     pub autonomous_creation_plan: String,
     pub autonomous_authorized_creation_plan: String,
     pub autonomous_contribution_plan: String,
@@ -401,6 +402,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "{api}/v1/base/autonomous-bounties/verification-jobs"
         ),
         autonomous_events: format!("{api}/v1/base/autonomous-bounties/events"),
+        autonomous_canonical_child_terms_plan: format!(
+            "{api}/v1/base/autonomous-bounties/canonical-child-terms-plan"
+        ),
         autonomous_creation_plan: format!("{api}/v1/base/autonomous-bounties/creation-plan"),
         autonomous_authorized_creation_plan: format!(
             "{api}/v1/base/autonomous-bounties/authorized-creation-plan"
@@ -479,6 +483,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "get_autonomous_bounty_terms",
             "publish_autonomous_submission_evidence",
             "get_autonomous_submission_evidence",
+            "plan_autonomous_canonical_child_terms",
             "plan_autonomous_bounty_creation",
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_contribution",
@@ -975,6 +980,8 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 6. Anyone can pool USDC with `plan_autonomous_bounty_contribution` until the target is reached.
 7. Funding is real only after FundingAdded; claimability requires BountyBecameClaimable.
 
+For a distribution-loop bounty, call `plan_autonomous_canonical_child_terms` first. It derives the exact recursive criteria and parent-round benchmark. The parent passes only after the child preserves the parent solver reward, is fully funded, and a different wallet has claimed and submitted it.
+
 If hosted planning is unavailable, the repository CLI command above verifies exact factory code and immutable getters at one Base `safe` block, validates terms against that block time, and emits the same unsigned wallet batch plus registration payload. It refuses a pending or mismatched deployment and never treats output as funding.
 
 ## Verify
@@ -994,6 +1001,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `get_autonomous_bounty_terms`
 - `publish_autonomous_submission_evidence`
 - `get_autonomous_submission_evidence`
+- `plan_autonomous_canonical_child_terms`
 - `plan_autonomous_bounty_creation`
 - `plan_autonomous_bounty_authorized_creation`
 - `plan_autonomous_bounty_contribution`
@@ -1022,6 +1030,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Canonical feed: {bounty_feed}
 - Live verification jobs: {verification_jobs}
 - Confirmed events: {events}
+- Canonical child terms plan: {canonical_child_terms_plan}
 - Creation plan: {creation_plan}
 - Authorized creation plan: {authorized_creation_plan}
 - Contribution plan: {contribution_plan}
@@ -1086,6 +1095,7 @@ Default CTA: Post your own bounty at {post_page}
         bounty_feed = endpoints.autonomous_bounty_feed,
         verification_jobs = endpoints.autonomous_verification_jobs,
         events = endpoints.autonomous_events,
+        canonical_child_terms_plan = endpoints.autonomous_canonical_child_terms_plan,
         creation_plan = endpoints.autonomous_creation_plan,
         authorized_creation_plan = endpoints.autonomous_authorized_creation_plan,
         contribution_plan = endpoints.autonomous_contribution_plan,
@@ -2926,6 +2936,7 @@ mod tests {
         for tool in [
             "list_autonomous_bounties",
             "list_autonomous_verification_jobs",
+            "plan_autonomous_canonical_child_terms",
             "plan_autonomous_bounty_creation",
             "plan_autonomous_bounty_contribution",
             "plan_autonomous_bounty_claim",

@@ -30,7 +30,10 @@ RPC_URL = "https://mainnet.base.org"
 FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
 IMPLEMENTATION = "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
-VERIFIER_MODULE = "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e"
+LEADING_ZERO_WORK_VERIFIER_MODULE = "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e"
+# Backwards-compatible name used by fixtures and downstream scripts.
+VERIFIER_MODULE = LEADING_ZERO_WORK_VERIFIER_MODULE
+ALLOWED_VERIFIER_MODULES = frozenset({LEADING_ZERO_WORK_VERIFIER_MODULE})
 CLONE_CODEHASH = "0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1"
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 MAX_COMMENT_BYTES = 8_192
@@ -400,7 +403,6 @@ def validate_common(state: BountyState, *, require_funded: bool = True) -> None:
         "factory": FACTORY,
         "settlement_token": USDC,
         "verification_mode": 0,
-        "verifier_module": VERIFIER_MODULE,
         "threshold": 1,
     }
     for field, wanted in expected.items():
@@ -409,6 +411,10 @@ def validate_common(state: BountyState, *, require_funded: bool = True) -> None:
             raise RelayError(
                 f"fail-closed canonical-state mismatch for {field}: expected {wanted}, got {observed}"
             )
+    if state.verifier_module not in ALLOWED_VERIFIER_MODULES:
+        raise RelayError(
+            f"verifier module is not allowlisted for the bounded relay: {state.verifier_module}"
+        )
     if state.target_amount <= 0 or state.target_amount > MAX_TARGET_MINOR:
         raise RelayError("bounty exceeds the public relay 5 USDC target cap")
     if state.verifier_reward <= 0 or state.verifier_reward > MAX_BOND_MINOR:
@@ -478,7 +484,7 @@ def action_call(
         raise RelayError("verification window expires too soon")
     proof = str(envelope["proof"])
     verification = client.call(
-        VERIFIER_MODULE,
+        state.verifier_module,
         "verify(bytes32,uint64,address,bytes32,bytes32,bytes32,bytes)(bool,bytes32)",
         state.bounty_id,
         str(state.round),

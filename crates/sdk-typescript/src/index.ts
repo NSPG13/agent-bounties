@@ -120,6 +120,14 @@ export type AutonomousVerificationAttestation = Record<string, unknown>;
 export type AutonomousSignedAttestation = Record<string, unknown>;
 export type AutonomousEvmLog = Record<string, unknown>;
 
+export interface CanonicalChildBountyTermsRequest {
+  parent_bounty_id: string;
+  parent_round: number;
+  parent_solver: string;
+  parent_solver_reward: { amount: number; currency: "usdc" };
+  verifier_module: string;
+}
+
 export interface AutonomousAuthorizationSignature {
   v: number;
   r: string;
@@ -606,6 +614,12 @@ export class AgentBountiesClient {
     network?: string | null,
   ): Promise<unknown> {
     return this.autonomousPost("creation-plan", { network: network ?? null, create });
+  }
+
+  async planAutonomousCanonicalChildTerms(
+    request: CanonicalChildBountyTermsRequest,
+  ): Promise<unknown> {
+    return this.autonomousPost("canonical-child-terms-plan", { ...request });
   }
 
   async planAutonomousBountyAuthorizedCreation(

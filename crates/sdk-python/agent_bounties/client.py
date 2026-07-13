@@ -505,6 +505,26 @@ class AgentBountiesClient:
             json={"network": network, "create": create},
         )
 
+    def plan_autonomous_canonical_child_terms(
+        self,
+        parent_bounty_id: str,
+        parent_round: int,
+        parent_solver: str,
+        parent_solver_reward: dict,
+        verifier_module: str,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/canonical-child-terms-plan",
+            json={
+                "parent_bounty_id": parent_bounty_id,
+                "parent_round": parent_round,
+                "parent_solver": parent_solver,
+                "parent_solver_reward": parent_solver_reward,
+                "verifier_module": verifier_module,
+            },
+        )
+
     def plan_autonomous_bounty_authorized_creation(
         self,
         create: dict,

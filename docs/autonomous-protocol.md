@@ -139,6 +139,30 @@ round, solver, submission hash, evidence hash, policy hash, and proof.
 A returned pass settles atomically. A returned fail pays the verifier and
 reopens atomically. A reverted or malformed module call changes no state.
 
+#### Canonical Child Distribution Module
+
+`agent-bounties/canonical-child-v1` is an opt-in deterministic policy for meta
+bounties whose explicit task is to create the next paid interaction. Its proof
+is `abi.encode(address childBounty)`. A pass requires all of the following at
+verification time:
+
+- the parent and child are canonical clones from the same configured factory;
+- the parent and child commit the module's exact four acceptance criteria;
+- the child creator is the active parent solver;
+- the child's canonical benchmark binds the exact parent bounty id and round;
+- the child uses the same module recursively with threshold one;
+- the child target is at least the parent solver reward and is fully funded;
+- native USDC covers the child target and active claim bond;
+- the child is `Submitted` with an unexpired verification window; and
+- the child solver is a different wallet from its creator.
+
+The distinct-wallet condition follows both from verifier checks and the base
+protocol's creator-cannot-claim invariant. Pooled contributors may fund the
+child, so a parent solver can earn while recruiting funders; a self-funded
+solver instead recycles capital into the next bounty. This module verifies only
+that distribution loop. It must not be presented as verification of unrelated
+code, research, or subjective work.
+
 ### Signed Quorum
 
 The bounty commits one to eight verifier wallets and a threshold. Each verifier
