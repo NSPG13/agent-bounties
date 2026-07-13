@@ -97,6 +97,8 @@ node --test scripts/test_agent_bounties_openclaw_skill.mjs
 node scripts/test-autonomous-wallet-flow.js
 node --check tools/autonomous-activation.js
 node scripts/test-autonomous-activation-console.js
+node --check tools/canonical-child-verifier-deployment.js
+node scripts/test-canonical-child-verifier-deployment-console.js
 "${python_cmd[@]}" -m pip install -r scripts/requirements-attest.txt
 "${python_cmd[@]}" scripts/test_base_deployment_attest.py -v
 "${python_cmd[@]}" scripts/check-render-blueprint.py
@@ -133,7 +135,9 @@ cargo run -p cli -- pooled-funding-demo
   scripts/base_deployment_attest.py \
   scripts/test_base_deployment_attest.py \
   scripts/build_base_attest_fixtures.py \
-  scripts/rehearse_autonomous_activation.py
+  scripts/rehearse_autonomous_activation.py \
+  scripts/build_canonical_child_verifier_bundle.py \
+  scripts/rehearse_canonical_child_verifier.py
 
 cd "$repo_root/crates/sdk-typescript"
 npm ci
@@ -144,6 +148,17 @@ cd "$repo_root/contracts/base-escrow"
 forge test --fuzz-runs 1000
 
 cd "$repo_root"
+verifier_bundle="deployments/canonical-child-verifier-base-mainnet-deployment.json"
+verifier_check="target/tmp/canonical-child-verifier-base-mainnet-deployment.json"
+"${python_cmd[@]}" scripts/build_canonical_child_verifier_bundle.py \
+  --deployer "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["deployment"]["from"])' "$verifier_bundle")" \
+  --deployer-nonce "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["deployment"]["deployer_nonce"])' "$verifier_bundle")" \
+  --source-commit "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$verifier_bundle")" \
+  --preflight-block-number "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["preflight_block"]["number"])' "$verifier_bundle")" \
+  --preflight-block-hash "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["preflight_block"]["hash"])' "$verifier_bundle")" \
+  --output "$verifier_check"
+cmp "$verifier_bundle" "$verifier_check"
+
 cargo run -p cli -- autonomous-activation-bundle \
   --deployer 0x884834E884d6e93462655A2820140aD03E6747bC \
   --deployer-nonce 4 \
