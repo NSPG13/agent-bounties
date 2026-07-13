@@ -54,6 +54,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "plan_autonomous_bounty_contribution",
     "plan_autonomous_bounty_claim",
     "plan_autonomous_bounty_submission",
+    "plan_autonomous_bounty_submission_authorization",
     "plan_autonomous_module_settlement",
     "plan_autonomous_attestation_settlement",
   ]) {
@@ -118,6 +119,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "planAutonomousBountyClaim",
     "planAutonomousBountyAuthorizedClaim",
     "planAutonomousBountySubmission",
+    "planAutonomousBountySubmissionAuthorization",
     "planAutonomousVerificationAttestation",
     "planAutonomousModuleSettlement",
     "planAutonomousAttestationSettlement",

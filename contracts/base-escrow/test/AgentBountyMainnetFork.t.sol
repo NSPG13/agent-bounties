@@ -9,6 +9,8 @@ interface VmFork {
     function envOr(string calldata name, bool defaultValue) external returns (bool value);
     function envString(string calldata name) external returns (string memory value);
     function prank(address sender) external;
+    function addr(uint256 privateKey) external returns (address keyAddr);
+    function sign(uint256 privateKey, bytes32 digest) external returns (uint8 v, bytes32 r, bytes32 s);
     function skip(bool skipTest) external;
 }
 
@@ -45,6 +47,24 @@ contract AgentBountyMainnetForkTest {
     bytes32 private constant EVIDENCE_SCHEMA_HASH = 0x21521c3eac6143dc56fd2c8d1aaf9831057d6c40c18b542fea77102a6c6d2244;
     bytes32 private constant SUBMISSION_HASH = keccak256("mainnet-fork-artifact");
     bytes32 private constant EVIDENCE_HASH = keccak256("mainnet-fork-evidence");
+    bytes32 private constant EIP712_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 private constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+    uint256 private constant GAS_RELAY_CREATOR_KEY =
+        uint256(keccak256("agent-bounties/mainnet-fork/gas-relay/creator-key"));
+    uint256 private constant GAS_RELAY_SOLVER_KEY =
+        uint256(keccak256("agent-bounties/mainnet-fork/gas-relay/solver-key"));
+
+    struct RelayLoopContext {
+        AgentBounty bounty;
+        bytes32 bountyId;
+        address creator;
+        address solver;
+        uint256 creatorBefore;
+        uint256 solverBefore;
+    }
 
     function testCanonicalMainnetPermissionlessPaidLoop() public {
         if (!vm.envOr("RUN_MAINNET_FORK", false)) {
@@ -126,5 +146,124 @@ contract AgentBountyMainnetForkTest {
         require(usdc.balanceOf(SOLVER) == solverBefore + 1_000_000, "solver payout mismatch");
         require(usdc.balanceOf(CREATOR) == recipientBefore + 100_000, "verifier reward mismatch");
         require(creatorBefore == recipientBefore, "creator baseline drift");
+    }
+
+    function testCanonicalMainnetGasRelayedPaidLoop() public {
+        if (!vm.envOr("RUN_MAINNET_FORK", false)) {
+            vm.skip(true);
+            return;
+        }
+        vm.createSelectFork(vm.envString("BASE_MAINNET_RPC_URL"));
+
+        require(block.chainid == 8453, "wrong chain");
+        require(keccak256(FACTORY.code) == FACTORY_RUNTIME_HASH, "factory code drift");
+        require(keccak256(IMPLEMENTATION.code) == IMPLEMENTATION_RUNTIME_HASH, "implementation code drift");
+        require(keccak256(MODULE.code) == MODULE_RUNTIME_HASH, "module code drift");
+
+        RelayLoopContext memory context = _createRelayLoopBounty();
+        _relayClaim(context.bounty, context.solver);
+        _relaySubmission(context.bounty, context.solver);
+        _relaySettlement(context.bounty, context.bountyId, context.solver);
+
+        MainnetUsdc usdc = MainnetUsdc(USDC);
+        require(context.bounty.bountyStatus() == AgentBounty.BountyStatus.Settled, "relayed loop not settled");
+        require(usdc.balanceOf(address(context.bounty)) == 0, "settled balance remains");
+        require(usdc.balanceOf(context.solver) == context.solverBefore + 1_000_000, "relayed solver payout mismatch");
+        require(usdc.balanceOf(context.creator) == context.creatorBefore + 100_000, "relayed verifier payout mismatch");
+    }
+
+    function _createRelayLoopBounty() private returns (RelayLoopContext memory context) {
+        AgentBountyFactory factory = AgentBountyFactory(FACTORY);
+        MainnetUsdc usdc = MainnetUsdc(USDC);
+        context.creator = vm.addr(GAS_RELAY_CREATOR_KEY);
+        context.solver = vm.addr(GAS_RELAY_SOLVER_KEY);
+        context.creatorBefore = usdc.balanceOf(context.creator);
+        context.solverBefore = usdc.balanceOf(context.solver);
+
+        vm.prank(FUNDING_SOURCE);
+        require(usdc.transfer(context.creator, 1_000_000), "fork creator funding failed");
+        vm.prank(BOND_SOURCE);
+        require(usdc.transfer(context.solver, 100_000), "fork solver bond funding failed");
+
+        AgentBountyFactory.CreateBountyParams memory params = AgentBountyFactory.CreateBountyParams({
+            solverReward: 900_000,
+            verifierReward: 100_000,
+            termsHash: TERMS_HASH,
+            policyHash: POLICY_HASH,
+            acceptanceCriteriaHash: CRITERIA_HASH,
+            benchmarkHash: BENCHMARK_HASH,
+            evidenceSchemaHash: EVIDENCE_SCHEMA_HASH,
+            fundingDeadline: uint64(block.timestamp + 30 days),
+            claimWindowSeconds: 1 days,
+            verificationWindowSeconds: 2 hours,
+            verificationMode: AgentBounty.VerificationMode.DeterministicModule,
+            verifierModule: MODULE,
+            verifierRewardRecipient: context.creator,
+            threshold: 1
+        });
+        vm.prank(context.creator);
+        require(usdc.approve(FACTORY, 1_000_000), "creator approval failed");
+        vm.prank(context.creator);
+        (address bountyAddress, bytes32 bountyId) = factory.createBounty(
+            params, new address[](0), 1_000_000, keccak256("agent-bounties/mainnet-fork/gas-relay/v1")
+        );
+        context.bounty = AgentBounty(bountyAddress);
+        context.bountyId = bountyId;
+    }
+
+    function _relayClaim(AgentBounty bounty, address solver) private {
+        bytes32 authorizationNonce = keccak256("agent-bounties/mainnet-fork/gas-relay/claim/v1");
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 authorizationDigest =
+            _usdcAuthorizationDigest(solver, address(bounty), 100_000, 0, validBefore, authorizationNonce);
+        (uint8 claimV, bytes32 claimR, bytes32 claimS) = vm.sign(GAS_RELAY_SOLVER_KEY, authorizationDigest);
+
+        vm.prank(RELAYER);
+        bounty.claimWithAuthorization(solver, 0, validBefore, authorizationNonce, claimV, claimR, claimS);
+        require(bounty.solver() == solver, "relayed solver mismatch");
+        require(bounty.activeClaimBond() == 100_000, "relayed bond missing");
+    }
+
+    function _relaySubmission(AgentBounty bounty, address solver) private {
+        uint256 deadline = block.timestamp + 30 minutes;
+        bytes32 digest = bounty.submitDigest(solver, bounty.round(), SUBMISSION_HASH, EVIDENCE_HASH, deadline);
+        (uint8 submitV, bytes32 submitR, bytes32 submitS) = vm.sign(GAS_RELAY_SOLVER_KEY, digest);
+
+        vm.prank(RELAYER);
+        bounty.submitWithSignature(
+            SUBMISSION_HASH, EVIDENCE_HASH, deadline, abi.encodePacked(submitR, submitS, submitV)
+        );
+        require(bounty.bountyStatus() == AgentBounty.BountyStatus.Submitted, "relayed submission missing");
+    }
+
+    function _relaySettlement(AgentBounty bounty, bytes32 bountyId, address solver) private {
+        uint256 nonce;
+        bytes32 responseHash;
+        do {
+            responseHash = keccak256(
+                abi.encode(bountyId, bounty.round(), solver, SUBMISSION_HASH, EVIDENCE_HASH, POLICY_HASH, nonce)
+            );
+            nonce += 1;
+        } while (uint256(responseHash) >> 240 != 0);
+
+        vm.prank(RELAYER);
+        bounty.verifyAndSettle(abi.encode(nonce - 1));
+    }
+
+    function _usdcAuthorizationDigest(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce
+    ) private view returns (bytes32) {
+        bytes32 domainSeparator = keccak256(
+            abi.encode(EIP712_DOMAIN_TYPEHASH, keccak256("USD Coin"), keccak256("2"), block.chainid, USDC)
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce)
+        );
+        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 }

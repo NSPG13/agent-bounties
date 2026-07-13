@@ -53,6 +53,7 @@ Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_diagnose_hoste
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_github_audience_audit.py -v }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_ruleset_drift_check.py -v }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_recover_first_organic_loop.py -v }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_relay_autonomous_action.py -v }
 Invoke-Checked { cargo run -p cli -- github-proof-comment-plan --bounty-id 00000000-0000-0000-0000-000000000001 --proof-url https://agentbounties.local/public/proofs/example --verifier-summary "GitHub CI passed" }
 Invoke-Checked { cargo run -p cli -- discovery --public-base-url https://agentbounties.local --mcp-base-url https://agentbounties.local/mcp }
 Invoke-Checked { cargo run -p cli -- discovery-report --input-fixture crates\cli\fixtures\discovery_answers.json --json-out target\tmp\discovery-report.json --markdown-out target\tmp\discovery-report.md }
@@ -71,7 +72,7 @@ Invoke-Checked { cargo run -p cli -- docs-contract-check }
 Invoke-Checked { cargo run -p cli -- demo }
 Invoke-Checked { cargo run -p cli -- pooled-funding-demo }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py }
-Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\diagnose_hosted_api.py scripts\test_diagnose_hosted_api.py scripts\github_audience_audit.py scripts\test_github_audience_audit.py scripts\ruleset_drift_check.py scripts\test_ruleset_drift_check.py scripts\recover_first_organic_loop.py scripts\test_recover_first_organic_loop.py scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py scripts\sync_hosted_bounty_inventory.py scripts\test_sync_hosted_bounty_inventory.py scripts\validate_real_funding_rehearsal.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\diagnose_hosted_api.py scripts\test_diagnose_hosted_api.py scripts\github_audience_audit.py scripts\test_github_audience_audit.py scripts\ruleset_drift_check.py scripts\test_ruleset_drift_check.py scripts\recover_first_organic_loop.py scripts\test_recover_first_organic_loop.py scripts\relay_autonomous_action.py scripts\test_relay_autonomous_action.py scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py scripts\sync_hosted_bounty_inventory.py scripts\test_sync_hosted_bounty_inventory.py scripts\validate_real_funding_rehearsal.py }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py scripts\check-migration-history.py scripts\check-render-blueprint.py scripts\stage_review_contract_root.py scripts\test_stage_review_contract_root.py scripts\base_deployment_attest.py scripts\test_base_deployment_attest.py scripts\build_base_attest_fixtures.py scripts\rehearse_autonomous_activation.py }
 Pop-Location
 

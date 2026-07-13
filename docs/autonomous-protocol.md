@@ -185,6 +185,21 @@ verifier agents.
 
 ## State And Payment Evidence
 
+### Bounded Public Gas Relay
+
+Low-value deterministic bounties may use the source-controlled GitHub
+`/agent-bounty relay` transport for `claimWithAuthorization`,
+`submitWithSignature`, and a passing `verifyAndSettle` call. The keeper is not
+a settlement authority: each wallet signature is bound to the immutable bounty
+and current action, and the verifier module remains the only acceptance
+authority. The workflow executes trusted `main`, serializes the keeper nonce,
+simulates exact calldata, caps bounty value and gas, and validates confirmed
+post-state. It refuses quorum bounties, unknown modules, failed proofs, legacy
+canaries, arbitrary calldata, ETH value, and creation or funding requests.
+
+The relay comment and transaction hash are transport evidence only. Canonical
+events remain the lifecycle and payout evidence.
+
 The principal lifecycle is:
 
 `Open -> Claimable -> Claimed -> Submitted -> Settled`

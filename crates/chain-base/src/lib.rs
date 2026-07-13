@@ -270,6 +270,40 @@ pub struct AutonomousBountyAuthorizedClaimPlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomousBountySubmissionAuthorizationRequest {
+    pub bounty_contract: String,
+    pub bounty_id: String,
+    pub round: u64,
+    pub solver: String,
+    pub submission_hash: String,
+    pub evidence_hash: String,
+    pub policy_hash: String,
+    pub deadline: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousBountySubmissionAuthorizationMessage {
+    pub bounty: String,
+    pub bounty_id: String,
+    pub solver: String,
+    pub round: String,
+    pub submission_hash: String,
+    pub evidence_hash: String,
+    pub policy_hash: String,
+    pub deadline: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousBountySubmissionAuthorizationTypedData {
+    pub types: BTreeMap<String, Vec<Eip712TypeField>>,
+    pub domain: Eip712DomainData,
+    pub primary_type: String,
+    pub message: AutonomousBountySubmissionAuthorizationMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutonomousVerificationAttestationRequest {
     pub bounty_contract: String,
     pub bounty_id: String,
@@ -784,6 +818,64 @@ impl AutonomousBountyTxPlanner {
                 ],
             ),
             function: "submit(bytes32,bytes32)".to_string(),
+        })
+    }
+
+    pub fn plan_submission_authorization(
+        &self,
+        network: &str,
+        request: &AutonomousBountySubmissionAuthorizationRequest,
+    ) -> Result<AutonomousBountySubmissionAuthorizationTypedData, ChainBaseError> {
+        if request.round == 0 || request.deadline == 0 {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "submission authorization round and deadline must be positive".to_string(),
+            ));
+        }
+        let network = base_network_descriptor(network)?;
+        let bounty = normalize_address(&request.bounty_contract)?;
+        let solver = normalize_address(&request.solver)?;
+        let mut types = BTreeMap::new();
+        types.insert(
+            "EIP712Domain".to_string(),
+            vec![
+                eip712_field("name", "string"),
+                eip712_field("version", "string"),
+                eip712_field("chainId", "uint256"),
+                eip712_field("verifyingContract", "address"),
+            ],
+        );
+        types.insert(
+            "Submit".to_string(),
+            vec![
+                eip712_field("bounty", "address"),
+                eip712_field("bountyId", "bytes32"),
+                eip712_field("solver", "address"),
+                eip712_field("round", "uint64"),
+                eip712_field("submissionHash", "bytes32"),
+                eip712_field("evidenceHash", "bytes32"),
+                eip712_field("policyHash", "bytes32"),
+                eip712_field("deadline", "uint256"),
+            ],
+        );
+        Ok(AutonomousBountySubmissionAuthorizationTypedData {
+            types,
+            domain: Eip712DomainData {
+                name: "Agent Bounties".to_string(),
+                version: "1".to_string(),
+                chain_id: network.chain_id,
+                verifying_contract: bounty.clone(),
+            },
+            primary_type: "Submit".to_string(),
+            message: AutonomousBountySubmissionAuthorizationMessage {
+                bounty,
+                bounty_id: word_hex(parse_bytes32(&request.bounty_id)?),
+                solver,
+                round: request.round.to_string(),
+                submission_hash: word_hex(parse_bytes32(&request.submission_hash)?),
+                evidence_hash: word_hex(parse_bytes32(&request.evidence_hash)?),
+                policy_hash: word_hex(parse_bytes32(&request.policy_hash)?),
+                deadline: request.deadline.to_string(),
+            },
         })
     }
 
@@ -4541,6 +4633,21 @@ mod tests {
                 &format!("0x{}", "cd".repeat(32)),
             )
             .unwrap();
+        let submission_authorization = planner
+            .plan_submission_authorization(
+                "base-mainnet",
+                &AutonomousBountySubmissionAuthorizationRequest {
+                    bounty_contract: "0x4444444444444444444444444444444444444444".to_string(),
+                    bounty_id: format!("0x{}", "12".repeat(32)),
+                    round: 1,
+                    solver: "0x3333333333333333333333333333333333333333".to_string(),
+                    submission_hash: format!("0x{}", "ab".repeat(32)),
+                    evidence_hash: format!("0x{}", "cd".repeat(32)),
+                    policy_hash: format!("0x{}", "ef".repeat(32)),
+                    deadline: 2_000_000_000,
+                },
+            )
+            .unwrap();
 
         assert_eq!(contribution.wallet_calls.len(), 2);
         assert!(contribution.fund.data.starts_with("0xca1d209d"));
@@ -4571,6 +4678,13 @@ mod tests {
             )
         );
         assert!(submission.data.starts_with("0xd26ff86e"));
+        assert_eq!(submission_authorization.primary_type, "Submit");
+        assert_eq!(submission_authorization.domain.chain_id, 8_453);
+        assert_eq!(submission_authorization.message.round, "1");
+        assert_eq!(
+            submission_authorization.message.submission_hash,
+            format!("0x{}", "ab".repeat(32))
+        );
     }
 
     #[test]

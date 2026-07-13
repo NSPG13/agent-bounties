@@ -1,0 +1,48 @@
+name: Autonomous Gas Relay
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: autonomous-gas-relay-base-mainnet
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    if: >-
+      github.event.issue.pull_request == null
+      && contains(github.event.issue.labels.*.name, 'funded-live')
+      && !contains(github.event.issue.labels.*.name, 'verification-unavailable')
+      && !contains(github.event.issue.labels.*.name, 'legacy-canary')
+      && startsWith(github.event.comment.body, '/agent-bounty relay')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - name: Validate, simulate, and relay the bounded action
+        env:
+          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/relay_autonomous_action.py
+          --event "$GITHUB_EVENT_PATH"
+          --execute
+          --publish
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: autonomous-gas-relay-${{ github.event.comment.id || github.run_id }}
+          path: |
+            target/autonomous-gas-relay.json
+            target/autonomous-gas-relay.md
+          if-no-files-found: warn
