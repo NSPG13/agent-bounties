@@ -1211,16 +1211,26 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_canonical_child_terms",
-            "Derive the exact immutable criteria, parent-and-round benchmark commitment, minimum USDC target, recursive verifier configuration, and proof encoding for a canonical child bounty. The parent cannot pass until a different wallet has claimed and submitted the fully funded child.",
+            "Derive the exact task criteria, parent-and-round benchmark commitment, minimum USDC target, deterministic verifier configuration, and proof encoding for a canonical child bounty. The parent cannot pass until a different wallet completes the child and receives canonical settlement.",
             object_tool_schema(
                 json!({
                     "parent_bounty_id": string_property("Parent canonical bytes32 bounty ID."),
                     "parent_round": integer_property("Current positive parent claim round."),
                     "parent_solver": string_property("Active parent solver; this wallet must create the child."),
                     "parent_solver_reward": money_property("Parent solver reward; the child target must preserve at least this much USDC.", false),
-                    "verifier_module": string_property("Deployed canonical-child-v1 verifier module used by both parent and child.")
+                    "child_acceptance_criteria": {
+                        "type": "array",
+                        "description": "One to twenty explicit, deterministic acceptance criteria for the child task.",
+                        "items": { "type": "string" },
+                        "minItems": 1,
+                        "maxItems": 20
+                    },
+                    "verifier_module": string_property("Deployed canonical-child-v1 verifier module committed by the parent bounty.")
                 }),
-                &["parent_bounty_id", "parent_round", "parent_solver", "parent_solver_reward", "verifier_module"],
+                &[
+                    "parent_bounty_id", "parent_round", "parent_solver", "parent_solver_reward",
+                    "child_acceptance_criteria", "verifier_module"
+                ],
             ),
         ),
         tool(
@@ -4426,6 +4436,21 @@ mod tests {
                 "autonomous tool {autonomous} must be discoverable"
             );
         }
+
+        let canonical_child_terms = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_autonomous_canonical_child_terms")
+            .expect("canonical child terms descriptor exists");
+        assert!(canonical_child_terms.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "child_acceptance_criteria"));
+        assert_eq!(
+            canonical_child_terms.input_schema["properties"]["child_acceptance_criteria"]
+                ["minItems"],
+            1
+        );
 
         let get_live_money_readiness = descriptors
             .iter()

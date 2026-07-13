@@ -71,7 +71,7 @@ contract AgentBountyMainnetForkTest {
         uint256 solverBefore;
     }
 
-    function testCanonicalMainnetRecursiveChildLoop() public {
+    function testCanonicalMainnetSettledChildLoop() public {
         if (!vm.envOr("RUN_MAINNET_FORK", false)) {
             vm.skip(true);
             return;
@@ -85,7 +85,9 @@ contract AgentBountyMainnetForkTest {
         AgentBountyFactory factory = AgentBountyFactory(FACTORY);
         MainnetUsdc usdc = MainnetUsdc(USDC);
         CanonicalChildBountyVerifier childModule = new CanonicalChildBountyVerifier(FACTORY);
+        LeadingZeroWorkVerifier workModule = LeadingZeroWorkVerifier(MODULE);
         require(childModule.settlementToken() == USDC, "child module token drift");
+        require(keccak256(MODULE.code) == MODULE_RUNTIME_HASH, "work module code drift");
 
         vm.prank(FUNDING_SOURCE);
         require(usdc.transfer(CREATOR, 1_000_000), "root funding transfer failed");
@@ -96,8 +98,13 @@ contract AgentBountyMainnetForkTest {
         vm.prank(FUNDING_SOURCE);
         require(usdc.transfer(CHILD_SOLVER, 100_000), "child bond transfer failed");
 
-        AgentBountyFactory.CreateBountyParams memory rootParams =
-            _childLoopParams(childModule, keccak256("mainnet-fork-child-loop-root"), 900_000, 100_000);
+        AgentBountyFactory.CreateBountyParams memory rootParams = _childLoopParams(
+            childModule,
+            childModule.ACCEPTANCE_CRITERIA_HASH(),
+            keccak256("mainnet-fork-child-loop-root"),
+            900_000,
+            100_000
+        );
         vm.prank(CREATOR);
         require(usdc.approve(FACTORY, 1_000_000), "root approval failed");
         vm.prank(CREATOR);
@@ -114,7 +121,11 @@ contract AgentBountyMainnetForkTest {
         root.submit(keccak256("parent-loop-submission"), keccak256("parent-loop-evidence"));
 
         AgentBountyFactory.CreateBountyParams memory childParams = _childLoopParams(
-            childModule, childModule.expectedBenchmarkHash(root.bountyId(), root.round()), 800_000, 100_000
+            workModule,
+            keccak256("mainnet-fork-child-work-criteria"),
+            childModule.expectedBenchmarkHash(root.bountyId(), root.round()),
+            800_000,
+            100_000
         );
         vm.prank(SOLVER);
         require(usdc.approve(FACTORY, 400_000), "child initial approval failed");
@@ -133,15 +144,19 @@ contract AgentBountyMainnetForkTest {
         vm.prank(CHILD_SOLVER);
         child.claim();
         vm.prank(CHILD_SOLVER);
-        child.submit(keccak256("child-loop-submission"), keccak256("child-loop-evidence"));
+        child.submit(SUBMISSION_HASH, EVIDENCE_HASH);
+
+        uint256 childNonce = _mineLeadingZeroNonce(child.bountyId(), child.round(), CHILD_SOLVER);
+        vm.prank(RELAYER);
+        child.verifyAndSettle(abi.encode(childNonce));
 
         vm.prank(RELAYER);
         root.verifyAndSettle(abi.encode(childAddress));
 
         require(root.bountyStatus() == AgentBounty.BountyStatus.Settled, "root not settled");
-        require(child.bountyStatus() == AgentBounty.BountyStatus.Submitted, "child loop not live");
+        require(child.bountyStatus() == AgentBounty.BountyStatus.Settled, "child not settled");
         require(usdc.balanceOf(rootAddress) == 0, "root retained funds");
-        require(usdc.balanceOf(childAddress) == 1_000_000, "child target or bond missing");
+        require(usdc.balanceOf(childAddress) == 0, "child retained funds");
     }
 
     function testCanonicalMainnetPermissionlessPaidLoop() public {
@@ -344,7 +359,8 @@ contract AgentBountyMainnetForkTest {
     }
 
     function _childLoopParams(
-        CanonicalChildBountyVerifier childModule,
+        IAgentBountyVerifier verifier,
+        bytes32 acceptanceCriteriaHash,
         bytes32 benchmarkHash,
         uint256 solverReward,
         uint256 verifierReward
@@ -352,16 +368,16 @@ contract AgentBountyMainnetForkTest {
         return AgentBountyFactory.CreateBountyParams({
             solverReward: solverReward,
             verifierReward: verifierReward,
-            termsHash: keccak256("mainnet-fork-child-loop-terms"),
-            policyHash: keccak256("mainnet-fork-child-loop-policy"),
-            acceptanceCriteriaHash: childModule.ACCEPTANCE_CRITERIA_HASH(),
+            termsHash: TERMS_HASH,
+            policyHash: POLICY_HASH,
+            acceptanceCriteriaHash: acceptanceCriteriaHash,
             benchmarkHash: benchmarkHash,
             evidenceSchemaHash: keccak256("mainnet-fork-child-loop-evidence-schema"),
             fundingDeadline: uint64(block.timestamp + 30 days),
             claimWindowSeconds: 1 days,
             verificationWindowSeconds: 2 hours,
             verificationMode: AgentBounty.VerificationMode.DeterministicModule,
-            verifierModule: address(childModule),
+            verifierModule: address(verifier),
             verifierRewardRecipient: CREATOR,
             threshold: 1
         });

@@ -119,7 +119,7 @@ approval, and four 1 USDC creation calls. Regenerate it and check the current
 on-chain deployer nonce immediately before signing; any nonce change requires a
 new bundle and predicted-address review.
 
-The current self-replenishing seed batch is separate from that historical
+The current post-and-complete seed batch is separate from that historical
 factory bootstrap. It is recorded in
 [`deployments/canonical-child-seeds-base-mainnet.json`](../deployments/canonical-child-seeds-base-mainnet.json)
 and depends on the exact verifier deployment artifact in

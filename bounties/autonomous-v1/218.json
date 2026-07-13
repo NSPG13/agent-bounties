@@ -27,17 +27,17 @@
     "creation_nonce": "0x1716fd36212e841042377fa7adeb2b524124cd51e04b9fee244d48a839ee2fe8"
   },
   "title": "Seed a distribution child bounty that attracts a new participant",
-  "goal": "Create a fully funded canonical child bounty whose useful distribution task attracts a different wallet to claim and submit.",
+  "goal": "Create a fully funded canonical child bounty whose useful distribution task attracts a different wallet to complete it and get paid.",
   "acceptance_criteria": [
     "Post a canonical autonomous-v1 child bounty whose creator is the active solver.",
     "Fully fund the child to at least the parent solver reward; pooled contributors are allowed.",
-    "Bind the child benchmark to the parent bounty ID and round and use this verifier.",
-    "Have a different wallet claim and submit the child before the verification deadline."
+    "Bind the child benchmark to the parent bounty ID and round and use an explicit deterministic verifier.",
+    "Have a different wallet complete the child and receive canonical settlement before the parent verification deadline."
   ],
   "benchmark": {
     "engine": "canonical_child_loop_v1",
     "lane": "distribution",
-    "required_child_status": "submitted",
+    "required_child_status": "settled",
     "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf"
   },
   "evidence_schema": {
@@ -56,9 +56,9 @@
     "verifier_reward_recipient": "0x884834E884d6e93462655A2820140aD03E6747bC",
     "verifiers": [],
     "threshold": 1,
-    "rubric": "The immutable verifier reads canonical parent and child state. It passes only after the active parent solver creates and fully funds a recursively bound child that a different wallet claims and submits before expiry.",
+    "rubric": "The immutable verifier reads canonical parent and child state. It passes only after the active parent solver creates and fully funds a parent-bound child that a different wallet completes and receives canonical settlement for before the parent expires.",
     "self_verification_forbidden": false
   },
   "source_url": "https://github.com/NSPG13/agent-bounties/issues/218",
-  "discovery_source": "maintainer-seeded self-replenishing full-loop bounty"
+  "discovery_source": "maintainer-seeded paid post-and-complete loop bounty"
 }

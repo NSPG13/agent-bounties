@@ -31,9 +31,8 @@ interface ICanonicalBountyView {
 }
 
 /// @notice Verifies a distribution loop using only canonical on-chain state.
-/// A parent solver passes after posting a recursively verifiable child bounty,
-/// preserving the parent solver reward in fully funded work, and attracting a
-/// different wallet that claims and submits that child.
+/// A parent solver passes after posting a parent-bound child bounty, funding it,
+/// and attracting a different wallet that completes it and receives settlement.
 contract CanonicalChildBountyVerifier is IAgentBountyVerifier {
     struct ChildSnapshot {
         bytes32 bountyId;
@@ -50,11 +49,12 @@ contract CanonicalChildBountyVerifier is IAgentBountyVerifier {
     bytes32 public constant PROTOCOL_TAG = keccak256("agent-bounties/canonical-child-v1");
     uint8 public constant DETERMINISTIC_MODULE_MODE = 0;
     uint8 public constant SUBMITTED_STATUS = 3;
+    uint8 public constant SETTLED_STATUS = 4;
 
     string public constant ACCEPTANCE_CRITERIA_JSON = '["Post a canonical autonomous-v1 child bounty whose creator is the active solver.",'
         '"Fully fund the child to at least the parent solver reward; pooled contributors are allowed.",'
-        '"Bind the child benchmark to the parent bounty ID and round and use this verifier.",'
-        '"Have a different wallet claim and submit the child before the verification deadline."]';
+        '"Bind the child benchmark to the parent bounty ID and round and use an explicit deterministic verifier.",'
+        '"Have a different wallet complete the child and receive canonical settlement before the parent verification deadline."]';
     bytes32 public constant ACCEPTANCE_CRITERIA_HASH = keccak256(bytes(ACCEPTANCE_CRITERIA_JSON));
 
     address public immutable canonicalFactory;
@@ -169,21 +169,19 @@ contract CanonicalChildBountyVerifier is IAgentBountyVerifier {
         if (child.creator() != parentSolver) return (false, bytes32(0));
         if (child.factory() != canonicalFactory) return (false, bytes32(0));
         if (child.settlementToken() != settlementToken) return (false, bytes32(0));
-        if (child.acceptanceCriteriaHash() != ACCEPTANCE_CRITERIA_HASH) return (false, bytes32(0));
         if (child.benchmarkHash() != expectedBenchmarkHash(parentBountyId, parentRound)) return (false, bytes32(0));
         if (child.verificationMode() != DETERMINISTIC_MODULE_MODE) return (false, bytes32(0));
-        if (child.verifierModule() != address(this)) return (false, bytes32(0));
-        if (child.threshold() != 1 || child.status() != SUBMITTED_STATUS) return (false, bytes32(0));
+        address childVerifier = child.verifierModule();
+        if (childVerifier == address(0) || childVerifier.code.length == 0) return (false, bytes32(0));
+        if (child.threshold() != 1 || child.status() != SETTLED_STATUS) return (false, bytes32(0));
 
         ChildSnapshot memory snapshot;
         snapshot.target = child.targetAmount();
         if (snapshot.target < parent.solverReward()) return (false, bytes32(0));
         snapshot.funded = child.fundedAmount();
-        if (snapshot.funded != snapshot.target) return (false, bytes32(0));
+        if (snapshot.funded != 0) return (false, bytes32(0));
         snapshot.bond = child.activeClaimBond();
-        if (IERC20BountyToken(settlementToken).balanceOf(childAddress) < snapshot.target + snapshot.bond) {
-            return (false, bytes32(0));
-        }
+        if (snapshot.bond != 0) return (false, bytes32(0));
 
         snapshot.solver = child.solver();
         if (snapshot.solver == address(0) || snapshot.solver == parentSolver) return (false, bytes32(0));
@@ -193,7 +191,6 @@ contract CanonicalChildBountyVerifier is IAgentBountyVerifier {
             return (false, bytes32(0));
         }
         snapshot.verificationExpiresAt = child.verificationExpiresAt();
-        if (snapshot.verificationExpiresAt < block.timestamp) return (false, bytes32(0));
         snapshot.bountyId = child.bountyId();
         snapshot.round = child.round();
 
