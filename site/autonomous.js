@@ -172,6 +172,43 @@
     return address ? requiredAddress(address, "Address") : null;
   }
 
+  function defaultVerification(protocol) {
+    const config = protocol.default_verification;
+    if (!config || config.mode !== "deterministic_module" || config.threshold !== 1) {
+      throw new Error("The active protocol does not declare a safe deterministic default.");
+    }
+    const module = protocol.deterministic_modules && protocol.deterministic_modules[config.module_id];
+    if (!module) throw new Error("The default deterministic verifier is unavailable.");
+    return {
+      ...config,
+      contract: requiredAddress(module.contract || "", "Deterministic verifier module"),
+    };
+  }
+
+  function configurePostVerification(form, protocol, account = null) {
+    if (!form) return;
+    const defaults = defaultVerification(protocol);
+    const mode = form.elements.verificationMode.value;
+    const deterministic = mode === "deterministic_module";
+    const module = form.elements.verifierModule;
+    const recipient = form.elements.verifierRewardRecipient;
+    const verifiers = form.elements.verifiers;
+    const threshold = form.elements.threshold;
+
+    module.value = defaults.contract;
+    module.readOnly = true;
+    module.disabled = !deterministic;
+    recipient.disabled = !deterministic;
+    verifiers.disabled = deterministic;
+    threshold.readOnly = deterministic;
+    if (deterministic) {
+      threshold.value = String(defaults.threshold);
+      if (defaults.verifier_reward_recipient === "creator_wallet" && account && !recipient.value.trim()) {
+        recipient.value = account;
+      }
+    }
+  }
+
   function parseJson(value, label) {
     try {
       return JSON.parse(value);
@@ -225,6 +262,13 @@
     const accounts = await walletRequest("eth_requestAccounts");
     if (!accounts || !accounts[0]) throw new Error("No wallet account was returned.");
     state.account = accounts[0];
+    configurePostVerification(
+      context.querySelector && context.querySelector("#autonomous-post-form")
+        ? context.querySelector("#autonomous-post-form")
+        : (context.id === "autonomous-post-form" ? context : byId("autonomous-post-form")),
+      protocol,
+      state.account,
+    );
     const current = await walletRequest("eth_chainId");
     if (String(current).toLowerCase() !== protocol.chain_id_hex.toLowerCase()) {
       try {
@@ -777,8 +821,10 @@
   }
 
   async function initialize() {
+    const postForm = byId("autonomous-post-form");
     try {
       const protocol = await loadProtocol();
+      configurePostVerification(postForm, protocol, state.account);
       document.querySelectorAll("[data-protocol-status]").forEach((element) => {
         element.textContent = protocol.status === "active" ? "Base mainnet active" : "Deployment pending review";
         element.dataset.tone = protocol.status === "active" ? "success" : "pending";
@@ -791,8 +837,16 @@
     } catch (_error) {
       // Individual actions surface configuration errors.
     }
-    const postForm = byId("autonomous-post-form");
-    if (postForm) postForm.addEventListener("submit", postBounty);
+    if (postForm) {
+      postForm.addEventListener("submit", postBounty);
+      postForm.elements.verificationMode.addEventListener("change", () => {
+        try {
+          configurePostVerification(postForm, state.protocol, state.account);
+        } catch (error) {
+          output(byId("autonomous-post-output"), error.message || String(error), "error");
+        }
+      });
+    }
     const fundForm = byId("autonomous-fund-form");
     if (fundForm) fundForm.addEventListener("submit", fundBounty);
     const submitForm = byId("autonomous-submit-form");

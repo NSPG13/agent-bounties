@@ -3023,15 +3023,57 @@ fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlan
         ),
         _ => return Err("unsupported Base network".to_string()),
     };
-    let required = |key: &str| {
-        env::var(key)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("hosted autonomous protocol is not configured: set {key}"))
-    };
-    AutonomousBountyTxPlanner::new(required(factory_env)?, required(implementation_env)?)
-        .map_err(|error| error.to_string())
+    let (factory, implementation) = autonomous_planner_addresses(
+        descriptor.chain_id,
+        env::var(factory_env).ok(),
+        env::var(implementation_env).ok(),
+    )?;
+    AutonomousBountyTxPlanner::new(factory, implementation).map_err(|error| error.to_string())
+}
+
+const CANONICAL_BASE_MAINNET_BOUNTY_FACTORY: &str = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
+const CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION: &str =
+    "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9";
+
+fn configured_address(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+}
+
+fn autonomous_planner_addresses(
+    chain_id: u64,
+    configured_factory: Option<String>,
+    configured_implementation: Option<String>,
+) -> Result<(String, String), String> {
+    let factory = configured_address(configured_factory);
+    let implementation = configured_address(configured_implementation);
+    if chain_id == 8_453 {
+        if factory.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY)
+        }) || implementation.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION)
+        }) {
+            return Err("configured Base mainnet autonomous deployment does not match the canonical attested deployment".to_string());
+        }
+        return Ok((
+            CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_string(),
+            CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION.to_string(),
+        ));
+    }
+    if chain_id == 84_532 {
+        return Ok((
+            factory.ok_or_else(|| {
+                "hosted autonomous protocol is not configured: set BASE_SEPOLIA_BOUNTY_FACTORY"
+                    .to_string()
+            })?,
+            implementation.ok_or_else(|| {
+                "hosted autonomous protocol is not configured: set BASE_SEPOLIA_BOUNTY_IMPLEMENTATION"
+                    .to_string()
+            })?,
+        ));
+    }
+    Err("unsupported Base network".to_string())
 }
 
 async fn require_indexed_canonical_bounty(
@@ -3792,8 +3834,28 @@ fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyR
 fn autonomous_factory_for_chain(chain_id: u64) -> Option<String> {
     match chain_id {
         84_532 => env_nonempty_value("BASE_SEPOLIA_BOUNTY_FACTORY"),
-        8_453 => env_nonempty_value("BASE_MAINNET_BOUNTY_FACTORY"),
+        8_453 => canonical_mainnet_factory(
+            env_nonempty_value("BASE_MAINNET_BOUNTY_FACTORY"),
+            env_nonempty_value("BASE_MAINNET_BOUNTY_IMPLEMENTATION"),
+        ),
         _ => None,
+    }
+}
+
+fn canonical_mainnet_factory(
+    configured_factory: Option<String>,
+    configured_implementation: Option<String>,
+) -> Option<String> {
+    if configured_factory
+        .as_deref()
+        .is_some_and(|address| !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY))
+        || configured_implementation.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION)
+        })
+    {
+        None
+    } else {
+        Some(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_string())
     }
 }
 
@@ -4517,6 +4579,9 @@ mod tests {
         assert_eq!(body["supplied_usdc_token_matches_native"], true);
         assert_eq!(body["live_money_ready"], false);
         assert!(body["checks"].as_array().unwrap().iter().any(|check| {
+            check["name"] == "Autonomous bounty factory" && check["configured"] == true
+        }));
+        assert!(body["checks"].as_array().unwrap().iter().any(|check| {
             check["name"]
                 .as_str()
                 .unwrap()
@@ -4528,6 +4593,38 @@ mod tests {
                 .unwrap()
                 .contains("payment-method configuration")
         }));
+    }
+
+    #[test]
+    fn mainnet_planner_and_readiness_pin_the_attested_deployment() {
+        let expected = autonomous_planner_addresses(8_453, None, None).unwrap();
+        assert_eq!(expected.0, CANONICAL_BASE_MAINNET_BOUNTY_FACTORY);
+        assert_eq!(expected.1, CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION);
+        assert_eq!(
+            canonical_mainnet_factory(None, None).as_deref(),
+            Some(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY)
+        );
+
+        assert!(autonomous_planner_addresses(
+            8_453,
+            Some("0x1111111111111111111111111111111111111111".to_string()),
+            None,
+        )
+        .is_err());
+        assert_eq!(
+            canonical_mainnet_factory(
+                Some("0x1111111111111111111111111111111111111111".to_string()),
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            canonical_mainnet_factory(
+                None,
+                Some("0x2222222222222222222222222222222222222222".to_string()),
+            ),
+            None
+        );
     }
 
     #[tokio::test]

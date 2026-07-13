@@ -2,6 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const { webcrypto } = require("crypto");
 
 const repoRoot = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(repoRoot, "site", "autonomous.js"), "utf8");
@@ -29,6 +30,8 @@ for (const required of [
   "BountyClaimed",
   "submission_added",
   "BountySettled",
+  "default_verification",
+  "configurePostVerification",
 ]) {
   assert(source.includes(required), `autonomous wallet flow missing ${required}`);
 }
@@ -52,6 +55,17 @@ assert.strictEqual(protocol.chain_id, 8453);
 assert.strictEqual(protocol.status, "active");
 assert.strictEqual(protocol.factory, "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9");
 assert.strictEqual(protocol.implementation, "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9");
+assert.strictEqual(protocol.default_verification.mode, "deterministic_module");
+assert.strictEqual(protocol.default_verification.module_id, "leading_zero_work_v1");
+assert.strictEqual(protocol.default_verification.verifier_reward_recipient, "creator_wallet");
+assert.strictEqual(protocol.default_verification.threshold, 1);
+
+const postHtml = fs.readFileSync(path.join(repoRoot, "site", "post.html"), "utf8");
+assert(
+  postHtml.indexOf('value="deterministic_module"') < postHtml.indexOf('value="signed_quorum"'),
+  "public posting must default to deterministic verification",
+);
+assert(postHtml.includes("Verifier wallet quorum (advanced)"));
 
 for (const page of ["index.html", "post.html", "funding.html", "earn.html", "operator.html"]) {
   const html = fs.readFileSync(path.join(repoRoot, "site", page), "utf8");
@@ -65,4 +79,92 @@ for (const page of ["post.html", "funding.html", "earn.html"]) {
   assert(html.includes("Connect wallet"), `${page} does not use connect-wallet onboarding`);
 }
 
-console.log("autonomous wallet flow contract passed");
+async function testDeterministicPostingDefaults() {
+  const documentListeners = {};
+  const formListeners = {};
+  const controlListeners = {};
+  const elements = {
+    verificationMode: {
+      value: "deterministic_module",
+      addEventListener(name, handler) {
+        controlListeners[name] = handler;
+      },
+    },
+    verifierModule: { value: "", readOnly: false, disabled: false },
+    verifierRewardRecipient: { value: "", disabled: false },
+    verifiers: { value: "", disabled: false },
+    threshold: { value: "8", readOnly: false },
+  };
+  const form = {
+    id: "autonomous-post-form",
+    elements,
+    addEventListener(name, handler) {
+      formListeners[name] = handler;
+    },
+    querySelector() {
+      return null;
+    },
+  };
+  const document = {
+    addEventListener(name, handler) {
+      documentListeners[name] = handler;
+    },
+    getElementById(id) {
+      return id === "autonomous-post-form" ? form : null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  const window = {
+    addEventListener() {},
+    dispatchEvent() {},
+    ethereum: null,
+  };
+  const context = vm.createContext({
+    console,
+    crypto: webcrypto,
+    document,
+    window,
+    Event,
+    URLSearchParams,
+    location: { search: "" },
+    fetch: async () => ({ ok: true, json: async () => protocol }),
+    setTimeout: (callback) => {
+      callback();
+      return 1;
+    },
+  });
+  new vm.Script(source, { filename: "site/autonomous.js" }).runInContext(context);
+  await documentListeners.DOMContentLoaded();
+
+  assert.strictEqual(
+    elements.verifierModule.value,
+    protocol.deterministic_modules.leading_zero_work_v1.contract,
+  );
+  assert.strictEqual(elements.verifierModule.readOnly, true);
+  assert.strictEqual(elements.verifierModule.disabled, false);
+  assert.strictEqual(elements.verifiers.disabled, true);
+  assert.strictEqual(elements.threshold.value, "1");
+  assert.strictEqual(elements.threshold.readOnly, true);
+
+  elements.verificationMode.value = "signed_quorum";
+  controlListeners.change();
+  assert.strictEqual(elements.verifierModule.disabled, true);
+  assert.strictEqual(elements.verifierRewardRecipient.disabled, true);
+  assert.strictEqual(elements.verifiers.disabled, false);
+  assert.strictEqual(elements.threshold.readOnly, false);
+
+  elements.verificationMode.value = "deterministic_module";
+  controlListeners.change();
+  assert.strictEqual(elements.verifierModule.disabled, false);
+  assert.strictEqual(elements.verifiers.disabled, true);
+  assert.strictEqual(elements.threshold.value, "1");
+}
+
+testDeterministicPostingDefaults()
+  .then(() => console.log("autonomous wallet flow contract passed"))
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });

@@ -91,9 +91,11 @@
               <label>
                 Mechanism
                 <select name="verificationMode">
-                  <option value="signed_quorum">Deterministic signed verifier</option>
-                  <option value="ai_judge_quorum">AI judge quorum</option>
-                  <option value="deterministic_module">On-chain verifier module</option>
+                  <option value="deterministic_module">Permissionless on-chain verifier</option>
+                  <optgroup label="Advanced verifier services">
+                    <option value="signed_quorum">Verifier wallet quorum (advanced)</option>
+                    <option value="ai_judge_quorum">AI judge quorum (advanced)</option>
+                  </optgroup>
                 </select>
               </label>
               <label>
@@ -108,7 +110,7 @@
             <div class="form-row">
               <label>
                 On-chain verifier module
-                <input name="verifierModule" placeholder="0x...">
+                <input name="verifierModule" placeholder="Loaded from active protocol" readonly>
               </label>
               <label>
                 Module reward wallet
