@@ -96,6 +96,7 @@ Core MCP tools include:
 ```text
 list_autonomous_bounties
 publish_autonomous_bounty_terms
+plan_autonomous_canonical_child_terms
 plan_autonomous_bounty_creation
 plan_autonomous_bounty_authorized_creation
 plan_autonomous_bounty_contribution

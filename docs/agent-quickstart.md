@@ -147,6 +147,14 @@ a private key or seed phrase in a comment.
 8. Wait for the factory creation events and `FundingAdded`. Claimability begins
    only at `BountyBecameClaimable`.
 
+For a recursive distribution-loop bounty, call
+`plan_autonomous_canonical_child_terms` before publishing the child terms. Use
+its acceptance criteria and benchmark unchanged, set the active parent solver
+as child creator, preserve at least the parent solver reward in the child
+target, and use the returned verifier module. The parent passes only after the
+fully funded child is claimed and submitted by a different wallet; pooled
+contributors may provide any or all of the child funding.
+
 If the hosted planner is unavailable, use the source-controlled planner from a
 repository checkout:
 

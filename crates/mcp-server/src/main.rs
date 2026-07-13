@@ -21,11 +21,13 @@ use chain_base::{
     build_autonomous_submission_evidence_record, build_autonomous_verification_jobs,
     decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
+    plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
     AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
     AutonomousBountyFeedItem, AutonomousBountySubmissionAuthorizationRequest,
     AutonomousBountyTxPlanner, AutonomousSignedAttestation,
-    AutonomousVerificationAttestationRequest, BaseNetworkDescriptor, BaseRpcUrlConfig, EvmLog,
+    AutonomousVerificationAttestationRequest, BaseNetworkDescriptor, BaseRpcUrlConfig,
+    CanonicalChildBountyTermsRequest, EvmLog,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
@@ -557,6 +559,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/get_base_transaction_receipt",
             post(get_base_transaction_receipt),
+        )
+        .route(
+            "/tools/plan_autonomous_canonical_child_terms",
+            post(plan_autonomous_canonical_child_terms),
         )
         .route(
             "/tools/plan_autonomous_bounty_creation",
@@ -1201,6 +1207,20 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet.")
                 }),
                 &["tx_hash"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_canonical_child_terms",
+            "Derive the exact immutable criteria, parent-and-round benchmark commitment, minimum USDC target, recursive verifier configuration, and proof encoding for a canonical child bounty. The parent cannot pass until a different wallet has claimed and submitted the fully funded child.",
+            object_tool_schema(
+                json!({
+                    "parent_bounty_id": string_property("Parent canonical bytes32 bounty ID."),
+                    "parent_round": integer_property("Current positive parent claim round."),
+                    "parent_solver": string_property("Active parent solver; this wallet must create the child."),
+                    "parent_solver_reward": money_property("Parent solver reward; the child target must preserve at least this much USDC.", false),
+                    "verifier_module": string_property("Deployed canonical-child-v1 verifier module used by both parent and child.")
+                }),
+                &["parent_bounty_id", "parent_round", "parent_solver", "parent_solver_reward", "verifier_module"],
             ),
         ),
         tool(
@@ -3165,6 +3185,15 @@ async fn indexed_autonomous_bounty(
         .ok_or_else(|| "canonical bounty has no indexed feed state".to_string())
 }
 
+async fn plan_autonomous_canonical_child_terms(
+    Json(args): Json<CanonicalChildBountyTermsRequest>,
+) -> Json<serde_json::Value> {
+    match build_canonical_child_bounty_terms_plan(&args) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn plan_autonomous_bounty_creation(
     State(state): State<SharedState>,
     Json(args): Json<PlanAutonomousBountyCreationArgs>,
@@ -4374,6 +4403,7 @@ mod tests {
         }
 
         for autonomous in [
+            "plan_autonomous_canonical_child_terms",
             "plan_autonomous_bounty_creation",
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_contribution",

@@ -278,7 +278,7 @@ test("direct safe-chain verifier excludes quorum canaries without service attest
   assert.equal(report.status, "no_claimable_bounties");
   assert.equal(report.observed_block.tag, "safe");
   assert.equal(report.verified.length, 0);
-  assert.equal(report.excluded.length, 4);
+  assert.equal(report.excluded.length, manifest.bounties.length);
   assert.ok(report.excluded.every((item) => item.reason === "quorum_verifier_service_not_attested"));
 });
 
@@ -293,7 +293,7 @@ test("direct safe-chain verifier accepts deterministic module earning inventory"
   });
 
   assert.equal(report.status, "verified");
-  assert.equal(report.verified.length, 4);
+  assert.equal(report.verified.length, manifest.bounties.length);
   assert.equal(report.excluded.length, 0);
   for (const item of report.verified) {
     assert.equal(item.evidence_source, "direct_safe_chain");
@@ -336,9 +336,12 @@ test("direct safe-chain verifier excludes one bounty with altered terms", async 
     )),
   });
 
-  assert.equal(report.status, "verified");
-  assert.equal(report.verified.length, 3);
-  assert.deepEqual(report.excluded.map((item) => item.id), [manifest.bounties[1].bounty_id]);
+  assert.equal(
+    report.status,
+    manifest.bounties.length === 1 ? "no_claimable_bounties" : "verified",
+  );
+  assert.equal(report.verified.length, manifest.bounties.length - 1);
+  assert.deepEqual(report.excluded.map((item) => item.id), [manifest.bounties[0].bounty_id]);
 });
 
 test("unavailable hosted services fall back to direct safe-chain inventory", async () => {
@@ -355,7 +358,7 @@ test("unavailable hosted services fall back to direct safe-chain inventory", asy
   assert.equal(report.protocol_status, "active");
   assert.equal(report.protocol_source, "direct_safe_chain");
   assert.equal(report.direct_chain_status, "verified");
-  assert.equal(report.verified_claimable_bounties.length, 4);
+  assert.equal(report.verified_claimable_bounties.length, manifest.bounties.length);
   assert.equal(report.recommended_action, "claim_verified_bounty");
   assert.ok(report.warnings.includes("autonomous_feed_unavailable"));
   assert.ok(!report.warnings.includes("autonomous_protocol_not_active"));
@@ -377,7 +380,7 @@ test("verified direct factory stays active when no bundled bounty is claimable",
   assert.equal(report.protocol_source, "direct_safe_chain");
   assert.equal(report.direct_chain_status, "no_claimable_bounties");
   assert.equal(report.verified_claimable_bounties.length, 0);
-  assert.equal(report.excluded_claimable_candidates.length, 4);
+  assert.equal(report.excluded_claimable_candidates.length, manifest.bounties.length);
   assert.ok(!report.warnings.includes("autonomous_protocol_not_active"));
   assert.ok(report.warnings.includes("no_verified_funded_bounty_is_claimable"));
 });

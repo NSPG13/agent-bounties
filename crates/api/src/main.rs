@@ -26,6 +26,7 @@ use chain_base::{
     build_autonomous_submission_evidence_record, build_autonomous_verification_jobs,
     decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
+    plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
     AutonomousBountyAuthorizationSignature, AutonomousBountyAuthorizedClaimPlan,
     AutonomousBountyAuthorizedContributionPlan, AutonomousBountyAuthorizedCreationPlan,
@@ -35,8 +36,9 @@ use chain_base::{
     AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountyTxPlanner,
     AutonomousSignedAttestation, AutonomousVerificationAttestationRequest,
     AutonomousVerificationAttestationTypedData, AutonomousVerificationJob, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, ChainBaseError, EthGetTransactionReceiptRequest,
-    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, RpcTransactionReceipt,
+    BaseRpcUrlConfig, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
+    ChainBaseError, EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog,
+    EvmTransactionIntent, RpcTransactionReceipt,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
@@ -118,6 +120,7 @@ use uuid::Uuid;
         public_capability_feed,
         broadcast_base_signed_transaction,
         get_base_transaction_receipt,
+        plan_autonomous_canonical_child_terms,
         plan_autonomous_bounty_creation,
         plan_autonomous_bounty_authorized_creation,
         plan_autonomous_bounty_contribution,
@@ -714,6 +717,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/transaction-receipt",
             post(get_base_transaction_receipt),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/canonical-child-terms-plan",
+            post(plan_autonomous_canonical_child_terms),
         )
         .route(
             "/v1/base/autonomous-bounties/creation-plan",
@@ -2344,6 +2351,15 @@ async fn indexed_autonomous_bounty(
         .into_iter()
         .find(|item| item.bounty_contract.eq_ignore_ascii_case(bounty_contract))
         .ok_or(StatusCode::NOT_FOUND)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/canonical-child-terms-plan", responses((status = 200, description = "Exact recursively verifiable child-bounty terms and commitment plan")))]
+async fn plan_autonomous_canonical_child_terms(
+    Json(request): Json<CanonicalChildBountyTermsRequest>,
+) -> Result<Json<CanonicalChildBountyTermsPlan>, StatusCode> {
+    build_canonical_child_bounty_terms_plan(&request)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/creation-plan", responses((status = 200, description = "Unsigned canonical autonomous bounty creation and initial-funding plan")))]
@@ -5633,6 +5649,10 @@ mod tests {
         assert_eq!(manifest.protocol["version"], "agent-bounties/autonomous-v1");
         assert_eq!(manifest.protocol["operator_settlement_signer"], false);
         assert_eq!(
+            manifest.endpoints.autonomous_canonical_child_terms_plan,
+            "http://127.0.0.1:8080/v1/base/autonomous-bounties/canonical-child-terms-plan"
+        );
+        assert_eq!(
             manifest.endpoints.autonomous_creation_plan,
             "http://127.0.0.1:8080/v1/base/autonomous-bounties/creation-plan"
         );
@@ -5643,11 +5663,36 @@ mod tests {
         assert!(manifest
             .agent_tools
             .iter()
+            .any(|tool| tool == "plan_autonomous_canonical_child_terms"));
+        assert!(manifest
+            .agent_tools
+            .iter()
             .any(|tool| tool == "plan_autonomous_bounty_submission"));
         assert!(manifest
             .agent_tools
             .iter()
             .all(|tool| !tool.starts_with("plan_base_")));
+    }
+
+    #[tokio::test]
+    async fn canonical_child_terms_endpoint_matches_contract_vectors() {
+        let plan = plan_autonomous_canonical_child_terms(Json(CanonicalChildBountyTermsRequest {
+            parent_bounty_id: format!("0x{}", "ab".repeat(32)),
+            parent_round: 1,
+            parent_solver: "0x3333333333333333333333333333333333333333".to_string(),
+            parent_solver_reward: Money::new(900_000, "usdc").unwrap(),
+            verifier_module: "0x4444444444444444444444444444444444444444".to_string(),
+        }))
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(
+            plan.acceptance_criteria_hash,
+            "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553"
+        );
+        assert_eq!(plan.required_child_status, "submitted");
+        assert_eq!(plan.minimum_child_target.amount, 900_000);
     }
 
     #[tokio::test]
@@ -5832,6 +5877,7 @@ mod tests {
         assert!(paths.contains_key("/v1/base/broadcast-signed-transaction"));
         assert!(paths.contains_key("/v1/base/transaction-receipt"));
         for autonomous in [
+            "/v1/base/autonomous-bounties/canonical-child-terms-plan",
             "/v1/base/autonomous-bounties/creation-plan",
             "/v1/base/autonomous-bounties/authorized-creation-plan",
             "/v1/base/autonomous-bounties/contribution-plan",

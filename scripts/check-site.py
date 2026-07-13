@@ -349,6 +349,7 @@ def main() -> int:
     for tool in [
         "list_autonomous_bounties",
         "publish_autonomous_bounty_terms",
+        "plan_autonomous_canonical_child_terms",
         "plan_autonomous_bounty_creation",
         "plan_autonomous_bounty_contribution",
         "plan_autonomous_bounty_claim",

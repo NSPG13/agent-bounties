@@ -50,6 +50,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
   const tools = asArray(discovery.agent_tools, "discovery.agent_tools");
   for (const tool of [
     "list_autonomous_bounties",
+    "plan_autonomous_canonical_child_terms",
     "plan_autonomous_bounty_creation",
     "plan_autonomous_bounty_contribution",
     "plan_autonomous_bounty_claim",
@@ -112,6 +113,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
   for (const method of [
     "publishAutonomousBountyTerms",
     "publishAutonomousSubmissionEvidence",
+    "planAutonomousCanonicalChildTerms",
     "planAutonomousBountyCreation",
     "planAutonomousBountyAuthorizedCreation",
     "planAutonomousBountyContribution",

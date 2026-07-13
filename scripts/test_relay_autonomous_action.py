@@ -185,6 +185,10 @@ class RelayTests(unittest.TestCase):
             relay.validate_common(
                 bounty_state(solver_reward=5_000_000, target_amount=5_100_000)
             )
+        with self.assertRaisesRegex(relay.RelayError, "not allowlisted"):
+            relay.validate_common(
+                bounty_state(verifier_module="0x9999999999999999999999999999999999999999")
+            )
 
     def test_claim_builds_only_bounded_authorization_call(self) -> None:
         client = FakeClient()
