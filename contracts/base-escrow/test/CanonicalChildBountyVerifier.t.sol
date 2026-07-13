@@ -79,9 +79,9 @@ contract CanonicalChildBountyVerifierTest {
     ChildLoopToken private token;
     AgentBountyFactory private factory;
     CanonicalChildBountyVerifier private module;
+    LeadingZeroWorkVerifier private taskVerifier;
     ChildLoopActor private parentSolver;
     ChildLoopActor private childSolver;
-    ChildLoopActor private grandchildSolver;
     ChildLoopActor private poolContributor;
     ChildLoopActor private verifierRecipient;
     uint256 private nonce;
@@ -90,138 +90,151 @@ contract CanonicalChildBountyVerifierTest {
         token = new ChildLoopToken();
         factory = new AgentBountyFactory(address(token));
         module = new CanonicalChildBountyVerifier(address(factory));
+        taskVerifier = new LeadingZeroWorkVerifier(8);
         parentSolver = new ChildLoopActor();
         childSolver = new ChildLoopActor();
-        grandchildSolver = new ChildLoopActor();
         poolContributor = new ChildLoopActor();
         verifierRecipient = new ChildLoopActor();
         token.mint(address(this), 100_000);
         token.approve(address(factory), type(uint256).max);
     }
 
-    function testPooledChildSubmissionSettlesParentAndLeavesLiveWork() public {
+    function testPooledSettledChildPaysBothSolvers() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
-        AgentBounty child = _createPooledSubmittedChild(parent, module, 800, 100, 2 hours);
+        AgentBounty child = _createPooledSubmittedChild(parent, taskVerifier, 800, 100, 2 hours);
+
+        _settleChild(child);
 
         parent.verifyAndSettle(abi.encode(address(child)));
 
         require(parent.bountyStatus() == AgentBounty.BountyStatus.Settled, "parent not settled");
-        require(child.bountyStatus() == AgentBounty.BountyStatus.Submitted, "child work not live");
+        require(child.bountyStatus() == AgentBounty.BountyStatus.Settled, "child not settled");
         require(token.balanceOf(address(parentSolver)) == 1_000, "parent solver payout mismatch");
-        require(token.balanceOf(address(verifierRecipient)) == 100, "verifier payout mismatch");
+        require(token.balanceOf(address(childSolver)) == 900, "child solver payout mismatch");
+        require(token.balanceOf(address(verifierRecipient)) == 200, "verifier payout mismatch");
         require(token.balanceOf(address(parent)) == 0, "parent retained funds");
-        require(token.balanceOf(address(child)) == 1_000, "child funding or bond missing");
+        require(token.balanceOf(address(child)) == 0, "child retained funds");
     }
 
-    function testVerifierRecursesAcrossTwoPaidGenerations() public {
+    function testSubmittedButUnverifiedChildCannotSettleParent() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
-        AgentBounty child = _createPooledSubmittedChild(parent, module, 800, 100, 2 hours);
+        AgentBounty child = _createPooledSubmittedChild(parent, taskVerifier, 800, 100, 2 hours);
+        uint256 verifierBalance = token.balanceOf(address(verifierRecipient));
+
         parent.verifyAndSettle(abi.encode(address(child)));
 
-        bytes32 benchmarkHash = module.expectedBenchmarkHash(child.bountyId(), child.round());
-        AgentBounty grandchild = _createChild(factory, childSolver, module, benchmarkHash, 700, 100, 800, 2 hours);
-        _submit(grandchild, grandchildSolver, keccak256("grandchild-submission"), keccak256("grandchild-evidence"));
-
-        child.verifyAndSettle(abi.encode(address(grandchild)));
-
-        require(child.bountyStatus() == AgentBounty.BountyStatus.Settled, "child not settled");
-        require(grandchild.bountyStatus() == AgentBounty.BountyStatus.Submitted, "grandchild work not live");
-        require(token.balanceOf(address(childSolver)) == 900, "child solver payout mismatch");
-        require(token.balanceOf(address(verifierRecipient)) == 200, "two verifier rewards missing");
+        _assertRejected(parent, verifierBalance + 100);
+        require(child.bountyStatus() == AgentBounty.BountyStatus.Submitted, "child status changed");
+        require(token.balanceOf(address(childSolver)) == 0, "unverified child solver was paid");
     }
 
     function testClaimableChildCannotSettleParent() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
-        AgentBounty child = _createLinkedChild(parent, parentSolver, module, 800, 100, 900, 2 hours);
+        AgentBounty child = _createLinkedChild(parent, parentSolver, taskVerifier, 800, 100, 900, 2 hours);
+        uint256 verifierBalance = token.balanceOf(address(verifierRecipient));
 
         parent.verifyAndSettle(abi.encode(address(child)));
 
-        _assertRejected(parent);
+        _assertRejected(parent, verifierBalance + 100);
         require(child.bountyStatus() == AgentBounty.BountyStatus.Claimable, "child status changed");
     }
 
     function testChildCreatedByDifferentWalletCannotSettleParent() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
         bytes32 benchmarkHash = module.expectedBenchmarkHash(parent.bountyId(), parent.round());
-        AgentBounty child = _createChild(factory, poolContributor, module, benchmarkHash, 800, 100, 900, 2 hours);
+        AgentBounty child = _createChild(factory, poolContributor, taskVerifier, benchmarkHash, 800, 100, 900, 2 hours);
         _submit(child, childSolver, CHILD_SUBMISSION_HASH, CHILD_EVIDENCE_HASH);
+        _settleChild(child);
+        uint256 verifierBalance = token.balanceOf(address(verifierRecipient));
 
         parent.verifyAndSettle(abi.encode(address(child)));
 
-        _assertRejected(parent);
+        _assertRejected(parent, verifierBalance + 100);
     }
 
     function testChildBelowParentSolverRewardCannotSettleParent() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
-        AgentBounty child = _createLinkedChild(parent, parentSolver, module, 798, 101, 899, 2 hours);
+        AgentBounty child = _createLinkedChild(parent, parentSolver, taskVerifier, 798, 101, 899, 2 hours);
         _submit(child, childSolver, CHILD_SUBMISSION_HASH, CHILD_EVIDENCE_HASH);
+        _settleChild(child);
+        uint256 verifierBalance = token.balanceOf(address(verifierRecipient));
 
         parent.verifyAndSettle(abi.encode(address(child)));
 
-        _assertRejected(parent);
+        _assertRejected(parent, verifierBalance + 100);
     }
 
     function testWrongParentRoundBenchmarkCannotSettleParent() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
         bytes32 wrongBenchmark = module.expectedBenchmarkHash(parent.bountyId(), parent.round() + 1);
-        AgentBounty child = _createChild(factory, parentSolver, module, wrongBenchmark, 800, 100, 900, 2 hours);
+        AgentBounty child = _createChild(factory, parentSolver, taskVerifier, wrongBenchmark, 800, 100, 900, 2 hours);
         _submit(child, childSolver, CHILD_SUBMISSION_HASH, CHILD_EVIDENCE_HASH);
+        _settleChild(child);
+        uint256 verifierBalance = token.balanceOf(address(verifierRecipient));
 
         parent.verifyAndSettle(abi.encode(address(child)));
 
-        _assertRejected(parent);
+        _assertRejected(parent, verifierBalance + 100);
     }
 
-    function testWrongChildVerifierCannotSettleParent() public {
+    function testAnotherDeterministicVerifierCanCompleteChild() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
         LeadingZeroWorkVerifier otherModule = new LeadingZeroWorkVerifier(8);
         bytes32 benchmarkHash = module.expectedBenchmarkHash(parent.bountyId(), parent.round());
         AgentBounty child = _createChild(factory, parentSolver, otherModule, benchmarkHash, 800, 100, 900, 2 hours);
         _submit(child, childSolver, CHILD_SUBMISSION_HASH, CHILD_EVIDENCE_HASH);
+        _settleChild(child, otherModule);
 
         parent.verifyAndSettle(abi.encode(address(child)));
 
-        _assertRejected(parent);
+        require(parent.bountyStatus() == AgentBounty.BountyStatus.Settled, "parent not settled");
     }
 
     function testExternalFactoryChildCannotSettleParent() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
         AgentBountyFactory externalFactory = new AgentBountyFactory(address(token));
         bytes32 benchmarkHash = module.expectedBenchmarkHash(parent.bountyId(), parent.round());
-        AgentBounty child = _createChild(externalFactory, parentSolver, module, benchmarkHash, 800, 100, 900, 2 hours);
+        AgentBounty child =
+            _createChild(externalFactory, parentSolver, taskVerifier, benchmarkHash, 800, 100, 900, 2 hours);
         _submit(child, childSolver, CHILD_SUBMISSION_HASH, CHILD_EVIDENCE_HASH);
+        _settleChild(child);
+        uint256 verifierBalance = token.balanceOf(address(verifierRecipient));
 
         parent.verifyAndSettle(abi.encode(address(child)));
 
-        _assertRejected(parent);
+        _assertRejected(parent, verifierBalance + 100);
     }
 
     function testExpiredChildSubmissionCannotSettleParent() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
-        AgentBounty child = _createLinkedChild(parent, parentSolver, module, 800, 100, 900, 60);
+        AgentBounty child = _createLinkedChild(parent, parentSolver, taskVerifier, 800, 100, 900, 60);
         _submit(child, childSolver, CHILD_SUBMISSION_HASH, CHILD_EVIDENCE_HASH);
         vm.warp(block.timestamp + 61);
+        uint256 verifierBalance = token.balanceOf(address(verifierRecipient));
 
         parent.verifyAndSettle(abi.encode(address(child)));
 
-        _assertRejected(parent);
+        _assertRejected(parent, verifierBalance + 100);
     }
 
     function testMisleadingParentCriteriaCannotUseModule() public {
         AgentBounty parent = _createSubmittedParent(keccak256("different-criteria"), 2 hours);
-        AgentBounty child = _createPooledSubmittedChild(parent, module, 800, 100, 2 hours);
+        AgentBounty child = _createPooledSubmittedChild(parent, taskVerifier, 800, 100, 2 hours);
+        _settleChild(child);
+        uint256 verifierBalance = token.balanceOf(address(verifierRecipient));
 
         parent.verifyAndSettle(abi.encode(address(child)));
 
-        _assertRejected(parent);
+        _assertRejected(parent, verifierBalance + 100);
     }
 
     function testMalformedProofCannotSettleParent() public {
         AgentBounty parent = _createSubmittedParent(module.ACCEPTANCE_CRITERIA_HASH(), 2 hours);
+        uint256 verifierBalance = token.balanceOf(address(verifierRecipient));
 
         parent.verifyAndSettle(hex"01");
 
-        _assertRejected(parent);
+        _assertRejected(parent, verifierBalance + 100);
     }
 
     function testBenchmarkEncodingIsStableAndLowercase() public view {
@@ -236,8 +249,13 @@ contract CanonicalChildBountyVerifierTest {
 
     function testAcceptanceCriteriaHashMatchesCanonicalJsonPlanner() public view {
         require(
-            module.ACCEPTANCE_CRITERIA_HASH() == 0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553,
+            module.ACCEPTANCE_CRITERIA_HASH()
+                == 0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de,
             "acceptance hash drift"
+        );
+        require(
+            module.ACCEPTANCE_CRITERIA_HASH() == keccak256(bytes(module.ACCEPTANCE_CRITERIA_JSON())),
+            "acceptance JSON drift"
         );
     }
 
@@ -317,6 +335,32 @@ contract CanonicalChildBountyVerifierTest {
         solver.submit(bounty, submissionHash, evidenceHash);
     }
 
+    function _settleChild(AgentBounty child) private {
+        _settleChild(child, taskVerifier);
+    }
+
+    function _settleChild(AgentBounty child, LeadingZeroWorkVerifier verifier) private {
+        uint256 proofNonce;
+        while (
+            uint256(
+                        verifier.workHash(
+                            child.bountyId(),
+                            child.round(),
+                            child.solver(),
+                            child.submissionHash(),
+                            child.evidenceHash(),
+                            child.policyHash(),
+                            proofNonce
+                        )
+                    ) >> (256 - verifier.difficultyBits()) != 0
+        ) {
+            proofNonce += 1;
+            require(proofNonce < 1_000_000, "proof search cap reached");
+        }
+        child.verifyAndSettle(abi.encode(proofNonce));
+        require(child.bountyStatus() == AgentBounty.BountyStatus.Settled, "child settlement failed");
+    }
+
     function _params(
         IAgentBountyVerifier verifier,
         bytes32 benchmarkHash,
@@ -343,12 +387,12 @@ contract CanonicalChildBountyVerifierTest {
         });
     }
 
-    function _assertRejected(AgentBounty parent) private view {
+    function _assertRejected(AgentBounty parent, uint256 expectedVerifierBalance) private view {
         require(parent.bountyStatus() == AgentBounty.BountyStatus.Claimable, "parent did not reject");
         require(parent.fundedAmount() == parent.targetAmount(), "parent funding changed");
         require(parent.solver() == address(0), "parent solver not reset");
         require(token.balanceOf(address(parent)) == parent.targetAmount(), "parent reserve changed");
-        require(token.balanceOf(address(verifierRecipient)) == 100, "verifier not paid equally");
+        require(token.balanceOf(address(verifierRecipient)) == expectedVerifierBalance, "verifier not paid equally");
     }
 
     function _nextNonce() private returns (bytes32) {

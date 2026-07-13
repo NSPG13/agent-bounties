@@ -17,7 +17,7 @@ FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 PROTOCOL_TAG = "0x437e2138276203e007f58857babacb739e6612192c7d9ce8f41e610236edf382"
 ACCEPTANCE_CRITERIA_HASH = (
-    "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553"
+    "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de"
 )
 SOURCE = "contracts/base-escrow/src/CanonicalChildBountyVerifier.sol:CanonicalChildBountyVerifier"
 

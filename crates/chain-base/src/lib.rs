@@ -134,8 +134,8 @@ pub const CANONICAL_CHILD_PROTOCOL_VERSION: &str = "agent-bounties/canonical-chi
 pub const CANONICAL_CHILD_ACCEPTANCE_CRITERIA: [&str; 4] = [
     "Post a canonical autonomous-v1 child bounty whose creator is the active solver.",
     "Fully fund the child to at least the parent solver reward; pooled contributors are allowed.",
-    "Bind the child benchmark to the parent bounty ID and round and use this verifier.",
-    "Have a different wallet claim and submit the child before the verification deadline.",
+    "Bind the child benchmark to the parent bounty ID and round and use an explicit deterministic verifier.",
+    "Have a different wallet complete the child and receive canonical settlement before the parent verification deadline.",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +144,7 @@ pub struct CanonicalChildBountyTermsRequest {
     pub parent_round: u64,
     pub parent_solver: String,
     pub parent_solver_reward: Money,
+    pub child_acceptance_criteria: Vec<String>,
     pub verifier_module: String,
 }
 
@@ -185,12 +186,21 @@ pub fn plan_canonical_child_bounty_terms(
         ));
     }
     autonomous_money_to_uint256(&request.parent_solver_reward, false)?;
+    if request.child_acceptance_criteria.is_empty()
+        || request.child_acceptance_criteria.len() > 20
+        || request
+            .child_acceptance_criteria
+            .iter()
+            .any(|criterion| criterion.trim().is_empty() || criterion.len() > 500)
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "canonical child acceptance criteria must contain 1-20 nonempty items of at most 500 bytes"
+                .to_string(),
+        ));
+    }
 
     let parent_bounty_id = format!("0x{}", hex::encode(parent_id));
-    let acceptance_criteria = CANONICAL_CHILD_ACCEPTANCE_CRITERIA
-        .iter()
-        .map(|criterion| (*criterion).to_string())
-        .collect::<Vec<_>>();
+    let acceptance_criteria = request.child_acceptance_criteria.clone();
     let benchmark = json!({
         "parent_bounty_id": parent_bounty_id,
         "parent_round_hex": format!("0x{:016x}", request.parent_round),
@@ -213,9 +223,9 @@ pub fn plan_canonical_child_bounty_terms(
         verification_mode: AutonomousVerificationMode::DeterministicModule,
         verifier_module,
         threshold: 1,
-        required_child_status: "submitted".to_string(),
+        required_child_status: "settled".to_string(),
         proof_encoding: "abi.encode(address childBounty)".to_string(),
-        evidence_boundary: "This plan is not completion or payout evidence. The parent passes only when the configured verifier reads a fully funded canonical child with these commitments in Submitted state, created by the parent solver and claimed and submitted by a different wallet. Only the parent's confirmed canonical BountySettled event proves payment.".to_string(),
+        evidence_boundary: "This plan is not completion or payout evidence. The parent passes only after the configured verifier reads a parent-bound canonical child in Settled state, created by the parent solver and completed by a different wallet through its own explicit deterministic verifier. The child's confirmed canonical BountySettled event proves the child solver was paid; the parent's confirmed canonical BountySettled event proves the parent solver was paid.".to_string(),
     })
 }
 
@@ -4576,13 +4586,17 @@ mod tests {
             parent_round: 0x0123456789abcdef,
             parent_solver: "0x3333333333333333333333333333333333333333".to_string(),
             parent_solver_reward: Money::new(900_000, "usdc").unwrap(),
+            child_acceptance_criteria: vec![
+                "Run the deterministic fixture suite.".to_string(),
+                "Publish the passing output hash.".to_string(),
+            ],
             verifier_module: "0x4444444444444444444444444444444444444444".to_string(),
         })
         .unwrap();
 
         assert_eq!(
             plan.acceptance_criteria_hash,
-            "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553"
+            keccak256_canonical_json(&json!(plan.acceptance_criteria)).unwrap()
         );
         assert_eq!(
             serde_json::to_string(&plan.benchmark).unwrap(),
@@ -4593,7 +4607,7 @@ mod tests {
             keccak256_canonical_json(&plan.benchmark).unwrap()
         );
         assert_eq!(plan.minimum_child_target.amount, 900_000);
-        assert_eq!(plan.required_child_status, "submitted");
+        assert_eq!(plan.required_child_status, "settled");
     }
 
     #[test]
@@ -4603,8 +4617,16 @@ mod tests {
             parent_round: 0,
             parent_solver: "0x3333333333333333333333333333333333333333".to_string(),
             parent_solver_reward: Money::new(1, "usdc").unwrap(),
+            child_acceptance_criteria: vec!["Return a nonempty artifact.".to_string()],
             verifier_module: "0x4444444444444444444444444444444444444444".to_string(),
         };
+        assert!(matches!(
+            plan_canonical_child_bounty_terms(&request),
+            Err(ChainBaseError::InvalidVerificationConfiguration(_))
+        ));
+
+        request.verifier_module = "0x4444444444444444444444444444444444444444".to_string();
+        request.child_acceptance_criteria.clear();
         assert!(matches!(
             plan_canonical_child_bounty_terms(&request),
             Err(ChainBaseError::InvalidVerificationConfiguration(_))

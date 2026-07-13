@@ -2353,7 +2353,7 @@ async fn indexed_autonomous_bounty(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-#[utoipa::path(post, path = "/v1/base/autonomous-bounties/canonical-child-terms-plan", responses((status = 200, description = "Exact recursively verifiable child-bounty terms and commitment plan")))]
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/canonical-child-terms-plan", responses((status = 200, description = "Exact settled-child bounty terms and commitment plan")))]
 async fn plan_autonomous_canonical_child_terms(
     Json(request): Json<CanonicalChildBountyTermsRequest>,
 ) -> Result<Json<CanonicalChildBountyTermsPlan>, StatusCode> {
@@ -5681,6 +5681,7 @@ mod tests {
             parent_round: 1,
             parent_solver: "0x3333333333333333333333333333333333333333".to_string(),
             parent_solver_reward: Money::new(900_000, "usdc").unwrap(),
+            child_acceptance_criteria: vec!["Produce the committed digital artifact.".to_string()],
             verifier_module: "0x4444444444444444444444444444444444444444".to_string(),
         }))
         .await
@@ -5689,9 +5690,10 @@ mod tests {
 
         assert_eq!(
             plan.acceptance_criteria_hash,
-            "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553"
+            chain_base::keccak256_canonical_json(&serde_json::json!(plan.acceptance_criteria))
+                .unwrap()
         );
-        assert_eq!(plan.required_child_status, "submitted");
+        assert_eq!(plan.required_child_status, "settled");
         assert_eq!(plan.minimum_child_target.amount, 900_000);
     }
 

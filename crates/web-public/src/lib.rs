@@ -980,7 +980,7 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 6. Anyone can pool USDC with `plan_autonomous_bounty_contribution` until the target is reached.
 7. Funding is real only after FundingAdded; claimability requires BountyBecameClaimable.
 
-For a distribution-loop bounty, call `plan_autonomous_canonical_child_terms` first. It derives the exact recursive criteria and parent-round benchmark. The parent passes only after the child preserves the parent solver reward, is fully funded, and a different wallet has claimed and submitted it.
+For a distribution-loop bounty, call `plan_autonomous_canonical_child_terms` first. It derives the task-specific criteria and parent-round benchmark. The parent passes only after the child preserves the parent solver reward, is fully funded, and a different wallet completes it and receives canonical settlement.
 
 If hosted planning is unavailable, the repository CLI command above verifies exact factory code and immutable getters at one Base `safe` block, validates terms against that block time, and emits the same unsigned wallet batch plus registration payload. It refuses a pending or mismatched deployment and never treats output as funding.
 

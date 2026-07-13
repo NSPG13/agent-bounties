@@ -69,7 +69,7 @@ Relay the emitted `module_settlement_request` through `plan_autonomous_module_se
 6. Anyone can add USDC with `plan_autonomous_bounty_contribution`; contributions are capped at the remaining target.
 7. Funding is real only after confirmed canonical `FundingAdded` evidence. Work becomes claimable only after `BountyBecameClaimable`.
 
-For a distribution-loop bounty, call `plan_autonomous_canonical_child_terms` first. It derives the exact recursive criteria and parent-round benchmark. The parent passes only after the child preserves the parent solver reward, is fully funded, and a different wallet has claimed and submitted it.
+For a post-and-complete meta-bounty, call `plan_autonomous_canonical_child_terms` first. It derives the parent-bound benchmark and validates the child's explicit task criteria. The parent passes only after the child target preserves the parent solver reward and a different wallet completes the child through its deterministic verifier and receives canonical settlement.
 
 If hosted planning is unavailable, the repository CLI command above verifies exact factory code and immutable getters at one Base `safe` block, validates terms against that block time, and emits the same unsigned wallet batch plus registration payload. It refuses a pending or mismatched deployment and never treats output as funding.
 

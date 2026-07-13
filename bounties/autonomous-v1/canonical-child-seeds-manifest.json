@@ -7,10 +7,10 @@
       "issue": 217,
       "document": "bounties/autonomous-v1/217.json",
       "commitments": {
-        "terms_hash": "0x79ad6bca38a1fe89c3ea3e0a2626c4ce676508fb11a536cfb7d88e2c65861341",
-        "policy_hash": "0xda07d7be200da71e91e188435e784eb2cdf59b12d35f58cb38960282a7df65e7",
-        "acceptance_criteria_hash": "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553",
-        "benchmark_hash": "0x75b7dca470b32b6cb289dd7c6d36c380ef090f7ad48400debef7a9ef6606fc48",
+        "terms_hash": "0xaf531eb33072f9515cde6465b39ffb40d9700fca720275fb74052613c10e8d47",
+        "policy_hash": "0x1aeb19c011a96b34630887af5b32942639d8ac6b03849bf8899ca02ea6812632",
+        "acceptance_criteria_hash": "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
+        "benchmark_hash": "0x2c88d4b4a457a9ebef51b6853e39081a52c72d38731896e2099db3c71e75cd75",
         "evidence_schema_hash": "0x63403e220d097ae424c3772578b6708bf6114d2d4b9976a5d8fa22231fb5b300"
       },
       "creation_nonce": "0x6a7751dfcd4709a50bf22722e9c9f4ac5a4ad9086d99b0d65a8a247959c36e3f"
@@ -19,10 +19,10 @@
       "issue": 218,
       "document": "bounties/autonomous-v1/218.json",
       "commitments": {
-        "terms_hash": "0x52a338e7c551168b41a644d91fe60aa1c40979d73624149e86bfaaeaaba5b492",
-        "policy_hash": "0xda07d7be200da71e91e188435e784eb2cdf59b12d35f58cb38960282a7df65e7",
-        "acceptance_criteria_hash": "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553",
-        "benchmark_hash": "0x66433351d0007df8de1ed2233c30ff9c430830dedd2b67952d1e5f928b8ccada",
+        "terms_hash": "0x8fa155afd80580b19b8efea0df928a224bd15d46506b3b492152f62da0d5d7e0",
+        "policy_hash": "0x1aeb19c011a96b34630887af5b32942639d8ac6b03849bf8899ca02ea6812632",
+        "acceptance_criteria_hash": "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
+        "benchmark_hash": "0x04493c6dbb0c25cba6af3ca0995edf54459b98fef06862b2149e1ea35bd2f7d8",
         "evidence_schema_hash": "0x63403e220d097ae424c3772578b6708bf6114d2d4b9976a5d8fa22231fb5b300"
       },
       "creation_nonce": "0x1716fd36212e841042377fa7adeb2b524124cd51e04b9fee244d48a839ee2fe8"
@@ -31,10 +31,10 @@
       "issue": 219,
       "document": "bounties/autonomous-v1/219.json",
       "commitments": {
-        "terms_hash": "0x89a9b532872a1c4ca44605ff31a2a51824e23b039ea001586cedfb6c18f428bb",
-        "policy_hash": "0xda07d7be200da71e91e188435e784eb2cdf59b12d35f58cb38960282a7df65e7",
-        "acceptance_criteria_hash": "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553",
-        "benchmark_hash": "0xe0c6001a5954f2bbcba0ef5ca0280e71e1825c131ba162911040af20865f9e7d",
+        "terms_hash": "0xc5ebd9f75694bca94e8e1fe38e2bdbed92f5ed4457d490cc0100356a22b17000",
+        "policy_hash": "0x1aeb19c011a96b34630887af5b32942639d8ac6b03849bf8899ca02ea6812632",
+        "acceptance_criteria_hash": "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
+        "benchmark_hash": "0x473cf1ae01a77e9dffd8ca3aa0529e26180072432302e248ad121205c1b39c98",
         "evidence_schema_hash": "0x63403e220d097ae424c3772578b6708bf6114d2d4b9976a5d8fa22231fb5b300"
       },
       "creation_nonce": "0x6be855bd6491ad18ccee73d84d38d0e5722255c905fc6e219979531afa306ee4"
@@ -43,10 +43,10 @@
       "issue": 220,
       "document": "bounties/autonomous-v1/220.json",
       "commitments": {
-        "terms_hash": "0xd485b1fc4ced3fdfd75b560dcc2eaab2ce379278ab3eb7441ce3bc9ab0d09e4d",
-        "policy_hash": "0xda07d7be200da71e91e188435e784eb2cdf59b12d35f58cb38960282a7df65e7",
-        "acceptance_criteria_hash": "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553",
-        "benchmark_hash": "0xa9453843816d8bfcdc607ca0cb53e9909d46d8de7a1e904b45f8b025c56fd6f9",
+        "terms_hash": "0xcdb0a1cc57ee12fd764a1eb7c8887a40e2e659c3a4d34dc9487a2abd64f16c48",
+        "policy_hash": "0x1aeb19c011a96b34630887af5b32942639d8ac6b03849bf8899ca02ea6812632",
+        "acceptance_criteria_hash": "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
+        "benchmark_hash": "0xd57a1a8ae7d0bb8d72ea2c37c74db78799935258c98eab2c131aa1a438e400bc",
         "evidence_schema_hash": "0x63403e220d097ae424c3772578b6708bf6114d2d4b9976a5d8fa22231fb5b300"
       },
       "creation_nonce": "0xcb34d62655be09e4885f1b3e86d02d444d994973464079df61700ee22701fc30"
