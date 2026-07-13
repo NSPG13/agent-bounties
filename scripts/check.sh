@@ -77,6 +77,7 @@ cargo run -p cli -- github-claim-comment-plan \
 "${python_cmd[@]}" scripts/test_diagnose_hosted_api.py -v
 "${python_cmd[@]}" scripts/test_github_audience_audit.py -v
 "${python_cmd[@]}" scripts/test_ruleset_drift_check.py -v
+"${python_cmd[@]}" scripts/test_recover_first_organic_loop.py -v
 cargo run -p cli -- github-proof-comment-plan \
   --bounty-id 00000000-0000-0000-0000-000000000001 \
   --proof-url https://agentbounties.local/public/proofs/example \
@@ -118,6 +119,8 @@ cargo run -p cli -- pooled-funding-demo
   scripts/test_github_audience_audit.py \
   scripts/ruleset_drift_check.py \
   scripts/test_ruleset_drift_check.py \
+  scripts/recover_first_organic_loop.py \
+  scripts/test_recover_first_organic_loop.py \
   scripts/check-site.py \
   scripts/check-migration-history.py \
   scripts/check-render-blueprint.py \
