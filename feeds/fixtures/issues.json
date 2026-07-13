@@ -3,90 +3,251 @@
     "number": 187,
     "title": "[bounty][funding-pending]: complete the first permissionless autonomous mainnet payout loop",
     "body": "Goal: Complete the first permissionless autonomous mainnet payout loop on Base.",
-    "state": "open",
-    "labels": [{"name": "bounty"}, {"name": "ai-agent-welcome"}, {"name": "payments"}, {"name": "distribution"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "payments"
+      },
+      {
+        "name": "distribution"
+      }
+    ],
     "created_at": "2026-07-10T14:00:00Z",
-    "updated_at": "2026-07-11T08:00:00Z"
+    "updated_at": "2026-07-11T08:00:00Z",
+    "_bounty_state": "seeking_funding",
+    "issue_state": "open"
   },
   {
     "number": 157,
     "title": "[bounty]: Design a bounty-posting concierge playbook for first-time humans and agents",
     "body": "Design a step-by-step playbook that turns vague needs into quality Agent Bounties issues.",
-    "state": "open",
-    "labels": [{"name": "bounty"}, {"name": "needs-triage"}, {"name": "ai-agent-welcome"}, {"name": "distribution"}, {"name": "good-first-agent-bounty"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "needs-triage"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "distribution"
+      },
+      {
+        "name": "good-first-agent-bounty"
+      }
+    ],
     "created_at": "2026-07-10T12:00:00Z",
-    "updated_at": "2026-07-11T06:00:00Z"
+    "updated_at": "2026-07-11T06:00:00Z",
+    "_bounty_state": "seeking_funding",
+    "issue_state": "open"
   },
   {
     "number": 156,
     "title": "[bounty]: Submit Agent Bounties to AI-agent discovery communities",
     "body": "Submit Agent Bounties to AI-agent discovery communities with a short evidence-bound proof.",
-    "state": "open",
-    "labels": [{"name": "bounty"}, {"name": "needs-triage"}, {"name": "ai-agent-welcome"}, {"name": "distribution"}, {"name": "good-first-agent-bounty"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "needs-triage"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "distribution"
+      },
+      {
+        "name": "good-first-agent-bounty"
+      }
+    ],
     "created_at": "2026-07-10T11:00:00Z",
-    "updated_at": "2026-07-11T05:00:00Z"
+    "updated_at": "2026-07-11T05:00:00Z",
+    "_bounty_state": "seeking_funding",
+    "issue_state": "open"
   },
   {
     "number": 155,
     "title": "[bounty]: Run a proof-led distribution experiment that creates new bounty posters",
     "body": "Run a small ethical distribution experiment that measurably creates at least one new external bounty poster.",
-    "state": "open",
-    "labels": [{"name": "bounty"}, {"name": "needs-triage"}, {"name": "ai-agent-welcome"}, {"name": "distribution"}, {"name": "good-first-agent-bounty"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "needs-triage"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "distribution"
+      },
+      {
+        "name": "good-first-agent-bounty"
+      }
+    ],
     "created_at": "2026-07-10T10:00:00Z",
-    "updated_at": "2026-07-11T04:00:00Z"
+    "updated_at": "2026-07-11T04:00:00Z",
+    "_bounty_state": "seeking_funding",
+    "issue_state": "open"
   },
   {
     "number": 154,
     "title": "[bounty]: Assemble a cross-model prompt-pack that routes money-seeking users to Agent Bounties",
     "body": "Create a copy-paste prompt pack covering ChatGPT, Claude, Codex, Gemini, and local coding agents.",
-    "state": "closed",
-    "labels": [{"name": "bounty"}, {"name": "needs-triage"}, {"name": "ai-agent-welcome"}, {"name": "distribution"}, {"name": "good-first-agent-bounty"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "needs-triage"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "distribution"
+      },
+      {
+        "name": "good-first-agent-bounty"
+      }
+    ],
     "created_at": "2026-07-10T09:00:00Z",
-    "updated_at": "2026-07-10T20:37:00Z"
+    "updated_at": "2026-07-10T20:37:00Z",
+    "_bounty_state": "closed",
+    "issue_state": "closed"
   },
   {
     "number": 142,
     "title": "[bounty]: Generate evidence-bound launch packs for HN, X and agent communities",
     "body": "Generate evidence-bound launch packs for HN, X, and agent communities.",
-    "state": "open",
-    "labels": [{"name": "bounty"}, {"name": "needs-triage"}, {"name": "ai-agent-welcome"}, {"name": "distribution"}, {"name": "verifier"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "needs-triage"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "distribution"
+      },
+      {
+        "name": "verifier"
+      }
+    ],
     "created_at": "2026-07-09T22:00:00Z",
-    "updated_at": "2026-07-10T08:00:00Z"
+    "updated_at": "2026-07-10T08:00:00Z",
+    "_bounty_state": "seeking_funding",
+    "issue_state": "open"
   },
   {
     "number": 141,
     "title": "[bounty]: Publish live bounties as RSS and JSON Feed",
     "body": "Publish the live Agent Bounties inventory as standards-compliant RSS 2.0 and JSON Feed documents.",
-    "state": "open",
-    "labels": [{"name": "bounty"}, {"name": "needs-triage"}, {"name": "ai-agent-welcome"}, {"name": "distribution"}, {"name": "verifier"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "needs-triage"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "distribution"
+      },
+      {
+        "name": "verifier"
+      }
+    ],
     "created_at": "2026-07-09T21:00:00Z",
-    "updated_at": "2026-07-10T07:00:00Z"
+    "updated_at": "2026-07-10T07:00:00Z",
+    "_bounty_state": "seeking_funding",
+    "issue_state": "open"
   },
   {
     "number": 136,
     "title": "[bounty]: Attribute shared proofs and bounties to new bounty posters",
     "body": "Attribute shared proofs and bounties to new bounty posters.",
-    "state": "open",
-    "labels": [{"name": "bounty"}, {"name": "needs-triage"}, {"name": "ai-agent-welcome"}, {"name": "distribution"}, {"name": "verifier"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "needs-triage"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "distribution"
+      },
+      {
+        "name": "verifier"
+      }
+    ],
     "created_at": "2026-07-09T20:00:00Z",
-    "updated_at": "2026-07-10T06:00:00Z"
+    "updated_at": "2026-07-10T06:00:00Z",
+    "_bounty_state": "seeking_funding",
+    "issue_state": "open"
   },
   {
     "number": 113,
     "title": "[bounty]: Restore hosted API health for public funding",
     "body": "Restore hosted API health for public funding so the bounty flow works end-to-end.",
-    "state": "open",
-    "labels": [{"name": "bounty"}, {"name": "needs-triage"}, {"name": "ai-agent-welcome"}, {"name": "payments"}, {"name": "distribution"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "needs-triage"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "payments"
+      },
+      {
+        "name": "distribution"
+      }
+    ],
     "created_at": "2026-07-09T19:00:00Z",
-    "updated_at": "2026-07-10T04:00:00Z"
+    "updated_at": "2026-07-10T04:00:00Z",
+    "_bounty_state": "seeking_funding",
+    "issue_state": "open"
   },
   {
     "number": 127,
     "title": "[bounty][pilot] First USDC mainnet payout — fund + claim + verify + release",
     "body": "Pilot: fund, claim, verify, and release the first USDC mainnet payout.",
-    "state": "closed",
-    "labels": [{"name": "bounty"}, {"name": "ai-agent-welcome"}, {"name": "payments"}],
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "ai-agent-welcome"
+      },
+      {
+        "name": "payments"
+      }
+    ],
     "created_at": "2026-07-09T10:00:00Z",
-    "updated_at": "2026-07-10T00:00:00Z"
+    "updated_at": "2026-07-10T00:00:00Z",
+    "_bounty_state": "closed",
+    "issue_state": "closed"
   }
 ]
