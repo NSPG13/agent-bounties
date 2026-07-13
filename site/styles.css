@@ -557,6 +557,50 @@ textarea {
   background: rgba(255, 255, 255, 0.62);
 }
 
+.recovery-list {
+  display: grid;
+  gap: 1px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.recovery-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
+  align-items: center;
+  gap: 18px;
+  min-height: 76px;
+  padding: 16px;
+  background: var(--panel);
+}
+
+.recovery-row div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.recovery-row code {
+  width: fit-content;
+}
+
+.recovery-row output {
+  color: var(--muted);
+  text-align: right;
+}
+
+.recovery-row[data-state="ready"] output {
+  color: #754800;
+}
+
+.recovery-row[data-state="recovered"] output {
+  color: var(--accent-strong);
+}
+
+.recovery-row[data-state="error"] output {
+  color: #8d1b13;
+}
+
 .prefill-output {
   background: rgba(255, 255, 255, 0.62);
 }
@@ -650,6 +694,14 @@ code {
   .form-row.three,
   .feed-layout {
     grid-template-columns: 1fr;
+  }
+
+  .recovery-row {
+    grid-template-columns: 1fr;
+  }
+
+  .recovery-row output {
+    text-align: left;
   }
 
   .cta {

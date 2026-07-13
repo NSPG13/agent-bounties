@@ -32,6 +32,15 @@ for (const required of [
   "BountySettled",
   "default_verification",
   "configurePostVerification",
+  "legacy-recovery-form",
+  "recoverLegacyBounties",
+  "expectedCloneRuntime",
+  "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "0x786be3f994365fcd417a1b502a83300ea87d9b34",
+  "0x481dfc6f45d43b89dfcc1a84fd6d9b5f73a6a0b9",
+  "0x3195aebfc39a069bf1a4420951d0babc99b2b612",
+  "0xea8a1af0",
+  "0x110f8874",
 ]) {
   assert(source.includes(required), `autonomous wallet flow missing ${required}`);
 }
@@ -67,7 +76,7 @@ assert(
 );
 assert(postHtml.includes("Verifier wallet quorum (advanced)"));
 
-for (const page of ["index.html", "post.html", "funding.html", "earn.html", "operator.html"]) {
+for (const page of ["index.html", "post.html", "funding.html", "earn.html", "operator.html", "recovery.html"]) {
   const html = fs.readFileSync(path.join(repoRoot, "site", page), "utf8");
   assert(html.includes("autonomous.js"), `${page} does not load autonomous.js`);
   assert(!html.includes("main.js"), `${page} loads the retired browser bundle`);

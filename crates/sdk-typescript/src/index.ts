@@ -690,6 +690,25 @@ export class AgentBountiesClient {
     });
   }
 
+  async planAutonomousBountySubmissionAuthorization(
+    submission: {
+      bounty_contract: string;
+      bounty_id: string;
+      round: number;
+      solver: string;
+      submission_hash: string;
+      evidence_hash: string;
+      policy_hash: string;
+      deadline: number;
+    },
+    network?: string | null,
+  ): Promise<unknown> {
+    return this.autonomousPost("submission-authorization-plan", {
+      network: network ?? null,
+      submission,
+    });
+  }
+
   async planAutonomousVerificationAttestation(
     attestation: AutonomousVerificationAttestation,
     network?: string | null,

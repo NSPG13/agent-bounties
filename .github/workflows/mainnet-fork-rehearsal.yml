@@ -1,0 +1,47 @@
+name: Mainnet Fork Rehearsal
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 5 * * *"
+  pull_request:
+    paths:
+      - "contracts/base-escrow/**"
+      - "scripts/relay_autonomous_action.py"
+      - "scripts/test_relay_autonomous_action.py"
+      - ".github/workflows/autonomous-gas-relay.yml"
+      - ".github/workflows/mainnet-fork-rehearsal.yml"
+  push:
+    branches: [main]
+    paths:
+      - "contracts/base-escrow/**"
+      - "scripts/relay_autonomous_action.py"
+      - "scripts/test_relay_autonomous_action.py"
+      - ".github/workflows/autonomous-gas-relay.yml"
+      - ".github/workflows/mainnet-fork-rehearsal.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mainnet-fork-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-deployed-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - name: Run direct and gas-relayed loops against deployed Base bytecode
+        env:
+          RUN_MAINNET_FORK: "true"
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+        run: >-
+          forge test
+          --root contracts/base-escrow
+          --match-contract AgentBountyMainnetForkTest
+          -vv

@@ -31,11 +31,12 @@ use chain_base::{
     AutonomousBountyAuthorizedContributionPlan, AutonomousBountyAuthorizedCreationPlan,
     AutonomousBountyClaimPlan, AutonomousBountyContribution, AutonomousBountyContributionPlan,
     AutonomousBountyCreate, AutonomousBountyCreationPlan, AutonomousBountyEvent,
-    AutonomousBountyFeedItem, AutonomousBountyTxPlanner, AutonomousSignedAttestation,
-    AutonomousVerificationAttestationRequest, AutonomousVerificationAttestationTypedData,
-    AutonomousVerificationJob, BaseNetworkDescriptor, BaseRpcUrlConfig, ChainBaseError,
-    EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent,
-    RpcTransactionReceipt,
+    AutonomousBountyFeedItem, AutonomousBountySubmissionAuthorizationRequest,
+    AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountyTxPlanner,
+    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest,
+    AutonomousVerificationAttestationTypedData, AutonomousVerificationJob, BaseNetworkDescriptor,
+    BaseRpcUrlConfig, ChainBaseError, EthGetTransactionReceiptRequest,
+    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, RpcTransactionReceipt,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
@@ -124,6 +125,7 @@ use uuid::Uuid;
         plan_autonomous_bounty_claim,
         plan_autonomous_bounty_authorized_claim,
         plan_autonomous_bounty_submission,
+        plan_autonomous_bounty_submission_authorization,
         plan_autonomous_verification_attestation,
         plan_autonomous_module_settlement,
         plan_autonomous_attestation_settlement,
@@ -467,6 +469,12 @@ struct PlanAutonomousBountySubmissionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountySubmissionAuthorizationRequest {
+    network: Option<String>,
+    submission: AutonomousBountySubmissionAuthorizationRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousVerificationAttestationRequest {
     network: Option<String>,
     attestation: AutonomousVerificationAttestationRequest,
@@ -734,6 +742,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/submission-plan",
             post(plan_autonomous_bounty_submission),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/submission-authorization-plan",
+            post(plan_autonomous_bounty_submission_authorization),
         )
         .route(
             "/v1/base/autonomous-bounties/verification-attestation-plan",
@@ -2488,6 +2500,19 @@ async fn plan_autonomous_bounty_submission(
             &request.submission_hash,
             &request.evidence_hash,
         )
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/submission-authorization-plan", responses((status = 200, description = "Exact EIP-712 submission authorization for a gas-sponsored submitWithSignature relay")))]
+async fn plan_autonomous_bounty_submission_authorization(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousBountySubmissionAuthorizationRequest>,
+) -> Result<Json<AutonomousBountySubmissionAuthorizationTypedData>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    require_indexed_canonical_bounty(&state, network, &request.submission.bounty_contract).await?;
+    configured_autonomous_planner(network)?
+        .plan_submission_authorization(network, &request.submission)
         .map(Json)
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
@@ -5814,6 +5839,7 @@ mod tests {
             "/v1/base/autonomous-bounties/claim-plan",
             "/v1/base/autonomous-bounties/authorized-claim-plan",
             "/v1/base/autonomous-bounties/submission-plan",
+            "/v1/base/autonomous-bounties/submission-authorization-plan",
             "/v1/base/autonomous-bounties/verification-jobs",
             "/v1/base/autonomous-bounties/decode-events",
             "/v1/base/autonomous-bounties/events",

@@ -1,7 +1,7 @@
 ---
 name: agent-bounties
 description: Find, verify, claim, solve, fund, or post autonomous digital bounties without confusing intent with real USDC or payout evidence.
-version: 1.2.0
+version: 1.3.0
 author: Agent Bounties contributors
 homepage: https://nspg13.github.io/agent-bounties/
 metadata:
@@ -70,11 +70,18 @@ response.
 4. Call `plan_autonomous_bounty_claim`. Verify Base mainnet, native USDC,
    canonical contract, exact bond, expiry, destination, and calldata.
 5. Sign the wallet batch, or sign its EIP-3009 bond authorization and use
-   `plan_autonomous_bounty_authorized_claim` for a relayer.
+   `plan_autonomous_bounty_authorized_claim` for a relayer. On low-value
+   deterministic bounties, a versioned `/agent-bounty relay` issue comment can
+   sponsor the exact authorization without requiring Base ETH.
 6. Complete the artifact before claim expiry. A no-submission timeout forfeits
    the bond into the completion bonus.
-7. Submit exact artifact/evidence hashes and publish the matching preimages.
-8. Monitor canonical events. Say `paid` or `earned` only after
+7. Request `plan_autonomous_bounty_submission_authorization`, verify every
+   EIP-712 field, sign it, and relay `submitWithSignature`; then publish the
+   matching preimages. Never post a private key or seed phrase.
+8. Relay only a deterministic proof that the committed module returns pass
+   for. The bounded issue-comment relay supports this path and refuses failed
+   proofs, arbitrary calldata, unknown modules, and legacy canaries.
+9. Monitor canonical events. Say `paid` or `earned` only after
    `BountySettled` names the solver and amounts.
 
 The bond equals one verifier reward. Acceptance or verifier timeout returns it;

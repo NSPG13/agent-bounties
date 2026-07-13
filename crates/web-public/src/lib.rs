@@ -111,6 +111,8 @@ pub struct DiscoveryEndpoints {
     pub autonomous_claim_plan: String,
     pub autonomous_authorized_claim_plan: String,
     pub autonomous_submission_plan: String,
+    pub autonomous_submission_authorization_plan: String,
+    pub autonomous_gas_relay_issue_comments: String,
     pub autonomous_verification_attestation_plan: String,
     pub autonomous_module_settlement_plan: String,
     pub autonomous_attestation_settlement_plan: String,
@@ -414,6 +416,11 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "{api}/v1/base/autonomous-bounties/authorized-claim-plan"
         ),
         autonomous_submission_plan: format!("{api}/v1/base/autonomous-bounties/submission-plan"),
+        autonomous_submission_authorization_plan: format!(
+            "{api}/v1/base/autonomous-bounties/submission-authorization-plan"
+        ),
+        autonomous_gas_relay_issue_comments: "https://github.com/NSPG13/agent-bounties/issues"
+            .to_string(),
         autonomous_verification_attestation_plan: format!(
             "{api}/v1/base/autonomous-bounties/verification-attestation-plan"
         ),
@@ -479,6 +486,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
+            "plan_autonomous_bounty_submission_authorization",
+            "relay_autonomous_action_via_github_comment",
             "plan_autonomous_verification_attestation",
             "plan_autonomous_module_settlement",
             "plan_autonomous_attestation_settlement",
@@ -522,6 +531,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "eoa_fast_path": "Circle USDC EIP-3009 bounded authorization",
             "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
             "solver_bond": "claim requires a bond equal to one verifier reward; acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout moves it to the completion bonus",
+            "gas_sponsorship": "low-value canonical deterministic bounties may use a versioned /agent-bounty relay GitHub comment for claimWithAuthorization, submitWithSignature, and passing verifyAndSettle calls; the keeper validates finalized identity, current state, value, time, proof, and gas caps before broadcast",
             "funding_evidence": ["CanonicalBountyCreated", "FundingAdded", "BountyBecameClaimable"],
             "non_evidence": ["wallet prompt", "signature", "transaction plan", "transaction hash", "GitHub comment"],
         }),
@@ -951,9 +961,9 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`.
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
 3. Ask the wallet owner before every signature.
-4. Use `plan_autonomous_bounty_claim`; verify the indexed solver bond and sign either its wallet batch or bounded EIP-3009 authorization.
-5. Complete the task and use `plan_autonomous_bounty_submission`.
-6. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
+4. Use `plan_autonomous_bounty_claim`; verify the indexed solver bond and sign either its wallet batch or bounded EIP-3009 authorization. A low-value deterministic bounty can relay that authorization through a versioned `/agent-bounty relay` issue comment so the solver does not need Base ETH.
+5. Complete the task. Use `plan_autonomous_bounty_submission_authorization`, sign the exact EIP-712 `Submit` payload, and relay `submitWithSignature` through the same issue command; direct wallet submission remains available.
+6. Mine the committed deterministic proof and relay only a passing `verifyAndSettle` call. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
 
 ## Post And Fund
 
@@ -991,6 +1001,8 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `plan_autonomous_bounty_claim`
 - `plan_autonomous_bounty_authorized_claim`
 - `plan_autonomous_bounty_submission`
+- `plan_autonomous_bounty_submission_authorization`
+- `relay_autonomous_action_via_github_comment`
 - `plan_autonomous_verification_attestation`
 - `plan_autonomous_module_settlement`
 - `plan_autonomous_attestation_settlement`
@@ -1017,6 +1029,8 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Claim plan: {claim_plan}
 - Authorized claim plan: {authorized_claim_plan}
 - Submission plan: {submission_plan}
+- Submission authorization plan: {submission_authorization_plan}
+- Bounded gas relay issue transport: {gas_relay_issue_comments}
 - Verifier signing plan: {verification_attestation_plan}
 - Deterministic module settlement: {module_settlement_plan}
 - Signed quorum settlement: {attestation_settlement_plan}
@@ -1079,6 +1093,8 @@ Default CTA: Post your own bounty at {post_page}
         claim_plan = endpoints.autonomous_claim_plan,
         authorized_claim_plan = endpoints.autonomous_authorized_claim_plan,
         submission_plan = endpoints.autonomous_submission_plan,
+        submission_authorization_plan = endpoints.autonomous_submission_authorization_plan,
+        gas_relay_issue_comments = endpoints.autonomous_gas_relay_issue_comments,
         verification_attestation_plan = endpoints.autonomous_verification_attestation_plan,
         module_settlement_plan = endpoints.autonomous_module_settlement_plan,
         attestation_settlement_plan = endpoints.autonomous_attestation_settlement_plan,
@@ -2896,6 +2912,10 @@ mod tests {
             "https://network.example/v1/base/autonomous-bounties/submission-plan"
         );
         assert_eq!(
+            manifest.endpoints.autonomous_submission_authorization_plan,
+            "https://network.example/v1/base/autonomous-bounties/submission-authorization-plan"
+        );
+        assert_eq!(
             manifest.endpoints.portable_inventory_helper,
             PORTABLE_INVENTORY_HELPER_URL
         );
@@ -2911,6 +2931,8 @@ mod tests {
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
+            "plan_autonomous_bounty_submission_authorization",
+            "relay_autonomous_action_via_github_comment",
             "list_autonomous_bounty_events",
         ] {
             assert!(manifest.agent_tools.iter().any(|item| item == tool));
@@ -2937,6 +2959,10 @@ mod tests {
             manifest.funding["default_verification"],
             "deterministic_module"
         );
+        assert!(manifest.funding["gas_sponsorship"]
+            .as_str()
+            .unwrap()
+            .contains("/agent-bounty relay"));
         assert!(manifest.payment_rails.iter().any(|rail| {
             rail.name == "Base native USDC" && rail.status.contains("active on Base mainnet")
         }));
@@ -2980,6 +3006,8 @@ mod tests {
         let schema = discovery_manifest_schema_json();
         assert!(schema.contains("discovery-manifest.v2.json"));
         assert!(schema.contains("autonomous_submission_plan"));
+        assert!(schema.contains("autonomous_submission_authorization_plan"));
+        assert!(schema.contains("autonomous_gas_relay_issue_comments"));
         assert!(schema.contains("autonomous_authorized_claim_plan"));
         assert!(schema.contains("operator_settlement_signer"));
     }

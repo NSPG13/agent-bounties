@@ -614,6 +614,15 @@ class AgentBountiesClient:
             },
         )
 
+    def plan_autonomous_bounty_submission_authorization(
+        self, submission: dict, network: str | None = None
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/submission-authorization-plan",
+            json={"network": network, "submission": submission},
+        )
+
     def plan_autonomous_verification_attestation(
         self, attestation: dict, network: str | None = None
     ):

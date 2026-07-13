@@ -23,7 +23,8 @@ use chain_base::{
     eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
     AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
-    AutonomousBountyFeedItem, AutonomousBountyTxPlanner, AutonomousSignedAttestation,
+    AutonomousBountyFeedItem, AutonomousBountySubmissionAuthorizationRequest,
+    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
     AutonomousVerificationAttestationRequest, BaseNetworkDescriptor, BaseRpcUrlConfig, EvmLog,
 };
 use chrono::Utc;
@@ -321,6 +322,12 @@ struct PlanAutonomousBountySubmissionArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousBountySubmissionAuthorizationArgs {
+    network: Option<String>,
+    submission: AutonomousBountySubmissionAuthorizationRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousVerificationAttestationArgs {
     network: Option<String>,
     attestation: AutonomousVerificationAttestationRequest,
@@ -578,6 +585,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_autonomous_bounty_submission",
             post(plan_autonomous_bounty_submission),
+        )
+        .route(
+            "/tools/plan_autonomous_bounty_submission_authorization",
+            post(plan_autonomous_bounty_submission_authorization),
         )
         .route(
             "/tools/plan_autonomous_verification_attestation",
@@ -1331,6 +1342,31 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "evidence_hash": string_property("0x-prefixed bytes32 evidence-package commitment.")
                 }),
                 &["bounty_contract", "solver", "submission_hash", "evidence_hash"],
+            ),
+        ),
+        tool(
+            "plan_autonomous_bounty_submission_authorization",
+            "Build the exact EIP-712 submission authorization an active solver signs for a gas-sponsored submitWithSignature relay.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "submission": {
+                        "type": "object",
+                        "properties": {
+                            "bounty_contract": string_property("Claimed canonical bounty contract."),
+                            "bounty_id": string_property("Current canonical bytes32 bounty id."),
+                            "round": integer_property("Current positive claim round."),
+                            "solver": string_property("Wallet holding the current claim."),
+                            "submission_hash": string_property("Nonzero bytes32 artifact commitment."),
+                            "evidence_hash": string_property("Nonzero bytes32 evidence commitment."),
+                            "policy_hash": string_property("Immutable bytes32 verification-policy commitment."),
+                            "deadline": integer_property("Unix expiry no later than the active claim deadline.")
+                        },
+                        "required": ["bounty_contract", "bounty_id", "round", "solver", "submission_hash", "evidence_hash", "policy_hash", "deadline"],
+                        "additionalProperties": false
+                    }
+                }),
+                &["submission"],
             ),
         ),
         tool(
@@ -3341,6 +3377,26 @@ async fn plan_autonomous_bounty_submission(
     }
 }
 
+async fn plan_autonomous_bounty_submission_authorization(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousBountySubmissionAuthorizationArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    if let Err(error) =
+        require_indexed_canonical_bounty(&state, network, &args.submission.bounty_contract).await
+    {
+        return mcp_error(error);
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_submission_authorization(network, &args.submission)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn plan_autonomous_verification_attestation(
     State(state): State<SharedState>,
     Json(args): Json<PlanAutonomousVerificationAttestationArgs>,
@@ -4325,6 +4381,7 @@ mod tests {
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
+            "plan_autonomous_bounty_submission_authorization",
             "list_autonomous_verification_jobs",
             "decode_autonomous_bounty_events",
             "list_autonomous_bounty_events",

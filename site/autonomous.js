@@ -10,6 +10,32 @@
 
   const announcedProviders = [];
 
+  const LEGACY_RECOVERY = Object.freeze({
+    creator: "0x884834e884d6e93462655a2820140ad03e6747bc",
+    factory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+    implementation: "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
+    usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    contracts: [
+      "0x786be3f994365fcd417a1b502a83300ea87d9b34",
+      "0x481dfc6f45d43b89dfcc1a84fd6d9b5f73a6a0b9",
+      "0x3195aebfc39a069bf1a4420951d0babc99b2b612",
+    ],
+    amount: 1_000_000n,
+    selectors: Object.freeze({
+      creator: "0x02d05d3f",
+      factory: "0xc45a0155",
+      settlementToken: "0x7b9e618d",
+      status: "0x200d2ed2",
+      fundedAmount: "0x820a5f50",
+      solver: "0x49a7a26d",
+      activeClaimBond: "0x123d3d01",
+      contributions: "0x42e94c90",
+      balanceOf: "0x70a08231",
+      cancel: "0xea8a1af0",
+      withdrawRefund: "0x110f8874",
+    }),
+  });
+
   const byId = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -355,6 +381,158 @@
         hashes.push(hash);
       }
       return { kind: "transactions", hashes };
+    }
+  }
+
+  function addressWord(address) {
+    return address.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+  }
+
+  async function recoveryCall(to, data) {
+    const value = await walletRequest("eth_call", [{ to, data }, "latest"]);
+    if (!/^0x[0-9a-fA-F]{64}$/.test(value || "")) {
+      throw new Error(`Invalid Base response from ${to}.`);
+    }
+    return value.toLowerCase();
+  }
+
+  function recoveryAddress(word) {
+    return `0x${word.slice(-40)}`;
+  }
+
+  function recoveryUint(word) {
+    return BigInt(word);
+  }
+
+  function expectedCloneRuntime() {
+    return `0x363d3d373d3d3d363d73${LEGACY_RECOVERY.implementation.slice(2)}5af43d82803e903d91602b57fd5bf3`;
+  }
+
+  async function readLegacyRecoveryState(contract, account) {
+    const selectors = LEGACY_RECOVERY.selectors;
+    const [code, creator, factory, token, status, funded, solver, bond, contribution, balance] = await Promise.all([
+      walletRequest("eth_getCode", [contract, "latest"]),
+      recoveryCall(contract, selectors.creator),
+      recoveryCall(contract, selectors.factory),
+      recoveryCall(contract, selectors.settlementToken),
+      recoveryCall(contract, selectors.status),
+      recoveryCall(contract, selectors.fundedAmount),
+      recoveryCall(contract, selectors.solver),
+      recoveryCall(contract, selectors.activeClaimBond),
+      recoveryCall(contract, `${selectors.contributions}${addressWord(account)}`),
+      recoveryCall(LEGACY_RECOVERY.usdc, `${selectors.balanceOf}${addressWord(contract)}`),
+    ]);
+    const value = {
+      contract,
+      code: String(code).toLowerCase(),
+      creator: recoveryAddress(creator),
+      factory: recoveryAddress(factory),
+      token: recoveryAddress(token),
+      status: recoveryUint(status),
+      funded: recoveryUint(funded),
+      solver: recoveryAddress(solver),
+      bond: recoveryUint(bond),
+      contribution: recoveryUint(contribution),
+      balance: recoveryUint(balance),
+    };
+    if (value.code !== expectedCloneRuntime()) throw new Error(`${contract} clone bytecode does not match.`);
+    if (value.creator !== LEGACY_RECOVERY.creator || value.creator !== account.toLowerCase()) {
+      throw new Error(`${contract} is not owned by the connected creator wallet.`);
+    }
+    if (value.factory !== LEGACY_RECOVERY.factory) throw new Error(`${contract} factory does not match.`);
+    if (value.token !== LEGACY_RECOVERY.usdc) throw new Error(`${contract} token is not native Base USDC.`);
+    if (value.solver !== "0x0000000000000000000000000000000000000000" || value.bond !== 0n) {
+      throw new Error(`${contract} has an active solver or bond; recovery refused.`);
+    }
+    const fullyFunded = value.funded === LEGACY_RECOVERY.amount
+      && value.contribution === LEGACY_RECOVERY.amount
+      && value.balance === LEGACY_RECOVERY.amount;
+    const refundPending = value.status === 5n && fullyFunded;
+    const ready = value.status === 1n && fullyFunded;
+    const recovered = value.status === 5n
+      && value.funded === 0n
+      && value.contribution === 0n
+      && value.balance === 0n;
+    if (!ready && !refundPending && !recovered) {
+      throw new Error(`${contract} is not in a pinned recoverable state.`);
+    }
+    return { ...value, ready, refundPending, recovered };
+  }
+
+  function showLegacyRecoveryState(states) {
+    for (const stateValue of states) {
+      const row = document.querySelector(`[data-recovery-contract="${stateValue.contract}"]`);
+      if (!row) continue;
+      const target = row.querySelector("output");
+      if (stateValue.recovered) {
+        row.dataset.state = "recovered";
+        target.textContent = "Recovered - 0 USDC locked";
+      } else if (stateValue.refundPending) {
+        row.dataset.state = "ready";
+        target.textContent = "Cancelled - refund ready";
+      } else {
+        row.dataset.state = "ready";
+        target.textContent = "1 USDC - ready to recover";
+      }
+    }
+  }
+
+  async function inspectLegacyRecovery(account) {
+    const states = [];
+    for (const contract of LEGACY_RECOVERY.contracts) {
+      states.push(await readLegacyRecoveryState(contract, account));
+    }
+    showLegacyRecoveryState(states);
+    return states;
+  }
+
+  async function waitLegacyRecovery(account, timeoutMs = 180_000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const states = await inspectLegacyRecovery(account);
+      if (states.every((item) => item.recovered)) return states;
+      await sleep(2_000);
+    }
+    throw new Error("Recovery transactions were submitted but final zero-balance state is still pending. Retry to inspect the remaining calls.");
+  }
+
+  async function recoverLegacyBounties(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const result = byId("legacy-recovery-output");
+    try {
+      const protocol = requireActiveProtocol(await loadProtocol());
+      const account = await connectWallet(form);
+      if (account.toLowerCase() !== LEGACY_RECOVERY.creator) {
+        throw new Error(`Connect creator wallet ${LEGACY_RECOVERY.creator}.`);
+      }
+      const states = await inspectLegacyRecovery(account);
+      if (states.every((item) => item.recovered)) {
+        output(result, "All three contracts are already cancelled, refunded, and at zero USDC.", "success");
+        return;
+      }
+      const calls = [];
+      for (const item of states) {
+        if (item.ready) calls.push({ to: item.contract, data: LEGACY_RECOVERY.selectors.cancel });
+        if (item.ready || item.refundPending) {
+          calls.push({ to: item.contract, data: LEGACY_RECOVERY.selectors.withdrawRefund });
+        }
+      }
+      if (!calls.length) throw new Error("No recovery calls remain.");
+      output(result, `Requesting ${calls.length} pinned recovery calls from the connected wallet.`, "pending");
+      const sent = await sendWalletCalls(calls, account, protocol);
+      output(result, sent.kind === "bundle" ? "Recovery batch submitted. Verifying Base state..." : "Recovery transactions confirmed. Verifying Base state...", "pending");
+      await waitLegacyRecovery(account);
+      const references = sent.kind === "transactions"
+        ? sent.hashes.map((hash) => `${protocol.explorer_url}/tx/${hash}`)
+        : [`Wallet batch: ${typeof sent.id === "string" ? sent.id : JSON.stringify(sent.id)}`];
+      output(result, [
+        "Recovered exactly 3.000000 USDC.",
+        "All three contracts are cancelled with zero funded amount, zero creator contribution, and zero USDC balance.",
+        ...references,
+      ], "success");
+    } catch (error) {
+      output(result, error.message || String(error), "error");
     }
   }
 
@@ -851,6 +1029,8 @@
     if (fundForm) fundForm.addEventListener("submit", fundBounty);
     const submitForm = byId("autonomous-submit-form");
     if (submitForm) submitForm.addEventListener("submit", submitBounty);
+    const legacyRecoveryForm = byId("legacy-recovery-form");
+    if (legacyRecoveryForm) legacyRecoveryForm.addEventListener("submit", recoverLegacyBounties);
     document.querySelectorAll("[data-connect-wallet]").forEach((button) => {
       button.addEventListener("click", async () => {
         const target = byId(button.dataset.output);

@@ -14,6 +14,7 @@ REQUIRED_FILES = [
     "post.html",
     "funding.html",
     "operator.html",
+    "recovery.html",
     "terms.html",
     "privacy.html",
     "refunds.html",
@@ -125,6 +126,7 @@ def main() -> int:
         fail("retired browser settlement bundle site/main.js must not exist")
 
     pages = {name: (site_dir / name).read_text(encoding="utf-8") for name in CORE_PAGES}
+    recovery_page = (site_dir / "recovery.html").read_text(encoding="utf-8")
     javascript = (site_dir / "autonomous.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
@@ -151,6 +153,40 @@ def main() -> int:
             "eth_requestAccounts",
         ],
     )
+
+    require_phrases(
+        "recovery.html",
+        recovery_page,
+        [
+            'id="legacy-recovery-form"',
+            "Cancel and recover 3 USDC",
+            "0x786be3f994365fcd417a1b502a83300ea87d9b34",
+            "0x481dfc6f45d43b89dfcc1a84fd6d9b5f73a6a0b9",
+            "0x3195aebfc39a069bf1a4420951d0babc99b2b612",
+            "Only the exact creator wallet and six pinned zero-value calls are accepted.",
+            "autonomous.js",
+        ],
+    )
+    require_phrases(
+        "autonomous.js legacy recovery",
+        javascript,
+        [
+            'creator: "0x884834e884d6e93462655a2820140ad03e6747bc"',
+            'factory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"',
+            'implementation: "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9"',
+            'usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"',
+            'cancel: "0xea8a1af0"',
+            'withdrawRefund: "0x110f8874"',
+            "value.code !== expectedCloneRuntime()",
+            "value.solver !== \"0x0000000000000000000000000000000000000000\" || value.bond !== 0n",
+            "value.funded === 0n",
+            "value.contribution === 0n",
+            "value.balance === 0n",
+            'value: "0x0"',
+        ],
+    )
+    if "import wallet" in recovery_page.lower() or "private key" in recovery_page.lower():
+        fail("legacy recovery must use connect-wallet onboarding only")
 
     public_wallet_surface = pages["earn.html"] + pages["post.html"] + pages["funding.html"]
     if "Connect wallet" not in public_wallet_surface:
@@ -269,6 +305,8 @@ def main() -> int:
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_authorized_contribution",
             "plan_autonomous_bounty_authorized_claim",
+            "plan_autonomous_bounty_submission_authorization",
+            "/agent-bounty relay",
             "list_autonomous_verification_jobs",
             "solver bond",
             "ai_judge_quorum",
@@ -317,6 +355,8 @@ def main() -> int:
         "plan_autonomous_bounty_authorized_claim",
         "list_autonomous_verification_jobs",
         "plan_autonomous_bounty_submission",
+        "plan_autonomous_bounty_submission_authorization",
+        "relay_autonomous_action_via_github_comment",
         "list_autonomous_bounty_events",
     ]:
         if tool not in tools:
@@ -338,6 +378,8 @@ def main() -> int:
         fail("discovery funding policy has the wrong verification default")
     if funding.get("default_verifier_module") != expected_module:
         fail("discovery funding policy has the wrong default verifier module")
+    if "/agent-bounty relay" not in funding.get("gas_sponsorship", ""):
+        fail("discovery funding policy does not advertise bounded gas sponsorship")
     base_rail = next(
         (
             rail
