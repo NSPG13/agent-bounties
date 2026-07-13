@@ -140,6 +140,34 @@ export interface AutonomousLifecycleRequest {
   caller?: string | null;
 }
 
+export type BoundedAgentWalletAction =
+  | { kind: "create"; create: AutonomousBountyCreate }
+  | {
+      kind: "fund";
+      bounty_contract: string;
+      amount: { amount: number; currency: "usdc" };
+    }
+  | {
+      kind: "claim";
+      bounty_contract: string;
+      expected_claim_bond: { amount: number; currency: "usdc" };
+    }
+  | {
+      kind: "submit";
+      bounty_contract: string;
+      submission_hash: string;
+      evidence_hash: string;
+    };
+
+export interface BoundedAgentWalletActionRequest {
+  wallet_contract: string;
+  delegate: string;
+  policy_version: number;
+  delegate_nonce: number;
+  deadline: number;
+  action: BoundedAgentWalletAction;
+}
+
 export type StripeConnectSnapshot = Record<string, unknown>;
 export type StripeWebhookEvent = Record<string, unknown>;
 export type DiscoveryManifest = Record<string, unknown>;
@@ -688,6 +716,33 @@ export class AgentBountiesClient {
       ...request,
       network: request.network ?? null,
       relayer: request.relayer ?? null,
+    });
+  }
+
+  async planBoundedAgentWalletAction(
+    walletAction: BoundedAgentWalletActionRequest,
+    network = "base-sepolia",
+  ): Promise<unknown> {
+    return this.request("/v1/base/bounded-agent-wallet/action-plan", {
+      method: "POST",
+      body: JSON.stringify({ network, wallet_action: walletAction }),
+    });
+  }
+
+  async planBoundedAgentWalletAuthorizedAction(request: {
+    wallet_action: BoundedAgentWalletActionRequest;
+    signature: AutonomousAuthorizationSignature;
+    relayer?: string | null;
+    network?: string | null;
+  }): Promise<unknown> {
+    return this.request("/v1/base/bounded-agent-wallet/authorized-action-plan", {
+      method: "POST",
+      body: JSON.stringify({
+        network: request.network ?? "base-sepolia",
+        wallet_action: request.wallet_action,
+        signature: request.signature,
+        relayer: request.relayer ?? null,
+      }),
     });
   }
 

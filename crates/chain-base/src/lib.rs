@@ -368,6 +368,87 @@ pub struct AutonomousBountyAuthorizedClaimPlan {
     pub evidence_boundary: String,
 }
 
+pub const BOUNDED_AGENT_WALLET_PROTOCOL_VERSION: &str = "agent-bounties/bounded-wallet-v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BoundedAgentWalletAction {
+    Create {
+        create: Box<AutonomousBountyCreate>,
+    },
+    Fund {
+        bounty_contract: String,
+        amount: Money,
+    },
+    Claim {
+        bounty_contract: String,
+        expected_claim_bond: Money,
+    },
+    Submit {
+        bounty_contract: String,
+        submission_hash: String,
+        evidence_hash: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoundedAgentWalletActionRequest {
+    pub wallet_contract: String,
+    pub delegate: String,
+    pub policy_version: u64,
+    pub delegate_nonce: u128,
+    pub deadline: u64,
+    pub action: BoundedAgentWalletAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoundedAgentWalletAuthorizationMessage {
+    pub wallet: String,
+    pub action: String,
+    pub payload_hash: String,
+    pub nonce: String,
+    pub deadline: String,
+    pub policy_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoundedAgentWalletAuthorizationTypedData {
+    pub types: BTreeMap<String, Vec<Eip712TypeField>>,
+    pub domain: Eip712DomainData,
+    pub primary_type: String,
+    pub message: BoundedAgentWalletAuthorizationMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoundedAgentWalletActionPlan {
+    pub protocol_version: String,
+    pub network: BaseNetworkDescriptor,
+    pub expected_factory_contract: String,
+    pub wallet_contract: String,
+    pub delegate: String,
+    pub action: String,
+    pub action_code: u8,
+    pub spend_upper_bound: String,
+    pub payload: String,
+    pub payload_hash: String,
+    pub direct_transaction: EvmTransactionIntent,
+    pub relay_authorization: BoundedAgentWalletAuthorizationTypedData,
+    pub predicted_bounty_contract: Option<String>,
+    pub evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoundedAgentWalletAuthorizedActionPlan {
+    pub protocol_version: String,
+    pub network: BaseNetworkDescriptor,
+    pub wallet_contract: String,
+    pub action: String,
+    pub relay_transaction: EvmTransactionIntent,
+    pub evidence_boundary: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutonomousBountySubmissionAuthorizationRequest {
     pub bounty_contract: String,
@@ -463,6 +544,200 @@ impl AutonomousBountyTxPlanner {
         Ok(Self {
             factory_contract: normalize_address(factory_contract.into())?,
             implementation_contract: normalize_address(implementation_contract.into())?,
+        })
+    }
+
+    pub fn plan_bounded_wallet_action(
+        &self,
+        network: &str,
+        request: &BoundedAgentWalletActionRequest,
+    ) -> Result<BoundedAgentWalletActionPlan, ChainBaseError> {
+        if request.policy_version == 0 || request.deadline == 0 {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "bounded-wallet policy version and action deadline must be positive".to_string(),
+            ));
+        }
+        let network = base_network_descriptor(network)?;
+        let wallet = normalize_address(&request.wallet_contract)?;
+        let delegate = normalize_address(&request.delegate)?;
+        let (
+            action,
+            action_code,
+            spend_upper_bound,
+            payload,
+            direct_data,
+            predicted_bounty_contract,
+        ) = match &request.action {
+            BoundedAgentWalletAction::Create { create } => {
+                if normalize_address(&create.creator)? != wallet {
+                    return Err(ChainBaseError::InvalidVerificationConfiguration(
+                        "bounded-wallet bounty creator must equal the wallet contract".to_string(),
+                    ));
+                }
+                let params = autonomous_create_param_words(create)?;
+                let verifiers = normalized_verifiers(create)?;
+                validate_autonomous_creation(create, &verifiers)?;
+                let creation_nonce = parse_bytes32(&create.creation_nonce)?;
+                let initial_funding = autonomous_money_to_uint256(&create.initial_funding, true)?;
+                let arguments = encode_bounty_create_arguments(
+                    &params,
+                    &verifiers,
+                    initial_funding,
+                    creation_nonce,
+                )?;
+                let bounty_id = autonomous_bounty_id(
+                    network.chain_id,
+                    &self.factory_contract,
+                    &wallet,
+                    creation_nonce,
+                    &params,
+                    &verifiers,
+                )?;
+                let predicted = predict_minimal_proxy_address(
+                    &self.factory_contract,
+                    &self.implementation_contract,
+                    bounty_id,
+                )?;
+                (
+                        "create".to_string(),
+                        0,
+                        initial_funding,
+                        arguments.clone(),
+                        encode_selector_and_arguments(
+                            "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+                            &arguments,
+                        ),
+                        Some(predicted),
+                    )
+            }
+            BoundedAgentWalletAction::Fund {
+                bounty_contract,
+                amount,
+            } => {
+                let amount = autonomous_money_to_uint256(amount, false)?;
+                let payload = encode_static_arguments(vec![
+                    encode_address(bounty_contract)?,
+                    encode_uint256(amount)?,
+                ]);
+                (
+                    "fund".to_string(),
+                    1,
+                    amount,
+                    payload.clone(),
+                    encode_selector_and_arguments("fundBounty(address,uint256)", &payload),
+                    None,
+                )
+            }
+            BoundedAgentWalletAction::Claim {
+                bounty_contract,
+                expected_claim_bond,
+            } => {
+                let bond = autonomous_money_to_uint256(expected_claim_bond, false)?;
+                let payload = encode_static_arguments(vec![encode_address(bounty_contract)?]);
+                (
+                    "claim".to_string(),
+                    2,
+                    bond,
+                    payload.clone(),
+                    encode_selector_and_arguments("claimBounty(address)", &payload),
+                    None,
+                )
+            }
+            BoundedAgentWalletAction::Submit {
+                bounty_contract,
+                submission_hash,
+                evidence_hash,
+            } => {
+                let payload = encode_static_arguments(vec![
+                    encode_address(bounty_contract)?,
+                    parse_bytes32(submission_hash)?,
+                    parse_bytes32(evidence_hash)?,
+                ]);
+                (
+                    "submit".to_string(),
+                    3,
+                    0,
+                    payload.clone(),
+                    encode_selector_and_arguments(
+                        "submitBounty(address,bytes32,bytes32)",
+                        &payload,
+                    ),
+                    None,
+                )
+            }
+        };
+        let payload_hash = word_hex(Keccak256::digest(&payload).into());
+        let direct_transaction = EvmTransactionIntent {
+            from: Some(delegate.clone()),
+            to: wallet.clone(),
+            value_wei: 0,
+            data: format!("0x{}", hex::encode(direct_data)),
+            function: match action.as_str() {
+                "create" => "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+                "fund" => "fundBounty(address,uint256)",
+                "claim" => "claimBounty(address)",
+                _ => "submitBounty(address,bytes32,bytes32)",
+            }
+            .to_string(),
+        };
+        let relay_authorization = bounded_wallet_typed_data(
+            &network,
+            &wallet,
+            action_code,
+            &payload_hash,
+            request.delegate_nonce,
+            request.deadline,
+            request.policy_version,
+        );
+        Ok(BoundedAgentWalletActionPlan {
+            protocol_version: BOUNDED_AGENT_WALLET_PROTOCOL_VERSION.to_string(),
+            network,
+            expected_factory_contract: self.factory_contract.clone(),
+            wallet_contract: wallet,
+            delegate,
+            action,
+            action_code,
+            spend_upper_bound: spend_upper_bound.to_string(),
+            payload: format!("0x{}", hex::encode(payload)),
+            payload_hash,
+            direct_transaction,
+            relay_authorization,
+            predicted_bounty_contract,
+            evidence_boundary: "This unsigned plan is not authorization, funding, claim, submission, or payout evidence. Before signing, read the wallet's owner, factory, settlementToken, policy, policyVersion, delegateNonce, revoked, periodSpent, and lifetimeSpent on-chain and require exact agreement. Canonical events remain the only lifecycle and payment evidence.".to_string(),
+        })
+    }
+
+    pub fn plan_bounded_wallet_authorized_action(
+        &self,
+        network: &str,
+        request: &BoundedAgentWalletActionRequest,
+        signature: &AutonomousBountyAuthorizationSignature,
+        relayer: Option<&str>,
+    ) -> Result<BoundedAgentWalletAuthorizedActionPlan, ChainBaseError> {
+        let plan = self.plan_bounded_wallet_action(network, request)?;
+        let signature = encode_signature_bytes(signature)?;
+        let payload = parse_hex_bytes(&plan.payload)?;
+        let data = encode_bounded_wallet_relay_call(
+            plan.action_code,
+            &payload,
+            request.delegate_nonce,
+            request.deadline,
+            &signature,
+        )?;
+        Ok(BoundedAgentWalletAuthorizedActionPlan {
+            protocol_version: plan.protocol_version,
+            network: plan.network,
+            wallet_contract: plan.wallet_contract.clone(),
+            action: plan.action,
+            relay_transaction: EvmTransactionIntent {
+                from: relayer.map(normalize_address).transpose()?,
+                to: plan.wallet_contract,
+                value_wei: 0,
+                data,
+                function: "executeWithSignature(uint8,bytes,uint256,uint256,bytes)"
+                    .to_string(),
+            },
+            evidence_boundary: "A delegate signature or relay transaction hash is not execution or payment evidence. Confirm the exact canonical action event and, for earnings, the canonical BountySettled event.".to_string(),
         })
     }
 
@@ -3933,6 +4208,66 @@ fn eip3009_typed_data(
     }
 }
 
+fn bounded_wallet_typed_data(
+    network: &BaseNetworkDescriptor,
+    wallet: &str,
+    action: u8,
+    payload_hash: &str,
+    nonce: u128,
+    deadline: u64,
+    policy_version: u64,
+) -> BoundedAgentWalletAuthorizationTypedData {
+    let mut types = BTreeMap::new();
+    types.insert(
+        "EIP712Domain".to_string(),
+        vec![
+            eip712_field("name", "string"),
+            eip712_field("version", "string"),
+            eip712_field("chainId", "uint256"),
+            eip712_field("verifyingContract", "address"),
+        ],
+    );
+    types.insert(
+        "AgentAction".to_string(),
+        vec![
+            eip712_field("wallet", "address"),
+            eip712_field("action", "uint8"),
+            eip712_field("payloadHash", "bytes32"),
+            eip712_field("nonce", "uint256"),
+            eip712_field("deadline", "uint256"),
+            eip712_field("policyVersion", "uint64"),
+        ],
+    );
+    BoundedAgentWalletAuthorizationTypedData {
+        types,
+        domain: Eip712DomainData {
+            name: "Agent Bounties Bounded Wallet".to_string(),
+            version: "1".to_string(),
+            chain_id: network.chain_id,
+            verifying_contract: wallet.to_string(),
+        },
+        primary_type: "AgentAction".to_string(),
+        message: BoundedAgentWalletAuthorizationMessage {
+            wallet: wallet.to_string(),
+            action: action.to_string(),
+            payload_hash: payload_hash.to_string(),
+            nonce: nonce.to_string(),
+            deadline: deadline.to_string(),
+            policy_version: policy_version.to_string(),
+        },
+    }
+}
+
+fn encode_signature_bytes(
+    signature: &AutonomousBountyAuthorizationSignature,
+) -> Result<Vec<u8>, ChainBaseError> {
+    let mut bytes = Vec::with_capacity(65);
+    bytes.extend_from_slice(&parse_bytes32(&signature.r)?);
+    bytes.extend_from_slice(&parse_bytes32(&signature.s)?);
+    bytes.push(normalized_signature_v(signature.v)?);
+    Ok(bytes)
+}
+
 fn normalized_signature_v(v: u8) -> Result<u8, ChainBaseError> {
     match v {
         0 | 1 => Ok(v + 27),
@@ -4330,12 +4665,26 @@ fn encode_autonomous_create_call(
     creation_nonce: [u8; 32],
 ) -> Result<String, ChainBaseError> {
     const SIGNATURE: &str = "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)";
+    let arguments =
+        encode_bounty_create_arguments(params, verifiers, initial_funding, creation_nonce)?;
+    Ok(format!(
+        "0x{}",
+        hex::encode(encode_selector_and_arguments(SIGNATURE, &arguments))
+    ))
+}
+
+fn encode_bounty_create_arguments(
+    params: &[[u8; 32]],
+    verifiers: &[[u8; 32]],
+    initial_funding: u128,
+    creation_nonce: [u8; 32],
+) -> Result<Vec<u8>, ChainBaseError> {
     if params.len() != 14 {
         return Err(ChainBaseError::InvalidVerificationConfiguration(
             "factory parameter tuple must contain fourteen words".to_string(),
         ));
     }
-    let mut bytes = selector(SIGNATURE).to_vec();
+    let mut bytes = Vec::new();
     for word in params {
         bytes.extend_from_slice(word);
     }
@@ -4346,7 +4695,7 @@ fn encode_autonomous_create_call(
     for verifier in verifiers {
         bytes.extend_from_slice(verifier);
     }
-    Ok(format!("0x{}", hex::encode(bytes)))
+    Ok(bytes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4445,11 +4794,52 @@ fn predict_minimal_proxy_address(
 }
 
 fn encode_call(signature: &str, words: Vec<[u8; 32]>) -> String {
-    let mut bytes = selector(signature).to_vec();
-    for word in words {
-        bytes.extend_from_slice(&word);
-    }
+    let arguments = encode_static_arguments(words);
+    let bytes = encode_selector_and_arguments(signature, &arguments);
     format!("0x{}", hex::encode(bytes))
+}
+
+fn encode_static_arguments(words: Vec<[u8; 32]>) -> Vec<u8> {
+    words.into_iter().flatten().collect()
+}
+
+fn encode_selector_and_arguments(signature: &str, arguments: &[u8]) -> Vec<u8> {
+    let mut bytes = selector(signature).to_vec();
+    bytes.extend_from_slice(arguments);
+    bytes
+}
+
+fn encode_bounded_wallet_relay_call(
+    action: u8,
+    payload: &[u8],
+    nonce: u128,
+    deadline: u64,
+    signature: &[u8],
+) -> Result<String, ChainBaseError> {
+    const SIGNATURE: &str = "executeWithSignature(uint8,bytes,uint256,uint256,bytes)";
+    let payload_tail = encode_dynamic_bytes(payload)?;
+    let signature_tail = encode_dynamic_bytes(signature)?;
+    let mut arguments = Vec::with_capacity(5 * 32 + payload_tail.len() + signature_tail.len());
+    arguments.extend_from_slice(&encode_uint256(action.into())?);
+    arguments.extend_from_slice(&encode_uint256(5 * 32)?);
+    arguments.extend_from_slice(&encode_uint256(nonce)?);
+    arguments.extend_from_slice(&encode_uint256(deadline.into())?);
+    arguments.extend_from_slice(&encode_uint256((5 * 32 + payload_tail.len()) as u128)?);
+    arguments.extend_from_slice(&payload_tail);
+    arguments.extend_from_slice(&signature_tail);
+    Ok(format!(
+        "0x{}",
+        hex::encode(encode_selector_and_arguments(SIGNATURE, &arguments))
+    ))
+}
+
+fn encode_dynamic_bytes(value: &[u8]) -> Result<Vec<u8>, ChainBaseError> {
+    let mut bytes = Vec::with_capacity(32 + value.len() + 31);
+    bytes.extend_from_slice(&encode_uint256(value.len() as u128)?);
+    bytes.extend_from_slice(value);
+    let padding = (32 - value.len() % 32) % 32;
+    bytes.resize(bytes.len() + padding, 0);
+    Ok(bytes)
 }
 
 #[derive(Debug, Clone)]
@@ -4564,12 +4954,116 @@ mod tests {
         );
         assert_eq!(hex::encode(selector("claim()")), "4e71d92d");
         assert_eq!(hex::encode(selector("submit(bytes32,bytes32)")), "d26ff86e");
+        assert_eq!(
+            hex::encode(selector("fundBounty(address,uint256)")),
+            "f0206e56"
+        );
+        assert_eq!(hex::encode(selector("claimBounty(address)")), "98ff8075");
+        assert_eq!(
+            hex::encode(selector("submitBounty(address,bytes32,bytes32)")),
+            "856191ac"
+        );
+        assert_eq!(
+            hex::encode(selector(
+                "executeWithSignature(uint8,bytes,uint256,uint256,bytes)"
+            )),
+            "7272147c"
+        );
         assert_eq!(hex::encode(selector("verifyAndSettle(bytes)")), "ed827cee");
         assert_eq!(
             hex::encode(selector(
                 "settleWithAttestations((address,bool,bytes32,uint256,bytes)[])"
             )),
             "e3457186"
+        );
+    }
+
+    #[test]
+    fn bounded_wallet_fund_plan_matches_cast_and_binds_delegate_policy() {
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+        )
+        .unwrap();
+        let request = BoundedAgentWalletActionRequest {
+            wallet_contract: "0x3333333333333333333333333333333333333333".to_string(),
+            delegate: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            policy_version: 3,
+            delegate_nonce: 7,
+            deadline: 2_000_000_000,
+            action: BoundedAgentWalletAction::Fund {
+                bounty_contract: "0x4444444444444444444444444444444444444444".to_string(),
+                amount: Money::new(25, "usdc").unwrap(),
+            },
+        };
+
+        let plan = planner
+            .plan_bounded_wallet_action("base-sepolia", &request)
+            .unwrap();
+
+        assert_eq!(plan.action_code, 1);
+        assert_eq!(plan.spend_upper_bound, "25");
+        assert_eq!(
+            plan.payload,
+            format!(
+                "0x{}{}",
+                "0".repeat(24),
+                format!("{}{:064x}", "44".repeat(20), 25)
+            )
+        );
+        assert_eq!(
+            plan.payload_hash,
+            "0xe465fccd2205a9756702c4215d477404ca62f0abd2d9d645cd83bbb7e5f95e04"
+        );
+        assert_eq!(
+            plan.direct_transaction.data,
+            format!("0xf0206e56{}", &plan.payload[2..])
+        );
+        assert_eq!(
+            plan.relay_authorization.domain.verifying_contract,
+            request.wallet_contract
+        );
+        assert_eq!(plan.relay_authorization.message.action, "1");
+        assert_eq!(plan.relay_authorization.message.nonce, "7");
+        assert_eq!(plan.relay_authorization.message.policy_version, "3");
+    }
+
+    #[test]
+    fn bounded_wallet_relay_call_matches_cast_vector() {
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+        )
+        .unwrap();
+        let request = BoundedAgentWalletActionRequest {
+            wallet_contract: "0x3333333333333333333333333333333333333333".to_string(),
+            delegate: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            policy_version: 3,
+            delegate_nonce: 7,
+            deadline: 2_000_000_000,
+            action: BoundedAgentWalletAction::Fund {
+                bounty_contract: "0x4444444444444444444444444444444444444444".to_string(),
+                amount: Money::new(25, "usdc").unwrap(),
+            },
+        };
+        let signature = AutonomousBountyAuthorizationSignature {
+            v: 27,
+            r: format!("0x{}", "11".repeat(32)),
+            s: format!("0x{}", "22".repeat(32)),
+        };
+
+        let plan = planner
+            .plan_bounded_wallet_authorized_action(
+                "base-sepolia",
+                &request,
+                &signature,
+                Some("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            )
+            .unwrap();
+
+        assert_eq!(
+            plan.relay_transaction.data,
+            "0x7272147c000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000007000000000000000000000000000000000000000000000000000000007735940000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000444444444444444444444444444444444444444400000000000000000000000000000000000000000000000000000000000000190000000000000000000000000000000000000000000000000000000000000041111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222221b00000000000000000000000000000000000000000000000000000000000000"
         );
     }
 

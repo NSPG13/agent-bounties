@@ -24,6 +24,15 @@ The factory and bounty implementation are not upgradeable. External compatible
 contracts may be submitted for discovery, but they are always marked untrusted
 and never become canonical.
 
+`BoundedAgentWallet` is an optional account layer, not a settlement authority
+and not part of a bounty's canonical identity. It can hold USDC and call only
+the configured canonical factory and canonical bounties for create, fund,
+claim, and submit. Its owner delegates those actions under immutable-at-call
+policy checks for verifier modes, validity, per-action spend, period spend, and
+lifetime spend. The owner alone retains withdrawal, revocation, policy, and
+ownership authority. Its first activation is Base Sepolia rehearsal-only; the
+mainnet protocol does not advertise a canonical bounded wallet deployment.
+
 Portable planners must verify deployment state at one exact Base `safe` block
 before emitting wallet calls. Required checks are the factory and implementation
 account code hashes plus `SUPPORTED_PROTOCOL_VERSION()`, `implementation()`,
@@ -79,6 +88,8 @@ Funding paths are:
 - wallet batch: `approve` plus `createBounty` or `fund`,
 - EIP-3009: a bounded native-USDC authorization relayed through
   `createBountyWithAuthorization` or `fundWithAuthorization`.
+- bounded wallet rehearsal: an owner-funded contract executes only canonical
+  actions through a delegate whose USDC exposure is enforced on-chain.
 
 `FundingAdded` is funding evidence. `BountyBecameClaimable` proves the target
 was reached. An approval, signature, planner response, transaction hash, or
@@ -224,6 +235,26 @@ canaries, arbitrary calldata, ETH value, and creation or funding requests.
 The relay comment and transaction hash are transport evidence only. Canonical
 events remain the lifecycle and payout evidence.
 
+### Bounded Delegated Wallet
+
+The owner may pre-authorize an agent through `BoundedAgentWallet.Policy` rather
+than approving every later transaction. The policy commits the delegate,
+validity window, action mask, verification-mode mask, maximum spend per action,
+maximum spend per fixed period, and maximum lifetime spend. Gross create,
+fund, and claim-bond outflows consume the caps; submit consumes no USDC.
+Returned bonds and solver earnings remain available for later work but do not
+decrease the lifetime counter.
+
+The delegate may transact directly or sign EIP-712 `AgentAction` data binding
+the wallet, action, payload hash, current nonce, short deadline, and current
+policy version. Any relayer can sponsor the exact signed action. A policy
+change invalidates older signatures, and each successful direct or relayed
+action increments the nonce. The dispatcher has no arbitrary-call branch.
+
+The hosted planner is testnet-gated and receives public action data only. The
+delegate private key remains outside the platform. See
+[`bounded-agent-wallet.md`](bounded-agent-wallet.md).
+
 The principal lifecycle is:
 
 `Open -> Claimable -> Claimed -> Submitted -> Settled`
@@ -271,6 +302,8 @@ contract registration never crosses this boundary.
 - no duplicate verifier signatures,
 - exact reward conservation in tested terminal paths,
 - no payment state inferred from plans, broadcasts, or unconfirmed receipts.
+- bounded-agent delegates cannot withdraw, change policy, select another token
+  or factory, call noncanonical bounties, or exceed contract-enforced caps.
 
 ## Known Limits
 

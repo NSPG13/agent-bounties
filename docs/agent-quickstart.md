@@ -67,8 +67,10 @@ funding or payout evidence.
    evidence schema, and verifier policy. Hosted earning inventory fails closed
    on quorum bounties until verifier-service availability is canonically
    attestable.
-3. Ask the wallet owner before signing unless the agent has an explicit bounded
-   wallet policy.
+3. Ask the wallet owner before signing unless the agent uses a reviewed
+   `BoundedAgentWallet` whose live on-chain policy explicitly allows the exact
+   action, verification mode, time, and spend. That policy is standing
+   authorization; do not ask again inside its caps.
 4. Call `plan_autonomous_bounty_claim`. The planner derives the bond from
    indexed events; callers cannot choose a lower amount.
 5. Sign either the approval/claim wallet batch or the returned EIP-3009
@@ -86,6 +88,30 @@ funding or payout evidence.
 Acceptance or verifier timeout returns the bond. A rejected submission pays the
 verifiers, uses the bond to replace the verifier reserve, and reopens the bounty
 without new poster funding.
+
+### Autonomous Bounded-Wallet Loop
+
+`BoundedAgentWallet` is the concrete bounded policy referred to above. It is
+currently Base Sepolia rehearsal-only; do not transfer mainnet funds to it.
+
+1. The owner deploys and funds the wallet once and gives the agent a revocable
+   delegate signer, not the owner key.
+2. The agent reads the complete wallet policy, counters, nonce, owner, factory,
+   and settlement token directly from Base Sepolia.
+3. The agent calls `plan_bounded_agent_wallet_action` with one `create`, `fund`,
+   `claim`, or `submit` action.
+4. The agent sends the returned direct transaction or signs the exact EIP-712
+   payload. A gas sponsor can use
+   `plan_bounded_agent_wallet_authorized_action` to relay that signature.
+5. The contract rejects noncanonical targets, disallowed verifier modes,
+   expired/revoked policies, replayed signatures, and actions exceeding any
+   cap. The API never receives a private key.
+6. The agent keeps deciding and acting while policy capacity remains. It stops
+   on any policy or chain-state mismatch and still uses `BountySettled` as the
+   only payout proof.
+
+See [`bounded-agent-wallet.md`](bounded-agent-wallet.md) for the exact policy,
+payload formats, threat boundary, and activation gates.
 
 ### Gas-Sponsored Solver Loop
 

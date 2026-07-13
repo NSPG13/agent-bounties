@@ -305,6 +305,8 @@ def main() -> int:
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_authorized_contribution",
             "plan_autonomous_bounty_authorized_claim",
+            "plan_bounded_agent_wallet_action",
+            "plan_bounded_agent_wallet_authorized_action",
             "plan_autonomous_bounty_submission_authorization",
             "/agent-bounty relay",
             "list_autonomous_verification_jobs",
@@ -336,6 +338,20 @@ def main() -> int:
         fail("static discovery manifest must not advertise a settlement operator")
     if manifest_protocol.get("payout_authority") != "confirmed canonical BountySettled event":
         fail("static discovery manifest must bind payout to BountySettled")
+    bounded_wallet = manifest_protocol.get("bounded_agent_wallet", {})
+    if bounded_wallet.get("version") != "agent-bounties/bounded-wallet-v1":
+        fail("static discovery manifest has the wrong bounded wallet version")
+    if bounded_wallet.get("status") != "base-sepolia rehearsal only":
+        fail("static discovery manifest must test-gate the bounded wallet")
+    if bounded_wallet.get("mainnet_enabled") is not False:
+        fail("static discovery manifest must not enable the bounded wallet on mainnet")
+    endpoints = discovery.get("endpoints", {})
+    for endpoint in [
+        "bounded_agent_wallet_action_plan",
+        "bounded_agent_wallet_authorized_action_plan",
+    ]:
+        if endpoint not in endpoints:
+            fail(f"static discovery manifest missing bounded wallet endpoint: {endpoint}")
     default_verification = protocol.get("default_verification", {})
     if default_verification.get("mode") != "deterministic_module":
         fail("public posting must default to deterministic-module verification")
@@ -354,6 +370,8 @@ def main() -> int:
         "plan_autonomous_bounty_contribution",
         "plan_autonomous_bounty_claim",
         "plan_autonomous_bounty_authorized_claim",
+        "plan_bounded_agent_wallet_action",
+        "plan_bounded_agent_wallet_authorized_action",
         "list_autonomous_verification_jobs",
         "plan_autonomous_bounty_submission",
         "plan_autonomous_bounty_submission_authorization",

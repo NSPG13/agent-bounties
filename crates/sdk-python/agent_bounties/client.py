@@ -614,6 +614,35 @@ class AgentBountiesClient:
             },
         )
 
+    def plan_bounded_agent_wallet_action(
+        self,
+        wallet_action: dict,
+        network: str = "base-sepolia",
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/bounded-agent-wallet/action-plan",
+            json={"network": network, "wallet_action": wallet_action},
+        )
+
+    def plan_bounded_agent_wallet_authorized_action(
+        self,
+        wallet_action: dict,
+        signature: dict,
+        relayer: str | None = None,
+        network: str = "base-sepolia",
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/bounded-agent-wallet/authorized-action-plan",
+            json={
+                "network": network,
+                "wallet_action": wallet_action,
+                "signature": signature,
+                "relayer": relayer,
+            },
+        )
+
     def plan_autonomous_bounty_submission(
         self,
         bounty_contract: str,

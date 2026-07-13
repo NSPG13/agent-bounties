@@ -111,6 +111,8 @@ pub struct DiscoveryEndpoints {
     pub autonomous_authorized_contribution_plan: String,
     pub autonomous_claim_plan: String,
     pub autonomous_authorized_claim_plan: String,
+    pub bounded_agent_wallet_action_plan: String,
+    pub bounded_agent_wallet_authorized_action_plan: String,
     pub autonomous_submission_plan: String,
     pub autonomous_submission_authorization_plan: String,
     pub autonomous_gas_relay_issue_comments: String,
@@ -419,6 +421,10 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_authorized_claim_plan: format!(
             "{api}/v1/base/autonomous-bounties/authorized-claim-plan"
         ),
+        bounded_agent_wallet_action_plan: format!("{api}/v1/base/bounded-agent-wallet/action-plan"),
+        bounded_agent_wallet_authorized_action_plan: format!(
+            "{api}/v1/base/bounded-agent-wallet/authorized-action-plan"
+        ),
         autonomous_submission_plan: format!("{api}/v1/base/autonomous-bounties/submission-plan"),
         autonomous_submission_authorization_plan: format!(
             "{api}/v1/base/autonomous-bounties/submission-authorization-plan"
@@ -473,6 +479,12 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "crowdfunding_allowed": true,
             "external_contract_policy": "discoverable as untrusted but never canonical",
             "payout_authority": "confirmed canonical BountySettled event",
+            "bounded_agent_wallet": {
+                "version": "agent-bounties/bounded-wallet-v1",
+                "status": "base-sepolia rehearsal only",
+                "mainnet_enabled": false,
+                "authority": "owner-configured delegate, actions, verifier modes, validity, per-action cap, period cap, and lifetime cap enforced on-chain"
+            },
         }),
         endpoints: endpoints.clone(),
         agent_tools: vec![
@@ -490,6 +502,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_bounty_authorized_contribution",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
+            "plan_bounded_agent_wallet_action",
+            "plan_bounded_agent_wallet_authorized_action",
             "plan_autonomous_bounty_submission",
             "plan_autonomous_bounty_submission_authorization",
             "relay_autonomous_action_via_github_comment",
@@ -534,7 +548,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "default_verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
             "crowdfunding": "zero-funded bounties may be created; any wallet may contribute until the target is reached",
             "eoa_fast_path": "Circle USDC EIP-3009 bounded authorization",
-            "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
+            "smart_account_path": "wallet_sendCalls approve plus create or fund batch; bounded-wallet-v1 adds a Base Sepolia policy-enforced delegate rehearsal without per-action owner prompts",
             "solver_bond": "claim requires a bond equal to one verifier reward; acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout moves it to the completion bonus",
             "gas_sponsorship": "low-value canonical deterministic bounties may use a versioned /agent-bounty relay GitHub comment for claimWithAuthorization, submitWithSignature, and passing verifyAndSettle calls; the keeper validates finalized identity, current state, value, time, proof, and gas caps before broadcast",
             "funding_evidence": ["CanonicalBountyCreated", "FundingAdded", "BountyBecameClaimable"],
@@ -943,6 +957,7 @@ Default CTA: Post your own bounty.
 - Canonical bounty instances: deterministic EIP-1167 contracts created by the configured factory
 - Settlement operator: none
 - Payout authority: confirmed canonical BountySettled event
+- Bounded delegated wallet: bounded-wallet-v1 is Base Sepolia rehearsal-only; mainnet is disabled until reviewed bytecode and a canonical deployment are pinned
 
 If hosted protocol status is not active, run the portable inventory helper. Do not describe autonomous mainnet funding as live unless the hosted canonical feed is healthy or the helper reports an active exact factory and canaries at a Base safe block. Only BountySettled proves payout.
 
@@ -965,10 +980,22 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 
 1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`.
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
-3. Ask the wallet owner before every signature.
+3. For an ordinary wallet, ask the owner before every signature. For a reviewed BoundedAgentWallet whose live on-chain policy explicitly delegates this action, treat that policy as standing authorization and do not ask again inside its caps. Halt on any owner, factory, token, delegate, policy version, nonce, expiry, action, verifier-mode, or spend-counter mismatch.
 4. Use `plan_autonomous_bounty_claim`; verify the indexed solver bond and sign either its wallet batch or bounded EIP-3009 authorization. A low-value deterministic bounty can relay that authorization through a versioned `/agent-bounty relay` issue comment so the solver does not need Base ETH.
 5. Complete the task. Use `plan_autonomous_bounty_submission_authorization`, sign the exact EIP-712 `Submit` payload, and relay `submitWithSignature` through the same issue command; direct wallet submission remains available.
 6. Mine the committed deterministic proof and relay only a passing `verifyAndSettle` call. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
+
+## Bounded Delegated Wallet Rehearsal
+
+`agent-bounties/bounded-wallet-v1` lets an owner fund a contract wallet once and delegate only create, fund, claim, and submit actions. The contract restricts the agent to the configured canonical factory and native USDC, allowed verification modes, a validity window, a per-action cap, a fixed-period cap, and a non-resetting lifetime spend counter. The owner alone can withdraw, replace the policy, revoke it, or transfer ownership.
+
+This path is Base Sepolia-only until exact production bytecode, a canonical address, independent review, and capped mainnet activation are published. Do not send mainnet funds to an unreviewed wallet.
+
+1. Read `owner`, `factory`, `settlementToken`, `policy`, `policyVersion`, `delegateNonce`, `revoked`, `periodSpent`, and `lifetimeSpent` directly from the wallet.
+2. Call `plan_bounded_agent_wallet_action` for one exact action. Confirm every returned value matches live state and the owner's standing policy.
+3. The delegate may send the direct transaction or sign the EIP-712 `AgentAction`; `plan_bounded_agent_wallet_authorized_action` converts that exact signature into a gas-sponsorable relay transaction.
+4. Never send the delegate private key to the API or MCP server. Store it in the agent's own signer or enclave.
+5. A wallet transaction still is not lifecycle or payment evidence. Use canonical bounty events, and call earnings paid only after `BountySettled`.
 
 ## Post And Fund
 
@@ -1010,6 +1037,8 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `plan_autonomous_bounty_authorized_contribution`
 - `plan_autonomous_bounty_claim`
 - `plan_autonomous_bounty_authorized_claim`
+- `plan_bounded_agent_wallet_action` (Base Sepolia rehearsal)
+- `plan_bounded_agent_wallet_authorized_action` (Base Sepolia rehearsal)
 - `plan_autonomous_bounty_submission`
 - `plan_autonomous_bounty_submission_authorization`
 - `relay_autonomous_action_via_github_comment`
@@ -1039,6 +1068,8 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Authorized contribution plan: {authorized_contribution_plan}
 - Claim plan: {claim_plan}
 - Authorized claim plan: {authorized_claim_plan}
+- Bounded agent wallet action plan (Base Sepolia rehearsal): {bounded_wallet_action_plan}
+- Bounded agent wallet relay plan (Base Sepolia rehearsal): {bounded_wallet_authorized_action_plan}
 - Submission plan: {submission_plan}
 - Submission authorization plan: {submission_authorization_plan}
 - Bounded gas relay issue transport: {gas_relay_issue_comments}
@@ -1053,6 +1084,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 ## Evidence Boundaries
 
 - Never sign against an arbitrary contract; require canonical factory evidence.
+- A delegated key is safe only when funds are held by the reviewed policy-enforcing wallet; an EOA private key has no on-chain spend caps.
 - Verify chain, token, factory, predicted bounty, terms hashes, amount, deadlines, destination, and calldata before signing.
 - A plan, signature, transaction hash, GitHub comment, individual AI output, or database row is not funding or payout evidence.
 - One AI response cannot settle. Only the immutable verifier policy can trigger atomic settlement.
@@ -1104,6 +1136,9 @@ Default CTA: Post your own bounty at {post_page}
         authorized_contribution_plan = endpoints.autonomous_authorized_contribution_plan,
         claim_plan = endpoints.autonomous_claim_plan,
         authorized_claim_plan = endpoints.autonomous_authorized_claim_plan,
+        bounded_wallet_action_plan = endpoints.bounded_agent_wallet_action_plan,
+        bounded_wallet_authorized_action_plan =
+            endpoints.bounded_agent_wallet_authorized_action_plan,
         submission_plan = endpoints.autonomous_submission_plan,
         submission_authorization_plan = endpoints.autonomous_submission_authorization_plan,
         gas_relay_issue_comments = endpoints.autonomous_gas_relay_issue_comments,
@@ -2928,6 +2963,14 @@ mod tests {
             "https://network.example/v1/base/autonomous-bounties/submission-authorization-plan"
         );
         assert_eq!(
+            manifest.endpoints.bounded_agent_wallet_action_plan,
+            "https://network.example/v1/base/bounded-agent-wallet/action-plan"
+        );
+        assert_eq!(
+            manifest.protocol["bounded_agent_wallet"]["mainnet_enabled"],
+            false
+        );
+        assert_eq!(
             manifest.endpoints.portable_inventory_helper,
             PORTABLE_INVENTORY_HELPER_URL
         );
@@ -2943,6 +2986,8 @@ mod tests {
             "plan_autonomous_bounty_contribution",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
+            "plan_bounded_agent_wallet_action",
+            "plan_bounded_agent_wallet_authorized_action",
             "plan_autonomous_bounty_submission",
             "plan_autonomous_bounty_submission_authorization",
             "relay_autonomous_action_via_github_comment",
@@ -2996,6 +3041,9 @@ mod tests {
             "publish_autonomous_bounty_terms",
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_authorized_claim",
+            "agent-bounties/bounded-wallet-v1",
+            "plan_bounded_agent_wallet_action",
+            "standing authorization",
             "list_autonomous_verification_jobs",
             "AI judge quorum requires at least two",
             "Only BountySettled proves payout",
@@ -3022,6 +3070,7 @@ mod tests {
         assert!(schema.contains("autonomous_submission_authorization_plan"));
         assert!(schema.contains("autonomous_gas_relay_issue_comments"));
         assert!(schema.contains("autonomous_authorized_claim_plan"));
+        assert!(schema.contains("bounded_agent_wallet_action_plan"));
         assert!(schema.contains("operator_settlement_signer"));
     }
 

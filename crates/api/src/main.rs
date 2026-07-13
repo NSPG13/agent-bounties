@@ -36,9 +36,11 @@ use chain_base::{
     AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountyTxPlanner,
     AutonomousSignedAttestation, AutonomousVerificationAttestationRequest,
     AutonomousVerificationAttestationTypedData, AutonomousVerificationJob, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
-    ChainBaseError, EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog,
-    EvmTransactionIntent, RpcTransactionReceipt,
+    BaseRpcUrlConfig, BoundedAgentWalletAction, BoundedAgentWalletActionPlan,
+    BoundedAgentWalletActionRequest, BoundedAgentWalletAuthorizedActionPlan,
+    CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest, ChainBaseError,
+    EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent,
+    RpcTransactionReceipt,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
@@ -127,6 +129,8 @@ use uuid::Uuid;
         plan_autonomous_bounty_authorized_contribution,
         plan_autonomous_bounty_claim,
         plan_autonomous_bounty_authorized_claim,
+        plan_bounded_agent_wallet_action,
+        plan_bounded_agent_wallet_authorized_action,
         plan_autonomous_bounty_submission,
         plan_autonomous_bounty_submission_authorization,
         plan_autonomous_verification_attestation,
@@ -463,6 +467,20 @@ struct PlanAutonomousBountyAuthorizedClaimRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanBoundedAgentWalletActionRequest {
+    network: Option<String>,
+    wallet_action: BoundedAgentWalletActionRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanBoundedAgentWalletAuthorizedActionRequest {
+    network: Option<String>,
+    wallet_action: BoundedAgentWalletActionRequest,
+    signature: AutonomousBountyAuthorizationSignature,
+    relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousBountySubmissionRequest {
     network: Option<String>,
     bounty_contract: String,
@@ -745,6 +763,14 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/authorized-claim-plan",
             post(plan_autonomous_bounty_authorized_claim),
+        )
+        .route(
+            "/v1/base/bounded-agent-wallet/action-plan",
+            post(plan_bounded_agent_wallet_action),
+        )
+        .route(
+            "/v1/base/bounded-agent-wallet/authorized-action-plan",
+            post(plan_bounded_agent_wallet_authorized_action),
         )
         .route(
             "/v1/base/autonomous-bounties/submission-plan",
@@ -2386,6 +2412,82 @@ async fn plan_autonomous_bounty_authorized_creation(
         .plan_authorized_creation(
             network,
             &request.create,
+            &request.signature,
+            request.relayer.as_deref(),
+        )
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+async fn validate_bounded_agent_wallet_action(
+    state: &SharedState,
+    network: &str,
+    action: &BoundedAgentWalletAction,
+) -> Result<(), StatusCode> {
+    if network != "base-sepolia" {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    match action {
+        BoundedAgentWalletAction::Create { create } => {
+            require_autonomous_creation_terms(state, network, create).await
+        }
+        BoundedAgentWalletAction::Fund {
+            bounty_contract, ..
+        } => require_indexed_canonical_bounty(state, network, bounty_contract).await,
+        BoundedAgentWalletAction::Claim {
+            bounty_contract,
+            expected_claim_bond,
+        } => {
+            let item = indexed_autonomous_bounty(state, network, bounty_contract).await?;
+            require_claimable_autonomous_item(&item)?;
+            let expected =
+                u128::try_from(expected_claim_bond.amount).map_err(|_| StatusCode::BAD_REQUEST)?;
+            let indexed = item
+                .claim_bond
+                .parse::<u128>()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if !expected_claim_bond.currency.eq_ignore_ascii_case("usdc") || expected != indexed {
+                return Err(StatusCode::CONFLICT);
+            }
+            Ok(())
+        }
+        BoundedAgentWalletAction::Submit {
+            bounty_contract, ..
+        } => {
+            let item = indexed_autonomous_bounty(state, network, bounty_contract).await?;
+            if item.terms_valid && item.status == "claimed" {
+                Ok(())
+            } else {
+                Err(StatusCode::CONFLICT)
+            }
+        }
+    }
+}
+
+#[utoipa::path(post, path = "/v1/base/bounded-agent-wallet/action-plan", responses((status = 200, description = "Testnet-only direct transaction and exact EIP-712 authorization for a policy-capped agent wallet"), (status = 503, description = "Bounded wallet mainnet activation is not enabled")))]
+async fn plan_bounded_agent_wallet_action(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanBoundedAgentWalletActionRequest>,
+) -> Result<Json<BoundedAgentWalletActionPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-sepolia");
+    validate_bounded_agent_wallet_action(&state, network, &request.wallet_action.action).await?;
+    configured_autonomous_planner(network)?
+        .plan_bounded_wallet_action(network, &request.wallet_action)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/bounded-agent-wallet/authorized-action-plan", responses((status = 200, description = "Testnet-only gas-sponsorable relay transaction for an exact delegate-signed bounded-wallet action"), (status = 503, description = "Bounded wallet mainnet activation is not enabled")))]
+async fn plan_bounded_agent_wallet_authorized_action(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanBoundedAgentWalletAuthorizedActionRequest>,
+) -> Result<Json<BoundedAgentWalletAuthorizedActionPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-sepolia");
+    validate_bounded_agent_wallet_action(&state, network, &request.wallet_action.action).await?;
+    configured_autonomous_planner(network)?
+        .plan_bounded_wallet_authorized_action(
+            network,
+            &request.wallet_action,
             &request.signature,
             request.relayer.as_deref(),
         )
@@ -5886,6 +5988,8 @@ mod tests {
             "/v1/base/autonomous-bounties/authorized-contribution-plan",
             "/v1/base/autonomous-bounties/claim-plan",
             "/v1/base/autonomous-bounties/authorized-claim-plan",
+            "/v1/base/bounded-agent-wallet/action-plan",
+            "/v1/base/bounded-agent-wallet/authorized-action-plan",
             "/v1/base/autonomous-bounties/submission-plan",
             "/v1/base/autonomous-bounties/submission-authorization-plan",
             "/v1/base/autonomous-bounties/verification-jobs",

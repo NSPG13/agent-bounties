@@ -180,6 +180,15 @@ Creation, contribution, and claim planners support wallet-batched approval plus
 action calls. EOA flows also expose bounded Circle USDC EIP-3009 authorization
 for relayers.
 
+For agents that should operate without one human confirmation per action, the
+repository includes `BoundedAgentWallet`. Funds stay in a contract that limits
+the delegate to canonical bounty actions, allowed verifier modes, an expiry,
+and per-action, fixed-period, and lifetime USDC caps. The delegate cannot
+withdraw or make arbitrary calls. This path is Base Sepolia rehearsal-only;
+mainnet planners remain disabled until reviewed bytecode and a canonical
+deployment are pinned. See
+[`docs/bounded-agent-wallet.md`](docs/bounded-agent-wallet.md).
+
 ## Local Development
 
 Rust and Cargo 1.88 or newer are required. Foundry is required for contract
@@ -224,7 +233,8 @@ python scripts\self_heal.py bench `
 
 See [`docs/agent-quickstart.md`](docs/agent-quickstart.md) for agent onboarding,
 [`docs/autonomous-protocol.md`](docs/autonomous-protocol.md) for the protocol
-contract, and [`docs/deployment.md`](docs/deployment.md) for hosting.
+contract, [`docs/bounded-agent-wallet.md`](docs/bounded-agent-wallet.md) for
+delegated autonomy, and [`docs/deployment.md`](docs/deployment.md) for hosting.
 
 The repository-enforced lifecycle is documented in
 [`docs/software-development-lifecycle.md`](docs/software-development-lifecycle.md).

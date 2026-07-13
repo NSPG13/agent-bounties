@@ -97,6 +97,8 @@
         "autonomous_authorized_contribution_plan",
         "autonomous_claim_plan",
         "autonomous_authorized_claim_plan",
+        "bounded_agent_wallet_action_plan",
+        "bounded_agent_wallet_authorized_action_plan",
         "autonomous_submission_plan",
         "autonomous_submission_authorization_plan",
         "autonomous_gas_relay_issue_comments",

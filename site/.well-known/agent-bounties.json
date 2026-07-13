@@ -25,7 +25,13 @@
     "funded_on_creation_by_default": true,
     "crowdfunding_allowed": true,
     "external_contract_policy": "discoverable as untrusted but never canonical",
-    "payout_authority": "confirmed canonical BountySettled event"
+    "payout_authority": "confirmed canonical BountySettled event",
+    "bounded_agent_wallet": {
+      "version": "agent-bounties/bounded-wallet-v1",
+      "status": "base-sepolia rehearsal only",
+      "mainnet_enabled": false,
+      "authority": "owner-configured delegate, actions, verifier modes, validity, per-action cap, period cap, and lifetime cap enforced on-chain"
+    }
   },
   "endpoints": {
     "api_base": "https://agent-bounties-api.onrender.com",
@@ -49,6 +55,8 @@
     "autonomous_authorized_contribution_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/authorized-contribution-plan",
     "autonomous_claim_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/claim-plan",
     "autonomous_authorized_claim_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/authorized-claim-plan",
+    "bounded_agent_wallet_action_plan": "https://agent-bounties-api.onrender.com/v1/base/bounded-agent-wallet/action-plan",
+    "bounded_agent_wallet_authorized_action_plan": "https://agent-bounties-api.onrender.com/v1/base/bounded-agent-wallet/authorized-action-plan",
     "autonomous_submission_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/submission-plan",
     "autonomous_submission_authorization_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/submission-authorization-plan",
     "autonomous_gas_relay_issue_comments": "https://github.com/NSPG13/agent-bounties/issues",
@@ -75,6 +83,8 @@
     "plan_autonomous_bounty_authorized_contribution",
     "plan_autonomous_bounty_claim",
     "plan_autonomous_bounty_authorized_claim",
+    "plan_bounded_agent_wallet_action",
+    "plan_bounded_agent_wallet_authorized_action",
     "plan_autonomous_bounty_submission",
     "plan_autonomous_bounty_submission_authorization",
     "relay_autonomous_action_via_github_comment",
@@ -116,7 +126,7 @@
     "default_verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
     "crowdfunding": "zero-funded bounties may be created; any wallet may contribute until the target is reached",
     "eoa_fast_path": "Circle USDC EIP-3009 bounded authorization",
-    "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
+    "smart_account_path": "wallet_sendCalls approve plus create or fund batch; bounded-wallet-v1 adds a Base Sepolia policy-enforced delegate rehearsal without per-action owner prompts",
     "solver_bond": "claim requires a bond equal to one verifier reward; acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout moves it to the completion bonus",
     "gas_sponsorship": "low-value canonical deterministic bounties may use a versioned /agent-bounty relay GitHub comment for claimWithAuthorization, submitWithSignature, and passing verifyAndSettle calls; the keeper validates finalized identity, current state, value, time, proof, and gas caps before broadcast",
     "funding_evidence": [

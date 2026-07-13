@@ -27,7 +27,8 @@ use chain_base::{
     AutonomousBountyFeedItem, AutonomousBountySubmissionAuthorizationRequest,
     AutonomousBountyTxPlanner, AutonomousSignedAttestation,
     AutonomousVerificationAttestationRequest, BaseNetworkDescriptor, BaseRpcUrlConfig,
-    CanonicalChildBountyTermsRequest, EvmLog,
+    BoundedAgentWalletAction, BoundedAgentWalletActionRequest, CanonicalChildBountyTermsRequest,
+    EvmLog,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
@@ -315,6 +316,20 @@ struct PlanAutonomousBountyAuthorizedClaimArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanBoundedAgentWalletActionArgs {
+    network: Option<String>,
+    wallet_action: BoundedAgentWalletActionRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanBoundedAgentWalletAuthorizedActionArgs {
+    network: Option<String>,
+    wallet_action: BoundedAgentWalletActionRequest,
+    signature: AutonomousBountyAuthorizationSignature,
+    relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousBountySubmissionArgs {
     network: Option<String>,
     bounty_contract: String,
@@ -587,6 +602,14 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_autonomous_bounty_authorized_claim",
             post(plan_autonomous_bounty_authorized_claim),
+        )
+        .route(
+            "/tools/plan_bounded_agent_wallet_action",
+            post(plan_bounded_agent_wallet_action),
+        )
+        .route(
+            "/tools/plan_bounded_agent_wallet_authorized_action",
+            post(plan_bounded_agent_wallet_authorized_action),
         )
         .route(
             "/tools/plan_autonomous_bounty_submission",
@@ -1358,6 +1381,39 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "relayer": nullable_string_property("Optional wallet sponsoring the transaction.")
                 }),
                 &["bounty_contract", "solver", "authorization_nonce", "authorization_valid_before", "signature"],
+            ),
+        ),
+        tool(
+            "plan_bounded_agent_wallet_action",
+            "Build a testnet-only direct transaction and exact EIP-712 authorization for one canonical bounty action under an owner-defined on-chain spending policy. The delegate key is never sent to this service.",
+            object_tool_schema(
+                json!({
+                    "network": { "type": ["string", "null"], "const": "base-sepolia", "description": "Optional during rehearsal; defaults to base-sepolia." },
+                    "wallet_action": bounded_agent_wallet_request_property()
+                }),
+                &["wallet_action"],
+            ),
+        ),
+        tool(
+            "plan_bounded_agent_wallet_authorized_action",
+            "After the active delegate signs the exact EIP-712 payload, build a testnet-only transaction any gas sponsor can relay. The contract enforces canonical targets, action permissions, verifier modes, time limits, and spend caps.",
+            object_tool_schema(
+                json!({
+                    "network": { "type": ["string", "null"], "const": "base-sepolia", "description": "Optional during rehearsal; defaults to base-sepolia." },
+                    "wallet_action": bounded_agent_wallet_request_property(),
+                    "signature": {
+                        "type": "object",
+                        "properties": {
+                            "v": integer_property("EIP-712 recovery id: 0, 1, 27, or 28."),
+                            "r": string_property("0x-prefixed bytes32 signature r."),
+                            "s": string_property("0x-prefixed bytes32 signature s.")
+                        },
+                        "required": ["v", "r", "s"],
+                        "additionalProperties": false
+                    },
+                    "relayer": nullable_string_property("Optional gas-sponsor wallet sending the transaction.")
+                }),
+                &["wallet_action", "signature"],
             ),
         ),
         tool(
@@ -3245,6 +3301,165 @@ async fn plan_autonomous_bounty_authorized_creation(
     }
 }
 
+fn bounded_agent_wallet_request_property() -> Value {
+    json!({
+        "type": "object",
+        "description": "Exact delegate scope read from the wallet immediately before signing. The hosted service never receives a private key.",
+        "properties": {
+            "wallet_contract": string_property("Deployed BoundedAgentWallet contract on Base Sepolia."),
+            "delegate": string_property("Active delegate signer configured by the wallet owner."),
+            "policy_version": integer_property("Current positive on-chain policyVersion."),
+            "delegate_nonce": integer_property("Current on-chain delegateNonce; prevents replay."),
+            "deadline": integer_property("Short Unix expiry for this exact action authorization."),
+            "action": bounded_agent_wallet_action_property()
+        },
+        "required": ["wallet_contract", "delegate", "policy_version", "delegate_nonce", "deadline", "action"],
+        "additionalProperties": false
+    })
+}
+
+fn bounded_agent_wallet_action_property() -> Value {
+    json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "const": "create" },
+                    "create": autonomous_bounty_create_property()
+                },
+                "required": ["kind", "create"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "const": "fund" },
+                    "bounty_contract": string_property("Indexed canonical bounty contract."),
+                    "amount": money_property("Maximum requested contribution; the contract charges only the remaining amount accepted.", false)
+                },
+                "required": ["kind", "bounty_contract", "amount"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "const": "claim" },
+                    "bounty_contract": string_property("Fully funded, earning-ready canonical bounty."),
+                    "expected_claim_bond": money_property("Exact indexed claim bond checked before planning; the contract reads it again.", false)
+                },
+                "required": ["kind", "bounty_contract", "expected_claim_bond"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "const": "submit" },
+                    "bounty_contract": string_property("Canonical bounty currently claimed by this wallet."),
+                    "submission_hash": string_property("0x-prefixed bytes32 artifact commitment."),
+                    "evidence_hash": string_property("0x-prefixed bytes32 evidence commitment.")
+                },
+                "required": ["kind", "bounty_contract", "submission_hash", "evidence_hash"],
+                "additionalProperties": false
+            }
+        ]
+    })
+}
+
+async fn validate_bounded_agent_wallet_action(
+    state: &SharedState,
+    network: &str,
+    action: &BoundedAgentWalletAction,
+) -> Result<(), String> {
+    if network != "base-sepolia" {
+        return Err(
+            "bounded agent wallets are testnet-only until reviewed canonical bytecode and a deployment address are pinned"
+                .to_string(),
+        );
+    }
+    match action {
+        BoundedAgentWalletAction::Create { create } => {
+            require_autonomous_creation_terms(state, network, create).await
+        }
+        BoundedAgentWalletAction::Fund {
+            bounty_contract, ..
+        } => require_indexed_canonical_bounty(state, network, bounty_contract).await,
+        BoundedAgentWalletAction::Claim {
+            bounty_contract,
+            expected_claim_bond,
+        } => {
+            let item = indexed_autonomous_bounty(state, network, bounty_contract).await?;
+            require_claimable_autonomous_item(&item)?;
+            let expected = u128::try_from(expected_claim_bond.amount)
+                .map_err(|_| "expected claim bond must be positive USDC".to_string())?;
+            let indexed = item
+                .claim_bond
+                .parse::<u128>()
+                .map_err(|_| "indexed claim bond is invalid".to_string())?;
+            if !expected_claim_bond.currency.eq_ignore_ascii_case("usdc") || expected != indexed {
+                return Err(
+                    "expected claim bond does not match indexed canonical state".to_string()
+                );
+            }
+            Ok(())
+        }
+        BoundedAgentWalletAction::Submit {
+            bounty_contract, ..
+        } => {
+            let item = indexed_autonomous_bounty(state, network, bounty_contract).await?;
+            if item.terms_valid && item.status == "claimed" {
+                Ok(())
+            } else {
+                Err("canonical bounty is not in a valid claimed state".to_string())
+            }
+        }
+    }
+}
+
+async fn plan_bounded_agent_wallet_action(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanBoundedAgentWalletActionArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-sepolia");
+    if let Err(error) =
+        validate_bounded_agent_wallet_action(&state, network, &args.wallet_action.action).await
+    {
+        return mcp_error(error);
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_bounded_wallet_action(network, &args.wallet_action)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_bounded_agent_wallet_authorized_action(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanBoundedAgentWalletAuthorizedActionArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-sepolia");
+    if let Err(error) =
+        validate_bounded_agent_wallet_action(&state, network, &args.wallet_action.action).await
+    {
+        return mcp_error(error);
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_bounded_wallet_authorized_action(
+                network,
+                &args.wallet_action,
+                &args.signature,
+                args.relayer.as_deref(),
+            )
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn require_autonomous_creation_terms(
     state: &SharedState,
     network: &str,
@@ -4420,6 +4635,8 @@ mod tests {
             "plan_autonomous_bounty_authorized_contribution",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
+            "plan_bounded_agent_wallet_action",
+            "plan_bounded_agent_wallet_authorized_action",
             "plan_autonomous_bounty_submission",
             "plan_autonomous_bounty_submission_authorization",
             "list_autonomous_verification_jobs",
@@ -4450,6 +4667,23 @@ mod tests {
             canonical_child_terms.input_schema["properties"]["child_acceptance_criteria"]
                 ["minItems"],
             1
+        );
+
+        let bounded_wallet = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_bounded_agent_wallet_action")
+            .expect("bounded wallet descriptor exists");
+        assert_eq!(
+            bounded_wallet.input_schema["properties"]["network"]["const"],
+            "base-sepolia"
+        );
+        assert_eq!(
+            bounded_wallet.input_schema["properties"]["wallet_action"]["properties"]["action"]
+                ["oneOf"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
         );
 
         let get_live_money_readiness = descriptors
