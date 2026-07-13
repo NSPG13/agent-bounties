@@ -1,0 +1,84 @@
+{
+  "schema_version": "agent-bounties/standing-meta-mainnet-evidence-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "canonical_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "verifier": {
+    "address": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+    "runtime_code_hash": "0xbb6d6df11b85f59b5010aa61f4caf499fb27b94a0f5978aff85fa97ed2bbd2c3",
+    "transaction_hash": "0x176ad0c53a9cce839e651b229217cea676082bd429c39949338576196d67dd1a",
+    "block_number": 48580386,
+    "block_hash": "0x92d0a7b5676ee19b1b7334775eb19d11b87b0b74ecf1dc44d9604ca784094a01",
+    "gas_used": 1593538
+  },
+  "activation": {
+    "transaction_hash": "0xaaddec0591a03ef82a5124f6913098f715b6dff2108e6d86899b30a4e57e166d",
+    "block_number": 48580588,
+    "block_hash": "0xe40b24ec919a85bd0ed9bb9c164f1aadd28612f0ab9e4fdfe7e92e0a405a34cc",
+    "status": "success",
+    "value_wei": "0",
+    "gas_used": 2386484,
+    "log_count": 29,
+    "funded_usdc_minor": 4000000,
+    "creator_usdc_before": 9890000,
+    "creator_usdc_after": 5890000,
+    "factory_allowance_after": 0
+  },
+  "safe_block_attestation": {
+    "number": 48580765,
+    "hash": "0x4dac1ec348fa963548fbf8cb33cec291d17ff660e684a83194f57c96522d3ad9"
+  },
+  "bounties": [
+    {
+      "issue": 217,
+      "bounty_id": "0x051117b7e4b2804155c40a3ea5b575c002e82a6ef0f916c5a0b8e06a00981225",
+      "contract": "0xc003cd82625fd04741894f35673a26db8a1f4437",
+      "funded_minor": 1000000,
+      "target_minor": 1000000,
+      "token_balance_minor": 1000000,
+      "status": "claimable",
+      "canonical_created_events": 1,
+      "funding_added_events": 1,
+      "became_claimable_events": 1
+    },
+    {
+      "issue": 218,
+      "bounty_id": "0xc8639e6246dd69888ef49b9bf1d523a0d1c948631159a83e49a75a1714f0ba5d",
+      "contract": "0x0e919fd268ce865fc8e434022a2c7d410d26afae",
+      "funded_minor": 1000000,
+      "target_minor": 1000000,
+      "token_balance_minor": 1000000,
+      "status": "claimable",
+      "canonical_created_events": 1,
+      "funding_added_events": 1,
+      "became_claimable_events": 1
+    },
+    {
+      "issue": 219,
+      "bounty_id": "0x74c85776463c5498f8ddec328791499794fbd93744c14e49a21c843991717fe2",
+      "contract": "0x4340ec8281a5fe9628a504d2de2115345b516cea",
+      "funded_minor": 1000000,
+      "target_minor": 1000000,
+      "token_balance_minor": 1000000,
+      "status": "claimable",
+      "canonical_created_events": 1,
+      "funding_added_events": 1,
+      "became_claimable_events": 1
+    },
+    {
+      "issue": 220,
+      "bounty_id": "0x687cbb2519e509df727f7491ecb3a9d186d6528a482bac337124a521fd0e6630",
+      "contract": "0xafac1296f884373b8362df88db6d75c997bc79d2",
+      "funded_minor": 1000000,
+      "target_minor": 1000000,
+      "token_balance_minor": 1000000,
+      "status": "claimable",
+      "canonical_created_events": 1,
+      "funding_added_events": 1,
+      "became_claimable_events": 1
+    }
+  ],
+  "evidence_boundary": "This file records confirmed Base mainnet creation and funding plus exact safe-block state. It proves funding and claimability, not future solver payment. Only a confirmed canonical BountySettled event proves payout."
+}

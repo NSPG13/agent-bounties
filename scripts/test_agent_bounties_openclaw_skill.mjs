@@ -4,7 +4,9 @@ import test from "node:test";
 
 import {
   collectInventory,
+  keccak256Hex,
   normalizeApiBaseUrl,
+  rpcBatchTransport,
   STANDING_META_BOUNTY,
   verifyClaimableItem,
   verifyDirectChainInventory,
@@ -43,9 +45,73 @@ async function permissionlessDirectManifest() {
     bounty.verification_mode = "deterministic_module";
     bounty.verifier_module = "0x8888888888888888888888888888888888888888";
     bounty.verifier_runtime_code_hash = `0x${"77".repeat(32)}`;
+    bounty.verifier_set_hash = `0x${"00".repeat(32)}`;
   }
   return manifest;
 }
+
+test("Base RPC transport chunks public-endpoint batches and retries rate limits", async () => {
+  const calls = Array.from({ length: 12 }, (_, index) => ({
+    key: `call_${index}`,
+    method: "eth_call",
+    params: [{ to: "0x0000000000000000000000000000000000000000" }, "safe"],
+  }));
+  const payloadSizes = [];
+  const sleeps = [];
+  let rateLimited = false;
+  const fetchImpl = async (_url, options) => {
+    const payload = JSON.parse(options.body);
+    payloadSizes.push(payload.length);
+    if (payload[0].id === 1 && !rateLimited) {
+      rateLimited = true;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => payload.map(({ id }) => (id <= 5 ? {
+          jsonrpc: "2.0",
+          id,
+          result: `0x${id.toString(16)}`,
+        } : {
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32016, message: "over rate limit" },
+        })),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => payload.map(({ id }) => ({
+        jsonrpc: "2.0",
+        id,
+        result: `0x${id.toString(16)}`,
+      })),
+    };
+  };
+
+  const results = await rpcBatchTransport("https://rpc.example.test", calls, {
+    fetchImpl,
+    sleepImpl: async (milliseconds) => sleeps.push(milliseconds),
+    batchSize: 50,
+    minIntervalMs: 0,
+  });
+
+  assert.deepEqual(payloadSizes, [10, 5, 2]);
+  assert.deepEqual([...results.keys()], calls.map((call) => call.key));
+  assert.equal(results.get("call_11"), "0xc");
+  assert.deepEqual(sleeps, [500]);
+});
+
+test("local Ethereum Keccak-256 matches canonical vectors", () => {
+  assert.equal(
+    keccak256Hex("0x"),
+    "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+  );
+  assert.equal(
+    keccak256Hex("0x68656c6c6f"),
+    "0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8",
+  );
+});
 
 function directTransport(manifest, mutate = null) {
   const byIssue = new Map(manifest.bounties.map((item) => [String(item.issue), item]));
@@ -93,7 +159,7 @@ function directTransport(manifest, mutate = null) {
           acceptance: bounty.acceptance_criteria_hash,
           benchmark: bounty.benchmark_hash,
           evidence: bounty.evidence_schema_hash,
-          verifier_set: manifest.verifier_set_hash,
+          verifier_set: bounty.verifier_set_hash || manifest.verifier_set_hash,
           verification_mode: abiWord({
             deterministic_module: 0,
             signed_quorum: 1,
@@ -191,6 +257,16 @@ test("portable skill metadata and install contracts remain publishable", async (
       "utf8",
     ),
   );
+  const standingMetaActivation = JSON.parse(
+    await readFile(
+      new URL(
+        "../deployments/canonical-child-seeds-base-mainnet.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const activationItems = [...activation.bounties, ...standingMetaActivation.bounties];
 
   assert.match(skill, /^---\r?\nname: agent-bounties\r?\n/);
   assert.match(skill, /\r?\nversion: 1\.3\.0\r?\n/);
@@ -257,7 +333,8 @@ test("portable skill metadata and install contracts remain publishable", async (
         "utf8",
       ),
     );
-    const activationItem = activation.bounties.find((entry) => entry.issue === item.issue);
+    const activationItem = activationItems.find((entry) => entry.issue === item.issue);
+    assert.ok(activationItem, `missing activation artifact for issue #${item.issue}`);
     assert.deepEqual(bundledTerms, sourceTerms);
     assert.equal(item.title, sourceTerms.title);
     assert.equal(item.bounty_id, activationItem.bounty_id);
@@ -292,6 +369,10 @@ test("portable skill metadata and install contracts remain publishable", async (
     "fixtures/terms/169.json",
     "fixtures/terms/170.json",
     "fixtures/terms/171.json",
+    "fixtures/terms/217.json",
+    "fixtures/terms/218.json",
+    "fixtures/terms/219.json",
+    "fixtures/terms/220.json",
     "fixtures/verified-claimable.json",
     "references/payment-truth.md",
     "scripts/check-in.mjs",
@@ -301,7 +382,7 @@ test("portable skill metadata and install contracts remain publishable", async (
   }
 });
 
-test("direct safe-chain verifier excludes quorum canaries without service attestations", async () => {
+test("direct safe-chain verifier includes deterministic inventory and excludes unattested quorum", async () => {
   const manifest = await directManifest();
   const solver = "0x7777777777777777777777777777777777777777";
   const report = await verifyDirectChainInventory({
@@ -311,10 +392,16 @@ test("direct safe-chain verifier excludes quorum canaries without service attest
     solverWallet: solver,
   });
 
-  assert.equal(report.status, "no_claimable_bounties");
+  const deterministic = manifest.bounties.filter(
+    (item) => item.verification_mode === "deterministic_module",
+  );
+  const quorum = manifest.bounties.filter(
+    (item) => item.verification_mode !== "deterministic_module",
+  );
+  assert.equal(report.status, "verified");
   assert.equal(report.observed_block.tag, "safe");
-  assert.equal(report.verified.length, 0);
-  assert.equal(report.excluded.length, manifest.bounties.length);
+  assert.equal(report.verified.length, deterministic.length);
+  assert.equal(report.excluded.length, quorum.length);
   assert.ok(report.excluded.every((item) => item.reason === "quorum_verifier_service_not_attested"));
 });
 
@@ -341,6 +428,27 @@ test("direct safe-chain verifier accepts deterministic module earning inventory"
     assert.equal(item.claim_plan.wallet_calls[0].from, solver);
     assert.equal(item.claim_plan.wallet_calls[1].to, item.contract);
   }
+});
+
+test("direct safe-chain verifier uses each bounty's verifier-set commitment", async () => {
+  const manifest = await permissionlessDirectManifest();
+  const report = await verifyDirectChainInventory({
+    manifest,
+    rpcUrl: "https://rpc.example.test",
+    rpcTransport: directTransport(manifest),
+  });
+  assert.equal(report.verified.length, manifest.bounties.length);
+  assert.ok(report.verified.every((item) => item.verifier_set_hash === `0x${"00".repeat(32)}`));
+
+  const drifted = await verifyDirectChainInventory({
+    manifest,
+    rpcUrl: "https://rpc.example.test",
+    rpcTransport: directTransport(manifest, (key, value) => (
+      key.endsWith("_verifier_set") ? manifest.verifier_set_hash : value
+    )),
+  });
+  assert.equal(drifted.verified.length, 0);
+  assert.equal(drifted.excluded.length, manifest.bounties.length);
 });
 
 test("direct safe-chain verifier fails closed on factory code mismatch", async () => {
@@ -392,12 +500,14 @@ test("direct safe-chain inventory marks only the exact canonical child verifier 
     rpcTransport: directTransport(manifest),
   });
 
-  assert.equal(report.verified.length, 1);
+  assert.equal(report.verified.length, manifest.bounties.length);
+  const marked = report.verified.filter((item) => item.standing_meta_bounty);
+  assert.equal(marked.length, 1);
   assert.equal(
-    report.verified[0].standing_meta_bounty.inventory_class,
+    marked[0].standing_meta_bounty.inventory_class,
     STANDING_META_BOUNTY.inventoryClass,
   );
-  assert.equal(report.verified[0].standing_meta_bounty.requires_different_solver_wallet, true);
+  assert.equal(marked[0].standing_meta_bounty.requires_different_solver_wallet, true);
 });
 
 test("direct safe-chain inventory rejects deterministic verifier bytecode drift", async () => {

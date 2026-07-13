@@ -5,12 +5,31 @@ import { pathToFileURL } from "node:url";
 
 export const DEFAULT_API_BASE_URL = "https://agent-bounties-api.onrender.com";
 export const DEFAULT_PROTOCOL_URL = "https://nspg13.github.io/agent-bounties/protocol.json";
-export const DEFAULT_BASE_RPC_URL = "https://mainnet.base.org";
+export const DEFAULT_BASE_RPC_URL = "https://base-rpc.publicnode.com";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const EMPTY_CODE_HASH = "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
-const TERMS_SOURCE_COMMIT = "eea06e72dbdc1f647ad4aa3dac2a9f5ed93f67c8";
+const UINT64_MASK = (1n << 64n) - 1n;
+const KECCAK_RATE_BYTES = 136;
+const KECCAK_ROTATIONS = Object.freeze([
+  0, 1, 62, 28, 27,
+  36, 44, 6, 55, 20,
+  3, 10, 43, 25, 39,
+  41, 45, 15, 21, 8,
+  18, 2, 61, 56, 14,
+]);
+const KECCAK_ROUND_CONSTANTS = Object.freeze([
+  0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an,
+  0x8000000080008000n, 0x000000000000808bn, 0x0000000080000001n,
+  0x8000000080008081n, 0x8000000000008009n, 0x000000000000008an,
+  0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an,
+  0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n,
+  0x8000000000008003n, 0x8000000000008002n, 0x8000000000000080n,
+  0x000000000000800an, 0x800000008000000an, 0x8000000080008081n,
+  0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+]);
+const TERMS_SOURCE_COMMIT = "907f8741f8127a9610aa796cbce15c91a0bc690a";
 export const STANDING_META_BOUNTY = Object.freeze({
   schemaVersion: "agent-bounties/standing-meta-bounty-v1",
   inventoryClass: "post_bounty_third_party_completion",
@@ -25,6 +44,81 @@ export const STANDING_META_BOUNTY = Object.freeze({
     "Have a different wallet complete the child and receive canonical settlement before the parent verification deadline.",
   ]),
 });
+
+function rotateLeft64(value, bits) {
+  if (bits === 0) return value;
+  const shift = BigInt(bits);
+  return ((value << shift) | (value >> (64n - shift))) & UINT64_MASK;
+}
+
+function keccakPermutation(state) {
+  for (const roundConstant of KECCAK_ROUND_CONSTANTS) {
+    const column = Array(5).fill(0n);
+    for (let x = 0; x < 5; x += 1) {
+      for (let y = 0; y < 5; y += 1) column[x] ^= state[x + (5 * y)];
+    }
+    const delta = column.map((_, x) => (
+      column[(x + 4) % 5] ^ rotateLeft64(column[(x + 1) % 5], 1)
+    ));
+    for (let x = 0; x < 5; x += 1) {
+      for (let y = 0; y < 5; y += 1) state[x + (5 * y)] ^= delta[x];
+    }
+
+    const rotated = Array(25).fill(0n);
+    for (let x = 0; x < 5; x += 1) {
+      for (let y = 0; y < 5; y += 1) {
+        rotated[y + (5 * ((2 * x + 3 * y) % 5))] = rotateLeft64(
+          state[x + (5 * y)],
+          KECCAK_ROTATIONS[x + (5 * y)],
+        );
+      }
+    }
+    for (let x = 0; x < 5; x += 1) {
+      for (let y = 0; y < 5; y += 1) {
+        state[x + (5 * y)] = rotated[x + (5 * y)]
+          ^ ((~rotated[((x + 1) % 5) + (5 * y)])
+            & rotated[((x + 2) % 5) + (5 * y)]);
+      }
+    }
+    state[0] ^= roundConstant;
+  }
+}
+
+function absorbKeccakBlock(state, bytes) {
+  for (let index = 0; index < KECCAK_RATE_BYTES; index += 1) {
+    state[Math.floor(index / 8)] ^= BigInt(bytes[index]) << BigInt((index % 8) * 8);
+  }
+  keccakPermutation(state);
+}
+
+export function keccak256Hex(value) {
+  const input = String(value || "");
+  if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(input)) {
+    throw new Error("Keccak input must be even-length hexadecimal bytes");
+  }
+  const bytes = new Uint8Array((input.length - 2) / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(input.slice(2 + (index * 2), 4 + (index * 2)), 16);
+  }
+  const state = Array(25).fill(0n);
+  let offset = 0;
+  while (offset + KECCAK_RATE_BYTES <= bytes.length) {
+    absorbKeccakBlock(state, bytes.subarray(offset, offset + KECCAK_RATE_BYTES));
+    offset += KECCAK_RATE_BYTES;
+  }
+  const finalBlock = new Uint8Array(KECCAK_RATE_BYTES);
+  finalBlock.set(bytes.subarray(offset));
+  finalBlock[bytes.length - offset] ^= 0x01;
+  finalBlock[KECCAK_RATE_BYTES - 1] ^= 0x80;
+  absorbKeccakBlock(state, finalBlock);
+
+  let digest = "";
+  for (let index = 0; index < 32; index += 1) {
+    const byte = Number((state[Math.floor(index / 8)] >> BigInt((index % 8) * 8)) & 0xffn);
+    digest += byte.toString(16).padStart(2, "0");
+  }
+  return `0x${digest}`;
+}
 const CHAIN_MANIFEST_URL = new URL("../fixtures/base-mainnet-canaries.json", import.meta.url);
 const SELECTOR = Object.freeze({
   acceptanceCriteriaHash: "0x8a2b02be",
@@ -108,46 +202,100 @@ async function request(url, parseJson) {
   }
 }
 
-async function rpcBatchTransport(rpcUrl, calls) {
-  const payload = calls.map((call, index) => ({
-    jsonrpc: "2.0",
-    id: index + 1,
-    method: call.method,
-    params: call.params,
-  }));
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const response = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) {
-      if (attempt < 3 && response.status === 429) {
-        await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
-        continue;
-      }
-      throw new Error(`Base RPC returned HTTP ${response.status}`);
-    }
-    const body = await response.json();
-    if (!Array.isArray(body)) throw new Error("Base RPC did not return a batch response");
-    const byId = new Map(body.map((item) => [item?.id, item]));
-    const rateLimited = calls.some((_, index) => byId.get(index + 1)?.error?.code === -32016);
-    if (rateLimited && attempt < 3) {
-      await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
-      continue;
-    }
-    const results = new Map();
-    for (let index = 0; index < calls.length; index += 1) {
-      const item = byId.get(index + 1);
-      if (!item || item.error || item.result === undefined) {
-        throw new Error(`Base RPC failed ${calls[index].key}`);
-      }
-      results.set(calls[index].key, item.result);
-    }
-    return results;
+const BASE_PUBLIC_RPC_MAX_BATCH = 10;
+const BASE_PUBLIC_RPC_DEFAULT_BATCH = 10;
+const BASE_PUBLIC_RPC_MIN_INTERVAL_MS = 100;
+let nextRpcRequestAt = 0;
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForRpcSlot(minIntervalMs, sleepImpl) {
+  if (minIntervalMs <= 0) return;
+  const waitMs = Math.max(0, nextRpcRequestAt - Date.now());
+  if (waitMs > 0) await sleepImpl(waitMs);
+  nextRpcRequestAt = Date.now() + minIntervalMs;
+}
+
+export async function rpcBatchTransport(rpcUrl, calls, {
+  fetchImpl = fetch,
+  sleepImpl = sleep,
+  batchSize = BASE_PUBLIC_RPC_DEFAULT_BATCH,
+  minIntervalMs = BASE_PUBLIC_RPC_MIN_INTERVAL_MS,
+  maxAttempts = 5,
+} = {}) {
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new Error("Base RPC batch size must be a positive integer");
   }
-  throw new Error("Base RPC retry budget exhausted");
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error("Base RPC max attempts must be a positive integer");
+  }
+  const effectiveBatchSize = Math.min(batchSize, BASE_PUBLIC_RPC_MAX_BATCH);
+  const results = new Map();
+
+  for (let offset = 0; offset < calls.length; offset += effectiveBatchSize) {
+    const chunk = calls.slice(offset, offset + effectiveBatchSize);
+    let pending = chunk.map((call, index) => ({ call, id: offset + index + 1 }));
+    let completed = false;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const payload = pending.map(({ call, id }) => ({
+        jsonrpc: "2.0",
+        id,
+        method: call.method,
+        params: call.params,
+      }));
+      await waitForRpcSlot(minIntervalMs, sleepImpl);
+      const response = await fetchImpl(rpcUrl, {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) {
+        if (attempt + 1 < maxAttempts && response.status === 429) {
+          const retryAfter = Number(response.headers?.get?.("retry-after"));
+          await sleepImpl(Number.isFinite(retryAfter) && retryAfter > 0
+            ? retryAfter * 1_000
+            : 500 * (2 ** attempt));
+          continue;
+        }
+        throw new Error(`Base RPC returned HTTP ${response.status}`);
+      }
+      const body = await response.json();
+      if (!Array.isArray(body)) throw new Error("Base RPC did not return a batch response");
+      const byId = new Map(body.map((item) => [item?.id, item]));
+      const retry = [];
+      for (const entry of pending) {
+        const item = byId.get(entry.id);
+        if (item?.result !== undefined && !item.error) {
+          results.set(entry.call.key, item.result);
+          continue;
+        }
+        const rateLimited = item?.error?.code === -32016
+          || /rate limit/i.test(String(item?.error?.message || ""));
+        if (rateLimited) {
+          retry.push(entry);
+          continue;
+        }
+        const detail = item?.error
+          ? ` (${item.error.code}: ${item.error.message || "unknown RPC error"})`
+          : " (missing response)";
+        throw new Error(`Base RPC failed ${entry.call.key}${detail}`);
+      }
+      if (retry.length === 0) {
+        completed = true;
+        break;
+      }
+      pending = retry;
+      if (attempt + 1 < maxAttempts) {
+        await sleepImpl(500 * (2 ** attempt));
+      }
+    }
+    if (!completed) throw new Error("Base RPC retry budget exhausted");
+  }
+  return results;
 }
 
 function addressWord(value) {
@@ -192,18 +340,22 @@ function safeNumber(value, label) {
   return Number(value);
 }
 
-function proofCodeHash(value, label) {
-  const hash = String(value?.codeHash || "").toLowerCase();
-  if (!HASH.test(hash)) throw new Error(`${label} proof has no code hash`);
-  return hash;
+function runtimeCodeHash(value, label) {
+  if (value && typeof value === "object" && HASH.test(value.codeHash || "")) {
+    return value.codeHash.toLowerCase();
+  }
+  if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(String(value || ""))) {
+    throw new Error(`${label} has invalid runtime bytecode`);
+  }
+  return keccak256Hex(value);
 }
 
 function callRequest(key, to, data, blockNumber) {
   return { key, method: "eth_call", params: [{ to, data }, blockNumber] };
 }
 
-function proofRequest(key, address, blockNumber) {
-  return { key, method: "eth_getProof", params: [address, [], blockNumber] };
+function codeRequest(key, address, blockNumber) {
+  return { key, method: "eth_getCode", params: [address, blockNumber] };
 }
 
 function validateChainManifest(manifest) {
@@ -249,6 +401,8 @@ function validateChainManifest(manifest) {
       || !HASH.test(bounty.bounty_id || "")
       || !ADDRESS.test(bounty.contract || "")
       || !ADDRESS.test(bounty.creator || "")
+      || (bounty.verifier_set_hash !== undefined
+        && !HASH.test(bounty.verifier_set_hash || ""))
       || !["deterministic_module", "signed_quorum", "ai_judge_quorum"]
         .includes(bounty.verification_mode)
       || (bounty.verification_mode === "deterministic_module"
@@ -331,6 +485,7 @@ function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, c
     claim_contract: bounty.contract.toLowerCase(),
     verification_mode: bounty.verification_mode,
     verifier_module: bounty.verifier_module?.toLowerCase() || null,
+    verifier_set_hash: (bounty.verifier_set_hash || manifest.verifier_set_hash).toLowerCase(),
     verification_ready: true,
   };
   const standingMeta = standingMetaDescriptor({
@@ -371,9 +526,9 @@ export async function verifyDirectChainInventory({
     };
 
     const factoryProof = await rpcTransport(rpc, [
-      proofRequest("factory_proof", checked.factory, blockNumber),
+      codeRequest("factory_proof", checked.factory, blockNumber),
     ]);
-    const factoryCodeHash = proofCodeHash(factoryProof.get("factory_proof"), "factory");
+    const factoryCodeHash = runtimeCodeHash(factoryProof.get("factory_proof"), "factory");
     if (factoryCodeHash === EMPTY_CODE_HASH) {
       return {
         status: "not_deployed",
@@ -385,7 +540,7 @@ export async function verifyDirectChainInventory({
       };
     }
     const implementationProof = await rpcTransport(rpc, [
-      proofRequest("implementation_proof", checked.implementation, blockNumber),
+      codeRequest("implementation_proof", checked.implementation, blockNumber),
     ]);
     const globalResults = await rpcTransport(rpc, [
       callRequest("factory_protocol", checked.factory, SELECTOR.factoryProtocolVersion, blockNumber),
@@ -394,7 +549,7 @@ export async function verifyDirectChainInventory({
     ]);
     if (
       factoryCodeHash !== checked.factory_runtime_code_hash.toLowerCase()
-      || proofCodeHash(implementationProof.get("implementation_proof"), "implementation")
+      || runtimeCodeHash(implementationProof.get("implementation_proof"), "implementation")
         !== checked.implementation_runtime_code_hash.toLowerCase()
       || decodedHash(globalResults.get("factory_protocol"), "factory protocol")
         !== checked.protocol_hash.toLowerCase()
@@ -442,9 +597,9 @@ export async function verifyDirectChainInventory({
     const results = await rpcTransport(rpc, requests);
     for (const bounty of checked.bounties) {
       const key = `bounty_${bounty.issue}_proof`;
-      const proofRequests = [proofRequest(key, bounty.contract, blockNumber)];
+      const proofRequests = [codeRequest(key, bounty.contract, blockNumber)];
       if (bounty.verification_mode === "deterministic_module") {
-        proofRequests.push(proofRequest(
+        proofRequests.push(codeRequest(
           `bounty_${bounty.issue}_verifier_proof`,
           bounty.verifier_module,
           blockNumber,
@@ -468,8 +623,11 @@ export async function verifyDirectChainInventory({
         }[bounty.verification_mode];
         const expectedModule = bounty.verifier_module?.toLowerCase()
           || "0x0000000000000000000000000000000000000000";
+        const expectedVerifierSetHash = (
+          bounty.verifier_set_hash || checked.verifier_set_hash
+        ).toLowerCase();
         const matches = [
-          proofCodeHash(results.get(`${prefix}_proof`), `bounty #${bounty.issue}`)
+          runtimeCodeHash(results.get(`${prefix}_proof`), `bounty #${bounty.issue}`)
             === checked.bounty_proxy_runtime_code_hash.toLowerCase(),
           decodedUint(results.get(`${prefix}_canonical`), "canonical registration") === 1n,
           decodedHash(results.get(`${prefix}_protocol`), "bounty protocol") === checked.protocol_hash.toLowerCase(),
@@ -487,14 +645,14 @@ export async function verifyDirectChainInventory({
           decodedHash(results.get(`${prefix}_acceptance`), "acceptance hash") === bounty.acceptance_criteria_hash.toLowerCase(),
           decodedHash(results.get(`${prefix}_benchmark`), "benchmark hash") === bounty.benchmark_hash.toLowerCase(),
           decodedHash(results.get(`${prefix}_evidence`), "evidence schema hash") === bounty.evidence_schema_hash.toLowerCase(),
-          decodedHash(results.get(`${prefix}_verifier_set`), "verifier set hash") === checked.verifier_set_hash.toLowerCase(),
+          decodedHash(results.get(`${prefix}_verifier_set`), "verifier set hash") === expectedVerifierSetHash,
           decodedUint(results.get(`${prefix}_verification_mode`), "verification mode") === expectedMode,
           decodedAddress(results.get(`${prefix}_verifier_module`), "verifier module") === expectedModule,
           tokenBalance >= funded + timeoutBonus,
         ];
         if (bounty.verification_mode === "deterministic_module") {
           matches.push(
-            proofCodeHash(results.get(`${prefix}_verifier_proof`), `bounty #${bounty.issue} verifier`)
+            runtimeCodeHash(results.get(`${prefix}_verifier_proof`), `bounty #${bounty.issue} verifier`)
               === bounty.verifier_runtime_code_hash.toLowerCase(),
           );
         }
@@ -657,9 +815,9 @@ async function attestStandingMetaVerifier(rpcUrl, rpcTransport) {
       throw new Error("Base RPC did not return a safe block identity");
     }
     const proofs = await rpcTransport(rpc, [
-      proofRequest("standing_meta_verifier_proof", STANDING_META_BOUNTY.verifierModule, blockNumber),
+      codeRequest("standing_meta_verifier_proof", STANDING_META_BOUNTY.verifierModule, blockNumber),
     ]);
-    const codeHash = proofCodeHash(
+    const codeHash = runtimeCodeHash(
       proofs.get("standing_meta_verifier_proof"),
       "standing meta verifier",
     );
