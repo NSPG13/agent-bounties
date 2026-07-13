@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   collectInventory,
   normalizeApiBaseUrl,
+  STANDING_META_BOUNTY,
   verifyClaimableItem,
   verifyDirectChainInventory,
 } from "../skills/agent-bounties/scripts/check-in.mjs";
@@ -41,6 +42,7 @@ async function permissionlessDirectManifest() {
   for (const bounty of manifest.bounties) {
     bounty.verification_mode = "deterministic_module";
     bounty.verifier_module = "0x8888888888888888888888888888888888888888";
+    bounty.verifier_runtime_code_hash = `0x${"77".repeat(32)}`;
   }
   return manifest;
 }
@@ -100,6 +102,7 @@ function directTransport(manifest, mutate = null) {
           verifier_module: abiAddress(
             bounty.verifier_module || "0x0000000000000000000000000000000000000000",
           ),
+          verifier_proof: { codeHash: bounty.verifier_runtime_code_hash },
           token_balance: abiWord(bounty.target_minor),
           solver_balance: abiWord(500000),
           allowance: abiWord(0),
@@ -111,6 +114,39 @@ function directTransport(manifest, mutate = null) {
     }
     return results;
   };
+}
+
+function standingMetaTransport(runtimeCodeHash = STANDING_META_BOUNTY.verifierRuntimeCodeHash) {
+  return async (_rpcUrl, calls) => new Map(calls.map((call) => {
+    if (call.key === "standing_meta_safe_block") {
+      return [call.key, {
+        number: "0x12345",
+        hash: `0x${"dd".repeat(32)}`,
+      }];
+    }
+    assert.equal(call.key, "standing_meta_verifier_proof");
+    return [call.key, { codeHash: runtimeCodeHash }];
+  }));
+}
+
+function makeHostedStandingMetaCandidate(item) {
+  item.verifier_module = STANDING_META_BOUNTY.verifierModule;
+  item.terms.document.acceptance_criteria = [...STANDING_META_BOUNTY.acceptanceCriteria];
+  item.terms.document.benchmark = {
+    engine: "canonical_child_loop_v1",
+    required_child_status: "settled",
+    verifier_module: STANDING_META_BOUNTY.verifierModule,
+  };
+  item.terms.document.evidence_schema = {
+    type: "object",
+    required: ["child_bounty_contract"],
+  };
+  item.terms.document.verification_policy = {
+    mechanism: "deterministic_module",
+    verifier_module: STANDING_META_BOUNTY.verifierModule,
+    threshold: 1,
+  };
+  return item;
 }
 
 test("portable skill metadata and install contracts remain publishable", async () => {
@@ -344,6 +380,40 @@ test("direct safe-chain verifier excludes one bounty with altered terms", async 
   assert.deepEqual(report.excluded.map((item) => item.id), [manifest.bounties[0].bounty_id]);
 });
 
+test("direct safe-chain inventory marks only the exact canonical child verifier as meta", async () => {
+  const manifest = await permissionlessDirectManifest();
+  const bounty = manifest.bounties[0];
+  bounty.verifier_module = STANDING_META_BOUNTY.verifierModule;
+  bounty.verifier_runtime_code_hash = STANDING_META_BOUNTY.verifierRuntimeCodeHash;
+  bounty.acceptance_criteria_hash = STANDING_META_BOUNTY.acceptanceCriteriaHash;
+  const report = await verifyDirectChainInventory({
+    manifest,
+    rpcUrl: "https://rpc.example.test",
+    rpcTransport: directTransport(manifest),
+  });
+
+  assert.equal(report.verified.length, 1);
+  assert.equal(
+    report.verified[0].standing_meta_bounty.inventory_class,
+    STANDING_META_BOUNTY.inventoryClass,
+  );
+  assert.equal(report.verified[0].standing_meta_bounty.requires_different_solver_wallet, true);
+});
+
+test("direct safe-chain inventory rejects deterministic verifier bytecode drift", async () => {
+  const manifest = await permissionlessDirectManifest();
+  const report = await verifyDirectChainInventory({
+    manifest,
+    rpcUrl: "https://rpc.example.test",
+    rpcTransport: directTransport(manifest, (key, value) => (
+      key.endsWith("_verifier_proof") ? { codeHash: `0x${"66".repeat(32)}` } : value
+    )),
+  });
+
+  assert.equal(report.verified.length, 0);
+  assert.equal(report.excluded.length, manifest.bounties.length);
+});
+
 test("unavailable hosted services fall back to direct safe-chain inventory", async () => {
   const manifest = await permissionlessDirectManifest();
   const report = await collectInventory({
@@ -418,6 +488,38 @@ test("only active canonical autonomous inventory is claimable", async () => {
   assert.equal(report.recommended_action, "claim_verified_bounty");
   assert.equal(report.funding_candidates.length, 1);
   assert.equal(report.live_verification_jobs.length, 1);
+});
+
+test("hosted inventory emits a standing meta marker after exact-code safe-block attestation", async () => {
+  const input = await fixture("verified-claimable.json");
+  makeHostedStandingMetaCandidate(input.autonomous_feed.body[0]);
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: input,
+    baseRpcUrl: "https://rpc.example.test",
+    rpcTransport: standingMetaTransport(),
+  });
+
+  const meta = report.verified_claimable_bounties[0].standing_meta_bounty;
+  assert.equal(meta.schema_version, STANDING_META_BOUNTY.schemaVersion);
+  assert.equal(meta.inventory_class, STANDING_META_BOUNTY.inventoryClass);
+  assert.equal(meta.observed_block_number, 0x12345);
+  assert.ok(!report.warnings.includes("standing_meta_verifier_attestation_failed"));
+});
+
+test("hosted meta-looking terms do not count when verifier bytecode differs", async () => {
+  const input = await fixture("verified-claimable.json");
+  makeHostedStandingMetaCandidate(input.autonomous_feed.body[0]);
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: input,
+    baseRpcUrl: "https://rpc.example.test",
+    rpcTransport: standingMetaTransport(`0x${"66".repeat(32)}`),
+  });
+
+  assert.equal(report.verified_claimable_bounties.length, 1);
+  assert.equal(report.verified_claimable_bounties[0].standing_meta_bounty, undefined);
+  assert.ok(report.warnings.includes("standing_meta_verifier_code_mismatch"));
 });
 
 test("hosted quorum bounty is excluded without a service availability attestation", async () => {
