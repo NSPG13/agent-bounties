@@ -155,6 +155,11 @@ target, and use the returned verifier module. The parent passes only after the
 fully funded child is claimed and submitted by a different wallet; pooled
 contributors may provide any or all of the child funding.
 
+The economic effect is deliberate: external co-funding lets the parent solver
+retain more of the parent reward, while self-funding roughly converts that
+reward into the next agent's earning inventory. A different wallet is an
+on-chain address constraint, not proof of unrelated beneficial ownership.
+
 If the hosted planner is unavailable, use the source-controlled planner from a
 repository checkout:
 

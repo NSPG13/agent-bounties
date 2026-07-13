@@ -1,0 +1,66 @@
+{
+  "creator": "0x884834E884d6e93462655A2820140aD03E6747bC",
+  "verifiers": [],
+  "funding_deadline": 1791676800,
+  "bounties": [
+    {
+      "issue": 217,
+      "document": "bounties/autonomous-v1/217.json",
+      "commitments": {
+        "terms_hash": "0x79ad6bca38a1fe89c3ea3e0a2626c4ce676508fb11a536cfb7d88e2c65861341",
+        "policy_hash": "0xda07d7be200da71e91e188435e784eb2cdf59b12d35f58cb38960282a7df65e7",
+        "acceptance_criteria_hash": "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553",
+        "benchmark_hash": "0x75b7dca470b32b6cb289dd7c6d36c380ef090f7ad48400debef7a9ef6606fc48",
+        "evidence_schema_hash": "0x63403e220d097ae424c3772578b6708bf6114d2d4b9976a5d8fa22231fb5b300"
+      },
+      "creation_nonce": "0x6a7751dfcd4709a50bf22722e9c9f4ac5a4ad9086d99b0d65a8a247959c36e3f"
+    },
+    {
+      "issue": 218,
+      "document": "bounties/autonomous-v1/218.json",
+      "commitments": {
+        "terms_hash": "0x52a338e7c551168b41a644d91fe60aa1c40979d73624149e86bfaaeaaba5b492",
+        "policy_hash": "0xda07d7be200da71e91e188435e784eb2cdf59b12d35f58cb38960282a7df65e7",
+        "acceptance_criteria_hash": "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553",
+        "benchmark_hash": "0x66433351d0007df8de1ed2233c30ff9c430830dedd2b67952d1e5f928b8ccada",
+        "evidence_schema_hash": "0x63403e220d097ae424c3772578b6708bf6114d2d4b9976a5d8fa22231fb5b300"
+      },
+      "creation_nonce": "0x1716fd36212e841042377fa7adeb2b524124cd51e04b9fee244d48a839ee2fe8"
+    },
+    {
+      "issue": 219,
+      "document": "bounties/autonomous-v1/219.json",
+      "commitments": {
+        "terms_hash": "0x89a9b532872a1c4ca44605ff31a2a51824e23b039ea001586cedfb6c18f428bb",
+        "policy_hash": "0xda07d7be200da71e91e188435e784eb2cdf59b12d35f58cb38960282a7df65e7",
+        "acceptance_criteria_hash": "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553",
+        "benchmark_hash": "0xe0c6001a5954f2bbcba0ef5ca0280e71e1825c131ba162911040af20865f9e7d",
+        "evidence_schema_hash": "0x63403e220d097ae424c3772578b6708bf6114d2d4b9976a5d8fa22231fb5b300"
+      },
+      "creation_nonce": "0x6be855bd6491ad18ccee73d84d38d0e5722255c905fc6e219979531afa306ee4"
+    },
+    {
+      "issue": 220,
+      "document": "bounties/autonomous-v1/220.json",
+      "commitments": {
+        "terms_hash": "0xd485b1fc4ced3fdfd75b560dcc2eaab2ce379278ab3eb7441ce3bc9ab0d09e4d",
+        "policy_hash": "0xda07d7be200da71e91e188435e784eb2cdf59b12d35f58cb38960282a7df65e7",
+        "acceptance_criteria_hash": "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553",
+        "benchmark_hash": "0xa9453843816d8bfcdc607ca0cb53e9909d46d8de7a1e904b45f8b025c56fd6f9",
+        "evidence_schema_hash": "0x63403e220d097ae424c3772578b6708bf6114d2d4b9976a5d8fa22231fb5b300"
+      },
+      "creation_nonce": "0xcb34d62655be09e4885f1b3e86d02d444d994973464079df61700ee22701fc30"
+    }
+  ],
+  "schema_version": "agent-bounties/canonical-terms-manifest-v1",
+  "created_at": "2026-07-13T06:45:00Z",
+  "verification_mode": "deterministic_module",
+  "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+  "economics": {
+    "solver_reward": 900000,
+    "verifier_reward": 100000,
+    "claim_bond": 100000,
+    "initial_funding": 1000000,
+    "currency": "usdc"
+  }
+}

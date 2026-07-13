@@ -118,3 +118,17 @@ $committedActivation = Get-Content (Join-Path $repoRoot "deployments\base-mainne
 if ($generatedActivation -ne $committedActivation) {
     throw "deployments/base-mainnet-activation.json is stale; regenerate it with the autonomous-activation-bundle command"
 }
+
+$seedActivationCheck = Join-Path $repoRoot "target\tmp\canonical-child-seeds-base-mainnet.json"
+Invoke-Checked {
+    cargo run -p cli -- autonomous-activation-bundle `
+        --manifest bounties/autonomous-v1/canonical-child-seeds-manifest.json `
+        --deployer 0x884834E884d6e93462655A2820140aD03E6747bC `
+        --deployer-nonce 4 `
+        --output $seedActivationCheck
+}
+$generatedSeedActivation = Get-Content $seedActivationCheck -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+$committedSeedActivation = Get-Content (Join-Path $repoRoot "deployments\canonical-child-seeds-base-mainnet.json") -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+if ($generatedSeedActivation -ne $committedSeedActivation) {
+    throw "deployments/canonical-child-seeds-base-mainnet.json is stale; regenerate it from the canonical child seed manifest"
+}

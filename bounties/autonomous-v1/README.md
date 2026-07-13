@@ -25,7 +25,8 @@ cargo run -p cli -- autonomous-activation-bundle `
   --deployer 0x884834E884d6e93462655A2820140aD03E6747bC `
   --deployer-nonce 4 `
   --output deployments/base-mainnet-activation.json
-python scripts\rehearse_autonomous_activation.py
+python scripts\rehearse_autonomous_activation.py `
+  --fork-block-number 48496661
 ```
 
 The checked-in bundle predicts the factory and implementation from the
@@ -37,3 +38,25 @@ never signs or broadcasts a Base mainnet transaction.
 Issue `#187` uses the separately deployed permissionless verifier recorded in
 `deployments/leading-zero-work-verifier-base-mainnet.json`. Its terms are not
 funding evidence until a matching canonical bounty is created and indexed.
+
+Issues `#217` through `#220` are the first canonical-child-v1 seed set. Their
+terms and aggregate unsigned wallet calls are locked by
+`canonical-child-seeds-manifest.json` and
+`deployments/canonical-child-seeds-base-mainnet.json`. Reproduce the batch and
+replay the verifier plus all four creations against current Base state with:
+
+```powershell
+cargo run -p cli -- autonomous-activation-bundle `
+  --manifest bounties/autonomous-v1/canonical-child-seeds-manifest.json `
+  --deployer 0x884834E884d6e93462655A2820140aD03E6747bC `
+  --deployer-nonce 4 `
+  --output deployments/canonical-child-seeds-base-mainnet.json
+python scripts/rehearse_autonomous_activation.py `
+  --bundle deployments/canonical-child-seeds-base-mainnet.json `
+  --expect-existing-factory `
+  --verifier-deployment deployments/canonical-child-verifier-base-mainnet-deployment.json `
+  --fork-url https://your-base-mainnet-rpc
+```
+
+The seed issues remain activation-blocked until confirmed mainnet events are
+recorded. The bundle and fork replay are not funding evidence.
