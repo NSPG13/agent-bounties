@@ -24,23 +24,30 @@ use chain_base::{
     autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
     build_autonomous_submission_evidence_record, build_autonomous_verification_jobs,
-    decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
+    canonical_bounded_wallet_expected_state, decode_autonomous_bounty_logs,
+    eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
+    fetch_transaction_receipt, inspect_bounded_wallet_safe_state, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
-    AutonomousBountyAuthorizationSignature, AutonomousBountyAuthorizedClaimPlan,
-    AutonomousBountyAuthorizedContributionPlan, AutonomousBountyAuthorizedCreationPlan,
-    AutonomousBountyClaimPlan, AutonomousBountyContribution, AutonomousBountyContributionPlan,
-    AutonomousBountyCreate, AutonomousBountyCreationPlan, AutonomousBountyEvent,
-    AutonomousBountyFeedItem, AutonomousBountySubmissionAuthorizationRequest,
+    validate_bounded_wallet_action_against_safe_state, AutonomousBountyAuthorizationSignature,
+    AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
+    AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
+    AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
+    AutonomousBountyCreationPlan, AutonomousBountyEvent, AutonomousBountyFeedItem,
+    AutonomousBountySubmissionAuthorizationRequest,
     AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountyTxPlanner,
     AutonomousSignedAttestation, AutonomousVerificationAttestationRequest,
     AutonomousVerificationAttestationTypedData, AutonomousVerificationJob, BaseNetworkDescriptor,
     BaseRpcUrlConfig, BoundedAgentWalletAction, BoundedAgentWalletActionPlan,
     BoundedAgentWalletActionRequest, BoundedAgentWalletAuthorizedActionPlan,
+    BoundedWalletDeploymentExpectedState, BoundedWalletSafeObservation,
     CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest, ChainBaseError,
     EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent,
     RpcTransactionReceipt,
+};
+#[cfg(test)]
+use chain_base::{
+    CANONICAL_BASE_MAINNET_BOUNDED_WALLET_FACTORY, CANONICAL_BASE_SEPOLIA_BOUNDED_WALLET_FACTORY,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
@@ -131,6 +138,7 @@ use uuid::Uuid;
         plan_autonomous_bounty_authorized_claim,
         plan_bounded_agent_wallet_action,
         plan_bounded_agent_wallet_authorized_action,
+        inspect_bounded_agent_wallet,
         plan_autonomous_bounty_submission,
         plan_autonomous_bounty_submission_authorization,
         plan_autonomous_verification_attestation,
@@ -480,6 +488,11 @@ struct PlanBoundedAgentWalletAuthorizedActionRequest {
     relayer: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct BoundedAgentWalletInspectionQuery {
+    network: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousBountySubmissionRequest {
     network: Option<String>,
@@ -763,6 +776,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/authorized-claim-plan",
             post(plan_autonomous_bounty_authorized_claim),
+        )
+        .route(
+            "/v1/base/bounded-agent-wallet/:wallet/inspection",
+            get(inspect_bounded_agent_wallet),
         )
         .route(
             "/v1/base/bounded-agent-wallet/action-plan",
@@ -2275,6 +2292,9 @@ fn base_rpc_fetch_status(error: &ChainBaseError) -> StatusCode {
 const CANONICAL_BASE_MAINNET_BOUNTY_FACTORY: &str = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
 const CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION: &str =
     "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9";
+const CANONICAL_BASE_SEPOLIA_BOUNTY_FACTORY: &str = "0x95e28e0c270374cb1406f88e26ee68e49be50e92";
+const CANONICAL_BASE_SEPOLIA_BOUNTY_IMPLEMENTATION: &str =
+    "0x2aada84f8953a7a7b7b6ff3834158a8d40751564";
 
 fn autonomous_planner_addresses(
     chain_id: u64,
@@ -2302,9 +2322,16 @@ fn autonomous_planner_addresses(
         ));
     }
     if chain_id == 84_532 {
+        if factory.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_SEPOLIA_BOUNTY_FACTORY)
+        }) || implementation.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_SEPOLIA_BOUNTY_IMPLEMENTATION)
+        }) {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
         return Ok((
-            factory.ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
-            implementation.ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
+            CANONICAL_BASE_SEPOLIA_BOUNTY_FACTORY.to_string(),
+            CANONICAL_BASE_SEPOLIA_BOUNTY_IMPLEMENTATION.to_string(),
         ));
     }
     Err(StatusCode::BAD_REQUEST)
@@ -2330,6 +2357,45 @@ fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlan
     )?;
     AutonomousBountyTxPlanner::new(&factory, &implementation)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn bounded_wallet_expected_state(
+    network: &str,
+    mainnet_enabled: bool,
+) -> Result<BoundedWalletDeploymentExpectedState, StatusCode> {
+    let descriptor = base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if descriptor.chain_id == 8_453 && !mainnet_enabled {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    canonical_bounded_wallet_expected_state(network).map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn bounded_wallet_mainnet_enabled() -> bool {
+    env::var("ENABLE_BOUNDED_WALLET_MAINNET")
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+async fn configured_bounded_wallet_observation(
+    state: &SharedState,
+    network: &str,
+    wallet: &str,
+) -> Result<BoundedWalletSafeObservation, StatusCode> {
+    let expected = bounded_wallet_expected_state(network, bounded_wallet_mainnet_enabled())?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(network)
+        .map_err(|error| base_rpc_fetch_status(&error))?;
+    inspect_bounded_wallet_safe_state(&rpc_url, &expected, wallet)
+        .await
+        .map_err(|error| match error {
+            ChainBaseError::InvalidAddress(_) | ChainBaseError::UnknownNetwork(_) => {
+                StatusCode::BAD_REQUEST
+            }
+            ChainBaseError::MissingRpcUrl { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            ChainBaseError::InvalidVerificationConfiguration(_) => StatusCode::CONFLICT,
+            _ => StatusCode::BAD_GATEWAY,
+        })
 }
 
 async fn require_indexed_canonical_bounty(
@@ -2424,9 +2490,7 @@ async fn validate_bounded_agent_wallet_action(
     network: &str,
     action: &BoundedAgentWalletAction,
 ) -> Result<(), StatusCode> {
-    if network != "base-sepolia" {
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
-    }
+    bounded_wallet_expected_state(network, bounded_wallet_mainnet_enabled())?;
     match action {
         BoundedAgentWalletAction::Create { create } => {
             require_autonomous_creation_terms(state, network, create).await
@@ -2464,27 +2528,75 @@ async fn validate_bounded_agent_wallet_action(
     }
 }
 
-#[utoipa::path(post, path = "/v1/base/bounded-agent-wallet/action-plan", responses((status = 200, description = "Testnet-only direct transaction and exact EIP-712 authorization for a policy-capped agent wallet"), (status = 503, description = "Bounded wallet mainnet activation is not enabled")))]
+#[utoipa::path(
+    get,
+    path = "/v1/base/bounded-agent-wallet/{wallet}/inspection",
+    params(
+        ("wallet" = String, Path, description = "Factory-registered bounded wallet address"),
+        ("network" = Option<String>, Query, description = "Base network; defaults to base-sepolia")
+    ),
+    responses(
+        (status = 200, description = "Exact bounded-wallet code, immutable configuration, registration, owner, policy, counters, and activation at one Base safe block"),
+        (status = 409, description = "Wallet or factory does not match the canonical activation"),
+        (status = 503, description = "RPC or bounded-wallet mainnet activation is unavailable")
+    )
+)]
+async fn inspect_bounded_agent_wallet(
+    State(state): State<SharedState>,
+    Path(wallet): Path<String>,
+    Query(query): Query<BoundedAgentWalletInspectionQuery>,
+) -> Result<Json<BoundedWalletSafeObservation>, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-sepolia");
+    configured_bounded_wallet_observation(&state, network, &wallet)
+        .await
+        .map(Json)
+}
+
+#[utoipa::path(post, path = "/v1/base/bounded-agent-wallet/action-plan", responses((status = 200, description = "Safe-block-gated direct transaction and exact EIP-712 authorization for a policy-capped agent wallet"), (status = 409, description = "Wallet identity, bytecode, policy, nonce, deadline, or spend caps do not match safe state"), (status = 503, description = "Bounded wallet mainnet activation is not enabled")))]
 async fn plan_bounded_agent_wallet_action(
     State(state): State<SharedState>,
     Json(request): Json<PlanBoundedAgentWalletActionRequest>,
 ) -> Result<Json<BoundedAgentWalletActionPlan>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-sepolia");
     validate_bounded_agent_wallet_action(&state, network, &request.wallet_action.action).await?;
-    configured_autonomous_planner(network)?
+    let plan = configured_autonomous_planner(network)?
         .plan_bounded_wallet_action(network, &request.wallet_action)
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let observation = configured_bounded_wallet_observation(
+        &state,
+        network,
+        &request.wallet_action.wallet_contract,
+    )
+    .await?;
+    validate_bounded_wallet_action_against_safe_state(&request.wallet_action, &plan, &observation)
+        .map_err(|_| StatusCode::CONFLICT)?;
+    Ok(Json(plan))
 }
 
-#[utoipa::path(post, path = "/v1/base/bounded-agent-wallet/authorized-action-plan", responses((status = 200, description = "Testnet-only gas-sponsorable relay transaction for an exact delegate-signed bounded-wallet action"), (status = 503, description = "Bounded wallet mainnet activation is not enabled")))]
+#[utoipa::path(post, path = "/v1/base/bounded-agent-wallet/authorized-action-plan", responses((status = 200, description = "Safe-block-gated gas-sponsorable relay transaction for an exact delegate-signed bounded-wallet action"), (status = 409, description = "Wallet identity, bytecode, policy, nonce, deadline, or spend caps do not match safe state"), (status = 503, description = "Bounded wallet mainnet activation is not enabled")))]
 async fn plan_bounded_agent_wallet_authorized_action(
     State(state): State<SharedState>,
     Json(request): Json<PlanBoundedAgentWalletAuthorizedActionRequest>,
 ) -> Result<Json<BoundedAgentWalletAuthorizedActionPlan>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-sepolia");
     validate_bounded_agent_wallet_action(&state, network, &request.wallet_action.action).await?;
-    configured_autonomous_planner(network)?
+    let planner = configured_autonomous_planner(network)?;
+    let unsigned_plan = planner
+        .plan_bounded_wallet_action(network, &request.wallet_action)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let observation = configured_bounded_wallet_observation(
+        &state,
+        network,
+        &request.wallet_action.wallet_contract,
+    )
+    .await?;
+    validate_bounded_wallet_action_against_safe_state(
+        &request.wallet_action,
+        &unsigned_plan,
+        &observation,
+    )
+    .map_err(|_| StatusCode::CONFLICT)?;
+    planner
         .plan_bounded_wallet_authorized_action(
             network,
             &request.wallet_action,
@@ -5941,17 +6053,40 @@ mod tests {
     }
 
     #[test]
-    fn sepolia_planner_still_requires_explicit_addresses() {
+    fn sepolia_planner_uses_only_the_canonical_attested_deployment() {
         assert_eq!(
-            autonomous_planner_addresses(84_532, None, None),
+            autonomous_planner_addresses(84_532, None, None).unwrap(),
+            (
+                CANONICAL_BASE_SEPOLIA_BOUNTY_FACTORY.to_string(),
+                CANONICAL_BASE_SEPOLIA_BOUNTY_IMPLEMENTATION.to_string()
+            )
+        );
+        assert_eq!(
+            autonomous_planner_addresses(
+                84_532,
+                Some("0x1111111111111111111111111111111111111111".to_string()),
+                Some("0x2222222222222222222222222222222222222222".to_string()),
+            ),
             Err(StatusCode::SERVICE_UNAVAILABLE)
         );
-        assert!(autonomous_planner_addresses(
-            84_532,
-            Some("0x1111111111111111111111111111111111111111".to_string()),
-            Some("0x2222222222222222222222222222222222222222".to_string()),
-        )
-        .is_ok());
+    }
+
+    #[test]
+    fn bounded_wallet_mainnet_requires_explicit_activation() {
+        let sepolia = bounded_wallet_expected_state("base-sepolia", false).unwrap();
+        assert_eq!(
+            sepolia.wallet_factory_contract,
+            CANONICAL_BASE_SEPOLIA_BOUNDED_WALLET_FACTORY
+        );
+        assert_eq!(
+            bounded_wallet_expected_state("base-mainnet", false),
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        );
+        let mainnet = bounded_wallet_expected_state("base-mainnet", true).unwrap();
+        assert_eq!(
+            mainnet.wallet_factory_contract,
+            CANONICAL_BASE_MAINNET_BOUNDED_WALLET_FACTORY
+        );
     }
 
     #[tokio::test]
@@ -5990,6 +6125,7 @@ mod tests {
             "/v1/base/autonomous-bounties/authorized-claim-plan",
             "/v1/base/bounded-agent-wallet/action-plan",
             "/v1/base/bounded-agent-wallet/authorized-action-plan",
+            "/v1/base/bounded-agent-wallet/{wallet}/inspection",
             "/v1/base/autonomous-bounties/submission-plan",
             "/v1/base/autonomous-bounties/submission-authorization-plan",
             "/v1/base/autonomous-bounties/verification-jobs",

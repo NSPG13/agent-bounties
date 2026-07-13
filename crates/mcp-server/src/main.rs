@@ -19,16 +19,17 @@ use chain_base::{
     autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
     build_autonomous_submission_evidence_record, build_autonomous_verification_jobs,
-    decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
+    canonical_bounded_wallet_expected_state, decode_autonomous_bounty_logs,
+    eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
+    fetch_transaction_receipt, inspect_bounded_wallet_safe_state, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
-    AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
-    AutonomousBountyFeedItem, AutonomousBountySubmissionAuthorizationRequest,
-    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
-    AutonomousVerificationAttestationRequest, BaseNetworkDescriptor, BaseRpcUrlConfig,
-    BoundedAgentWalletAction, BoundedAgentWalletActionRequest, CanonicalChildBountyTermsRequest,
-    EvmLog,
+    validate_bounded_wallet_action_against_safe_state, AutonomousBountyAuthorizationSignature,
+    AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
+    AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
+    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseNetworkDescriptor,
+    BaseRpcUrlConfig, BoundedAgentWalletAction, BoundedAgentWalletActionRequest,
+    BoundedWalletSafeObservation, CanonicalChildBountyTermsRequest, EvmLog,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
@@ -330,6 +331,12 @@ struct PlanBoundedAgentWalletAuthorizedActionArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct InspectBoundedAgentWalletArgs {
+    network: Option<String>,
+    wallet_contract: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousBountySubmissionArgs {
     network: Option<String>,
     bounty_contract: String,
@@ -610,6 +617,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_bounded_agent_wallet_authorized_action",
             post(plan_bounded_agent_wallet_authorized_action),
+        )
+        .route(
+            "/tools/inspect_bounded_agent_wallet",
+            post(inspect_bounded_agent_wallet),
         )
         .route(
             "/tools/plan_autonomous_bounty_submission",
@@ -1384,11 +1395,22 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
         ),
         tool(
-            "plan_bounded_agent_wallet_action",
-            "Build a testnet-only direct transaction and exact EIP-712 authorization for one canonical bounty action under an owner-defined on-chain spending policy. The delegate key is never sent to this service.",
+            "inspect_bounded_agent_wallet",
+            "Inspect exact wallet/factory bytecode, registration, immutable configuration, owner, active delegate policy, nonces, counters, and activation at one Base safe block.",
             object_tool_schema(
                 json!({
-                    "network": { "type": ["string", "null"], "const": "base-sepolia", "description": "Optional during rehearsal; defaults to base-sepolia." },
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia. Mainnet requires explicit service activation."),
+                    "wallet_contract": string_property("Factory-registered bounded agent wallet contract.")
+                }),
+                &["wallet_contract"],
+            ),
+        ),
+        tool(
+            "plan_bounded_agent_wallet_action",
+            "After checking exact canonical wallet state at one Base safe block, build a direct transaction and exact EIP-712 authorization for one owner-capped bounty action. The delegate key is never sent to this service.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia. Mainnet requires explicit service activation."),
                     "wallet_action": bounded_agent_wallet_request_property()
                 }),
                 &["wallet_action"],
@@ -1396,10 +1418,10 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_bounded_agent_wallet_authorized_action",
-            "After the active delegate signs the exact EIP-712 payload, build a testnet-only transaction any gas sponsor can relay. The contract enforces canonical targets, action permissions, verifier modes, time limits, and spend caps.",
+            "After checking the same safe-block state and active delegate signature, build a transaction any gas sponsor can relay. The contract enforces canonical targets, action permissions, verifier modes, time limits, and spend caps.",
             object_tool_schema(
                 json!({
-                    "network": { "type": ["string", "null"], "const": "base-sepolia", "description": "Optional during rehearsal; defaults to base-sepolia." },
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia. Mainnet requires explicit service activation."),
                     "wallet_action": bounded_agent_wallet_request_property(),
                     "signature": {
                         "type": "object",
@@ -3153,9 +3175,37 @@ fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlan
     AutonomousBountyTxPlanner::new(factory, implementation).map_err(|error| error.to_string())
 }
 
+fn bounded_wallet_expected_state(
+    network: &str,
+) -> Result<chain_base::BoundedWalletDeploymentExpectedState, String> {
+    let descriptor = base_network_descriptor(network).map_err(|error| error.to_string())?;
+    if descriptor.chain_id == 8_453 && !env_flag("ENABLE_BOUNDED_WALLET_MAINNET") {
+        return Err("bounded agent wallet mainnet activation is not enabled".to_string());
+    }
+    canonical_bounded_wallet_expected_state(network).map_err(|error| error.to_string())
+}
+
+async fn configured_bounded_wallet_observation(
+    state: &SharedState,
+    network: &str,
+    wallet: &str,
+) -> Result<BoundedWalletSafeObservation, String> {
+    let expected = bounded_wallet_expected_state(network)?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(network)
+        .map_err(|error| error.to_string())?;
+    inspect_bounded_wallet_safe_state(&rpc_url, &expected, wallet)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 const CANONICAL_BASE_MAINNET_BOUNTY_FACTORY: &str = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
 const CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION: &str =
     "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9";
+const CANONICAL_BASE_SEPOLIA_BOUNTY_FACTORY: &str = "0x95e28e0c270374cb1406f88e26ee68e49be50e92";
+const CANONICAL_BASE_SEPOLIA_BOUNTY_IMPLEMENTATION: &str =
+    "0x2aada84f8953a7a7b7b6ff3834158a8d40751564";
 
 fn configured_address(value: Option<String>) -> Option<String> {
     value
@@ -3184,15 +3234,16 @@ fn autonomous_planner_addresses(
         ));
     }
     if chain_id == 84_532 {
+        if factory.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_SEPOLIA_BOUNTY_FACTORY)
+        }) || implementation.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_SEPOLIA_BOUNTY_IMPLEMENTATION)
+        }) {
+            return Err("configured Base Sepolia autonomous deployment does not match the canonical source-pinned deployment".to_string());
+        }
         return Ok((
-            factory.ok_or_else(|| {
-                "hosted autonomous protocol is not configured: set BASE_SEPOLIA_BOUNTY_FACTORY"
-                    .to_string()
-            })?,
-            implementation.ok_or_else(|| {
-                "hosted autonomous protocol is not configured: set BASE_SEPOLIA_BOUNTY_IMPLEMENTATION"
-                    .to_string()
-            })?,
+            CANONICAL_BASE_SEPOLIA_BOUNTY_FACTORY.to_string(),
+            CANONICAL_BASE_SEPOLIA_BOUNTY_IMPLEMENTATION.to_string(),
         ));
     }
     Err("unsupported Base network".to_string())
@@ -3306,7 +3357,7 @@ fn bounded_agent_wallet_request_property() -> Value {
         "type": "object",
         "description": "Exact delegate scope read from the wallet immediately before signing. The hosted service never receives a private key.",
         "properties": {
-            "wallet_contract": string_property("Deployed BoundedAgentWallet contract on Base Sepolia."),
+            "wallet_contract": string_property("Deployed canonical BoundedAgentWallet contract on the selected Base network."),
             "delegate": string_property("Active delegate signer configured by the wallet owner."),
             "policy_version": integer_property("Current positive on-chain policyVersion."),
             "delegate_nonce": integer_property("Current on-chain delegateNonce; prevents replay."),
@@ -3370,12 +3421,7 @@ async fn validate_bounded_agent_wallet_action(
     network: &str,
     action: &BoundedAgentWalletAction,
 ) -> Result<(), String> {
-    if network != "base-sepolia" {
-        return Err(
-            "bounded agent wallets are testnet-only until reviewed canonical bytecode and a deployment address are pinned"
-                .to_string(),
-        );
-    }
+    bounded_wallet_expected_state(network)?;
     match action {
         BoundedAgentWalletAction::Create { create } => {
             require_autonomous_creation_terms(state, network, create).await
@@ -3415,6 +3461,17 @@ async fn validate_bounded_agent_wallet_action(
     }
 }
 
+async fn inspect_bounded_agent_wallet(
+    State(state): State<SharedState>,
+    Json(args): Json<InspectBoundedAgentWalletArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-sepolia");
+    match configured_bounded_wallet_observation(&state, network, &args.wallet_contract).await {
+        Ok(observation) => mcp_json(observation),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn plan_bounded_agent_wallet_action(
     State(state): State<SharedState>,
     Json(args): Json<PlanBoundedAgentWalletActionArgs>,
@@ -3425,13 +3482,31 @@ async fn plan_bounded_agent_wallet_action(
     {
         return mcp_error(error);
     }
-    match configured_autonomous_planner(network).and_then(|planner| {
+    let plan = match configured_autonomous_planner(network).and_then(|planner| {
         planner
             .plan_bounded_wallet_action(network, &args.wallet_action)
             .map_err(|error| error.to_string())
     }) {
-        Ok(plan) => mcp_json(plan),
-        Err(error) => mcp_error(error),
+        Ok(plan) => plan,
+        Err(error) => return mcp_error(error),
+    };
+    let observation = match configured_bounded_wallet_observation(
+        &state,
+        network,
+        &args.wallet_action.wallet_contract,
+    )
+    .await
+    {
+        Ok(observation) => observation,
+        Err(error) => return mcp_error(error),
+    };
+    match validate_bounded_wallet_action_against_safe_state(
+        &args.wallet_action,
+        &plan,
+        &observation,
+    ) {
+        Ok(()) => mcp_json(plan),
+        Err(error) => mcp_error(error.to_string()),
     }
 }
 
@@ -3445,18 +3520,39 @@ async fn plan_bounded_agent_wallet_authorized_action(
     {
         return mcp_error(error);
     }
-    match configured_autonomous_planner(network).and_then(|planner| {
-        planner
-            .plan_bounded_wallet_authorized_action(
-                network,
-                &args.wallet_action,
-                &args.signature,
-                args.relayer.as_deref(),
-            )
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(plan) => mcp_json(plan),
-        Err(error) => mcp_error(error),
+    let planner = match configured_autonomous_planner(network) {
+        Ok(planner) => planner,
+        Err(error) => return mcp_error(error),
+    };
+    let unsigned_plan = match planner.plan_bounded_wallet_action(network, &args.wallet_action) {
+        Ok(plan) => plan,
+        Err(error) => return mcp_error(error.to_string()),
+    };
+    let observation = match configured_bounded_wallet_observation(
+        &state,
+        network,
+        &args.wallet_action.wallet_contract,
+    )
+    .await
+    {
+        Ok(observation) => observation,
+        Err(error) => return mcp_error(error),
+    };
+    match validate_bounded_wallet_action_against_safe_state(
+        &args.wallet_action,
+        &unsigned_plan,
+        &observation,
+    ) {
+        Ok(()) => match planner.plan_bounded_wallet_authorized_action(
+            network,
+            &args.wallet_action,
+            &args.signature,
+            args.relayer.as_deref(),
+        ) {
+            Ok(plan) => mcp_json(plan),
+            Err(error) => mcp_error(error.to_string()),
+        },
+        Err(error) => mcp_error(error.to_string()),
     }
 }
 
@@ -4635,6 +4731,7 @@ mod tests {
             "plan_autonomous_bounty_authorized_contribution",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
+            "inspect_bounded_agent_wallet",
             "plan_bounded_agent_wallet_action",
             "plan_bounded_agent_wallet_authorized_action",
             "plan_autonomous_bounty_submission",
@@ -4674,8 +4771,8 @@ mod tests {
             .find(|descriptor| descriptor.name == "plan_bounded_agent_wallet_action")
             .expect("bounded wallet descriptor exists");
         assert_eq!(
-            bounded_wallet.input_schema["properties"]["network"]["const"],
-            "base-sepolia"
+            bounded_wallet.input_schema["properties"]["network"]["enum"],
+            json!(["base-sepolia", "base-mainnet"])
         );
         assert_eq!(
             bounded_wallet.input_schema["properties"]["wallet_action"]["properties"]["action"]

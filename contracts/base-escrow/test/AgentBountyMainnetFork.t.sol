@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "../src/AgentBountyFactory.sol";
+import "../src/BoundedAgentWalletFactory.sol";
 import "../src/CanonicalChildBountyVerifier.sol";
 import "../src/LeadingZeroWorkVerifier.sol";
 
@@ -61,6 +62,12 @@ contract AgentBountyMainnetForkTest {
         uint256(keccak256("agent-bounties/mainnet-fork/gas-relay/creator-key"));
     uint256 private constant GAS_RELAY_SOLVER_KEY =
         uint256(keccak256("agent-bounties/mainnet-fork/gas-relay/solver-key"));
+    uint256 private constant BOUNDED_CREATOR_DELEGATE_KEY =
+        uint256(keccak256("agent-bounties/mainnet-fork/bounded-wallet/creator-delegate"));
+    uint256 private constant BOUNDED_SOLVER_DELEGATE_KEY =
+        uint256(keccak256("agent-bounties/mainnet-fork/bounded-wallet/solver-delegate"));
+    uint256 private constant BOUNDED_OWNER_KEY =
+        uint256(keccak256("agent-bounties/mainnet-fork/bounded-wallet/owner"));
 
     struct RelayLoopContext {
         AgentBounty bounty;
@@ -258,6 +265,39 @@ contract AgentBountyMainnetForkTest {
         require(usdc.balanceOf(context.creator) == context.creatorBefore + 100_000, "relayed verifier payout mismatch");
     }
 
+    function testBoundedWalletMainnetForkAutonomousPaidLoop() public {
+        if (!vm.envOr("RUN_MAINNET_FORK", false)) {
+            vm.skip(true);
+            return;
+        }
+        _selectMainnetFork();
+
+        MainnetUsdc usdc = MainnetUsdc(USDC);
+        (BoundedAgentWallet creatorWallet, BoundedAgentWallet solverWallet) = _deployBoundedWallets(usdc);
+        AgentBounty bounty = _createBoundedBounty(creatorWallet);
+        _relayBoundedAction(
+            solverWallet, BoundedAgentWallet.Action.Claim, abi.encode(address(bounty)), BOUNDED_SOLVER_DELEGATE_KEY
+        );
+        _relayBoundedAction(
+            solverWallet,
+            BoundedAgentWallet.Action.Submit,
+            abi.encode(address(bounty), SUBMISSION_HASH, EVIDENCE_HASH),
+            BOUNDED_SOLVER_DELEGATE_KEY
+        );
+        uint256 nonce = _mineLeadingZeroNonce(bounty.bountyId(), bounty.round(), address(solverWallet));
+        uint256 relayerBefore = usdc.balanceOf(RELAYER);
+        vm.prank(RELAYER);
+        bounty.verifyAndSettle(abi.encode(nonce));
+
+        require(bounty.bountyStatus() == AgentBounty.BountyStatus.Settled, "bounded bounty not settled");
+        require(usdc.balanceOf(address(bounty)) == 0, "bounded bounty retained USDC");
+        require(usdc.balanceOf(address(creatorWallet)) == 0, "creator wallet retained funding");
+        require(usdc.balanceOf(address(solverWallet)) == 300_000, "solver wallet payout mismatch");
+        require(usdc.balanceOf(RELAYER) == relayerBefore + 100_000, "bounded verifier payout mismatch");
+        require(creatorWallet.lifetimeSpent() == 300_000, "creator cap accounting mismatch");
+        require(solverWallet.lifetimeSpent() == 100_000, "solver cap accounting mismatch");
+    }
+
     function _createRelayLoopBounty() private returns (RelayLoopContext memory context) {
         AgentBountyFactory factory = AgentBountyFactory(FACTORY);
         MainnetUsdc usdc = MainnetUsdc(USDC);
@@ -295,6 +335,115 @@ contract AgentBountyMainnetForkTest {
         );
         context.bounty = AgentBounty(bountyAddress);
         context.bountyId = bountyId;
+    }
+
+    function _boundedPolicy(address delegate) private view returns (BoundedAgentWallet.Policy memory) {
+        return BoundedAgentWallet.Policy({
+            delegate: delegate,
+            validAfter: uint64(block.timestamp),
+            validUntil: uint64(block.timestamp + 90 days),
+            periodSeconds: 1 days,
+            maxPerAction: 500_000,
+            maxPerPeriod: 1_000_000,
+            maxLifetimeSpend: 1_000_000,
+            allowedActions: 15,
+            allowedVerificationModes: 1
+        });
+    }
+
+    function _deployBoundedWallets(MainnetUsdc usdc)
+        private
+        returns (BoundedAgentWallet creatorWallet, BoundedAgentWallet solverWallet)
+    {
+        BoundedAgentWalletFactory walletFactory = new BoundedAgentWalletFactory(FACTORY);
+        address owner = vm.addr(BOUNDED_OWNER_KEY);
+        vm.prank(FUNDING_SOURCE);
+        require(usdc.transfer(owner, 400_000), "wallet owner funding failed");
+        creatorWallet = _createAuthorizedWallet(
+            walletFactory,
+            owner,
+            _boundedPolicy(vm.addr(BOUNDED_CREATOR_DELEGATE_KEY)),
+            keccak256("mainnet-fork-bounded-creator"),
+            300_000,
+            keccak256("mainnet-fork-bounded-creator-authorization")
+        );
+        solverWallet = _createAuthorizedWallet(
+            walletFactory,
+            owner,
+            _boundedPolicy(vm.addr(BOUNDED_SOLVER_DELEGATE_KEY)),
+            keccak256("mainnet-fork-bounded-solver"),
+            100_000,
+            keccak256("mainnet-fork-bounded-solver-authorization")
+        );
+        require(usdc.balanceOf(owner) == 0, "wallet owner retained pilot funding");
+        require(usdc.balanceOf(address(creatorWallet)) == 300_000, "creator wallet funding mismatch");
+        require(usdc.balanceOf(address(solverWallet)) == 100_000, "solver wallet funding mismatch");
+        require(usdc.balanceOf(address(walletFactory)) == 0, "wallet factory retained USDC");
+    }
+
+    function _createAuthorizedWallet(
+        BoundedAgentWalletFactory walletFactory,
+        address owner,
+        BoundedAgentWallet.Policy memory policy,
+        bytes32 salt,
+        uint256 amount,
+        bytes32 authorizationNonce
+    ) private returns (BoundedAgentWallet wallet) {
+        address predicted = walletFactory.predictWallet(owner, policy, salt);
+        bytes32 digest =
+            _usdcAuthorizationDigest(owner, predicted, amount, 0, type(uint256).max, authorizationNonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(BOUNDED_OWNER_KEY, digest);
+        vm.prank(RELAYER);
+        address deployed = walletFactory.createWalletWithAuthorization(
+            owner, policy, salt, amount, 0, type(uint256).max, authorizationNonce, v, r, s
+        );
+        require(deployed == predicted, "authorized wallet address drift");
+        wallet = BoundedAgentWallet(payable(deployed));
+    }
+
+    function _createBoundedBounty(BoundedAgentWallet creatorWallet) private returns (AgentBounty bounty) {
+        AgentBountyFactory factory = AgentBountyFactory(FACTORY);
+        AgentBountyFactory.CreateBountyParams memory params = AgentBountyFactory.CreateBountyParams({
+            solverReward: 200_000,
+            verifierReward: 100_000,
+            termsHash: TERMS_HASH,
+            policyHash: POLICY_HASH,
+            acceptanceCriteriaHash: CRITERIA_HASH,
+            benchmarkHash: BENCHMARK_HASH,
+            evidenceSchemaHash: EVIDENCE_SCHEMA_HASH,
+            fundingDeadline: uint64(block.timestamp + 30 days),
+            claimWindowSeconds: 1 days,
+            verificationWindowSeconds: 2 hours,
+            verificationMode: AgentBounty.VerificationMode.DeterministicModule,
+            verifierModule: MODULE,
+            verifierRewardRecipient: RELAYER,
+            threshold: 1
+        });
+        bytes32 creationNonce = keccak256("mainnet-fork-bounded-wallet-loop/v1");
+        address[] memory noVerifiers = new address[](0);
+        address predicted = factory.predictBountyAddress(address(creatorWallet), params, noVerifiers, creationNonce);
+        _relayBoundedAction(
+            creatorWallet,
+            BoundedAgentWallet.Action.Create,
+            abi.encode(params, noVerifiers, uint256(300_000), creationNonce),
+            BOUNDED_CREATOR_DELEGATE_KEY
+        );
+        bounty = AgentBounty(predicted);
+        require(bounty.bountyStatus() == AgentBounty.BountyStatus.Claimable, "bounded bounty not claimable");
+    }
+
+    function _relayBoundedAction(
+        BoundedAgentWallet wallet,
+        BoundedAgentWallet.Action action,
+        bytes memory payload,
+        uint256 delegateKey
+    ) private {
+        uint256 nonce = wallet.delegateNonce();
+        uint256 deadline = block.timestamp + 30 minutes;
+        bytes32 digest = wallet.actionDigest(action, keccak256(payload), nonce, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(delegateKey, digest);
+        vm.prank(RELAYER);
+        wallet.executeWithSignature(action, payload, nonce, deadline, abi.encodePacked(r, s, v));
     }
 
     function _relayClaim(AgentBounty bounty, address solver) private {

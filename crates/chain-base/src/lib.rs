@@ -1426,6 +1426,157 @@ impl AutonomousBountyTxPlanner {
     }
 }
 
+pub fn validate_bounded_wallet_action_against_safe_state(
+    request: &BoundedAgentWalletActionRequest,
+    plan: &BoundedAgentWalletActionPlan,
+    observation: &BoundedWalletSafeObservation,
+) -> Result<(), ChainBaseError> {
+    let expected_network = match plan.network.chain_id {
+        8_453 => "base-mainnet",
+        84_532 => "base-sepolia",
+        _ => "unsupported",
+    };
+    if observation.protocol_version != BOUNDED_AGENT_WALLET_PROTOCOL_VERSION
+        || observation.chain_id != plan.network.chain_id
+        || observation.network != expected_network
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet plan and safe observation identify different protocols or networks"
+                .to_string(),
+        ));
+    }
+    if normalize_address(&request.wallet_contract)? != observation.wallet_contract
+        || normalize_address(&request.delegate)? != observation.policy.delegate
+        || plan.wallet_contract != observation.wallet_contract
+        || plan.delegate != observation.policy.delegate
+        || plan.expected_factory_contract != observation.bounty_factory_contract
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet plan does not match safe wallet identity or delegate state".to_string(),
+        ));
+    }
+    let observed_nonce = observation.delegate_nonce.parse::<u128>().map_err(|_| {
+        ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet safe delegate nonce is invalid".to_string(),
+        )
+    })?;
+    if !observation.active
+        || observation.revoked
+        || request.policy_version != observation.policy_version
+        || request.delegate_nonce != observed_nonce
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet policy is inactive, revoked, or stale".to_string(),
+        ));
+    }
+    if request.deadline <= observation.safe_block_timestamp
+        || request.deadline > observation.policy.valid_until
+        || request.deadline > observation.safe_block_timestamp.saturating_add(900)
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet action deadline must be live and no more than 15 minutes after the safe block"
+                .to_string(),
+        ));
+    }
+    let action_mask = 1u8.checked_shl(plan.action_code.into()).ok_or_else(|| {
+        ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet plan has an unsupported action code".to_string(),
+        )
+    })?;
+    if observation.policy.allowed_actions & action_mask == 0 {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet policy does not allow the planned action".to_string(),
+        ));
+    }
+    if let BoundedAgentWalletAction::Create { create } = &request.action {
+        let mode = match create.verification_mode {
+            AutonomousVerificationMode::DeterministicModule => 0,
+            AutonomousVerificationMode::SignedQuorum => 1,
+            AutonomousVerificationMode::AiJudgeQuorum => 2,
+        };
+        if observation.policy.allowed_verification_modes & (1u8 << mode) == 0 {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "bounded-wallet policy does not allow the bounty verification mode".to_string(),
+            ));
+        }
+    }
+    let spend = plan.spend_upper_bound.parse::<u128>().map_err(|_| {
+        ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet plan spend bound is invalid".to_string(),
+        )
+    })?;
+    if spend == 0 {
+        return Ok(());
+    }
+    let max_per_action = observation
+        .policy
+        .max_per_action
+        .parse::<u128>()
+        .map_err(|_| {
+            ChainBaseError::InvalidVerificationConfiguration(
+                "bounded-wallet safe per-action cap is invalid".to_string(),
+            )
+        })?;
+    let max_per_period = observation
+        .policy
+        .max_per_period
+        .parse::<u128>()
+        .map_err(|_| {
+            ChainBaseError::InvalidVerificationConfiguration(
+                "bounded-wallet safe period cap is invalid".to_string(),
+            )
+        })?;
+    let max_lifetime = observation
+        .policy
+        .max_lifetime_spend
+        .parse::<u128>()
+        .map_err(|_| {
+            ChainBaseError::InvalidVerificationConfiguration(
+                "bounded-wallet safe lifetime cap is invalid".to_string(),
+            )
+        })?;
+    let observed_bucket = observation.period_bucket.parse::<u128>().map_err(|_| {
+        ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet safe period bucket is invalid".to_string(),
+        )
+    })?;
+    let period_spent = observation.period_spent.parse::<u128>().map_err(|_| {
+        ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet safe period spend is invalid".to_string(),
+        )
+    })?;
+    let lifetime_spent = observation.lifetime_spent.parse::<u128>().map_err(|_| {
+        ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet safe lifetime spend is invalid".to_string(),
+        )
+    })?;
+    if observation.policy.period_seconds == 0 {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet safe period length is zero".to_string(),
+        ));
+    }
+    let current_bucket =
+        u128::from(observation.safe_block_timestamp / observation.policy.period_seconds);
+    let effective_period_spent = if current_bucket == observed_bucket {
+        period_spent
+    } else {
+        0
+    };
+    if spend > max_per_action
+        || effective_period_spent
+            .checked_add(spend)
+            .map_or(true, |next| next > max_per_period)
+        || lifetime_spent
+            .checked_add(spend)
+            .map_or(true, |next| next > max_lifetime)
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet plan exceeds the live per-action, period, or lifetime cap".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmLog {
     pub address: String,
@@ -1494,6 +1645,115 @@ pub struct AutonomousFactorySafeObservation {
     pub protocol_hash: String,
     pub factory_runtime_code_hash: String,
     pub implementation_runtime_code_hash: String,
+    pub evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundedWalletDeploymentExpectedState {
+    pub protocol_version: String,
+    pub network: String,
+    pub chain_id: u64,
+    pub wallet_factory_contract: String,
+    pub wallet_factory_runtime_code_hash: String,
+    pub wallet_runtime_code_hash: String,
+    pub bounty_factory_contract: String,
+    pub native_usdc_token_address: String,
+}
+
+pub const CANONICAL_BASE_SEPOLIA_BOUNTY_FACTORY: &str =
+    "0x95e28e0c270374cb1406f88e26ee68e49be50e92";
+pub const CANONICAL_BASE_MAINNET_BOUNTY_FACTORY: &str =
+    "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
+pub const CANONICAL_BASE_SEPOLIA_BOUNDED_WALLET_FACTORY: &str =
+    "0x38b5bec0b16d25ff1b0a6bb09f8f7f5a54dd3397";
+pub const CANONICAL_BASE_SEPOLIA_BOUNDED_WALLET_FACTORY_CODE_HASH: &str =
+    "0x119c73cb4442cf5a792e6b9e0ed20f1b811f6596b76cb3377c766732a2235a4c";
+pub const CANONICAL_BASE_SEPOLIA_BOUNDED_WALLET_CODE_HASH: &str =
+    "0xca08c0045ab20776437a0443aeda5a5558126820043088e55a8040e2a0d03311";
+pub const CANONICAL_BASE_MAINNET_BOUNDED_WALLET_FACTORY: &str =
+    "0x372d05f2843e945d5903148dbb1572ae51bdd51b";
+pub const CANONICAL_BASE_MAINNET_BOUNDED_WALLET_FACTORY_CODE_HASH: &str =
+    "0x5db581ee8f2652bccc7a04eeae7cb368dd4bb94188fd675f2cbaba65d868f365";
+pub const CANONICAL_BASE_MAINNET_BOUNDED_WALLET_CODE_HASH: &str =
+    "0xd72086e6d3ed8cd9d2fdc73c299d043d55a49f16c7081de77a4477450b928756";
+
+pub fn canonical_bounded_wallet_expected_state(
+    network: &str,
+) -> Result<BoundedWalletDeploymentExpectedState, ChainBaseError> {
+    let descriptor = base_network_descriptor(network)?;
+    let (
+        wallet_factory_contract,
+        wallet_factory_runtime_code_hash,
+        wallet_runtime_code_hash,
+        bounty_factory_contract,
+    ) = match descriptor.chain_id {
+        84_532 => (
+            CANONICAL_BASE_SEPOLIA_BOUNDED_WALLET_FACTORY,
+            CANONICAL_BASE_SEPOLIA_BOUNDED_WALLET_FACTORY_CODE_HASH,
+            CANONICAL_BASE_SEPOLIA_BOUNDED_WALLET_CODE_HASH,
+            CANONICAL_BASE_SEPOLIA_BOUNTY_FACTORY,
+        ),
+        8_453 => (
+            CANONICAL_BASE_MAINNET_BOUNDED_WALLET_FACTORY,
+            CANONICAL_BASE_MAINNET_BOUNDED_WALLET_FACTORY_CODE_HASH,
+            CANONICAL_BASE_MAINNET_BOUNDED_WALLET_CODE_HASH,
+            CANONICAL_BASE_MAINNET_BOUNTY_FACTORY,
+        ),
+        _ => unreachable!("base_network_descriptor returned an unsupported chain"),
+    };
+    Ok(BoundedWalletDeploymentExpectedState {
+        protocol_version: BOUNDED_AGENT_WALLET_PROTOCOL_VERSION.to_string(),
+        network: if descriptor.chain_id == 8_453 {
+            "base-mainnet".to_string()
+        } else {
+            "base-sepolia".to_string()
+        },
+        chain_id: descriptor.chain_id,
+        wallet_factory_contract: wallet_factory_contract.to_string(),
+        wallet_factory_runtime_code_hash: wallet_factory_runtime_code_hash.to_string(),
+        wallet_runtime_code_hash: wallet_runtime_code_hash.to_string(),
+        bounty_factory_contract: bounty_factory_contract.to_string(),
+        native_usdc_token_address: descriptor.native_usdc_token_address,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundedWalletPolicyObservation {
+    pub delegate: String,
+    pub valid_after: u64,
+    pub valid_until: u64,
+    pub period_seconds: u64,
+    pub max_per_action: String,
+    pub max_per_period: String,
+    pub max_lifetime_spend: String,
+    pub allowed_actions: u8,
+    pub allowed_verification_modes: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundedWalletSafeObservation {
+    pub protocol_version: String,
+    pub network: String,
+    pub chain_id: u64,
+    pub safe_block_number: u64,
+    pub safe_block_hash: String,
+    pub safe_block_timestamp: u64,
+    pub block_tag: String,
+    pub wallet_factory_contract: String,
+    pub wallet_contract: String,
+    pub owner: String,
+    pub bounty_factory_contract: String,
+    pub native_usdc_token_address: String,
+    pub wallet_factory_runtime_code_hash: String,
+    pub wallet_runtime_code_hash: String,
+    pub policy: BoundedWalletPolicyObservation,
+    pub policy_version: u64,
+    pub delegate_nonce: String,
+    pub period_bucket: String,
+    pub period_spent: String,
+    pub lifetime_spent: String,
+    pub revoked: bool,
+    pub active: bool,
     pub evidence_boundary: String,
 }
 
@@ -2096,6 +2356,378 @@ where
     })
 }
 
+pub async fn inspect_bounded_wallet_safe_state(
+    rpc_url: &str,
+    expected: &BoundedWalletDeploymentExpectedState,
+    wallet_contract: &str,
+) -> Result<BoundedWalletSafeObservation, ChainBaseError> {
+    inspect_bounded_wallet_safe_state_with_transport(
+        rpc_url,
+        expected,
+        wallet_contract,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn inspect_bounded_wallet_safe_state_with_transport<T>(
+    rpc_url: &str,
+    expected: &BoundedWalletDeploymentExpectedState,
+    wallet_contract: &str,
+    transport: &T,
+) -> Result<BoundedWalletSafeObservation, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let network = base_network_descriptor(&expected.network)?;
+    if expected.protocol_version != BOUNDED_AGENT_WALLET_PROTOCOL_VERSION
+        || network.chain_id != expected.chain_id
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet manifest has an unsupported protocol or chain".to_string(),
+        ));
+    }
+
+    let wallet_factory_contract = normalize_address(&expected.wallet_factory_contract)?;
+    let wallet_contract = normalize_address(wallet_contract)?;
+    let bounty_factory_contract = normalize_address(&expected.bounty_factory_contract)?;
+    let native_usdc_token_address = normalize_address(&expected.native_usdc_token_address)?;
+    let zero_address = "0x0000000000000000000000000000000000000000";
+    if wallet_factory_contract == zero_address
+        || wallet_contract == zero_address
+        || bounty_factory_contract == zero_address
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet deployment addresses must be nonzero".to_string(),
+        ));
+    }
+    if native_usdc_token_address != normalize_address(&network.native_usdc_token_address)? {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet settlement token does not match the Base network".to_string(),
+        ));
+    }
+    let wallet_factory_runtime_code_hash =
+        normalize_hash(&expected.wallet_factory_runtime_code_hash)?;
+    let wallet_runtime_code_hash = normalize_hash(&expected.wallet_runtime_code_hash)?;
+    let empty_code_hash = "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
+    if wallet_factory_runtime_code_hash == empty_code_hash
+        || wallet_runtime_code_hash == empty_code_hash
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet runtime code hashes must not identify empty code".to_string(),
+        ));
+    }
+
+    let safe_block = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "eth_getBlockByNumber",
+                    "params": ["safe", false]
+                }),
+            )
+            .await?,
+        1,
+        "eth_getBlockByNumber",
+    )?;
+    let safe_block_number = parse_rpc_quantity(
+        safe_block
+            .get("number")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing number".to_string(),
+                )
+            })?,
+    )?;
+    let safe_block_hash = normalize_hash(
+        safe_block
+            .get("hash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing hash".to_string(),
+                )
+            })?,
+    )?;
+    let safe_block_timestamp = parse_rpc_quantity(
+        safe_block
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing timestamp".to_string(),
+                )
+            })?,
+    )?;
+    let exact_block = hex_quantity(safe_block_number);
+
+    let observed_factory_hash = fetch_account_code_hash(
+        rpc_url,
+        &wallet_factory_contract,
+        &exact_block,
+        2,
+        transport,
+    )
+    .await?;
+    require_canonical_match(
+        "bounded-wallet factory runtime code hash",
+        &observed_factory_hash,
+        &wallet_factory_runtime_code_hash,
+    )?;
+    let observed_wallet_hash =
+        fetch_account_code_hash(rpc_url, &wallet_contract, &exact_block, 3, transport).await?;
+    require_canonical_match(
+        "bounded-wallet runtime code hash",
+        &observed_wallet_hash,
+        &wallet_runtime_code_hash,
+    )?;
+
+    let factory_bounty_word = fetch_contract_word(
+        rpc_url,
+        &wallet_factory_contract,
+        &encode_call("bountyFactory()", Vec::new()),
+        &exact_block,
+        4,
+        transport,
+    )
+    .await?;
+    let factory_bounty = address_from_word(parse_bytes32(&factory_bounty_word)?);
+    require_canonical_match(
+        "bounded-wallet factory bounty factory",
+        &factory_bounty,
+        &bounty_factory_contract,
+    )?;
+
+    let factory_token_word = fetch_contract_word(
+        rpc_url,
+        &wallet_factory_contract,
+        &encode_call("settlementToken()", Vec::new()),
+        &exact_block,
+        5,
+        transport,
+    )
+    .await?;
+    let factory_token = address_from_word(parse_bytes32(&factory_token_word)?);
+    require_canonical_match(
+        "bounded-wallet factory settlement token",
+        &factory_token,
+        &native_usdc_token_address,
+    )?;
+
+    let registered_word = fetch_contract_word(
+        rpc_url,
+        &wallet_factory_contract,
+        &encode_call(
+            "isFactoryWallet(address)",
+            vec![encode_address(&wallet_contract)?],
+        ),
+        &exact_block,
+        6,
+        transport,
+    )
+    .await?;
+    if word_to_u128(parse_bytes32(&registered_word)?)? != 1 {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "wallet is not registered by the canonical bounded-wallet factory".to_string(),
+        ));
+    }
+
+    let owner_word = fetch_contract_word(
+        rpc_url,
+        &wallet_contract,
+        &encode_call("owner()", Vec::new()),
+        &exact_block,
+        7,
+        transport,
+    )
+    .await?;
+    let owner = address_from_word(parse_bytes32(&owner_word)?);
+    if owner == zero_address {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet owner must be nonzero".to_string(),
+        ));
+    }
+
+    let wallet_bounty_word = fetch_contract_word(
+        rpc_url,
+        &wallet_contract,
+        &encode_call("factory()", Vec::new()),
+        &exact_block,
+        8,
+        transport,
+    )
+    .await?;
+    let wallet_bounty = address_from_word(parse_bytes32(&wallet_bounty_word)?);
+    require_canonical_match(
+        "bounded-wallet bounty factory",
+        &wallet_bounty,
+        &bounty_factory_contract,
+    )?;
+
+    let wallet_token_word = fetch_contract_word(
+        rpc_url,
+        &wallet_contract,
+        &encode_call("settlementToken()", Vec::new()),
+        &exact_block,
+        9,
+        transport,
+    )
+    .await?;
+    let wallet_token = address_from_word(parse_bytes32(&wallet_token_word)?);
+    require_canonical_match(
+        "bounded-wallet settlement token",
+        &wallet_token,
+        &native_usdc_token_address,
+    )?;
+
+    let policy_words = fetch_contract_words(
+        rpc_url,
+        &wallet_contract,
+        &encode_call("policy()", Vec::new()),
+        &exact_block,
+        10,
+        9,
+        transport,
+    )
+    .await?;
+    let delegate = address_from_word(policy_words[0]);
+    if delegate == zero_address {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet delegate must be nonzero".to_string(),
+        ));
+    }
+    let valid_after = rpc_word_to_u64(policy_words[1], "policy validAfter")?;
+    let valid_until = rpc_word_to_u64(policy_words[2], "policy validUntil")?;
+    let period_seconds = rpc_word_to_u64(policy_words[3], "policy periodSeconds")?;
+    let max_per_action = word_to_u128(policy_words[4])?;
+    let max_per_period = word_to_u128(policy_words[5])?;
+    let max_lifetime_spend = word_to_u128(policy_words[6])?;
+    let allowed_actions = rpc_word_to_u8(policy_words[7], "policy allowedActions")?;
+    let allowed_verification_modes =
+        rpc_word_to_u8(policy_words[8], "policy allowedVerificationModes")?;
+    if valid_until <= valid_after
+        || period_seconds == 0
+        || max_per_action == 0
+        || max_per_period == 0
+        || max_lifetime_spend == 0
+        || allowed_actions == 0
+        || allowed_verification_modes == 0
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet policy is structurally inactive".to_string(),
+        ));
+    }
+
+    let policy_version = fetch_contract_u64(
+        rpc_url,
+        &wallet_contract,
+        "policyVersion()",
+        &exact_block,
+        11,
+        transport,
+    )
+    .await?;
+    if policy_version == 0 {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "bounded-wallet policy version must be positive".to_string(),
+        ));
+    }
+    let delegate_nonce = fetch_contract_u128(
+        rpc_url,
+        &wallet_contract,
+        "delegateNonce()",
+        &exact_block,
+        12,
+        transport,
+    )
+    .await?;
+    let period_bucket = fetch_contract_u128(
+        rpc_url,
+        &wallet_contract,
+        "periodBucket()",
+        &exact_block,
+        13,
+        transport,
+    )
+    .await?;
+    let period_spent = fetch_contract_u128(
+        rpc_url,
+        &wallet_contract,
+        "periodSpent()",
+        &exact_block,
+        14,
+        transport,
+    )
+    .await?;
+    let lifetime_spent = fetch_contract_u128(
+        rpc_url,
+        &wallet_contract,
+        "lifetimeSpent()",
+        &exact_block,
+        15,
+        transport,
+    )
+    .await?;
+    let revoked_word = fetch_contract_word(
+        rpc_url,
+        &wallet_contract,
+        &encode_call("revoked()", Vec::new()),
+        &exact_block,
+        16,
+        transport,
+    )
+    .await?;
+    let revoked_raw = word_to_u128(parse_bytes32(&revoked_word)?)?;
+    if revoked_raw > 1 {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "bounded-wallet revoked() returned a non-boolean word".to_string(),
+        ));
+    }
+    let revoked = revoked_raw == 1;
+    let active =
+        !revoked && safe_block_timestamp >= valid_after && safe_block_timestamp <= valid_until;
+
+    Ok(BoundedWalletSafeObservation {
+        protocol_version: expected.protocol_version.clone(),
+        network: expected.network.clone(),
+        chain_id: expected.chain_id,
+        safe_block_number,
+        safe_block_hash,
+        safe_block_timestamp,
+        block_tag: "safe".to_string(),
+        wallet_factory_contract,
+        wallet_contract,
+        owner,
+        bounty_factory_contract,
+        native_usdc_token_address,
+        wallet_factory_runtime_code_hash,
+        wallet_runtime_code_hash,
+        policy: BoundedWalletPolicyObservation {
+            delegate,
+            valid_after,
+            valid_until,
+            period_seconds,
+            max_per_action: max_per_action.to_string(),
+            max_per_period: max_per_period.to_string(),
+            max_lifetime_spend: max_lifetime_spend.to_string(),
+            allowed_actions,
+            allowed_verification_modes,
+        },
+        policy_version,
+        delegate_nonce: delegate_nonce.to_string(),
+        period_bucket: period_bucket.to_string(),
+        period_spent: period_spent.to_string(),
+        lifetime_spent: lifetime_spent.to_string(),
+        revoked,
+        active,
+        evidence_boundary: "This observation proves exact factory and wallet code, immutable configuration, registration, owner, and policy state at one Base safe block. It does not authorize an action and does not prove funding, completion, payout, or settlement.".to_string(),
+    })
+}
+
 fn rpc_result(value: Value, request_id: u64, method: &str) -> Result<Value, ChainBaseError> {
     let object = value.as_object().ok_or_else(|| {
         ChainBaseError::InvalidRpcResponse(format!("{method} response is not an object"))
@@ -2140,24 +2772,19 @@ where
                 &json!({
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "method": "eth_getProof",
-                    "params": [address, [], block]
+                    "method": "eth_getCode",
+                    "params": [address, block]
                 }),
             )
             .await?,
         request_id,
-        "eth_getProof",
+        "eth_getCode",
     )?;
-    normalize_hash(
-        result
-            .get("codeHash")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                ChainBaseError::InvalidRpcResponse(
-                    "eth_getProof response is missing codeHash".to_string(),
-                )
-            })?,
-    )
+    let encoded = result.as_str().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("eth_getCode result is not hex bytecode".to_string())
+    })?;
+    let bytes = parse_hex_bytes(encoded)?;
+    Ok(format!("0x{}", hex::encode(Keccak256::digest(bytes))))
 }
 
 async fn fetch_contract_word<T>(
@@ -2189,6 +2816,96 @@ where
     normalize_hash(result.as_str().ok_or_else(|| {
         ChainBaseError::InvalidRpcResponse("eth_call result is not one ABI word".to_string())
     })?)
+}
+
+async fn fetch_contract_words<T>(
+    rpc_url: &str,
+    contract: &str,
+    data: &str,
+    block: &str,
+    request_id: u64,
+    expected_words: usize,
+    transport: &T,
+) -> Result<Vec<[u8; 32]>, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let result = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_call",
+                    "params": [{ "to": contract, "data": data }, block]
+                }),
+            )
+            .await?,
+        request_id,
+        "eth_call",
+    )?;
+    let encoded = result.as_str().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("eth_call result is not ABI data".to_string())
+    })?;
+    decode_words(encoded, expected_words, "eth_call result").map_err(|_| {
+        ChainBaseError::InvalidRpcResponse(format!(
+            "eth_call result is not exactly {expected_words} ABI words"
+        ))
+    })
+}
+
+async fn fetch_contract_u128<T>(
+    rpc_url: &str,
+    contract: &str,
+    signature: &str,
+    block: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<u128, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let word = fetch_contract_word(
+        rpc_url,
+        contract,
+        &encode_call(signature, Vec::new()),
+        block,
+        request_id,
+        transport,
+    )
+    .await?;
+    word_to_u128(parse_bytes32(&word)?)
+}
+
+async fn fetch_contract_u64<T>(
+    rpc_url: &str,
+    contract: &str,
+    signature: &str,
+    block: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<u64, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let value =
+        fetch_contract_u128(rpc_url, contract, signature, block, request_id, transport).await?;
+    u64::try_from(value).map_err(|_| {
+        ChainBaseError::InvalidRpcResponse(format!("{signature} result exceeds uint64"))
+    })
+}
+
+fn rpc_word_to_u64(word: [u8; 32], field: &str) -> Result<u64, ChainBaseError> {
+    let value = word_to_u128(word)?;
+    u64::try_from(value)
+        .map_err(|_| ChainBaseError::InvalidRpcResponse(format!("{field} exceeds uint64")))
+}
+
+fn rpc_word_to_u8(word: [u8; 32], field: &str) -> Result<u8, ChainBaseError> {
+    let value = word_to_u128(word)?;
+    u8::try_from(value)
+        .map_err(|_| ChainBaseError::InvalidRpcResponse(format!("{field} exceeds uint8")))
 }
 
 fn require_canonical_match(
@@ -5029,6 +5746,76 @@ mod tests {
     }
 
     #[test]
+    fn bounded_wallet_plan_requires_fresh_safe_policy_and_remaining_caps() {
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+        )
+        .unwrap();
+        let request = BoundedAgentWalletActionRequest {
+            wallet_contract: "0x3333333333333333333333333333333333333333".to_string(),
+            delegate: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            policy_version: 3,
+            delegate_nonce: 7,
+            deadline: 2_000_000_000,
+            action: BoundedAgentWalletAction::Fund {
+                bounty_contract: "0x4444444444444444444444444444444444444444".to_string(),
+                amount: Money::new(25, "usdc").unwrap(),
+            },
+        };
+        let plan = planner
+            .plan_bounded_wallet_action("base-sepolia", &request)
+            .unwrap();
+        let observation = BoundedWalletSafeObservation {
+            protocol_version: BOUNDED_AGENT_WALLET_PROTOCOL_VERSION.to_string(),
+            network: "base-sepolia".to_string(),
+            chain_id: 84_532,
+            safe_block_number: 100,
+            safe_block_hash: format!("0x{}", "11".repeat(32)),
+            safe_block_timestamp: 1_999_999_500,
+            block_tag: "safe".to_string(),
+            wallet_factory_contract: "0x5555555555555555555555555555555555555555".to_string(),
+            wallet_contract: request.wallet_contract.clone(),
+            owner: "0x6666666666666666666666666666666666666666".to_string(),
+            bounty_factory_contract: planner.factory_contract.clone(),
+            native_usdc_token_address: BASE_SEPOLIA_USDC_TOKEN_ADDRESS.to_string(),
+            wallet_factory_runtime_code_hash: format!("0x{}", "22".repeat(32)),
+            wallet_runtime_code_hash: format!("0x{}", "33".repeat(32)),
+            policy: BoundedWalletPolicyObservation {
+                delegate: request.delegate.clone(),
+                valid_after: 1_999_999_000,
+                valid_until: 2_000_000_500,
+                period_seconds: 86_400,
+                max_per_action: "100".to_string(),
+                max_per_period: "1000".to_string(),
+                max_lifetime_spend: "2000".to_string(),
+                allowed_actions: 15,
+                allowed_verification_modes: 1,
+            },
+            policy_version: request.policy_version,
+            delegate_nonce: request.delegate_nonce.to_string(),
+            period_bucket: (1_999_999_500u128 / 86_400).to_string(),
+            period_spent: "900".to_string(),
+            lifetime_spent: "1000".to_string(),
+            revoked: false,
+            active: true,
+            evidence_boundary: "test".to_string(),
+        };
+
+        validate_bounded_wallet_action_against_safe_state(&request, &plan, &observation).unwrap();
+
+        let mut exhausted = observation.clone();
+        exhausted.period_spent = "990".to_string();
+        let error = validate_bounded_wallet_action_against_safe_state(&request, &plan, &exhausted)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ChainBaseError::InvalidVerificationConfiguration(message)
+                if message.contains("exceeds")
+        ));
+    }
+
+    #[test]
     fn bounded_wallet_relay_call_matches_cast_vector() {
         let planner = AutonomousBountyTxPlanner::new(
             "0x1111111111111111111111111111111111111111",
@@ -6390,6 +7177,8 @@ mod tests {
     }
 
     fn canonical_factory_expected_state() -> AutonomousFactoryExpectedState {
+        let factory_code = "0x6001600055";
+        let implementation_code = "0x6002600055";
         AutonomousFactoryExpectedState {
             protocol_version: "agent-bounties/autonomous-v1".to_string(),
             network: "base-mainnet".to_string(),
@@ -6398,8 +7187,16 @@ mod tests {
             implementation_contract: "0x2222222222222222222222222222222222222222".to_string(),
             native_usdc_token_address: BASE_MAINNET_USDC_TOKEN_ADDRESS.to_string(),
             protocol_hash: AUTONOMOUS_BOUNTY_PROTOCOL_HASH.to_string(),
-            factory_runtime_code_hash: format!("0x{}", "33".repeat(32)),
-            implementation_runtime_code_hash: format!("0x{}", "44".repeat(32)),
+            factory_runtime_code_hash: format!(
+                "0x{}",
+                hex::encode(Keccak256::digest(parse_hex_bytes(factory_code).unwrap()))
+            ),
+            implementation_runtime_code_hash: format!(
+                "0x{}",
+                hex::encode(Keccak256::digest(
+                    parse_hex_bytes(implementation_code).unwrap()
+                ))
+            ),
         }
     }
 
@@ -6427,16 +7224,92 @@ mod tests {
             json!({
                 "jsonrpc": "2.0",
                 "id": 2,
-                "result": { "codeHash": expected.factory_runtime_code_hash }
+                "result": "0x6001600055"
             }),
             json!({
                 "jsonrpc": "2.0",
                 "id": 3,
-                "result": { "codeHash": expected.implementation_runtime_code_hash }
+                "result": "0x6002600055"
             }),
             json!({ "jsonrpc": "2.0", "id": 4, "result": expected.protocol_hash }),
             json!({ "jsonrpc": "2.0", "id": 5, "result": implementation_word }),
             json!({ "jsonrpc": "2.0", "id": 6, "result": token_word }),
+        ])
+    }
+
+    fn bounded_wallet_expected_state() -> BoundedWalletDeploymentExpectedState {
+        let factory_code = "0x6003600055";
+        let wallet_code = "0x6004600055";
+        BoundedWalletDeploymentExpectedState {
+            protocol_version: BOUNDED_AGENT_WALLET_PROTOCOL_VERSION.to_string(),
+            network: "base-mainnet".to_string(),
+            chain_id: 8_453,
+            wallet_factory_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            wallet_factory_runtime_code_hash: format!(
+                "0x{}",
+                hex::encode(Keccak256::digest(parse_hex_bytes(factory_code).unwrap()))
+            ),
+            wallet_runtime_code_hash: format!(
+                "0x{}",
+                hex::encode(Keccak256::digest(parse_hex_bytes(wallet_code).unwrap()))
+            ),
+            bounty_factory_contract: "0x2222222222222222222222222222222222222222".to_string(),
+            native_usdc_token_address: BASE_MAINNET_USDC_TOKEN_ADDRESS.to_string(),
+        }
+    }
+
+    fn abi_address_word(address: &str) -> String {
+        format!("{:0>64}", address.trim_start_matches("0x"))
+    }
+
+    fn abi_uint_word(value: u128) -> String {
+        format!("{value:064x}")
+    }
+
+    fn bounded_wallet_rpc_responses(
+        expected: &BoundedWalletDeploymentExpectedState,
+        owner: &str,
+        delegate: &str,
+    ) -> VecDeque<Value> {
+        let policy = format!(
+            "0x{}{}{}{}{}{}{}{}{}",
+            abi_address_word(delegate),
+            abi_uint_word(1),
+            abi_uint_word(2_000_000_000),
+            abi_uint_word(86_400),
+            abi_uint_word(1_000_000),
+            abi_uint_word(2_000_000),
+            abi_uint_word(5_000_000),
+            abi_uint_word(15),
+            abi_uint_word(1),
+        );
+        let one = format!("0x{}", abi_uint_word(1));
+        let zero = format!("0x{}", abi_uint_word(0));
+        VecDeque::from(vec![
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "number": "0x10",
+                    "hash": format!("0x{}", "aa".repeat(32)),
+                    "timestamp": "0x669b8f00"
+                }
+            }),
+            json!({ "jsonrpc": "2.0", "id": 2, "result": "0x6003600055" }),
+            json!({ "jsonrpc": "2.0", "id": 3, "result": "0x6004600055" }),
+            json!({ "jsonrpc": "2.0", "id": 4, "result": format!("0x{}", abi_address_word(&expected.bounty_factory_contract)) }),
+            json!({ "jsonrpc": "2.0", "id": 5, "result": format!("0x{}", abi_address_word(&expected.native_usdc_token_address)) }),
+            json!({ "jsonrpc": "2.0", "id": 6, "result": one }),
+            json!({ "jsonrpc": "2.0", "id": 7, "result": format!("0x{}", abi_address_word(owner)) }),
+            json!({ "jsonrpc": "2.0", "id": 8, "result": format!("0x{}", abi_address_word(&expected.bounty_factory_contract)) }),
+            json!({ "jsonrpc": "2.0", "id": 9, "result": format!("0x{}", abi_address_word(&expected.native_usdc_token_address)) }),
+            json!({ "jsonrpc": "2.0", "id": 10, "result": policy }),
+            json!({ "jsonrpc": "2.0", "id": 11, "result": format!("0x{}", abi_uint_word(1)) }),
+            json!({ "jsonrpc": "2.0", "id": 12, "result": zero }),
+            json!({ "jsonrpc": "2.0", "id": 13, "result": format!("0x{}", abi_uint_word(19_923)) }),
+            json!({ "jsonrpc": "2.0", "id": 14, "result": format!("0x{}", abi_uint_word(250_000)) }),
+            json!({ "jsonrpc": "2.0", "id": 15, "result": format!("0x{}", abi_uint_word(500_000)) }),
+            json!({ "jsonrpc": "2.0", "id": 16, "result": format!("0x{}", abi_uint_word(0)) }),
         ])
     }
 
@@ -6496,9 +7369,9 @@ mod tests {
         assert_eq!(requests.len(), 6);
         assert_eq!(requests[0]["method"], "eth_getBlockByNumber");
         assert_eq!(requests[0]["params"], json!(["safe", false]));
-        assert_eq!(requests[1]["method"], "eth_getProof");
-        assert_eq!(requests[1]["params"][2], "0x10");
-        assert_eq!(requests[2]["params"][2], "0x10");
+        assert_eq!(requests[1]["method"], "eth_getCode");
+        assert_eq!(requests[1]["params"][1], "0x10");
+        assert_eq!(requests[2]["params"][1], "0x10");
         for request in &requests[3..] {
             assert_eq!(request["method"], "eth_call");
             assert_eq!(request["params"][1], "0x10");
@@ -6529,6 +7402,86 @@ mod tests {
             error,
             ChainBaseError::InvalidVerificationConfiguration(message)
                 if message.contains("factory settlement token mismatch")
+        ));
+    }
+
+    #[tokio::test]
+    async fn bounded_wallet_inspection_pins_code_registration_and_policy_to_one_safe_block() {
+        let expected = bounded_wallet_expected_state();
+        let wallet = "0x4444444444444444444444444444444444444444";
+        let owner = "0x5555555555555555555555555555555555555555";
+        let delegate = "0x6666666666666666666666666666666666666666";
+        let seen_requests = Arc::new(Mutex::new(Vec::new()));
+        let transport = SequenceTransport {
+            seen_requests: seen_requests.clone(),
+            responses: Mutex::new(bounded_wallet_rpc_responses(&expected, owner, delegate)),
+        };
+
+        let observation = inspect_bounded_wallet_safe_state_with_transport(
+            "https://mainnet.base.org",
+            &expected,
+            wallet,
+            &transport,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(observation.safe_block_number, 16);
+        assert_eq!(observation.wallet_contract, wallet);
+        assert_eq!(observation.owner, owner);
+        assert_eq!(observation.policy.delegate, delegate);
+        assert_eq!(observation.policy.max_per_action, "1000000");
+        assert_eq!(observation.policy.allowed_actions, 15);
+        assert_eq!(observation.policy.allowed_verification_modes, 1);
+        assert_eq!(observation.policy_version, 1);
+        assert_eq!(observation.delegate_nonce, "0");
+        assert_eq!(observation.period_spent, "250000");
+        assert_eq!(observation.lifetime_spent, "500000");
+        assert!(observation.active);
+
+        let requests = seen_requests.lock().unwrap();
+        assert_eq!(requests.len(), 16);
+        assert_eq!(requests[0]["params"], json!(["safe", false]));
+        for request in &requests[1..] {
+            assert_eq!(
+                request["params"][request["params"].as_array().unwrap().len() - 1],
+                "0x10"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_wallet_inspection_rejects_unregistered_wallet() {
+        let expected = bounded_wallet_expected_state();
+        let wallet = "0x4444444444444444444444444444444444444444";
+        let mut responses = bounded_wallet_rpc_responses(
+            &expected,
+            "0x5555555555555555555555555555555555555555",
+            "0x6666666666666666666666666666666666666666",
+        );
+        responses[5] = json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "result": format!("0x{}", abi_uint_word(0))
+        });
+        let transport = SequenceTransport {
+            seen_requests: Arc::new(Mutex::new(Vec::new())),
+            responses: Mutex::new(responses),
+        };
+
+        let error = inspect_bounded_wallet_safe_state_with_transport(
+            "https://mainnet.base.org",
+            &expected,
+            wallet,
+            &transport,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ChainBaseError::InvalidVerificationConfiguration(message)
+                if message.contains("not registered")
         ));
     }
 
