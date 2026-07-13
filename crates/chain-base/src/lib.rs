@@ -2426,7 +2426,12 @@ fn validate_autonomous_terms_against_creation(
         }
     }
 
-    match verifier_set_hash_from_policy(policy) {
+    let expected_verifier_set_hash = if expected_mode == Some(0) {
+        Ok(format!("0x{}", "00".repeat(32)))
+    } else {
+        verifier_set_hash_from_policy(policy)
+    };
+    match expected_verifier_set_hash {
         Ok(expected) => {
             if !creation_data["verifier_set_hash"]
                 .as_str()
@@ -5173,6 +5178,43 @@ mod tests {
         create.solver_reward = Money::new(800_000, "usdc").unwrap();
         assert!(
             validate_autonomous_creation_against_terms("base-mainnet", &create, &record).is_err()
+        );
+    }
+
+    #[test]
+    fn deterministic_terms_accept_the_contract_zero_verifier_set() {
+        let document: AutonomousBountyTermsDocument =
+            serde_json::from_str(include_str!("../../../bounties/autonomous-v1/217.json")).unwrap();
+        let record = build_autonomous_bounty_terms_record(
+            "0x884834E884d6e93462655A2820140aD03E6747bC",
+            document,
+            Utc::now(),
+        )
+        .unwrap();
+        let creation_data = json!({
+            "terms_hash": record.terms_hash,
+            "policy_hash": record.policy_hash,
+            "acceptance_criteria_hash": record.acceptance_criteria_hash,
+            "benchmark_hash": record.benchmark_hash,
+            "evidence_schema_hash": record.evidence_schema_hash,
+            "solver_reward": 900_000,
+            "verifier_reward": 100_000,
+            "claim_bond": 100_000,
+            "initial_funding": 1_000_000,
+            "funding_deadline": 1_791_676_800u64,
+            "claim_window_seconds": 1_209_600,
+            "verification_window_seconds": 1_209_600,
+            "creation_nonce": "0x6a7751dfcd4709a50bf22722e9c9f4ac5a4ad9086d99b0d65a8a247959c36e3f",
+            "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+            "verification_mode": 0,
+            "threshold": 1,
+            "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+            "verifier_reward_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc",
+            "verifier_set_hash": format!("0x{}", "00".repeat(32)),
+        });
+
+        assert!(
+            validate_autonomous_terms_against_creation(&creation_data, Some(&record),).is_empty()
         );
     }
 

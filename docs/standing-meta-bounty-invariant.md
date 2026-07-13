@@ -53,6 +53,10 @@ after it verifies:
 The guard rejects malformed or spoofed standing-meta descriptors. Only a
 confirmed canonical `BountySettled` event proves eventual payout.
 
+The initial Base mainnet verifier deployment, four-bounty activation receipt,
+canonical event counts, and exact safe-block state are recorded in
+[`docs/evidence/standing-meta-bounties-base-mainnet-2026-07-13.json`](evidence/standing-meta-bounties-base-mainnet-2026-07-13.json).
+
 ## Replenishment
 
 When inventory falls below two, replenishment is the highest-priority liquidity

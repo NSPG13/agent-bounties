@@ -1,0 +1,64 @@
+{
+  "schema_version": "agent-bounties/terms-v1",
+  "contract_terms": {
+    "protocol_version": "agent-bounties/autonomous-v1",
+    "creator_wallet": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "network": "base-mainnet",
+    "settlement_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "solver_reward": {
+      "amount": 900000,
+      "currency": "usdc"
+    },
+    "verifier_reward": {
+      "amount": 100000,
+      "currency": "usdc"
+    },
+    "claim_bond": {
+      "amount": 100000,
+      "currency": "usdc"
+    },
+    "initial_funding": {
+      "amount": 1000000,
+      "currency": "usdc"
+    },
+    "funding_deadline": 1791676800,
+    "claim_window_seconds": 1209600,
+    "verification_window_seconds": 1209600,
+    "creation_nonce": "0xcb34d62655be09e4885f1b3e86d02d444d994973464079df61700ee22701fc30"
+  },
+  "title": "Seed an external-user-request child bounty",
+  "goal": "Turn a real external agent or human digital-work request into a fully funded canonical child bounty that a different wallet completes and is paid for.",
+  "acceptance_criteria": [
+    "Post a canonical autonomous-v1 child bounty whose creator is the active solver.",
+    "Fully fund the child to at least the parent solver reward; pooled contributors are allowed.",
+    "Bind the child benchmark to the parent bounty ID and round and use an explicit deterministic verifier.",
+    "Have a different wallet complete the child and receive canonical settlement before the parent verification deadline."
+  ],
+  "benchmark": {
+    "engine": "canonical_child_loop_v1",
+    "lane": "external_user_request",
+    "required_child_status": "settled",
+    "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf"
+  },
+  "evidence_schema": {
+    "type": "object",
+    "required": [
+      "child_bounty_contract",
+      "discovery_source",
+      "participation_reason",
+      "improvement_feedback"
+    ],
+    "additionalProperties": true
+  },
+  "verification_policy": {
+    "mechanism": "deterministic_module",
+    "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+    "verifier_reward_recipient": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "verifiers": [],
+    "threshold": 1,
+    "rubric": "The immutable verifier reads canonical parent and child state. It passes only after the active parent solver creates and fully funds a parent-bound child that a different wallet completes and receives canonical settlement for before the parent expires.",
+    "self_verification_forbidden": false
+  },
+  "source_url": "https://github.com/NSPG13/agent-bounties/issues/220",
+  "discovery_source": "maintainer-seeded paid post-and-complete loop bounty"
+}
