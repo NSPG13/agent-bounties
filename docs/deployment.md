@@ -119,6 +119,21 @@ approval, and four 1 USDC creation calls. Regenerate it and check the current
 on-chain deployer nonce immediately before signing; any nonce change requires a
 new bundle and predicted-address review.
 
+The current self-replenishing seed batch is separate from that historical
+factory bootstrap. It is recorded in
+[`deployments/canonical-child-seeds-base-mainnet.json`](../deployments/canonical-child-seeds-base-mainnet.json)
+and depends on the exact verifier deployment artifact in
+[`deployments/canonical-child-verifier-base-mainnet-deployment.json`](../deployments/canonical-child-verifier-base-mainnet-deployment.json).
+The locked local console at `tools/autonomous-activation.html` requires both
+artifacts, verifies factory and verifier bytecode/configuration, and supports
+atomic activation or bounded recovery from a partially confirmed sequential
+wallet flow. None of these files proves mainnet funding.
+
+The exact existing-factory fork replay is recorded in
+[`docs/evidence/canonical-child-seeds-mainnet-fork-2026-07-13.json`](evidence/canonical-child-seeds-mainnet-fork-2026-07-13.json).
+It proves the verifier deployment and four funding calls execute together on a
+fork; its local transaction hashes are not mainnet evidence.
+
 The repeatable Base-mainnet-fork result is recorded in
 [`docs/evidence/autonomous-v1-mainnet-fork-2026-07-11.json`](evidence/autonomous-v1-mainnet-fork-2026-07-11.json).
 That file proves rehearsal only. It is not live deployment, funding, or payout

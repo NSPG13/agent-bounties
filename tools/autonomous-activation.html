@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://mainnet.base.org; script-src 'self'; style-src 'unsafe-inline'">
-    <title>Autonomous V1 Activation</title>
+    <title>Canonical Child Bounty Activation</title>
     <style>
       :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #111315; color: #f4f5f5; }
       * { box-sizing: border-box; }
@@ -39,8 +39,8 @@
     <main>
       <header>
         <div>
-          <h1>Autonomous V1 Activation</h1>
-          <p>Local, non-custodial bootstrap for the committed Base mainnet canary.</p>
+          <h1>Canonical Child Bounty Activation</h1>
+          <p>Local, non-custodial funding console for four self-replenishing Base bounties.</p>
         </div>
         <span class="badge">Unsigned bundle</span>
       </header>
@@ -68,17 +68,8 @@
       </section>
 
       <section>
-        <h2>2. Deploy Canonical Factory</h2>
-        <p>One wallet confirmation deploys the immutable factory and its immutable bounty implementation.</p>
-        <div class="actions">
-          <button id="deploy" disabled>Deploy factory</button>
-        </div>
-        <output id="deploy-output">Deployment is disabled until inspection passes.</output>
-      </section>
-
-      <section>
-        <h2>3. Fund Four Bounties</h2>
-        <p>The preferred action is one EIP-5792 wallet batch: an exact 4 USDC approval followed by four 1 USDC canonical creations.</p>
+        <h2>2. Fund Four Bounties</h2>
+        <p>The preferred action is one atomic EIP-5792 wallet batch: an exact 4 USDC approval followed by four 1 USDC canonical creations.</p>
         <div class="actions">
           <button id="activate" disabled>Send wallet batch</button>
           <button class="warning" id="sequential" disabled hidden>Use sequential fallback</button>

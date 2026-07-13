@@ -2,8 +2,12 @@
   "use strict";
 
   const BASE_CHAIN_ID = "0x2105";
-  const BUNDLE_URL = "/deployments/base-mainnet-activation.json";
-  const state = { bundle: null, account: null, provider: null, providers: [], inspected: false, factoryVerified: false };
+  const BUNDLE_URL = "/deployments/canonical-child-seeds-base-mainnet.json";
+  const VERIFIER_BUNDLE_URL = "/deployments/canonical-child-verifier-base-mainnet-deployment.json";
+  const VERIFIER_MODULE = "0x40adac5a1d00a725f77682f8940b893eaed31ecf";
+  const ACCEPTANCE_CRITERIA_HASH = "0x005f591a8549549698e7c028b78ddc84076e0996ef07e19dd543ebdb12cb4553";
+  const EXPECTED_ISSUES = [217, 218, 219, 220];
+  const state = { bundle: null, account: null, provider: null, providers: [], pendingBounties: [], inspected: false };
   const announcedProviders = [];
   const byId = (id) => document.getElementById(id);
   const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -21,22 +25,30 @@
 
   async function loadBundle() {
     requireLocalOrigin();
-    const response = await fetch(BUNDLE_URL, { cache: "no-store" });
-    if (!response.ok) throw new Error("The checked-in activation bundle is unavailable.");
+    const [response, verifierResponse] = await Promise.all([
+      fetch(BUNDLE_URL, { cache: "no-store" }),
+      fetch(VERIFIER_BUNDLE_URL, { cache: "no-store" }),
+    ]);
+    if (!response.ok || !verifierResponse.ok) throw new Error("A checked-in activation artifact is unavailable.");
     const bundle = await response.json();
+    const verifierBundle = await verifierResponse.json();
     if (
       bundle.schema_version !== "agent-bounties/autonomous-activation-bundle-v1"
       || bundle.network !== "base-mainnet"
       || bundle.chain_id !== 8453
-      || bundle.deployment.to !== null
-      || bundle.deployment.value_wei !== 0
+      || bundle.manifest_canonical_json_keccak256 !== "0x431541ef2248e27052b128043d6a44253c9b8e890c13c9cda42b5a80f46ddb4f"
       || bundle.creation_batch.total_initial_funding !== "4000000"
       || bundle.bounties.length !== 4
       || bundle.creation_batch.wallet_calls.length !== 5
+      || bundle.bounties.some((item, index) => item.issue !== EXPECTED_ISSUES[index])
+      || verifierBundle.schema_version !== "agent-bounties/canonical-child-verifier-deployment-v1"
+      || verifierBundle.deployment.expected_contract !== VERIFIER_MODULE
+      || verifierBundle.acceptance_criteria_hash !== ACCEPTANCE_CRITERIA_HASH
     ) {
-      throw new Error("Activation bundle violates the capped autonomous-v1 contract.");
+      throw new Error("Activation artifacts violate the locked canonical-child-v1 contract.");
     }
     state.bundle = bundle;
+    state.verifierBundle = verifierBundle;
     document.querySelector("[data-factory]").textContent = bundle.deployment.expected_factory;
     document.querySelector("[data-implementation]").textContent = bundle.deployment.expected_implementation;
     document.querySelector("[data-creator]").textContent = bundle.deployment.from;
@@ -149,9 +161,52 @@
     if (token !== deployment.settlement_token.toLowerCase()) {
       throw new Error(`Factory settlement token mismatch: ${token}`);
     }
-    state.factoryVerified = true;
-    byId("activate").disabled = false;
-    byId("verify").disabled = false;
+    return true;
+  }
+
+  async function verifyVerifierModule() {
+    const deployment = state.verifierBundle.deployment;
+    const code = (await wallet("eth_getCode", [VERIFIER_MODULE, "latest"])).toLowerCase();
+    if (!code || code === "0x") throw new Error("Deploy the canonical child verifier before funding bounties.");
+    if (code !== deployment.expected_runtime_code) throw new Error("Canonical child verifier runtime bytecode mismatch.");
+    const factory = addressResult(await call(VERIFIER_MODULE, "0x044f3e72"));
+    const token = addressResult(await call(VERIFIER_MODULE, "0x7b9e618d"));
+    const criteria = (await call(VERIFIER_MODULE, "0x77de6ca7")).toLowerCase();
+    if (
+      factory !== state.bundle.deployment.expected_factory.toLowerCase()
+      || token !== state.bundle.deployment.settlement_token.toLowerCase()
+      || criteria !== ACCEPTANCE_CRITERIA_HASH
+    ) {
+      throw new Error("Canonical child verifier immutable configuration mismatch.");
+    }
+  }
+
+  async function bountyIsActivated(bounty) {
+    const contract = bounty.predicted_bounty_contract;
+    const code = await wallet("eth_getCode", [contract, "latest"]);
+    if (!code || code === "0x") return false;
+    const canonical = uintResult(await call(state.bundle.deployment.expected_factory, `0xdb021126${addressWord(contract)}`));
+    const bountyId = (await call(contract, "0xc17bd75e")).toLowerCase();
+    const funded = uintResult(await call(contract, "0x820a5f50"));
+    const target = uintResult(await call(contract, "0x953b8fb8"));
+    const status = uintResult(await call(contract, "0x200d2ed2"));
+    const balance = await tokenBalance(contract);
+    const verifier = addressResult(await call(contract, "0x41506fc1"));
+    const criteria = (await call(contract, "0x8a2b02be")).toLowerCase();
+    const terms = (await call(contract, "0xb311d9fd")).toLowerCase();
+    if (
+      canonical !== 1n
+      || bountyId !== bounty.bounty_id.toLowerCase()
+      || funded !== 1_000_000n
+      || target !== 1_000_000n
+      || balance !== 1_000_000n
+      || status !== 1n
+      || verifier !== VERIFIER_MODULE
+      || criteria !== ACCEPTANCE_CRITERIA_HASH
+      || terms !== bounty.commitments.terms_hash.toLowerCase()
+    ) {
+      throw new Error(`Issue #${bounty.issue} exists but fails the locked canonical funding contract.`);
+    }
     return true;
   }
 
@@ -159,23 +214,26 @@
     const target = byId("inspect-output");
     try {
       const account = await connect();
-      const deployment = state.bundle.deployment;
       const nonce = Number.parseInt(await wallet("eth_getTransactionCount", [account, "latest"]), 16);
       const eth = uintResult(await wallet("eth_getBalance", [account, "latest"]));
       const usdc = await tokenBalance(account);
       const factoryExists = await verifyFactory();
-      if (!factoryExists && nonce !== deployment.deployer_nonce) {
-        throw new Error(`Nonce drift: bundle requires ${deployment.deployer_nonce}, wallet is ${nonce}. Regenerate the bundle before signing.`);
+      if (!factoryExists) throw new Error("The attested canonical factory is unavailable.");
+      await verifyVerifierModule();
+      const pendingBounties = [];
+      for (const bounty of state.bundle.bounties) {
+        if (!(await bountyIsActivated(bounty))) pendingBounties.push(bounty);
       }
-      if (!factoryExists && usdc < BigInt(state.bundle.creation_batch.total_initial_funding)) {
-        throw new Error(`Wallet has ${Number(usdc) / 1_000_000} USDC; 4 USDC is required.`);
+      const requiredFunding = BigInt(pendingBounties.length) * 1_000_000n;
+      if (usdc < requiredFunding) {
+        throw new Error(`Wallet has ${Number(usdc) / 1_000_000} USDC; ${Number(requiredFunding) / 1_000_000} USDC is required for the remaining bounties.`);
       }
-      let estimatedGas = 0n;
-      if (!factoryExists) {
-        estimatedGas = uintResult(await wallet("eth_estimateGas", [{ from: account, data: deployment.data, value: "0x0" }]));
-      }
+      state.pendingBounties = pendingBounties;
       state.inspected = true;
-      byId("deploy").disabled = factoryExists;
+      byId("activate").disabled = pendingBounties.length !== state.bundle.bounties.length;
+      byId("sequential").hidden = pendingBounties.length === 0 || pendingBounties.length === state.bundle.bounties.length;
+      byId("sequential").disabled = pendingBounties.length === 0;
+      byId("verify").disabled = false;
       write(target, [
         `Wallet provider: ${providerName(state.provider)}`,
         `Account: ${account}`,
@@ -183,11 +241,19 @@
         `Nonce: ${nonce}`,
         `ETH: ${(Number(eth) / 1e18).toFixed(6)}`,
         `USDC: ${(Number(usdc) / 1_000_000).toFixed(6)}`,
-        factoryExists ? "Factory: deployed and configuration verified" : `Factory: empty predicted address; estimated deployment gas ${estimatedGas}`,
+        "Factory: deployed and immutable configuration verified",
+        "Verifier: deployed and byte-for-byte verified",
+        pendingBounties.length === 0
+          ? "Bounties: all four are deployed; verify canonical state"
+          : `Bounties: ${pendingBounties.length} of 4 remain; ${Number(requiredFunding) / 1_000_000} USDC required`,
       ], "success");
     } catch (error) {
       state.inspected = false;
-      byId("deploy").disabled = true;
+      state.pendingBounties = [];
+      byId("activate").disabled = true;
+      byId("sequential").disabled = true;
+      byId("sequential").hidden = true;
+      byId("verify").disabled = true;
       write(target, error.message || String(error), "error");
     }
   }
@@ -205,47 +271,18 @@
     throw new Error(`Transaction confirmation timed out: ${transactionHash}`);
   }
 
-  async function deploy() {
-    const target = byId("deploy-output");
-    try {
-      await inspect();
-      if (!state.inspected || state.factoryVerified) return;
-      write(target, ["Wallet confirmation requested for the exact factory deployment.", `Expected: ${state.bundle.deployment.expected_factory}`]);
-      const hash = await wallet("eth_sendTransaction", [{
-        from: state.account,
-        data: state.bundle.deployment.data,
-        value: "0x0",
-      }]);
-      const receipt = await waitReceipt(hash);
-      if (String(receipt.contractAddress).toLowerCase() !== state.bundle.deployment.expected_factory.toLowerCase()) {
-        throw new Error(`Receipt contract mismatch: ${receipt.contractAddress}`);
-      }
-      if (!(await verifyFactory())) throw new Error("Factory receipt succeeded but code is unavailable.");
-      byId("deploy").disabled = true;
-      write(target, ["Factory deployment confirmed and configuration verified.", `Transaction: https://base.blockscout.com/tx/${hash}`], "success");
-    } catch (error) {
-      write(target, error.message || String(error), "error");
-    }
-  }
-
   async function verifyActivation(timeoutMilliseconds = 0) {
     const deadline = Date.now() + timeoutMilliseconds;
     do {
       try {
         if (!(await verifyFactory())) throw new Error("Canonical factory is not deployed.");
+        await verifyVerifierModule();
         const results = [];
         for (const bounty of state.bundle.bounties) {
-          const contract = bounty.predicted_bounty_contract;
-          const canonical = uintResult(await call(state.bundle.deployment.expected_factory, `0xdb021126${addressWord(contract)}`));
-          const bountyId = (await call(contract, "0xc17bd75e")).toLowerCase();
-          const funded = uintResult(await call(contract, "0x820a5f50"));
-          const target = uintResult(await call(contract, "0x953b8fb8"));
-          const status = uintResult(await call(contract, "0x200d2ed2"));
-          const balance = await tokenBalance(contract);
-          if (canonical !== 1n || bountyId !== bounty.bounty_id.toLowerCase() || funded !== 1_000_000n || target !== 1_000_000n || balance !== 1_000_000n || status !== 1n) {
+          if (!(await bountyIsActivated(bounty))) {
             throw new Error(`Issue #${bounty.issue} is not yet canonical, fully funded, and claimable.`);
           }
-          results.push(`#${bounty.issue}: ${contract} | 1 USDC | claimable`);
+          results.push(`#${bounty.issue}: ${bounty.predicted_bounty_contract} | 1 USDC | claimable`);
         }
         return results;
       } catch (error) {
@@ -268,8 +305,11 @@
   async function activateBatch() {
     const target = byId("activate-output");
     try {
-      await connect();
-      if (!(await verifyFactory())) throw new Error("Deploy and verify the factory first.");
+      await inspect();
+      if (!state.inspected) return;
+      if (state.pendingBounties.length !== state.bundle.bounties.length) {
+        throw new Error("Atomic activation is available only before any seed bounty exists. Use the bounded sequential recovery path.");
+      }
       write(target, "Wallet confirmation requested for one exact five-call batch.");
       await wallet("wallet_sendCalls", [{
         version: "2.0.0",
@@ -290,8 +330,16 @@
     const target = byId("activate-output");
     byId("sequential").disabled = true;
     try {
-      await connect();
-      for (const transaction of state.bundle.creation_batch.wallet_calls) {
+      await inspect();
+      if (!state.inspected || state.pendingBounties.length === 0) return;
+      const approvalTemplate = state.bundle.creation_batch.wallet_calls[0];
+      const remainingFunding = BigInt(state.pendingBounties.length) * 1_000_000n;
+      const approvalData = `${approvalTemplate.data.slice(0, -64)}${remainingFunding.toString(16).padStart(64, "0")}`;
+      const transactions = [{ ...approvalTemplate, data: approvalData }, ...state.pendingBounties.map((bounty) => {
+        const index = state.bundle.bounties.findIndex((item) => item.issue === bounty.issue);
+        return state.bundle.creation_batch.wallet_calls[index + 1];
+      })];
+      for (const transaction of transactions) {
         write(target, `Wallet confirmation requested: ${transaction.function}`);
         const hash = await wallet("eth_sendTransaction", [{ from: state.account, to: transaction.to, data: transaction.data, value: "0x0" }]);
         await waitReceipt(hash);
@@ -319,14 +367,14 @@
     byId("wallet-provider").addEventListener("change", () => {
       state.provider = null;
       state.account = null;
+      state.pendingBounties = [];
       state.inspected = false;
-      state.factoryVerified = false;
-      byId("deploy").disabled = true;
       byId("activate").disabled = true;
+      byId("sequential").disabled = true;
+      byId("sequential").hidden = true;
       byId("verify").disabled = true;
     });
     byId("inspect").addEventListener("click", inspect);
-    byId("deploy").addEventListener("click", deploy);
     byId("activate").addEventListener("click", activateBatch);
     byId("sequential").addEventListener("click", activateSequential);
     byId("verify").addEventListener("click", () => showVerifiedActivation());

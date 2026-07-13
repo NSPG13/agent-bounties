@@ -1,0 +1,93 @@
+{
+  "bounties": [
+    {
+      "bounty_id": "0xf288ff4e7bc1d1749a5564f1b78a182444969ca5164d26b4a6efb768ac65b329",
+      "contract": "0x2e1d6aa2d14c71b410d93a61cacd65564bd2d95f",
+      "funded": 1000000,
+      "issue": 217,
+      "status": "claimable",
+      "target": 1000000,
+      "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf"
+    },
+    {
+      "bounty_id": "0x0f29d77b8077db5c214b05e8284afc26e0cbad44160035ef2c5610c22ea7be4a",
+      "contract": "0xb0c5c588f1b8d70eedbe57aa82075873bdaf33ea",
+      "funded": 1000000,
+      "issue": 218,
+      "status": "claimable",
+      "target": 1000000,
+      "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf"
+    },
+    {
+      "bounty_id": "0xd6472929895ceb66a78590b58d7277833dd3081779298e5d13e59c30c2b727ef",
+      "contract": "0xe5f7af12d084eb23c1d230065ebbef411f99a967",
+      "funded": 1000000,
+      "issue": 219,
+      "status": "claimable",
+      "target": 1000000,
+      "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf"
+    },
+    {
+      "bounty_id": "0xa4164c5e54b756bf49616eb328f308e4a335308e30c1e14af154d79e856b0cf3",
+      "contract": "0x2fab3439082aa48b2dcc69816cd4340054565937",
+      "funded": 1000000,
+      "issue": 220,
+      "status": "claimable",
+      "target": 1000000,
+      "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf"
+    }
+  ],
+  "creator_eth_before_wei": 2928169639983243,
+  "creator_usdc_after": 5890000,
+  "creator_usdc_before": 9890000,
+  "deployer_nonce": 17,
+  "deployment_gas_used": 0,
+  "evidence_boundary": "Fork transaction hashes are rehearsal evidence only and do not prove mainnet funding or payout.",
+  "factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "factory_source": "existing",
+  "fork_block": 48568129,
+  "implementation": "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
+  "network": "base-mainnet-fork",
+  "portable_creation_plan": {
+    "bounty_id": "0xf288ff4e7bc1d1749a5564f1b78a182444969ca5164d26b4a6efb768ac65b329",
+    "evidence_boundary": "The checked-in Rust-generated batch is replayed below. Production safe-block factory attestation is verified separately because Anvil historical account proofs are incomplete after local fork mutation.",
+    "issue": 217,
+    "predicted_bounty_contract": "0x2e1d6aa2d14c71b410d93a61cacd65564bd2d95f",
+    "schema_version": "agent-bounties/autonomous-activation-bundle-v1",
+    "wallet_call_count": 2
+  },
+  "result": "pass",
+  "transactions": [
+    {
+      "function": "approve(address,uint256)",
+      "gas_used": 55425,
+      "log_count": 1
+    },
+    {
+      "function": "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+      "gas_used": 625354,
+      "log_count": 7
+    },
+    {
+      "function": "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+      "gas_used": 625354,
+      "log_count": 7
+    },
+    {
+      "function": "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+      "gas_used": 625354,
+      "log_count": 7
+    },
+    {
+      "function": "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)",
+      "gas_used": 620566,
+      "log_count": 7
+    }
+  ],
+  "verifier": {
+    "contract": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+    "gas_used": 1643013,
+    "runtime_code_hash": "0x6a76885f5bc79fced62a954c158aa3a9666c5f1dc4959b3ea4971719f948f4e3",
+    "transaction": "0x6ce8b658df1c593e4288cab7faadf7fcd7f1d67f3790b29e31f3b65db43e767b"
+  }
+}

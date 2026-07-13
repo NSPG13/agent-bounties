@@ -164,3 +164,10 @@ cargo run -p cli -- autonomous-activation-bundle \
   --deployer-nonce 4 \
   --output target/tmp/base-mainnet-activation.json
 cmp deployments/base-mainnet-activation.json target/tmp/base-mainnet-activation.json
+
+cargo run -p cli -- autonomous-activation-bundle \
+  --manifest bounties/autonomous-v1/canonical-child-seeds-manifest.json \
+  --deployer 0x884834E884d6e93462655A2820140aD03E6747bC \
+  --deployer-nonce 4 \
+  --output target/tmp/canonical-child-seeds-base-mainnet.json
+cmp deployments/canonical-child-seeds-base-mainnet.json target/tmp/canonical-child-seeds-base-mainnet.json
