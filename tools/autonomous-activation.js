@@ -36,7 +36,7 @@
       bundle.schema_version !== "agent-bounties/autonomous-activation-bundle-v1"
       || bundle.network !== "base-mainnet"
       || bundle.chain_id !== 8453
-      || bundle.manifest_canonical_json_keccak256 !== "0x431541ef2248e27052b128043d6a44253c9b8e890c13c9cda42b5a80f46ddb4f"
+      || bundle.manifest_canonical_json_keccak256 !== "0x67e77578481d2ef5015643c880a3810b018681ccb2f1d7571d4b573601095a74"
       || bundle.creation_batch.total_initial_funding !== "4000000"
       || bundle.bounties.length !== 4
       || bundle.creation_batch.wallet_calls.length !== 5

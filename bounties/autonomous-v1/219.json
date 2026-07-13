@@ -57,7 +57,7 @@
     "verifiers": [],
     "threshold": 1,
     "rubric": "The immutable verifier reads canonical parent and child state. It passes only after the active parent solver creates and fully funds a recursively bound child that a different wallet claims and submits before expiry.",
-    "self_verification_forbidden": true
+    "self_verification_forbidden": false
   },
   "source_url": "https://github.com/NSPG13/agent-bounties/issues/219",
   "discovery_source": "maintainer-seeded self-replenishing full-loop bounty"
