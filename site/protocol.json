@@ -9,6 +9,12 @@
   "implementation": "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
   "deployment_transaction": "0x8c172a34188cc68cf61f7293825e3c93e025a029b878436d34aafd2103c2e70e",
   "deployment_block": 48496662,
+  "default_verification": {
+    "mode": "deterministic_module",
+    "module_id": "leading_zero_work_v1",
+    "verifier_reward_recipient": "creator_wallet",
+    "threshold": 1
+  },
   "deterministic_modules": {
     "leading_zero_work_v1": {
       "contract": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",

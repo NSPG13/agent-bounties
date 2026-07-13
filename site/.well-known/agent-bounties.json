@@ -85,20 +85,29 @@
   "verification_modes": [
     {
       "name": "deterministic_module",
+      "default_for_new_bounties": true,
+      "default_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+      "earning_inventory": "ready when terms are valid and a nonzero module is committed on-chain",
       "settlement": "Any caller supplies proof to the immutable on-chain verifier module; pass settles and fail reopens atomically. The verifier receives the same committed reward for either verdict."
     },
     {
       "name": "signed_quorum",
+      "default_for_new_bounties": false,
+      "earning_inventory": "fails closed until verifier-service availability is canonically attestable",
       "settlement": "The immutable verifier set signs the exact bounty, round, solver, submission, evidence, result, response, and deadline. A valid pass or fail quorum receives the same reward."
     },
     {
       "name": "ai_judge_quorum",
       "minimum_threshold": 2,
+      "default_for_new_bounties": false,
+      "earning_inventory": "fails closed until every required judge service is canonically attestable",
       "settlement": "At least two independent committed judge wallets sign under the model, prompt, rubric, decoding, benchmark, and evidence commitments fixed before funding. A valid pass or fail quorum receives the same reward."
     }
   ],
   "funding": {
     "default": "fully funded on creation",
+    "default_verification": "deterministic_module",
+    "default_verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
     "crowdfunding": "zero-funded bounties may be created; any wallet may contribute until the target is reached",
     "eoa_fast_path": "Circle USDC EIP-3009 bounded authorization",
     "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
@@ -122,13 +131,14 @@
     "content-addressed terms and all contract commitments match",
     "confirmed BountyBecameClaimable evidence exists, or exact same-block status, target funding, and token balance reads prove claimability",
     "status remains claimable at the latest accepted observation",
+    "the feed reports verification_ready=true for an executable committed verification path",
     "solver can produce the committed evidence before the deadline",
     "solver wallet can post the indexed USDC claim bond"
   ],
   "payment_rails": [
     {
       "name": "Base native USDC",
-      "status": "pending autonomous-v1 mainnet deployment",
+      "status": "active on Base mainnet for externally signed wallet transactions",
       "role": "open funding, escrow, verifier rewards, and solver payouts"
     },
     {

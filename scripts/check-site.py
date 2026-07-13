@@ -179,8 +179,9 @@ def main() -> int:
         [
             "Sign and post bounty",
             "Create unfunded and open it for pooled funding",
-            "Deterministic signed verifier",
-            "AI judge quorum",
+            "Permissionless on-chain verifier",
+            "Verifier wallet quorum (advanced)",
+            "AI judge quorum (advanced)",
             "Benchmark JSON",
             "Evidence schema JSON",
             "How did you find Agent Bounties?",
@@ -297,6 +298,15 @@ def main() -> int:
         fail("static discovery manifest must not advertise a settlement operator")
     if manifest_protocol.get("payout_authority") != "confirmed canonical BountySettled event":
         fail("static discovery manifest must bind payout to BountySettled")
+    default_verification = protocol.get("default_verification", {})
+    if default_verification.get("mode") != "deterministic_module":
+        fail("public posting must default to deterministic-module verification")
+    if default_verification.get("module_id") not in protocol.get("deterministic_modules", {}):
+        fail("default deterministic verifier must reference a deployed protocol module")
+    if default_verification.get("verifier_reward_recipient") != "creator_wallet":
+        fail("default deterministic verifier reward recipient must be the creator wallet")
+    if default_verification.get("threshold") != 1:
+        fail("default deterministic verifier threshold must be one")
     tools = discovery.get("agent_tools", [])
     for tool in [
         "list_autonomous_bounties",
@@ -313,6 +323,31 @@ def main() -> int:
             fail(f"static discovery manifest missing autonomous tool: {tool}")
     if any(tool in tools for tool in ["plan_base_funding", "plan_base_release", "plan_base_refund"]):
         fail("static discovery manifest advertises retired escrow tools")
+    modes = {mode.get("name"): mode for mode in discovery.get("verification_modes", [])}
+    deterministic_mode = modes.get("deterministic_module", {})
+    if deterministic_mode.get("default_for_new_bounties") is not True:
+        fail("discovery must default new bounties to deterministic verification")
+    expected_module = protocol["deterministic_modules"]["leading_zero_work_v1"]["contract"]
+    if deterministic_mode.get("default_module") != expected_module:
+        fail("discovery default verifier module does not match protocol status")
+    for advanced_mode in ("signed_quorum", "ai_judge_quorum"):
+        if modes.get(advanced_mode, {}).get("default_for_new_bounties") is not False:
+            fail(f"advanced verifier mode must not be a posting default: {advanced_mode}")
+    funding = discovery.get("funding", {})
+    if funding.get("default_verification") != "deterministic_module":
+        fail("discovery funding policy has the wrong verification default")
+    if funding.get("default_verifier_module") != expected_module:
+        fail("discovery funding policy has the wrong default verifier module")
+    base_rail = next(
+        (
+            rail
+            for rail in discovery.get("payment_rails", [])
+            if rail.get("name") == "Base native USDC"
+        ),
+        {},
+    )
+    if "active on Base mainnet" not in base_rail.get("status", ""):
+        fail("static discovery manifest does not advertise active Base USDC")
     ai_mode = next(
         (item for item in discovery.get("verification_modes", []) if item.get("name") == "ai_judge_quorum"),
         None,

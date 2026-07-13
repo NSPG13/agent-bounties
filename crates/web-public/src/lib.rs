@@ -495,23 +495,29 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         verification_modes: vec![
             serde_json::json!({
                 "name": "deterministic_module",
+                "default_for_new_bounties": true,
+                "default_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
                 "earning_inventory": "ready when terms are valid and a nonzero module is committed on-chain",
                 "settlement": "Any caller supplies proof to the immutable on-chain verifier module; pass settles and fail reopens atomically. The verifier receives the same committed reward for either verdict."
             }),
             serde_json::json!({
                 "name": "signed_quorum",
+                "default_for_new_bounties": false,
                 "earning_inventory": "fails closed until verifier-service availability is canonically attestable",
                 "settlement": "Committed verifier wallets sign the exact round, solver, submission, evidence, result, response, and deadline. A valid pass or fail quorum receives the same reward."
             }),
             serde_json::json!({
                 "name": "ai_judge_quorum",
                 "minimum_threshold": 2,
+                "default_for_new_bounties": false,
                 "earning_inventory": "fails closed until every required judge service is canonically attestable",
                 "settlement": "At least two independent committed judge wallets sign under the model, prompt, rubric, decoding, benchmark, and evidence commitments fixed before funding. A valid pass or fail quorum receives the same reward."
             }),
         ],
         funding: serde_json::json!({
             "default": "fully funded on creation",
+            "default_verification": "deterministic_module",
+            "default_verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
             "crowdfunding": "zero-funded bounties may be created; any wallet may contribute until the target is reached",
             "eoa_fast_path": "Circle USDC EIP-3009 bounded authorization",
             "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
@@ -536,7 +542,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             PaymentRailDescriptor {
                 name: "Base native USDC".to_string(),
                 currency: "usdc".to_string(),
-                status: "requires active autonomous-v1 deployment configuration".to_string(),
+                status: "active on Base mainnet for externally signed wallet transactions".to_string(),
                 settlement: "Canonical per-bounty contracts fund and settle atomically; BountySettled is payout evidence.".to_string(),
                 funding_required_before_claim: true,
                 automatic_release_limit_minor: None,
@@ -2917,6 +2923,23 @@ mod tests {
             .verification_modes
             .iter()
             .any(|mode| { mode["name"] == "ai_judge_quorum" && mode["minimum_threshold"] == 2 }));
+        let deterministic = manifest
+            .verification_modes
+            .iter()
+            .find(|mode| mode["name"] == "deterministic_module")
+            .unwrap();
+        assert_eq!(deterministic["default_for_new_bounties"], true);
+        assert_eq!(
+            deterministic["default_module"],
+            "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e"
+        );
+        assert_eq!(
+            manifest.funding["default_verification"],
+            "deterministic_module"
+        );
+        assert!(manifest.payment_rails.iter().any(|rail| {
+            rail.name == "Base native USDC" && rail.status.contains("active on Base mainnet")
+        }));
         assert!(manifest
             .evidence_boundaries
             .iter()

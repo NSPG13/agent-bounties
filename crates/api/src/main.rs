@@ -1036,8 +1036,28 @@ fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyR
 fn autonomous_factory_for_chain(chain_id: u64) -> Option<String> {
     match chain_id {
         84_532 => env_nonempty_value("BASE_SEPOLIA_BOUNTY_FACTORY"),
-        8_453 => env_nonempty_value("BASE_MAINNET_BOUNTY_FACTORY"),
+        8_453 => canonical_mainnet_factory(
+            env_nonempty_value("BASE_MAINNET_BOUNTY_FACTORY"),
+            env_nonempty_value("BASE_MAINNET_BOUNTY_IMPLEMENTATION"),
+        ),
         _ => None,
+    }
+}
+
+fn canonical_mainnet_factory(
+    configured_factory: Option<String>,
+    configured_implementation: Option<String>,
+) -> Option<String> {
+    if configured_factory
+        .as_deref()
+        .is_some_and(|address| !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY))
+        || configured_implementation.as_deref().is_some_and(|address| {
+            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION)
+        })
+    {
+        None
+    } else {
+        Some(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_string())
     }
 }
 
@@ -5627,6 +5647,10 @@ mod tests {
         assert!(report
             .checks
             .iter()
+            .any(|check| { check.name == "Autonomous bounty factory" && check.configured }));
+        assert!(report
+            .checks
+            .iter()
             .any(|check| check.name == "Stripe live-money execution gate"));
         assert!(report
             .checks
@@ -5709,6 +5733,36 @@ mod tests {
                 None,
             ),
             Err(StatusCode::SERVICE_UNAVAILABLE)
+        );
+    }
+
+    #[test]
+    fn mainnet_readiness_uses_canonical_factory_and_rejects_drift() {
+        assert_eq!(
+            canonical_mainnet_factory(None, None).as_deref(),
+            Some(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY)
+        );
+        assert_eq!(
+            canonical_mainnet_factory(
+                Some(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_uppercase()),
+                Some(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION.to_uppercase()),
+            )
+            .as_deref(),
+            Some(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY)
+        );
+        assert_eq!(
+            canonical_mainnet_factory(
+                Some("0x1111111111111111111111111111111111111111".to_string()),
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            canonical_mainnet_factory(
+                None,
+                Some("0x2222222222222222222222222222222222222222".to_string()),
+            ),
+            None
         );
     }
 
