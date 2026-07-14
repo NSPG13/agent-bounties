@@ -20,6 +20,9 @@ from urllib.request import Request, urlopen
 from Crypto.Hash import keccak
 
 
+MAX_ACTIVATION_FUNDING_MINOR = 8_040_000
+
+
 def rpc(url: str, method: str, params: list[Any], request_id: int = 1) -> Any:
     payload = json.dumps(
         {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
@@ -46,6 +49,15 @@ def address_word(address: str) -> str:
     if len(raw) != 40 or any(character not in "0123456789abcdefABCDEF" for character in raw):
         raise ValueError(f"invalid EVM address: {address}")
     return raw.lower().rjust(64, "0")
+
+
+def uint256_argument(calldata: str, index: int) -> int:
+    raw = calldata.removeprefix("0x")
+    start = 8 + index * 64
+    end = start + 64
+    if index < 0 or len(raw) < end:
+        raise ValueError(f"calldata is missing uint256 argument {index}")
+    return int(raw[start:end], 16)
 
 
 def call(url: str, contract: str, signature: str, arguments: str = "") -> str:
@@ -119,8 +131,25 @@ def validate_bundle(bundle: dict[str, Any]) -> None:
     calls = bundle["creation_batch"]["wallet_calls"]
     if len(calls) != len(bundle["bounties"]) + 1:
         raise ValueError("activation batch must contain one approval and one call per bounty")
-    if bundle["creation_batch"]["total_initial_funding"] != "4000000":
-        raise ValueError("activation bundle must remain capped at 4 USDC total")
+    creations = bundle["creation_batch"]["creations"]
+    if len(creations) != len(bundle["bounties"]):
+        raise ValueError("activation batch bounty and creation counts differ")
+    total_initial_funding = int(bundle["creation_batch"]["total_initial_funding"])
+    observed_total = 0
+    for creation in creations:
+        initial_funding = int(creation["eip3009_authorization"]["message"]["value"])
+        target = uint256_argument(creation["create_bounty"]["data"], 0) + uint256_argument(
+            creation["create_bounty"]["data"], 1
+        )
+        if initial_funding <= 0 or initial_funding > target:
+            raise ValueError("activation bounty initial funding exceeds its target")
+        observed_total += initial_funding
+    if (
+        total_initial_funding <= 0
+        or total_initial_funding > MAX_ACTIVATION_FUNDING_MINOR
+        or observed_total != total_initial_funding
+    ):
+        raise ValueError("activation batch initial funding total is inconsistent")
 
 
 def run_portable_creation_plan(
@@ -350,11 +379,8 @@ def rehearse(
                 )
                 total_funding = int(bundle["creation_batch"]["total_initial_funding"])
                 bounty_count = len(bundle["bounties"])
-                if bounty_count == 0 or total_funding % bounty_count != 0:
-                    raise RuntimeError(
-                        "activation funding must divide evenly across the manifest bounties"
-                    )
-                expected_bounty_funding = total_funding // bounty_count
+                if bounty_count == 0:
+                    raise RuntimeError("activation manifest has no bounties")
                 if wallet_usdc < total_funding:
                     raise RuntimeError(
                         f"forked wallet has {wallet_usdc} USDC minor units; {total_funding} required"
@@ -445,8 +471,17 @@ def rehearse(
                     )
 
                 bounty_summaries = []
-                for bounty in bundle["bounties"]:
+                for index, bounty in enumerate(bundle["bounties"]):
                     contract = bounty["predicted_bounty_contract"]
+                    creation = bundle["creation_batch"]["creations"][index]
+                    expected_initial_funding = int(
+                        creation["eip3009_authorization"]["message"]["value"]
+                    )
+                    create_data = creation["create_bounty"]["data"]
+                    expected_target = uint256_argument(create_data, 0) + uint256_argument(
+                        create_data, 1
+                    )
+                    expected_status = 1 if expected_initial_funding == expected_target else 0
                     canonical = uint_result(
                         call(local_url, observed_factory, "isCanonicalBounty(address)", address_word(contract))
                     )
@@ -466,16 +501,18 @@ def rehearse(
                     if (
                         canonical != 1
                         or bounty_id != bounty["bounty_id"].lower()
-                        or funded != expected_bounty_funding
-                        or target != expected_bounty_funding
-                        or status != 1
-                        or token_balance != expected_bounty_funding
+                        or funded != expected_initial_funding
+                        or target != expected_target
+                        or status != expected_status
+                        or token_balance != expected_initial_funding
                         or (
                             verifier_summary is not None
                             and verifier_module != verifier_summary["contract"]
                         )
                     ):
-                        raise RuntimeError(f"issue {bounty['issue']} did not become fully funded and claimable")
+                        raise RuntimeError(
+                            f"issue {bounty['issue']} did not reach its committed funding state"
+                        )
                     bounty_summaries.append(
                         {
                             "issue": bounty["issue"],
@@ -483,7 +520,7 @@ def rehearse(
                             "bounty_id": bounty_id,
                             "funded": funded,
                             "target": target,
-                            "status": "claimable",
+                            "status": "claimable" if expected_status == 1 else "seeking_funding",
                             "verifier_module": verifier_module,
                         }
                     )

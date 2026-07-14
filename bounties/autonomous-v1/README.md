@@ -63,8 +63,9 @@ remain immutable historical terms after claim, cancellation, settlement, or
 refund and must not be rewritten. Live standing-meta inventory is determined
 from canonical events, not this document.
 
-Issues `#244`, `#248`, `#249`, and `#250` are the direct deterministic 2 USDC
-solver canaries. Their exact terms and aggregate 8.04 USDC initial-funding
+Issues `#244`, `#248`, `#249`, and `#250` are an experiment testing whether a
+2 USDC solver reward improves claim and completion behavior; this amount is not
+a protocol default. Their exact terms and aggregate 7.89 USDC initial-funding
 calls are locked by `direct-canaries-manifest.json` and
 `deployments/direct-canaries-base-mainnet.json`. Reproduce the unsigned batch
 with:
@@ -76,6 +77,11 @@ cargo run -p cli -- autonomous-activation-bundle `
   --deployer-nonce 4 `
   --output deployments/direct-canaries-base-mainnet.json
 ```
+
+Issues `#244`, `#248`, and `#249` each start fully funded at 2.01 USDC. Issue
+`#250` starts at 1.86 of its 2.01 USDC target and remains unclaimable until any
+wallet contributes the remaining 0.15 USDC. This is a pooled-funding canary,
+not a reduced solver reward.
 
 Browser, API, and relayer references in these canaries are optional
 instrumentation. Payment eligibility is only the committed 16-bit

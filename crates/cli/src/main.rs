@@ -745,6 +745,8 @@ struct ActivationCommitments {
 struct ActivationManifestBounty {
     issue: u64,
     document: String,
+    #[serde(default)]
+    initial_funding: Option<i64>,
     commitments: ActivationCommitments,
     creation_nonce: String,
 }
@@ -859,12 +861,18 @@ fn autonomous_activation_bundle(
         }
         let create = autonomous_bounty_create_from_terms(&record)
             .with_context(|| format!("derive creation input for issue {}", bounty.issue))?;
-        if !create
-            .creation_nonce
-            .eq_ignore_ascii_case(&bounty.creation_nonce)
+        let expected_initial_funding = bounty
+            .initial_funding
+            .unwrap_or(manifest.economics.initial_funding);
+        if expected_initial_funding <= 0
+            || expected_initial_funding
+                > manifest.economics.solver_reward + manifest.economics.verifier_reward
+            || !create
+                .creation_nonce
+                .eq_ignore_ascii_case(&bounty.creation_nonce)
             || create.solver_reward.amount != manifest.economics.solver_reward
             || create.verifier_reward.amount != manifest.economics.verifier_reward
-            || create.initial_funding.amount != manifest.economics.initial_funding
+            || create.initial_funding.amount != expected_initial_funding
             || create.verifiers.len() != manifest.verifiers.len()
             || !create
                 .verifiers
