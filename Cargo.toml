@@ -41,7 +41,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-sha3 = "0.10"
+sha3 = "0.11"
 sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "chrono", "json", "macros", "migrate"] }
 thiserror = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
