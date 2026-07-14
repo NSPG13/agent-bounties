@@ -1,3 +1,7 @@
+use alloy::{
+    primitives::{keccak256, Address, Signature, B256, U256},
+    sol_types::SolValue,
+};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -13,6 +17,9 @@ pub const STANDARD_EXACT_SCHEME: &str = "exact";
 pub const MAX_HEADER_LENGTH: usize = 32 * 1024;
 const MIN_SETTLEMENT_BUFFER_SECONDS: u64 = 6;
 const MAX_CLOCK_SKEW_SECONDS: u64 = 30;
+const EIP712_DOMAIN_TYPE: &str =
+    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
+const TRANSFER_WITH_AUTHORIZATION_TYPE: &str = "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)";
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum X402Error {
@@ -111,6 +118,26 @@ pub struct PaymentPayload {
     pub payload: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extensions: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SettlementResponse {
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payer: Option<String>,
+    pub transaction: String,
+    pub network: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -216,11 +243,19 @@ pub fn encode_payment_signature_header(payload: &PaymentPayload) -> Result<Strin
     encode_header(payload)
 }
 
+pub fn encode_payment_response_header(response: &SettlementResponse) -> Result<String, X402Error> {
+    encode_header(response)
+}
+
 pub fn decode_payment_required_header(header: &str) -> Result<PaymentRequired, X402Error> {
     decode_header(header)
 }
 
 pub fn decode_payment_signature_header(header: &str) -> Result<PaymentPayload, X402Error> {
+    decode_header(header)
+}
+
+pub fn decode_payment_response_header(header: &str) -> Result<SettlementResponse, X402Error> {
     decode_header(header)
 }
 
@@ -295,6 +330,20 @@ pub fn validate_funding_payload(
     let nonce = normalize_word(&authorization_payload.authorization.nonce)
         .map_err(|_| X402Error::InvalidNonce)?;
     let (v, r, s) = split_signature(&authorization_payload.signature)?;
+    let digest = eip3009_authorization_digest(expected, &authorization_payload.authorization)?;
+    let signature = authorization_payload
+        .signature
+        .parse::<Signature>()
+        .map_err(|_| X402Error::InvalidSignature)?;
+    let recovered = signature
+        .recover_address_from_prehash(&digest)
+        .map_err(|_| X402Error::InvalidSignature)?;
+    let expected_signer = contributor
+        .parse::<Address>()
+        .map_err(|_| X402Error::InvalidSignature)?;
+    if recovered != expected_signer {
+        return Err(X402Error::InvalidSignature);
+    }
 
     Ok(ValidatedFundingAuthorization {
         contributor,
@@ -306,6 +355,89 @@ pub fn validate_funding_payload(
         r,
         s,
     })
+}
+
+fn eip3009_authorization_digest(
+    requirements: &PaymentRequirements,
+    authorization: &Eip3009Authorization,
+) -> Result<B256, X402Error> {
+    let chain_id = requirements
+        .network
+        .strip_prefix("eip155:")
+        .ok_or(X402Error::InvalidChallenge("network must be eip155"))?
+        .parse::<u64>()
+        .map_err(|_| X402Error::InvalidChallenge("network chain ID is invalid"))?;
+    let verifying_contract = requirements
+        .asset
+        .parse::<Address>()
+        .map_err(|_| X402Error::InvalidChallenge("asset address is invalid"))?;
+    let name = requirements
+        .extra
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or(X402Error::InvalidChallenge("USDC EIP-712 name is missing"))?;
+    let version = requirements
+        .extra
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or(X402Error::InvalidChallenge(
+            "USDC EIP-712 version is missing",
+        ))?;
+    let from = authorization
+        .from
+        .parse::<Address>()
+        .map_err(|_| X402Error::InvalidAddress)?;
+    let to = authorization
+        .to
+        .parse::<Address>()
+        .map_err(|_| X402Error::InvalidAddress)?;
+    let value = authorization
+        .value
+        .parse::<u64>()
+        .map(U256::from)
+        .map_err(|_| X402Error::InvalidAmount)?;
+    let valid_after = authorization
+        .valid_after
+        .parse::<u64>()
+        .map(U256::from)
+        .map_err(|_| X402Error::InvalidValidAfter)?;
+    let valid_before = authorization
+        .valid_before
+        .parse::<u64>()
+        .map(U256::from)
+        .map_err(|_| X402Error::AuthorizationExpired)?;
+    let nonce = authorization
+        .nonce
+        .parse::<B256>()
+        .map_err(|_| X402Error::InvalidNonce)?;
+
+    let domain_separator = keccak256(
+        (
+            keccak256(EIP712_DOMAIN_TYPE),
+            keccak256(name),
+            keccak256(version),
+            U256::from(chain_id),
+            verifying_contract,
+        )
+            .abi_encode(),
+    );
+    let authorization_hash = keccak256(
+        (
+            keccak256(TRANSFER_WITH_AUTHORIZATION_TYPE),
+            from,
+            to,
+            value,
+            valid_after,
+            valid_before,
+            nonce,
+        )
+            .abi_encode(),
+    );
+    let mut preimage = Vec::with_capacity(66);
+    preimage.extend_from_slice(&[0x19, 0x01]);
+    preimage.extend_from_slice(domain_separator.as_slice());
+    preimage.extend_from_slice(authorization_hash.as_slice());
+    Ok(keccak256(preimage))
 }
 
 fn encode_header<T: Serialize>(value: &T) -> Result<String, X402Error> {
@@ -377,10 +509,14 @@ fn split_signature(signature: &str) -> Result<(u8, String, String), X402Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::signers::{local::PrivateKeySigner, SignerSync};
 
     const ASSET: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
     const BOUNTY: &str = "0x1111111111111111111111111111111111111111";
-    const FUNDER: &str = "0x2222222222222222222222222222222222222222";
+    const FUNDER: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+    const TEST_PRIVATE_KEY: &str =
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    const FOUNDRY_TYPED_DATA_SIGNATURE: &str = "0x525987b32d816adbfab6840381acfb64549b4f00e7d2ec2229e67182f676a80c768b69e91496161b6039cafe5a71925101fd751f06c29cd34ef3ae5cf91674601c";
     const NONCE: &str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     fn challenge() -> PaymentRequired {
@@ -395,24 +531,53 @@ mod tests {
         .unwrap()
     }
 
+    fn authorization() -> Eip3009Authorization {
+        Eip3009Authorization {
+            from: FUNDER.to_string(),
+            to: BOUNTY.to_string(),
+            value: "150000".to_string(),
+            valid_after: "0".to_string(),
+            valid_before: "1300".to_string(),
+            nonce: NONCE.to_string(),
+        }
+    }
+
     fn payment(required: &PaymentRequired) -> PaymentPayload {
+        let authorization = authorization();
+        let digest = eip3009_authorization_digest(&required.accepts[0], &authorization).unwrap();
+        let signer = TEST_PRIVATE_KEY.parse::<PrivateKeySigner>().unwrap();
+        assert_eq!(format!("{:#x}", signer.address()), FUNDER);
+        let signature = signer.sign_hash_sync(&digest).unwrap().to_string();
         PaymentPayload {
             x402_version: X402_VERSION,
             resource: Some(required.resource.clone()),
             accepted: required.accepts[0].clone(),
             payload: json!({
-                "signature": format!("0x{}{}1b", "11".repeat(32), "22".repeat(32)),
-                "authorization": {
-                    "from": FUNDER,
-                    "to": BOUNTY,
-                    "value": "150000",
-                    "validAfter": "0",
-                    "validBefore": "1300",
-                    "nonce": NONCE
-                }
+                "signature": signature,
+                "authorization": authorization
             }),
             extensions: required.extensions.clone(),
         }
+    }
+
+    #[test]
+    fn eip3009_digest_matches_foundry_typed_data_vector() {
+        let required = challenge();
+        let digest = eip3009_authorization_digest(&required.accepts[0], &authorization()).unwrap();
+        let signer = TEST_PRIVATE_KEY.parse::<PrivateKeySigner>().unwrap();
+        assert_eq!(
+            signer.sign_hash_sync(&digest).unwrap().to_string(),
+            FOUNDRY_TYPED_DATA_SIGNATURE
+        );
+
+        let fixture: Value =
+            serde_json::from_str(include_str!("../fixtures/base-usdc-eip3009.json")).unwrap();
+        assert_eq!(fixture["primaryType"], "TransferWithAuthorization");
+        assert_eq!(fixture["domain"]["chainId"], 8453);
+        assert_eq!(fixture["domain"]["verifyingContract"], ASSET);
+        assert_eq!(fixture["message"]["from"], FUNDER);
+        assert_eq!(fixture["message"]["to"], BOUNTY);
+        assert_eq!(fixture["message"]["nonce"], NONCE);
     }
 
     #[test]
@@ -430,6 +595,27 @@ mod tests {
             decode_payment_signature_header(&signature_header).unwrap(),
             payload
         );
+
+        let response = SettlementResponse {
+            success: true,
+            error_reason: None,
+            error_message: None,
+            payer: Some(FUNDER.to_string()),
+            transaction: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string(),
+            network: "eip155:8453".to_string(),
+            amount: Some("150000".to_string()),
+            extensions: Some(BTreeMap::from([(
+                "agent-bounties".to_string(),
+                json!({"canonicalEvent": "FundingAdded"}),
+            )])),
+            extra: None,
+        };
+        let response_header = encode_payment_response_header(&response).unwrap();
+        assert_eq!(
+            decode_payment_response_header(&response_header).unwrap(),
+            response
+        );
     }
 
     #[test]
@@ -441,9 +627,9 @@ mod tests {
         assert_eq!(validated.amount, 150_000);
         assert_eq!(validated.valid_before, 1_300);
         assert_eq!(validated.nonce, NONCE);
-        assert_eq!(validated.v, 27);
-        assert_eq!(validated.r, format!("0x{}", "11".repeat(32)));
-        assert_eq!(validated.s, format!("0x{}", "22".repeat(32)));
+        assert!(matches!(validated.v, 27 | 28));
+        assert_eq!(validated.r.len(), 66);
+        assert_eq!(validated.s.len(), 66);
     }
 
     #[test]
@@ -518,6 +704,14 @@ mod tests {
         assert_eq!(
             validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
             X402Error::InvalidNonce
+        );
+
+        let mut payload = payment(&required);
+        payload.payload["authorization"]["from"] =
+            json!("0x2222222222222222222222222222222222222222");
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::InvalidSignature
         );
 
         let mut payload = payment(&required);

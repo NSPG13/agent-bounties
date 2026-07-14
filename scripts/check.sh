@@ -34,6 +34,7 @@ bash "$repo_root/scripts/preflight.sh" full
 cargo fmt --all -- --check
 cargo clippy --workspace -- -D warnings
 cargo test --workspace
+bash "$repo_root/scripts/check-x402-relayer.sh"
 cargo build -p api -p mcp-server
 cargo run -p cli -- service-smoke-spawn \
   --api-base-url http://127.0.0.1:18080 \

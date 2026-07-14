@@ -46,6 +46,9 @@ try {
     $env:AGENT_BOUNTIES_TEST_DATABASE_URL = $databaseUrl
     try {
         Invoke-Checked {
+            cargo test -p db tests::x402_relay_attempt_is_idempotent_and_lease_bounded -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
         }
         Invoke-Checked {

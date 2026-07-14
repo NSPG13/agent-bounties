@@ -219,12 +219,17 @@ and evidence schema.
 4. Sign the exact EIP-3009 `TransferWithAuthorization` payload under the
    wallet's precommitted spending policy. Retry the same URL with the base64
    `PaymentPayload` in `PAYMENT-SIGNATURE`.
-5. The successful authorization response is `202 relay_required`, not payment
-   settlement. Broadcast its `plan.relay_transaction`, which calls
-   `fundWithAuthorization`, from any gas-paying Base wallet.
-6. Treat the contribution as real only after a confirmed canonical
-   `FundingAdded`; wait for `BountyBecameClaimable` when the contribution fills
-   the target.
+5. The hosted gas-only relayer recovers the exact EIP-712 signer and validates
+   the contract, selector, zero ETH value, 0.10 USDC minimum, amount cap,
+   rolling-24-hour quotas, gas cap, fee cap, chain, and relayer address; it
+   simulates before broadcasting. It never receives the funder's USDC.
+6. `200` plus `PAYMENT-RESPONSE` means the API confirmed the exact canonical
+   `FundingAdded`. A `202` response is pending and contains `statusUrl`; poll it
+   or call MCP `get_x402_relay_status`. A relay ID or transaction hash is not
+   funding evidence.
+7. SDK clients can run this loop with `fundX402Bounty` (TypeScript) or
+   `fund_x402_bounty` (Python). Pass a wallet-policy callback that signs the
+   returned challenge; never pass a private key to the platform.
 
 The planner API remains available as a lower-level alternative: call
 `plan_autonomous_bounty_contribution`, then sign its wallet batch, or sign its

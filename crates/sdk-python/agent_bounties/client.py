@@ -1,11 +1,21 @@
 import hashlib
 import os
+import time
+from typing import Callable
 
 import httpx
 
 
 def hash_artifact(body: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _x402_response_body(response: httpx.Response) -> dict:
+    try:
+        body = response.json()
+    except ValueError:
+        return {"error": response.text or f"HTTP {response.status_code}"}
+    return body if isinstance(body, dict) else {"error": response.text}
 
 
 class AgentBountiesClient:
@@ -92,13 +102,107 @@ class AgentBountiesClient:
             headers=headers or None,
             timeout=30,
         )
-        if response.status_code not in (202, 402):
+        if response.status_code not in (200, 202, 400, 402, 404, 409, 413, 422, 429, 503):
             response.raise_for_status()
         return {
             "status": response.status_code,
             "payment_required": response.headers.get("PAYMENT-REQUIRED"),
-            "body": response.json(),
+            "payment_response": response.headers.get("PAYMENT-RESPONSE"),
+            "body": _x402_response_body(response),
         }
+
+    def get_x402_relay_status(self, relay_id: str):
+        response = httpx.get(
+            f"{self.base_url}/v1/x402/base/relays/{relay_id}",
+            headers=self._headers() or None,
+            timeout=30,
+        )
+        if response.status_code not in (200, 202, 404, 422, 503):
+            response.raise_for_status()
+        return {
+            "status": response.status_code,
+            "payment_required": response.headers.get("PAYMENT-REQUIRED"),
+            "payment_response": response.headers.get("PAYMENT-RESPONSE"),
+            "body": _x402_response_body(response),
+        }
+
+    def fund_x402_bounty(
+        self,
+        bounty_contract: str,
+        signer: Callable[[str, dict], str],
+        amount: int | None = None,
+        network: str = "base-mainnet",
+        relayer: str | None = None,
+        poll_interval_seconds: float = 1.0,
+        timeout_seconds: float = 60.0,
+    ):
+        challenge = self.request_x402_bounty_funding(
+            bounty_contract,
+            amount=amount,
+            network=network,
+            relayer=relayer,
+        )
+        payment_required = challenge["payment_required"]
+        if challenge["status"] != 402 or not payment_required:
+            raise RuntimeError("x402 endpoint did not return a signable PAYMENT-REQUIRED challenge")
+        payment_signature = signer(payment_required, challenge["body"])
+        if not payment_signature:
+            raise RuntimeError("x402 signer returned an empty PAYMENT-SIGNATURE")
+
+        deadline = time.monotonic() + timeout_seconds
+        response = self.request_x402_bounty_funding(
+            bounty_contract,
+            amount=amount,
+            network=network,
+            relayer=relayer,
+            payment_signature=payment_signature,
+        )
+        while response["status"] != 200:
+            if response["status"] == 402:
+                raise RuntimeError("x402 authorization expired or no longer matches the challenge")
+            if response["status"] == 422:
+                raise RuntimeError("x402 authorization failed without canonical funding")
+            if response["status"] == 429:
+                raise RuntimeError("x402 hosted relay rolling quota is exhausted")
+            if response["status"] in (400, 404, 409, 413):
+                raise RuntimeError(
+                    f"x402 funding request was rejected with HTTP {response['status']}"
+                )
+            if time.monotonic() >= deadline:
+                raise TimeoutError("x402 funding timed out before canonical confirmation")
+            time.sleep(poll_interval_seconds)
+            relay_id = self._x402_relay_id(response["body"])
+            if relay_id:
+                response = self.get_x402_relay_status(relay_id)
+            else:
+                response = self.request_x402_bounty_funding(
+                    bounty_contract,
+                    amount=amount,
+                    network=network,
+                    relayer=relayer,
+                    payment_signature=payment_signature,
+                )
+            if response["status"] == 503:
+                response = self.request_x402_bounty_funding(
+                    bounty_contract,
+                    amount=amount,
+                    network=network,
+                    relayer=relayer,
+                    payment_signature=payment_signature,
+                )
+        if not response["payment_response"]:
+            raise RuntimeError("confirmed x402 funding is missing PAYMENT-RESPONSE")
+        return response
+
+    @staticmethod
+    def _x402_relay_id(body: dict) -> str | None:
+        relay = body.get("relay")
+        if isinstance(relay, dict) and isinstance(relay.get("id"), str):
+            return relay["id"]
+        status_url = body.get("statusUrl")
+        if isinstance(status_url, str):
+            return status_url.rstrip("/").rsplit("/", 1)[-1]
+        return None
 
     def get_risk_policy(self):
         return self._request("GET", "/v1/risk/policy")

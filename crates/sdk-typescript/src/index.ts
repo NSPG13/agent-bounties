@@ -154,9 +154,20 @@ export interface X402BountyFundingRequest {
 }
 
 export interface X402BountyFundingResponse {
-  status: 202 | 402;
+  status: 200 | 202 | 400 | 402 | 404 | 409 | 413 | 422 | 429 | 503;
   payment_required: string | null;
+  payment_response: string | null;
   body: Record<string, unknown>;
+}
+
+export type X402PaymentSigner = (
+  paymentRequired: string,
+  challengeBody: Record<string, unknown>,
+) => Promise<string>;
+
+export interface X402FundingLoopOptions {
+  pollIntervalMs?: number;
+  timeoutMs?: number;
 }
 
 export interface AgentBountiesClientOptions {
@@ -271,6 +282,33 @@ export async function hashArtifact(body: string): Promise<string> {
     .join("");
 }
 
+function x402RelayId(body: Record<string, unknown>): string | null {
+  const relay = body.relay;
+  if (relay && typeof relay === "object" && "id" in relay) {
+    const id = (relay as { id?: unknown }).id;
+    if (typeof id === "string") return id;
+  }
+  const statusUrl = body.statusUrl;
+  if (typeof statusUrl === "string") {
+    const id = statusUrl.split("/").filter(Boolean).pop();
+    return id || null;
+  }
+  return null;
+}
+
+async function x402ResponseBody(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text();
+  if (!text) return { error: `HTTP ${response.status}` };
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : { error: text };
+  } catch {
+    return { error: text };
+  }
+}
+
 export class AgentBountiesClient {
   private readonly baseUrl: string;
   private readonly operatorApiToken?: string;
@@ -346,14 +384,90 @@ export class AgentBountiesClient {
           : {}),
       },
     });
-    if (response.status !== 202 && response.status !== 402) {
+    if (![200, 202, 400, 402, 404, 409, 413, 422, 429, 503].includes(response.status)) {
       throw new Error(`${path} failed: ${response.status}`);
     }
     return {
       status: response.status,
       payment_required: response.headers.get("PAYMENT-REQUIRED"),
-      body: (await response.json()) as Record<string, unknown>,
+      payment_response: response.headers.get("PAYMENT-RESPONSE"),
+      body: await x402ResponseBody(response),
     } as X402BountyFundingResponse;
+  }
+
+  async getX402RelayStatus(relayId: string): Promise<X402BountyFundingResponse> {
+    const path = `/v1/x402/base/relays/${relayId}`;
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      headers: this.operatorApiToken
+        ? { "x-operator-token": this.operatorApiToken }
+        : undefined,
+    });
+    if (![200, 202, 404, 422, 503].includes(response.status)) {
+      throw new Error(`${path} failed: ${response.status}`);
+    }
+    return {
+      status: response.status,
+      payment_required: response.headers.get("PAYMENT-REQUIRED"),
+      payment_response: response.headers.get("PAYMENT-RESPONSE"),
+      body: await x402ResponseBody(response),
+    } as X402BountyFundingResponse;
+  }
+
+  async fundX402Bounty(
+    request: Omit<X402BountyFundingRequest, "payment_signature">,
+    signer: X402PaymentSigner,
+    options: X402FundingLoopOptions = {},
+  ): Promise<X402BountyFundingResponse> {
+    const pollIntervalMs = options.pollIntervalMs ?? 1_000;
+    const timeoutMs = options.timeoutMs ?? 60_000;
+    const deadline = Date.now() + timeoutMs;
+    const challenge = await this.requestX402BountyFunding(request);
+    if (challenge.status !== 402 || !challenge.payment_required) {
+      throw new Error("x402 funding endpoint did not return a signable PAYMENT-REQUIRED challenge");
+    }
+    const paymentSignature = await signer(challenge.payment_required, challenge.body);
+    if (!paymentSignature) throw new Error("x402 signer returned an empty PAYMENT-SIGNATURE");
+
+    let response = await this.requestX402BountyFunding({
+      ...request,
+      payment_signature: paymentSignature,
+    });
+    while (response.status !== 200) {
+      if (
+        [400, 402, 404, 409, 413, 422, 429].includes(response.status) ||
+        Date.now() >= deadline
+      ) {
+        throw new Error(
+          response.status === 402
+            ? "x402 authorization expired or no longer matches the funding challenge"
+            : response.status === 429
+            ? "x402 hosted relay rolling quota is exhausted"
+            : response.status === 422
+            ? "x402 authorization failed without canonical funding"
+            : [400, 404, 409, 413].includes(response.status)
+            ? `x402 funding request was rejected with HTTP ${response.status}`
+            : "x402 funding timed out before canonical confirmation",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      const relayId = x402RelayId(response.body);
+      response = relayId
+        ? await this.getX402RelayStatus(relayId)
+        : await this.requestX402BountyFunding({
+            ...request,
+            payment_signature: paymentSignature,
+          });
+      if (response.status === 503) {
+        response = await this.requestX402BountyFunding({
+          ...request,
+          payment_signature: paymentSignature,
+        });
+      }
+    }
+    if (!response.payment_response) {
+      throw new Error("confirmed x402 funding is missing PAYMENT-RESPONSE");
+    }
+    return response;
   }
 
   async getRiskPolicy(): Promise<unknown> {

@@ -81,8 +81,10 @@ Funding paths are:
   `createBountyWithAuthorization` or `fundWithAuthorization`,
 - x402 v2: an HTTP `402` challenge using the `agent-bounty-fund` scheme that
   binds the network, native USDC token, amount, bounty contract, resource URL,
-  timeout, and EIP-3009 authorization before returning the same canonical
-  `fundWithAuthorization` relay call.
+  timeout, and EIP-3009 authorization. The bounded hosted gas relayer recovers
+  the EIP-712 signer, enforces durable amount and rolling quotas, simulates and
+  broadcasts the same canonical `fundWithAuthorization` call, persists nonce
+  idempotency, and returns success only after confirmed `FundingAdded`.
 
 The x402 adapter must never advertise standard `exact` with the bounty contract
 as `payTo`. A standard facilitator would call USDC

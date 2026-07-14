@@ -13,13 +13,16 @@ Expose:
 
 - `/.well-known/x402.json` for agent-oriented capability discovery;
 - `GET /v1/x402/base/bounties/{bounty_contract}/funding` for the `402` challenge
-  and validated relay plan;
+  and hosted relay;
+- `GET /v1/x402/base/relays/{relay_id}` for durable confirmation polling;
 - the x402 endpoints in `/.well-known/agent-bounties.json` and `/llms.txt`.
 
-The authorization response is intentionally `202 relay_required`. It must not
-include `PAYMENT-RESPONSE` or claim settlement because the relayer transaction
-has not yet produced a canonical event. Only confirmed `FundingAdded` updates
-funding state.
+A valid signed retry is persisted by authorization nonce, simulated, and
+broadcast by a dedicated gas-only relayer. It returns `200` with
+`PAYMENT-RESPONSE` only after the exact canonical `FundingAdded` has the
+configured confirmations. If confirmation exceeds the request window, it
+returns `202` with a durable status URL. Neither response treats a mere
+transaction hash as funding.
 
 ## Why A Custom Scheme Is Required
 
@@ -41,6 +44,12 @@ custody or settlement authority.
 - Bound the signed challenge to x402 v2, CAIP-2 network, native USDC, exact
   amount, canonical bounty address, configured resource URL, timeout, nonce,
   and complete requirement echo.
+- Recover the EIP-712 signer before persistence or RPC work. Shape validation
+  alone is insufficient because forged authorizations can exhaust service
+  capacity even though contract simulation would eventually reject them.
+- Enforce a hosted minimum amount plus atomic rolling-24-hour network and
+  contributor quotas. Idempotent retries of one authorization do not consume a
+  second quota slot.
 - Limit HTTP header size and reject malformed base64, JSON, addresses, nonce,
   signature, validity window, resource, extension, or requirement data.
 - Bound authorization expiry to the advertised timeout plus narrow clock skew.
@@ -51,6 +60,9 @@ custody or settlement authority.
   token balance, or transaction hash.
 - Let USDC EIP-3009 enforce single-use nonces on-chain and let the indexer
   reconcile only confirmed canonical events.
+- Give the relayer gas only. Isolate its key from MCP and workers; serialize
+  sends with a database lease; cap USDC, gas, and fee per transaction; and
+  persist request fingerprints without storing signatures.
 - Keep free bounty discovery free. Do not add a paid endpoint solely to obtain
   a Bazaar listing.
 

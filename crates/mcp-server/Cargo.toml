@@ -19,8 +19,8 @@ eval-harness = { path = "../eval-harness" }
 github-app = { path = "../github-app" }
 ledger = { path = "../ledger" }
 payments-stripe = { path = "../payments-stripe" }
-payments-x402 = { path = "../payments-x402" }
 risk = { path = "../risk" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
