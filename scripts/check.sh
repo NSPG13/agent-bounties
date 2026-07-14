@@ -106,7 +106,6 @@ node scripts/test-autonomous-activation-console.js
 node --check tools/canonical-child-verifier-deployment.js
 node scripts/test-canonical-child-verifier-deployment-console.js
 "${python_cmd[@]}" -m pip install -r scripts/requirements-attest.txt
-"${python_cmd[@]}" scripts/test_base_deployment_attest.py -v
 "${python_cmd[@]}" scripts/check-render-blueprint.py
 "${python_cmd[@]}" scripts/test_stage_review_contract_root.py -v
 cargo run -p cli -- docs-contract-check
@@ -140,9 +139,6 @@ cargo run -p cli -- pooled-funding-demo
   scripts/stage_review_contract_root.py \
   scripts/test_stage_review_contract_root.py \
   scripts/validate_real_funding_rehearsal.py \
-  scripts/base_deployment_attest.py \
-  scripts/test_base_deployment_attest.py \
-  scripts/build_base_attest_fixtures.py \
   scripts/rehearse_autonomous_activation.py \
   scripts/build_canonical_child_verifier_bundle.py \
   scripts/rehearse_canonical_child_verifier.py
