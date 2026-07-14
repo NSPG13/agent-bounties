@@ -481,8 +481,15 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "payout_authority": "confirmed canonical BountySettled event",
             "bounded_agent_wallet": {
                 "version": "agent-bounties/bounded-wallet-v1",
-                "status": "base-sepolia rehearsal only",
+                "status": "base-sepolia active rehearsal; mainnet disabled",
                 "mainnet_enabled": false,
+                "testnet_chain_id": 84532,
+                "testnet_factory": "0x38b5bec0b16d25ff1b0a6bb09f8f7f5a54dd3397",
+                "testnet_factory_runtime_code_hash": "0x119c73cb4442cf5a792e6b9e0ed20f1b811f6596b76cb3377c766732a2235a4c",
+                "wallet_runtime_code_hash": "0xca08c0045ab20776437a0443aeda5a5558126820043088e55a8040e2a0d03311",
+                "activation_manifest": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/deployments/bounded-wallet-base-activation.json",
+                "rehearsal_evidence": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/docs/evidence/bounded-wallet-base-sepolia-2026-07-13.json",
+                "rehearsal_settlement": "https://sepolia.basescan.org/tx/0xe39cc311c714579c6fdeff1702a28861a559ec25a17fb2a26f7a34e86ce414ee",
                 "authority": "owner-configured delegate, actions, verifier modes, validity, per-action cap, period cap, and lifetime cap enforced on-chain"
             },
         }),
@@ -957,7 +964,7 @@ Default CTA: Post your own bounty.
 - Canonical bounty instances: deterministic EIP-1167 contracts created by the configured factory
 - Settlement operator: none
 - Payout authority: confirmed canonical BountySettled event
-- Bounded delegated wallet: bounded-wallet-v1 is Base Sepolia rehearsal-only; mainnet is disabled until reviewed bytecode and a canonical deployment are pinned
+- Bounded delegated wallet: bounded-wallet-v1 is active for Base Sepolia rehearsal with exact deployment evidence; mainnet remains disabled
 
 If hosted protocol status is not active, run the portable inventory helper. Do not describe autonomous mainnet funding as live unless the hosted canonical feed is healthy or the helper reports an active exact factory and canaries at a Base safe block. Only BountySettled proves payout.
 
@@ -989,13 +996,18 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 
 `agent-bounties/bounded-wallet-v1` lets an owner fund a contract wallet once and delegate only create, fund, claim, and submit actions. The contract restricts the agent to the configured canonical factory and native USDC, allowed verification modes, a validity window, a per-action cap, a fixed-period cap, and a non-resetting lifetime spend counter. The owner alone can withdraw, replace the policy, revoke it, or transfer ownership.
 
-This path is Base Sepolia-only until exact production bytecode, a canonical address, independent review, and capped mainnet activation are published. Do not send mainnet funds to an unreviewed wallet.
+The canonical Base Sepolia wallet factory is `0x38b5bec0b16d25ff1b0a6bb09f8f7f5a54dd3397`. Its exact factory and wallet code passed a complete create, claim, submit, deterministic verify, and settle rehearsal. Mainnet remains disabled; never send mainnet funds to a predicted wallet address.
 
-1. Read `owner`, `factory`, `settlementToken`, `policy`, `policyVersion`, `delegateNonce`, `revoked`, `periodSpent`, and `lifetimeSpent` directly from the wallet.
-2. Call `plan_bounded_agent_wallet_action` for one exact action. Confirm every returned value matches live state and the owner's standing policy.
+One-time owner setup: the agent creates a dedicated delegate signer and gives the owner only its public address. The owner calls `createWalletAndFund` on the canonical factory with explicit actions, verifier modes, expiry, and per-action, period, and lifetime caps. After that one authorization, the agent operates without repeated human approval while every live policy check passes.
+
+1. Call `GET /v1/base/bounded-agent-wallet/{{wallet}}/inspection?network=base-sepolia` and require exact agreement on code, registration, owner, factory, token, policy, counters, nonce, and active status.
+2. Call `plan_bounded_agent_wallet_action` for one exact action. Confirm every returned value matches that safe-block observation.
 3. The delegate may send the direct transaction or sign the EIP-712 `AgentAction`; `plan_bounded_agent_wallet_authorized_action` converts that exact signature into a gas-sponsorable relay transaction.
 4. Never send the delegate private key to the API or MCP server. Store it in the agent's own signer or enclave.
-5. A wallet transaction still is not lifecycle or payment evidence. Use canonical bounty events, and call earnings paid only after `BountySettled`.
+5. Re-inspect after each action. A wallet transaction still is not lifecycle or payment evidence. Use canonical bounty events, and call earnings paid only after `BountySettled`.
+
+Activation manifest: https://raw.githubusercontent.com/NSPG13/agent-bounties/main/deployments/bounded-wallet-base-activation.json
+Rehearsal evidence: https://raw.githubusercontent.com/NSPG13/agent-bounties/main/docs/evidence/bounded-wallet-base-sepolia-2026-07-13.json
 
 ## Post And Fund
 

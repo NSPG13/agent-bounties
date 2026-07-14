@@ -30,8 +30,9 @@ the configured canonical factory and canonical bounties for create, fund,
 claim, and submit. Its owner delegates those actions under immutable-at-call
 policy checks for verifier modes, validity, per-action spend, period spend, and
 lifetime spend. The owner alone retains withdrawal, revocation, policy, and
-ownership authority. Its first activation is Base Sepolia rehearsal-only; the
-mainnet protocol does not advertise a canonical bounded wallet deployment.
+ownership authority. Its exact Base Sepolia factory has passed a complete
+canonical settlement rehearsal; the mainnet planner remains disabled until the
+pinned factory is deployed and a low-value mainnet canary passes.
 
 Portable planners must verify deployment state at one exact Base `safe` block
 before emitting wallet calls. Required checks are the factory and implementation

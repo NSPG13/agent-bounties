@@ -133,6 +133,19 @@ def main() -> int:
     discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text(encoding="utf-8"))
     protocol = json.loads((site_dir / "protocol.json").read_text(encoding="utf-8"))
     deployment = json.loads((repo_root / "deployments" / "base-mainnet.json").read_text(encoding="utf-8"))
+    bounded_activation = json.loads(
+        (repo_root / "deployments" / "bounded-wallet-base-activation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    bounded_evidence = json.loads(
+        (
+            repo_root
+            / "docs"
+            / "evidence"
+            / "bounded-wallet-base-sepolia-2026-07-13.json"
+        ).read_text(encoding="utf-8")
+    )
     check_protocol(protocol, deployment)
 
     for name, page in pages.items():
@@ -341,10 +354,32 @@ def main() -> int:
     bounded_wallet = manifest_protocol.get("bounded_agent_wallet", {})
     if bounded_wallet.get("version") != "agent-bounties/bounded-wallet-v1":
         fail("static discovery manifest has the wrong bounded wallet version")
-    if bounded_wallet.get("status") != "base-sepolia rehearsal only":
-        fail("static discovery manifest must test-gate the bounded wallet")
+    if bounded_wallet.get("status") != "base-sepolia active rehearsal; mainnet disabled":
+        fail("static discovery manifest must advertise the bounded wallet activation exactly")
     if bounded_wallet.get("mainnet_enabled") is not False:
         fail("static discovery manifest must not enable the bounded wallet on mainnet")
+    if bounded_wallet.get("testnet_factory") != "0x38b5bec0b16d25ff1b0a6bb09f8f7f5a54dd3397":
+        fail("static discovery manifest has the wrong bounded wallet factory")
+    if not str(bounded_wallet.get("rehearsal_evidence", "")).endswith(
+        "/docs/evidence/bounded-wallet-base-sepolia-2026-07-13.json"
+    ):
+        fail("static discovery manifest is missing bounded wallet rehearsal evidence")
+    sepolia_activation = bounded_activation.get("networks", {}).get("base-sepolia", {})
+    if bounded_activation.get("source_revision") != bounded_evidence.get("source_revision"):
+        fail("bounded wallet activation and rehearsal source revisions differ")
+    if sepolia_activation.get("wallet_factory") != bounded_wallet.get("testnet_factory"):
+        fail("bounded wallet deployment and discovery factories differ")
+    if (
+        sepolia_activation.get("wallet_factory_runtime_code_hash")
+        != bounded_wallet.get("testnet_factory_runtime_code_hash")
+    ):
+        fail("bounded wallet deployment and discovery factory hashes differ")
+    if bounded_evidence.get("transactions", {}).get("settle") not in bounded_wallet.get(
+        "rehearsal_settlement", ""
+    ):
+        fail("bounded wallet discovery does not link the canonical rehearsal settlement")
+    if bounded_evidence.get("settlement", {}).get("usdc_conserved") is not True:
+        fail("bounded wallet rehearsal does not prove USDC conservation")
     endpoints = discovery.get("endpoints", {})
     for endpoint in [
         "bounded_agent_wallet_action_plan",

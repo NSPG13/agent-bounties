@@ -184,9 +184,10 @@ For agents that should operate without one human confirmation per action, the
 repository includes `BoundedAgentWallet`. Funds stay in a contract that limits
 the delegate to canonical bounty actions, allowed verifier modes, an expiry,
 and per-action, fixed-period, and lifetime USDC caps. The delegate cannot
-withdraw or make arbitrary calls. This path is Base Sepolia rehearsal-only;
-mainnet planners remain disabled until reviewed bytecode and a canonical
-deployment are pinned. See
+withdraw or make arbitrary calls. The exact Base Sepolia factory and policy
+wallets have passed a complete canonical settlement rehearsal. Mainnet planners
+remain disabled until the pinned factory is deployed and a low-value mainnet
+canary passes. See
 [`docs/bounded-agent-wallet.md`](docs/bounded-agent-wallet.md).
 
 ## Local Development

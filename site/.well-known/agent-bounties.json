@@ -28,8 +28,15 @@
     "payout_authority": "confirmed canonical BountySettled event",
     "bounded_agent_wallet": {
       "version": "agent-bounties/bounded-wallet-v1",
-      "status": "base-sepolia rehearsal only",
+      "status": "base-sepolia active rehearsal; mainnet disabled",
       "mainnet_enabled": false,
+      "testnet_chain_id": 84532,
+      "testnet_factory": "0x38b5bec0b16d25ff1b0a6bb09f8f7f5a54dd3397",
+      "testnet_factory_runtime_code_hash": "0x119c73cb4442cf5a792e6b9e0ed20f1b811f6596b76cb3377c766732a2235a4c",
+      "wallet_runtime_code_hash": "0xca08c0045ab20776437a0443aeda5a5558126820043088e55a8040e2a0d03311",
+      "activation_manifest": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/deployments/bounded-wallet-base-activation.json",
+      "rehearsal_evidence": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/docs/evidence/bounded-wallet-base-sepolia-2026-07-13.json",
+      "rehearsal_settlement": "https://sepolia.basescan.org/tx/0xe39cc311c714579c6fdeff1702a28861a559ec25a17fb2a26f7a34e86ce414ee",
       "authority": "owner-configured delegate, actions, verifier modes, validity, per-action cap, period cap, and lifetime cap enforced on-chain"
     }
   },

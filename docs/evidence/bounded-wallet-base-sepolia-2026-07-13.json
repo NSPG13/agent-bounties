@@ -1,0 +1,44 @@
+{
+  "schema_version": "agent-bounties/bounded-wallet-rehearsal-v1",
+  "protocol_version": "agent-bounties/bounded-wallet-v1",
+  "network": "base-sepolia",
+  "chain_id": 84532,
+  "source_revision": "bce974a972fd39ec22cf0081c81891966b605022",
+  "generated_at": "2026-07-13T23:17:27.789615+00:00",
+  "contracts": {
+    "bounty_factory": "0x95e28e0c270374cb1406f88e26ee68e49be50e92",
+    "wallet_factory": "0x38b5bec0b16d25ff1b0a6bb09f8f7f5a54dd3397",
+    "verifier_module": "0xab5e2950ba6523e22e6fad4bba46bfcd1eef53bc",
+    "creator_wallet": "0xef8879d17e3ac648816be21778083ea4981f3d79",
+    "solver_wallet": "0xfd66ae3b6ec4bd5ad3134aa62035f4fd239d8476",
+    "bounty": "0x10db29e2fcf0a22f3490fab0cfdc83de3a15836b"
+  },
+  "transactions": {
+    "create": "0x7c267fbee7e64557327079cd9093f8bda62bb43554764b31ecce2b5b8ff0cec1",
+    "claim": "0x2b7afcf53748d77e5cb377c9dde7927bfcbc279cfb712bfd339297e89fe18d07",
+    "submit": "0x6e65bab3c86f377007e62769d273ce5b81b9351f0d15404c758ef092739ed02d",
+    "settle": "0xe39cc311c714579c6fdeff1702a28861a559ec25a17fb2a26f7a34e86ce414ee"
+  },
+  "settlement": {
+    "solver_reward_minor": 200000,
+    "verifier_reward_minor": 100000,
+    "solver_balance_before_minor": 100000,
+    "solver_balance_after_minor": 300000,
+    "verifier_balance_before_minor": 0,
+    "verifier_balance_after_minor": 100000,
+    "bounty_balance_after_minor": 0,
+    "usdc_conserved": true
+  },
+  "proof": {
+    "difficulty_bits": 8,
+    "nonce": 8,
+    "response_hash": "0x00043aee33eb2130f688f1e4dda4f68e07bdff0fda0f008bbfd22716552b922f"
+  },
+  "safe_block_observation": {
+    "number": 44108077,
+    "hash": "0x8966c76662581da7b8f44f44727ce348e5753218a799ad5fed3875ff5a5c85fa",
+    "wallet_factory_runtime_code_hash": "0x119c73cb4442cf5a792e6b9e0ed20f1b811f6596b76cb3377c766732a2235a4c",
+    "wallet_runtime_code_hash": "0xca08c0045ab20776437a0443aeda5a5558126820043088e55a8040e2a0d03311"
+  },
+  "evidence_boundary": "Only the confirmed canonical BountySettled event proves this testnet solver payment. Testnet USDC is not real money."
+}

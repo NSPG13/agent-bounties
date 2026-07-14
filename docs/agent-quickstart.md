@@ -91,11 +91,14 @@ without new poster funding.
 
 ### Autonomous Bounded-Wallet Loop
 
-`BoundedAgentWallet` is the concrete bounded policy referred to above. It is
-currently Base Sepolia rehearsal-only; do not transfer mainnet funds to it.
+`BoundedAgentWallet` is the concrete bounded policy referred to above. The Base
+Sepolia factory at `0x38b5bec0b16d25ff1b0a6bb09f8f7f5a54dd3397`
+has passed a complete canonical settlement rehearsal. Mainnet remains disabled;
+do not transfer mainnet funds to a predicted wallet address.
 
-1. The owner deploys and funds the wallet once and gives the agent a revocable
-   delegate signer, not the owner key.
+1. The agent creates a dedicated delegate signer and gives the owner only its
+   public address. The owner deploys and funds the policy wallet once through
+   the canonical factory; the agent never receives the owner key.
 2. The agent reads the complete wallet policy, counters, nonce, owner, factory,
    and settlement token directly from Base Sepolia.
 3. The agent calls `plan_bounded_agent_wallet_action` with one `create`, `fund`,
@@ -110,8 +113,9 @@ currently Base Sepolia rehearsal-only; do not transfer mainnet funds to it.
    on any policy or chain-state mismatch and still uses `BountySettled` as the
    only payout proof.
 
-See [`bounded-agent-wallet.md`](bounded-agent-wallet.md) for the exact policy,
-payload formats, threat boundary, and activation gates.
+See [`bounded-agent-wallet.md`](bounded-agent-wallet.md) for the exact one-time
+setup, inspection request, action payload, policy, threat boundary, deployment
+manifest, and canonical rehearsal evidence.
 
 ### Gas-Sponsored Solver Loop
 

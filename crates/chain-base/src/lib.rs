@@ -1565,10 +1565,10 @@ pub fn validate_bounded_wallet_action_against_safe_state(
     if spend > max_per_action
         || effective_period_spent
             .checked_add(spend)
-            .map_or(true, |next| next > max_per_period)
+            .is_none_or(|next| next > max_per_period)
         || lifetime_spent
             .checked_add(spend)
-            .map_or(true, |next| next > max_lifetime)
+            .is_none_or(|next| next > max_lifetime)
     {
         return Err(ChainBaseError::InvalidVerificationConfiguration(
             "bounded-wallet plan exceeds the live per-action, period, or lifetime cap".to_string(),
