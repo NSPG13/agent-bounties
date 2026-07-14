@@ -75,6 +75,7 @@ cargo run -p cli -- github-claim-comment-plan \
 "${python_cmd[@]}" scripts/github_claim_comment.py --self-test
 "${python_cmd[@]}" scripts/github_proof_comment.py --self-test
 "${python_cmd[@]}" scripts/test_sync_hosted_bounty_inventory.py -v
+"${python_cmd[@]}" scripts/test_reconcile_github_bounty_labels.py -v
 "${python_cmd[@]}" scripts/test_diagnose_hosted_api.py -v
 "${python_cmd[@]}" scripts/test_github_audience_audit.py -v
 "${python_cmd[@]}" scripts/test_ruleset_drift_check.py -v
@@ -120,6 +121,8 @@ cargo run -p cli -- pooled-funding-demo
   scripts/github_proof_comment.py \
   scripts/sync_hosted_bounty_inventory.py \
   scripts/test_sync_hosted_bounty_inventory.py \
+  scripts/reconcile_github_bounty_labels.py \
+  scripts/test_reconcile_github_bounty_labels.py \
   scripts/diagnose_hosted_api.py \
   scripts/test_diagnose_hosted_api.py \
   scripts/github_audience_audit.py \
