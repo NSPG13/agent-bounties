@@ -69,6 +69,11 @@ indexed state, displays the exact refundable bond and current solver payout,
 then requests only the bounded wallet signature or calls returned by the
 planner. A GitHub comment alone never reserves or claims the contract.
 
+Do not claim an issue labeled `recovery-reserved`. Its contract may be
+technically claimable after a timeout while the existing solver is still owed
+incident recovery. The GitHub workflow intentionally withholds the wallet
+handoff so a new solver cannot unknowingly post a bond or duplicate the work.
+
 1. Call `list_autonomous_bounties` with `claimable_only=true`.
 2. Require `verification_ready=true`, then check factory origin, `terms_valid`,
    reward, timeout completion bonus, solver bond, deadlines, benchmark,

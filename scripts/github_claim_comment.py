@@ -104,6 +104,14 @@ def write_issue_files(
     body_file.write_text(str(issue.get("body") or ""), encoding="utf-8")
 
     comment_user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+    labels = issue.get("labels") if isinstance(issue.get("labels"), list) else []
+    label_names = sorted(
+        {
+            str(label.get("name") or "").strip().lower()
+            for label in labels
+            if isinstance(label, dict) and str(label.get("name") or "").strip()
+        }
+    )
     meta: Dict[str, object] = {
         "repo": env.get("GITHUB_REPOSITORY") or repository.get("full_name") or "",
         "number": issue.get("number"),
@@ -113,6 +121,7 @@ def write_issue_files(
         "comment_id": str(comment.get("id") or ""),
         "comment_url": comment.get("html_url") or "",
         "contributor_login": comment_user.get("login") or "",
+        "labels": label_names,
     }
     missing = [key for key, value in meta.items() if key != "comment_url" and value in ("", None)]
     if missing:
@@ -121,6 +130,35 @@ def write_issue_files(
         raise UserError("comment does not contain a /claim, /attempt, or /agent-bounty claim command")
 
     return meta, body_file
+
+
+def recovery_reserved_plan(meta: Mapping[str, object]) -> Dict[str, object]:
+    details = "\n".join(
+        [
+            f"Issue: {meta['url']}",
+            f"Contributor: {meta['contributor_login']}",
+            "Decision: RecoveryReserved",
+            "Settlement authority: false",
+            "",
+            "This issue is marked recovery-reserved after a platform incident.",
+            "Do not connect a wallet, sign a claim, or post a solver bond for this round.",
+            "The GitHub command is coordination evidence only and created no reservation or failed attempt.",
+            "Use a different canonical feed entry with status=claimable and verification_ready=true.",
+        ]
+    )
+    return {
+        "ready": False,
+        "signal": {
+            "decision": "RecoveryReserved",
+            "reservation_id": "none",
+        },
+        "check": {
+            "conclusion": "ActionRequired",
+            "title": "Bounty is reserved for incident recovery",
+            "summary": "Do not sign a claim or post a bond for this recovery-reserved bounty.",
+            "text": details,
+        },
+    }
 
 
 def load_existing_comments(env: Mapping[str, str], meta: Mapping[str, object]) -> List[Mapping[str, object]]:
@@ -254,7 +292,12 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
     comment_ref = comment_url or f"issue comment {meta['comment_id']}"
     wallet_handoff = str(signal.get("claim_handoff_url") or "").strip()
     machine_request = signal.get("claim_plan_request")
-    if decision == "OnChainClaimRequired":
+    if decision == "RecoveryReserved":
+        status_line = (
+            "This issue is reserved for incident recovery. The claim command created no "
+            "on-chain reservation; do not connect a wallet, sign a claim, or post a bond."
+        )
+    elif decision == "OnChainClaimRequired":
         status_line = (
             "GitHub recorded claim intent but cannot reserve the autonomous contract. "
             "Use the handoff below to connect the payout wallet, review the exact indexed bond, "
@@ -389,8 +432,15 @@ def run_from_env(env: Mapping[str, str], stdout: TextIO) -> int:
     existing_comments = load_existing_comments(env, meta)
     active_login = active_claim_login(existing_comments, str(meta["comment_id"]))
     prior_progress_count = progress_signal_count(existing_comments, None)
-    plan_json = run_github_claim_plan(env, workspace, meta, body_file, active_login, prior_progress_count)
-    plan = json.loads(plan_json)
+    labels = meta.get("labels") if isinstance(meta.get("labels"), list) else []
+    if "recovery-reserved" in labels:
+        plan = recovery_reserved_plan(meta)
+        plan_json = json.dumps(plan, indent=2, sort_keys=True) + "\n"
+    else:
+        plan_json = run_github_claim_plan(
+            env, workspace, meta, body_file, active_login, prior_progress_count
+        )
+        plan = json.loads(plan_json)
     comment = render_comment(meta, plan)
 
     plan_file = tmp_dir / "paid-bounty-claim-plan.json"
@@ -508,6 +558,31 @@ def run_self_test() -> int:
     ]:
         if required_text not in routed:
             raise UserError(f"self-test autonomous route missing: {required_text}")
+
+    recovery_event = json.loads(json.dumps(event))
+    recovery_event["issue"]["body"] = "Funding: pending in this stale issue body."
+    recovery_event["issue"]["labels"] = [
+        {"name": "bounty"},
+        {"name": "funded-live"},
+        {"name": "recovery-reserved"},
+    ]
+    recovery_event["comment"]["id"] = 12347
+    recovery_event["comment"]["body"] = "/claim #1"
+    event_path.write_text(json.dumps(recovery_event), encoding="utf-8")
+    recovery_buffer = io.StringIO()
+    run_from_env(env, recovery_buffer)
+    recovery_output = recovery_buffer.getvalue()
+    for required_text in [
+        "Bounty is reserved for incident recovery",
+        "do not connect a wallet, sign a claim, or post a bond",
+        "Decision: RecoveryReserved",
+        "created no reservation or failed attempt",
+    ]:
+        if required_text not in recovery_output:
+            raise UserError(f"self-test recovery guard missing: {required_text}")
+    for forbidden_text in ["Connect wallet and sign claim", "Machine claim-plan request"]:
+        if forbidden_text in recovery_output:
+            raise UserError(f"self-test recovery guard exposed claim action: {forbidden_text}")
 
     print(f"GitHub claim comment dry-run passed: {output_path}")
     return 0
