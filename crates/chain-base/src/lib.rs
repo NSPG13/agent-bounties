@@ -49,6 +49,8 @@ pub enum ChainBaseError {
     InvalidAttestationScope(String),
     #[error("invalid autonomous submission evidence: {0}")]
     InvalidSubmissionEvidence(String),
+    #[error("invalid autonomous submission preparation: {0}")]
+    InvalidSubmissionPreparation(String),
     #[error("autonomous bounty terms document exceeds 256 KiB")]
     TermsDocumentTooLarge,
     #[error("release recipients must be non-empty")]
@@ -654,6 +656,30 @@ pub struct AutonomousBountySubmissionAuthorizationTypedData {
     pub domain: Eip712DomainData,
     pub primary_type: String,
     pub message: AutonomousBountySubmissionAuthorizationMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomousBountySubmissionPreparation {
+    pub protocol_version: String,
+    pub network: BaseNetworkDescriptor,
+    pub bounty_contract: String,
+    pub bounty_id: String,
+    pub current_bounty_state: String,
+    pub expected_bounty_state: String,
+    pub expected_canonical_event: String,
+    pub solver: String,
+    pub round: u64,
+    pub claim_expires_at: u64,
+    pub authorization_deadline: u64,
+    pub artifact_reference: String,
+    pub submission_hash: String,
+    pub evidence_hash: String,
+    pub policy_hash: String,
+    pub signing_payload: AutonomousBountySubmissionAuthorizationTypedData,
+    pub unsigned_relay_envelope: Value,
+    pub evidence_publication: Value,
+    pub relay_issue_url: Option<String>,
+    pub evidence_boundary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1444,6 +1470,8 @@ pub const BASE_MAINNET_USDC_TOKEN_ADDRESS: &str = "0x833589fCD6eDb6E08f4c7C32D4f
 pub const BASE_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 pub const AUTONOMOUS_BOUNTY_PROTOCOL_HASH: &str =
     "0x0afcbf01041498cc301207aa5cd21a838c522d8c057d9b29c2dd83d7d94053e7";
+pub const AUTONOMOUS_SUBMISSION_AUTHORIZATION_TTL_SECONDS: u64 = 1_800;
+pub const AUTONOMOUS_SUBMISSION_MIN_SIGNING_WINDOW_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutonomousFactoryExpectedState {
@@ -2876,6 +2904,181 @@ pub fn validate_attestation_request_against_feed(
     Ok(())
 }
 
+pub fn build_autonomous_submission_preparation(
+    planner: &AutonomousBountyTxPlanner,
+    network: &str,
+    item: &AutonomousBountyFeedItem,
+    solver_wallet: &str,
+    artifact_reference: &str,
+    evidence: Value,
+    observed_at_unix: u64,
+) -> Result<AutonomousBountySubmissionPreparation, ChainBaseError> {
+    if item.status != "claimed" || !item.terms_valid || !item.verification_ready {
+        return Err(ChainBaseError::InvalidSubmissionPreparation(format!(
+            "canonical bounty must be claimed with valid terms and executable verification; state={}, terms_valid={}, verification_ready={}",
+            item.status, item.terms_valid, item.verification_ready
+        )));
+    }
+    let terms = item.terms.as_ref().ok_or_else(|| {
+        ChainBaseError::InvalidSubmissionPreparation(
+            "content-addressed bounty terms are unavailable".to_string(),
+        )
+    })?;
+    let claim = item
+        .events
+        .iter()
+        .rev()
+        .find(|event| event.kind == AutonomousBountyEventKind::BountyClaimed)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidSubmissionPreparation(
+                "indexed BountyClaimed evidence is missing".to_string(),
+            )
+        })?;
+    let solver = normalize_evm_address(solver_wallet)?;
+    let indexed_solver = claim
+        .data
+        .get("solver")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidSubmissionPreparation(
+                "BountyClaimed solver is missing".to_string(),
+            )
+        })?;
+    if !indexed_solver.eq_ignore_ascii_case(&solver) {
+        return Err(ChainBaseError::InvalidSubmissionPreparation(
+            "requested solver does not own the active claim".to_string(),
+        ));
+    }
+    let round = claim
+        .data
+        .get("round")
+        .and_then(Value::as_u64)
+        .filter(|round| *round > 0)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidSubmissionPreparation(
+                "BountyClaimed round is missing or zero".to_string(),
+            )
+        })?;
+    let claim_expires_at = claim
+        .data
+        .get("claim_expires_at")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidSubmissionPreparation(
+                "BountyClaimed claim expiry is missing".to_string(),
+            )
+        })?;
+    let minimum_deadline = observed_at_unix
+        .checked_add(AUTONOMOUS_SUBMISSION_MIN_SIGNING_WINDOW_SECONDS)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidSubmissionPreparation(
+                "submission signing window overflowed".to_string(),
+            )
+        })?;
+    if claim_expires_at <= minimum_deadline {
+        return Err(ChainBaseError::InvalidSubmissionPreparation(
+            "active claim expires too soon to prepare and relay a submission".to_string(),
+        ));
+    }
+    let authorization_deadline = claim_expires_at.min(
+        observed_at_unix
+            .checked_add(AUTONOMOUS_SUBMISSION_AUTHORIZATION_TTL_SECONDS)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidSubmissionPreparation(
+                    "submission authorization deadline overflowed".to_string(),
+                )
+            })?,
+    );
+    let (artifact_reference, submission_hash, evidence_hash) =
+        validate_submission_preimages(artifact_reference, &evidence)?;
+    let bounty_contract = normalize_evm_address(&item.bounty_contract)?;
+    let authorization_request = AutonomousBountySubmissionAuthorizationRequest {
+        bounty_contract: bounty_contract.clone(),
+        bounty_id: item.bounty_id.clone(),
+        round,
+        solver: solver.clone(),
+        submission_hash: submission_hash.clone(),
+        evidence_hash: evidence_hash.clone(),
+        policy_hash: terms.policy_hash.clone(),
+        deadline: authorization_deadline,
+    };
+    let signing_payload = planner.plan_submission_authorization(network, &authorization_request)?;
+    let network_descriptor = base_network_descriptor(network)?;
+    let unsigned_relay_envelope = json!({
+        "schema": "agent-bounties/autonomous-gas-relay-v1",
+        "action": "submit",
+        "network": network_descriptor.name,
+        "bounty_contract": bounty_contract,
+        "solver": solver,
+        "round": round,
+        "submission_hash": submission_hash,
+        "evidence_hash": evidence_hash,
+        "deadline": authorization_deadline,
+        "signature": Value::Null,
+    });
+    let evidence_publication = json!({
+        "network": network_descriptor.name,
+        "bounty_contract": bounty_contract,
+        "bounty_id": item.bounty_id,
+        "round": round,
+        "solver_wallet": solver,
+        "artifact_reference": artifact_reference,
+        "evidence": evidence,
+    });
+    let relay_issue_url = terms
+        .document
+        .source_url
+        .clone()
+        .filter(|url| url.starts_with("https://github.com/") && url.contains("/issues/"));
+    Ok(AutonomousBountySubmissionPreparation {
+        protocol_version: "agent-bounties/autonomous-v1".to_string(),
+        network: network_descriptor,
+        bounty_contract,
+        bounty_id: item.bounty_id.clone(),
+        current_bounty_state: "claimed".to_string(),
+        expected_bounty_state: "submitted".to_string(),
+        expected_canonical_event: "SubmissionAdded".to_string(),
+        solver,
+        round,
+        claim_expires_at,
+        authorization_deadline,
+        artifact_reference,
+        submission_hash,
+        evidence_hash,
+        policy_hash: terms.policy_hash.clone(),
+        signing_payload,
+        unsigned_relay_envelope,
+        evidence_publication,
+        relay_issue_url,
+        evidence_boundary: "This preparation validates one indexed active claim and computes deterministic public commitments. It does not sign, broadcast, submit, publish evidence, verify, settle, or prove payment. Add the solver's EIP-712 signature to the relay envelope, wait for confirmed canonical SubmissionAdded, then publish the returned evidence preimages. Only BountySettled proves payout.".to_string(),
+    })
+}
+
+fn validate_submission_preimages(
+    artifact_reference: &str,
+    evidence: &Value,
+) -> Result<(String, String, String), ChainBaseError> {
+    let artifact_reference = artifact_reference.trim();
+    if artifact_reference.is_empty() || artifact_reference.len() > 16 * 1024 {
+        return Err(ChainBaseError::InvalidSubmissionEvidence(
+            "artifact reference must be non-empty and no larger than 16 KiB".to_string(),
+        ));
+    }
+    let evidence_size = serde_json::to_vec(evidence)
+        .map_err(|error| ChainBaseError::InvalidCanonicalJson(error.to_string()))?
+        .len();
+    if evidence_size > 256 * 1024 || !evidence.is_object() {
+        return Err(ChainBaseError::InvalidSubmissionEvidence(
+            "evidence must be an object no larger than 256 KiB".to_string(),
+        ));
+    }
+    Ok((
+        artifact_reference.to_string(),
+        sha256_utf8(artifact_reference),
+        sha256_canonical_json(evidence)?,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_autonomous_submission_evidence_record(
     network: &str,
@@ -2888,11 +3091,8 @@ pub fn build_autonomous_submission_evidence_record(
     evidence: Value,
     created_at: DateTime<Utc>,
 ) -> Result<domain::AutonomousSubmissionEvidenceRecord, ChainBaseError> {
-    let artifact_reference = artifact_reference.trim();
     if item.status != "submitted"
         || round == 0
-        || artifact_reference.is_empty()
-        || artifact_reference.len() > 16 * 1024
         || !item.bounty_contract.eq_ignore_ascii_case(bounty_contract)
         || !item.bounty_id.eq_ignore_ascii_case(bounty_id)
     {
@@ -2900,18 +3100,10 @@ pub fn build_autonomous_submission_evidence_record(
             "bounty identity, state, round, or artifact reference is invalid".to_string(),
         ));
     }
-    let evidence_size = serde_json::to_vec(&evidence)
-        .map_err(|error| ChainBaseError::InvalidCanonicalJson(error.to_string()))?
-        .len();
-    if evidence_size > 256 * 1024 || !evidence.is_object() {
-        return Err(ChainBaseError::InvalidSubmissionEvidence(
-            "evidence must be an object no larger than 256 KiB".to_string(),
-        ));
-    }
+    let (artifact_reference, artifact_hash, evidence_hash) =
+        validate_submission_preimages(artifact_reference, &evidence)?;
     let solver_wallet = normalize_evm_address(solver_wallet)?;
     let bounty_contract = normalize_evm_address(bounty_contract)?;
-    let artifact_hash = sha256_utf8(artifact_reference);
-    let evidence_hash = sha256_canonical_json(&evidence)?;
     let submission = item
         .events
         .iter()
@@ -2949,7 +3141,7 @@ pub fn build_autonomous_submission_evidence_record(
         bounty_id: bounty_id.to_ascii_lowercase(),
         round,
         solver_wallet,
-        artifact_reference: artifact_reference.to_string(),
+        artifact_reference,
         artifact_hash,
         evidence,
         evidence_hash,
@@ -5773,6 +5965,183 @@ mod tests {
         only_reserved.exclude_from_verification_jobs(&mut verification_feed);
         assert_eq!(verification_feed.len(), 1);
         assert_eq!(verification_feed[0].bounty_contract, available_contract);
+    }
+
+    fn claimed_submission_fixture(claim_expires_at: u64) -> AutonomousBountyFeedItem {
+        let bounty_id = format!("0x{}", "ab".repeat(32));
+        let bounty_contract = "0x2222222222222222222222222222222222222222";
+        let solver = "0x3333333333333333333333333333333333333333";
+        AutonomousBountyFeedItem {
+            bounty_id: bounty_id.clone(),
+            bounty_contract: bounty_contract.to_string(),
+            creator: "0x4444444444444444444444444444444444444444".to_string(),
+            status: "claimed".to_string(),
+            solver_reward: "1900000".to_string(),
+            verifier_reward: "100000".to_string(),
+            claim_bond: "100000".to_string(),
+            timeout_bond_pool: "0".to_string(),
+            target_amount: "2000000".to_string(),
+            funded_amount: "2000000".to_string(),
+            terms_hash: format!("0x{}", "aa".repeat(32)),
+            terms: Some(AutonomousBountyTermsRecord {
+                terms_hash: format!("0x{}", "aa".repeat(32)),
+                policy_hash: format!("0x{}", "bb".repeat(32)),
+                acceptance_criteria_hash: format!("0x{}", "01".repeat(32)),
+                benchmark_hash: format!("0x{}", "02".repeat(32)),
+                evidence_schema_hash: format!("0x{}", "03".repeat(32)),
+                creator_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+                document: AutonomousBountyTermsDocument {
+                    schema_version: "agent-bounties/terms-v1".to_string(),
+                    contract_terms: json!({}),
+                    title: "Deterministic claimed bounty".to_string(),
+                    goal: "Prepare one exact submission".to_string(),
+                    acceptance_criteria: vec!["fixture passes".to_string()],
+                    benchmark: json!({"engine": "fixture"}),
+                    evidence_schema: json!({"required": ["commit_sha"]}),
+                    verification_policy: json!({
+                        "mechanism": "deterministic_module",
+                        "threshold": 1,
+                        "verifier_module": "0x5555555555555555555555555555555555555555"
+                    }),
+                    source_url: Some(
+                        "https://github.com/NSPG13/agent-bounties/issues/244".to_string(),
+                    ),
+                    discovery_source: Some("github-label:bounty".to_string()),
+                },
+                created_at: Utc::now(),
+            }),
+            terms_valid: true,
+            verification_mode: "deterministic_module".to_string(),
+            verifier_module: Some("0x5555555555555555555555555555555555555555".to_string()),
+            verification_ready: true,
+            verification_readiness_reason: "deterministic verifier module is committed on-chain"
+                .to_string(),
+            validation_errors: Vec::new(),
+            events: vec![AutonomousBountyEvent {
+                id: Uuid::new_v4(),
+                log_key: "100:0".to_string(),
+                tx_hash: format!("0x{}", "11".repeat(32)),
+                block_number: 100,
+                log_index: 0,
+                contract_address: bounty_contract.to_string(),
+                bounty_id,
+                kind: AutonomousBountyEventKind::BountyClaimed,
+                data: json!({
+                    "round": 2,
+                    "solver": solver,
+                    "bond": 100000,
+                    "claim_expires_at": claim_expires_at
+                }),
+                occurred_at: Utc::now(),
+            }],
+        }
+    }
+
+    #[test]
+    fn submission_preparation_binds_active_claim_hashes_and_relay_fields() {
+        let item = claimed_submission_fixture(5_000);
+        let solver = "0x3333333333333333333333333333333333333333";
+        let artifact = "  https://github.com/owner/repo/commit/abc  ";
+        let evidence = json!({"z": 2, "a": {"commit_sha": "abc"}});
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x6666666666666666666666666666666666666666",
+            "0x7777777777777777777777777777777777777777",
+        )
+        .unwrap();
+
+        let prepared = build_autonomous_submission_preparation(
+            &planner,
+            "base-mainnet",
+            &item,
+            solver,
+            artifact,
+            evidence.clone(),
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(prepared.current_bounty_state, "claimed");
+        assert_eq!(prepared.expected_bounty_state, "submitted");
+        assert_eq!(prepared.expected_canonical_event, "SubmissionAdded");
+        assert_eq!(prepared.round, 2);
+        assert_eq!(prepared.claim_expires_at, 5_000);
+        assert_eq!(prepared.authorization_deadline, 2_800);
+        assert_eq!(
+            prepared.artifact_reference,
+            "https://github.com/owner/repo/commit/abc"
+        );
+        assert_eq!(
+            prepared.submission_hash,
+            sha256_utf8(prepared.artifact_reference.as_str())
+        );
+        assert_eq!(
+            prepared.evidence_hash,
+            sha256_canonical_json(&json!({"a": {"commit_sha": "abc"}, "z": 2})).unwrap()
+        );
+        assert_eq!(prepared.signing_payload.message.round, "2");
+        assert_eq!(prepared.signing_payload.message.deadline, "2800");
+        assert_eq!(
+            prepared.signing_payload.message.submission_hash,
+            prepared.submission_hash
+        );
+        assert_eq!(prepared.unsigned_relay_envelope["signature"], Value::Null);
+        assert_eq!(prepared.unsigned_relay_envelope["round"], 2);
+        assert_eq!(prepared.evidence_publication["evidence"], evidence);
+        assert_eq!(
+            prepared.relay_issue_url.as_deref(),
+            Some("https://github.com/NSPG13/agent-bounties/issues/244")
+        );
+    }
+
+    #[test]
+    fn submission_preparation_fails_closed_on_state_solver_time_and_evidence() {
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x6666666666666666666666666666666666666666",
+            "0x7777777777777777777777777777777777777777",
+        )
+        .unwrap();
+        let solver = "0x3333333333333333333333333333333333333333";
+        let prepare = |item: &AutonomousBountyFeedItem, solver: &str, evidence: Value| {
+            build_autonomous_submission_preparation(
+                &planner,
+                "base-mainnet",
+                item,
+                solver,
+                "https://example.com/artifact",
+                evidence,
+                1_000,
+            )
+        };
+
+        let mut item = claimed_submission_fixture(5_000);
+        assert!(matches!(
+            prepare(
+                &item,
+                "0x8888888888888888888888888888888888888888",
+                json!({})
+            ),
+            Err(ChainBaseError::InvalidSubmissionPreparation(_))
+        ));
+        item.verification_ready = false;
+        assert!(matches!(
+            prepare(&item, solver, json!({})),
+            Err(ChainBaseError::InvalidSubmissionPreparation(_))
+        ));
+        item = claimed_submission_fixture(1_060);
+        assert!(matches!(
+            prepare(&item, solver, json!({})),
+            Err(ChainBaseError::InvalidSubmissionPreparation(_))
+        ));
+        item = claimed_submission_fixture(5_000);
+        assert!(matches!(
+            prepare(&item, solver, json!(["not", "an", "object"])),
+            Err(ChainBaseError::InvalidSubmissionEvidence(_))
+        ));
+        item.status = "submitted".to_string();
+        assert!(matches!(
+            prepare(&item, solver, json!({})),
+            Err(ChainBaseError::InvalidSubmissionPreparation(_))
+        ));
     }
 
     #[test]

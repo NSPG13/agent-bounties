@@ -75,9 +75,11 @@ response.
    sponsor the exact authorization without requiring Base ETH.
 6. Complete the artifact before claim expiry. A no-submission timeout forfeits
    the bond into the completion bonus.
-7. Request `plan_autonomous_bounty_submission_authorization`, verify every
-   EIP-712 field, sign it, and relay `submitWithSignature`; then publish the
-   matching preimages. Never post a private key or seed phrase.
+7. Call `prepare_autonomous_bounty_submission` with the public artifact
+   reference and evidence object. Verify every field in the returned EIP-712
+   payload, sign it, add the signature to the unsigned relay envelope, and
+   relay `submitWithSignature`. After canonical `SubmissionAdded`, publish the
+   returned matching preimages. Never post a private key or seed phrase.
 8. Relay only a deterministic proof that the committed module returns pass
    for. The bounded issue-comment relay supports this path and refuses failed
    proofs, arbitrary calldata, unknown modules, and legacy canaries.

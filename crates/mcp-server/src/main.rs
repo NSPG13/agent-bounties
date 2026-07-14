@@ -18,9 +18,10 @@ use bounty_router::BountyRouter;
 use chain_base::{
     autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
-    build_autonomous_submission_evidence_record, build_autonomous_verification_jobs,
-    decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
+    build_autonomous_submission_evidence_record, build_autonomous_submission_preparation,
+    build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
+    eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
+    fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
     AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
@@ -345,6 +346,15 @@ struct PlanAutonomousBountySubmissionAuthorizationArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct PrepareAutonomousBountySubmissionArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    solver_wallet: String,
+    artifact_reference: String,
+    evidence: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousVerificationAttestationArgs {
     network: Option<String>,
     attestation: AutonomousVerificationAttestationRequest,
@@ -615,6 +625,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_autonomous_bounty_submission",
             post(plan_autonomous_bounty_submission),
+        )
+        .route(
+            "/tools/prepare_autonomous_bounty_submission",
+            post(prepare_autonomous_bounty_submission),
         )
         .route(
             "/tools/plan_autonomous_bounty_submission_authorization",
@@ -1420,6 +1434,23 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "evidence_hash": string_property("0x-prefixed bytes32 evidence-package commitment.")
                 }),
                 &["bounty_contract", "solver", "submission_hash", "evidence_hash"],
+            ),
+        ),
+        tool(
+            "prepare_autonomous_bounty_submission",
+            "Validate the current indexed claim, compute the artifact and canonical evidence hashes, and return the exact EIP-712 signing payload plus unsigned relay and later evidence-publication templates. This does not sign, submit, publish, verify, settle, or prove payment.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Indexed canonical bounty contract in claimed state."),
+                    "solver_wallet": string_property("Wallet that owns the active indexed claim."),
+                    "artifact_reference": string_property("Public repository, commit, artifact URI, or canonical result string to commit."),
+                    "evidence": {
+                        "type": "object",
+                        "description": "Public evidence object required by the bounty's immutable evidence schema; maximum encoded size is 256 KiB."
+                    }
+                }),
+                &["bounty_contract", "solver_wallet", "artifact_reference", "evidence"],
             ),
         ),
         tool(
@@ -3555,6 +3586,36 @@ async fn plan_autonomous_bounty_submission(
     }
 }
 
+async fn prepare_autonomous_bounty_submission(
+    State(state): State<SharedState>,
+    Json(args): Json<PrepareAutonomousBountySubmissionArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    let observed_at_unix = match u64::try_from(Utc::now().timestamp()) {
+        Ok(value) => value,
+        Err(_) => return mcp_error("system clock is before Unix epoch"),
+    };
+    match configured_autonomous_planner(network).and_then(|planner| {
+        build_autonomous_submission_preparation(
+            &planner,
+            network,
+            &item,
+            &args.solver_wallet,
+            &args.artifact_reference,
+            args.evidence,
+            observed_at_unix,
+        )
+        .map_err(|error| error.to_string())
+    }) {
+        Ok(preparation) => mcp_json(preparation),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn plan_autonomous_bounty_submission_authorization(
     State(state): State<SharedState>,
     Json(args): Json<PlanAutonomousBountySubmissionAuthorizationArgs>,
@@ -4569,6 +4630,7 @@ mod tests {
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
+            "prepare_autonomous_bounty_submission",
             "plan_autonomous_bounty_submission_authorization",
             "list_autonomous_verification_jobs",
             "decode_autonomous_bounty_events",
@@ -4595,6 +4657,21 @@ mod tests {
             .iter()
             .any(|value| value == "bounty_contract"));
         assert!(x402_funding.authorization.is_none());
+
+        let prepare_submission = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "prepare_autonomous_bounty_submission")
+            .expect("prepare submission descriptor exists");
+        assert_eq!(
+            prepare_submission.input_schema["properties"]["evidence"]["type"],
+            "object"
+        );
+        assert!(prepare_submission.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "artifact_reference"));
+        assert!(prepare_submission.authorization.is_none());
 
         let canonical_child_terms = descriptors
             .iter()

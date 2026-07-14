@@ -242,6 +242,12 @@ simulates exact calldata, caps bounty value and gas, and validates confirmed
 post-state. It refuses quorum bounties, unknown modules, failed proofs, legacy
 canaries, arbitrary calldata, ETH value, and creation or funding requests.
 
+`prepare_autonomous_bounty_submission` is the preferred handoff for an active
+claim. It reads canonical indexed state, binds the current solver and round,
+computes the public artifact/evidence commitments, caps the EIP-712 deadline to
+the claim and relay window, and returns unsigned transport and publication
+templates. It cannot sign, broadcast, publish, verify, settle, or prove payout.
+
 The relay comment and transaction hash are transport evidence only. Canonical
 events remain the lifecycle and payout evidence.
 

@@ -23,10 +23,10 @@ use bounty_router::{BountyRouter, RouteDecision};
 use chain_base::{
     autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
-    build_autonomous_submission_evidence_record, build_autonomous_verification_jobs,
-    decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_block_number, fetch_transaction_receipt,
-    normalize_evm_address,
+    build_autonomous_submission_evidence_record, build_autonomous_submission_preparation,
+    build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
+    eth_get_transaction_receipt_request, eth_send_raw_transaction_request, fetch_block_number,
+    fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
     AutonomousBountyAuthorizationSignature, AutonomousBountyAuthorizedClaimPlan,
@@ -35,13 +35,13 @@ use chain_base::{
     AutonomousBountyCreate, AutonomousBountyCreationPlan, AutonomousBountyEvent,
     AutonomousBountyEventKind, AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
     AutonomousBountySubmissionAuthorizationRequest,
-    AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountyTxPlanner,
-    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest,
-    AutonomousVerificationAttestationTypedData, AutonomousVerificationJob, BaseNetworkDescriptor,
-    BaseRelayedTransaction, BaseRpcUrlConfig, BaseTransactionRelayer,
-    CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest, ChainBaseError,
-    EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent,
-    RpcTransactionReceipt, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
+    AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountySubmissionPreparation,
+    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
+    AutonomousVerificationAttestationRequest, AutonomousVerificationAttestationTypedData,
+    AutonomousVerificationJob, BaseNetworkDescriptor, BaseRelayedTransaction, BaseRpcUrlConfig,
+    BaseTransactionRelayer, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
+    ChainBaseError, EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog,
+    EvmTransactionIntent, RpcTransactionReceipt, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
     AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
 };
 use chrono::Utc;
@@ -147,6 +147,7 @@ use uuid::Uuid;
         plan_autonomous_bounty_claim,
         plan_autonomous_bounty_authorized_claim,
         plan_autonomous_bounty_submission,
+        prepare_autonomous_bounty_submission,
         plan_autonomous_bounty_submission_authorization,
         plan_autonomous_verification_attestation,
         plan_autonomous_module_settlement,
@@ -626,6 +627,15 @@ struct PlanAutonomousBountySubmissionAuthorizationRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct PrepareAutonomousBountySubmissionRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    solver_wallet: String,
+    artifact_reference: String,
+    evidence: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousVerificationAttestationRequest {
     network: Option<String>,
     attestation: AutonomousVerificationAttestationRequest,
@@ -952,6 +962,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/submission-plan",
             post(plan_autonomous_bounty_submission),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/submission-preparation",
+            post(prepare_autonomous_bounty_submission),
         )
         .route(
             "/v1/base/autonomous-bounties/submission-authorization-plan",
@@ -3520,6 +3534,45 @@ async fn plan_autonomous_bounty_submission(
         )
         .map(Json)
         .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/base/autonomous-bounties/submission-preparation",
+    responses(
+        (status = 200, description = "Canonical active-claim validation, deterministic submission commitments, exact EIP-712 payload, and unsigned relay/evidence templates"),
+        (status = 400, description = "Malformed wallet, artifact reference, evidence object, or network"),
+        (status = 404, description = "Bounty contract is not an indexed canonical instance"),
+        (status = 409, description = "Bounty is not an executable active claim owned by this solver or expires too soon"),
+        (status = 503, description = "Canonical indexed state or planner configuration is unavailable")
+    )
+)]
+async fn prepare_autonomous_bounty_submission(
+    State(state): State<SharedState>,
+    Json(request): Json<PrepareAutonomousBountySubmissionRequest>,
+) -> Result<Json<AutonomousBountySubmissionPreparation>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    let observed_at_unix =
+        u64::try_from(Utc::now().timestamp()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    build_autonomous_submission_preparation(
+        &configured_autonomous_planner(network)?,
+        network,
+        &item,
+        &request.solver_wallet,
+        &request.artifact_reference,
+        request.evidence,
+        observed_at_unix,
+    )
+    .map(Json)
+    .map_err(|error| match error {
+        ChainBaseError::InvalidSubmissionPreparation(_) => StatusCode::CONFLICT,
+        ChainBaseError::InvalidSubmissionEvidence(_)
+        | ChainBaseError::InvalidAddress(_)
+        | ChainBaseError::InvalidCanonicalJson(_)
+        | ChainBaseError::UnknownNetwork(_) => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    })
 }
 
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/submission-authorization-plan", responses((status = 200, description = "Exact EIP-712 submission authorization for a gas-sponsored submitWithSignature relay")))]
@@ -7371,6 +7424,7 @@ mod tests {
             "/v1/base/autonomous-bounties/claim-plan",
             "/v1/base/autonomous-bounties/authorized-claim-plan",
             "/v1/base/autonomous-bounties/submission-plan",
+            "/v1/base/autonomous-bounties/submission-preparation",
             "/v1/base/autonomous-bounties/submission-authorization-plan",
             "/v1/base/autonomous-bounties/verification-jobs",
             "/v1/base/autonomous-bounties/decode-events",

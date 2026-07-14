@@ -774,6 +774,26 @@ class AgentBountiesClient:
             },
         )
 
+    def prepare_autonomous_bounty_submission(
+        self,
+        bounty_contract: str,
+        solver_wallet: str,
+        artifact_reference: str,
+        evidence: dict,
+        network: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/submission-preparation",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "solver_wallet": solver_wallet,
+                "artifact_reference": artifact_reference,
+                "evidence": evidence,
+            },
+        )
+
     def plan_autonomous_bounty_submission_authorization(
         self, submission: dict, network: str | None = None
     ):
