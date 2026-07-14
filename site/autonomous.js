@@ -887,9 +887,10 @@
     }
   }
 
-  function bountyRow(item, api) {
+  function bountyRow(item, api, targeted = false) {
     const article = document.createElement("article");
     article.className = "bounty-row";
+    if (targeted) article.dataset.targetedClaim = "true";
     const heading = document.createElement("h3");
     heading.textContent = item.terms ? item.terms.document.title : item.bounty_id;
     const detail = document.createElement("p");
@@ -902,7 +903,7 @@
     const claim = document.createElement("button");
     claim.className = "button primary";
     claim.type = "button";
-    claim.textContent = "Claim bounty";
+    claim.textContent = targeted ? "Connect wallet and sign claim" : "Claim bounty";
     claim.disabled =
       state.protocol.status !== "active" || item.status !== "claimable" || !item.terms || !item.terms_valid;
     claim.addEventListener("click", async () => {
@@ -974,17 +975,37 @@
     try {
       await loadProtocol();
       const api = state.protocol.api_base_url.replace(/\/$/, "");
+      const params = new URLSearchParams(location.search);
+      const requestedContract = params.get("bountyContract");
+      const target = requestedContract
+        ? requiredAddress(requestedContract, "Bounty contract")
+        : null;
       const items = await requestJson(
-        `${api}/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true`,
+        `${api}/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=${target ? "false" : "true"}`,
       );
       container.textContent = "";
-      if (!items.length) {
+      const visible = target
+        ? items.filter((item) => item.bounty_contract.toLowerCase() === target.toLowerCase())
+        : items;
+      if (!visible.length) {
         const empty = document.createElement("p");
-        empty.textContent = "No funded bounty is currently claimable.";
+        empty.textContent = target
+          ? "The requested contract is not indexed as a canonical bounty. No wallet request was made."
+          : "No funded bounty is currently claimable.";
         container.append(empty);
         return;
       }
-      for (const item of items) container.append(bountyRow(item, api));
+      for (const item of visible) container.append(bountyRow(item, api, Boolean(target)));
+      if (target) {
+        const item = visible[0];
+        output(byId("claim-feed-output"), [
+          item.status === "claimable"
+            ? "Canonical bounty selected. Connect the payout wallet and sign the bounded claim request."
+            : `This canonical bounty is ${item.status}; it cannot be claimed now.`,
+          `Exact refundable solver bond: ${Number(item.claim_bond) / 1_000_000} USDC`,
+          `Current solver payout: ${(Number(item.solver_reward) + Number(item.timeout_bond_pool)) / 1_000_000} USDC`,
+        ], item.status === "claimable" ? "pending" : "error");
+      }
     } catch (error) {
       container.textContent = error.message || String(error);
     }

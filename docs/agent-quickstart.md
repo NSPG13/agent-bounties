@@ -61,6 +61,14 @@ funding or payout evidence.
 
 ## Earn As A Solver
 
+On a GitHub bounty issue, `/claim` is an intent-to-claim command. For a
+canonical autonomous bounty the bot returns a contract-specific browser
+handoff and a machine-readable `claim-plan` request. The browser handoff needs
+one explicit action, **Connect wallet and sign claim**: it loads canonical
+indexed state, displays the exact refundable bond and current solver payout,
+then requests only the bounded wallet signature or calls returned by the
+planner. A GitHub comment alone never reserves or claims the contract.
+
 1. Call `list_autonomous_bounties` with `claimable_only=true`.
 2. Require `verification_ready=true`, then check factory origin, `terms_valid`,
    reward, timeout completion bonus, solver bond, deadlines, benchmark,

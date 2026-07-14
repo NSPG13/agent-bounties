@@ -252,12 +252,42 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
     contributor = str(meta.get("contributor_login") or "unknown")
     comment_url = str(meta.get("comment_url") or "").strip()
     comment_ref = comment_url or f"issue comment {meta['comment_id']}"
+    wallet_handoff = str(signal.get("claim_handoff_url") or "").strip()
+    machine_request = signal.get("claim_plan_request")
     if decision == "OnChainClaimRequired":
-        status_line = "GitHub cannot reserve this autonomous bounty. Claim only through the canonical funded contract."
+        status_line = (
+            "GitHub recorded claim intent but cannot reserve the autonomous contract. "
+            "Use the handoff below to connect the payout wallet, review the exact indexed bond, "
+            "and sign the bounded claim request."
+        )
     elif ready:
         status_line = "This claim is a temporary coordination signal only; it never authorizes bounty acceptance, escrow release, or payout."
     else:
         status_line = "This claim comment needs a concrete progress signal before it should reserve attention."
+
+    claim_actions = []
+    if wallet_handoff:
+        claim_actions.extend(
+            [
+                f"**Connect wallet and sign claim:** {wallet_handoff}",
+                "",
+                "The handoff retrieves canonical state and shows the exact refundable bond before requesting a signature.",
+                "",
+            ]
+        )
+    if isinstance(machine_request, dict):
+        claim_actions.extend(
+            [
+                "<details><summary>Machine claim-plan request</summary>",
+                "",
+                "```json",
+                json.dumps(machine_request, indent=2, sort_keys=True),
+                "```",
+                "",
+                "</details>",
+                "",
+            ]
+        )
 
     return "\n".join(
         [
@@ -268,6 +298,7 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
             "",
             status_line,
             "",
+            *claim_actions,
             f"Claim comment id: `{meta['comment_id']}`",
             f"Claim comment: {comment_ref}",
             f"Contributor: `{contributor}`",
@@ -450,6 +481,16 @@ def run_self_test() -> int:
             "signal": {
                 "decision": "OnChainClaimRequired",
                 "reservation_id": "routing-only",
+                "claim_handoff_url": "https://nspg13.github.io/agent-bounties/earn.html?bountyContract=0x1111111111111111111111111111111111111111",
+                "claim_plan_request": {
+                    "method": "POST",
+                    "url": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/claim-plan",
+                    "body": {
+                        "network": "base-mainnet",
+                        "bounty_contract": "0x1111111111111111111111111111111111111111",
+                        "solver": "0xYOUR_BASE_WALLET",
+                    },
+                },
             },
             "check": {
                 "conclusion": "ActionRequired",
@@ -459,8 +500,14 @@ def run_self_test() -> int:
             },
         },
     )
-    if "Claim only through the canonical funded contract" not in routed:
-        raise UserError("self-test autonomous route did not suppress GitHub reservation")
+    for required_text in [
+        "cannot reserve the autonomous contract",
+        "Connect wallet and sign claim",
+        "exact indexed bond",
+        "Machine claim-plan request",
+    ]:
+        if required_text not in routed:
+            raise UserError(f"self-test autonomous route missing: {required_text}")
 
     print(f"GitHub claim comment dry-run passed: {output_path}")
     return 0
