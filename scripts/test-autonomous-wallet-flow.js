@@ -75,6 +75,14 @@ assert(
   "public posting must default to deterministic verification",
 );
 assert(postHtml.includes("Verifier wallet quorum (advanced)"));
+assert(postHtml.includes('name="solverReward" type="number" min="0.01" step="0.01" value="2.00"'));
+assert(postHtml.includes('name="verifierReward" type="number" min="0.01" step="0.01" value="0.01"'));
+
+const earnHtml = fs.readFileSync(path.join(repoRoot, "site", "earn.html"), "utf8");
+assert(earnHtml.includes("exact indexed bond before the wallet is asked to sign"));
+assert(source.includes('params.get("bountyContract")'));
+assert(source.includes("Connect wallet and sign claim"));
+assert(source.includes("Exact refundable solver bond"));
 
 for (const page of ["index.html", "post.html", "funding.html", "earn.html", "operator.html", "recovery.html"]) {
   const html = fs.readFileSync(path.join(repoRoot, "site", page), "utf8");

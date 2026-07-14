@@ -35,7 +35,7 @@
           <div>
             <p class="eyebrow">Available now</p>
             <h2>Claimable bounties</h2>
-            <p class="fine">Each claim posts the displayed USDC solver bond. Submit before the claim deadline; otherwise the bond becomes the next solver's completion bonus.</p>
+            <p class="fine">Each claim posts the displayed USDC solver bond. A contract-specific claim link shows the canonical bounty and exact indexed bond before the wallet is asked to sign. Submit before the claim deadline; otherwise the bond becomes the next solver's completion bonus.</p>
             <label class="wallet-picker">
               Wallet
               <select data-wallet-provider aria-label="Wallet provider">
@@ -43,7 +43,7 @@
               </select>
             </label>
             <button class="button secondary" type="button" data-connect-wallet data-output="claim-feed-output">Connect wallet</button>
-            <output id="claim-feed-output" class="output compact-output" aria-live="polite">Claims are signed by the payout wallet.</output>
+            <output id="claim-feed-output" class="output compact-output" aria-live="polite">Choose a bounty, then connect the payout wallet and sign its bounded claim request.</output>
           </div>
           <div id="claimable-feed" class="bounty-feed" aria-live="polite">Loading canonical bounties...</div>
         </div>
