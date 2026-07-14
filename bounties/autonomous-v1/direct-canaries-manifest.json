@@ -42,8 +42,9 @@
     {
       "issue": 250,
       "document": "bounties/autonomous-v1/250.json",
+      "initial_funding": 1860000,
       "commitments": {
-        "terms_hash": "0x335b37aa73cfab37e97318919a53579f9d6e5e363bccbc408f97ca34323dfd8b",
+        "terms_hash": "0x6c667e781271306036b4ceafcea089a089fa75818305d65a575b479654b2c43b",
         "policy_hash": "0x1b7c8b964d90524f09ad4a776c6a4e780f4c0f60e2c9bc6b49ef9690aa650a45",
         "acceptance_criteria_hash": "0x55d62c237e9bc967d9f6785ebec9752ccc9ba39621447c54cb3593f23c0c2465",
         "benchmark_hash": "0x7907330f9d9dad46fcfc6018152080acb2fe960dd22f0ec2a0833ff5eb033aba",
@@ -61,6 +62,7 @@
     "verifier_reward": 10000,
     "claim_bond": 10000,
     "initial_funding": 2010000,
-    "currency": "usdc"
+    "currency": "usdc",
+    "note": "Experimental 2 USDC solver reward; per-bounty initial_funding overrides support pooled-funding canaries and are not a protocol default."
   }
 }

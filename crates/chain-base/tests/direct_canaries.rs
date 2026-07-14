@@ -19,6 +19,8 @@ struct Manifest {
 struct ManifestBounty {
     issue: u64,
     document: String,
+    #[serde(default)]
+    initial_funding: Option<i64>,
     commitments: Commitments,
     creation_nonce: String,
 }
@@ -79,6 +81,9 @@ fn direct_canary_terms_and_unsigned_batch_match_committed_artifacts() {
         );
         let create = autonomous_bounty_create_from_terms(&record).unwrap();
         assert_eq!(create.creation_nonce, bounty.creation_nonce);
+        if let Some(initial_funding) = bounty.initial_funding {
+            assert_eq!(create.initial_funding.amount, initial_funding);
+        }
         creates.push(create);
     }
 
@@ -90,7 +95,7 @@ fn direct_canary_terms_and_unsigned_batch_match_committed_artifacts() {
     let batch = planner
         .plan_creation_batch("base-mainnet", &creates)
         .unwrap();
-    assert_eq!(batch.total_initial_funding, "8040000");
+    assert_eq!(batch.total_initial_funding, "7890000");
     assert_eq!(batch.creations.len(), 4);
     assert_eq!(batch.wallet_calls.len(), 5);
 
@@ -102,7 +107,7 @@ fn direct_canary_terms_and_unsigned_batch_match_committed_artifacts() {
         bundle["manifest_canonical_json_keccak256"],
         keccak256_canonical_json(&manifest_value).unwrap()
     );
-    assert_eq!(bundle["creation_batch"]["total_initial_funding"], "8040000");
+    assert_eq!(bundle["creation_batch"]["total_initial_funding"], "7890000");
     for (index, creation) in batch.creations.iter().enumerate() {
         assert_eq!(
             bundle["bounties"][index]["issue"],
