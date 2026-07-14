@@ -33,14 +33,16 @@ use chain_base::{
     AutonomousBountyAuthorizedContributionPlan, AutonomousBountyAuthorizedCreationPlan,
     AutonomousBountyClaimPlan, AutonomousBountyContribution, AutonomousBountyContributionPlan,
     AutonomousBountyCreate, AutonomousBountyCreationPlan, AutonomousBountyEvent,
-    AutonomousBountyFeedItem, AutonomousBountySubmissionAuthorizationRequest,
+    AutonomousBountyEventKind, AutonomousBountyFeedItem,
+    AutonomousBountySubmissionAuthorizationRequest,
     AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountyTxPlanner,
     AutonomousSignedAttestation, AutonomousVerificationAttestationRequest,
     AutonomousVerificationAttestationTypedData, AutonomousVerificationJob, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, BaseTransactionRelayer, CanonicalChildBountyTermsPlan,
-    CanonicalChildBountyTermsRequest, ChainBaseError, EthGetTransactionReceiptRequest,
-    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, RpcTransactionReceipt,
-    AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION, AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
+    BaseRelayedTransaction, BaseRpcUrlConfig, BaseTransactionRelayer,
+    CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest, ChainBaseError,
+    EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent,
+    RpcTransactionReceipt, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
+    AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
 };
 use chrono::Utc;
 use db::{
@@ -151,6 +153,7 @@ use uuid::Uuid;
         plan_autonomous_attestation_settlement,
         plan_autonomous_expire_claim,
         plan_autonomous_expire_submission,
+        relay_autonomous_timeout,
         plan_autonomous_cancel,
         plan_autonomous_refund_withdrawal,
         decode_autonomous_bounty_events,
@@ -650,6 +653,36 @@ struct PlanAutonomousLifecycleRequest {
     caller: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum AutonomousTimeoutAction {
+    ExpireClaim,
+    ExpireSubmission,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct RelayAutonomousTimeoutRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    action: AutonomousTimeoutAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct RelayAutonomousTimeoutResponse {
+    network: String,
+    bounty_contract: String,
+    action: AutonomousTimeoutAction,
+    previous_bounty_state: String,
+    expected_bounty_state: String,
+    expected_canonical_event: String,
+    transaction_hash: String,
+    relayer: String,
+    confirmed: bool,
+    confirmed_block: Option<u64>,
+    canonical_event_id: Option<String>,
+    evidence_boundary: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DecodeAutonomousBountyEventsRequest {
     logs: Vec<EvmLog>,
@@ -935,6 +968,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/expire-submission-plan",
             post(plan_autonomous_expire_submission),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/timeout-relay",
+            post(relay_autonomous_timeout),
         )
         .route(
             "/v1/base/autonomous-bounties/cancel-plan",
@@ -3606,6 +3643,278 @@ async fn plan_autonomous_expire_submission(
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/base/autonomous-bounties/timeout-relay",
+    request_body = RelayAutonomousTimeoutRequest,
+    responses(
+        (status = 200, description = "Canonical timeout event confirmed", body = RelayAutonomousTimeoutResponse),
+        (status = 202, description = "Bounded timeout transaction broadcast; confirmation pending", body = RelayAutonomousTimeoutResponse),
+        (status = 404, description = "Canonical indexed bounty not found"),
+        (status = 409, description = "Requested transition does not match the indexed bounty state or immutable deadline"),
+        (status = 422, description = "Generated relay intent violated the bounded timeout policy"),
+        (status = 503, description = "Hosted gas relayer, database lease, or Base RPC unavailable")
+    )
+)]
+async fn relay_autonomous_timeout(
+    State(state): State<SharedState>,
+    Json(request): Json<RelayAutonomousTimeoutRequest>,
+) -> Result<Response, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let descriptor = base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let network = match descriptor.chain_id {
+        8_453 => "base-mainnet",
+        84_532 => "base-sepolia",
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let bounty_contract =
+        normalize_evm_address(&request.bounty_contract).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let item = indexed_autonomous_bounty(&state, network, &bounty_contract).await?;
+    if !item.terms_valid || item.status != request.action.previous_bounty_state() {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let relayer = state
+        .x402_relayer
+        .relayer
+        .as_ref()
+        .filter(|_| state.x402_relayer.enabled)
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let relayer_address = relayer.address();
+    let planner = configured_autonomous_planner(network)?;
+    let intent = match request.action {
+        AutonomousTimeoutAction::ExpireClaim => {
+            planner.plan_expire_claim(&bounty_contract, Some(&relayer_address))
+        }
+        AutonomousTimeoutAction::ExpireSubmission => {
+            planner.plan_expire_submission(&bounty_contract, Some(&relayer_address))
+        }
+    }
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_autonomous_timeout_intent(
+        &intent,
+        &bounty_contract,
+        &relayer_address,
+        request.action,
+    )?;
+
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(network)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let lease_token = store
+        .acquire_x402_relayer_lease(network, state.x402_relayer.lease_seconds)
+        .await
+        .map_err(map_x402_db_error)?
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let relay_result = tokio::time::timeout(
+        Duration::from_secs(state.x402_relayer.rpc_timeout_seconds),
+        relayer.simulate_and_broadcast(
+            &rpc_url,
+            descriptor.chain_id,
+            &intent,
+            state.x402_relayer.max_gas,
+            state.x402_relayer.max_fee_per_gas_wei,
+        ),
+    )
+    .await;
+    let release_result = store
+        .release_x402_relayer_lease(network, lease_token)
+        .await
+        .map_err(map_x402_db_error);
+    let transaction = match relay_result {
+        Ok(Ok(transaction)) => transaction,
+        Ok(Err(error)) => return Err(timeout_relay_status(&error)),
+        Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
+    };
+    release_result?;
+
+    let confirmation = wait_for_timeout_confirmation(
+        &rpc_url,
+        &bounty_contract,
+        request.action,
+        &transaction,
+        state.x402_relayer.confirmations,
+        state.x402_relayer.wait_seconds,
+    )
+    .await?;
+    let response = RelayAutonomousTimeoutResponse {
+        network: network.to_string(),
+        bounty_contract,
+        action: request.action,
+        previous_bounty_state: request.action.previous_bounty_state().to_string(),
+        expected_bounty_state: request.action.expected_bounty_state().to_string(),
+        expected_canonical_event: request.action.expected_event_name().to_string(),
+        transaction_hash: transaction.tx_hash,
+        relayer: transaction.relayer,
+        confirmed: confirmation.confirmed,
+        confirmed_block: confirmation.confirmed_block,
+        canonical_event_id: confirmation.canonical_event_id,
+        evidence_boundary: format!(
+            "Only a confirmed {} event proves this timeout transition. It is bond/lifecycle evidence, not bounty payout or BountySettled evidence.",
+            request.action.expected_event_name()
+        ),
+    };
+    Ok((
+        if response.confirmed {
+            StatusCode::OK
+        } else {
+            StatusCode::ACCEPTED
+        },
+        Json(response),
+    )
+        .into_response())
+}
+
+impl AutonomousTimeoutAction {
+    fn previous_bounty_state(self) -> &'static str {
+        match self {
+            Self::ExpireClaim => "claimed",
+            Self::ExpireSubmission => "submitted",
+        }
+    }
+
+    fn expected_bounty_state(self) -> &'static str {
+        "claimable"
+    }
+
+    fn function(self) -> &'static str {
+        match self {
+            Self::ExpireClaim => "expireClaim()",
+            Self::ExpireSubmission => "expireSubmission()",
+        }
+    }
+
+    fn calldata(self) -> &'static str {
+        match self {
+            Self::ExpireClaim => "0x1257d2c8",
+            Self::ExpireSubmission => "0xf9251ec7",
+        }
+    }
+
+    fn expected_event_name(self) -> &'static str {
+        match self {
+            Self::ExpireClaim => "ClaimExpired",
+            Self::ExpireSubmission => "SubmissionExpired",
+        }
+    }
+
+    fn expected_event_kind(self) -> AutonomousBountyEventKind {
+        match self {
+            Self::ExpireClaim => AutonomousBountyEventKind::ClaimExpired,
+            Self::ExpireSubmission => AutonomousBountyEventKind::SubmissionExpired,
+        }
+    }
+}
+
+fn validate_autonomous_timeout_intent(
+    intent: &EvmTransactionIntent,
+    bounty_contract: &str,
+    relayer: &str,
+    action: AutonomousTimeoutAction,
+) -> Result<(), StatusCode> {
+    if intent.value_wei != 0
+        || intent.function != action.function()
+        || !intent.to.eq_ignore_ascii_case(bounty_contract)
+        || intent
+            .from
+            .as_deref()
+            .is_none_or(|from| !from.eq_ignore_ascii_case(relayer))
+    {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    if !intent.data.eq_ignore_ascii_case(action.calldata()) {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    Ok(())
+}
+
+fn timeout_relay_status(error: &ChainBaseError) -> StatusCode {
+    match error {
+        ChainBaseError::RelayerProvider(message)
+            if message.to_ascii_lowercase().contains("revert") =>
+        {
+            StatusCode::CONFLICT
+        }
+        ChainBaseError::InvalidRelayIntent(_)
+        | ChainBaseError::RelayerChainMismatch { .. }
+        | ChainBaseError::RelayerGasLimitExceeded { .. }
+        | ChainBaseError::RelayerFeeCapExceeded { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+#[derive(Debug)]
+struct TimeoutRelayConfirmation {
+    confirmed: bool,
+    confirmed_block: Option<u64>,
+    canonical_event_id: Option<String>,
+}
+
+async fn wait_for_timeout_confirmation(
+    rpc_url: &str,
+    bounty_contract: &str,
+    action: AutonomousTimeoutAction,
+    transaction: &BaseRelayedTransaction,
+    required_confirmations: u64,
+    wait_seconds: u64,
+) -> Result<TimeoutRelayConfirmation, StatusCode> {
+    let deadline = Instant::now() + Duration::from_secs(wait_seconds);
+    loop {
+        let receipt = fetch_transaction_receipt(rpc_url, &transaction.tx_hash, 1)
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+            .result;
+        if let Some(receipt) = receipt {
+            if receipt
+                .succeeded()
+                .map_err(|error| base_rpc_fetch_status(&error))?
+                == Some(false)
+            {
+                return Err(StatusCode::BAD_GATEWAY);
+            }
+            let block_number = receipt
+                .block_number()
+                .map_err(|error| base_rpc_fetch_status(&error))?
+                .ok_or(StatusCode::BAD_GATEWAY)?;
+            let events = decode_autonomous_bounty_logs(
+                receipt
+                    .logs_to_evm_logs()
+                    .map_err(|error| base_rpc_fetch_status(&error))?,
+            )
+            .map_err(|error| base_rpc_fetch_status(&error))?;
+            let event = events.into_iter().find(|event| {
+                event.kind == action.expected_event_kind()
+                    && event.contract_address.eq_ignore_ascii_case(bounty_contract)
+            });
+            let event = event.ok_or(StatusCode::BAD_GATEWAY)?;
+            let latest_block = fetch_block_number(rpc_url, 2)
+                .await
+                .map_err(|error| base_rpc_fetch_status(&error))?;
+            let confirmations = latest_block.saturating_sub(block_number).saturating_add(1);
+            if confirmations >= required_confirmations {
+                return Ok(TimeoutRelayConfirmation {
+                    confirmed: true,
+                    confirmed_block: Some(block_number),
+                    canonical_event_id: Some(event.log_key),
+                });
+            }
+        }
+        if Instant::now() >= deadline {
+            return Ok(TimeoutRelayConfirmation {
+                confirmed: false,
+                confirmed_block: None,
+                canonical_event_id: None,
+            });
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/cancel-plan", responses((status = 200, description = "Creator or post-deadline cancellation plan")))]
 async fn plan_autonomous_cancel(
     State(state): State<SharedState>,
@@ -5453,6 +5762,55 @@ mod tests {
         assert_eq!(
             response.headers()["x-agent-bounties-protocol"],
             "agent-bounties/autonomous-v1"
+        );
+    }
+
+    #[test]
+    fn timeout_relay_accepts_only_exact_permissionless_transition_intent() {
+        let bounty = "0x1111111111111111111111111111111111111111";
+        let relayer = "0x2222222222222222222222222222222222222222";
+        let mut intent = EvmTransactionIntent {
+            from: Some(relayer.to_string()),
+            to: bounty.to_string(),
+            value_wei: 0,
+            data: AutonomousTimeoutAction::ExpireSubmission
+                .calldata()
+                .to_string(),
+            function: AutonomousTimeoutAction::ExpireSubmission
+                .function()
+                .to_string(),
+        };
+
+        assert!(validate_autonomous_timeout_intent(
+            &intent,
+            bounty,
+            relayer,
+            AutonomousTimeoutAction::ExpireSubmission,
+        )
+        .is_ok());
+
+        intent.data = AutonomousTimeoutAction::ExpireClaim.calldata().to_string();
+        assert_eq!(
+            validate_autonomous_timeout_intent(
+                &intent,
+                bounty,
+                relayer,
+                AutonomousTimeoutAction::ExpireSubmission,
+            ),
+            Err(StatusCode::UNPROCESSABLE_ENTITY)
+        );
+        intent.data = AutonomousTimeoutAction::ExpireSubmission
+            .calldata()
+            .to_string();
+        intent.value_wei = 1;
+        assert_eq!(
+            validate_autonomous_timeout_intent(
+                &intent,
+                bounty,
+                relayer,
+                AutonomousTimeoutAction::ExpireSubmission,
+            ),
+            Err(StatusCode::UNPROCESSABLE_ENTITY)
         );
     }
 
