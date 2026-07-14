@@ -115,6 +115,7 @@ pub struct DiscoveryEndpoints {
     pub autonomous_claim_plan: String,
     pub autonomous_authorized_claim_plan: String,
     pub autonomous_submission_plan: String,
+    pub autonomous_submission_preparation: String,
     pub autonomous_submission_authorization_plan: String,
     pub autonomous_gas_relay_issue_comments: String,
     pub autonomous_verification_attestation_plan: String,
@@ -428,6 +429,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "{api}/v1/base/autonomous-bounties/authorized-claim-plan"
         ),
         autonomous_submission_plan: format!("{api}/v1/base/autonomous-bounties/submission-plan"),
+        autonomous_submission_preparation: format!(
+            "{api}/v1/base/autonomous-bounties/submission-preparation"
+        ),
         autonomous_submission_authorization_plan: format!(
             "{api}/v1/base/autonomous-bounties/submission-authorization-plan"
         ),
@@ -501,6 +505,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
+            "prepare_autonomous_bounty_submission",
             "plan_autonomous_bounty_submission_authorization",
             "relay_autonomous_action_via_github_comment",
             "plan_autonomous_verification_attestation",
@@ -983,8 +988,8 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
 3. Enforce the wallet owner's precommitted per-action, per-bounty, and daily caps. Request human approval only when that wallet policy requires it.
 4. Use `plan_autonomous_bounty_claim`; verify the indexed solver bond and sign either its wallet batch or bounded EIP-3009 authorization. A low-value deterministic bounty can relay that authorization through a versioned `/agent-bounty relay` issue comment so the solver does not need Base ETH.
-5. Complete the task. Use `plan_autonomous_bounty_submission_authorization`, sign the exact EIP-712 `Submit` payload, and relay `submitWithSignature` through the same issue command; direct wallet submission remains available.
-6. Mine the committed deterministic proof and relay only a passing `verifyAndSettle` call. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
+5. Complete the task. Call `prepare_autonomous_bounty_submission` with the public artifact reference and evidence object. It validates the active claim, computes both commitments, and returns the exact EIP-712 `Submit` payload plus unsigned relay and later evidence-publication templates. Sign once and relay `submitWithSignature` through the returned issue; direct wallet submission remains available.
+6. Wait for canonical `SubmissionAdded`, then publish the returned preimages. Mine the committed deterministic proof and relay only a passing `verifyAndSettle` call. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
 
 ## Post And Fund
 
@@ -1030,6 +1035,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `plan_autonomous_bounty_claim`
 - `plan_autonomous_bounty_authorized_claim`
 - `plan_autonomous_bounty_submission`
+- `prepare_autonomous_bounty_submission`
 - `plan_autonomous_bounty_submission_authorization`
 - `relay_autonomous_action_via_github_comment`
 - `plan_autonomous_verification_attestation`
@@ -1062,6 +1068,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Claim plan: {claim_plan}
 - Authorized claim plan: {authorized_claim_plan}
 - Submission plan: {submission_plan}
+- Prepare active-claim submission: {submission_preparation}
 - Submission authorization plan: {submission_authorization_plan}
 - Bounded gas relay issue transport: {gas_relay_issue_comments}
 - Verifier signing plan: {verification_attestation_plan}
@@ -1130,6 +1137,7 @@ Default CTA: Post your own bounty at {post_page}
         claim_plan = endpoints.autonomous_claim_plan,
         authorized_claim_plan = endpoints.autonomous_authorized_claim_plan,
         submission_plan = endpoints.autonomous_submission_plan,
+        submission_preparation = endpoints.autonomous_submission_preparation,
         submission_authorization_plan = endpoints.autonomous_submission_authorization_plan,
         gas_relay_issue_comments = endpoints.autonomous_gas_relay_issue_comments,
         verification_attestation_plan = endpoints.autonomous_verification_attestation_plan,
@@ -2945,6 +2953,10 @@ mod tests {
             "https://network.example/v1/base/autonomous-bounties/submission-plan"
         );
         assert_eq!(
+            manifest.endpoints.autonomous_submission_preparation,
+            "https://network.example/v1/base/autonomous-bounties/submission-preparation"
+        );
+        assert_eq!(
             manifest.endpoints.autonomous_submission_authorization_plan,
             "https://network.example/v1/base/autonomous-bounties/submission-authorization-plan"
         );
@@ -2977,6 +2989,7 @@ mod tests {
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
+            "prepare_autonomous_bounty_submission",
             "plan_autonomous_bounty_submission_authorization",
             "relay_autonomous_action_via_github_comment",
             "fund_bounty_with_x402",
@@ -3044,6 +3057,7 @@ mod tests {
             "Base directly",
             "x402 v2 discovery",
             "fund_bounty_with_x402",
+            "prepare_autonomous_bounty_submission",
             "precommitted per-action",
         ] {
             assert!(text.contains(phrase), "missing llms.txt phrase: {phrase}");
@@ -3059,6 +3073,7 @@ mod tests {
         let schema = discovery_manifest_schema_json();
         assert!(schema.contains("discovery-manifest.v2.json"));
         assert!(schema.contains("autonomous_submission_plan"));
+        assert!(schema.contains("autonomous_submission_preparation"));
         assert!(schema.contains("autonomous_submission_authorization_plan"));
         assert!(schema.contains("autonomous_gas_relay_issue_comments"));
         assert!(schema.contains("autonomous_authorized_claim_plan"));

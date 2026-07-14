@@ -863,6 +863,19 @@ export class AgentBountiesClient {
     });
   }
 
+  async prepareAutonomousBountySubmission(request: {
+    network?: string | null;
+    bounty_contract: string;
+    solver_wallet: string;
+    artifact_reference: string;
+    evidence: Record<string, unknown>;
+  }): Promise<unknown> {
+    return this.autonomousPost("submission-preparation", {
+      ...request,
+      network: request.network ?? null,
+    });
+  }
+
   async planAutonomousBountySubmissionAuthorization(
     submission: {
       bounty_contract: string;
