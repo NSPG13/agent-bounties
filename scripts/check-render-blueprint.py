@@ -251,6 +251,9 @@ def main() -> int:
     require_env_value(worker, "BASE_INDEXER_NETWORK", "base-mainnet")
     require_env_value(worker, "BASE_INDEXER_PROTOCOL", "autonomous-v1")
     require_env_value(worker, "BASE_INDEXER_RPC_URL", rpc_url)
+    require_env_value(worker, "BASE_INDEXER_RETRY_INITIAL_SECONDS", '"5"')
+    require_env_value(worker, "BASE_INDEXER_RETRY_MAX_SECONDS", '"120"')
+    require_env_value(worker, "BASE_INDEXER_EXIT_AFTER_FAILURES", '"8"')
     if active:
         require_env_value(worker, "BASE_INDEXER_FACTORY_CONTRACT", factory["contract"])
         require_env_value(worker, "BASE_INDEXER_START_BLOCK", f'"{factory["deployment_block"]}"')
@@ -268,6 +271,9 @@ def main() -> int:
         "BASE_INDEXER_PROTOCOL=autonomous-v1",
         f"BASE_INDEXER_RPC_URL={rpc_url}",
         "BASE_INDEXER_START_BLOCK=",
+        "BASE_INDEXER_RETRY_INITIAL_SECONDS=5",
+        "BASE_INDEXER_RETRY_MAX_SECONDS=120",
+        "BASE_INDEXER_EXIT_AFTER_FAILURES=8",
     ]
     env_lines = set(env_example.splitlines())
     for required in required_env_lines:

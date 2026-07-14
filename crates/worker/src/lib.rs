@@ -4,20 +4,190 @@ use chain_base::{
     autonomous_bounty_event_topics, base_network_descriptor, decode_autonomous_bounty_logs,
     fetch_base_contract_logs, fetch_base_multi_contract_logs, fetch_block_number,
     rpc_logs_to_evm_logs, AutonomousBountyEventKind, BaseContractLogQuery,
-    BaseMultiContractLogQuery, BaseNetworkDescriptor,
+    BaseMultiContractLogQuery, BaseNetworkDescriptor, ChainBaseError,
 };
 use chrono::Utc;
-use db::{BaseIndexerHeartbeat, PostgresStore};
+use db::{BaseIndexerHeartbeat, DbError, PostgresStore};
 use domain::{Submission, VerifierResult};
 use ledger::Ledger;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt};
 use verifier_sdk::{VerificationInput, Verifier, VerifierResultType};
 
 const AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE: usize = 500;
 const INDEXER_HEARTBEAT_SUCCESS: &str = "success";
 const INDEXER_HEARTBEAT_SKIPPED: &str = "skipped";
 const INDEXER_HEARTBEAT_FAILED: &str = "failed";
+
+pub fn redact_operational_error(message: &str) -> String {
+    let mut redacted = String::with_capacity(message.len());
+    let mut index = 0;
+    while index < message.len() {
+        let remaining = &message[index..];
+        let scheme_len = if remaining.starts_with("https://") {
+            Some(8)
+        } else if remaining.starts_with("http://") {
+            Some(7)
+        } else if remaining.starts_with("wss://") {
+            Some(6)
+        } else if remaining.starts_with("ws://") {
+            Some(5)
+        } else {
+            None
+        };
+        if let Some(scheme_len) = scheme_len {
+            redacted.push_str("[redacted-url]");
+            index += scheme_len;
+            while index < message.len() {
+                let character = message[index..]
+                    .chars()
+                    .next()
+                    .expect("index remains on a character boundary");
+                if character.is_whitespace()
+                    || matches!(character, '"' | '\'' | ')' | ']' | '}' | ',' | ';')
+                {
+                    break;
+                }
+                index += character.len_utf8();
+            }
+            continue;
+        }
+        let character = remaining
+            .chars()
+            .next()
+            .expect("index remains below message length");
+        redacted.push(character);
+        index += character.len_utf8();
+    }
+    redacted
+}
+
+#[derive(Debug)]
+struct IndexerOperationalError {
+    message: String,
+    retryable: bool,
+}
+
+impl fmt::Display for IndexerOperationalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for IndexerOperationalError {}
+
+pub fn indexer_error_is_retryable(error: &anyhow::Error) -> bool {
+    if let Some(error) = error.downcast_ref::<IndexerOperationalError>() {
+        return error.retryable;
+    }
+    if let Some(error) = error.downcast_ref::<ChainBaseError>() {
+        return matches!(
+            error,
+            ChainBaseError::RpcTransport(_)
+                | ChainBaseError::RpcHttpStatus(_)
+                | ChainBaseError::RpcProviderError { .. }
+        );
+    }
+    matches!(error.downcast_ref::<DbError>(), Some(DbError::Sqlx(_)))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexerRecoveryPolicy {
+    pub initial_backoff_seconds: u64,
+    pub max_backoff_seconds: u64,
+    pub exit_after_consecutive_failures: u32,
+}
+
+impl Default for IndexerRecoveryPolicy {
+    fn default() -> Self {
+        Self {
+            initial_backoff_seconds: 5,
+            max_backoff_seconds: 120,
+            exit_after_consecutive_failures: 8,
+        }
+    }
+}
+
+impl IndexerRecoveryPolicy {
+    pub fn from_env() -> anyhow::Result<Self> {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    pub fn from_lookup<F>(lookup: F) -> anyhow::Result<Self>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let defaults = Self::default();
+        let initial_backoff_seconds = optional_positive_u64(
+            &lookup,
+            "BASE_INDEXER_RETRY_INITIAL_SECONDS",
+            defaults.initial_backoff_seconds,
+        )?;
+        let max_backoff_seconds = optional_positive_u64(
+            &lookup,
+            "BASE_INDEXER_RETRY_MAX_SECONDS",
+            defaults.max_backoff_seconds,
+        )?;
+        let exit_after_consecutive_failures = optional_positive_u64(
+            &lookup,
+            "BASE_INDEXER_EXIT_AFTER_FAILURES",
+            u64::from(defaults.exit_after_consecutive_failures),
+        )?
+        .try_into()
+        .context("BASE_INDEXER_EXIT_AFTER_FAILURES exceeds u32")?;
+
+        if max_backoff_seconds < initial_backoff_seconds {
+            return Err(anyhow!(
+                "BASE_INDEXER_RETRY_MAX_SECONDS must be greater than or equal to BASE_INDEXER_RETRY_INITIAL_SECONDS"
+            ));
+        }
+
+        Ok(Self {
+            initial_backoff_seconds,
+            max_backoff_seconds,
+            exit_after_consecutive_failures,
+        })
+    }
+
+    pub fn decision(&self, consecutive_failures: u32, retryable: bool) -> IndexerRecoveryDecision {
+        if !retryable {
+            return IndexerRecoveryDecision::HaltForOperatorInvestigation {
+                consecutive_failures,
+            };
+        }
+        if consecutive_failures >= self.exit_after_consecutive_failures {
+            return IndexerRecoveryDecision::ExitForSupervisorRestart {
+                consecutive_failures,
+            };
+        }
+
+        let exponent = consecutive_failures.saturating_sub(1).min(63);
+        let multiplier = 1u64.checked_shl(exponent).unwrap_or(u64::MAX);
+        let backoff_seconds = self
+            .initial_backoff_seconds
+            .saturating_mul(multiplier)
+            .min(self.max_backoff_seconds);
+        IndexerRecoveryDecision::RetryFromPersistedCursor {
+            consecutive_failures,
+            backoff_seconds,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum IndexerRecoveryDecision {
+    RetryFromPersistedCursor {
+        consecutive_failures: u32,
+        backoff_seconds: u64,
+    },
+    ExitForSupervisorRestart {
+        consecutive_failures: u32,
+    },
+    HaltForOperatorInvestigation {
+        consecutive_failures: u32,
+    },
+}
 
 pub struct VerificationJob<V: Verifier> {
     pub verifier: V,
@@ -182,7 +352,8 @@ pub async fn poll_autonomous_indexer_once_with_heartbeat(
         }
         Err(error) => {
             let completed_at = Utc::now();
-            let error_message = error.to_string();
+            let retryable = indexer_error_is_retryable(&error);
+            let error_message = redact_operational_error(&error.to_string());
             let heartbeat = BaseIndexerHeartbeat {
                 network: config.network.clone(),
                 escrow_contract: config.factory_contract.clone(),
@@ -196,15 +367,22 @@ pub async fn poll_autonomous_indexer_once_with_heartbeat(
                 fetched_logs: 0,
                 persisted_cursor_block: None,
                 skipped_reason: None,
-                error_message: Some(error_message),
+                error_message: Some(error_message.clone()),
                 updated_at: completed_at,
             };
             if let Err(heartbeat_error) = store.upsert_base_indexer_heartbeat(&heartbeat).await {
-                return Err(error).context(format!(
-                    "failed to persist autonomous Base indexer failure heartbeat: {heartbeat_error}"
-                ));
+                return Err(anyhow::Error::new(IndexerOperationalError {
+                    message: format!(
+                        "{error_message}; failed to persist autonomous Base indexer failure heartbeat: {}",
+                        redact_operational_error(&heartbeat_error.to_string())
+                    ),
+                    retryable: retryable && matches!(heartbeat_error, DbError::Sqlx(_)),
+                }));
             }
-            Err(error)
+            Err(anyhow::Error::new(IndexerOperationalError {
+                message: error_message,
+                retryable,
+            }))
         }
     }
 }
@@ -578,6 +756,21 @@ fn parse_u64_env(name: &str, value: &str) -> anyhow::Result<u64> {
         .with_context(|| format!("{name} must be a non-negative integer"))
 }
 
+fn optional_positive_u64<F>(lookup: &F, name: &str, default: u64) -> anyhow::Result<u64>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let value = lookup(name)
+        .filter(|value| nonempty(value))
+        .map(|value| parse_u64_env(name, &value))
+        .transpose()?
+        .unwrap_or(default);
+    if value == 0 {
+        return Err(anyhow!("{name} must be greater than zero"));
+    }
+    Ok(value)
+}
+
 fn nonempty(value: &str) -> bool {
     !value.trim().is_empty()
 }
@@ -627,5 +820,112 @@ mod tests {
         assert_eq!(bounded_to_block(100, 500, 50), 149);
         assert_eq!(bounded_to_block(100, 120, 50), 120);
         assert_eq!(bounded_to_block(100, 120, 0), 100);
+    }
+
+    #[test]
+    fn recovery_policy_retries_with_capped_exponential_backoff() {
+        let policy = IndexerRecoveryPolicy {
+            initial_backoff_seconds: 5,
+            max_backoff_seconds: 30,
+            exit_after_consecutive_failures: 8,
+        };
+
+        assert_eq!(
+            policy.decision(1, true),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                consecutive_failures: 1,
+                backoff_seconds: 5,
+            }
+        );
+        assert_eq!(
+            policy.decision(4, true),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                consecutive_failures: 4,
+                backoff_seconds: 30,
+            }
+        );
+        assert_eq!(
+            policy.decision(7, true),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                consecutive_failures: 7,
+                backoff_seconds: 30,
+            }
+        );
+    }
+
+    #[test]
+    fn recovery_policy_exits_after_bounded_failures() {
+        let policy = IndexerRecoveryPolicy::default();
+
+        assert_eq!(
+            policy.decision(8, true),
+            IndexerRecoveryDecision::ExitForSupervisorRestart {
+                consecutive_failures: 8,
+            }
+        );
+        assert_eq!(
+            policy.decision(u32::MAX, true),
+            IndexerRecoveryDecision::ExitForSupervisorRestart {
+                consecutive_failures: u32::MAX,
+            }
+        );
+    }
+
+    #[test]
+    fn recovery_policy_halts_non_retryable_failures_immediately() {
+        let policy = IndexerRecoveryPolicy::default();
+
+        assert_eq!(
+            policy.decision(1, false),
+            IndexerRecoveryDecision::HaltForOperatorInvestigation {
+                consecutive_failures: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn indexer_retries_only_typed_external_failures() {
+        let transport = anyhow::Error::new(ChainBaseError::RpcHttpStatus(503));
+        let malformed = anyhow::Error::new(ChainBaseError::InvalidRpcResponse(
+            "missing result".to_string(),
+        ));
+        let integrity = anyhow!("factory query returned a non-factory autonomous event");
+
+        assert!(indexer_error_is_retryable(&transport));
+        assert!(!indexer_error_is_retryable(&malformed));
+        assert!(!indexer_error_is_retryable(&integrity));
+    }
+
+    #[test]
+    fn recovery_policy_rejects_zero_and_inverted_limits() {
+        let zero = HashMap::from([("BASE_INDEXER_RETRY_INITIAL_SECONDS", "0")]);
+        let error =
+            IndexerRecoveryPolicy::from_lookup(|key| zero.get(key).map(|value| value.to_string()))
+                .unwrap_err();
+        assert!(error.to_string().contains("must be greater than zero"));
+
+        let inverted = HashMap::from([
+            ("BASE_INDEXER_RETRY_INITIAL_SECONDS", "60"),
+            ("BASE_INDEXER_RETRY_MAX_SECONDS", "30"),
+        ]);
+        let error = IndexerRecoveryPolicy::from_lookup(|key| {
+            inverted.get(key).map(|value| value.to_string())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("must be greater than or equal"));
+    }
+
+    #[test]
+    fn operational_errors_redact_provider_urls() {
+        let message = "RPC https://user:secret@rpc.example/v2/API_KEY?token=SECRET failed; fallback http://localhost:8545 and wss://rpc.example/SECRET unavailable";
+
+        let redacted = redact_operational_error(message);
+
+        assert_eq!(
+            redacted,
+            "RPC [redacted-url] failed; fallback [redacted-url] and [redacted-url] unavailable"
+        );
+        assert!(!redacted.contains("secret"));
+        assert!(!redacted.contains("API_KEY"));
     }
 }

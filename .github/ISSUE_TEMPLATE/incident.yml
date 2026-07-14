@@ -1,0 +1,84 @@
+name: Operational incident
+description: Record a public, redacted Agent Bounties incident and recovery evidence.
+title: "[incident]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, private keys, wallet recovery phrases, access tokens, personal data, private bounty evidence, or unredacted provider logs. A public issue is coordination evidence, not funding, verification, payout, or settlement authority.
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - SEV0 - value, integrity, key, contract, ledger, or false payment evidence
+        - SEV1 - critical earning, funding, verification, or database outage
+        - SEV2 - degraded service, stale indexer, verifier subset, or webhook delay
+        - SEV3 - non-critical distribution, analytics, template, or docs degradation
+    validations:
+      required: true
+
+  - type: input
+    id: detected_at
+    attributes:
+      label: Detection time (UTC)
+      placeholder: "2026-07-13T23:59:00Z"
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: User and protocol impact
+      description: State what failed, who was affected, and whether value or canonical evidence may be involved.
+    validations:
+      required: true
+
+  - type: textarea
+    id: signals
+    attributes:
+      label: Redacted signals
+      description: Include SLOs, health/revision headers, indexer heartbeat/cursor, canonical event or webhook evidence. Link artifacts instead of pasting sensitive logs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: containment
+    attributes:
+      label: Containment and recovery plan
+      description: Name the policy action, risk class, authority, stop condition, and post-repair verification.
+    validations:
+      required: true
+
+  - type: textarea
+    id: timeline
+    attributes:
+      label: Timeline
+      placeholder: |
+        - 00:00 UTC - detected
+        - 00:05 UTC - contained
+        - 00:20 UTC - recovery verified
+    validations:
+      required: true
+
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Regression fixture
+      description: Identify the RecoveryBench or deterministic fixture that will reproduce this incident.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Public safety check
+      options:
+        - label: I removed secrets, private data, private evidence, and unredacted provider logs.
+          required: true
+        - label: I did not claim funding or payment from a plan, comment, transaction hash, database row, or AI output.
+          required: true
+        - label: I understand automatic recovery cannot authorize wallet, contract, verifier, payout, or settlement actions.
+          required: true

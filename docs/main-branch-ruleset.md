@@ -8,7 +8,9 @@ the default branch; contributor branches and forks remain unrestricted.
 - Every update to `main` has a pull request audit trail.
 - The latest reviewable push needs one independent approval.
 - Review threads must be resolved before merge.
-- `full-check` and `postgres-sync` must come from GitHub Actions and pass.
+- `full-check`, `postgres-sync`, and `sdlc-recovery` must come from GitHub
+  Actions and pass. The recovery check validates the machine policy and full
+  deterministic incident corpus without contacting production.
 - Force pushes and deletion of `main` are blocked.
 - Only squash merges are accepted.
 
@@ -37,6 +39,9 @@ gh api repos/NSPG13/agent-bounties/rulesets
 If a ruleset with this name already exists, update its numeric endpoint with
 `PUT` instead of creating a duplicate. Any future required check must first run
 successfully on a pull request and must be bound to its expected GitHub App.
+Apply the `sdlc-recovery` requirement only after that job has completed
+successfully on the SDLC pull request, so contributors are never blocked by a
+required context that has not yet run.
 
 ## Drift Check
 

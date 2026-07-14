@@ -13,6 +13,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  sdlc-recovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate bounded self-healing contract
+        run: |
+          python scripts/test_self_heal.py -v
+          python scripts/self_heal.py validate-policy \
+            --policy ops/self-healing-policy.json
+          python scripts/self_heal.py bench \
+            --policy ops/self-healing-policy.json \
+            --fixtures ops/fixtures/recovery-cases.json \
+            --output target/operations/recovery-bench.json
+
+      - name: Upload RecoveryBench evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-bench-${{ github.run_id }}
+          path: target/operations/recovery-bench.json
+          if-no-files-found: error
+          retention-days: 30
+
   ruleset-drift:
     runs-on: ubuntu-latest
     steps:
