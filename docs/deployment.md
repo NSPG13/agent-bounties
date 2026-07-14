@@ -30,6 +30,46 @@ Validate before synchronizing:
 python scripts\check-render-blueprint.py
 ```
 
+Application deployment authority lives in the `Render Deploy Recovery` GitHub
+Actions workflow. Native Render auto-deploy is off because the Git provider
+event stream failed to deliver reviewed main commits reliably. After `CI`
+succeeds on a push to `main`, the workflow:
+
+1. checks out the exact successful-CI SHA;
+2. verifies it is the latest successful CI revision reachable from `main`;
+3. resolves all three Render services by exact name and verifies repository,
+   branch, and service type;
+4. disables any drifted native auto-deploy setting;
+5. calls Render's deploy API with the exact commit for API, MCP, and worker;
+6. waits for all three deploys to reach `live` and fails on terminal errors;
+7. verifies exact revision and protocol headers from API and MCP `/health`;
+8. stores a redacted 30-day deployment evidence artifact.
+
+Configure one GitHub Actions secret named `RENDER_API_KEY`. Create it in the
+Render Dashboard for the workspace that owns these three services, then store
+it only under repository **Settings > Secrets and variables > Actions**. Never
+put the key in Render variables, workflow inputs, logs, issues, or Git. A
+missing key is a visible workflow failure, not a silent manual-deploy fallback.
+The key can deploy application services, so rotate it after suspected exposure.
+Creating, rotating, or revoking the credential is an explicit R3 access change;
+using the already-provisioned credential for the bounded exact-SHA application
+deploy is R2.
+
+The controller can be rehearsed without credentials:
+
+```powershell
+python scripts\test_render_deploy_recovery.py -v
+python scripts\check-render-blueprint.py
+```
+
+After the secret exists, `workflow_dispatch` can recover the latest successful
+CI revision reachable from `main`. An older successful SHA skips when a newer
+successful SHA exists, while a newer failed commit cannot suppress deployment
+of the last known-good revision. The scheduled `Operational Control Loop` stays
+read-only and continues to fail closed on revision skew; it does not possess
+the Render key. If current `main` is newer and failing, pass the latest
+successful 40-character SHA in the manual `revision` input.
+
 The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
 implementation, and Base RPC configuration. Canonical planners fail closed
 without Postgres and the active protocol addresses.
@@ -67,6 +107,9 @@ Secrets belong in Render environment groups, never in Git:
 - managed RPC credentials,
 - optional `OPERATOR_API_TOKEN` for non-protocol administrative surfaces,
 - future Stripe secrets and verified webhook secret.
+
+The separate `RENDER_API_KEY` belongs only in GitHub Actions and is never
+injected into an application container.
 
 The autonomous contracts do not need a hosted private key, settlement signer,
 or owner key. Agents and relayers submit their own wallet transactions.

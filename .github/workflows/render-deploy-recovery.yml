@@ -1,0 +1,175 @@
+name: Render Deploy Recovery
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/render-deploy-recovery.yml"
+      - "render.yaml"
+      - "scripts/check-render-blueprint.py"
+      - "scripts/render_deploy_recovery.py"
+      - "scripts/test_render_deploy_recovery.py"
+      - "docs/deployment.md"
+      - "docs/software-development-lifecycle.md"
+      - "docs/self-healing-operations.md"
+      - "ops/self-healing-policy.json"
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Exact current main SHA; defaults to the dispatch revision"
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  controller-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || inputs.revision || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify deterministic deploy controller
+        run: |
+          python scripts/test_render_deploy_recovery.py -v
+          python scripts/check-render-blueprint.py
+          python -m py_compile \
+            scripts/render_deploy_recovery.py \
+            scripts/test_render_deploy_recovery.py
+
+  deploy-exact-main-revision:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+    needs: controller-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    concurrency:
+      group: render-production-deploy
+      cancel-in-progress: false
+    env:
+      TARGET_REVISION: ${{ github.event.workflow_run.head_sha || inputs.revision || github.sha }}
+      PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
+      PRODUCTION_MCP_BASE_URL: ${{ vars.PRODUCTION_MCP_BASE_URL || 'https://agent-bounties-mcp.onrender.com' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_REVISION }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Select latest successful main revision
+        id: target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "${TARGET_REVISION}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "TARGET_REVISION must be an exact 40-character Git SHA" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          current_main="$(git rev-parse refs/remotes/origin/main)"
+          if ! git merge-base --is-ancestor "${TARGET_REVISION}" "${current_main}"; then
+            echo "TARGET_REVISION is not reachable from current main" >&2
+            exit 1
+          fi
+
+          latest_successful=""
+          for attempt in 1 2 3; do
+            latest_successful="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=20" \
+                --jq '.workflow_runs | map(select(.conclusion == "success")) | .[0].head_sha // empty'
+            )"
+            if [[ "${attempt}" -lt 3 ]]; then
+              sleep $((attempt * 2))
+            fi
+          done
+          if [[ ! "${latest_successful}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "GitHub did not return a successful main CI revision" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${latest_successful}" "${current_main}"; then
+            echo "Latest successful CI revision is not reachable from current main" >&2
+            exit 1
+          fi
+          if [[ "${TARGET_REVISION,,}" != "${latest_successful,,}" ]]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "Latest successful main CI is ${latest_successful}; that revision owns deployment." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy and attest exact revision
+        if: steps.target.outputs.deploy == 'true'
+        shell: bash
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          python scripts/render_deploy_recovery.py \
+            --revision "${TARGET_REVISION}" \
+            --api-url "${PRODUCTION_API_BASE_URL%/}/health" \
+            --mcp-url "${PRODUCTION_MCP_BASE_URL%/}/health" \
+            --output target/operations/render-deploy.json
+
+      - name: Publish deployment evidence summary
+        if: always() && steps.target.outputs.deploy == 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          evidence_path = Path("target/operations/render-deploy.json")
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          if not evidence_path.exists():
+              summary_path.write_text(
+                  "# Render deployment\n\nNo evidence was produced. Inspect the deploy step.\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(0)
+          evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+          lines = [
+              "# Render deployment",
+              "",
+              f"- Revision: `{evidence['revision']}`",
+              f"- Verified: `{str(evidence['success']).lower()}`",
+              f"- Services live: `{sum(item['status'] == 'live' for item in evidence['services'])}/3`",
+              f"- Exact health attestations: `{len(evidence['health'])}/2`",
+              "",
+              "The controller can deploy application services only. It cannot deploy contracts, sign wallet transactions, or authorize settlement.",
+          ]
+          if evidence.get("error"):
+              lines.extend(["", f"Failure: `{evidence['error']}`"])
+          summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload redacted deployment evidence
+        if: always() && steps.target.outputs.deploy == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-deploy-${{ github.run_id }}
+          path: target/operations/render-deploy.json
+          if-no-files-found: error
+          retention-days: 30

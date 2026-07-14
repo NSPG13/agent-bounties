@@ -51,7 +51,8 @@ services:
     plan: starter
     region: oregon
     branch: main
-    autoDeployTrigger: commit
+    # GitHub Actions deploys the exact successful-CI main SHA through Render's API.
+    autoDeployTrigger: off
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
@@ -112,7 +113,8 @@ services:
     plan: starter
     region: oregon
     branch: main
-    autoDeployTrigger: commit
+    # GitHub Actions deploys the exact successful-CI main SHA through Render's API.
+    autoDeployTrigger: off
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
@@ -150,7 +152,8 @@ services:
     plan: starter
     region: oregon
     branch: main
-    autoDeployTrigger: commit
+    # GitHub Actions deploys the exact successful-CI main SHA through Render's API.
+    autoDeployTrigger: off
     dockerfilePath: ./Dockerfile
     dockerContext: .
     maxShutdownDelaySeconds: 60
