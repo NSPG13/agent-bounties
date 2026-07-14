@@ -79,6 +79,11 @@ cargo run -p cli -- github-claim-comment-plan \
 "${python_cmd[@]}" scripts/test_ruleset_drift_check.py -v
 "${python_cmd[@]}" scripts/test_recover_first_organic_loop.py -v
 "${python_cmd[@]}" scripts/test_relay_autonomous_action.py -v
+"${python_cmd[@]}" scripts/test_self_heal.py -v
+"${python_cmd[@]}" scripts/self_heal.py bench \
+  --policy ops/self-healing-policy.json \
+  --fixtures ops/fixtures/recovery-cases.json \
+  --output target/tmp/recovery-bench.json
 cargo run -p cli -- github-proof-comment-plan \
   --bounty-id 00000000-0000-0000-0000-000000000001 \
   --proof-url https://agentbounties.local/public/proofs/example \
@@ -126,6 +131,8 @@ cargo run -p cli -- pooled-funding-demo
   scripts/test_recover_first_organic_loop.py \
   scripts/relay_autonomous_action.py \
   scripts/test_relay_autonomous_action.py \
+  scripts/self_heal.py \
+  scripts/test_self_heal.py \
   scripts/check-site.py \
   scripts/check-migration-history.py \
   scripts/check-render-blueprint.py \

@@ -1,0 +1,94 @@
+{
+  "schema": "agent-bounties/self-healing-policy-v1",
+  "policy_version": 1,
+  "probe": {
+    "attempts": 3,
+    "interval_seconds": 2,
+    "timeout_seconds": 10
+  },
+  "thresholds": {
+    "restart_after_consecutive_failures": 3,
+    "indexer_stale_after_seconds": 90,
+    "indexer_lag_blocks": 20,
+    "webhook_backlog_age_seconds": 300,
+    "minimum_claimable_bounties": 1
+  },
+  "automatic_action_budget": {
+    "read_retries_per_cycle": 3,
+    "service_restarts_per_component_per_hour": 1,
+    "indexer_restarts_per_hour": 2
+  },
+  "automatic_actions": {
+    "retry_probe": {
+      "risk_class": "R0",
+      "executor": "controller",
+      "requires": [
+        "read_only"
+      ]
+    },
+    "restart_service": {
+      "risk_class": "R1",
+      "executor": "platform_health_supervisor",
+      "requires": [
+        "same_revision",
+        "no_integrity_failure",
+        "component_stateless_or_cursor_backed"
+      ]
+    },
+    "resume_indexer_from_persisted_cursor": {
+      "risk_class": "R2",
+      "executor": "indexer_worker",
+      "requires": [
+        "canonical_event_integrity",
+        "cursor_monotonic",
+        "idempotent_event_upsert"
+      ]
+    },
+    "suppress_unready_inventory": {
+      "risk_class": "R2",
+      "executor": "earning_feed",
+      "requires": [
+        "read_model_only",
+        "canonical_contract_state_unchanged"
+      ]
+    },
+    "switch_to_attested_rpc": {
+      "risk_class": "R2",
+      "executor": "preconfigured_adapter",
+      "requires": [
+        "chain_id_match",
+        "safe_block_available",
+        "factory_runtime_hash_match",
+        "implementation_runtime_hash_match"
+      ]
+    },
+    "replay_verified_webhook": {
+      "risk_class": "R2",
+      "executor": "idempotent_reconciler",
+      "requires": [
+        "signature_valid",
+        "event_idempotency_key_present",
+        "amount_binding_valid",
+        "destination_binding_valid"
+      ]
+    }
+  },
+  "prohibited_automatic_actions": [
+    "sign_wallet_transaction",
+    "approve_token_allowance",
+    "fund_bounty",
+    "authorize_verdict",
+    "authorize_settlement",
+    "deploy_or_replace_contract",
+    "pause_or_upgrade_contract",
+    "rotate_secret_or_key",
+    "change_access_control",
+    "rewrite_canonical_event",
+    "move_indexer_cursor_backward",
+    "edit_terms_or_evidence",
+    "edit_ledger_or_payout_record",
+    "delete_durable_data",
+    "infer_payment_from_noncanonical_evidence"
+  ],
+  "evidence_boundary": "Automatic repair may restore availability or rebuild a read model from confirmed canonical evidence. It never creates funding, verification, payout, refund, or settlement evidence."
+}

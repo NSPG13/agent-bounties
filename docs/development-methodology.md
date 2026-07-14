@@ -17,7 +17,10 @@ and measurable.
   submit, verify, and payout-status tools,
 - optional Docker-backed Postgres service smoke with restart hydration checks,
 - optional live SDK smoke for Python and TypeScript clients against a local API,
-- verifier fixture outputs.
+- verifier fixture outputs,
+- bounded operational recovery decisions, including restart budgets, monotonic
+  cursor resume, revision skew, verifier suppression, webhook replay, and
+  integrity containment.
 - deterministic abuse controls, including claim-owner enforcement and
   low-value payout caps.
 - GitHub CI proof guards that route missing PR acceptance metadata, self-merged
@@ -58,6 +61,14 @@ candidate, score delta, and source suite. A candidate is accepted only when it
 improves over the baseline floor, clears the gate threshold, and has no fixture
 failures.
 
+`RecoveryLoop` applies the same rule to production failures. Redacted snapshots
+in `ops/fixtures/recovery-cases.json` commit the required recovery decision,
+automatic actions, manual escalations, and explicitly forbidden actions. The
+candidate policy passes only at a score of 1.0; availability improvements may
+not trade away any payment, contract, ledger, cursor, or evidence invariant.
+AI can propose or rank repairs, but the deterministic policy decides whether an
+action is allowlisted and never grants wallet or settlement authority.
+
 When the hosted API or MCP server runs `BountyBench`, `AbuseBench`,
 `JudgeBench`, or `EvalLoops/all-v0`, it appends a durable `EvalRun` summary
 with suite, score, pass/fail, and timestamp. Agents and dashboards can read
@@ -88,6 +99,11 @@ the agent discovery manifest and Base Sepolia Foundry runbook generator so
 changes to public machine-readable entrypoints and operator payment commands
 are visible in CI. New deterministic product requirements should be added to
 these scripts before they are considered enforced.
+
+The same gate validates `ops/self-healing-policy.json`, runs RecoveryBench, and
+tests the controller contract. The scheduled `Operational Control Loop`
+workflow applies the reviewed policy to read-only production observations and
+preserves the snapshot and recovery plan as an artifact.
 
 `scripts/check-postgres.ps1` and `scripts/check-postgres.sh` are the durable
 hosted-mode gate. They require Docker, start Postgres, run the spawned

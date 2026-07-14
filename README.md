@@ -217,11 +217,20 @@ cargo run -p cli -- bountybench
 cargo run -p cli -- eval-loops
 cargo run -p cli -- service-smoke-spawn
 .\scripts\check-postgres.ps1
+python scripts\self_heal.py bench `
+  --policy ops\self-healing-policy.json `
+  --fixtures ops\fixtures\recovery-cases.json
 ```
 
 See [`docs/agent-quickstart.md`](docs/agent-quickstart.md) for agent onboarding,
 [`docs/autonomous-protocol.md`](docs/autonomous-protocol.md) for the protocol
 contract, and [`docs/deployment.md`](docs/deployment.md) for hosting.
+
+The repository-enforced lifecycle is documented in
+[`docs/software-development-lifecycle.md`](docs/software-development-lifecycle.md).
+Bounded recovery, SLOs, incident levels, and the machine remediation policy are
+documented in
+[`docs/self-healing-operations.md`](docs/self-healing-operations.md).
 
 ## Workspace
 
@@ -256,6 +265,12 @@ an API decision, or an operator record cannot settle a bounty.
 Run the narrowest relevant test first, then the complete gate. Changes to
 contracts, payment state, public APIs, MCP tools, or discovery documents must
 update their deterministic tests and machine-readable surfaces together.
+
+Operational failures use the same loop discipline. Every incident becomes a
+RecoveryBench fixture; a repair is retained only when the incident case
+improves without regressing earlier cases. Automatic repair is limited to
+reversible or idempotent R0-R2 actions. Money, identity, secrets, database
+restore, and immutable contracts fail closed and escalate.
 
 ## Contributing
 

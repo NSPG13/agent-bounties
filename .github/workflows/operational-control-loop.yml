@@ -1,0 +1,110 @@
+name: Operational Control Loop
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Deployed API base URL"
+        required: false
+        type: string
+      mcp_base_url:
+        description: "Deployed MCP base URL"
+        required: false
+        type: string
+      expected_revision:
+        description: "Exact deployed revision; defaults to checked-out main"
+        required: false
+        type: string
+  schedule:
+    - cron: "17,47 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: operational-control-loop
+  cancel-in-progress: true
+
+jobs:
+  observe-plan-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
+      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://agent-bounties-mcp.onrender.com' }}
+      PRODUCTION_EXPECTED_REVISION: ${{ inputs.expected_revision || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate bounded recovery policy and corpus
+        run: |
+          python scripts/self_heal.py validate-policy \
+            --policy ops/self-healing-policy.json
+          python scripts/self_heal.py bench \
+            --policy ops/self-healing-policy.json \
+            --fixtures ops/fixtures/recovery-cases.json \
+            --output target/operations/recovery-bench.json
+
+      - name: Observe production and build recovery plan
+        id: observe
+        continue-on-error: true
+        run: |
+          python scripts/self_heal.py observe \
+            --policy ops/self-healing-policy.json \
+            --api-url "${PRODUCTION_API_BASE_URL}" \
+            --mcp-url "${PRODUCTION_MCP_BASE_URL}" \
+            --expected-revision "${PRODUCTION_EXPECTED_REVISION}" \
+            --snapshot-out target/operations/snapshot.json \
+            --plan-out target/operations/recovery-plan.json
+
+      - name: Publish bounded recovery summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan_path = Path("target/operations/recovery-plan.json")
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          if not plan_path.exists():
+              summary_path.write_text(
+                  "# Operational control loop\n\nNo recovery plan was produced. Inspect the workflow logs.\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(0)
+          plan = json.loads(plan_path.read_text(encoding="utf-8"))
+          lines = [
+              "# Operational control loop",
+              "",
+              f"- Decision: `{plan['decision']}`",
+              f"- Severity: `{plan['severity']}`",
+              f"- Automatic actions: `{len(plan['automatic_actions'])}`",
+              f"- Manual actions: `{len(plan['manual_actions'])}`",
+              "",
+              "Automatic actions are restricted to R0-R2 availability/read-model recovery. No wallet, contract, verification, or settlement authority is present.",
+          ]
+          if plan["reasons"]:
+              lines.extend(["", "## Reasons", ""])
+              lines.extend(f"- {reason}" for reason in plan["reasons"])
+          summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-control-loop-${{ github.run_id }}
+          path: target/operations/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail closed on unresolved escalation
+        if: steps.observe.outcome != 'success'
+        run: |
+          echo "The recovery plan requires containment or operator escalation." >&2
+          exit 1

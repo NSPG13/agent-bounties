@@ -4119,6 +4119,7 @@ fn docs_contract_check(root: PathBuf, contract_root: PathBuf) -> Result<()> {
     check_agent_quickstart_contract(&root, &mut issues);
     check_production_env_contract(&root, &mut issues);
     check_contributor_first_protocol_contract(&root, &mut issues);
+    check_operational_sdlc_contract(&root, &mut issues);
     for file in &files {
         let text = fs::read_to_string(file)
             .with_context(|| format!("failed to read docs file {}", file.display()))?;
@@ -4379,6 +4380,77 @@ fn check_contributor_first_protocol_contract(root: &Path, issues: &mut Vec<DocsC
             "Distribution feedback request",
         ],
         "maintainer change notice issue template",
+    );
+}
+
+fn check_operational_sdlc_contract(root: &Path, issues: &mut Vec<DocsContractIssue>) {
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from("docs/software-development-lifecycle.md"),
+        &[
+            "Software Development Lifecycle",
+            "Change Classes",
+            "Lifecycle Gates",
+            "RecoveryBench",
+            "Definition Of Done",
+            "BountySettled",
+        ],
+        "software development lifecycle",
+    );
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from("docs/self-healing-operations.md"),
+        &[
+            "Self-Healing Operations",
+            "SLOs And Error Budgets",
+            "Remediation Matrix",
+            "Prohibited Automatic Repair",
+            "RecoveryLoop",
+        ],
+        "self-healing operations contract",
+    );
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from("AGENTS.md"),
+        &[
+            "docs/software-development-lifecycle.md",
+            "docs/self-healing-operations.md",
+            "ops/fixtures/recovery-cases.json",
+        ],
+        "agent contributor guide",
+    );
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from(".github/PULL_REQUEST_TEMPLATE.md"),
+        &[
+            "SDLC And Recovery",
+            "Change class",
+            "Rollback or forward-repair path",
+            "Recovery fixture added",
+        ],
+        "pull request template",
+    );
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from(".github/ISSUE_TEMPLATE/incident.yml"),
+        &["Operational incident", "Severity", "Regression fixture"],
+        "incident issue template",
+    );
+    check_required_markers(
+        root,
+        issues,
+        &PathBuf::from("SECURITY.md"),
+        &[
+            "private GitHub Security",
+            "Automated recovery cannot",
+            "immutable",
+        ],
+        "security reporting contract",
     );
 }
 
@@ -5757,6 +5829,64 @@ mod tests {
                 "maintainer change notice issue template missing required marker `Contributor impact and repair path`",
             )
         }));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn operational_sdlc_contract_reports_missing_safety_markers() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-bounties-operational-sdlc-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(root.join(".github").join("ISSUE_TEMPLATE"))
+            .expect("should create temp github template dir");
+        fs::create_dir_all(root.join("docs")).expect("should create temp docs dir");
+        fs::write(
+            root.join("docs").join("software-development-lifecycle.md"),
+            "# Software Development Lifecycle\nChange Classes\nLifecycle Gates\n",
+        )
+        .expect("should write partial SDLC doc");
+        fs::write(
+            root.join("docs").join("self-healing-operations.md"),
+            "# Self-Healing Operations\nSLOs And Error Budgets\n",
+        )
+        .expect("should write partial operations doc");
+        fs::write(
+            root.join("AGENTS.md"),
+            "docs/software-development-lifecycle.md\n",
+        )
+        .expect("should write partial agents file");
+        fs::write(
+            root.join(".github").join("PULL_REQUEST_TEMPLATE.md"),
+            "## SDLC And Recovery\nChange class\n",
+        )
+        .expect("should write partial PR template");
+        fs::write(
+            root.join(".github")
+                .join("ISSUE_TEMPLATE")
+                .join("incident.yml"),
+            "name: Operational incident\nSeverity\n",
+        )
+        .expect("should write partial incident template");
+
+        let mut issues = Vec::new();
+        check_operational_sdlc_contract(&root, &mut issues);
+
+        assert!(issues.iter().any(|issue| issue
+            .message
+            .contains("software development lifecycle missing required marker `RecoveryBench`")));
+        assert!(issues.iter().any(|issue| {
+            issue.message.contains(
+            "self-healing operations contract missing required marker `Prohibited Automatic Repair`"
+        )
+        }));
+        assert!(issues.iter().any(|issue| issue
+            .message
+            .contains("pull request template missing required marker `Recovery fixture added`")));
+        assert!(issues.iter().any(|issue| issue
+            .message
+            .contains("incident issue template missing required marker `Regression fixture`")));
 
         let _ = fs::remove_dir_all(root);
     }

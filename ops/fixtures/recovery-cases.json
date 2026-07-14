@@ -1,0 +1,348 @@
+{
+  "schema": "agent-bounties/recovery-fixtures-v1",
+  "base_snapshot": {
+    "schema": "agent-bounties/operations-snapshot-v1",
+    "observed_at": "2026-07-13T00:00:00Z",
+    "expected_revision": "1111111111111111111111111111111111111111",
+    "components": {
+      "api": {
+        "state": "healthy",
+        "consecutive_failures": 0,
+        "revision": "1111111111111111111111111111111111111111"
+      },
+      "mcp": {
+        "state": "healthy",
+        "consecutive_failures": 0,
+        "revision": "1111111111111111111111111111111111111111"
+      },
+      "database": {
+        "state": "healthy",
+        "consecutive_failures": 0
+      },
+      "indexer": {
+        "state": "healthy",
+        "consecutive_failures": 0,
+        "heartbeat_age_seconds": 10,
+        "lag_blocks": 1,
+        "cursor_monotonic": true
+      },
+      "base_rpc": {
+        "state": "healthy",
+        "consecutive_failures": 0,
+        "attested_failover_available": false
+      },
+      "verifier_fleet": {
+        "state": "healthy",
+        "consecutive_failures": 0,
+        "unready_claimable_count": 0
+      },
+      "stripe_webhooks": {
+        "state": "healthy",
+        "consecutive_failures": 0,
+        "oldest_pending_age_seconds": 0,
+        "signature_valid": true,
+        "event_idempotency_key_present": true,
+        "amount_binding_valid": true,
+        "destination_binding_valid": true
+      },
+      "inventory": {
+        "state": "healthy",
+        "consecutive_failures": 0,
+        "claimable_count": 5
+      }
+    },
+    "invariants": {
+      "canonical_event_integrity": true,
+      "contract_code_hashes_match": true,
+      "cursor_not_regressed": true,
+      "ledger_conserved": true,
+      "payment_evidence_consistent": true
+    }
+  },
+  "cases": [
+    {
+      "name": "healthy_noop",
+      "patch": {},
+      "expected": {
+        "decision": "healthy",
+        "automatic_action_ids": [],
+        "manual_action_ids": [],
+        "forbidden_action_ids": [
+          "inventory:fund_bounty",
+          "platform:authorize_settlement"
+        ]
+      }
+    },
+    {
+      "name": "transient_api_failure_retries_read_only",
+      "patch": {
+        "components": {
+          "api": {
+            "state": "degraded",
+            "consecutive_failures": 1
+          }
+        }
+      },
+      "expected": {
+        "decision": "recovering",
+        "automatic_action_ids": [
+          "api:retry_probe"
+        ],
+        "manual_action_ids": []
+      }
+    },
+    {
+      "name": "persistent_api_failure_uses_platform_restart",
+      "patch": {
+        "components": {
+          "api": {
+            "state": "unavailable",
+            "consecutive_failures": 3
+          }
+        }
+      },
+      "expected": {
+        "decision": "recovering",
+        "automatic_action_ids": [
+          "api:restart_service"
+        ],
+        "manual_action_ids": []
+      }
+    },
+    {
+      "name": "persistent_mcp_failure_uses_platform_restart",
+      "patch": {
+        "components": {
+          "mcp": {
+            "state": "unavailable",
+            "consecutive_failures": 4
+          }
+        }
+      },
+      "expected": {
+        "decision": "recovering",
+        "automatic_action_ids": [
+          "mcp:restart_service"
+        ],
+        "manual_action_ids": []
+      }
+    },
+    {
+      "name": "release_revision_skew_fails_closed",
+      "patch": {
+        "components": {
+          "mcp": {
+            "revision": "2222222222222222222222222222222222222222"
+          }
+        }
+      },
+      "expected": {
+        "decision": "contained",
+        "automatic_action_ids": [],
+        "manual_action_ids": [
+          "release:block_rollout"
+        ]
+      }
+    },
+    {
+      "name": "database_failure_requires_recovery_authority",
+      "patch": {
+        "components": {
+          "database": {
+            "state": "unavailable",
+            "consecutive_failures": 3
+          }
+        }
+      },
+      "expected": {
+        "decision": "contained",
+        "automatic_action_ids": [],
+        "manual_action_ids": [
+          "database:restore_database"
+        ]
+      }
+    },
+    {
+      "name": "stale_indexer_resumes_from_monotonic_cursor",
+      "patch": {
+        "components": {
+          "indexer": {
+            "state": "stale",
+            "consecutive_failures": 2,
+            "heartbeat_age_seconds": 180,
+            "lag_blocks": 30
+          }
+        }
+      },
+      "expected": {
+        "decision": "recovering",
+        "automatic_action_ids": [
+          "indexer:resume_indexer_from_persisted_cursor"
+        ],
+        "manual_action_ids": []
+      }
+    },
+    {
+      "name": "indexer_cursor_regression_never_auto_repairs",
+      "patch": {
+        "components": {
+          "indexer": {
+            "state": "stale",
+            "cursor_monotonic": false,
+            "heartbeat_age_seconds": 180
+          }
+        },
+        "invariants": {
+          "cursor_not_regressed": false
+        }
+      },
+      "expected": {
+        "decision": "contained",
+        "automatic_action_ids": [],
+        "manual_action_ids": [
+          "indexer:investigate_indexer_integrity",
+          "platform:freeze_value_movement",
+          "platform:reconcile_from_canonical_chain"
+        ],
+        "forbidden_action_ids": [
+          "indexer:resume_indexer_from_persisted_cursor"
+        ]
+      }
+    },
+    {
+      "name": "attested_rpc_failover_is_bounded",
+      "patch": {
+        "components": {
+          "base_rpc": {
+            "state": "unavailable",
+            "consecutive_failures": 3,
+            "attested_failover_available": true
+          }
+        }
+      },
+      "expected": {
+        "decision": "recovering",
+        "automatic_action_ids": [
+          "base_rpc:switch_to_attested_rpc"
+        ],
+        "manual_action_ids": []
+      }
+    },
+    {
+      "name": "unattested_rpc_failover_escalates",
+      "patch": {
+        "components": {
+          "base_rpc": {
+            "state": "unavailable",
+            "consecutive_failures": 3,
+            "attested_failover_available": false
+          }
+        }
+      },
+      "expected": {
+        "decision": "escalation_required",
+        "automatic_action_ids": [],
+        "manual_action_ids": [
+          "base_rpc:attest_rpc_failover"
+        ]
+      }
+    },
+    {
+      "name": "unready_verifier_inventory_is_suppressed",
+      "patch": {
+        "components": {
+          "verifier_fleet": {
+            "state": "degraded",
+            "unready_claimable_count": 2
+          }
+        }
+      },
+      "expected": {
+        "decision": "recovering",
+        "automatic_action_ids": [
+          "verifier_fleet:suppress_unready_inventory"
+        ],
+        "manual_action_ids": []
+      }
+    },
+    {
+      "name": "verified_webhook_replay_is_idempotent",
+      "patch": {
+        "components": {
+          "stripe_webhooks": {
+            "state": "stale",
+            "oldest_pending_age_seconds": 600
+          }
+        }
+      },
+      "expected": {
+        "decision": "recovering",
+        "automatic_action_ids": [
+          "stripe_webhooks:replay_verified_webhook"
+        ],
+        "manual_action_ids": []
+      }
+    },
+    {
+      "name": "unsigned_webhook_never_replays",
+      "patch": {
+        "components": {
+          "stripe_webhooks": {
+            "state": "stale",
+            "oldest_pending_age_seconds": 600,
+            "signature_valid": false
+          }
+        }
+      },
+      "expected": {
+        "decision": "contained",
+        "automatic_action_ids": [],
+        "manual_action_ids": [
+          "stripe_webhooks:investigate_webhook_integrity"
+        ],
+        "forbidden_action_ids": [
+          "stripe_webhooks:replay_verified_webhook"
+        ]
+      }
+    },
+    {
+      "name": "low_inventory_alert_never_spends",
+      "patch": {
+        "components": {
+          "inventory": {
+            "claimable_count": 0
+          }
+        }
+      },
+      "expected": {
+        "decision": "escalation_required",
+        "automatic_action_ids": [],
+        "manual_action_ids": [
+          "inventory:publish_inventory_alert"
+        ],
+        "forbidden_action_ids": [
+          "inventory:fund_bounty"
+        ]
+      }
+    },
+    {
+      "name": "payment_evidence_mismatch_contains_value_movement",
+      "patch": {
+        "invariants": {
+          "payment_evidence_consistent": false
+        }
+      },
+      "expected": {
+        "decision": "contained",
+        "automatic_action_ids": [],
+        "manual_action_ids": [
+          "platform:freeze_value_movement",
+          "platform:reconcile_from_canonical_chain"
+        ],
+        "forbidden_action_ids": [
+          "platform:authorize_settlement"
+        ]
+      }
+    }
+  ]
+}

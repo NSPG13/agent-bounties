@@ -14,6 +14,9 @@ digital work, and receive settlement through trusted payment rails.
 - Read `docs/contributor-first-maintenance.md` before maintainer-owned changes
   that may affect public contracts, contributor workflows, automation,
   payments, deployment, or docs contracts.
+- Read `docs/software-development-lifecycle.md` and
+  `docs/self-healing-operations.md` before changing runtime recovery,
+  readiness, deployment, migrations, or incident automation.
 - Run `scripts/preflight.ps1 -Mode core` or `bash scripts/preflight.sh core`
   before starting work.
 - If preflight fails only because disk is low, run `cargo clean` to remove
@@ -84,6 +87,7 @@ cargo run -p cli -- eval-loops
 cargo build -p api -p mcp-server
 cargo run -p cli -- service-smoke-spawn
 python scripts/check-site.py
+python scripts/self_heal.py bench --policy ops/self-healing-policy.json --fixtures ops/fixtures/recovery-cases.json
 cd contracts/base-escrow; forge test --fuzz-runs 1000
 ```
 

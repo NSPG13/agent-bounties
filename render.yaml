@@ -151,6 +151,12 @@ services:
         value: "2"
       - key: BASE_INDEXER_MAX_BLOCKS_PER_QUERY
         value: "2000"
+      - key: BASE_INDEXER_RETRY_INITIAL_SECONDS
+        value: "5"
+      - key: BASE_INDEXER_RETRY_MAX_SECONDS
+        value: "120"
+      - key: BASE_INDEXER_EXIT_AFTER_FAILURES
+        value: "8"
       - fromGroup: agent-bounties-base
 
 databases:

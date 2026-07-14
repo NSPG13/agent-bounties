@@ -37,6 +37,12 @@ gh api repos/NSPG13/agent-bounties/rulesets
 If a ruleset with this name already exists, update its numeric endpoint with
 `PUT` instead of creating a duplicate. Any future required check must first run
 successfully on a pull request and must be bound to its expected GitHub App.
+The `sdlc-recovery` job validates the machine policy and deterministic incident
+corpus without contacting production. Activate it as a required context in a
+separate, announced ruleset change only after the workflow is merged to `main`,
+has completed successfully there, and active contributor PRs have been checked
+for compatibility. This prevents a nonexistent context from blocking older
+branches.
 
 ## Drift Check
 

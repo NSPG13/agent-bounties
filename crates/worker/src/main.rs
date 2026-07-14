@@ -2,7 +2,11 @@ use anyhow::Context;
 use db::PostgresStore;
 use std::{env, time::Duration};
 use tokio::time::sleep;
-use worker::{poll_autonomous_indexer_once_with_heartbeat, AutonomousIndexerConfig};
+use worker::{
+    indexer_error_is_retryable, poll_autonomous_indexer_once_with_heartbeat,
+    redact_operational_error, AutonomousIndexerConfig, IndexerRecoveryDecision,
+    IndexerRecoveryPolicy,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -21,15 +25,63 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("BASE_INDEXER_PROTOCOL must be autonomous-v1");
     }
     let config = AutonomousIndexerConfig::from_env()?;
+    let recovery_policy = IndexerRecoveryPolicy::from_env()?;
+    let mut consecutive_failures = 0u32;
 
     loop {
-        let report = poll_autonomous_indexer_once_with_heartbeat(&store, &config).await?;
-        println!("{}", serde_json::to_string(&report)?);
-        if once {
-            return Ok(());
-        }
-        if wait_or_shutdown(config.poll_seconds).await? {
-            return Ok(());
+        match poll_autonomous_indexer_once_with_heartbeat(&store, &config).await {
+            Ok(report) => {
+                consecutive_failures = 0;
+                println!("{}", serde_json::to_string(&report)?);
+                if once {
+                    return Ok(());
+                }
+                if wait_or_shutdown(config.poll_seconds).await? {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                let decision = recovery_policy
+                    .decision(consecutive_failures, indexer_error_is_retryable(&error));
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "schema": "agent-bounties/indexer-recovery-v1",
+                        "network": config.network,
+                        "factory_contract": config.factory_contract,
+                        "error": redact_operational_error(&error.to_string()),
+                        "decision": decision,
+                        "evidence_boundary": "Retry resumes from the persisted monotonic cursor. It cannot create funding, verification, payout, or settlement evidence."
+                    }))?
+                );
+
+                if once {
+                    anyhow::bail!(
+                        "autonomous Base indexer poll failed; inspect the redacted failure heartbeat"
+                    );
+                }
+
+                match decision {
+                    IndexerRecoveryDecision::RetryFromPersistedCursor {
+                        backoff_seconds, ..
+                    } => {
+                        if wait_or_shutdown(backoff_seconds).await? {
+                            return Ok(());
+                        }
+                    }
+                    IndexerRecoveryDecision::ExitForSupervisorRestart { .. } => {
+                        anyhow::bail!(
+                            "autonomous Base indexer exhausted its bounded recovery budget; inspect the redacted failure heartbeat"
+                        );
+                    }
+                    IndexerRecoveryDecision::HaltForOperatorInvestigation { .. } => loop {
+                        if wait_or_shutdown(86_400).await? {
+                            return Ok(());
+                        }
+                    },
+                }
+            }
         }
     }
 }

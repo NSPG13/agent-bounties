@@ -43,6 +43,21 @@ payment; only reconciled payout evidence allows paid or earned language.
 - [ ] Payment, settlement, and payout behavior is unchanged or explicitly
       covered by tests and docs.
 
+## SDLC And Recovery
+
+- Change class: `R0` / `R1` / `R2` / `R3` / `R4`
+- Authoritative source of truth:
+- Expected failure modes:
+- Idempotency or replay key:
+- Rollback or forward-repair path:
+- Health/readiness/SLO signal:
+- Recovery fixture added or reason not applicable:
+- Release/canary impact:
+
+Automatic recovery is limited to allowlisted R0-R2 actions in
+`ops/self-healing-policy.json`. R3-R4 changes require explicit risk evidence;
+they cannot be made self-healing by adding a retry.
+
 ## Local Checks
 
 List the commands you ran, for example:

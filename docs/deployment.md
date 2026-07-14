@@ -46,6 +46,9 @@ BASE_MAINNET_BOUNTY_FACTORY=<verified factory>
 BASE_MAINNET_BOUNTY_IMPLEMENTATION=<verified implementation>
 BASE_MAINNET_RPC_URL=<managed HTTPS RPC>
 BASE_INDEXER_RPC_URL=<managed HTTPS RPC>
+BASE_INDEXER_RETRY_INITIAL_SECONDS=5
+BASE_INDEXER_RETRY_MAX_SECONDS=120
+BASE_INDEXER_EXIT_AFTER_FAILURES=8
 ENABLE_BASE_TX_BROADCAST=false
 ```
 
@@ -203,6 +206,26 @@ Check:
 - worker heartbeat and confirmed cursor,
 - no active legacy escrow endpoints or addresses,
 - no secret material in responses or logs.
+
+Run the bounded operational controller after production smoke:
+
+```powershell
+python scripts\self_heal.py observe `
+  --policy ops\self-healing-policy.json `
+  --api-url https://agent-bounties-api.onrender.com `
+  --mcp-url https://agent-bounties-mcp.onrender.com `
+  --expected-revision <deployed-git-sha> `
+  --snapshot-out target\operations\snapshot.json `
+  --plan-out target\operations\recovery-plan.json
+```
+
+API/MCP health failure is handled by Render's service supervisor. The indexer
+retries typed RPC/SQL transport failures from its persisted monotonic cursor
+with capped exponential backoff and exits after its bounded failure budget so
+the worker supervisor can replace the process. Integrity and unclassified
+failures halt ingestion after a redacted failed heartbeat. See
+[`self-healing-operations.md`](self-healing-operations.md) for SLOs, containment,
+and actions that automation is prohibited from taking.
 
 ## Fiat Services
 

@@ -33,6 +33,10 @@ Those services improve coordination but do not control custody.
   boundaries, and the distribution loop.
 - `verifier-sdk`: defines deterministic verifier adapters and fixtures.
 - `eval-harness`: runs routing, template, verifier, proof, and abuse loops.
+- `ops/self-healing-policy.json` plus `scripts/self_heal.py`: classifies trusted
+  runtime observations into bounded automatic recovery or explicit containment.
+  It has no signer, settlement authority, secret rotation, or destructive data
+  path.
 
 ## Data Flow
 
@@ -71,6 +75,14 @@ services.
 The worker owns chain ingestion. It advances its cursor only after decoded
 events are persisted. API and MCP planners fail closed when the database,
 factory configuration, terms, or canonical event graph is unavailable.
+
+API and MCP process availability is supervised through `/health`; durable
+freshness uses separate readiness evidence. The worker retries only typed RPC
+and SQL transport failures from its persisted monotonic cursor with capped
+backoff, then exits after a bounded failure budget so the platform can replace
+the process. Unclassified or integrity failures write a redacted failed
+heartbeat and halt ingestion. Recovery never moves the cursor backward or
+treats replay as new economic evidence.
 
 ## Verification Boundary
 
