@@ -369,8 +369,8 @@ fn split_signature(signature: &str) -> Result<(u8, String, String), X402Error> {
     };
     Ok((
         v,
-        format!("0x{}", &raw[..64].to_ascii_lowercase()),
-        format!("0x{}", &raw[64..128].to_ascii_lowercase()),
+        format!("0x{}", raw[..64].to_ascii_lowercase()),
+        format!("0x{}", raw[64..128].to_ascii_lowercase()),
     ))
 }
 
