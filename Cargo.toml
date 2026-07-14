@@ -30,7 +30,7 @@ rust-version = "1.88"
 alloy = { version = "=1.4.1", default-features = false, features = ["std", "provider-http", "reqwest-rustls-tls", "rpc-types", "signer-local", "sol-types"] }
 anyhow = "1"
 async-trait = "0.1"
-axum = "0.7"
+axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
