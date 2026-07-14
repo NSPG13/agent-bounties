@@ -58,5 +58,28 @@ python scripts/rehearse_autonomous_activation.py `
   --fork-url https://your-base-mainnet-rpc
 ```
 
-The seed issues remain activation-blocked until confirmed mainnet events are
-recorded. The bundle and fork replay are not funding evidence.
+The `#217` through `#220` seed set was activated on Base mainnet. These files
+remain immutable historical terms after claim, cancellation, settlement, or
+refund and must not be rewritten. Live standing-meta inventory is determined
+from canonical events, not this document.
+
+Issues `#244`, `#248`, `#249`, and `#250` are the direct deterministic 2 USDC
+solver canaries. Their exact terms and aggregate 8.04 USDC initial-funding
+calls are locked by `direct-canaries-manifest.json` and
+`deployments/direct-canaries-base-mainnet.json`. Reproduce the unsigned batch
+with:
+
+```powershell
+cargo run -p cli -- autonomous-activation-bundle `
+  --manifest bounties/autonomous-v1/direct-canaries-manifest.json `
+  --deployer 0x884834E884d6e93462655A2820140aD03E6747bC `
+  --deployer-nonce 4 `
+  --output deployments/direct-canaries-base-mainnet.json
+```
+
+Browser, API, and relayer references in these canaries are optional
+instrumentation. Payment eligibility is only the committed 16-bit
+`LeadingZeroWorkVerifier` result. The manifest, terms publication, unsigned
+bundle, wallet signature, or transaction hash is not funding evidence; wait
+for confirmed canonical creation, `FundingAdded`, and
+`BountyBecameClaimable` events.
