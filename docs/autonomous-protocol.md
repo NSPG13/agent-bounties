@@ -64,6 +64,15 @@ usage bounded:
 The public feed requires exactly one of each event and fails closed on a missing
 or conflicting configuration.
 
+During a publicly documented recovery incident, hosted services may configure
+an exact contract-address reservation. The full feed must retain the canonical
+on-chain status and balances while setting `verification_ready=false` with an
+explicit recovery reason. Earning-only feeds, claim planners, and automated
+verification-job routing must exclude the reserved contract. This operational
+containment cannot alter contract state, authorize settlement, or prove payout;
+removal requires a reviewed configuration change after the obligation is
+resolved.
+
 ## Funding
 
 The immutable target is:

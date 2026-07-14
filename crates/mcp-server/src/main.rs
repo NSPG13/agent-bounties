@@ -24,10 +24,10 @@ use chain_base::{
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
     AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
-    AutonomousBountyFeedItem, AutonomousBountySubmissionAuthorizationRequest,
-    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
-    AutonomousVerificationAttestationRequest, BaseNetworkDescriptor, BaseRpcUrlConfig,
-    CanonicalChildBountyTermsRequest, EvmLog,
+    AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
+    AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
+    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseNetworkDescriptor,
+    BaseRpcUrlConfig, CanonicalChildBountyTermsRequest, EvmLog,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
@@ -65,6 +65,7 @@ struct AppState {
     stripe_payment_method_configuration: Option<String>,
     operator_api_token: Option<String>,
     store: Option<PostgresStore>,
+    recovery_reservations: AutonomousBountyRecoveryReservations,
 }
 
 type SharedState = Arc<AppState>;
@@ -458,6 +459,12 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Vec::new()
     };
+    let recovery_reservations_raw = env::var("BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS").ok();
+    let recovery_reservations =
+        AutonomousBountyRecoveryReservations::parse_csv(recovery_reservations_raw.as_deref())
+            .map_err(|error| {
+                anyhow::anyhow!("BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS is invalid: {error}")
+            })?;
     let state: SharedState = Arc::new(AppState {
         network: Mutex::new(network),
         eval_runs: Mutex::new(eval_runs),
@@ -478,6 +485,7 @@ async fn main() -> anyhow::Result<()> {
             .ok()
             .and_then(non_empty_secret),
         store,
+        recovery_reservations,
     });
     let app = Router::new()
         .route("/health", get(health))
@@ -3228,9 +3236,10 @@ async fn indexed_autonomous_bounty(
         .list_autonomous_bounty_terms()
         .await
         .map_err(|error| error.to_string())?;
-    build_autonomous_bounty_feed(events, terms, false)
-        .map_err(|error| error.to_string())?
-        .into_iter()
+    let mut feed =
+        build_autonomous_bounty_feed(events, terms, false).map_err(|error| error.to_string())?;
+    state.recovery_reservations.apply(&mut feed, false);
+    feed.into_iter()
         .find(|item| item.bounty_contract.eq_ignore_ascii_case(bounty_contract))
         .ok_or_else(|| "canonical bounty has no indexed feed state".to_string())
 }
@@ -3912,10 +3921,14 @@ async fn list_autonomous_bounties(
         Ok(terms) => terms,
         Err(error) => return mcp_error(error),
     };
-    match build_autonomous_bounty_feed(events, terms, args.claimable_only.unwrap_or(false)) {
-        Ok(feed) => mcp_json(feed),
-        Err(error) => mcp_error(error),
-    }
+    let mut feed = match build_autonomous_bounty_feed(events, terms, false) {
+        Ok(feed) => feed,
+        Err(error) => return mcp_error(error),
+    };
+    state
+        .recovery_reservations
+        .apply(&mut feed, args.claimable_only.unwrap_or(false));
+    mcp_json(feed)
 }
 
 async fn list_autonomous_verification_jobs(
@@ -3938,10 +3951,13 @@ async fn list_autonomous_verification_jobs(
         Ok(evidence) => evidence,
         Err(error) => return mcp_error(error),
     };
-    let feed = match build_autonomous_bounty_feed(events, terms, false) {
+    let mut feed = match build_autonomous_bounty_feed(events, terms, false) {
         Ok(feed) => feed,
         Err(error) => return mcp_error(error),
     };
+    state
+        .recovery_reservations
+        .exclude_from_verification_jobs(&mut feed);
     let observed_at = match u64::try_from(Utc::now().timestamp()) {
         Ok(value) => value,
         Err(_) => return mcp_error("system clock is before Unix epoch"),
@@ -5174,6 +5190,7 @@ mod tests {
             stripe_payment_method_configuration: None,
             operator_api_token: None,
             store: None,
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -5191,6 +5208,7 @@ mod tests {
             stripe_payment_method_configuration: Some(payment_method_configuration.to_string()),
             operator_api_token: None,
             store: None,
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -5206,6 +5224,7 @@ mod tests {
             stripe_payment_method_configuration: None,
             operator_api_token: Some(token.to_string()),
             store: None,
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 

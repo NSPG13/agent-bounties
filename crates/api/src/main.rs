@@ -33,7 +33,7 @@ use chain_base::{
     AutonomousBountyAuthorizedContributionPlan, AutonomousBountyAuthorizedCreationPlan,
     AutonomousBountyClaimPlan, AutonomousBountyContribution, AutonomousBountyContributionPlan,
     AutonomousBountyCreate, AutonomousBountyCreationPlan, AutonomousBountyEvent,
-    AutonomousBountyEventKind, AutonomousBountyFeedItem,
+    AutonomousBountyEventKind, AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
     AutonomousBountySubmissionAuthorizationRequest,
     AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountyTxPlanner,
     AutonomousSignedAttestation, AutonomousVerificationAttestationRequest,
@@ -260,6 +260,7 @@ struct AppState {
     public_base_url: String,
     mcp_base_url: String,
     x402_relayer: X402HostedRelayerConfig,
+    recovery_reservations: AutonomousBountyRecoveryReservations,
 }
 
 #[derive(Clone)]
@@ -793,6 +794,12 @@ async fn main() -> anyhow::Result<()> {
     if x402_relayer.enabled && store.is_none() {
         anyhow::bail!("ENABLE_X402_HOSTED_RELAY requires DATABASE_URL");
     }
+    let recovery_reservations_raw = env::var("BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS").ok();
+    let recovery_reservations =
+        AutonomousBountyRecoveryReservations::parse_csv(recovery_reservations_raw.as_deref())
+            .map_err(|error| {
+                anyhow::anyhow!("BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS is invalid: {error}")
+            })?;
     let state: SharedState = Arc::new(AppState {
         network: Arc::new(Mutex::new(network)),
         eval_runs: Arc::new(Mutex::new(eval_runs)),
@@ -827,6 +834,7 @@ async fn main() -> anyhow::Result<()> {
         mcp_base_url: env::var("MCP_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8090".to_string()),
         x402_relayer,
+        recovery_reservations,
     });
     let app = Router::new()
         .route("/health", get(health))
@@ -3339,9 +3347,10 @@ async fn indexed_autonomous_bounty(
         .list_autonomous_bounty_terms()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    build_autonomous_bounty_feed(events, terms, false)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .into_iter()
+    let mut feed = build_autonomous_bounty_feed(events, terms, false)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state.recovery_reservations.apply(&mut feed, false);
+    feed.into_iter()
         .find(|item| item.bounty_contract.eq_ignore_ascii_case(bounty_contract))
         .ok_or(StatusCode::NOT_FOUND)
 }
@@ -4120,9 +4129,12 @@ async fn autonomous_bounty_feed(
         .list_autonomous_bounty_terms()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    build_autonomous_bounty_feed(events, terms, query.claimable_only.unwrap_or(false))
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    let mut feed = build_autonomous_bounty_feed(events, terms, false)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state
+        .recovery_reservations
+        .apply(&mut feed, query.claimable_only.unwrap_or(false));
+    Ok(Json(feed))
 }
 
 #[utoipa::path(get, path = "/v1/base/autonomous-bounties/verification-jobs", responses((status = 200, description = "Live verifier jobs joined to immutable terms and hash-matched evidence preimages")))]
@@ -4147,8 +4159,11 @@ async fn autonomous_verification_jobs(
         .list_autonomous_submission_evidence(network)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let feed = build_autonomous_bounty_feed(events, terms, false)
+    let mut feed = build_autonomous_bounty_feed(events, terms, false)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state
+        .recovery_reservations
+        .exclude_from_verification_jobs(&mut feed);
     let observed_at = u64::try_from(Utc::now().timestamp()).map_err(|_| StatusCode::BAD_REQUEST)?;
     let mut jobs = build_autonomous_verification_jobs(network, feed, evidence, observed_at)
         .map_err(|_| StatusCode::CONFLICT)?;
@@ -8355,6 +8370,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -8381,6 +8397,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -8402,6 +8419,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -8423,6 +8441,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -8448,6 +8467,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -8475,6 +8495,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -8499,6 +8520,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -8523,6 +8545,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 
@@ -8548,6 +8571,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
 

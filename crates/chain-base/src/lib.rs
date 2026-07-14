@@ -2542,6 +2542,60 @@ pub struct AutonomousBountyFeedItem {
     pub events: Vec<AutonomousBountyEvent>,
 }
 
+pub const RECOVERY_RESERVED_VERIFICATION_REASON: &str =
+    "incident recovery reservation is active; do not claim, sign, or post a bond";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AutonomousBountyRecoveryReservations {
+    contracts: HashSet<String>,
+}
+
+impl AutonomousBountyRecoveryReservations {
+    pub fn parse_csv(value: Option<&str>) -> Result<Self, ChainBaseError> {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(Self::default());
+        };
+        let mut contracts = HashSet::new();
+        for candidate in value.split(',') {
+            let candidate = candidate.trim();
+            if candidate.is_empty() {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "recovery-reserved bounty contract list contains an empty entry".to_string(),
+                ));
+            }
+            let contract = normalize_address(candidate).map_err(|_| {
+                ChainBaseError::InvalidVerificationConfiguration(format!(
+                    "recovery-reserved bounty contract is not a valid EVM address: {candidate}"
+                ))
+            })?;
+            contracts.insert(contract);
+        }
+        Ok(Self { contracts })
+    }
+
+    pub fn contains(&self, bounty_contract: &str) -> bool {
+        self.contracts
+            .contains(&bounty_contract.to_ascii_lowercase())
+    }
+
+    pub fn apply(&self, feed: &mut Vec<AutonomousBountyFeedItem>, claimable_only: bool) {
+        for item in feed.iter_mut() {
+            if self.contains(&item.bounty_contract) {
+                item.verification_ready = false;
+                item.verification_readiness_reason =
+                    RECOVERY_RESERVED_VERIFICATION_REASON.to_string();
+            }
+        }
+        if claimable_only {
+            feed.retain(autonomous_bounty_is_earning_ready);
+        }
+    }
+
+    pub fn exclude_from_verification_jobs(&self, feed: &mut Vec<AutonomousBountyFeedItem>) {
+        feed.retain(|item| !self.contains(&item.bounty_contract));
+    }
+}
+
 pub fn autonomous_bounty_is_earning_ready(item: &AutonomousBountyFeedItem) -> bool {
     item.status == "claimable" && item.terms_valid && item.verification_ready
 }
@@ -5657,6 +5711,68 @@ mod tests {
                 "issue {issue} evidence schema"
             );
         }
+    }
+
+    #[test]
+    fn recovery_reservations_fail_closed_and_filter_earning_inventory() {
+        let reserved_contract = "0x2222222222222222222222222222222222222222";
+        let available_contract = "0x3333333333333333333333333333333333333333";
+        let reservations = AutonomousBountyRecoveryReservations::parse_csv(Some(&format!(
+            " 0x{} , {available_contract} ",
+            "22".repeat(20).to_ascii_uppercase()
+        )))
+        .unwrap();
+        assert!(reservations.contains(reserved_contract));
+        assert!(reservations.contains(&available_contract.to_ascii_uppercase()));
+        assert!(matches!(
+            AutonomousBountyRecoveryReservations::parse_csv(Some(&format!("{reserved_contract},"))),
+            Err(ChainBaseError::InvalidVerificationConfiguration(_))
+        ));
+
+        let item = |bounty_contract: &str| AutonomousBountyFeedItem {
+            bounty_id: format!("0x{}", "ab".repeat(32)),
+            bounty_contract: bounty_contract.to_string(),
+            creator: "0x4444444444444444444444444444444444444444".to_string(),
+            status: "claimable".to_string(),
+            solver_reward: "900000".to_string(),
+            verifier_reward: "100000".to_string(),
+            claim_bond: "100000".to_string(),
+            timeout_bond_pool: "0".to_string(),
+            target_amount: "1000000".to_string(),
+            funded_amount: "1000000".to_string(),
+            terms_hash: format!("0x{}", "aa".repeat(32)),
+            terms: None,
+            terms_valid: true,
+            verification_mode: "deterministic_module".to_string(),
+            verifier_module: Some("0x5555555555555555555555555555555555555555".to_string()),
+            verification_ready: true,
+            verification_readiness_reason: "deterministic verifier module is committed on-chain"
+                .to_string(),
+            validation_errors: Vec::new(),
+            events: Vec::new(),
+        };
+
+        let only_reserved =
+            AutonomousBountyRecoveryReservations::parse_csv(Some(reserved_contract)).unwrap();
+        let mut full_feed = vec![item(reserved_contract), item(available_contract)];
+        only_reserved.apply(&mut full_feed, false);
+        assert_eq!(full_feed.len(), 2);
+        assert!(!full_feed[0].verification_ready);
+        assert_eq!(
+            full_feed[0].verification_readiness_reason,
+            RECOVERY_RESERVED_VERIFICATION_REASON
+        );
+        assert!(full_feed[1].verification_ready);
+
+        let mut earning_feed = vec![item(reserved_contract), item(available_contract)];
+        only_reserved.apply(&mut earning_feed, true);
+        assert_eq!(earning_feed.len(), 1);
+        assert_eq!(earning_feed[0].bounty_contract, available_contract);
+
+        let mut verification_feed = vec![item(reserved_contract), item(available_contract)];
+        only_reserved.exclude_from_verification_jobs(&mut verification_feed);
+        assert_eq!(verification_feed.len(), 1);
+        assert_eq!(verification_feed[0].bounty_contract, available_contract);
     }
 
     #[test]
