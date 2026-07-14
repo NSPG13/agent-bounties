@@ -78,6 +78,11 @@ reserve attention briefly while producing concrete progress:
 Plan: inspect the failing check, patch the narrow failure, and post a PR with the local command output.
 ```
 
+An issue labeled `recovery-reserved` is unavailable to new solvers even if its
+immutable contract has reopened to `claimable`. The claim workflow must not
+offer a wallet handoff for that issue; it tells the caller not to sign or post a
+bond until the incident obligation is resolved and the label is removed.
+
 The deterministic claim planner uses a 120-minute reservation window. A claim is
 reservation-ready only when the comment includes a concrete progress signal,
 such as `plan:`, `approach:`, `branch:`, `draft pr:`, `pr:`, `tests:`,
