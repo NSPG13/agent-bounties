@@ -45,6 +45,10 @@ use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper,
     StripePlanner, StripeRequestIntent, StripeWebhookEvent, STRIPE_API_BASE_URL,
 };
+use payments_x402::{
+    base_usdc_funding_challenge, decode_payment_signature_header, encode_payment_required_header,
+    validate_funding_payload, AGENT_BOUNTY_FUND_SCHEME, X402_VERSION,
+};
 use risk::RiskPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -292,6 +296,15 @@ struct PlanAutonomousBountyAuthorizedContributionArgs {
     contribution: AutonomousBountyContribution,
     signature: AutonomousBountyAuthorizationSignature,
     relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct X402BountyFundingArgs {
+    network: Option<String>,
+    bounty_contract: String,
+    amount: Option<u64>,
+    relayer: Option<String>,
+    payment_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -580,6 +593,7 @@ async fn main() -> anyhow::Result<()> {
             "/tools/plan_autonomous_bounty_authorized_contribution",
             post(plan_autonomous_bounty_authorized_contribution),
         )
+        .route("/tools/fund_bounty_with_x402", post(fund_bounty_with_x402))
         .route(
             "/tools/plan_autonomous_bounty_claim",
             post(plan_autonomous_bounty_claim),
@@ -1319,6 +1333,20 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "relayer": nullable_string_property("Optional wallet sponsoring the transaction.")
                 }),
                 &["contribution", "signature"],
+            ),
+        ),
+        tool(
+            "fund_bounty_with_x402",
+            "Issue an x402 v2 Base USDC funding challenge or validate the PAYMENT-SIGNATURE envelope and return the canonical fundWithAuthorization relay plan. The contract verifies the signature; only confirmed FundingAdded is funding evidence.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Indexed canonical bounty contract."),
+                    "amount": nullable_integer_property("Optional USDC base-unit contribution; defaults to the remaining target."),
+                    "relayer": nullable_string_property("Optional gas-paying Base wallet used in the returned relay transaction."),
+                    "payment_signature": nullable_string_property("Optional base64 x402 v2 PaymentPayload copied from the PAYMENT-SIGNATURE header. Omit it to receive the exact challenge.")
+                }),
+                &["bounty_contract"],
             ),
         ),
         tool(
@@ -3307,6 +3335,142 @@ async fn plan_autonomous_bounty_authorized_contribution(
     }
 }
 
+async fn fund_bounty_with_x402(
+    State(state): State<SharedState>,
+    Json(args): Json<X402BountyFundingArgs>,
+) -> Json<serde_json::Value> {
+    let requested_network = args.network.as_deref().unwrap_or("base-mainnet");
+    let descriptor = match base_network_descriptor(requested_network) {
+        Ok(descriptor) => descriptor,
+        Err(error) => return mcp_error(error),
+    };
+    let network = match descriptor.chain_id {
+        8_453 => "base-mainnet",
+        84_532 => "base-sepolia",
+        _ => return mcp_error("unsupported Base network"),
+    };
+    let bounty_contract = match normalize_evm_address(&args.bounty_contract) {
+        Ok(address) => address,
+        Err(error) => return mcp_error(error),
+    };
+    let item = match indexed_autonomous_bounty(&state, network, &bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if !item.terms_valid {
+        return mcp_error(format!(
+            "canonical bounty terms do not match contract commitments: {}",
+            item.validation_errors.join("; ")
+        ));
+    }
+    if item.status != "open" {
+        return mcp_error("canonical bounty is not accepting funding");
+    }
+    let target = match item.target_amount.parse::<u64>() {
+        Ok(target) => target,
+        Err(_) => return mcp_error("indexed target amount is invalid"),
+    };
+    let funded = match item.funded_amount.parse::<u64>() {
+        Ok(funded) => funded,
+        Err(_) => return mcp_error("indexed funded amount is invalid"),
+    };
+    let remaining = match target.checked_sub(funded) {
+        Some(remaining) if remaining > 0 => remaining,
+        _ => return mcp_error("canonical bounty has no remaining funding target"),
+    };
+    let amount = args.amount.unwrap_or(remaining);
+    if amount == 0 || amount > remaining || amount > i64::MAX as u64 {
+        return mcp_error("x402 amount must be positive and no greater than the remaining target");
+    }
+    let relayer = match args
+        .relayer
+        .as_deref()
+        .map(normalize_evm_address)
+        .transpose()
+    {
+        Ok(relayer) => relayer,
+        Err(error) => return mcp_error(error),
+    };
+    let mut resource_url = format!(
+        "{}/v1/x402/base/bounties/{}/funding?network={network}&amount={amount}",
+        public_base_url_from_env().trim_end_matches('/'),
+        bounty_contract
+    );
+    if let Some(relayer) = &relayer {
+        resource_url.push_str("&relayer=");
+        resource_url.push_str(relayer);
+    }
+    let challenge = match base_usdc_funding_challenge(
+        resource_url,
+        format!("eip155:{}", descriptor.chain_id),
+        &descriptor.native_usdc_token_address,
+        &bounty_contract,
+        amount,
+        300,
+    ) {
+        Ok(challenge) => challenge,
+        Err(error) => return mcp_error(error),
+    };
+    let payment_required = match encode_payment_required_header(&challenge) {
+        Ok(header) => header,
+        Err(error) => return mcp_error(error),
+    };
+    let Some(payment_signature) = args.payment_signature.as_deref() else {
+        return mcp_json(json!({
+            "x402Version": X402_VERSION,
+            "scheme": AGENT_BOUNTY_FUND_SCHEME,
+            "status": "payment_required",
+            "settled": false,
+            "payment_required": challenge,
+            "payment_required_header": payment_required,
+            "next_step": "Sign the exact EIP-3009 authorization, then call this tool again with the base64 PaymentPayload as payment_signature."
+        }));
+    };
+    let payload = match decode_payment_signature_header(payment_signature) {
+        Ok(payload) => payload,
+        Err(error) => return mcp_error(error),
+    };
+    let now = match u64::try_from(Utc::now().timestamp()) {
+        Ok(now) => now,
+        Err(_) => return mcp_error("system time is before the Unix epoch"),
+    };
+    let authorization = match validate_funding_payload(&payload, &challenge, now) {
+        Ok(authorization) => authorization,
+        Err(error) => return mcp_error(error),
+    };
+    let contribution = AutonomousBountyContribution {
+        bounty_contract: authorization.bounty_contract.clone(),
+        contributor: authorization.contributor.clone(),
+        amount: Money {
+            amount: authorization.amount as i64,
+            currency: "usdc".to_string(),
+        },
+        authorization_nonce: Some(authorization.nonce.clone()),
+        authorization_valid_before: Some(authorization.valid_before),
+    };
+    let signature = AutonomousBountyAuthorizationSignature {
+        v: authorization.v,
+        r: authorization.r,
+        s: authorization.s,
+    };
+    match configured_autonomous_planner(network).and_then(|planner| {
+        planner
+            .plan_authorized_contribution(network, &contribution, &signature, relayer.as_deref())
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(json!({
+            "x402Version": X402_VERSION,
+            "scheme": AGENT_BOUNTY_FUND_SCHEME,
+            "status": "relay_required",
+            "settled": false,
+            "plan": plan,
+            "canonical_success_event": "FundingAdded",
+            "next_step": "Simulate and broadcast plan.relay_transaction. The contract verifies the signature; then reconcile confirmed canonical FundingAdded."
+        })),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn plan_autonomous_bounty_claim(
     State(state): State<SharedState>,
     Json(args): Json<PlanAutonomousBountyClaimArgs>,
@@ -4418,6 +4582,7 @@ mod tests {
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_contribution",
             "plan_autonomous_bounty_authorized_contribution",
+            "fund_bounty_with_x402",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
@@ -4436,6 +4601,17 @@ mod tests {
                 "autonomous tool {autonomous} must be discoverable"
             );
         }
+
+        let x402_funding = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "fund_bounty_with_x402")
+            .expect("fund_bounty_with_x402 descriptor exists");
+        assert!(x402_funding.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "bounty_contract"));
+        assert!(x402_funding.authorization.is_none());
 
         let canonical_child_terms = descriptors
             .iter()

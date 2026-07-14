@@ -91,6 +91,7 @@ dependencies = [
  "hmac 0.12.1",
  "ledger",
  "payments-stripe",
+ "payments-x402",
  "risk",
  "serde",
  "serde_json",
@@ -1270,6 +1271,7 @@ dependencies = [
  "github-app",
  "ledger",
  "payments-stripe",
+ "payments-x402",
  "risk",
  "serde",
  "serde_json",
@@ -1379,6 +1381,17 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "payments-x402"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

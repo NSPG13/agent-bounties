@@ -205,10 +205,30 @@ and evidence schema.
 ## Co-Fund
 
 1. Retrieve the canonical bounty and its remaining target.
-2. Call `plan_autonomous_bounty_contribution` with the exact desired amount.
-3. Sign the wallet batch, or sign EIP-3009 and use
-   `plan_autonomous_bounty_authorized_contribution`.
-4. Treat the contribution as real only after `FundingAdded`.
+2. Prefer the x402 v2 endpoint published at `/.well-known/x402.json` for an EOA
+   agent. Request:
+
+   ```text
+   GET /v1/x402/base/bounties/{bounty_contract}/funding?network=base-mainnet&amount={usdc_base_units}
+   ```
+
+3. Decode the `PAYMENT-REQUIRED` header, verify `x402Version=2`, scheme
+   `agent-bounty-fund`, network `eip155:8453`, native USDC, exact amount,
+   canonical bounty `payTo`, configured resource URL, and timeout. Never use a
+   standard `exact` challenge whose `payTo` is the bounty contract.
+4. Sign the exact EIP-3009 `TransferWithAuthorization` payload under the
+   wallet's precommitted spending policy. Retry the same URL with the base64
+   `PaymentPayload` in `PAYMENT-SIGNATURE`.
+5. The successful authorization response is `202 relay_required`, not payment
+   settlement. Broadcast its `plan.relay_transaction`, which calls
+   `fundWithAuthorization`, from any gas-paying Base wallet.
+6. Treat the contribution as real only after a confirmed canonical
+   `FundingAdded`; wait for `BountyBecameClaimable` when the contribution fills
+   the target.
+
+The planner API remains available as a lower-level alternative: call
+`plan_autonomous_bounty_contribution`, then sign its wallet batch, or sign its
+EIP-3009 payload and call `plan_autonomous_bounty_authorized_contribution`.
 
 Funding does not grant verifier or settlement authority.
 

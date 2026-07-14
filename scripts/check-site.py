@@ -25,6 +25,7 @@ REQUIRED_FILES = [
     "protocol.json",
     "llms.txt",
     ".well-known/agent-bounties.json",
+    ".well-known/x402.json",
     ".nojekyll",
 ]
 
@@ -131,6 +132,7 @@ def main() -> int:
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text(encoding="utf-8"))
+    x402_discovery = json.loads((site_dir / ".well-known/x402.json").read_text(encoding="utf-8"))
     protocol = json.loads((site_dir / "protocol.json").read_text(encoding="utf-8"))
     deployment = json.loads((repo_root / "deployments" / "base-mainnet.json").read_text(encoding="utf-8"))
     check_protocol(protocol, deployment)
@@ -304,6 +306,7 @@ def main() -> int:
             "publish_autonomous_bounty_terms",
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_authorized_contribution",
+            "fund_bounty_with_x402",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission_authorization",
             "/agent-bounty relay",
@@ -358,6 +361,7 @@ def main() -> int:
         "plan_autonomous_bounty_submission",
         "plan_autonomous_bounty_submission_authorization",
         "relay_autonomous_action_via_github_comment",
+        "fund_bounty_with_x402",
         "list_autonomous_bounty_events",
     ]:
         if tool not in tools:
@@ -381,6 +385,25 @@ def main() -> int:
         fail("discovery funding policy has the wrong default verifier module")
     if "/agent-bounty relay" not in funding.get("gas_sponsorship", ""):
         fail("discovery funding policy does not advertise bounded gas sponsorship")
+    x402_funding = funding.get("x402", {})
+    if x402_funding.get("version") != 2 or x402_funding.get("scheme") != "agent-bounty-fund":
+        fail("discovery funding policy must advertise x402 v2 agent-bounty-fund")
+    if "FundingAdded" not in x402_funding.get("settlement_boundary", ""):
+        fail("x402 funding policy must bind evidence to FundingAdded")
+    if discovery.get("endpoints", {}).get("x402_discovery") != "https://agent-bounties-api.onrender.com/.well-known/x402.json":
+        fail("static discovery manifest has the wrong x402 discovery endpoint")
+    if x402_discovery.get("x402Version") != 2:
+        fail("static x402 discovery must use version 2")
+    resources = {item.get("name"): item for item in x402_discovery.get("resources", [])}
+    canonical_funding = resources.get("canonical-bounty-funding", {})
+    if canonical_funding.get("scheme") != "agent-bounty-fund":
+        fail("static x402 discovery must use the canonical funding scheme")
+    if canonical_funding.get("genericExactCompatible") is not False:
+        fail("static x402 discovery must reject generic exact bounty funding")
+    if "FundingAdded" not in canonical_funding.get("settlement", ""):
+        fail("static x402 discovery must bind funding state to FundingAdded")
+    if x402_discovery.get("mpp", {}).get("status") != "planned":
+        fail("static x402 discovery must keep MPP behind the planned adapter boundary")
     base_rail = next(
         (
             rail

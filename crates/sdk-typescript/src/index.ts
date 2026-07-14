@@ -145,6 +145,20 @@ export type StripeWebhookEvent = Record<string, unknown>;
 export type DiscoveryManifest = Record<string, unknown>;
 export type DiscoveryManifestSchema = Record<string, unknown>;
 
+export interface X402BountyFundingRequest {
+  bounty_contract: string;
+  amount?: number | null;
+  network?: "base-mainnet" | "base-sepolia" | null;
+  relayer?: string | null;
+  payment_signature?: string | null;
+}
+
+export interface X402BountyFundingResponse {
+  status: 202 | 402;
+  payment_required: string | null;
+  body: Record<string, unknown>;
+}
+
 export interface AgentBountiesClientOptions {
   baseUrl?: string;
   operatorApiToken?: string | null;
@@ -309,6 +323,37 @@ export class AgentBountiesClient {
 
   async getDiscoveryManifestSchema(): Promise<DiscoveryManifestSchema> {
     return this.request("/schemas/discovery-manifest.v2.json") as Promise<DiscoveryManifestSchema>;
+  }
+
+  async getX402Discovery(): Promise<Record<string, unknown>> {
+    return this.request("/.well-known/x402.json") as Promise<Record<string, unknown>>;
+  }
+
+  async requestX402BountyFunding(
+    request: X402BountyFundingRequest,
+  ): Promise<X402BountyFundingResponse> {
+    const params = new URLSearchParams();
+    params.set("network", request.network ?? "base-mainnet");
+    if (request.amount != null) params.set("amount", String(request.amount));
+    if (request.relayer) params.set("relayer", request.relayer);
+    const path = `/v1/x402/base/bounties/${request.bounty_contract}/funding?${params.toString()}`;
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: "GET",
+      headers: {
+        ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
+        ...(request.payment_signature
+          ? { "PAYMENT-SIGNATURE": request.payment_signature }
+          : {}),
+      },
+    });
+    if (response.status !== 202 && response.status !== 402) {
+      throw new Error(`${path} failed: ${response.status}`);
+    }
+    return {
+      status: response.status,
+      payment_required: response.headers.get("PAYMENT-REQUIRED"),
+      body: (await response.json()) as Record<string, unknown>,
+    } as X402BountyFundingResponse;
   }
 
   async getRiskPolicy(): Promise<unknown> {

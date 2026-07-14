@@ -64,6 +64,42 @@ class AgentBountiesClient:
     def get_discovery_manifest_schema(self):
         return self._request("GET", "/schemas/discovery-manifest.v2.json")
 
+    def get_x402_discovery(self):
+        return self._request("GET", "/.well-known/x402.json")
+
+    def request_x402_bounty_funding(
+        self,
+        bounty_contract: str,
+        amount: int | None = None,
+        network: str = "base-mainnet",
+        relayer: str | None = None,
+        payment_signature: str | None = None,
+    ):
+        headers = self._headers() or {}
+        if payment_signature:
+            headers["PAYMENT-SIGNATURE"] = payment_signature
+        response = httpx.get(
+            f"{self.base_url}/v1/x402/base/bounties/{bounty_contract}/funding",
+            params={
+                key: value
+                for key, value in {
+                    "network": network,
+                    "amount": amount,
+                    "relayer": relayer,
+                }.items()
+                if value is not None
+            },
+            headers=headers or None,
+            timeout=30,
+        )
+        if response.status_code not in (202, 402):
+            response.raise_for_status()
+        return {
+            "status": response.status_code,
+            "payment_required": response.headers.get("PAYMENT-REQUIRED"),
+            "body": response.json(),
+        }
+
     def get_risk_policy(self):
         return self._request("GET", "/v1/risk/policy")
 

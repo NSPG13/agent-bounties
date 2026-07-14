@@ -1,0 +1,542 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use thiserror::Error;
+
+pub const X402_VERSION: u8 = 2;
+pub const PAYMENT_REQUIRED_HEADER: &str = "payment-required";
+pub const PAYMENT_SIGNATURE_HEADER: &str = "payment-signature";
+pub const PAYMENT_RESPONSE_HEADER: &str = "payment-response";
+pub const AGENT_BOUNTY_FUND_SCHEME: &str = "agent-bounty-fund";
+pub const STANDARD_EXACT_SCHEME: &str = "exact";
+pub const MAX_HEADER_LENGTH: usize = 32 * 1024;
+const MIN_SETTLEMENT_BUFFER_SECONDS: u64 = 6;
+const MAX_CLOCK_SKEW_SECONDS: u64 = 30;
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum X402Error {
+    #[error("x402 header is empty")]
+    EmptyHeader,
+    #[error("x402 header exceeds the {MAX_HEADER_LENGTH}-byte limit")]
+    HeaderTooLarge,
+    #[error("x402 header is not valid base64")]
+    InvalidBase64,
+    #[error("x402 header is not valid UTF-8 JSON")]
+    InvalidJson,
+    #[error("unsupported x402 version {0}")]
+    UnsupportedVersion(u8),
+    #[error("payment requirements must contain exactly one funding option")]
+    AmbiguousRequirements,
+    #[error("standard exact transfers cannot fund an Agent Bounties contract; use agent-bounty-fund so FundingAdded is emitted")]
+    UnsafeExactFunding,
+    #[error("payment requirements do not exactly match the issued challenge")]
+    RequirementsMismatch,
+    #[error("payment resource does not match the issued challenge")]
+    ResourceMismatch,
+    #[error("payment extensions do not exactly echo the issued challenge")]
+    ExtensionsMismatch,
+    #[error("invalid EIP-3009 authorization payload")]
+    InvalidAuthorization,
+    #[error("invalid EVM address")]
+    InvalidAddress,
+    #[error("invalid USDC base-unit amount")]
+    InvalidAmount,
+    #[error("authorization recipient does not match the canonical bounty contract")]
+    RecipientMismatch,
+    #[error("authorization amount does not match the x402 requirement")]
+    AmountMismatch,
+    #[error("authorization validAfter must be zero for the autonomous-v1 contribution call")]
+    InvalidValidAfter,
+    #[error("authorization expires too soon to settle safely")]
+    AuthorizationExpired,
+    #[error("authorization lasts longer than the issued x402 timeout")]
+    AuthorizationTooLong,
+    #[error("invalid EIP-3009 nonce")]
+    InvalidNonce,
+    #[error("invalid EIP-3009 signature")]
+    InvalidSignature,
+    #[error("x402 funding challenge is invalid: {0}")]
+    InvalidChallenge(&'static str),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ResourceInfo {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PaymentRequirements {
+    pub scheme: String,
+    pub network: String,
+    pub asset: String,
+    pub amount: String,
+    pub pay_to: String,
+    pub max_timeout_seconds: u64,
+    #[serde(default)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PaymentRequired {
+    pub x402_version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub resource: ResourceInfo,
+    pub accepts: Vec<PaymentRequirements>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PaymentPayload {
+    pub x402_version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<ResourceInfo>,
+    pub accepted: PaymentRequirements,
+    pub payload: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Eip3009Authorization {
+    pub from: String,
+    pub to: String,
+    pub value: String,
+    pub valid_after: String,
+    pub valid_before: String,
+    pub nonce: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Eip3009Payload {
+    pub signature: String,
+    pub authorization: Eip3009Authorization,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedFundingAuthorization {
+    pub contributor: String,
+    pub bounty_contract: String,
+    pub amount: u64,
+    pub valid_before: u64,
+    pub nonce: String,
+    pub v: u8,
+    pub r: String,
+    pub s: String,
+}
+
+pub fn base_usdc_funding_challenge(
+    resource_url: impl Into<String>,
+    network: impl Into<String>,
+    asset: &str,
+    bounty_contract: &str,
+    amount: u64,
+    max_timeout_seconds: u64,
+) -> Result<PaymentRequired, X402Error> {
+    if amount == 0 {
+        return Err(X402Error::InvalidChallenge("amount must be positive"));
+    }
+    if max_timeout_seconds < MIN_SETTLEMENT_BUFFER_SECONDS {
+        return Err(X402Error::InvalidChallenge(
+            "maxTimeoutSeconds must allow the settlement buffer",
+        ));
+    }
+    let asset = normalize_address(asset)?;
+    let bounty_contract = normalize_address(bounty_contract)?;
+    let mut extra = BTreeMap::new();
+    extra.insert("assetTransferMethod".to_string(), json!("eip3009"));
+    extra.insert("name".to_string(), json!("USD Coin"));
+    extra.insert("version".to_string(), json!("2"));
+    extra.insert("fundingMethod".to_string(), json!("fundWithAuthorization"));
+    extra.insert("fundingEvent".to_string(), json!("FundingAdded"));
+    extra.insert(
+        "protocol".to_string(),
+        json!("agent-bounties/autonomous-v1"),
+    );
+
+    Ok(PaymentRequired {
+        x402_version: X402_VERSION,
+        error: Some(
+            "Authorize Base USDC funding; only confirmed canonical FundingAdded is funding evidence"
+                .to_string(),
+        ),
+        resource: ResourceInfo {
+            url: resource_url.into(),
+            description: Some(
+                "Fund a canonical Agent Bounties contract with a bounded USDC authorization"
+                    .to_string(),
+            ),
+            mime_type: Some("application/json".to_string()),
+            service_name: Some("Agent Bounties".to_string()),
+            tags: Some(vec![
+                "ai-agents".to_string(),
+                "bounties".to_string(),
+                "funding".to_string(),
+                "base".to_string(),
+                "usdc".to_string(),
+            ]),
+            icon_url: None,
+        },
+        accepts: vec![PaymentRequirements {
+            scheme: AGENT_BOUNTY_FUND_SCHEME.to_string(),
+            network: network.into(),
+            asset,
+            amount: amount.to_string(),
+            pay_to: bounty_contract,
+            max_timeout_seconds,
+            extra,
+        }],
+        extensions: None,
+    })
+}
+
+pub fn encode_payment_required_header(required: &PaymentRequired) -> Result<String, X402Error> {
+    encode_header(required)
+}
+
+pub fn encode_payment_signature_header(payload: &PaymentPayload) -> Result<String, X402Error> {
+    encode_header(payload)
+}
+
+pub fn decode_payment_required_header(header: &str) -> Result<PaymentRequired, X402Error> {
+    decode_header(header)
+}
+
+pub fn decode_payment_signature_header(header: &str) -> Result<PaymentPayload, X402Error> {
+    decode_header(header)
+}
+
+pub fn validate_funding_payload(
+    payload: &PaymentPayload,
+    required: &PaymentRequired,
+    now_unix_seconds: u64,
+) -> Result<ValidatedFundingAuthorization, X402Error> {
+    if payload.x402_version != X402_VERSION {
+        return Err(X402Error::UnsupportedVersion(payload.x402_version));
+    }
+    if required.x402_version != X402_VERSION {
+        return Err(X402Error::UnsupportedVersion(required.x402_version));
+    }
+    if required.accepts.len() != 1 {
+        return Err(X402Error::AmbiguousRequirements);
+    }
+    let expected = &required.accepts[0];
+    if expected.scheme == STANDARD_EXACT_SCHEME {
+        return Err(X402Error::UnsafeExactFunding);
+    }
+    if expected.scheme != AGENT_BOUNTY_FUND_SCHEME || payload.accepted != *expected {
+        return Err(X402Error::RequirementsMismatch);
+    }
+    if payload
+        .resource
+        .as_ref()
+        .is_some_and(|resource| resource != &required.resource)
+    {
+        return Err(X402Error::ResourceMismatch);
+    }
+    if payload.extensions != required.extensions {
+        return Err(X402Error::ExtensionsMismatch);
+    }
+
+    let authorization_payload: Eip3009Payload = serde_json::from_value(payload.payload.clone())
+        .map_err(|_| X402Error::InvalidAuthorization)?;
+    let contributor = normalize_address(&authorization_payload.authorization.from)?;
+    let recipient = normalize_address(&authorization_payload.authorization.to)?;
+    let expected_recipient = normalize_address(&expected.pay_to)?;
+    if recipient != expected_recipient {
+        return Err(X402Error::RecipientMismatch);
+    }
+    let amount = parse_positive_u64(&authorization_payload.authorization.value)?;
+    let expected_amount = parse_positive_u64(&expected.amount)?;
+    if amount != expected_amount {
+        return Err(X402Error::AmountMismatch);
+    }
+    let valid_after = authorization_payload
+        .authorization
+        .valid_after
+        .parse::<u64>()
+        .map_err(|_| X402Error::InvalidValidAfter)?;
+    if valid_after != 0 {
+        return Err(X402Error::InvalidValidAfter);
+    }
+    let valid_before = authorization_payload
+        .authorization
+        .valid_before
+        .parse::<u64>()
+        .map_err(|_| X402Error::AuthorizationExpired)?;
+    if valid_before < now_unix_seconds.saturating_add(MIN_SETTLEMENT_BUFFER_SECONDS) {
+        return Err(X402Error::AuthorizationExpired);
+    }
+    if valid_before
+        > now_unix_seconds
+            .saturating_add(expected.max_timeout_seconds)
+            .saturating_add(MAX_CLOCK_SKEW_SECONDS)
+    {
+        return Err(X402Error::AuthorizationTooLong);
+    }
+    let nonce = normalize_word(&authorization_payload.authorization.nonce)
+        .map_err(|_| X402Error::InvalidNonce)?;
+    let (v, r, s) = split_signature(&authorization_payload.signature)?;
+
+    Ok(ValidatedFundingAuthorization {
+        contributor,
+        bounty_contract: expected_recipient,
+        amount,
+        valid_before,
+        nonce,
+        v,
+        r,
+        s,
+    })
+}
+
+fn encode_header<T: Serialize>(value: &T) -> Result<String, X402Error> {
+    let json = serde_json::to_vec(value).map_err(|_| X402Error::InvalidJson)?;
+    let encoded = STANDARD.encode(json);
+    if encoded.len() > MAX_HEADER_LENGTH {
+        return Err(X402Error::HeaderTooLarge);
+    }
+    Ok(encoded)
+}
+
+fn decode_header<T: DeserializeOwned>(header: &str) -> Result<T, X402Error> {
+    if header.is_empty() {
+        return Err(X402Error::EmptyHeader);
+    }
+    if header.len() > MAX_HEADER_LENGTH {
+        return Err(X402Error::HeaderTooLarge);
+    }
+    let decoded = STANDARD
+        .decode(header)
+        .map_err(|_| X402Error::InvalidBase64)?;
+    serde_json::from_slice(&decoded).map_err(|_| X402Error::InvalidJson)
+}
+
+fn normalize_address(value: &str) -> Result<String, X402Error> {
+    let raw = value.strip_prefix("0x").ok_or(X402Error::InvalidAddress)?;
+    if raw.len() != 40 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(X402Error::InvalidAddress);
+    }
+    Ok(format!("0x{}", raw.to_ascii_lowercase()))
+}
+
+fn normalize_word(value: &str) -> Result<String, X402Error> {
+    let raw = value.strip_prefix("0x").ok_or(X402Error::InvalidNonce)?;
+    if raw.len() != 64 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(X402Error::InvalidNonce);
+    }
+    Ok(format!("0x{}", raw.to_ascii_lowercase()))
+}
+
+fn parse_positive_u64(value: &str) -> Result<u64, X402Error> {
+    let parsed = value.parse::<u64>().map_err(|_| X402Error::InvalidAmount)?;
+    if parsed == 0 {
+        return Err(X402Error::InvalidAmount);
+    }
+    Ok(parsed)
+}
+
+fn split_signature(signature: &str) -> Result<(u8, String, String), X402Error> {
+    let raw = signature
+        .strip_prefix("0x")
+        .ok_or(X402Error::InvalidSignature)?;
+    if raw.len() != 130 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(X402Error::InvalidSignature);
+    }
+    let bytes = hex::decode(raw).map_err(|_| X402Error::InvalidSignature)?;
+    let v = match bytes[64] {
+        0 | 27 => 27,
+        1 | 28 => 28,
+        _ => return Err(X402Error::InvalidSignature),
+    };
+    Ok((
+        v,
+        format!("0x{}", &raw[..64].to_ascii_lowercase()),
+        format!("0x{}", &raw[64..128].to_ascii_lowercase()),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ASSET: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+    const BOUNTY: &str = "0x1111111111111111111111111111111111111111";
+    const FUNDER: &str = "0x2222222222222222222222222222222222222222";
+    const NONCE: &str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn challenge() -> PaymentRequired {
+        base_usdc_funding_challenge(
+            "https://api.example/v1/x402/base/bounties/0x111/funding?amount=150000",
+            "eip155:8453",
+            ASSET,
+            BOUNTY,
+            150_000,
+            300,
+        )
+        .unwrap()
+    }
+
+    fn payment(required: &PaymentRequired) -> PaymentPayload {
+        PaymentPayload {
+            x402_version: X402_VERSION,
+            resource: Some(required.resource.clone()),
+            accepted: required.accepts[0].clone(),
+            payload: json!({
+                "signature": format!("0x{}{}1b", "11".repeat(32), "22".repeat(32)),
+                "authorization": {
+                    "from": FUNDER,
+                    "to": BOUNTY,
+                    "value": "150000",
+                    "validAfter": "0",
+                    "validBefore": "1300",
+                    "nonce": NONCE
+                }
+            }),
+            extensions: required.extensions.clone(),
+        }
+    }
+
+    #[test]
+    fn payment_required_and_signature_headers_round_trip() {
+        let required = challenge();
+        let required_header = encode_payment_required_header(&required).unwrap();
+        assert_eq!(
+            decode_payment_required_header(&required_header).unwrap(),
+            required
+        );
+
+        let payload = payment(&required);
+        let signature_header = encode_payment_signature_header(&payload).unwrap();
+        assert_eq!(
+            decode_payment_signature_header(&signature_header).unwrap(),
+            payload
+        );
+    }
+
+    #[test]
+    fn validates_exact_bounty_authorization() {
+        let required = challenge();
+        let validated = validate_funding_payload(&payment(&required), &required, 1_000).unwrap();
+        assert_eq!(validated.contributor, FUNDER);
+        assert_eq!(validated.bounty_contract, BOUNTY);
+        assert_eq!(validated.amount, 150_000);
+        assert_eq!(validated.valid_before, 1_300);
+        assert_eq!(validated.nonce, NONCE);
+        assert_eq!(validated.v, 27);
+        assert_eq!(validated.r, format!("0x{}", "11".repeat(32)));
+        assert_eq!(validated.s, format!("0x{}", "22".repeat(32)));
+    }
+
+    #[test]
+    fn rejects_standard_exact_funding_to_avoid_stranded_usdc() {
+        let mut required = challenge();
+        required.accepts[0].scheme = STANDARD_EXACT_SCHEME.to_string();
+        let payload = payment(&required);
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::UnsafeExactFunding
+        );
+    }
+
+    #[test]
+    fn rejects_tampered_requirements_resource_and_extensions() {
+        let required = challenge();
+        let mut payload = payment(&required);
+        payload.accepted.amount = "1".to_string();
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::RequirementsMismatch
+        );
+
+        let mut payload = payment(&required);
+        payload.resource.as_mut().unwrap().url.push_str("/redirect");
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::ResourceMismatch
+        );
+
+        let mut payload = payment(&required);
+        payload.extensions = Some(BTreeMap::from([("unexpected".to_string(), json!(true))]));
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::ExtensionsMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_recipient_amount_window_nonce_and_signature() {
+        let required = challenge();
+        let mut payload = payment(&required);
+        payload.payload["authorization"]["to"] = json!(FUNDER);
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::RecipientMismatch
+        );
+
+        let mut payload = payment(&required);
+        payload.payload["authorization"]["value"] = json!("149999");
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::AmountMismatch
+        );
+
+        let mut payload = payment(&required);
+        payload.payload["authorization"]["validBefore"] = json!("1005");
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::AuthorizationExpired
+        );
+
+        let mut payload = payment(&required);
+        payload.payload["authorization"]["validBefore"] = json!("1331");
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::AuthorizationTooLong
+        );
+
+        let mut payload = payment(&required);
+        payload.payload["authorization"]["nonce"] = json!("0x01");
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::InvalidNonce
+        );
+
+        let mut payload = payment(&required);
+        payload.payload["signature"] = json!("0x01");
+        assert_eq!(
+            validate_funding_payload(&payload, &required, 1_000).unwrap_err(),
+            X402Error::InvalidSignature
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_and_oversized_headers() {
+        assert_eq!(
+            decode_payment_signature_header("not base64!").unwrap_err(),
+            X402Error::InvalidBase64
+        );
+        assert_eq!(
+            decode_payment_signature_header(&"A".repeat(MAX_HEADER_LENGTH + 1)).unwrap_err(),
+            X402Error::HeaderTooLarge
+        );
+    }
+}

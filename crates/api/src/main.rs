@@ -14,8 +14,8 @@ use app::{
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{Html, IntoResponse},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -66,6 +66,11 @@ use payments_stripe::{
     CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper, StripeExecutionReport,
     StripePlanner, StripeRequestIntent, StripeWebhookEvent, STRIPE_API_BASE_URL,
 };
+use payments_x402::{
+    base_usdc_funding_challenge, decode_payment_signature_header, encode_payment_required_header,
+    validate_funding_payload, PaymentRequired, AGENT_BOUNTY_FUND_SCHEME, PAYMENT_REQUIRED_HEADER,
+    PAYMENT_SIGNATURE_HEADER, X402_VERSION,
+};
 use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -83,6 +88,7 @@ use uuid::Uuid;
         llms_txt,
         discovery_manifest_schema,
         agent_bounties_discovery,
+        x402_discovery,
         risk_policy,
         live_money_readiness,
         list_risk_events,
@@ -118,6 +124,7 @@ use uuid::Uuid;
         public_bounty_feed,
         public_funding_feed,
         public_capability_feed,
+        x402_base_bounty_funding,
         broadcast_base_signed_transaction,
         get_base_transaction_receipt,
         plan_autonomous_canonical_child_terms,
@@ -517,6 +524,13 @@ struct AutonomousBountyEventsQuery {
     bounty_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct X402FundingQuery {
+    network: Option<String>,
+    amount: Option<u64>,
+    relayer: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PublishAutonomousBountyTermsRequest {
     creator_wallet: String,
@@ -650,6 +664,7 @@ async fn main() -> anyhow::Result<()> {
             "/.well-known/agent-bounties.json",
             get(agent_bounties_discovery),
         )
+        .route("/.well-known/x402.json", get(x402_discovery))
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
@@ -698,6 +713,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/bounties/claimable", get(list_claimable_bounties))
         .route("/v1/bounties/feed", get(public_bounty_feed))
         .route("/v1/bounties/funding-feed", get(public_funding_feed))
+        .route(
+            "/v1/x402/base/bounties/:bounty_contract/funding",
+            get(x402_base_bounty_funding),
+        )
         .route(
             "/v1/bounties/:id/funding-intents",
             post(create_funding_intent),
@@ -996,6 +1015,53 @@ async fn agent_bounties_discovery(
         &state.public_base_url,
         &state.mcp_base_url,
     ))
+}
+
+#[utoipa::path(get, path = "/.well-known/x402.json", responses((status = 200, description = "x402 funding and discovery capabilities")))]
+async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let api = state.public_base_url.trim_end_matches('/');
+    Json(serde_json::json!({
+        "x402Version": X402_VERSION,
+        "service": "Agent Bounties",
+        "description": "AI agents can discover canonical bounties and authorize Base USDC funding without an allowance transaction.",
+        "resources": [
+            {
+                "name": "canonical-bounty-funding",
+                "method": "GET",
+                "urlTemplate": format!("{api}/v1/x402/base/bounties/{{bounty_contract}}/funding?network=base-mainnet&amount={{usdc_base_units}}"),
+                "scheme": AGENT_BOUNTY_FUND_SCHEME,
+                "networks": ["eip155:8453", "eip155:84532"],
+                "asset": "native USDC",
+                "flow": [
+                    "request without PAYMENT-SIGNATURE and receive 402 plus PAYMENT-REQUIRED",
+                    "sign the exact EIP-3009 authorization in the challenge",
+                    "retry with PAYMENT-SIGNATURE and receive a fundWithAuthorization relay plan",
+                    "broadcast the relay transaction and wait for confirmed canonical FundingAdded"
+                ],
+                "settlement": "The HTTP authorization response is not settlement. Only confirmed canonical FundingAdded changes funding state.",
+                "genericExactCompatible": false
+            },
+            {
+                "name": "open-bounty-discovery",
+                "method": "GET",
+                "url": format!("{api}/v1/base/autonomous-bounties/feed"),
+                "price": "free"
+            }
+        ],
+        "safety": {
+            "standardExactToBountyContract": "rejected because a direct token transfer bypasses fundWithAuthorization and emits no FundingAdded",
+            "authorizationReplay": "USDC EIP-3009 nonces are single-use on-chain",
+            "paymentProof": "transaction plans, signatures, broadcasts, and transaction hashes are not funding evidence"
+        },
+        "bazaar": {
+            "status": "custom funding scheme is self-described here and is not falsely advertised as supported by generic exact facilitators",
+            "next": "add a separate standard exact paid resource only when it provides distinct agent value and a production facilitator is configured"
+        },
+        "mpp": {
+            "status": "planned",
+            "scope": "fiat-capable payment credentials, recurring or metered sessions, and Stripe-backed convenience rails; never canonical bounty settlement authority"
+        }
+    }))
 }
 
 #[utoipa::path(get, path = "/v1/risk/policy", responses((status = 200, body = RiskPolicyDescriptor)))]
@@ -1787,6 +1853,190 @@ async fn public_funding_feed(
         public_funding_feed_items(&network, &state.public_base_url)
     };
     Json(items)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/x402/base/bounties/{bounty_contract}/funding",
+    params(
+        ("bounty_contract" = String, Path, description = "Canonical autonomous-v1 bounty contract"),
+        ("network" = Option<String>, Query, description = "base-mainnet or base-sepolia"),
+        ("amount" = Option<u64>, Query, description = "USDC base units; defaults to the remaining funding gap"),
+        ("relayer" = Option<String>, Query, description = "Optional gas-paying Base address used in the returned transaction intent")
+    ),
+    responses(
+        (status = 202, description = "x402 envelope validated; the contract still verifies the EIP-3009 signature when the relay transaction is broadcast"),
+        (status = 402, description = "PAYMENT-REQUIRED contains the exact x402 v2 funding challenge"),
+        (status = 404, description = "Canonical indexed bounty not found"),
+        (status = 409, description = "Bounty cannot accept the requested contribution")
+    )
+)]
+async fn x402_base_bounty_funding(
+    State(state): State<SharedState>,
+    Path(bounty_contract): Path<String>,
+    Query(query): Query<X402FundingQuery>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    let requested_network = query.network.as_deref().unwrap_or("base-mainnet");
+    let network =
+        base_network_descriptor(requested_network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let network_key = match network.chain_id {
+        8_453 => "base-mainnet",
+        84_532 => "base-sepolia",
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let caip2_network = format!("eip155:{}", network.chain_id);
+    let bounty_contract =
+        normalize_evm_address(&bounty_contract).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let item = indexed_autonomous_bounty(&state, network_key, &bounty_contract).await?;
+    if !item.terms_valid {
+        return Err(StatusCode::CONFLICT);
+    }
+    let amount = resolve_x402_funding_amount(
+        &item.status,
+        &item.target_amount,
+        &item.funded_amount,
+        query.amount,
+    )?;
+    let relayer = query
+        .relayer
+        .as_deref()
+        .map(normalize_evm_address)
+        .transpose()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mut resource_url = format!(
+        "{}/v1/x402/base/bounties/{}/funding?network={network_key}&amount={amount}",
+        state.public_base_url.trim_end_matches('/'),
+        bounty_contract
+    );
+    if let Some(relayer) = &relayer {
+        resource_url.push_str("&relayer=");
+        resource_url.push_str(relayer);
+    }
+    let challenge = base_usdc_funding_challenge(
+        resource_url,
+        caip2_network,
+        &network.native_usdc_token_address,
+        &bounty_contract,
+        amount,
+        300,
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let Some(header) = headers.get(PAYMENT_SIGNATURE_HEADER) else {
+        return x402_payment_required_response(challenge);
+    };
+    let payload = match header
+        .to_str()
+        .map_err(|_| payments_x402::X402Error::InvalidBase64)
+        .and_then(decode_payment_signature_header)
+    {
+        Ok(payload) => payload,
+        Err(error) => return x402_payment_required_error(challenge, &error.to_string()),
+    };
+    let now =
+        u64::try_from(Utc::now().timestamp()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let authorization = match validate_funding_payload(&payload, &challenge, now) {
+        Ok(authorization) => authorization,
+        Err(error) => return x402_payment_required_error(challenge, &error.to_string()),
+    };
+    let contribution = AutonomousBountyContribution {
+        bounty_contract: authorization.bounty_contract.clone(),
+        contributor: authorization.contributor.clone(),
+        amount: Money::new(authorization.amount as i64, "usdc")
+            .map_err(|_| StatusCode::BAD_REQUEST)?,
+        authorization_nonce: Some(authorization.nonce.clone()),
+        authorization_valid_before: Some(authorization.valid_before),
+    };
+    let signature = AutonomousBountyAuthorizationSignature {
+        v: authorization.v,
+        r: authorization.r.clone(),
+        s: authorization.s.clone(),
+    };
+    let plan = configured_autonomous_planner(network_key)?
+        .plan_authorized_contribution(network_key, &contribution, &signature, relayer.as_deref())
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mut response = (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "x402Version": X402_VERSION,
+            "scheme": AGENT_BOUNTY_FUND_SCHEME,
+            "status": "relay_required",
+            "settled": false,
+            "contributor": authorization.contributor,
+            "bountyContract": authorization.bounty_contract,
+            "amount": authorization.amount.to_string(),
+            "authorizationNonce": authorization.nonce,
+            "plan": plan,
+            "nextStep": "Simulate and broadcast plan.relay_transaction from the chosen gas-paying Base wallet. The contract verifies the EIP-3009 signature; then wait for confirmed canonical FundingAdded before treating the bounty as funded.",
+            "canonicalSuccessEvent": "FundingAdded",
+            "paymentResponseHeaderPresent": false
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
+    );
+    Ok(response)
+}
+
+fn x402_payment_required_error(
+    mut challenge: PaymentRequired,
+    error: &str,
+) -> Result<Response, StatusCode> {
+    challenge.error = Some(error.to_string());
+    x402_payment_required_response(challenge)
+}
+
+fn resolve_x402_funding_amount(
+    status: &str,
+    target_amount: &str,
+    funded_amount: &str,
+    requested_amount: Option<u64>,
+) -> Result<u64, StatusCode> {
+    if status != "open" {
+        return Err(StatusCode::CONFLICT);
+    }
+    let target = target_amount
+        .parse::<u64>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let funded = funded_amount
+        .parse::<u64>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let remaining = target
+        .checked_sub(funded)
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let amount = requested_amount.unwrap_or(remaining);
+    if remaining == 0 || amount == 0 || amount > remaining || amount > i64::MAX as u64 {
+        return Err(StatusCode::CONFLICT);
+    }
+    Ok(amount)
+}
+
+fn x402_payment_required_response(challenge: PaymentRequired) -> Result<Response, StatusCode> {
+    let encoded = encode_payment_required_header(&challenge)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut response = (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(serde_json::json!({
+            "x402Version": X402_VERSION,
+            "status": "payment_required",
+            "settled": false,
+            "paymentRequired": challenge,
+            "nextStep": "Sign the exact EIP-3009 authorization and retry this URL with the base64 x402 PaymentPayload in PAYMENT-SIGNATURE."
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        HeaderName::from_static(PAYMENT_REQUIRED_HEADER),
+        HeaderValue::from_str(&encoded).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
+    );
+    Ok(response)
 }
 
 #[utoipa::path(get, path = "/v1/capabilities/feed", responses((status = 200, description = "Public solver capability feed")))]
@@ -4500,6 +4750,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn x402_payment_required_response_uses_v2_wire_header_and_no_store() {
+        let challenge = base_usdc_funding_challenge(
+            "https://api.example/v1/x402/base/bounties/0x1111111111111111111111111111111111111111/funding?network=base-mainnet&amount=150000",
+            "eip155:8453",
+            "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "0x1111111111111111111111111111111111111111",
+            150_000,
+            300,
+        )
+        .unwrap();
+
+        let response = x402_payment_required_response(challenge.clone()).unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, private"
+        );
+        let decoded = payments_x402::decode_payment_required_header(
+            response.headers()[PAYMENT_REQUIRED_HEADER]
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(decoded, challenge);
+        assert_eq!(decoded.accepts[0].scheme, AGENT_BOUNTY_FUND_SCHEME);
+    }
+
+    #[test]
+    fn x402_funding_amount_defaults_to_gap_and_rejects_overfunding_or_wrong_state() {
+        assert_eq!(
+            resolve_x402_funding_amount("open", "2000000", "150000", None).unwrap(),
+            1_850_000
+        );
+        assert_eq!(
+            resolve_x402_funding_amount("open", "2000000", "150000", Some(250000)).unwrap(),
+            250_000
+        );
+        assert_eq!(
+            resolve_x402_funding_amount("open", "2000000", "150000", Some(1_850_001)).unwrap_err(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            resolve_x402_funding_amount("claimable", "2000000", "2000000", None).unwrap_err(),
+            StatusCode::CONFLICT
+        );
+    }
+
+    #[tokio::test]
+    async fn x402_discovery_is_explicit_about_custom_funding_and_mpp_boundary() {
+        let state = test_state(BountyNetwork::default());
+        let document = x402_discovery(State(state)).await.0;
+
+        assert_eq!(document["x402Version"], X402_VERSION);
+        assert_eq!(document["resources"][0]["scheme"], AGENT_BOUNTY_FUND_SCHEME);
+        assert_eq!(document["resources"][0]["genericExactCompatible"], false);
+        assert_eq!(document["mpp"]["status"], "planned");
+        assert!(document["safety"]["standardExactToBountyContract"]
+            .as_str()
+            .unwrap()
+            .contains("FundingAdded"));
+    }
+
     #[tokio::test]
     async fn agent_paid_status_endpoint_summarizes_solver_receivables() {
         let (network, _bounty, _proof) = completed_simulated_bounty().await;
@@ -5876,6 +6190,8 @@ mod tests {
         assert!(paths.contains_key("/v1/audience/outreach-attempts"));
         assert!(paths.contains_key("/v1/audience/report"));
         assert!(paths.contains_key("/v1/capabilities/search"));
+        assert!(paths.contains_key("/.well-known/x402.json"));
+        assert!(paths.contains_key("/v1/x402/base/bounties/{bounty_contract}/funding"));
         assert!(paths.contains_key("/v1/base/broadcast-signed-transaction"));
         assert!(paths.contains_key("/v1/base/transaction-receipt"));
         for autonomous in [
