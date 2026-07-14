@@ -73,6 +73,12 @@ Do not claim an issue labeled `recovery-reserved`. Its contract may be
 technically claimable after a timeout while the existing solver is still owed
 incident recovery. The GitHub workflow intentionally withholds the wallet
 handoff so a new solver cannot unknowingly post a bond or duplicate the work.
+Hosted API and MCP feeds apply the same public operational reservation: the
+full feed preserves canonical funding and status but reports
+`verification_ready=false` with an incident-recovery reason. A
+`claimable_only=true` request excludes the contract, and hosted claim planning
+fails closed. This reservation is not an on-chain state transition or payout
+evidence.
 
 1. Call `list_autonomous_bounties` with `claimable_only=true`.
 2. Require `verification_ready=true`, then check factory origin, `terms_valid`,

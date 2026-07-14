@@ -11,6 +11,10 @@ SERVICE_NAMES = [
     "agent-bounties-mcp",
     "agent-bounties-base-indexer",
 ]
+RECOVERY_RESERVED_BOUNTY_CONTRACTS = (
+    "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,"
+    "0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1"
+)
 
 
 def fail(message: str) -> None:
@@ -198,6 +202,7 @@ def main() -> int:
             "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION",
             "BASE_MAINNET_BOUNTY_FACTORY",
             "BASE_MAINNET_BOUNTY_IMPLEMENTATION",
+            "BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS",
         ],
     )
     require_env_sync_false(base_group, "BASE_SEPOLIA_RPC_URL")
@@ -205,6 +210,11 @@ def main() -> int:
     require_env_sync_false(base_group, "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION")
     require_env_value(base_group, "BASE_MAINNET_RPC_URL", rpc_url)
     require_env_value(base_group, "BASE_MAINNET_USDC_TOKEN", str(deployment["native_usdc"]))
+    require_env_value(
+        base_group,
+        "BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS",
+        f'"{RECOVERY_RESERVED_BOUNTY_CONTRACTS}"',
+    )
     relayer_group = require_group(
         text,
         "agent-bounties-x402-relayer",
@@ -292,6 +302,7 @@ def main() -> int:
         f"BASE_MAINNET_USDC_TOKEN={deployment['native_usdc']}",
         "BASE_MAINNET_BOUNTY_FACTORY=",
         "BASE_MAINNET_BOUNTY_IMPLEMENTATION=",
+        "BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS=",
         "BASE_INDEXER_NETWORK=base-mainnet",
         "BASE_INDEXER_PROTOCOL=autonomous-v1",
         f"BASE_INDEXER_RPC_URL={rpc_url}",

@@ -44,6 +44,7 @@ BASE_INDEXER_NETWORK=base-mainnet
 BASE_INDEXER_START_BLOCK=<factory deployment block>
 BASE_MAINNET_BOUNTY_FACTORY=<verified factory>
 BASE_MAINNET_BOUNTY_IMPLEMENTATION=<verified implementation>
+BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS=<comma-separated public incident contracts>
 BASE_MAINNET_RPC_URL=<managed HTTPS RPC>
 BASE_INDEXER_RPC_URL=<managed HTTPS RPC>
 BASE_INDEXER_RETRY_INITIAL_SECONDS=5
@@ -54,6 +55,11 @@ ENABLE_BASE_TX_BROADCAST=false
 
 Use the corresponding `BASE_SEPOLIA_*` values for testnet. The worker accepts
 `BASE_INDEXER_FACTORY_CONTRACT` as an explicit override.
+
+`BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS` is a public, temporary hosted-routing
+control. Every address must have a public incident record. Malformed values stop
+API and MCP startup; configured contracts remain visible in the full canonical
+feed but cannot appear as earning-ready work or verifier jobs.
 
 Secrets belong in Render environment groups, never in Git:
 
