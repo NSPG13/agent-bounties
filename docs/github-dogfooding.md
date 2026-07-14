@@ -83,6 +83,26 @@ immutable contract has reopened to `claimable`. The claim workflow must not
 offer a wallet handoff for that issue; it tells the caller not to sign or post a
 bond until the incident obligation is resolved and the label is removed.
 
+GitHub status labels are a discovery mirror, not authority. The scheduled
+inventory workflow reconciles them from the full canonical Base feed and its
+fail-closed earning subset:
+
+- `claimable-live` means the exact issue contract is fully funded, canonically
+  `claimable`, terms-valid, verification-ready, and present in the earning feed.
+- `claimed-live` means an on-chain solver claim is active, so another wallet
+  must not sign a claim or post a bond for that round.
+- `settled-paid` requires matching confirmed `BountySettled` evidence.
+- `verification-unavailable` removes the bounty from earning discovery even
+  when funds remain locked.
+
+The reconciler is dry-run by default and only changes those managed labels. It
+has no wallet, contract-call, verification, acceptance, or settlement authority.
+Run a local report with:
+
+```powershell
+python scripts/reconcile_github_bounty_labels.py
+```
+
 The deterministic claim planner uses a 120-minute reservation window. A claim is
 reservation-ready only when the comment includes a concrete progress signal,
 such as `plan:`, `approach:`, `branch:`, `draft pr:`, `pr:`, `tests:`,

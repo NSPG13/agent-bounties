@@ -8,6 +8,8 @@ on:
     paths:
       - "scripts/bounty_inventory_guard.py"
       - "scripts/test_bounty_inventory_guard.py"
+      - "scripts/reconcile_github_bounty_labels.py"
+      - "scripts/test_reconcile_github_bounty_labels.py"
       - "scripts/fixtures/bounty_inventory_*.json"
       - "skills/agent-bounties/scripts/check-in.mjs"
       - "docs/standing-meta-bounty-invariant.md"
@@ -26,7 +28,40 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run inventory guard unit tests
-        run: python scripts/test_bounty_inventory_guard.py -v
+        run: |
+          python scripts/test_bounty_inventory_guard.py -v
+          python scripts/test_reconcile_github_bounty_labels.py -v
+
+  reconcile-status-labels:
+    if: github.event_name != 'pull_request'
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Reconcile GitHub labels from canonical Base state
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/reconcile_github_bounty_labels.py \
+            --execute \
+            --confirm-repository "$GITHUB_REPOSITORY" \
+            --json-out bounty-label-reconciliation.json \
+            --md-out bounty-label-reconciliation.md
+          cat bounty-label-reconciliation.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload reconciliation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bounty-label-reconciliation
+          path: |
+            bounty-label-reconciliation.json
+            bounty-label-reconciliation.md
 
   live-report:
     if: github.event_name != 'pull_request'
