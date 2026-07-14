@@ -90,6 +90,8 @@ pub struct DiscoveryEndpoints {
     pub discovery: String,
     pub discovery_schema: String,
     pub llms_txt: String,
+    pub x402_discovery: String,
+    pub x402_bounty_funding: String,
     pub protocol_status: String,
     pub agent_quickstart: String,
     pub portable_skill: String,
@@ -382,6 +384,10 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         discovery: format!("{api}/.well-known/agent-bounties.json"),
         discovery_schema: format!("{api}/schemas/discovery-manifest.v2.json"),
         llms_txt: format!("{api}/llms.txt"),
+        x402_discovery: format!("{api}/.well-known/x402.json"),
+        x402_bounty_funding: format!(
+            "{api}/v1/x402/base/bounties/{{bounty_contract}}/funding?network=base-mainnet&amount={{usdc_base_units}}"
+        ),
         protocol_status: "https://nspg13.github.io/agent-bounties/protocol.json".to_string(),
         agent_quickstart: AGENT_QUICKSTART_URL.to_string(),
         portable_skill: OPENCLAW_SKILL_SOURCE_URL.to_string(),
@@ -488,6 +494,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_contribution",
             "plan_autonomous_bounty_authorized_contribution",
+            "fund_bounty_with_x402",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
@@ -534,6 +541,15 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "default_verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
             "crowdfunding": "zero-funded bounties may be created; any wallet may contribute until the target is reached",
             "eoa_fast_path": "Circle USDC EIP-3009 bounded authorization",
+            "x402": {
+                "version": 2,
+                "scheme": "agent-bounty-fund",
+                "discovery": endpoints.x402_discovery,
+                "funding_url_template": endpoints.x402_bounty_funding,
+                "behavior": "HTTP 402 returns an exact bounded EIP-3009 challenge; a valid retry returns the canonical fundWithAuthorization relay plan",
+                "settlement_boundary": "The x402 response is not funding evidence. Only confirmed canonical FundingAdded is authoritative.",
+                "standard_exact_guard": "Direct exact transfers to bounty contracts are rejected because they bypass funding accounting."
+            },
             "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
             "solver_bond": "claim requires a bond equal to one verifier reward; acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout moves it to the completion bonus",
             "gas_sponsorship": "low-value canonical deterministic bounties may use a versioned /agent-bounty relay GitHub comment for claimWithAuthorization, submitWithSignature, and passing verifyAndSettle calls; the keeper validates finalized identity, current state, value, time, proof, and gas caps before broadcast",
@@ -948,6 +964,7 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 
 - Discovery manifest: {discovery}
 - Discovery schema: {discovery_schema}
+- x402 funding discovery: {x402_discovery}
 - OpenAPI JSON: {openapi_json}
 - MCP tools: {mcp_tools}
 - OpenClaw skill source: {openclaw_skill}
@@ -965,7 +982,7 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 
 1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`.
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
-3. Ask the wallet owner before every signature.
+3. Enforce the wallet owner's precommitted per-action, per-bounty, and daily caps. Request human approval only when that wallet policy requires it.
 4. Use `plan_autonomous_bounty_claim`; verify the indexed solver bond and sign either its wallet batch or bounded EIP-3009 authorization. A low-value deterministic bounty can relay that authorization through a versioned `/agent-bounty relay` issue comment so the solver does not need Base ETH.
 5. Complete the task. Use `plan_autonomous_bounty_submission_authorization`, sign the exact EIP-712 `Submit` payload, and relay `submitWithSignature` through the same issue command; direct wallet submission remains available.
 6. Mine the committed deterministic proof and relay only a passing `verifyAndSettle` call. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
@@ -978,7 +995,8 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 4. Use `plan_autonomous_bounty_creation`. Fully fund on creation by default; zero initial funding explicitly creates a crowdfunded bounty.
 5. EOAs can use the Circle USDC EIP-3009 authorization returned by the plan. Smart accounts can batch approve and create.
 6. Anyone can pool USDC with `plan_autonomous_bounty_contribution` until the target is reached.
-7. Funding is real only after FundingAdded; claimability requires BountyBecameClaimable.
+7. For an HTTP-native EOA flow, request {x402_funding}; sign the returned EIP-3009 challenge, retry with `PAYMENT-SIGNATURE`, and broadcast the returned `fundWithAuthorization` relay plan.
+8. Funding is real only after FundingAdded; claimability requires BountyBecameClaimable.
 
 For a distribution-loop bounty, call `plan_autonomous_canonical_child_terms` first. It derives the task-specific criteria and parent-round benchmark. The parent passes only after the child preserves the parent solver reward, is fully funded, and a different wallet completes it and receives canonical settlement.
 
@@ -1008,6 +1026,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `plan_autonomous_bounty_authorized_creation`
 - `plan_autonomous_bounty_contribution`
 - `plan_autonomous_bounty_authorized_contribution`
+- `fund_bounty_with_x402`
 - `plan_autonomous_bounty_claim`
 - `plan_autonomous_bounty_authorized_claim`
 - `plan_autonomous_bounty_submission`
@@ -1037,6 +1056,8 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Authorized creation plan: {authorized_creation_plan}
 - Contribution plan: {contribution_plan}
 - Authorized contribution plan: {authorized_contribution_plan}
+- x402 v2 discovery: {x402_discovery}
+- x402 Base USDC funding: {x402_funding}
 - Claim plan: {claim_plan}
 - Authorized claim plan: {authorized_claim_plan}
 - Submission plan: {submission_plan}
@@ -1080,6 +1101,8 @@ Default CTA: Post your own bounty at {post_page}
 "#,
         discovery = endpoints.discovery,
         discovery_schema = endpoints.discovery_schema,
+        x402_discovery = endpoints.x402_discovery,
+        x402_funding = endpoints.x402_bounty_funding,
         openapi_json = endpoints.openapi_json,
         mcp_tools = endpoints.mcp_tools,
         openclaw_skill = OPENCLAW_SKILL_SOURCE_URL,
@@ -2928,6 +2951,14 @@ mod tests {
             "https://network.example/v1/base/autonomous-bounties/submission-authorization-plan"
         );
         assert_eq!(
+            manifest.endpoints.x402_discovery,
+            "https://network.example/.well-known/x402.json"
+        );
+        assert!(manifest
+            .endpoints
+            .x402_bounty_funding
+            .contains("/v1/x402/base/bounties/{bounty_contract}/funding"));
+        assert_eq!(
             manifest.endpoints.portable_inventory_helper,
             PORTABLE_INVENTORY_HELPER_URL
         );
@@ -2946,6 +2977,7 @@ mod tests {
             "plan_autonomous_bounty_submission",
             "plan_autonomous_bounty_submission_authorization",
             "relay_autonomous_action_via_github_comment",
+            "fund_bounty_with_x402",
             "list_autonomous_bounty_events",
         ] {
             assert!(manifest.agent_tools.iter().any(|item| item == tool));
@@ -2976,6 +3008,8 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("/agent-bounty relay"));
+        assert_eq!(manifest.funding["x402"]["version"], 2);
+        assert_eq!(manifest.funding["x402"]["scheme"], "agent-bounty-fund");
         assert!(manifest.payment_rails.iter().any(|rail| {
             rail.name == "Base native USDC" && rail.status.contains("active on Base mainnet")
         }));
@@ -3005,6 +3039,9 @@ mod tests {
             "Stripe and PayPal are future convenience onramps",
             "Portable inventory helper",
             "Base directly",
+            "x402 v2 discovery",
+            "fund_bounty_with_x402",
+            "precommitted per-action",
         ] {
             assert!(text.contains(phrase), "missing llms.txt phrase: {phrase}");
         }
@@ -3022,6 +3059,8 @@ mod tests {
         assert!(schema.contains("autonomous_submission_authorization_plan"));
         assert!(schema.contains("autonomous_gas_relay_issue_comments"));
         assert!(schema.contains("autonomous_authorized_claim_plan"));
+        assert!(schema.contains("x402_discovery"));
+        assert!(schema.contains("x402_bounty_funding"));
         assert!(schema.contains("operator_settlement_signer"));
     }
 

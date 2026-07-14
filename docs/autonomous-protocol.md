@@ -78,7 +78,17 @@ Funding paths are:
 
 - wallet batch: `approve` plus `createBounty` or `fund`,
 - EIP-3009: a bounded native-USDC authorization relayed through
-  `createBountyWithAuthorization` or `fundWithAuthorization`.
+  `createBountyWithAuthorization` or `fundWithAuthorization`,
+- x402 v2: an HTTP `402` challenge using the `agent-bounty-fund` scheme that
+  binds the network, native USDC token, amount, bounty contract, resource URL,
+  timeout, and EIP-3009 authorization before returning the same canonical
+  `fundWithAuthorization` relay call.
+
+The x402 adapter must never advertise standard `exact` with the bounty contract
+as `payTo`. A standard facilitator would call USDC
+`transferWithAuthorization` directly; ERC-20 transfers do not invoke `fund` or
+`fundWithAuthorization`, so the contract would receive tokens without updating
+`fundedAmount`, contributor refunds, or emitting `FundingAdded`.
 
 `FundingAdded` is funding evidence. `BountyBecameClaimable` proves the target
 was reached. An approval, signature, planner response, transaction hash, or

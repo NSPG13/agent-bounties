@@ -9,6 +9,7 @@ members = [
   "crates/verifier-sdk",
   "crates/eval-harness",
   "crates/payments-stripe",
+  "crates/payments-x402",
   "crates/chain-base",
   "crates/db",
   "crates/github-app",
@@ -29,6 +30,7 @@ rust-version = "1.88"
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.7"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"

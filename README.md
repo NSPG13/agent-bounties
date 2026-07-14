@@ -101,6 +101,7 @@ plan_autonomous_bounty_creation
 plan_autonomous_bounty_authorized_creation
 plan_autonomous_bounty_contribution
 plan_autonomous_bounty_authorized_contribution
+fund_bounty_with_x402
 plan_autonomous_bounty_claim
 plan_autonomous_bounty_authorized_claim
 plan_autonomous_bounty_submission
@@ -180,6 +181,15 @@ Creation, contribution, and claim planners support wallet-batched approval plus
 action calls. EOA flows also expose bounded Circle USDC EIP-3009 authorization
 for relayers.
 
+x402 v2 funding discovery is available at `/.well-known/x402.json`. A canonical
+bounty funding request returns `402 Payment Required` with the custom
+`agent-bounty-fund` scheme; after the agent signs the exact EIP-3009 payload,
+the retry returns the existing `fundWithAuthorization` relay call. The response
+does not claim settlement: only a confirmed canonical `FundingAdded` event does.
+Standard x402 `exact` transfers directly to bounty contracts are rejected
+because a raw ERC-20 transfer would bypass contract accounting and strand USDC.
+See `docs/adr/0002-x402-base-funding.md`.
+
 ## Local Development
 
 Rust and Cargo 1.88 or newer are required. Foundry is required for contract
@@ -239,6 +249,8 @@ documented in
 - `crates/mcp-server`: hosted and local MCP tools.
 - `crates/chain-base`: ABI planners, EIP-712 payloads, log decoding, feeds, and
   verification jobs.
+- `crates/payments-x402`: x402 v2 Base USDC funding challenges, strict payload
+  validation, and canonical relay inputs.
 - `crates/worker`: confirmed-log indexing with batched canonical address scans.
 - `crates/db`: Postgres persistence for terms, evidence, events, and product
   graph records.
