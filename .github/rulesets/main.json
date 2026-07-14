@@ -49,10 +49,6 @@
           {
             "context": "postgres-sync",
             "integration_id": 15368
-          },
-          {
-            "context": "sdlc-recovery",
-            "integration_id": 15368
           }
         ],
         "strict_required_status_checks_policy": false
