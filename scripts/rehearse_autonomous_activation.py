@@ -349,6 +349,12 @@ def rehearse(
                     )
                 )
                 total_funding = int(bundle["creation_batch"]["total_initial_funding"])
+                bounty_count = len(bundle["bounties"])
+                if bounty_count == 0 or total_funding % bounty_count != 0:
+                    raise RuntimeError(
+                        "activation funding must divide evenly across the manifest bounties"
+                    )
+                expected_bounty_funding = total_funding // bounty_count
                 if wallet_usdc < total_funding:
                     raise RuntimeError(
                         f"forked wallet has {wallet_usdc} USDC minor units; {total_funding} required"
@@ -460,10 +466,10 @@ def rehearse(
                     if (
                         canonical != 1
                         or bounty_id != bounty["bounty_id"].lower()
-                        or funded != 1_000_000
-                        or target != 1_000_000
+                        or funded != expected_bounty_funding
+                        or target != expected_bounty_funding
                         or status != 1
-                        or token_balance != 1_000_000
+                        or token_balance != expected_bounty_funding
                         or (
                             verifier_summary is not None
                             and verifier_module != verifier_summary["contract"]

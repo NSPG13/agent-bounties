@@ -1,0 +1,76 @@
+{
+  "schema_version": "agent-bounties/terms-v1",
+  "contract_terms": {
+    "protocol_version": "agent-bounties/autonomous-v1",
+    "creator_wallet": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "network": "base-mainnet",
+    "settlement_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "solver_reward": {
+      "amount": 2000000,
+      "currency": "usdc"
+    },
+    "verifier_reward": {
+      "amount": 10000,
+      "currency": "usdc"
+    },
+    "claim_bond": {
+      "amount": 10000,
+      "currency": "usdc"
+    },
+    "initial_funding": {
+      "amount": 2010000,
+      "currency": "usdc"
+    },
+    "funding_deadline": 1791676800,
+    "claim_window_seconds": 86400,
+    "verification_window_seconds": 7200,
+    "creation_nonce": "0xf06ec2966cf792f24f67734838492073358b2c47f4540ef5800c30e03ffb2275"
+  },
+  "title": "Complete a 16-bit proof-of-work paid loop",
+  "goal": "Claim this bounty from an independent wallet, submit two immutable hashes, relay the exact 16-bit leading-zero work proof, and receive automatic Base USDC settlement.",
+  "acceptance_criteria": [
+    "The solver wallet is not the creator and owns the first confirmed canonical claim round.",
+    "The solver submits nonzero submission and evidence hashes before the claim deadline.",
+    "The proof nonce produces a Keccak-256 hash with at least 16 leading zero bits when ABI-encoded with the exact bounty id, round, solver, submission hash, evidence hash, and policy hash.",
+    "A permissionless verifyAndSettle(bytes) call succeeds before the verification deadline.",
+    "A confirmed canonical BountySettled event pays the solver reward, returns the solver bond, and pays the deterministic verifier recipient."
+  ],
+  "benchmark": {
+    "engine": "leading_zero_work_v1",
+    "difficulty_bits": 16,
+    "hash_function": "keccak256",
+    "preimage_abi_types": [
+      "bytes32",
+      "uint64",
+      "address",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "uint256"
+    ],
+    "proof_encoding": "abi.encode(uint256 nonce)",
+    "verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+    "reference_command": "cargo run -p cli -- autonomous-mine-work-proof"
+  },
+  "evidence_schema": {
+    "type": "object",
+    "required": [
+      "artifact_reference",
+      "discovery_source",
+      "participation_reason",
+      "improvement_feedback"
+    ],
+    "additionalProperties": true
+  },
+  "verification_policy": {
+    "mechanism": "deterministic_module",
+    "verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+    "verifier_reward_recipient": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "verifiers": [],
+    "threshold": 1,
+    "rubric": "The immutable module passes only when the exact scope-bound work hash has at least 16 leading zero bits. No human or AI judgment authorizes settlement.",
+    "self_verification_forbidden": false
+  },
+  "source_url": "https://github.com/NSPG13/agent-bounties/issues/244",
+  "discovery_source": "maintainer-seeded permissionless full-loop canary"
+}
