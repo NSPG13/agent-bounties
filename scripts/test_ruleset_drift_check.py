@@ -65,6 +65,23 @@ class RulesetDriftCheckTests(unittest.TestCase):
             )
         )
 
+    def test_missing_sdlc_recovery_gate_is_flagged(self) -> None:
+        live = deepcopy(self.live)
+        checks = _rule(live, "required_status_checks")["parameters"]["required_status_checks"]
+        _rule(live, "required_status_checks")["parameters"]["required_status_checks"] = [
+            check for check in checks if check["context"] != "sdlc-recovery"
+        ]
+
+        result = MODULE.evaluate(self.canonical, live)
+
+        self.assertTrue(result["drift"])
+        self.assertTrue(
+            any(
+                "sdlc-recovery" in problem
+                for problem in result["live_semantic_problems"]
+            )
+        )
+
     def test_strict_status_mode_is_flagged(self) -> None:
         live = deepcopy(self.live)
         _rule(live, "required_status_checks")["parameters"][

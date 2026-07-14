@@ -49,6 +49,10 @@
           {
             "context": "full-check",
             "integration_id": 15368
+          },
+          {
+            "context": "sdlc-recovery",
+            "integration_id": 15368
           }
         ]
       }

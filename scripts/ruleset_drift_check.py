@@ -56,7 +56,7 @@ SERVER_OWNED_RULE_FIELDS = frozenset(
 # Semantic expectations documented in docs/main-branch-ruleset.md.
 GITHUB_ACTIONS_INTEGRATION_ID = 15368
 ADMIN_REPOSITORY_ROLE_ID = 5
-REQUIRED_STATUS_CONTEXTS = ("full-check", "postgres-sync")
+REQUIRED_STATUS_CONTEXTS = ("full-check", "postgres-sync", "sdlc-recovery")
 DEFAULT_BRANCH_TARGET = "~DEFAULT_BRANCH"
 GH_TIMEOUT_SECONDS = 30
 
