@@ -751,7 +751,7 @@ impl Bounty {
         if !allowed {
             return Err(DomainError::InvalidTransition {
                 from: format!("{:?}", self.status),
-                to: format!("{:?}", to),
+                to: format!("{to:?}"),
             });
         }
 

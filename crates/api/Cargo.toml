@@ -17,12 +17,14 @@ db = { path = "../db" }
 domain = { path = "../domain" }
 eval-harness = { path = "../eval-harness" }
 github-app = { path = "../github-app" }
+hex.workspace = true
 ledger = { path = "../ledger" }
 payments-stripe = { path = "../payments-stripe" }
 payments-x402 = { path = "../payments-x402" }
 risk = { path = "../risk" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 utoipa.workspace = true

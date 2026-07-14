@@ -1217,7 +1217,7 @@ mod tests {
             .contains("line_items%5B0%5D%5Bprice_data%5D%5Bunit_amount%5D=5000"));
         assert!(request
             .body
-            .contains(&format!("client_reference_id={}", organization_id)));
+            .contains(&format!("client_reference_id={organization_id}")));
         assert!(request
             .body
             .contains("payment_method_configuration=pmc_paypal_enabled"));

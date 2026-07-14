@@ -1482,8 +1482,7 @@ fn autonomous_mine_work_proof(
     let (proof, response_hash) = loop {
         if attempts >= max_attempts {
             bail!(
-                "no proof found after {max_attempts} attempts; continue from --start-nonce {}",
-                nonce
+                "no proof found after {max_attempts} attempts; continue from --start-nonce {nonce}"
             );
         }
         let encoded = leading_zero_work_preimage(

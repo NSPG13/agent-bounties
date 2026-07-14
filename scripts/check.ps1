@@ -33,6 +33,7 @@ Invoke-Checked { & (Join-Path $repoRoot "scripts\preflight.ps1") -Mode full }
 Invoke-Checked { cargo fmt --all -- --check }
 Invoke-Checked { cargo clippy --workspace -- -D warnings }
 Invoke-Checked { cargo test --workspace }
+Invoke-Checked { & (Join-Path $repoRoot "scripts\check-x402-relayer.ps1") }
 Invoke-Checked { cargo build -p api -p mcp-server }
 Invoke-Checked { cargo run -p cli -- service-smoke-spawn --api-base-url http://127.0.0.1:18080 --mcp-base-url http://127.0.0.1:18090 }
 Invoke-Checked { cargo run -p cli -- bountybench }

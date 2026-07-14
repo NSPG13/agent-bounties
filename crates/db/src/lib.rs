@@ -12,13 +12,16 @@ use domain::{
     VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{LedgerEntry, Posting};
+use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgRow, PgPool, Row};
 use std::collections::HashMap;
 use thiserror::Error;
+use uuid::Uuid;
 
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
 pub const AUTONOMOUS_PROTOCOL_MIGRATION: &str =
     include_str!("../../../migrations/0002_autonomous_protocol.sql");
+pub const X402_RELAYER_MIGRATION: &str = include_str!("../../../migrations/0003_x402_relayer.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -88,6 +91,10 @@ pub enum DbError {
     AudienceConflict(String),
     #[error("conflicting autonomous submission evidence replay: {0}")]
     AutonomousEvidenceConflict(String),
+    #[error("conflicting x402 relay replay: {0}")]
+    X402RelayConflict(String),
+    #[error("x402 hosted relay quota exceeded: {0}")]
+    X402RelayQuotaExceeded(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -164,6 +171,56 @@ pub struct BaseIndexerHeartbeat {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum X402RelayStatus {
+    Prepared,
+    Relaying,
+    Broadcast,
+    Confirmed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewX402RelayAttempt {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub network: String,
+    pub bounty_contract: String,
+    pub contributor: String,
+    pub amount: u64,
+    pub authorization_nonce: String,
+    pub authorization_valid_before: u64,
+    pub request_fingerprint: String,
+    pub relayer_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct X402RelayAttempt {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub network: String,
+    pub bounty_contract: String,
+    pub contributor: String,
+    pub amount: u64,
+    pub authorization_nonce: String,
+    pub authorization_valid_before: u64,
+    pub request_fingerprint: String,
+    pub relayer_address: String,
+    pub status: X402RelayStatus,
+    pub retryable: bool,
+    pub attempt_count: u32,
+    pub tx_hash: Option<String>,
+    pub estimated_gas: Option<u64>,
+    pub gas_limit: Option<u64>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub canonical_event_id: Option<Uuid>,
+    pub confirmed_block: Option<u64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct BountyStatusScope {
     pub bounty: Bounty,
@@ -219,7 +276,11 @@ impl PostgresStore {
             .await?;
 
         let migration_result = async {
-            for migration in [CORE_MIGRATION, AUTONOMOUS_PROTOCOL_MIGRATION] {
+            for migration in [
+                CORE_MIGRATION,
+                AUTONOMOUS_PROTOCOL_MIGRATION,
+                X402_RELAYER_MIGRATION,
+            ] {
                 for statement in migration
                     .split(';')
                     .map(str::trim)
@@ -242,6 +303,353 @@ impl PostgresStore {
             (Err(error), Ok(_)) => Err(error.into()),
             (Ok(()), Err(error)) | (Err(_), Err(error)) => Err(error.into()),
         }
+    }
+
+    pub async fn reserve_x402_relay_attempt(
+        &self,
+        attempt: &NewX402RelayAttempt,
+        max_network_attempts: u32,
+        max_contributor_attempts: u32,
+    ) -> DbResult<X402RelayAttempt> {
+        if max_network_attempts == 0 || max_contributor_attempts == 0 {
+            return Err(DbError::X402RelayQuotaExceeded(
+                "configured quota must be positive".to_string(),
+            ));
+        }
+        let normalized_bounty = normalize_key_address(&attempt.bounty_contract);
+        let normalized_contributor = normalize_key_address(&attempt.contributor);
+        let normalized_nonce = attempt.authorization_nonce.to_ascii_lowercase();
+        let normalized_relayer = normalize_key_address(&attempt.relayer_address);
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("x402-relay-quota:{}", attempt.network))
+            .execute(&mut *transaction)
+            .await?;
+
+        let existing = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, bounty_contract, contributor, amount,
+                   authorization_nonce, authorization_valid_before, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message,
+                   canonical_event_id, confirmed_block, created_at, updated_at
+            FROM x402_relay_attempts
+            WHERE network = $1 AND bounty_contract = $2 AND authorization_nonce = $3
+            "#,
+        )
+        .bind(&attempt.network)
+        .bind(&normalized_bounty)
+        .bind(&normalized_nonce)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(x402_relay_attempt_from_row)
+        .transpose()?;
+        if let Some(existing) = existing {
+            validate_x402_relay_replay(&existing, attempt)?;
+            transaction.commit().await?;
+            return Ok(existing);
+        }
+
+        let quota = sqlx::query(
+            r#"
+            SELECT COUNT(*) AS network_count,
+                   COUNT(*) FILTER (WHERE contributor = $2) AS contributor_count
+            FROM x402_relay_attempts
+            WHERE network = $1 AND created_at >= now() - interval '24 hours'
+            "#,
+        )
+        .bind(&attempt.network)
+        .bind(&normalized_contributor)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let network_count: i64 = quota.try_get("network_count")?;
+        let contributor_count: i64 = quota.try_get("contributor_count")?;
+        if network_count >= i64::from(max_network_attempts) {
+            return Err(DbError::X402RelayQuotaExceeded(
+                "network rolling-24-hour authorization limit reached".to_string(),
+            ));
+        }
+        if contributor_count >= i64::from(max_contributor_attempts) {
+            return Err(DbError::X402RelayQuotaExceeded(
+                "contributor rolling-24-hour authorization limit reached".to_string(),
+            ));
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO x402_relay_attempts
+              (id, idempotency_key, network, bounty_contract, contributor, amount,
+               authorization_nonce, authorization_valid_before, request_fingerprint,
+               relayer_address, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'prepared')
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(attempt.id)
+        .bind(&attempt.idempotency_key)
+        .bind(&attempt.network)
+        .bind(&normalized_bounty)
+        .bind(&normalized_contributor)
+        .bind(i64_from_u64(attempt.amount)?)
+        .bind(&normalized_nonce)
+        .bind(i64_from_u64(attempt.authorization_valid_before)?)
+        .bind(&attempt.request_fingerprint)
+        .bind(&normalized_relayer)
+        .execute(&mut *transaction)
+        .await?;
+
+        let persisted = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, bounty_contract, contributor, amount,
+                   authorization_nonce, authorization_valid_before, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message,
+                   canonical_event_id, confirmed_block, created_at, updated_at
+            FROM x402_relay_attempts
+            WHERE network = $1 AND bounty_contract = $2 AND authorization_nonce = $3
+            "#,
+        )
+        .bind(&attempt.network)
+        .bind(&normalized_bounty)
+        .bind(&normalized_nonce)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(x402_relay_attempt_from_row)
+        .transpose()?
+        .ok_or_else(|| {
+            DbError::X402RelayConflict(
+                "idempotency key is already bound to another authorization".to_string(),
+            )
+        })?;
+        validate_x402_relay_replay(&persisted, attempt)?;
+        transaction.commit().await?;
+        Ok(persisted)
+    }
+
+    pub async fn get_x402_relay_attempt(&self, id: Uuid) -> DbResult<Option<X402RelayAttempt>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, bounty_contract, contributor, amount,
+                   authorization_nonce, authorization_valid_before, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message,
+                   canonical_event_id, confirmed_block, created_at, updated_at
+            FROM x402_relay_attempts
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(x402_relay_attempt_from_row).transpose()
+    }
+
+    pub async fn get_x402_relay_attempt_by_authorization(
+        &self,
+        network: &str,
+        bounty_contract: &str,
+        authorization_nonce: &str,
+    ) -> DbResult<Option<X402RelayAttempt>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, bounty_contract, contributor, amount,
+                   authorization_nonce, authorization_valid_before, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message,
+                   canonical_event_id, confirmed_block, created_at, updated_at
+            FROM x402_relay_attempts
+            WHERE network = $1 AND bounty_contract = $2 AND authorization_nonce = $3
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(bounty_contract))
+        .bind(authorization_nonce.to_ascii_lowercase())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(x402_relay_attempt_from_row).transpose()
+    }
+
+    pub async fn acquire_x402_relayer_lease(
+        &self,
+        network: &str,
+        lease_seconds: u64,
+    ) -> DbResult<Option<Uuid>> {
+        let lease_token = Uuid::new_v4();
+        let lease_seconds = i64_from_u64(lease_seconds)?;
+        let row = sqlx::query(
+            r#"
+            INSERT INTO x402_relayer_leases
+              (network, lease_token, lease_expires_at, updated_at)
+            VALUES ($1, $2, now() + make_interval(secs => $3), now())
+            ON CONFLICT (network) DO UPDATE SET
+              lease_token = EXCLUDED.lease_token,
+              lease_expires_at = EXCLUDED.lease_expires_at,
+              updated_at = now()
+            WHERE x402_relayer_leases.lease_expires_at <= now()
+            RETURNING lease_token
+            "#,
+        )
+        .bind(network)
+        .bind(lease_token)
+        .bind(lease_seconds)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| row.try_get("lease_token"))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn release_x402_relayer_lease(
+        &self,
+        network: &str,
+        lease_token: Uuid,
+    ) -> DbResult<()> {
+        sqlx::query("DELETE FROM x402_relayer_leases WHERE network = $1 AND lease_token = $2")
+            .bind(network)
+            .bind(lease_token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn claim_x402_relay_attempt(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        lease_seconds: u64,
+    ) -> DbResult<Option<X402RelayAttempt>> {
+        let lease_seconds = i64_from_u64(lease_seconds)?;
+        let row = sqlx::query(
+            r#"
+            UPDATE x402_relay_attempts
+            SET status = 'relaying',
+                retryable = true,
+                attempt_count = attempt_count + 1,
+                lease_token = $2,
+                lease_expires_at = now() + make_interval(secs => $3),
+                error_code = NULL,
+                error_message = NULL,
+                updated_at = now()
+            WHERE id = $1
+              AND (
+                status = 'prepared'
+                OR (status = 'failed' AND retryable)
+                OR (status = 'relaying' AND lease_expires_at <= now())
+              )
+            RETURNING id, idempotency_key, network, bounty_contract, contributor, amount,
+                      authorization_nonce, authorization_valid_before, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message,
+                      canonical_event_id, confirmed_block, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(lease_seconds)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(x402_relay_attempt_from_row).transpose()
+    }
+
+    pub async fn mark_x402_relay_broadcast(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        tx_hash: &str,
+        estimated_gas: u64,
+        gas_limit: u64,
+    ) -> DbResult<X402RelayAttempt> {
+        let row = sqlx::query(
+            r#"
+            UPDATE x402_relay_attempts
+            SET status = 'broadcast', retryable = true, tx_hash = $3,
+                estimated_gas = $4, gas_limit = $5,
+                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+            WHERE id = $1 AND lease_token = $2 AND status = 'relaying'
+            RETURNING id, idempotency_key, network, bounty_contract, contributor, amount,
+                      authorization_nonce, authorization_valid_before, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message,
+                      canonical_event_id, confirmed_block, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(tx_hash.to_ascii_lowercase())
+        .bind(i64_from_u64(estimated_gas)?)
+        .bind(i64_from_u64(gas_limit)?)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::X402RelayConflict(
+                "relay lease was lost before broadcast persisted".to_string(),
+            )
+        })?;
+        x402_relay_attempt_from_row(row)
+    }
+
+    pub async fn mark_x402_relay_failed(
+        &self,
+        id: Uuid,
+        lease_token: Option<Uuid>,
+        retryable: bool,
+        error_code: &str,
+        error_message: &str,
+    ) -> DbResult<X402RelayAttempt> {
+        let row = sqlx::query(
+            r#"
+            UPDATE x402_relay_attempts
+            SET status = 'failed', retryable = $3, error_code = $4, error_message = $5,
+                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+            WHERE id = $1 AND ($2::uuid IS NULL OR lease_token = $2)
+            RETURNING id, idempotency_key, network, bounty_contract, contributor, amount,
+                      authorization_nonce, authorization_valid_before, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message,
+                      canonical_event_id, confirmed_block, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(retryable)
+        .bind(error_code)
+        .bind(error_message.chars().take(500).collect::<String>())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| DbError::X402RelayConflict("relay failure lease mismatch".to_string()))?;
+        x402_relay_attempt_from_row(row)
+    }
+
+    pub async fn mark_x402_relay_confirmed(
+        &self,
+        id: Uuid,
+        canonical_event_id: Uuid,
+        confirmed_block: u64,
+    ) -> DbResult<X402RelayAttempt> {
+        let row = sqlx::query(
+            r#"
+            UPDATE x402_relay_attempts
+            SET status = 'confirmed', retryable = false,
+                canonical_event_id = $2, confirmed_block = $3,
+                lease_token = NULL, lease_expires_at = NULL,
+                error_code = NULL, error_message = NULL, updated_at = now()
+            WHERE id = $1 AND status IN ('broadcast', 'confirmed')
+            RETURNING id, idempotency_key, network, bounty_contract, contributor, amount,
+                      authorization_nonce, authorization_valid_before, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message,
+                      canonical_event_id, confirmed_block, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(canonical_event_id)
+        .bind(i64_from_u64(confirmed_block)?)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::X402RelayConflict("relay was not broadcast before confirmation".to_string())
+        })?;
+        x402_relay_attempt_from_row(row)
     }
 
     pub async fn upsert_agent(&self, agent: &Agent) -> DbResult<()> {
@@ -2486,6 +2894,79 @@ fn parse_agent_status(value: String) -> DbResult<AgentStatus> {
     }
 }
 
+fn parse_x402_relay_status(value: String) -> DbResult<X402RelayStatus> {
+    match value.as_str() {
+        "prepared" => Ok(X402RelayStatus::Prepared),
+        "relaying" => Ok(X402RelayStatus::Relaying),
+        "broadcast" => Ok(X402RelayStatus::Broadcast),
+        "confirmed" => Ok(X402RelayStatus::Confirmed),
+        "failed" => Ok(X402RelayStatus::Failed),
+        other => Err(DbError::InvalidEnum(format!("x402 relay status {other}"))),
+    }
+}
+
+fn x402_relay_attempt_from_row(row: PgRow) -> DbResult<X402RelayAttempt> {
+    Ok(X402RelayAttempt {
+        id: row.try_get("id")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        network: row.try_get("network")?,
+        bounty_contract: row.try_get("bounty_contract")?,
+        contributor: row.try_get("contributor")?,
+        amount: u64_from_i64(row.try_get("amount")?)?,
+        authorization_nonce: row.try_get("authorization_nonce")?,
+        authorization_valid_before: u64_from_i64(row.try_get("authorization_valid_before")?)?,
+        request_fingerprint: row.try_get("request_fingerprint")?,
+        relayer_address: row.try_get("relayer_address")?,
+        status: parse_x402_relay_status(row.try_get("status")?)?,
+        retryable: row.try_get("retryable")?,
+        attempt_count: u32::try_from(row.try_get::<i32, _>("attempt_count")?)
+            .map_err(|_| DbError::IntegerOverflow("x402 relay attempt count".to_string()))?,
+        tx_hash: row.try_get("tx_hash")?,
+        estimated_gas: row
+            .try_get::<Option<i64>, _>("estimated_gas")?
+            .map(u64_from_i64)
+            .transpose()?,
+        gas_limit: row
+            .try_get::<Option<i64>, _>("gas_limit")?
+            .map(u64_from_i64)
+            .transpose()?,
+        error_code: row.try_get("error_code")?,
+        error_message: row.try_get("error_message")?,
+        canonical_event_id: row.try_get("canonical_event_id")?,
+        confirmed_block: row
+            .try_get::<Option<i64>, _>("confirmed_block")?
+            .map(u64_from_i64)
+            .transpose()?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn validate_x402_relay_replay(
+    persisted: &X402RelayAttempt,
+    requested: &NewX402RelayAttempt,
+) -> DbResult<()> {
+    if persisted.idempotency_key != requested.idempotency_key
+        || !persisted
+            .bounty_contract
+            .eq_ignore_ascii_case(&requested.bounty_contract)
+        || !persisted
+            .contributor
+            .eq_ignore_ascii_case(&requested.contributor)
+        || persisted.amount != requested.amount
+        || persisted.authorization_valid_before != requested.authorization_valid_before
+        || persisted.request_fingerprint != requested.request_fingerprint
+        || !persisted
+            .relayer_address
+            .eq_ignore_ascii_case(&requested.relayer_address)
+    {
+        return Err(DbError::X402RelayConflict(
+            "authorization nonce replay does not match the original request".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn parse_audience_provider(value: String) -> DbResult<AudienceProvider> {
     match value.as_str() {
         "Github" => Ok(AudienceProvider::Github),
@@ -2891,6 +3372,160 @@ mod tests {
                 "missing {index}"
             );
         }
+    }
+
+    #[test]
+    fn x402_migration_contains_idempotency_and_relayer_leases() {
+        for table in ["x402_relay_attempts", "x402_relayer_leases"] {
+            assert!(X402_RELAYER_MIGRATION.contains(table), "missing {table}");
+        }
+        for invariant in [
+            "idempotency_key TEXT NOT NULL UNIQUE",
+            "UNIQUE (network, bounty_contract, authorization_nonce)",
+            "request_fingerprint TEXT NOT NULL",
+            "lease_expires_at TIMESTAMPTZ",
+            "canonical_event_id UUID",
+        ] {
+            assert!(
+                X402_RELAYER_MIGRATION.contains(invariant),
+                "missing x402 invariant {invariant}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn x402_relay_attempt_is_idempotent_and_lease_bounded() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let nonce = format!("0x{:064x}", Uuid::new_v4().as_u128());
+        let network = format!("x402-test-{}", Uuid::new_v4());
+        let attempt = NewX402RelayAttempt {
+            id: Uuid::new_v4(),
+            idempotency_key: format!("x402-test-{}", Uuid::new_v4()),
+            network: network.clone(),
+            bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            contributor: "0x2222222222222222222222222222222222222222".to_string(),
+            amount: 150_000,
+            authorization_nonce: nonce,
+            authorization_valid_before: 2_000_000_000,
+            request_fingerprint: "fingerprint-a".to_string(),
+            relayer_address: "0x3333333333333333333333333333333333333333".to_string(),
+        };
+        let first = store
+            .reserve_x402_relay_attempt(&attempt, 2, 1)
+            .await
+            .unwrap();
+        let replay = store
+            .reserve_x402_relay_attempt(&attempt, 2, 1)
+            .await
+            .unwrap();
+        assert_eq!(first.id, replay.id);
+
+        let mut conflict = attempt.clone();
+        conflict.id = Uuid::new_v4();
+        conflict.request_fingerprint = "fingerprint-b".to_string();
+        assert!(matches!(
+            store.reserve_x402_relay_attempt(&conflict, 2, 1).await,
+            Err(DbError::X402RelayConflict(_))
+        ));
+
+        let mut contributor_quota = attempt.clone();
+        contributor_quota.id = Uuid::new_v4();
+        contributor_quota.idempotency_key = format!("x402-test-{}", Uuid::new_v4());
+        contributor_quota.authorization_nonce = format!("0x{:064x}", Uuid::new_v4().as_u128());
+        contributor_quota.request_fingerprint = "fingerprint-contributor-quota".to_string();
+        assert!(matches!(
+            store
+                .reserve_x402_relay_attempt(&contributor_quota, 2, 1)
+                .await,
+            Err(DbError::X402RelayQuotaExceeded(_))
+        ));
+
+        let mut second = contributor_quota.clone();
+        second.contributor = "0x4444444444444444444444444444444444444444".to_string();
+        second.request_fingerprint = "fingerprint-second".to_string();
+        let second = store
+            .reserve_x402_relay_attempt(&second, 2, 1)
+            .await
+            .unwrap();
+        assert_ne!(second.id, first.id);
+
+        let mut network_quota = contributor_quota;
+        network_quota.id = Uuid::new_v4();
+        network_quota.idempotency_key = format!("x402-test-{}", Uuid::new_v4());
+        network_quota.authorization_nonce = format!("0x{:064x}", Uuid::new_v4().as_u128());
+        network_quota.contributor = "0x5555555555555555555555555555555555555555".to_string();
+        network_quota.request_fingerprint = "fingerprint-network-quota".to_string();
+        assert!(matches!(
+            store.reserve_x402_relay_attempt(&network_quota, 2, 1).await,
+            Err(DbError::X402RelayQuotaExceeded(_))
+        ));
+
+        let lease = store
+            .acquire_x402_relayer_lease(&network, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(store
+            .acquire_x402_relayer_lease(&network, 30)
+            .await
+            .unwrap()
+            .is_none());
+        let claimed = store
+            .claim_x402_relay_attempt(first.id, lease, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.status, X402RelayStatus::Relaying);
+        sqlx::query(
+            "UPDATE x402_relay_attempts SET lease_expires_at = now() - interval '1 second' WHERE id = $1",
+        )
+        .bind(first.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE x402_relayer_leases SET lease_expires_at = now() - interval '1 second' WHERE network = $1",
+        )
+        .bind(&network)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        let recovered_lease = store
+            .acquire_x402_relayer_lease(&network, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        let recovered = store
+            .claim_x402_relay_attempt(first.id, recovered_lease, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.status, X402RelayStatus::Relaying);
+        assert_eq!(recovered.attempt_count, 2);
+        let broadcast = store
+            .mark_x402_relay_broadcast(
+                first.id,
+                recovered_lease,
+                &format!("0x{}", "44".repeat(32)),
+                100_000,
+                120_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(broadcast.status, X402RelayStatus::Broadcast);
+        store
+            .release_x402_relayer_lease(&network, recovered_lease)
+            .await
+            .unwrap();
+        let confirmed = store
+            .mark_x402_relay_confirmed(first.id, Uuid::new_v4(), 123)
+            .await
+            .unwrap();
+        assert_eq!(confirmed.status, X402RelayStatus::Confirmed);
+        assert!(!confirmed.retryable);
     }
 
     #[test]

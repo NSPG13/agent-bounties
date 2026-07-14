@@ -25,7 +25,8 @@ use chain_base::{
     build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
     build_autonomous_submission_evidence_record, build_autonomous_verification_jobs,
     decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
+    eth_send_raw_transaction_request, fetch_block_number, fetch_transaction_receipt,
+    normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
     AutonomousBountyAuthorizationSignature, AutonomousBountyAuthorizedClaimPlan,
@@ -36,12 +37,16 @@ use chain_base::{
     AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountyTxPlanner,
     AutonomousSignedAttestation, AutonomousVerificationAttestationRequest,
     AutonomousVerificationAttestationTypedData, AutonomousVerificationJob, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
-    ChainBaseError, EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog,
-    EvmTransactionIntent, RpcTransactionReceipt,
+    BaseRpcUrlConfig, BaseTransactionRelayer, CanonicalChildBountyTermsPlan,
+    CanonicalChildBountyTermsRequest, ChainBaseError, EthGetTransactionReceiptRequest,
+    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, RpcTransactionReceipt,
+    AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION, AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
 };
 use chrono::Utc;
-use db::{BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, PostgresStore};
+use db::{
+    BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, NewX402RelayAttempt, PostgresStore,
+    X402RelayAttempt, X402RelayStatus,
+};
 use domain::{
     Agent, AudienceInteraction, AudienceMember, AudienceReport, AutonomousBountyTermsDocument,
     AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord, BountyStatus, Capability,
@@ -68,13 +73,17 @@ use payments_stripe::{
 };
 use payments_x402::{
     base_usdc_funding_challenge, decode_payment_signature_header, encode_payment_required_header,
-    validate_funding_payload, PaymentRequired, AGENT_BOUNTY_FUND_SCHEME, PAYMENT_REQUIRED_HEADER,
+    encode_payment_response_header, validate_funding_payload, PaymentRequired, SettlementResponse,
+    AGENT_BOUNTY_FUND_SCHEME, PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER,
     PAYMENT_SIGNATURE_HEADER, X402_VERSION,
 };
 use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::env;
 use std::sync::{Arc, Mutex};
+use tokio::time::{sleep, Duration, Instant};
 use tower_http::cors::CorsLayer;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 use utoipa::openapi::Components;
@@ -125,6 +134,7 @@ use uuid::Uuid;
         public_funding_feed,
         public_capability_feed,
         x402_base_bounty_funding,
+        get_x402_relay,
         broadcast_base_signed_transaction,
         get_base_transaction_receipt,
         plan_autonomous_canonical_child_terms,
@@ -246,6 +256,103 @@ struct AppState {
     operator_api_token: Option<String>,
     public_base_url: String,
     mcp_base_url: String,
+    x402_relayer: X402HostedRelayerConfig,
+}
+
+#[derive(Clone)]
+struct X402HostedRelayerConfig {
+    enabled: bool,
+    relayer: Option<Arc<BaseTransactionRelayer>>,
+    min_amount: u64,
+    max_amount: u64,
+    max_gas: u64,
+    max_fee_per_gas_wei: u128,
+    max_daily_attempts: u32,
+    max_daily_attempts_per_contributor: u32,
+    confirmations: u64,
+    wait_seconds: u64,
+    rpc_timeout_seconds: u64,
+    lease_seconds: u64,
+}
+
+impl Default for X402HostedRelayerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            relayer: None,
+            min_amount: 100_000,
+            max_amount: 5_000_000,
+            max_gas: 300_000,
+            max_fee_per_gas_wei: 10_000_000_000,
+            max_daily_attempts: 100,
+            max_daily_attempts_per_contributor: 10,
+            confirmations: 2,
+            wait_seconds: 20,
+            rpc_timeout_seconds: 15,
+            lease_seconds: 45,
+        }
+    }
+}
+
+impl X402HostedRelayerConfig {
+    fn from_env() -> anyhow::Result<Self> {
+        let enabled = env_flag("ENABLE_X402_HOSTED_RELAY");
+        let relayer = env::var("X402_RELAYER_PRIVATE_KEY")
+            .ok()
+            .and_then(non_empty_secret)
+            .map(|private_key| BaseTransactionRelayer::from_private_key(&private_key))
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("X402_RELAYER_PRIVATE_KEY is invalid"))?
+            .map(Arc::new);
+        if enabled && relayer.is_none() {
+            anyhow::bail!("ENABLE_X402_HOSTED_RELAY requires X402_RELAYER_PRIVATE_KEY");
+        }
+        let min_amount = env_u64("X402_RELAYER_MIN_USDC_BASE_UNITS", 100_000)?;
+        let max_amount = env_u64("X402_RELAYER_MAX_USDC_BASE_UNITS", 5_000_000)?;
+        let max_gas = env_u64("X402_RELAYER_MAX_GAS", 300_000)?;
+        let max_fee_per_gas_wei = env_u128("X402_RELAYER_MAX_FEE_PER_GAS_WEI", 10_000_000_000)?;
+        if min_amount == 0 || max_amount < min_amount || max_gas == 0 || max_fee_per_gas_wei == 0 {
+            anyhow::bail!("x402 relayer amount, gas, and fee caps must be positive");
+        }
+        let max_daily_attempts = u32::try_from(env_u64("X402_RELAYER_MAX_DAILY_ATTEMPTS", 100)?)
+            .map_err(|_| anyhow::anyhow!("X402_RELAYER_MAX_DAILY_ATTEMPTS exceeds u32"))?;
+        let max_daily_attempts_per_contributor = u32::try_from(env_u64(
+            "X402_RELAYER_MAX_DAILY_ATTEMPTS_PER_CONTRIBUTOR",
+            10,
+        )?)
+        .map_err(|_| {
+            anyhow::anyhow!("X402_RELAYER_MAX_DAILY_ATTEMPTS_PER_CONTRIBUTOR exceeds u32")
+        })?;
+        if max_daily_attempts == 0
+            || max_daily_attempts_per_contributor == 0
+            || max_daily_attempts_per_contributor > max_daily_attempts
+        {
+            anyhow::bail!("x402 relayer rolling-24-hour quotas are invalid");
+        }
+        let rpc_timeout_seconds = env_u64("X402_RELAYER_RPC_TIMEOUT_SECONDS", 15)?.clamp(1, 30);
+        let lease_seconds = env_u64("X402_RELAYER_LEASE_SECONDS", 45)?.max(15);
+        if lease_seconds <= rpc_timeout_seconds {
+            anyhow::bail!("X402_RELAYER_LEASE_SECONDS must exceed the RPC timeout");
+        }
+        Ok(Self {
+            enabled,
+            relayer,
+            min_amount,
+            max_amount,
+            max_gas,
+            max_fee_per_gas_wei,
+            max_daily_attempts,
+            max_daily_attempts_per_contributor,
+            confirmations: env_u64("X402_RELAYER_CONFIRMATIONS", 2)?.max(1),
+            wait_seconds: env_u64("X402_RELAYER_WAIT_SECONDS", 20)?.min(60),
+            rpc_timeout_seconds,
+            lease_seconds,
+        })
+    }
+
+    fn address(&self) -> Option<String> {
+        self.relayer.as_ref().map(|relayer| relayer.address())
+    }
 }
 
 type SharedState = Arc<AppState>;
@@ -258,6 +365,36 @@ fn non_empty_secret(secret: String) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn env_flag(key: &str) -> bool {
+    env::var(key)
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn env_u64(key: &str, default: u64) -> anyhow::Result<u64> {
+    env::var(key)
+        .ok()
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| anyhow::anyhow!("{key} must be a positive integer"))
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(default))
+}
+
+fn env_u128(key: &str, default: u128) -> anyhow::Result<u128> {
+    env::var(key)
+        .ok()
+        .map(|value| {
+            value
+                .parse::<u128>()
+                .map_err(|_| anyhow::anyhow!("{key} must be a positive integer"))
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(default))
 }
 
 fn require_operator(state: &SharedState, headers: &HeaderMap) -> Result<(), StatusCode> {
@@ -619,6 +756,10 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Vec::new()
     };
+    let x402_relayer = X402HostedRelayerConfig::from_env()?;
+    if x402_relayer.enabled && store.is_none() {
+        anyhow::bail!("ENABLE_X402_HOSTED_RELAY requires DATABASE_URL");
+    }
     let state: SharedState = Arc::new(AppState {
         network: Arc::new(Mutex::new(network)),
         eval_runs: Arc::new(Mutex::new(eval_runs)),
@@ -652,6 +793,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
         mcp_base_url: env::var("MCP_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8090".to_string()),
+        x402_relayer,
     });
     let app = Router::new()
         .route("/health", get(health))
@@ -717,6 +859,7 @@ async fn main() -> anyhow::Result<()> {
             "/v1/x402/base/bounties/:bounty_contract/funding",
             get(x402_base_bounty_funding),
         )
+        .route("/v1/x402/base/relays/:relay_id", get(get_x402_relay))
         .route(
             "/v1/bounties/:id/funding-intents",
             post(create_funding_intent),
@@ -937,8 +1080,24 @@ fn service_bind_addr(configured: Option<&str>, port: Option<&str>, default_addr:
 }
 
 #[utoipa::path(get, path = "/health", responses((status = 200, body = String)))]
-async fn health() -> impl IntoResponse {
-    health_response(&deployment_revision())
+async fn health(State(state): State<SharedState>) -> Response {
+    let mut response = health_response(&deployment_revision()).into_response();
+    response.headers_mut().insert(
+        "x-agent-bounties-x402-relay",
+        HeaderValue::from_static(if state.x402_relayer.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }),
+    );
+    if let Some(address) = state.x402_relayer.address() {
+        if let Ok(value) = HeaderValue::from_str(&address) {
+            response
+                .headers_mut()
+                .insert("x-agent-bounties-x402-relayer", value);
+        }
+    }
+    response
 }
 
 fn deployment_revision() -> String {
@@ -1020,6 +1179,7 @@ async fn agent_bounties_discovery(
 #[utoipa::path(get, path = "/.well-known/x402.json", responses((status = 200, description = "x402 funding and discovery capabilities")))]
 async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let api = state.public_base_url.trim_end_matches('/');
+    let hosted_relayer_address = state.x402_relayer.address();
     Json(serde_json::json!({
         "x402Version": X402_VERSION,
         "service": "Agent Bounties",
@@ -1035,8 +1195,8 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
                 "flow": [
                     "request without PAYMENT-SIGNATURE and receive 402 plus PAYMENT-REQUIRED",
                     "sign the exact EIP-3009 authorization in the challenge",
-                    "retry with PAYMENT-SIGNATURE and receive a fundWithAuthorization relay plan",
-                    "broadcast the relay transaction and wait for confirmed canonical FundingAdded"
+                    "retry with PAYMENT-SIGNATURE; the bounded hosted relayer simulates and broadcasts fundWithAuthorization",
+                    "receive 200 plus PAYMENT-RESPONSE after canonical FundingAdded, or poll the returned statusUrl when the response is 202"
                 ],
                 "settlement": "The HTTP authorization response is not settlement. Only confirmed canonical FundingAdded changes funding state.",
                 "genericExactCompatible": false
@@ -1051,7 +1211,21 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
         "safety": {
             "standardExactToBountyContract": "rejected because a direct token transfer bypasses fundWithAuthorization and emits no FundingAdded",
             "authorizationReplay": "USDC EIP-3009 nonces are single-use on-chain",
-            "paymentProof": "transaction plans, signatures, broadcasts, and transaction hashes are not funding evidence"
+            "paymentProof": "transaction plans, signatures, broadcasts, and transaction hashes are not funding evidence",
+            "relayerCustody": "the hosted relayer holds gas only; the funder signs an exact amount, bounty, network, nonce, and expiration and the contract pulls USDC directly from that funder"
+        },
+        "hostedRelay": {
+            "enabled": state.x402_relayer.enabled,
+            "address": hosted_relayer_address,
+            "minUsdcBaseUnits": state.x402_relayer.min_amount.to_string(),
+            "maxUsdcBaseUnits": state.x402_relayer.max_amount.to_string(),
+            "maxGas": state.x402_relayer.max_gas,
+            "maxFeePerGasWei": state.x402_relayer.max_fee_per_gas_wei.to_string(),
+            "maxDailyAttempts": state.x402_relayer.max_daily_attempts,
+            "maxDailyAttemptsPerContributor": state.x402_relayer.max_daily_attempts_per_contributor,
+            "confirmations": state.x402_relayer.confirmations,
+            "statusUrlTemplate": format!("{api}/v1/x402/base/relays/{{relay_id}}"),
+            "fallback": "When disabled, a valid signed retry returns a self-relay transaction plan instead of claiming settlement."
         },
         "bazaar": {
             "status": "custom funding scheme is self-described here and is not falsely advertised as supported by generic exact facilitators",
@@ -1865,10 +2039,15 @@ async fn public_funding_feed(
         ("relayer" = Option<String>, Query, description = "Optional gas-paying Base address used in the returned transaction intent")
     ),
     responses(
+        (status = 200, description = "Canonical FundingAdded confirmed; PAYMENT-RESPONSE contains the x402 settlement result"),
         (status = 202, description = "x402 envelope validated; the contract still verifies the EIP-3009 signature when the relay transaction is broadcast"),
         (status = 402, description = "PAYMENT-REQUIRED contains the exact x402 v2 funding challenge"),
         (status = 404, description = "Canonical indexed bounty not found"),
-        (status = 409, description = "Bounty cannot accept the requested contribution")
+        (status = 409, description = "Bounty cannot accept the requested contribution"),
+        (status = 413, description = "Requested amount exceeds the hosted relay cap"),
+        (status = 422, description = "Authorization or hosted relay policy is invalid"),
+        (status = 429, description = "Rolling hosted relay quota is exhausted"),
+        (status = 503, description = "Hosted relayer or canonical RPC is temporarily unavailable")
     )
 )]
 async fn x402_base_bounty_funding(
@@ -1898,12 +2077,29 @@ async fn x402_base_bounty_funding(
         &item.funded_amount,
         query.amount,
     )?;
-    let relayer = query
+    if state.x402_relayer.enabled && amount > state.x402_relayer.max_amount {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    if state.x402_relayer.enabled && amount < state.x402_relayer.min_amount {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let requested_relayer = query
         .relayer
         .as_deref()
         .map(normalize_evm_address)
         .transpose()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let hosted_relayer = state.x402_relayer.address();
+    if state.x402_relayer.enabled
+        && requested_relayer.as_deref().is_some_and(|requested| {
+            hosted_relayer
+                .as_deref()
+                .is_none_or(|hosted| !requested.eq_ignore_ascii_case(hosted))
+        })
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let relayer = hosted_relayer.or(requested_relayer);
     let mut resource_url = format!(
         "{}/v1/x402/base/bounties/{}/funding?network={network_key}&amount={amount}",
         state.public_base_url.trim_end_matches('/'),
@@ -1956,19 +2152,93 @@ async fn x402_base_bounty_funding(
     let plan = configured_autonomous_planner(network_key)?
         .plan_authorized_contribution(network_key, &contribution, &signature, relayer.as_deref())
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if !state.x402_relayer.enabled {
+        return x402_self_relay_response(&authorization, plan);
+    }
+    validate_hosted_x402_intent(
+        &plan.relay_transaction,
+        relayer.as_deref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
+        &bounty_contract,
+    )?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let request_fingerprint = hex::encode(Sha256::digest(
+        serde_json::to_vec(&payload).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    ));
+    let attempt = store
+        .reserve_x402_relay_attempt(
+            &NewX402RelayAttempt {
+                id: Uuid::new_v4(),
+                idempotency_key: format!(
+                    "x402:{network_key}:{}:{}",
+                    authorization.bounty_contract, authorization.nonce
+                ),
+                network: network_key.to_string(),
+                bounty_contract: authorization.bounty_contract,
+                contributor: authorization.contributor,
+                amount: authorization.amount,
+                authorization_nonce: authorization.nonce,
+                authorization_valid_before: authorization.valid_before,
+                request_fingerprint,
+                relayer_address: relayer.ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
+            },
+            state.x402_relayer.max_daily_attempts,
+            state.x402_relayer.max_daily_attempts_per_contributor,
+        )
+        .await
+        .map_err(map_x402_db_error)?;
+    let attempt = process_x402_hosted_relay(&state, attempt, &plan.relay_transaction).await?;
+    x402_relay_response(&state, &attempt)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/x402/base/relays/{relay_id}",
+    params(("relay_id" = Uuid, Path, description = "Durable hosted x402 relay attempt ID")),
+    responses(
+        (status = 200, description = "Canonical FundingAdded confirmed"),
+        (status = 202, description = "Relay is queued, broadcasting, or awaiting confirmation"),
+        (status = 404, description = "Relay attempt not found")
+    )
+)]
+async fn get_x402_relay(
+    State(state): State<SharedState>,
+    Path(relay_id): Path<Uuid>,
+) -> Result<Response, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut attempt = store
+        .get_x402_relay_attempt(relay_id)
+        .await
+        .map_err(map_x402_db_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if attempt.status == X402RelayStatus::Broadcast {
+        attempt = reconcile_x402_relay(&state, attempt).await?;
+    }
+    x402_relay_response(&state, &attempt)
+}
+
+fn x402_self_relay_response(
+    authorization: &payments_x402::ValidatedFundingAuthorization,
+    plan: chain_base::AutonomousBountyAuthorizedContributionPlan,
+) -> Result<Response, StatusCode> {
     let mut response = (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "x402Version": X402_VERSION,
             "scheme": AGENT_BOUNTY_FUND_SCHEME,
-            "status": "relay_required",
+            "status": "self_relay_required",
             "settled": false,
             "contributor": authorization.contributor,
             "bountyContract": authorization.bounty_contract,
             "amount": authorization.amount.to_string(),
             "authorizationNonce": authorization.nonce,
             "plan": plan,
-            "nextStep": "Simulate and broadcast plan.relay_transaction from the chosen gas-paying Base wallet. The contract verifies the EIP-3009 signature; then wait for confirmed canonical FundingAdded before treating the bounty as funded.",
+            "nextStep": "Hosted relay is disabled. Simulate and broadcast plan.relay_transaction from the chosen gas-paying Base wallet, then wait for confirmed canonical FundingAdded.",
             "canonicalSuccessEvent": "FundingAdded",
             "paymentResponseHeaderPresent": false
         })),
@@ -1979,6 +2249,442 @@ async fn x402_base_bounty_funding(
         HeaderValue::from_static("no-store, private"),
     );
     Ok(response)
+}
+
+fn validate_hosted_x402_intent(
+    intent: &EvmTransactionIntent,
+    relayer: &str,
+    bounty_contract: &str,
+) -> Result<(), StatusCode> {
+    if intent.value_wei != 0
+        || intent.function != AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION
+        || !intent.to.eq_ignore_ascii_case(bounty_contract)
+        || intent
+            .from
+            .as_deref()
+            .is_none_or(|from| !from.eq_ignore_ascii_case(relayer))
+    {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let calldata = intent
+        .data
+        .strip_prefix("0x")
+        .ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
+    if calldata.len() != 8 + (8 * 64)
+        || !calldata.starts_with(AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR)
+    {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    Ok(())
+}
+
+async fn process_x402_hosted_relay(
+    state: &SharedState,
+    mut attempt: X402RelayAttempt,
+    intent: &EvmTransactionIntent,
+) -> Result<X402RelayAttempt, StatusCode> {
+    if attempt.status == X402RelayStatus::Broadcast {
+        return reconcile_x402_relay(state, attempt).await;
+    }
+    if attempt.status == X402RelayStatus::Confirmed
+        || (attempt.status == X402RelayStatus::Failed && !attempt.retryable)
+    {
+        return Ok(attempt);
+    }
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(&attempt.network)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let relayer = state
+        .x402_relayer
+        .relayer
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let Some(lease_token) = store
+        .acquire_x402_relayer_lease(&attempt.network, state.x402_relayer.lease_seconds)
+        .await
+        .map_err(map_x402_db_error)?
+    else {
+        return store
+            .get_x402_relay_attempt(attempt.id)
+            .await
+            .map_err(map_x402_db_error)?
+            .ok_or(StatusCode::NOT_FOUND);
+    };
+    let claimed = store
+        .claim_x402_relay_attempt(attempt.id, lease_token, state.x402_relayer.lease_seconds)
+        .await
+        .map_err(map_x402_db_error)?;
+    let Some(_claimed) = claimed else {
+        store
+            .release_x402_relayer_lease(&attempt.network, lease_token)
+            .await
+            .map_err(map_x402_db_error)?;
+        return store
+            .get_x402_relay_attempt(attempt.id)
+            .await
+            .map_err(map_x402_db_error)?
+            .ok_or(StatusCode::NOT_FOUND);
+    };
+    let relay_result = match tokio::time::timeout(
+        Duration::from_secs(state.x402_relayer.rpc_timeout_seconds),
+        relayer.simulate_and_broadcast(
+            &rpc_url,
+            base_network_descriptor(&attempt.network)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+                .chain_id,
+            intent,
+            state.x402_relayer.max_gas,
+            state.x402_relayer.max_fee_per_gas_wei,
+        ),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(ChainBaseError::RelayerProvider(
+            "relay RPC deadline exceeded".to_string(),
+        )),
+    };
+    let persisted_result = match relay_result {
+        Ok(transaction) => store
+            .mark_x402_relay_broadcast(
+                attempt.id,
+                lease_token,
+                &transaction.tx_hash,
+                transaction.estimated_gas,
+                transaction.gas_limit,
+            )
+            .await
+            .map_err(map_x402_db_error),
+        Err(error) => {
+            let retryable = x402_relay_error_is_retryable(&error);
+            store
+                .mark_x402_relay_failed(
+                    attempt.id,
+                    Some(lease_token),
+                    retryable,
+                    "relay_rejected",
+                    &error.to_string(),
+                )
+                .await
+                .map_err(map_x402_db_error)
+        }
+    };
+    let release_result = store
+        .release_x402_relayer_lease(&attempt.network, lease_token)
+        .await
+        .map_err(map_x402_db_error);
+    attempt = persisted_result?;
+    release_result?;
+    if attempt.status != X402RelayStatus::Broadcast {
+        return Ok(attempt);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(state.x402_relayer.wait_seconds);
+    loop {
+        attempt = reconcile_x402_relay(state, attempt).await?;
+        if attempt.status != X402RelayStatus::Broadcast || Instant::now() >= deadline {
+            return Ok(attempt);
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
+fn x402_relay_error_is_retryable(error: &ChainBaseError) -> bool {
+    match error {
+        ChainBaseError::InvalidRelayerPrivateKey
+        | ChainBaseError::InvalidRelayIntent(_)
+        | ChainBaseError::RelayerChainMismatch { .. } => false,
+        ChainBaseError::RelayerProvider(message) => {
+            !message.to_ascii_lowercase().contains("revert")
+        }
+        _ => true,
+    }
+}
+
+async fn reconcile_x402_relay(
+    state: &SharedState,
+    attempt: X402RelayAttempt,
+) -> Result<X402RelayAttempt, StatusCode> {
+    tokio::time::timeout(
+        Duration::from_secs(state.x402_relayer.rpc_timeout_seconds),
+        reconcile_x402_relay_inner(state, attempt),
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+}
+
+async fn reconcile_x402_relay_inner(
+    state: &SharedState,
+    attempt: X402RelayAttempt,
+) -> Result<X402RelayAttempt, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let tx_hash = attempt
+        .tx_hash
+        .as_deref()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(&attempt.network)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let response = fetch_transaction_receipt(&rpc_url, tx_hash, 1)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let Some(receipt) = response.result else {
+        return Ok(attempt);
+    };
+    if receipt.succeeded().map_err(|_| StatusCode::BAD_GATEWAY)? == Some(false) {
+        return store
+            .mark_x402_relay_failed(
+                attempt.id,
+                None,
+                false,
+                "transaction_reverted",
+                "The hosted relay transaction reverted; no canonical funding was applied.",
+            )
+            .await
+            .map_err(map_x402_db_error);
+    }
+    let Some(block_number) = receipt
+        .block_number()
+        .map_err(|_| StatusCode::BAD_GATEWAY)?
+    else {
+        return Ok(attempt);
+    };
+    let latest_block = fetch_block_number(&rpc_url, 2)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let observed_confirmations = latest_block.saturating_sub(block_number).saturating_add(1);
+    if observed_confirmations < state.x402_relayer.confirmations {
+        return Ok(attempt);
+    }
+    let confirmed_response = fetch_transaction_receipt(&rpc_url, tx_hash, 3)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let Some(confirmed_receipt) = confirmed_response.result else {
+        return Ok(attempt);
+    };
+    if confirmed_receipt
+        .block_number()
+        .map_err(|_| StatusCode::BAD_GATEWAY)?
+        != Some(block_number)
+        || confirmed_receipt
+            .succeeded()
+            .map_err(|_| StatusCode::BAD_GATEWAY)?
+            != Some(true)
+    {
+        return Ok(attempt);
+    }
+    let decoded = decode_autonomous_bounty_logs(
+        confirmed_receipt
+            .logs_to_evm_logs()
+            .map_err(|_| StatusCode::BAD_GATEWAY)?,
+    )
+    .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let matching_events = decoded
+        .into_iter()
+        .filter(|event| {
+            event
+                .contract_address
+                .eq_ignore_ascii_case(&attempt.bounty_contract)
+                && event.tx_hash.eq_ignore_ascii_case(tx_hash)
+        })
+        .collect::<Vec<_>>();
+    let funding_event = matching_events.iter().find(|event| {
+        event.kind == chain_base::AutonomousBountyEventKind::FundingAdded
+            && event.data["contributor"]
+                .as_str()
+                .is_some_and(|value| value.eq_ignore_ascii_case(&attempt.contributor))
+            && json_u128(&event.data["amount"]) == Some(u128::from(attempt.amount))
+    });
+    let Some(funding_event) = funding_event else {
+        return store
+            .mark_x402_relay_failed(
+                attempt.id,
+                None,
+                false,
+                "canonical_event_mismatch",
+                "The confirmed transaction did not emit the exact canonical FundingAdded event.",
+            )
+            .await
+            .map_err(map_x402_db_error);
+    };
+    let funding_event_id = funding_event.id;
+    for event in &matching_events {
+        store
+            .upsert_autonomous_bounty_event(&attempt.network, event)
+            .await
+            .map_err(map_x402_db_error)?;
+    }
+    store
+        .mark_x402_relay_confirmed(attempt.id, funding_event_id, block_number)
+        .await
+        .map_err(map_x402_db_error)
+}
+
+fn json_u128(value: &serde_json::Value) -> Option<u128> {
+    value
+        .as_u64()
+        .map(u128::from)
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+}
+
+fn map_x402_db_error(error: DbError) -> StatusCode {
+    match error {
+        DbError::X402RelayConflict(_) => StatusCode::CONFLICT,
+        DbError::X402RelayQuotaExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn x402_relay_response(
+    state: &SharedState,
+    attempt: &X402RelayAttempt,
+) -> Result<Response, StatusCode> {
+    let status_url = format!(
+        "{}/v1/x402/base/relays/{}",
+        state.public_base_url.trim_end_matches('/'),
+        attempt.id
+    );
+    if attempt.status == X402RelayStatus::Confirmed {
+        let transaction = attempt
+            .tx_hash
+            .clone()
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        let descriptor = base_network_descriptor(&attempt.network)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let settlement = SettlementResponse {
+            success: true,
+            error_reason: None,
+            error_message: None,
+            payer: Some(attempt.contributor.clone()),
+            transaction: transaction.clone(),
+            network: format!("eip155:{}", descriptor.chain_id),
+            amount: Some(attempt.amount.to_string()),
+            extensions: None,
+            extra: Some(BTreeMap::from([
+                ("relayId".to_string(), serde_json::json!(attempt.id)),
+                (
+                    "canonicalEvent".to_string(),
+                    serde_json::json!("FundingAdded"),
+                ),
+                (
+                    "canonicalEventId".to_string(),
+                    serde_json::json!(attempt.canonical_event_id),
+                ),
+                (
+                    "confirmedBlock".to_string(),
+                    serde_json::json!(attempt.confirmed_block),
+                ),
+            ])),
+        };
+        let encoded = encode_payment_response_header(&settlement)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut response = (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "x402Version": X402_VERSION,
+                "scheme": AGENT_BOUNTY_FUND_SCHEME,
+                "status": "confirmed",
+                "settled": true,
+                "relay": x402_public_relay(attempt),
+                "statusUrl": status_url,
+                "settlement": settlement,
+                "canonicalSuccessEvent": "FundingAdded",
+                "paymentResponseHeaderPresent": true
+            })),
+        )
+            .into_response();
+        response.headers_mut().insert(
+            HeaderName::from_static(PAYMENT_RESPONSE_HEADER),
+            HeaderValue::from_str(&encoded).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        );
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, private"),
+        );
+        return Ok(response);
+    }
+
+    let (status, next_step) = match attempt.status {
+        X402RelayStatus::Prepared | X402RelayStatus::Relaying => (
+            StatusCode::ACCEPTED,
+            "The hosted relay is queued. Poll statusUrl; do not treat this as funding.",
+        ),
+        X402RelayStatus::Broadcast => (
+            StatusCode::ACCEPTED,
+            "The transaction was broadcast. Poll statusUrl for confirmed canonical FundingAdded.",
+        ),
+        X402RelayStatus::Failed if attempt.retryable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The relay failed before canonical funding and may be retried with the same signed request.",
+        ),
+        X402RelayStatus::Failed => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "The authorization did not produce canonical funding. Issue a new authorization after correcting the reported error.",
+        ),
+        X402RelayStatus::Confirmed => unreachable!("confirmed returned above"),
+    };
+    let mut response = (
+        status,
+        Json(serde_json::json!({
+            "x402Version": X402_VERSION,
+            "scheme": AGENT_BOUNTY_FUND_SCHEME,
+            "status": x402_relay_status_name(attempt.status),
+            "settled": false,
+            "relay": x402_public_relay(attempt),
+            "statusUrl": status_url,
+            "nextStep": next_step,
+            "canonicalSuccessEvent": "FundingAdded",
+            "paymentResponseHeaderPresent": false
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
+    );
+    Ok(response)
+}
+
+fn x402_public_relay(attempt: &X402RelayAttempt) -> serde_json::Value {
+    serde_json::json!({
+        "id": attempt.id,
+        "network": attempt.network,
+        "bountyContract": attempt.bounty_contract,
+        "contributor": attempt.contributor,
+        "amount": attempt.amount,
+        "relayerAddress": attempt.relayer_address,
+        "status": x402_relay_status_name(attempt.status),
+        "retryable": attempt.retryable,
+        "attemptCount": attempt.attempt_count,
+        "transaction": attempt.tx_hash,
+        "estimatedGas": attempt.estimated_gas,
+        "gasLimit": attempt.gas_limit,
+        "errorCode": attempt.error_code,
+        "errorMessage": attempt.error_message,
+        "canonicalEventId": attempt.canonical_event_id,
+        "confirmedBlock": attempt.confirmed_block,
+        "createdAt": attempt.created_at,
+        "updatedAt": attempt.updated_at,
+    })
+}
+
+fn x402_relay_status_name(status: X402RelayStatus) -> &'static str {
+    match status {
+        X402RelayStatus::Prepared => "prepared",
+        X402RelayStatus::Relaying => "relaying",
+        X402RelayStatus::Broadcast => "broadcast",
+        X402RelayStatus::Confirmed => "confirmed",
+        X402RelayStatus::Failed => "failed",
+    }
 }
 
 fn x402_payment_required_error(
@@ -4799,6 +5505,83 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hosted_x402_intent_allows_only_exact_zero_value_funding_call() {
+        let relayer = "0x2222222222222222222222222222222222222222";
+        let bounty = "0x1111111111111111111111111111111111111111";
+        let mut intent = EvmTransactionIntent {
+            from: Some(relayer.to_string()),
+            to: bounty.to_string(),
+            value_wei: 0,
+            data: format!(
+                "0x{}{}",
+                AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
+                "00".repeat(8 * 32)
+            ),
+            function: AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION.to_string(),
+        };
+        assert!(validate_hosted_x402_intent(&intent, relayer, bounty).is_ok());
+
+        intent.value_wei = 1;
+        assert_eq!(
+            validate_hosted_x402_intent(&intent, relayer, bounty).unwrap_err(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        intent.value_wei = 0;
+        intent.data = "0xdeadbeef".to_string();
+        assert_eq!(
+            validate_hosted_x402_intent(&intent, relayer, bounty).unwrap_err(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[test]
+    fn confirmed_x402_relay_emits_payment_response_only_after_canonical_event() {
+        let state = test_state(BountyNetwork::default());
+        let now = Utc::now();
+        let attempt = X402RelayAttempt {
+            id: Uuid::new_v4(),
+            idempotency_key: "x402:test".to_string(),
+            network: "base-mainnet".to_string(),
+            bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            contributor: "0x3333333333333333333333333333333333333333".to_string(),
+            amount: 150_000,
+            authorization_nonce: format!("0x{}", "44".repeat(32)),
+            authorization_valid_before: 2_000_000_000,
+            request_fingerprint: "fingerprint".to_string(),
+            relayer_address: "0x2222222222222222222222222222222222222222".to_string(),
+            status: X402RelayStatus::Confirmed,
+            retryable: false,
+            attempt_count: 1,
+            tx_hash: Some(format!("0x{}", "55".repeat(32))),
+            estimated_gas: Some(100_000),
+            gas_limit: Some(120_000),
+            error_code: None,
+            error_message: None,
+            canonical_event_id: Some(Uuid::new_v4()),
+            confirmed_block: Some(123),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let public_relay = x402_public_relay(&attempt).to_string();
+        assert!(!public_relay.contains(&attempt.idempotency_key));
+        assert!(!public_relay.contains(&attempt.authorization_nonce));
+        assert!(!public_relay.contains(&attempt.request_fingerprint));
+
+        let response = x402_relay_response(&state, &attempt).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let settlement = payments_x402::decode_payment_response_header(
+            response.headers()[PAYMENT_RESPONSE_HEADER]
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(settlement.success);
+        assert_eq!(settlement.amount.as_deref(), Some("150000"));
+        assert_eq!(settlement.network, "eip155:8453");
+    }
+
     #[tokio::test]
     async fn x402_discovery_is_explicit_about_custom_funding_and_mpp_boundary() {
         let state = test_state(BountyNetwork::default());
@@ -4807,6 +5590,17 @@ mod tests {
         assert_eq!(document["x402Version"], X402_VERSION);
         assert_eq!(document["resources"][0]["scheme"], AGENT_BOUNTY_FUND_SCHEME);
         assert_eq!(document["resources"][0]["genericExactCompatible"], false);
+        assert_eq!(document["hostedRelay"]["enabled"], false);
+        assert_eq!(document["hostedRelay"]["minUsdcBaseUnits"], "100000");
+        assert_eq!(document["hostedRelay"]["maxDailyAttempts"], 100);
+        assert_eq!(
+            document["hostedRelay"]["maxDailyAttemptsPerContributor"],
+            10
+        );
+        assert!(document["hostedRelay"]["statusUrlTemplate"]
+            .as_str()
+            .unwrap()
+            .contains("/v1/x402/base/relays/{relay_id}"));
         assert_eq!(document["mpp"]["status"], "planned");
         assert!(document["safety"]["standardExactToBountyContract"]
             .as_str()
@@ -6192,6 +6986,7 @@ mod tests {
         assert!(paths.contains_key("/v1/capabilities/search"));
         assert!(paths.contains_key("/.well-known/x402.json"));
         assert!(paths.contains_key("/v1/x402/base/bounties/{bounty_contract}/funding"));
+        assert!(paths.contains_key("/v1/x402/base/relays/{relay_id}"));
         assert!(paths.contains_key("/v1/base/broadcast-signed-transaction"));
         assert!(paths.contains_key("/v1/base/transaction-receipt"));
         for autonomous in [
@@ -7201,6 +7996,7 @@ mod tests {
             operator_api_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            x402_relayer: X402HostedRelayerConfig::default(),
         })
     }
 
@@ -7226,6 +8022,7 @@ mod tests {
             operator_api_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            x402_relayer: X402HostedRelayerConfig::default(),
         })
     }
 
@@ -7246,6 +8043,7 @@ mod tests {
             operator_api_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            x402_relayer: X402HostedRelayerConfig::default(),
         })
     }
 
@@ -7266,6 +8064,7 @@ mod tests {
             operator_api_token: Some(token.to_string()),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            x402_relayer: X402HostedRelayerConfig::default(),
         })
     }
 
@@ -7290,6 +8089,7 @@ mod tests {
             operator_api_token: Some(token.to_string()),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            x402_relayer: X402HostedRelayerConfig::default(),
         })
     }
 
@@ -7316,6 +8116,7 @@ mod tests {
             operator_api_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            x402_relayer: X402HostedRelayerConfig::default(),
         })
     }
 
@@ -7339,6 +8140,7 @@ mod tests {
             operator_api_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            x402_relayer: X402HostedRelayerConfig::default(),
         })
     }
 
@@ -7362,6 +8164,7 @@ mod tests {
             operator_api_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            x402_relayer: X402HostedRelayerConfig::default(),
         })
     }
 
@@ -7386,6 +8189,7 @@ mod tests {
             operator_api_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            x402_relayer: X402HostedRelayerConfig::default(),
         })
     }
 

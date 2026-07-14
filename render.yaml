@@ -37,6 +37,11 @@ envVarGroups:
       - key: BASE_MAINNET_BOUNTY_IMPLEMENTATION
         value: 0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9
 
+  - name: agent-bounties-x402-relayer
+    envVars:
+      - key: X402_RELAYER_PRIVATE_KEY
+        sync: false
+
 services:
   - type: web
     name: agent-bounties-api
@@ -66,6 +71,28 @@ services:
           property: connectionString
       - key: ENABLE_BASE_TX_BROADCAST
         value: "false"
+      - key: ENABLE_X402_HOSTED_RELAY
+        value: "true"
+      - key: X402_RELAYER_MIN_USDC_BASE_UNITS
+        value: "100000"
+      - key: X402_RELAYER_MAX_USDC_BASE_UNITS
+        value: "5000000"
+      - key: X402_RELAYER_MAX_GAS
+        value: "300000"
+      - key: X402_RELAYER_MAX_FEE_PER_GAS_WEI
+        value: "10000000000"
+      - key: X402_RELAYER_MAX_DAILY_ATTEMPTS
+        value: "100"
+      - key: X402_RELAYER_MAX_DAILY_ATTEMPTS_PER_CONTRIBUTOR
+        value: "10"
+      - key: X402_RELAYER_CONFIRMATIONS
+        value: "2"
+      - key: X402_RELAYER_WAIT_SECONDS
+        value: "20"
+      - key: X402_RELAYER_RPC_TIMEOUT_SECONDS
+        value: "15"
+      - key: X402_RELAYER_LEASE_SECONDS
+        value: "45"
       - key: ENABLE_STRIPE_LIVE_EXECUTION
         value: "false"
       - key: ENABLE_STRIPE_PUBLIC_CHECKOUT
@@ -75,6 +102,7 @@ services:
       - fromGroup: agent-bounties-operator
       - fromGroup: agent-bounties-stripe
       - fromGroup: agent-bounties-base
+      - fromGroup: agent-bounties-x402-relayer
 
   - type: web
     name: agent-bounties-mcp

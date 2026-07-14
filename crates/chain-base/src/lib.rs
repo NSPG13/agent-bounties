@@ -1,3 +1,10 @@
+use alloy::{
+    network::TransactionBuilder,
+    primitives::{Address, Bytes, U256},
+    providers::{Provider, ProviderBuilder},
+    rpc::types::TransactionRequest,
+    signers::local::PrivateKeySigner,
+};
 use chrono::{DateTime, Utc};
 use domain::{
     AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord,
@@ -78,6 +85,20 @@ pub enum ChainBaseError {
     RpcProviderError { code: i64, message: String },
     #[error("invalid Base RPC response: {0}")]
     InvalidRpcResponse(String),
+    #[error("invalid Base relayer private key")]
+    InvalidRelayerPrivateKey,
+    #[error("invalid bounded Base relay intent: {0}")]
+    InvalidRelayIntent(String),
+    #[error("Base relayer connected to chain {observed}; expected {expected}")]
+    RelayerChainMismatch { expected: u64, observed: u64 },
+    #[error("Base relay gas estimate {estimated} exceeds cap {maximum}")]
+    RelayerGasLimitExceeded { estimated: u64, maximum: u64 },
+    #[error("Base relay max fee per gas {estimated} exceeds cap {maximum}")]
+    RelayerFeeCapExceeded { estimated: u128, maximum: u128 },
+    #[error("Base relayer balance {balance} is below bounded transaction cost {required}")]
+    RelayerInsufficientBalance { balance: u128, required: u128 },
+    #[error("Base relayer provider error: {0}")]
+    RelayerProvider(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +108,236 @@ pub struct EvmTransactionIntent {
     pub value_wei: u128,
     pub data: String,
     pub function: String,
+}
+
+#[derive(Clone)]
+pub struct BaseTransactionRelayer {
+    signer: PrivateKeySigner,
+}
+
+impl std::fmt::Debug for BaseTransactionRelayer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BaseTransactionRelayer")
+            .field("address", &self.address())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BaseRelayedTransaction {
+    pub relayer: String,
+    pub tx_hash: String,
+    pub estimated_gas: u64,
+    pub gas_limit: u64,
+    pub max_fee_per_gas_wei: u128,
+    pub max_priority_fee_per_gas_wei: u128,
+    pub estimated_max_cost_wei: u128,
+}
+
+impl BaseTransactionRelayer {
+    pub fn from_private_key(private_key: &str) -> Result<Self, ChainBaseError> {
+        let signer = private_key
+            .trim()
+            .parse::<PrivateKeySigner>()
+            .map_err(|_| ChainBaseError::InvalidRelayerPrivateKey)?;
+        Ok(Self { signer })
+    }
+
+    pub fn address(&self) -> String {
+        format!("{:#x}", self.signer.address())
+    }
+
+    pub async fn simulate_and_broadcast(
+        &self,
+        rpc_url: &str,
+        expected_chain_id: u64,
+        intent: &EvmTransactionIntent,
+        max_gas: u64,
+        max_fee_per_gas_wei: u128,
+    ) -> Result<BaseRelayedTransaction, ChainBaseError> {
+        if max_gas == 0 || max_fee_per_gas_wei == 0 {
+            return Err(ChainBaseError::InvalidRelayIntent(
+                "gas and fee caps must be positive".to_string(),
+            ));
+        }
+        if intent.value_wei != 0 {
+            return Err(ChainBaseError::InvalidRelayIntent(
+                "hosted relays cannot transfer ETH value".to_string(),
+            ));
+        }
+        let relayer = self.signer.address();
+        if let Some(from) = intent.from.as_deref() {
+            let expected = parse_alloy_address(from)?;
+            if expected != relayer {
+                return Err(ChainBaseError::InvalidRelayIntent(
+                    "transaction sender does not match the configured relayer".to_string(),
+                ));
+            }
+        }
+        let to = parse_alloy_address(&intent.to)?;
+        let data = parse_alloy_bytes(&intent.data)?;
+        if data.len() < 4 {
+            return Err(ChainBaseError::InvalidRelayIntent(
+                "transaction calldata is missing a function selector".to_string(),
+            ));
+        }
+        let rpc_url = rpc_url.parse().map_err(|_| {
+            ChainBaseError::RelayerProvider("configured RPC URL is invalid".to_string())
+        })?;
+        let provider = ProviderBuilder::new()
+            .wallet(self.signer.clone())
+            .connect_http(rpc_url);
+        let observed_chain_id = provider
+            .get_chain_id()
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        if observed_chain_id != expected_chain_id {
+            return Err(ChainBaseError::RelayerChainMismatch {
+                expected: expected_chain_id,
+                observed: observed_chain_id,
+            });
+        }
+
+        let transaction = TransactionRequest::default()
+            .with_from(relayer)
+            .with_to(to)
+            .with_value(U256::ZERO)
+            .with_input(data);
+        provider
+            .call(transaction.clone())
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        let estimated_gas = provider
+            .estimate_gas(transaction.clone())
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        let gas_limit = estimated_gas
+            .checked_mul(120)
+            .and_then(|value| value.checked_add(99))
+            .map(|value| value / 100)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRelayIntent("gas estimate overflow".to_string())
+            })?;
+        if gas_limit > max_gas {
+            return Err(ChainBaseError::RelayerGasLimitExceeded {
+                estimated: gas_limit,
+                maximum: max_gas,
+            });
+        }
+        let fees = provider
+            .estimate_eip1559_fees()
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        if fees.max_fee_per_gas > max_fee_per_gas_wei {
+            return Err(ChainBaseError::RelayerFeeCapExceeded {
+                estimated: fees.max_fee_per_gas,
+                maximum: max_fee_per_gas_wei,
+            });
+        }
+        let estimated_max_cost_wei = u128::from(gas_limit)
+            .checked_mul(fees.max_fee_per_gas)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRelayIntent("maximum gas cost overflow".to_string())
+            })?;
+        let balance = provider
+            .get_balance(relayer)
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        let balance = u128::try_from(balance).map_err(|_| {
+            ChainBaseError::InvalidRelayIntent("relayer balance exceeds u128".to_string())
+        })?;
+        if balance < estimated_max_cost_wei {
+            return Err(ChainBaseError::RelayerInsufficientBalance {
+                balance,
+                required: estimated_max_cost_wei,
+            });
+        }
+
+        let transaction = transaction
+            .with_gas_limit(gas_limit)
+            .with_max_fee_per_gas(fees.max_fee_per_gas)
+            .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas);
+        let pending = provider
+            .send_transaction(transaction)
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        Ok(BaseRelayedTransaction {
+            relayer: format!("{relayer:#x}"),
+            tx_hash: format!("{:#x}", pending.tx_hash()),
+            estimated_gas,
+            gas_limit,
+            max_fee_per_gas_wei: fees.max_fee_per_gas,
+            max_priority_fee_per_gas_wei: fees.max_priority_fee_per_gas,
+            estimated_max_cost_wei,
+        })
+    }
+}
+
+fn parse_alloy_address(value: &str) -> Result<Address, ChainBaseError> {
+    value
+        .parse::<Address>()
+        .map_err(|_| ChainBaseError::InvalidAddress(value.to_string()))
+}
+
+fn parse_alloy_bytes(value: &str) -> Result<Bytes, ChainBaseError> {
+    let raw = value.strip_prefix("0x").ok_or_else(|| {
+        ChainBaseError::InvalidRelayIntent("calldata must be 0x-prefixed".to_string())
+    })?;
+    let decoded = hex::decode(raw).map_err(|_| {
+        ChainBaseError::InvalidRelayIntent("calldata must be valid hex".to_string())
+    })?;
+    Ok(Bytes::from(decoded))
+}
+
+fn sanitize_relayer_provider_error(error: impl std::fmt::Display) -> ChainBaseError {
+    let message = redact_relayer_provider_urls(&error.to_string());
+    let first_line = message.lines().next().unwrap_or("provider request failed");
+    let bounded = first_line.chars().take(300).collect::<String>();
+    ChainBaseError::RelayerProvider(bounded)
+}
+
+fn redact_relayer_provider_urls(message: &str) -> String {
+    let mut redacted = String::with_capacity(message.len());
+    let mut index = 0;
+    while index < message.len() {
+        let remaining = &message[index..];
+        let scheme_len = if remaining.starts_with("https://") {
+            Some(8)
+        } else if remaining.starts_with("http://") {
+            Some(7)
+        } else if remaining.starts_with("wss://") {
+            Some(6)
+        } else if remaining.starts_with("ws://") {
+            Some(5)
+        } else {
+            None
+        };
+        if let Some(scheme_len) = scheme_len {
+            redacted.push_str("[redacted-url]");
+            index += scheme_len;
+            while index < message.len() {
+                let character = message[index..]
+                    .chars()
+                    .next()
+                    .expect("index remains on a character boundary");
+                if character.is_whitespace()
+                    || matches!(character, '"' | '\'' | ')' | ']' | '}' | ',' | ';')
+                {
+                    break;
+                }
+                index += character.len_utf8();
+            }
+            continue;
+        }
+        let character = remaining
+            .chars()
+            .next()
+            .expect("index remains below message length");
+        redacted.push(character);
+        index += character.len_utf8();
+    }
+    redacted
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +382,9 @@ pub struct AutonomousBountyCreate {
 }
 
 pub const CANONICAL_CHILD_PROTOCOL_VERSION: &str = "agent-bounties/canonical-child-v1";
+pub const AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION: &str =
+    "fundWithAuthorization(address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)";
+pub const AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR: &str = "e1c9e96f";
 pub const CANONICAL_CHILD_ACCEPTANCE_CRITERIA: [&str; 4] = [
     "Post a canonical autonomous-v1 child bounty whose creator is the active solver.",
     "Fully fund the child to at least the parent solver reward; pooled contributors are allowed.",
@@ -704,7 +958,7 @@ impl AutonomousBountyTxPlanner {
             to: bounty_contract.clone(),
             value_wei: 0,
             data: encode_call(
-                "fundWithAuthorization(address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)",
+                AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
                 vec![
                     encode_address(&contribution.contributor)?,
                     encode_uint256(amount)?,
@@ -716,7 +970,7 @@ impl AutonomousBountyTxPlanner {
                     parse_bytes32(&signature.s)?,
                 ],
             ),
-            function: "fundWithAuthorization(address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)".to_string(),
+            function: AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION.to_string(),
         };
         Ok(AutonomousBountyAuthorizedContributionPlan {
             protocol_version: plan.protocol_version,
@@ -4552,6 +4806,76 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
+    fn hosted_relayer_derives_public_address_and_redacts_private_key() {
+        let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        let relayer = BaseTransactionRelayer::from_private_key(private_key).unwrap();
+        assert_eq!(
+            relayer.address(),
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+        );
+        let debug = format!("{relayer:?}");
+        assert!(debug.contains(&relayer.address()));
+        assert!(!debug.contains(private_key));
+        assert_eq!(
+            BaseTransactionRelayer::from_private_key("not-a-private-key").unwrap_err(),
+            ChainBaseError::InvalidRelayerPrivateKey
+        );
+    }
+
+    #[test]
+    fn hosted_relayer_provider_errors_redact_rpc_credentials() {
+        let error = sanitize_relayer_provider_error(
+            "request to https://user:secret@rpc.example/v2/api-key?token=private failed; fallback wss://rpc.example/ws-key unavailable",
+        );
+        let ChainBaseError::RelayerProvider(message) = error else {
+            panic!("expected a relayer provider error");
+        };
+        assert_eq!(
+            message,
+            "request to [redacted-url] failed; fallback [redacted-url] unavailable"
+        );
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("api-key"));
+        assert!(!message.contains("ws-key"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_RPC_URL backed by an unlocked Anvil chain"]
+    async fn hosted_relayer_rehearsal_broadcasts_bounded_zero_value_transaction() {
+        let rpc_url = std::env::var("AGENT_BOUNTIES_TEST_RPC_URL").unwrap();
+        let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        let relayer = BaseTransactionRelayer::from_private_key(private_key).unwrap();
+        let intent = EvmTransactionIntent {
+            from: Some(relayer.address()),
+            to: relayer.address(),
+            value_wei: 0,
+            data: "0x12345678".to_string(),
+            function: "boundedRelayHarness()".to_string(),
+        };
+        let transaction = relayer
+            .simulate_and_broadcast(&rpc_url, 31_337, &intent, 100_000, 100_000_000_000)
+            .await
+            .unwrap();
+        assert_eq!(transaction.relayer, relayer.address());
+        assert!(transaction.gas_limit <= 100_000);
+        assert!(transaction.max_fee_per_gas_wei <= 100_000_000_000);
+
+        let mut receipt = None;
+        for request_id in 1..=30 {
+            receipt = fetch_transaction_receipt(&rpc_url, &transaction.tx_hash, request_id)
+                .await
+                .unwrap()
+                .result;
+            if receipt.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let receipt = receipt.expect("Anvil mined the relay transaction within three seconds");
+        assert_eq!(receipt.succeeded().unwrap(), Some(true));
+    }
+
+    #[test]
     fn function_selectors_match_solidity_contract() {
         assert_eq!(
             hex::encode(selector("createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)")),
@@ -4559,8 +4883,8 @@ mod tests {
         );
         assert_eq!(hex::encode(selector("fund(uint256)")), "ca1d209d");
         assert_eq!(
-            hex::encode(selector("fundWithAuthorization(address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)")),
-            "e1c9e96f"
+            hex::encode(selector(AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION)),
+            AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR
         );
         assert_eq!(hex::encode(selector("claim()")), "4e71d92d");
         assert_eq!(hex::encode(selector("submit(bytes32,bytes32)")), "d26ff86e");

@@ -184,8 +184,11 @@ for relayers.
 x402 v2 funding discovery is available at `/.well-known/x402.json`. A canonical
 bounty funding request returns `402 Payment Required` with the custom
 `agent-bounty-fund` scheme; after the agent signs the exact EIP-3009 payload,
-the retry returns the existing `fundWithAuthorization` relay call. The response
-does not claim settlement: only a confirmed canonical `FundingAdded` event does.
+the hosted gas-only relayer recovers the EIP-712 signer, enforces bounded
+amount and rolling-24-hour quotas, then simulates and broadcasts the exact
+`fundWithAuthorization` call. A fast confirmation returns `200` with
+`PAYMENT-RESPONSE`; otherwise `202` returns a durable relay URL to poll. Only a
+response backed by confirmed canonical `FundingAdded` claims settlement.
 Standard x402 `exact` transfers directly to bounty contracts are rejected
 because a raw ERC-20 transfer would bypass contract accounting and strand USDC.
 See `docs/adr/0002-x402-base-funding.md`.

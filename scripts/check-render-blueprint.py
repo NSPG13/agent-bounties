@@ -205,6 +205,12 @@ def main() -> int:
     require_env_sync_false(base_group, "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION")
     require_env_value(base_group, "BASE_MAINNET_RPC_URL", rpc_url)
     require_env_value(base_group, "BASE_MAINNET_USDC_TOKEN", str(deployment["native_usdc"]))
+    relayer_group = require_group(
+        text,
+        "agent-bounties-x402-relayer",
+        ["X402_RELAYER_PRIVATE_KEY"],
+    )
+    require_env_sync_false(relayer_group, "X402_RELAYER_PRIVATE_KEY")
     if active:
         require_env_value(base_group, "BASE_MAINNET_BOUNTY_FACTORY", str(factory["contract"]))
         require_env_value(base_group, "BASE_MAINNET_BOUNTY_IMPLEMENTATION", str(factory["implementation"]))
@@ -231,6 +237,18 @@ def main() -> int:
     require_env_value(api, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')
     require_env_value(api, "ENABLE_STRIPE_PUBLIC_CHECKOUT", '"false"')
     require_env_value(api, "ENABLE_BASE_TX_BROADCAST", '"false"')
+    require_env_value(api, "ENABLE_X402_HOSTED_RELAY", '"true"')
+    require_env_value(api, "X402_RELAYER_MIN_USDC_BASE_UNITS", '"100000"')
+    require_env_value(api, "X402_RELAYER_MAX_USDC_BASE_UNITS", '"5000000"')
+    require_env_value(api, "X402_RELAYER_MAX_GAS", '"300000"')
+    require_env_value(api, "X402_RELAYER_MAX_DAILY_ATTEMPTS", '"100"')
+    require_env_value(
+        api,
+        "X402_RELAYER_MAX_DAILY_ATTEMPTS_PER_CONTRIBUTOR",
+        '"10"',
+    )
+    if "fromGroup: agent-bounties-x402-relayer" not in api:
+        fail("API service must receive the isolated x402 relayer secret group")
     if "healthCheckPath: /health" not in api:
         fail("API service must use /health")
 
@@ -240,6 +258,8 @@ def main() -> int:
     require_env_value(mcp, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')
     require_env_value(mcp, "ENABLE_STRIPE_PUBLIC_CHECKOUT", '"false"')
     require_env_value(mcp, "ENABLE_BASE_TX_BROADCAST", '"false"')
+    if "fromGroup: agent-bounties-x402-relayer" in mcp:
+        fail("MCP service must not receive the x402 relayer private key")
     if "healthCheckPath: /health" not in mcp:
         fail("MCP service must use /health")
 
@@ -263,6 +283,11 @@ def main() -> int:
     env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
     required_env_lines = [
         "ENABLE_BASE_TX_BROADCAST=false",
+        "ENABLE_X402_HOSTED_RELAY=false",
+        "X402_RELAYER_PRIVATE_KEY=",
+        "X402_RELAYER_MIN_USDC_BASE_UNITS=100000",
+        "X402_RELAYER_MAX_DAILY_ATTEMPTS=100",
+        "X402_RELAYER_MAX_DAILY_ATTEMPTS_PER_CONTRIBUTOR=10",
         f"BASE_MAINNET_RPC_URL={rpc_url}",
         f"BASE_MAINNET_USDC_TOKEN={deployment['native_usdc']}",
         "BASE_MAINNET_BOUNTY_FACTORY=",
