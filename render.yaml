@@ -44,6 +44,11 @@ envVarGroups:
       - key: X402_RELAYER_PRIVATE_KEY
         sync: false
 
+  - name: agent-bounties-bond-sponsor
+    envVars:
+      - key: BOND_SPONSOR_PRIVATE_KEY
+        sync: false
+
 services:
   - type: web
     name: agent-bounties-api
@@ -96,6 +101,24 @@ services:
         value: "15"
       - key: X402_RELAYER_LEASE_SECONDS
         value: "45"
+      - key: ENABLE_BOND_SPONSORSHIP
+        value: "false"
+      - key: BOND_SPONSOR_MAX_BOND_BASE_UNITS
+        value: "100000"
+      - key: BOND_SPONSOR_MAX_NETWORK_24H_BASE_UNITS
+        value: "1000000"
+      - key: BOND_SPONSOR_MAX_SOLVER_24H_BASE_UNITS
+        value: "100000"
+      - key: BOND_SPONSOR_MAX_GAS
+        value: "100000"
+      - key: BOND_SPONSOR_MAX_FEE_PER_GAS_WEI
+        value: "10000000000"
+      - key: BOND_SPONSOR_CONFIRMATIONS
+        value: "2"
+      - key: BOND_SPONSOR_WAIT_SECONDS
+        value: "20"
+      - key: BOND_SPONSOR_RPC_TIMEOUT_SECONDS
+        value: "15"
       - key: ENABLE_STRIPE_LIVE_EXECUTION
         value: "false"
       - key: ENABLE_STRIPE_PUBLIC_CHECKOUT
@@ -106,6 +129,7 @@ services:
       - fromGroup: agent-bounties-stripe
       - fromGroup: agent-bounties-base
       - fromGroup: agent-bounties-x402-relayer
+      - fromGroup: agent-bounties-bond-sponsor
 
   - type: web
     name: agent-bounties-mcp

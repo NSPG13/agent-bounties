@@ -1,9 +1,11 @@
 use chain_base::{AutonomousBountyEvent, AutonomousBountyEventKind};
 use chrono::{DateTime, Utc};
 use domain::{
-    Agent, AgentStatus, AudienceInteraction, AudienceInteractionKind, AudienceLifecycleStage,
-    AudienceMember, AudienceProvider, AutonomousBountyTermsDocument, AutonomousBountyTermsRecord,
-    AutonomousSubmissionEvidenceRecord, Bounty, BountyStatus, Capability, CapabilityClass, Claim,
+    Agent, AgentEligibilityDecision, AgentEligibilityEvidence, AgentStatus, AgentWebhookEventType,
+    AudienceInteraction, AudienceInteractionKind, AudienceLifecycleStage, AudienceMember,
+    AudienceProvider, AutonomousBountyTermsDocument, AutonomousBountyTermsRecord,
+    AutonomousSubmissionEvidenceRecord, BondSponsorship, BondSponsorshipStatus, Bounty,
+    BountyStatus, Capability, CapabilityClass, Claim, ClaimCandidate, ClaimCandidateStatus,
     ContributorContact, DiscoveryResponse, Escrow, EscrowStatus, EvalRun, FundingContribution,
     FundingContributionStatus, FundingIntent, FundingIntentStatus, FundingMode, HelpRequest, Id,
     Money, OutreachAttempt, OutreachChannel, OutreachStatus, PaymentEvent, PaymentEventStatus,
@@ -13,7 +15,7 @@ use domain::{
 };
 use ledger::{LedgerEntry, Posting};
 use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
@@ -22,6 +24,8 @@ pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql
 pub const AUTONOMOUS_PROTOCOL_MIGRATION: &str =
     include_str!("../../../migrations/0002_autonomous_protocol.sql");
 pub const X402_RELAYER_MIGRATION: &str = include_str!("../../../migrations/0003_x402_relayer.sql");
+pub const AGENT_COORDINATION_MIGRATION: &str =
+    include_str!("../../../migrations/0004_agent_coordination.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -74,6 +78,33 @@ const INSERT_AUDIENCE_INTERACTION_SQL: &str = r#"
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (audience_member_id, provider_event_id) DO NOTHING
             "#;
+const CLAIM_CANDIDATE_SELECT_BY_IDEMPOTENCY_SQL: &str = r#"
+            SELECT id, idempotency_key, network, bounty_contract, solver_wallet,
+                   agent_id, eligibility_evidence, eligibility_decision, status,
+                   exclusive_until, authorization_nonce, authorization_valid_before,
+                   claim_transaction_hash, canonical_event_id, failure_code,
+                   failure_message, created_at, updated_at
+            FROM claim_candidates
+            WHERE idempotency_key = $1
+            "#;
+const ACTIVE_CLAIM_CANDIDATE_SELECT_SQL: &str = r#"
+            SELECT id, idempotency_key, network, bounty_contract, solver_wallet,
+                   agent_id, eligibility_evidence, eligibility_decision, status,
+                   exclusive_until, authorization_nonce, authorization_valid_before,
+                   claim_transaction_hash, canonical_event_id, failure_code,
+                   failure_message, created_at, updated_at
+            FROM claim_candidates
+            WHERE network = $1 AND bounty_contract = $2 AND solver_wallet = $3
+              AND status IN (
+                'waitlisted', 'exclusive', 'sponsoring', 'authorization_ready', 'relaying'
+              )
+            "#;
+const BOND_SPONSORSHIP_SELECT_BY_CANDIDATE_SQL: &str = r#"
+            SELECT id, claim_candidate_id, network, bounty_contract, solver_wallet,
+                   sponsor_wallet, amount, status, transaction_hash, confirmed_block,
+                   failure_code, failure_message, created_at, updated_at
+            FROM bond_sponsorships WHERE claim_candidate_id = $1
+            "#;
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -95,6 +126,12 @@ pub enum DbError {
     X402RelayConflict(String),
     #[error("x402 hosted relay quota exceeded: {0}")]
     X402RelayQuotaExceeded(String),
+    #[error("claim candidate conflict: {0}")]
+    ClaimCandidateConflict(String),
+    #[error("claim waitlist is full")]
+    ClaimWaitlistFull,
+    #[error("bond sponsorship quota exceeded: {0}")]
+    BondSponsorshipQuotaExceeded(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -222,6 +259,81 @@ pub struct X402RelayAttempt {
 }
 
 #[derive(Debug, Clone)]
+pub struct NewClaimCandidate {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub network: String,
+    pub bounty_contract: String,
+    pub solver_wallet: String,
+    pub agent_id: Option<Uuid>,
+    pub eligibility_evidence: AgentEligibilityEvidence,
+    pub eligibility_decision: AgentEligibilityDecision,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimCandidateReservation {
+    pub candidate: ClaimCandidate,
+    pub waitlist_position: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewBondSponsorship {
+    pub id: Uuid,
+    pub claim_candidate_id: Uuid,
+    pub network: String,
+    pub bounty_contract: String,
+    pub solver_wallet: String,
+    pub sponsor_wallet: String,
+    pub amount: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WebhookSubscription {
+    pub id: Uuid,
+    pub owner_wallet: String,
+    pub endpoint_url: String,
+    pub event_types: Vec<AgentWebhookEventType>,
+    pub secret_version: u32,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WebhookDelivery {
+    pub id: Uuid,
+    pub subscription_id: Uuid,
+    pub event_id: Uuid,
+    pub event_type: AgentWebhookEventType,
+    pub payload: serde_json::Value,
+    pub status: String,
+    pub attempt_count: u32,
+    pub next_attempt_at: DateTime<Utc>,
+    pub lease_token: Option<Uuid>,
+    pub lease_expires_at: Option<DateTime<Utc>>,
+    pub response_status: Option<u16>,
+    pub last_error: Option<String>,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryObligation {
+    pub id: Uuid,
+    pub issue_number: u64,
+    pub source_contract: String,
+    pub recipient_wallet: String,
+    pub amount: u64,
+    pub status: String,
+    pub transaction_hash: Option<String>,
+    pub evidence_url: Option<String>,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 pub struct BountyStatusScope {
     pub bounty: Bounty,
     pub funding_intents: Vec<FundingIntent>,
@@ -280,6 +392,7 @@ impl PostgresStore {
                 CORE_MIGRATION,
                 AUTONOMOUS_PROTOCOL_MIGRATION,
                 X402_RELAYER_MIGRATION,
+                AGENT_COORDINATION_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -650,6 +763,416 @@ impl PostgresStore {
             DbError::X402RelayConflict("relay was not broadcast before confirmation".to_string())
         })?;
         x402_relay_attempt_from_row(row)
+    }
+
+    pub async fn reserve_claim_candidate(
+        &self,
+        candidate: &NewClaimCandidate,
+        exclusive_seconds: u64,
+        waitlist_capacity: u16,
+    ) -> DbResult<ClaimCandidateReservation> {
+        if !candidate.eligibility_decision.eligible {
+            return Err(DbError::ClaimCandidateConflict(
+                "ineligible candidates cannot enter the claim queue".to_string(),
+            ));
+        }
+        if exclusive_seconds == 0 || waitlist_capacity == 0 {
+            return Err(DbError::ClaimCandidateConflict(
+                "claim queue bounds must be positive".to_string(),
+            ));
+        }
+        let network = candidate.network.trim().to_ascii_lowercase();
+        let bounty = normalize_key_address(&candidate.bounty_contract);
+        let solver = normalize_key_address(&candidate.solver_wallet);
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("claim-queue:{network}:{bounty}"))
+            .execute(&mut *transaction)
+            .await?;
+
+        let existing = sqlx::query(CLAIM_CANDIDATE_SELECT_BY_IDEMPOTENCY_SQL)
+            .bind(&candidate.idempotency_key)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .map(claim_candidate_from_row)
+            .transpose()?;
+        if let Some(existing) = existing {
+            if existing.network != network
+                || existing.bounty_contract != bounty
+                || existing.solver_wallet != solver
+                || existing.eligibility_evidence != candidate.eligibility_evidence
+            {
+                return Err(DbError::ClaimCandidateConflict(
+                    "idempotency key was already used for different claim inputs".to_string(),
+                ));
+            }
+            let position = waitlist_position(&mut transaction, &existing).await?;
+            transaction.commit().await?;
+            return Ok(ClaimCandidateReservation {
+                candidate: existing,
+                waitlist_position: position,
+            });
+        }
+
+        if sqlx::query(ACTIVE_CLAIM_CANDIDATE_SELECT_SQL)
+            .bind(&network)
+            .bind(&bounty)
+            .bind(&solver)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .is_some()
+        {
+            return Err(DbError::ClaimCandidateConflict(
+                "solver already has an active request for this bounty; replay its original idempotency key"
+                    .to_string(),
+            ));
+        }
+
+        let active_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*) FROM claim_candidates
+            WHERE network = $1 AND bounty_contract = $2
+              AND status IN ('exclusive', 'sponsoring', 'authorization_ready', 'relaying')
+            "#,
+        )
+        .bind(&network)
+        .bind(&bounty)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let status = if active_count == 0 {
+            "exclusive"
+        } else {
+            let waitlisted: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM claim_candidates WHERE network = $1 AND bounty_contract = $2 AND status = 'waitlisted'",
+            )
+            .bind(&network)
+            .bind(&bounty)
+            .fetch_one(&mut *transaction)
+            .await?;
+            if waitlisted >= i64::from(waitlist_capacity) {
+                return Err(DbError::ClaimWaitlistFull);
+            }
+            "waitlisted"
+        };
+        let exclusive_seconds = i64_from_u64(exclusive_seconds)?;
+        let row = sqlx::query(
+            r#"
+            INSERT INTO claim_candidates
+              (id, idempotency_key, network, bounty_contract, solver_wallet, agent_id,
+               eligibility_evidence, eligibility_decision, status, exclusive_until)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                    CASE WHEN $9 = 'exclusive'
+                         THEN now() + make_interval(secs => $10) ELSE NULL END)
+            RETURNING id, idempotency_key, network, bounty_contract, solver_wallet,
+                      agent_id, eligibility_evidence, eligibility_decision, status,
+                      exclusive_until, authorization_nonce, authorization_valid_before,
+                      claim_transaction_hash, canonical_event_id, failure_code,
+                      failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(candidate.id)
+        .bind(&candidate.idempotency_key)
+        .bind(&network)
+        .bind(&bounty)
+        .bind(&solver)
+        .bind(candidate.agent_id)
+        .bind(serde_json::to_value(&candidate.eligibility_evidence)?)
+        .bind(serde_json::to_value(&candidate.eligibility_decision)?)
+        .bind(status)
+        .bind(exclusive_seconds)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let candidate = claim_candidate_from_row(row)?;
+        let position = waitlist_position(&mut transaction, &candidate).await?;
+        transaction.commit().await?;
+        Ok(ClaimCandidateReservation {
+            candidate,
+            waitlist_position: position,
+        })
+    }
+
+    pub async fn get_claim_candidate(&self, id: Uuid) -> DbResult<Option<ClaimCandidate>> {
+        sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, bounty_contract, solver_wallet,
+                   agent_id, eligibility_evidence, eligibility_decision, status,
+                   exclusive_until, authorization_nonce, authorization_valid_before,
+                   claim_transaction_hash, canonical_event_id, failure_code,
+                   failure_message, created_at, updated_at
+            FROM claim_candidates WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(claim_candidate_from_row)
+        .transpose()
+    }
+
+    pub async fn set_claim_candidate_authorization(
+        &self,
+        id: Uuid,
+        nonce: &str,
+        valid_before: u64,
+    ) -> DbResult<ClaimCandidate> {
+        let row = sqlx::query(
+            r#"
+            UPDATE claim_candidates
+            SET status = 'authorization_ready', authorization_nonce = $2,
+                authorization_valid_before = $3, updated_at = now()
+            WHERE id = $1 AND status IN ('exclusive', 'sponsoring', 'authorization_ready')
+              AND exclusive_until > now()
+            RETURNING id, idempotency_key, network, bounty_contract, solver_wallet,
+                      agent_id, eligibility_evidence, eligibility_decision, status,
+                      exclusive_until, authorization_nonce, authorization_valid_before,
+                      claim_transaction_hash, canonical_event_id, failure_code,
+                      failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(nonce.to_ascii_lowercase())
+        .bind(i64_from_u64(valid_before)?)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::ClaimCandidateConflict(
+                "candidate is not the live exclusive claimant".to_string(),
+            )
+        })?;
+        claim_candidate_from_row(row)
+    }
+
+    pub async fn mark_claim_candidate_relaying(
+        &self,
+        id: Uuid,
+        tx_hash: &str,
+    ) -> DbResult<ClaimCandidate> {
+        update_claim_candidate_status(&self.pool, id, "relaying", Some(tx_hash), None, None).await
+    }
+
+    pub async fn mark_claim_candidate_claimed(
+        &self,
+        id: Uuid,
+        canonical_event_id: Uuid,
+    ) -> DbResult<ClaimCandidate> {
+        update_claim_candidate_status(
+            &self.pool,
+            id,
+            "claimed",
+            None,
+            Some(canonical_event_id),
+            None,
+        )
+        .await
+    }
+
+    pub async fn mark_claim_candidate_failed(
+        &self,
+        id: Uuid,
+        code: &str,
+        message: &str,
+    ) -> DbResult<ClaimCandidate> {
+        update_claim_candidate_status(&self.pool, id, "failed", None, None, Some((code, message)))
+            .await
+    }
+
+    pub async fn promote_waitlisted_claimant_after_canonical_reopen(
+        &self,
+        network: &str,
+        bounty_contract: &str,
+        exclusive_seconds: u64,
+    ) -> DbResult<Option<ClaimCandidate>> {
+        let network = network.trim().to_ascii_lowercase();
+        let bounty = normalize_key_address(bounty_contract);
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("claim-queue:{network}:{bounty}"))
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(
+            r#"
+            UPDATE claim_candidates SET status = 'superseded', updated_at = now()
+            WHERE network = $1 AND bounty_contract = $2
+              AND status IN ('exclusive', 'sponsoring', 'authorization_ready', 'relaying')
+              AND exclusive_until <= now()
+            "#,
+        )
+        .bind(&network)
+        .bind(&bounty)
+        .execute(&mut *transaction)
+        .await?;
+        let active = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, bounty_contract, solver_wallet,
+                   agent_id, eligibility_evidence, eligibility_decision, status,
+                   exclusive_until, authorization_nonce, authorization_valid_before,
+                   claim_transaction_hash, canonical_event_id, failure_code,
+                   failure_message, created_at, updated_at
+            FROM claim_candidates
+            WHERE network = $1 AND bounty_contract = $2
+              AND status IN ('exclusive', 'sponsoring', 'authorization_ready', 'relaying')
+            "#,
+        )
+        .bind(&network)
+        .bind(&bounty)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(claim_candidate_from_row)
+        .transpose()?;
+        if active.is_some() {
+            transaction.commit().await?;
+            return Ok(active);
+        }
+        let row = sqlx::query(
+            r#"
+            UPDATE claim_candidates
+            SET status = 'exclusive', exclusive_until = now() + make_interval(secs => $3),
+                updated_at = now()
+            WHERE id = (
+              SELECT id FROM claim_candidates
+              WHERE network = $1 AND bounty_contract = $2 AND status = 'waitlisted'
+              ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, idempotency_key, network, bounty_contract, solver_wallet,
+                      agent_id, eligibility_evidence, eligibility_decision, status,
+                      exclusive_until, authorization_nonce, authorization_valid_before,
+                      claim_transaction_hash, canonical_event_id, failure_code,
+                      failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(&network)
+        .bind(&bounty)
+        .bind(i64_from_u64(exclusive_seconds)?)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(claim_candidate_from_row)
+        .transpose()?;
+        transaction.commit().await?;
+        Ok(row)
+    }
+
+    pub async fn reserve_bond_sponsorship(
+        &self,
+        sponsorship: &NewBondSponsorship,
+        max_network_amount_24h: u64,
+        max_solver_amount_24h: u64,
+    ) -> DbResult<BondSponsorship> {
+        if sponsorship.amount == 0
+            || sponsorship.amount > max_solver_amount_24h
+            || max_solver_amount_24h > max_network_amount_24h
+        {
+            return Err(DbError::BondSponsorshipQuotaExceeded(
+                "requested grant exceeds configured bounds".to_string(),
+            ));
+        }
+        let network = sponsorship.network.trim().to_ascii_lowercase();
+        let solver = normalize_key_address(&sponsorship.solver_wallet);
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("bond-sponsorship:{network}"))
+            .execute(&mut *transaction)
+            .await?;
+        if let Some(existing) = sqlx::query(BOND_SPONSORSHIP_SELECT_BY_CANDIDATE_SQL)
+            .bind(sponsorship.claim_candidate_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .map(bond_sponsorship_from_row)
+            .transpose()?
+        {
+            transaction.commit().await?;
+            return Ok(existing);
+        }
+        let usage = sqlx::query(
+            r#"
+            SELECT COALESCE(SUM(amount), 0) AS network_amount,
+                   COALESCE(SUM(amount) FILTER (WHERE solver_wallet = $2), 0) AS solver_amount
+            FROM bond_sponsorships
+            WHERE network = $1
+              AND (status <> 'failed' OR failure_code = 'broadcast_unknown')
+              AND created_at >= now() - interval '24 hours'
+            "#,
+        )
+        .bind(&network)
+        .bind(&solver)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let network_amount = u64_from_i64(usage.try_get("network_amount")?)?;
+        let solver_amount = u64_from_i64(usage.try_get("solver_amount")?)?;
+        if network_amount.saturating_add(sponsorship.amount) > max_network_amount_24h
+            || solver_amount.saturating_add(sponsorship.amount) > max_solver_amount_24h
+        {
+            return Err(DbError::BondSponsorshipQuotaExceeded(
+                "rolling 24-hour grant cap reached".to_string(),
+            ));
+        }
+        let row = sqlx::query(
+            r#"
+            INSERT INTO bond_sponsorships
+              (id, claim_candidate_id, network, bounty_contract, solver_wallet,
+               sponsor_wallet, amount, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'reserved')
+            RETURNING id, claim_candidate_id, network, bounty_contract, solver_wallet,
+                      sponsor_wallet, amount, status, transaction_hash, confirmed_block,
+                      failure_code, failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(sponsorship.id)
+        .bind(sponsorship.claim_candidate_id)
+        .bind(&network)
+        .bind(normalize_key_address(&sponsorship.bounty_contract))
+        .bind(&solver)
+        .bind(normalize_key_address(&sponsorship.sponsor_wallet))
+        .bind(i64_from_u64(sponsorship.amount)?)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let sponsorship = bond_sponsorship_from_row(row)?;
+        transaction.commit().await?;
+        Ok(sponsorship)
+    }
+
+    pub async fn get_bond_sponsorship_for_candidate(
+        &self,
+        claim_candidate_id: Uuid,
+    ) -> DbResult<Option<BondSponsorship>> {
+        sqlx::query(BOND_SPONSORSHIP_SELECT_BY_CANDIDATE_SQL)
+            .bind(claim_candidate_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(bond_sponsorship_from_row)
+            .transpose()
+    }
+
+    pub async fn mark_bond_sponsorship_broadcast(
+        &self,
+        id: Uuid,
+        tx_hash: &str,
+    ) -> DbResult<BondSponsorship> {
+        update_bond_sponsorship(&self.pool, id, "broadcast", Some(tx_hash), None, None).await
+    }
+
+    pub async fn mark_bond_sponsorship_confirmed(
+        &self,
+        id: Uuid,
+        confirmed_block: u64,
+    ) -> DbResult<BondSponsorship> {
+        update_bond_sponsorship(
+            &self.pool,
+            id,
+            "confirmed",
+            None,
+            Some(confirmed_block),
+            None,
+        )
+        .await
+    }
+
+    pub async fn mark_bond_sponsorship_failed(
+        &self,
+        id: Uuid,
+        code: &str,
+        message: &str,
+    ) -> DbResult<BondSponsorship> {
+        update_bond_sponsorship(&self.pool, id, "failed", None, None, Some((code, message))).await
     }
 
     pub async fn upsert_agent(&self, agent: &Agent) -> DbResult<()> {
@@ -2967,6 +3490,191 @@ fn validate_x402_relay_replay(
     Ok(())
 }
 
+async fn waitlist_position(
+    transaction: &mut Transaction<'_, Postgres>,
+    candidate: &ClaimCandidate,
+) -> DbResult<Option<u32>> {
+    if candidate.status != ClaimCandidateStatus::Waitlisted {
+        return Ok(None);
+    }
+    let position: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM claim_candidates
+        WHERE network = $1 AND bounty_contract = $2 AND status = 'waitlisted'
+          AND (created_at, id) <= ($3, $4)
+        "#,
+    )
+    .bind(&candidate.network)
+    .bind(&candidate.bounty_contract)
+    .bind(candidate.created_at)
+    .bind(candidate.id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    Ok(Some(u32::try_from(position).map_err(|_| {
+        DbError::IntegerOverflow("claim waitlist position".to_string())
+    })?))
+}
+
+fn parse_claim_candidate_status(value: String) -> DbResult<ClaimCandidateStatus> {
+    match value.as_str() {
+        "waitlisted" => Ok(ClaimCandidateStatus::Waitlisted),
+        "exclusive" => Ok(ClaimCandidateStatus::Exclusive),
+        "sponsoring" => Ok(ClaimCandidateStatus::Sponsoring),
+        "authorization_ready" => Ok(ClaimCandidateStatus::AuthorizationReady),
+        "relaying" => Ok(ClaimCandidateStatus::Relaying),
+        "claimed" => Ok(ClaimCandidateStatus::Claimed),
+        "superseded" => Ok(ClaimCandidateStatus::Superseded),
+        "withdrawn" => Ok(ClaimCandidateStatus::Withdrawn),
+        "failed" => Ok(ClaimCandidateStatus::Failed),
+        other => Err(DbError::InvalidEnum(format!(
+            "claim candidate status {other}"
+        ))),
+    }
+}
+
+fn claim_candidate_from_row(row: PgRow) -> DbResult<ClaimCandidate> {
+    Ok(ClaimCandidate {
+        id: row.try_get("id")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        network: row.try_get("network")?,
+        bounty_contract: row.try_get("bounty_contract")?,
+        solver_wallet: row.try_get("solver_wallet")?,
+        agent_id: row.try_get("agent_id")?,
+        eligibility_evidence: serde_json::from_value(row.try_get("eligibility_evidence")?)?,
+        eligibility_decision: serde_json::from_value(row.try_get("eligibility_decision")?)?,
+        status: parse_claim_candidate_status(row.try_get("status")?)?,
+        exclusive_until: row.try_get("exclusive_until")?,
+        authorization_nonce: row.try_get("authorization_nonce")?,
+        authorization_valid_before: row
+            .try_get::<Option<i64>, _>("authorization_valid_before")?
+            .map(u64_from_i64)
+            .transpose()?,
+        claim_transaction_hash: row.try_get("claim_transaction_hash")?,
+        canonical_event_id: row.try_get("canonical_event_id")?,
+        failure_code: row.try_get("failure_code")?,
+        failure_message: row.try_get("failure_message")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+async fn update_claim_candidate_status(
+    pool: &PgPool,
+    id: Uuid,
+    status: &str,
+    tx_hash: Option<&str>,
+    canonical_event_id: Option<Uuid>,
+    failure: Option<(&str, &str)>,
+) -> DbResult<ClaimCandidate> {
+    let row = sqlx::query(
+        r#"
+        UPDATE claim_candidates
+        SET status = $2,
+            claim_transaction_hash = COALESCE($3, claim_transaction_hash),
+            canonical_event_id = COALESCE($4, canonical_event_id),
+            failure_code = $5,
+            failure_message = $6,
+            updated_at = now()
+        WHERE id = $1 AND (
+          ($2 = 'relaying' AND status IN ('exclusive', 'sponsoring', 'authorization_ready'))
+          OR ($2 = 'claimed' AND status IN ('exclusive', 'sponsoring', 'authorization_ready', 'relaying', 'claimed'))
+          OR ($2 = 'failed' AND status IN ('exclusive', 'sponsoring', 'authorization_ready', 'relaying'))
+        )
+        RETURNING id, idempotency_key, network, bounty_contract, solver_wallet,
+                  agent_id, eligibility_evidence, eligibility_decision, status,
+                  exclusive_until, authorization_nonce, authorization_valid_before,
+                  claim_transaction_hash, canonical_event_id, failure_code,
+                  failure_message, created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(status)
+    .bind(tx_hash.map(str::to_ascii_lowercase))
+    .bind(canonical_event_id)
+    .bind(failure.map(|(code, _)| code))
+    .bind(failure.map(|(_, message)| message.chars().take(500).collect::<String>()))
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        DbError::ClaimCandidateConflict(format!(
+            "candidate cannot transition to {status} from its current state"
+        ))
+    })?;
+    claim_candidate_from_row(row)
+}
+
+fn parse_bond_sponsorship_status(value: String) -> DbResult<BondSponsorshipStatus> {
+    match value.as_str() {
+        "reserved" => Ok(BondSponsorshipStatus::Reserved),
+        "broadcast" => Ok(BondSponsorshipStatus::Broadcast),
+        "confirmed" => Ok(BondSponsorshipStatus::Confirmed),
+        "failed" => Ok(BondSponsorshipStatus::Failed),
+        other => Err(DbError::InvalidEnum(format!(
+            "bond sponsorship status {other}"
+        ))),
+    }
+}
+
+fn bond_sponsorship_from_row(row: PgRow) -> DbResult<BondSponsorship> {
+    Ok(BondSponsorship {
+        id: row.try_get("id")?,
+        claim_candidate_id: row.try_get("claim_candidate_id")?,
+        network: row.try_get("network")?,
+        bounty_contract: row.try_get("bounty_contract")?,
+        solver_wallet: row.try_get("solver_wallet")?,
+        sponsor_wallet: row.try_get("sponsor_wallet")?,
+        amount: u64_from_i64(row.try_get("amount")?)?,
+        status: parse_bond_sponsorship_status(row.try_get("status")?)?,
+        transaction_hash: row.try_get("transaction_hash")?,
+        confirmed_block: row
+            .try_get::<Option<i64>, _>("confirmed_block")?
+            .map(u64_from_i64)
+            .transpose()?,
+        failure_code: row.try_get("failure_code")?,
+        failure_message: row.try_get("failure_message")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+async fn update_bond_sponsorship(
+    pool: &PgPool,
+    id: Uuid,
+    status: &str,
+    tx_hash: Option<&str>,
+    confirmed_block: Option<u64>,
+    failure: Option<(&str, &str)>,
+) -> DbResult<BondSponsorship> {
+    let row = sqlx::query(
+        r#"
+        UPDATE bond_sponsorships
+        SET status = $2, transaction_hash = COALESCE($3, transaction_hash),
+            confirmed_block = COALESCE($4, confirmed_block),
+            failure_code = $5, failure_message = $6, updated_at = now()
+        WHERE id = $1 AND (
+          ($2 = 'broadcast' AND status = 'reserved')
+          OR ($2 = 'confirmed' AND status IN ('broadcast', 'confirmed'))
+          OR ($2 = 'failed' AND status IN ('reserved', 'broadcast'))
+        )
+        RETURNING id, claim_candidate_id, network, bounty_contract, solver_wallet,
+                  sponsor_wallet, amount, status, transaction_hash, confirmed_block,
+                  failure_code, failure_message, created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(status)
+    .bind(tx_hash.map(str::to_ascii_lowercase))
+    .bind(confirmed_block.map(i64_from_u64).transpose()?)
+    .bind(failure.map(|(code, _)| code))
+    .bind(failure.map(|(_, message)| message.chars().take(500).collect::<String>()))
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        DbError::ClaimCandidateConflict(format!("bond sponsorship cannot transition to {status}"))
+    })?;
+    bond_sponsorship_from_row(row)
+}
+
 fn parse_audience_provider(value: String) -> DbResult<AudienceProvider> {
     match value.as_str() {
         "Github" => Ok(AudienceProvider::Github),
@@ -3389,6 +4097,36 @@ mod tests {
             assert!(
                 X402_RELAYER_MIGRATION.contains(invariant),
                 "missing x402 invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn coordination_migration_bounds_claims_sponsorship_and_delivery() {
+        for table in [
+            "recovery_obligations",
+            "claim_candidates",
+            "bond_sponsorships",
+            "webhook_subscriptions",
+            "webhook_deliveries",
+            "regression_verification_runs",
+        ] {
+            assert!(
+                AGENT_COORDINATION_MIGRATION.contains(table),
+                "missing {table}"
+            );
+        }
+        for invariant in [
+            "idempotency_key TEXT NOT NULL UNIQUE",
+            "idx_claim_candidates_one_exclusive",
+            "idx_claim_candidates_one_active_per_solver",
+            "claim_candidate_id UUID NOT NULL UNIQUE",
+            "idx_bond_sponsorships_rolling_caps",
+            "UNIQUE (subscription_id, event_id)",
+        ] {
+            assert!(
+                AGENT_COORDINATION_MIGRATION.contains(invariant),
+                "missing coordination invariant {invariant}"
             );
         }
     }

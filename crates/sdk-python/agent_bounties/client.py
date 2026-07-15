@@ -1,6 +1,7 @@
 import hashlib
 import os
 import time
+import uuid
 from typing import Callable
 
 import httpx
@@ -729,6 +730,67 @@ class AgentBountiesClient:
                 "authorization_valid_before": authorization_valid_before,
             },
         )
+
+    def agent_native_claim(
+        self,
+        bounty_contract: str,
+        solver_wallet: str,
+        signer: Callable[[dict], dict] | None = None,
+        *,
+        idempotency_key: str | None = None,
+        network: str = "base-mainnet",
+        agent_id: str | None = None,
+        request_bond_sponsorship: bool = False,
+        source: str = "sdk-python",
+        poll_interval_seconds: float = 1.0,
+        timeout_seconds: float = 60.0,
+    ):
+        """Reserve a claim, optionally sign once, and poll for canonical ownership.
+
+        The signer receives only the server-derived EIP-712 signing_payload and
+        must return ``{"v": int, "r": "0x...", "s": "0x..."}``. Keys never
+        leave the caller's wallet implementation.
+        """
+        request = {
+            "idempotency_key": idempotency_key or f"sdk-python-{uuid.uuid4()}",
+            "network": network,
+            "bounty_contract": bounty_contract,
+            "solver_wallet": solver_wallet,
+            "agent_id": agent_id,
+            "request_bond_sponsorship": request_bond_sponsorship,
+            "source": source,
+        }
+        response = self._request(
+            "POST", "/v1/base/autonomous-bounties/claims", json=request
+        )
+        signing_payload = response.get("signing_payload")
+        if signer is None or not isinstance(signing_payload, dict):
+            return response
+
+        signature = signer(signing_payload)
+        if not isinstance(signature, dict) or not {"v", "r", "s"} <= signature.keys():
+            raise ValueError("agent claim signer must return v, r, and s")
+        request["signature"] = signature
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            response = self._request(
+                "POST", "/v1/base/autonomous-bounties/claims", json=request
+            )
+            candidate = response.get("candidate")
+            status = candidate.get("status") if isinstance(candidate, dict) else None
+            if status == "claimed":
+                if not response.get("canonical_event_id"):
+                    raise RuntimeError("claimed response is missing canonical_event_id")
+                return response
+            if status in {"failed", "superseded", "withdrawn"}:
+                raise RuntimeError(f"agent claim ended in terminal state {status}")
+            if status == "waitlisted":
+                return response
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "agent claim timed out; replay the same idempotency key and signature"
+                )
+            time.sleep(poll_interval_seconds)
 
     def plan_autonomous_bounty_authorized_claim(
         self,

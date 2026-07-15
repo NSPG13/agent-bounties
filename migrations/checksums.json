@@ -4,6 +4,7 @@
   "migrations": {
     "0001_core.sql": "01c90253c0ecd84c3aedacf400062f3623d7c2a75ad77dbffbb140eb463b9f40",
     "0002_autonomous_protocol.sql": "0af4ab404df1e830c1c8bd60b6553e6af604ed36a076de9eba9d8186175fd820",
-    "0003_x402_relayer.sql": "7ae2b75395b319e3ac5e8c41c17dbf7fddb2d3b61ef56d60205299cc0c39a083"
+    "0003_x402_relayer.sql": "7ae2b75395b319e3ac5e8c41c17dbf7fddb2d3b61ef56d60205299cc0c39a083",
+    "0004_agent_coordination.sql": "71d7e986c99e774e4cbde2faf4cba7328b0dda618f1ba4ef5d2b2bde24421cb2"
   }
 }

@@ -53,6 +53,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "plan_autonomous_canonical_child_terms",
     "plan_autonomous_bounty_creation",
     "plan_autonomous_bounty_contribution",
+    "agent_native_claim",
     "plan_autonomous_bounty_claim",
     "plan_autonomous_bounty_submission",
     "prepare_autonomous_bounty_submission",
@@ -89,7 +90,8 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "schema endpoint requirements",
   );
   requireCondition(
-    endpointRequired.includes("autonomous_creation_plan") &&
+      endpointRequired.includes("autonomous_creation_plan") &&
+      endpointRequired.includes("autonomous_agent_native_claim") &&
       endpointRequired.includes("autonomous_attestation_settlement_plan"),
     "v2 schema does not require autonomous endpoints",
   );
@@ -119,6 +121,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "planAutonomousBountyAuthorizedCreation",
     "planAutonomousBountyContribution",
     "planAutonomousBountyAuthorizedContribution",
+    "agentNativeClaim",
     "planAutonomousBountyClaim",
     "planAutonomousBountyAuthorizedClaim",
     "planAutonomousBountySubmission",

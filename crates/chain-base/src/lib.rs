@@ -3864,7 +3864,7 @@ pub fn sha256_canonical_json(value: &Value) -> Result<String, ChainBaseError> {
 
 pub fn build_autonomous_bounty_terms_record(
     creator_wallet: &str,
-    document: AutonomousBountyTermsDocument,
+    mut document: AutonomousBountyTermsDocument,
     created_at: DateTime<Utc>,
 ) -> Result<AutonomousBountyTermsRecord, ChainBaseError> {
     let normalized_creator = normalize_evm_address(creator_wallet)?;
@@ -3894,6 +3894,7 @@ pub fn build_autonomous_bounty_terms_record(
         ));
     }
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
+    validate_claim_metadata(&mut document)?;
     let document_value = serde_json::to_value(&document)
         .map_err(|error| ChainBaseError::InvalidCanonicalJson(error.to_string()))?;
     if serde_json::to_vec(&document_value)
@@ -3915,6 +3916,66 @@ pub fn build_autonomous_bounty_terms_record(
         document,
         created_at,
     })
+}
+
+fn validate_claim_metadata(
+    document: &mut AutonomousBountyTermsDocument,
+) -> Result<(), ChainBaseError> {
+    if let Some(policy) = document.agent_eligibility.as_mut() {
+        if policy.required_capabilities.len() > 32
+            || policy.wallet_allowlist.len() > 500
+            || policy.wallet_denylist.len() > 500
+            || policy.maximum_sponsored_bond_base_units > 1_000_000
+            || (policy.sponsorship_allowed && policy.maximum_sponsored_bond_base_units == 0)
+        {
+            return Err(ChainBaseError::InvalidTermsDocument(
+                "agent eligibility or sponsorship bounds are invalid".to_string(),
+            ));
+        }
+        for index in 0..policy.required_capabilities.len() {
+            if policy.required_capabilities[..index].contains(&policy.required_capabilities[index])
+            {
+                return Err(ChainBaseError::InvalidTermsDocument(
+                    "required agent capabilities must be unique".to_string(),
+                ));
+            }
+        }
+        policy.wallet_allowlist = policy
+            .wallet_allowlist
+            .iter()
+            .map(normalize_evm_address)
+            .collect::<Result<Vec<_>, _>>()?;
+        policy.wallet_denylist = policy
+            .wallet_denylist
+            .iter()
+            .map(normalize_evm_address)
+            .collect::<Result<Vec<_>, _>>()?;
+        policy.wallet_allowlist.sort();
+        policy.wallet_allowlist.dedup();
+        policy.wallet_denylist.sort();
+        policy.wallet_denylist.dedup();
+        if policy
+            .wallet_allowlist
+            .iter()
+            .any(|wallet| policy.wallet_denylist.contains(wallet))
+        {
+            return Err(ChainBaseError::InvalidTermsDocument(
+                "a solver wallet cannot be both allowlisted and denylisted".to_string(),
+            ));
+        }
+    }
+    if let Some(policy) = document.claim_coordination.as_ref() {
+        if !(60..=86_400).contains(&policy.exclusive_claim_seconds)
+            || policy.waitlist_capacity == 0
+            || policy.waitlist_capacity > 1_000
+            || policy.takeover_grace_seconds > 3_600
+        {
+            return Err(ChainBaseError::InvalidTermsDocument(
+                "claim exclusivity, waitlist, or takeover bounds are invalid".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_contract_terms_document(
@@ -5702,6 +5763,8 @@ mod tests {
             }),
             source_url: Some("https://github.com/NSPG13/agent-bounties/issues/1".to_string()),
             discovery_source: Some("MCP discovery".to_string()),
+            agent_eligibility: None,
+            claim_coordination: None,
         };
         let record = build_autonomous_bounty_terms_record(
             "0x3333333333333333333333333333333333333333",
@@ -6007,6 +6070,8 @@ mod tests {
                         "https://github.com/NSPG13/agent-bounties/issues/244".to_string(),
                     ),
                     discovery_source: Some("github-label:bounty".to_string()),
+                    agent_eligibility: None,
+                    claim_coordination: None,
                 },
                 created_at: Utc::now(),
             }),
@@ -6199,6 +6264,8 @@ mod tests {
                     }),
                     source_url: None,
                     discovery_source: None,
+                    agent_eligibility: None,
+                    claim_coordination: None,
                 },
                 created_at: Utc::now(),
             }),
