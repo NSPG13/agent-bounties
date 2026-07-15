@@ -1469,19 +1469,20 @@ async fn prepare_agent_wallet_to_earn(
     State(state): State<SharedState>,
     Json(request): Json<PrepareAgentToEarnInput>,
 ) -> Result<Json<AgentWalletReadinessReport>, StatusCode> {
-    let (_, rpc_url) =
-        state
-            .base_rpc_urls
-            .resolve(&request.network)
-            .map_err(|error| match error {
-                ChainBaseError::UnknownNetwork(_)
-                | ChainBaseError::InvalidAddress(_)
-                | ChainBaseError::InvalidAmount => StatusCode::BAD_REQUEST,
-                _ => StatusCode::SERVICE_UNAVAILABLE,
-            })?;
+    let (descriptor, rpc_url) = state
+        .base_rpc_urls
+        .resolve(&request.network)
+        .map_err(|error| match error {
+            ChainBaseError::UnknownNetwork(_)
+            | ChainBaseError::InvalidAddress(_)
+            | ChainBaseError::InvalidAmount => StatusCode::BAD_REQUEST,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        })?;
+    let canonical_factory =
+        autonomous_factory_for_chain(descriptor.chain_id).ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     tokio::time::timeout(
         Duration::from_secs(12),
-        inspect_agent_wallet_readiness(&rpc_url, &request),
+        inspect_agent_wallet_readiness(&rpc_url, &canonical_factory, &request),
     )
     .await
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?

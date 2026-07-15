@@ -219,11 +219,11 @@ class AgentBountiesClient:
         self,
         wallet_address: str,
         bounty_contract: str,
-        claim_bond_base_units: str,
         signing_capabilities: list[str],
         policy: dict,
         network: str = "base-mainnet",
         wallet_profile: str | None = None,
+        claim_bond_base_units: str | None = None,
     ):
         """Check public wallet readiness without requesting wallet secrets or a signature."""
         return self._request(
@@ -233,7 +233,11 @@ class AgentBountiesClient:
                 "network": network,
                 "wallet_address": wallet_address,
                 "bounty_contract": bounty_contract,
-                "claim_bond_base_units": str(claim_bond_base_units),
+                "claim_bond_base_units": (
+                    str(claim_bond_base_units)
+                    if claim_bond_base_units is not None
+                    else None
+                ),
                 "signing_capabilities": signing_capabilities,
                 "wallet_profile": wallet_profile,
                 "policy": policy,
