@@ -150,6 +150,10 @@ def deploy_commit(deploy: dict[str, Any]) -> str | None:
     return commit_id.lower() if isinstance(commit_id, str) else None
 
 
+def auto_deploy_disabled(value: object) -> bool:
+    return value is False or value == "no"
+
+
 def existing_deploy(payload: object, revision: str) -> dict[str, Any] | None:
     if not isinstance(payload, list):
         raise RecoveryError("Render deploy-list response must be an array")
@@ -236,7 +240,7 @@ class RenderClient:
         return select_service(spec, self._read_with_retry(f"/services?{query}"))
 
     def disable_native_auto_deploy(self, service: dict[str, Any]) -> None:
-        if service.get("autoDeploy") is False:
+        if auto_deploy_disabled(service.get("autoDeploy")):
             return
         service_id = service["id"]
         updated = None
@@ -254,7 +258,9 @@ class RenderClient:
                     raise
             self._sleep(float(attempt * 2))
         updated_service = updated.get("service", updated) if isinstance(updated, dict) else None
-        if not isinstance(updated_service, dict) or updated_service.get("autoDeploy") is not False:
+        if not isinstance(updated_service, dict) or not auto_deploy_disabled(
+            updated_service.get("autoDeploy")
+        ):
             raise RecoveryError(f"Render did not disable native auto-deploy for {service['name']}")
 
     def list_deploys(self, service_id: str) -> Any:
