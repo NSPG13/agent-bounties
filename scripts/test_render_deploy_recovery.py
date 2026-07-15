@@ -154,6 +154,29 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             response={
                 "id": "srv-api",
                 "name": "agent-bounties-api",
+                "autoDeploy": "no",
+            }
+        )
+        client.disable_native_auto_deploy(
+            {"id": "srv-api", "name": "agent-bounties-api", "autoDeploy": True}
+        )
+        self.assertEqual(
+            client.requests,
+            [("PATCH", "/services/srv-api", {"autoDeploy": "no"})],
+        )
+
+    def test_disabled_render_enum_skips_redundant_update(self) -> None:
+        client = RecordingClient(response=None)
+        client.disable_native_auto_deploy(
+            {"id": "srv-api", "name": "agent-bounties-api", "autoDeploy": "no"}
+        )
+        self.assertEqual(client.requests, [])
+
+    def test_legacy_boolean_disabled_response_remains_compatible(self) -> None:
+        client = RecordingClient(
+            response={
+                "id": "srv-api",
+                "name": "agent-bounties-api",
                 "autoDeploy": False,
             }
         )
