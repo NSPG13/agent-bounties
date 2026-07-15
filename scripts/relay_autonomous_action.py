@@ -42,17 +42,46 @@ MAX_BOND_MINOR = 500_000
 MAX_AUTHORIZATION_WINDOW_SECONDS = 3_600
 MAX_GAS_PRICE_WEI = 100_000_000
 MAX_GAS_COST_WEI = 100_000_000_000_000
+DEFAULT_STATE_WAIT_SECONDS = 120
+DEFAULT_STATE_POLL_SECONDS = 3
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
+DEFAULT_OPERATION_TIMEOUT_SECONDS = 240
 GAS_CAPS = {"claim": 350_000, "submit": 250_000, "settle": 500_000}
+STATUS_OPEN = 0
 STATUS_CLAIMABLE = 1
 STATUS_CLAIMED = 2
 STATUS_SUBMITTED = 3
 STATUS_SETTLED = 4
 HEX_32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 HEX_SIGNATURE_RE = re.compile(r"^0x[0-9a-fA-F]{130}$")
+PRIVATE_KEY_RE = re.compile(r"^(?:0x)?[0-9a-fA-F]{64}$")
 
 
 class RelayError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "relay_refused",
+        retryable: bool = False,
+        details: Mapping[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.details = dict(details or {})
+
+
+def normalize_private_key(value: str) -> str:
+    normalized = value.strip()
+    if not PRIVATE_KEY_RE.fullmatch(normalized):
+        raise RelayError(
+            "keeper signer unavailable: BASE_KEEPER_PRIVATE_KEY must be exactly "
+            "one 32-byte hex value",
+            code="keeper_configuration_invalid",
+            retryable=True,
+        )
+    return normalized
 
 
 def parse_uint(value: str) -> int:
@@ -247,22 +276,57 @@ class BountyState:
 
 
 class CastClient:
-    def __init__(self, cast_bin: str, rpc_url: str, block_tag: str = "finalized") -> None:
+    def __init__(
+        self,
+        cast_bin: str,
+        rpc_url: str,
+        block_tag: str = "finalized",
+        command_timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        operation_timeout_seconds: int = DEFAULT_OPERATION_TIMEOUT_SECONDS,
+    ) -> None:
         self.cast_bin = cast_bin
         self.rpc_url = rpc_url
         self.block_tag = block_tag
+        self.command_timeout_seconds = command_timeout_seconds
+        self.operation_timeout_seconds = operation_timeout_seconds
+        self.operation_deadline = time.monotonic() + operation_timeout_seconds
+
+    def remaining_command_timeout(self) -> float:
+        remaining = self.operation_deadline - time.monotonic()
+        if remaining <= 0:
+            raise RelayError(
+                f"relay operation exceeded its {self.operation_timeout_seconds}-second deadline",
+                code="relay_operation_timeout",
+                retryable=True,
+            )
+        return min(float(self.command_timeout_seconds), remaining)
 
     def run(self, *args: str, retry: bool = True) -> str:
         attempts = 3 if retry else 1
         message = "unknown cast failure"
         for attempt in range(attempts):
-            completed = subprocess.run(
-                [self.cast_bin, *args],
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-            )
+            timeout = self.remaining_command_timeout()
+            try:
+                completed = subprocess.run(
+                    [self.cast_bin, *args],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                message = f"cast operation timed out after {timeout:.1f} seconds"
+                if self.operation_deadline - time.monotonic() <= 0:
+                    raise RelayError(
+                        "relay operation exceeded its "
+                        f"{self.operation_timeout_seconds}-second deadline",
+                        code="relay_operation_timeout",
+                        retryable=True,
+                    )
+                if attempt + 1 < attempts:
+                    time.sleep(2)
+                continue
             if completed.returncode == 0:
                 return completed.stdout.strip()
             message = completed.stderr.strip() or completed.stdout.strip()
@@ -285,9 +349,14 @@ class CastClient:
             self.run("block", block, "--field", "timestamp", "--rpc-url", self.rpc_url)
         )
 
-    def codehash(self, contract: str) -> str:
+    def codehash(self, contract: str, block: str | None = None) -> str:
         code = self.run(
-            "code", contract, "--block", self.block_tag, "--rpc-url", self.rpc_url
+            "code",
+            contract,
+            "--block",
+            block or self.block_tag,
+            "--rpc-url",
+            self.rpc_url,
         ).lower()
         if code == "0x":
             raise RelayError("bounty contract has no bytecode")
@@ -359,12 +428,61 @@ def bool_value(value: str) -> bool:
     return normalized == "true"
 
 
+def preflight_keeper(
+    client: CastClient, private_key: str | None
+) -> tuple[str, str, int]:
+    if not private_key:
+        raise RelayError(
+            "keeper signer unavailable: BASE_KEEPER_PRIVATE_KEY is required for execution",
+            code="keeper_configuration_missing",
+            retryable=True,
+        )
+    normalized_key = normalize_private_key(private_key)
+    try:
+        keeper = client.keeper_address(normalized_key)
+        chain_id = client.chain_id()
+        balance = client.balance(keeper)
+    except RelayError as error:
+        raise RelayError(
+            f"keeper preflight unavailable: {error}",
+            code="keeper_preflight_unavailable",
+            retryable=True,
+        ) from error
+    if chain_id != CHAIN_ID:
+        raise RelayError(
+            f"keeper RPC is connected to chain {chain_id}; expected {CHAIN_ID}",
+            code="keeper_chain_mismatch",
+            retryable=True,
+        )
+    if balance < MAX_GAS_COST_WEI:
+        raise RelayError(
+            f"keeper {keeper} needs at least {MAX_GAS_COST_WEI} wei on Base for one bounded relay",
+            code="keeper_balance_low",
+            retryable=True,
+        )
+    return normalized_key, keeper, balance
+
+
+def keeper_health(client: CastClient, private_key: str | None) -> dict[str, object]:
+    _, keeper, balance = preflight_keeper(client, private_key)
+    return {
+        "schema": SCHEMA,
+        "outcome": "healthy",
+        "action": "health_check",
+        "bounty_contract": "none",
+        "keeper": keeper,
+        "chain_id": CHAIN_ID,
+        "keeper_balance_wei": balance,
+        "minimum_balance_wei": MAX_GAS_COST_WEI,
+    }
+
+
 def read_state(client: CastClient, contract: str, block: str | None = None) -> BountyState:
     call = lambda signature, *args: client.call(contract, signature, *args, block=block)
     return BountyState(
         chain_id=client.chain_id(),
         block_timestamp=client.block_timestamp("latest" if block is None else block),
-        codehash=client.codehash(contract),
+        codehash=client.codehash(contract, block),
         canonical=bool_value(
             client.call(FACTORY, "isCanonicalBounty(address)(bool)", contract, block=block)
         ),
@@ -549,6 +667,79 @@ def already_applied(action: str, envelope: Mapping[str, object], state: BountySt
     return state.status == STATUS_SETTLED
 
 
+def status_name(status: int) -> str:
+    return {
+        STATUS_OPEN: "open",
+        STATUS_CLAIMABLE: "claimable",
+        STATUS_CLAIMED: "claimed",
+        STATUS_SUBMITTED: "submitted",
+        STATUS_SETTLED: "settled",
+    }.get(status, f"unknown-{status}")
+
+
+def is_waitable_predecessor(
+    action: str, envelope: Mapping[str, object], state: BountyState
+) -> bool:
+    if action == "claim":
+        return state.status == STATUS_OPEN and state.solver == ZERO_ADDRESS
+    if action == "submit":
+        return (
+            state.status == STATUS_CLAIMABLE
+            and state.solver == ZERO_ADDRESS
+            and state.round + 1 == int(envelope["round"])
+        )
+    return (
+        state.status == STATUS_CLAIMED
+        and state.round == int(envelope["round"])
+        and state.solver != ZERO_ADDRESS
+    )
+
+
+def read_actionable_state(
+    client: CastClient,
+    event: RelayEvent,
+    *,
+    wait_seconds: int,
+    poll_seconds: float,
+    sleep_fn=time.sleep,
+    clock=time.monotonic,
+) -> tuple[BountyState, tuple[str, list[str]] | None, int]:
+    action = str(event.envelope["action"])
+    contract = normalize_address(str(event.envelope["bounty_contract"]))
+    started = clock()
+    attempts = 0
+    while True:
+        attempts += 1
+        state = read_state(client, contract, block="latest")
+        validate_common(state, require_funded=state.status != STATUS_SETTLED)
+        if already_applied(action, event.envelope, state):
+            return state, None, attempts
+        try:
+            call = action_call(client, event, state)
+        except RelayError as error:
+            if not is_waitable_predecessor(action, event.envelope, state):
+                raise
+            elapsed = max(0.0, clock() - started)
+            if elapsed >= wait_seconds:
+                observed = status_name(state.status)
+                raise RelayError(
+                    f"lifecycle state did not reach the {action} precondition within "
+                    f"{wait_seconds} seconds; observed {observed} round {state.round}",
+                    code="lifecycle_state_timeout",
+                    retryable=True,
+                    details={
+                        "state_attempts": attempts,
+                        "state_wait_seconds": wait_seconds,
+                        "observed_status": observed,
+                        "observed_round": state.round,
+                    },
+                ) from error
+            remaining = wait_seconds - elapsed
+            sleep_fn(min(max(poll_seconds, 0.01), remaining))
+            continue
+        return state, call, attempts
+
+
 def write_json(path: pathlib.Path, value: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -566,11 +757,35 @@ def render_comment(report: Mapping[str, object], comment_id: int) -> str:
         f"Action: `{action}`",
         f"Bounty contract: `{contract}`",
     ]
+    if outcome == "processing":
+        lines.extend(
+            [
+                "",
+                "Request received. Keeper, chain, canonical contract, lifecycle state, proof, "
+                "gas, and balance validation are in progress.",
+                "This run has a bounded lifecycle wait of "
+                f"{report.get('state_wait_seconds', 0)} seconds; "
+                "this comment will be updated with a terminal result.",
+            ]
+        )
     if report.get("transaction_hash"):
         tx_hash = str(report["transaction_hash"])
         lines.extend([f"Transaction: https://basescan.org/tx/{tx_hash}"])
     if report.get("error"):
         lines.extend(["", f"Relay refused: {report['error']}"])
+    if report.get("error_code"):
+        lines.append(f"Failure code: `{report['error_code']}`")
+    if report.get("retryable"):
+        lines.append(
+            "Retryable: yes. The same bounded request may be retried while its signature, "
+            "round, and deadline remain valid; operator configuration errors require "
+            "maintainer repair."
+        )
+    if report.get("observed_status"):
+        lines.append(
+            f"Observed lifecycle state: `{report['observed_status']}` "
+            f"(round `{report.get('observed_round', 'unknown')}`)."
+        )
     lines.extend(
         [
             "",
@@ -591,6 +806,7 @@ def publish_comment(event: RelayEvent, comment: str, env: Mapping[str, str]) -> 
         env=dict(env),
         text=True,
         encoding="utf-8",
+        timeout=20,
     )
     existing = json.loads(existing_raw)
     source_marker = f"Source comment id: `{event.comment_id}`"
@@ -620,7 +836,13 @@ def publish_comment(event: RelayEvent, comment: str, env: Mapping[str, str]) -> 
             "--field",
             f"body={comment}",
         ]
-    subprocess.run(command, env=dict(env), check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(
+        command,
+        env=dict(env),
+        check=True,
+        stdout=subprocess.DEVNULL,
+        timeout=20,
+    )
 
 
 def relay(
@@ -629,12 +851,26 @@ def relay(
     *,
     execute: bool,
     private_key: str | None,
+    state_wait_seconds: int = DEFAULT_STATE_WAIT_SECONDS,
+    state_poll_seconds: float = DEFAULT_STATE_POLL_SECONDS,
+    sleep_fn=time.sleep,
+    clock=time.monotonic,
 ) -> dict[str, object]:
     envelope = event.envelope
     action = str(envelope["action"])
     contract = normalize_address(str(envelope["bounty_contract"]))
-    state = read_state(client, contract)
-    validate_common(state)
+    normalized_key: str | None = None
+    keeper: str | None = None
+    if execute or private_key:
+        normalized_key, keeper, _ = preflight_keeper(client, private_key)
+    state, call, state_attempts = read_actionable_state(
+        client,
+        event,
+        wait_seconds=state_wait_seconds,
+        poll_seconds=state_poll_seconds,
+        sleep_fn=sleep_fn,
+        clock=clock,
+    )
     report: dict[str, object] = {
         "schema": SCHEMA,
         "outcome": "validated",
@@ -644,18 +880,21 @@ def relay(
         "source_comment_id": event.comment_id,
         "source_comment_author": event.comment_author,
         "execute_requested": execute,
+        "lifecycle_block_tag": "latest",
+        "state_attempts": state_attempts,
+        "state_wait_seconds": state_wait_seconds,
         "before": asdict(state),
     }
-    if already_applied(action, envelope, state):
+    if keeper:
+        report["keeper"] = keeper
+    if call is None:
         report["outcome"] = "already_applied"
         return report
-    signature, args = action_call(client, event, state)
-    if not private_key:
-        if execute:
-            raise RelayError("BASE_KEEPER_PRIVATE_KEY is required for execution")
+    signature, args = call
+    if not normalized_key:
         report["call"] = {"function": signature, "args": args}
         return report
-    keeper = client.keeper_address(private_key)
+    assert keeper is not None
     gas_estimate = client.estimate(keeper, contract, signature, *args)
     gas_limit = gas_estimate * 125 // 100 + 10_000
     if gas_limit > GAS_CAPS[action]:
@@ -682,7 +921,7 @@ def relay(
     )
     if not execute:
         return report
-    receipt = client.send(private_key, gas_limit, contract, signature, *args)
+    receipt = client.send(normalized_key, gas_limit, contract, signature, *args)
     transaction_hash, block_tag = validate_receipt(receipt, contract)
     after = read_state(client, contract, block=block_tag)
     validate_after(action, envelope, state, after)
@@ -702,9 +941,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--event", type=pathlib.Path, default=os.environ.get("GITHUB_EVENT_PATH"))
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--health-check", action="store_true")
     parser.add_argument("--rpc-url", default=os.environ.get("BASE_MAINNET_RPC_URL", RPC_URL))
     parser.add_argument("--cast-bin", default=os.environ.get("CAST_BIN", "cast"))
     parser.add_argument("--block-tag", choices=("finalized", "latest"), default="finalized")
+    parser.add_argument(
+        "--state-wait-seconds",
+        type=int,
+        default=int(os.environ.get("BASE_RELAY_STATE_WAIT_SECONDS", DEFAULT_STATE_WAIT_SECONDS)),
+    )
+    parser.add_argument(
+        "--state-poll-seconds",
+        type=float,
+        default=float(os.environ.get("BASE_RELAY_STATE_POLL_SECONDS", DEFAULT_STATE_POLL_SECONDS)),
+    )
+    parser.add_argument(
+        "--command-timeout-seconds",
+        type=int,
+        default=int(
+            os.environ.get(
+                "BASE_RELAY_COMMAND_TIMEOUT_SECONDS", DEFAULT_COMMAND_TIMEOUT_SECONDS
+            )
+        ),
+    )
+    parser.add_argument(
+        "--operation-timeout-seconds",
+        type=int,
+        default=int(
+            os.environ.get(
+                "BASE_RELAY_OPERATION_TIMEOUT_SECONDS", DEFAULT_OPERATION_TIMEOUT_SECONDS
+            )
+        ),
+    )
     parser.add_argument(
         "--report", type=pathlib.Path, default=pathlib.Path("target/autonomous-gas-relay.json")
     )
@@ -716,27 +984,92 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if not args.event:
+    if not 0 <= args.state_wait_seconds <= 300:
+        print(
+            "autonomous_gas_relay=failed error=state wait must be between 0 and 300 seconds",
+            file=sys.stderr,
+        )
+        return 1
+    if not 0.1 <= args.state_poll_seconds <= 30:
+        print(
+            "autonomous_gas_relay=failed error=state poll must be between 0.1 and 30 seconds",
+            file=sys.stderr,
+        )
+        return 1
+    if not 5 <= args.command_timeout_seconds <= 60:
+        print(
+            "autonomous_gas_relay=failed error=command timeout must be between 5 and 60 seconds",
+            file=sys.stderr,
+        )
+        return 1
+    if not 60 <= args.operation_timeout_seconds <= 480:
+        print(
+            "autonomous_gas_relay=failed error=operation timeout must be between 60 and 480 seconds",
+            file=sys.stderr,
+        )
+        return 1
+    if not args.event and not args.health_check:
         print("autonomous_gas_relay=failed error=GITHUB_EVENT_PATH is required", file=sys.stderr)
         return 1
     event: RelayEvent | None = None
     try:
-        event = parse_event(pathlib.Path(args.event))
-        client = CastClient(args.cast_bin, args.rpc_url, args.block_tag)
-        report = relay(
-            client,
-            event,
-            execute=args.execute,
-            private_key=os.environ.get("BASE_KEEPER_PRIVATE_KEY"),
+        client = CastClient(
+            args.cast_bin,
+            args.rpc_url,
+            args.block_tag,
+            args.command_timeout_seconds,
+            args.operation_timeout_seconds,
         )
+        if args.health_check:
+            report = keeper_health(client, os.environ.get("BASE_KEEPER_PRIVATE_KEY"))
+        else:
+            event = parse_event(pathlib.Path(args.event))
+            if args.publish:
+                processing = {
+                    "schema": SCHEMA,
+                    "outcome": "processing",
+                    "action": str(event.envelope["action"]),
+                    "bounty_contract": str(event.envelope["bounty_contract"]),
+                    "state_wait_seconds": args.state_wait_seconds,
+                }
+                try:
+                    publish_comment(
+                        event,
+                        render_comment(processing, event.comment_id),
+                        os.environ,
+                    )
+                except (
+                    RelayError,
+                    OSError,
+                    subprocess.SubprocessError,
+                    json.JSONDecodeError,
+                ) as error:
+                    print(
+                        "autonomous_gas_relay=warning "
+                        f"error=unable to publish processing status: {error}",
+                        file=sys.stderr,
+                    )
+            report = relay(
+                client,
+                event,
+                execute=args.execute,
+                private_key=os.environ.get("BASE_KEEPER_PRIVATE_KEY"),
+                state_wait_seconds=args.state_wait_seconds,
+                state_poll_seconds=args.state_poll_seconds,
+            )
     except (RelayError, json.JSONDecodeError, OSError, ValueError) as error:
+        retryable = isinstance(error, RelayError) and error.retryable
         report = {
             "schema": SCHEMA,
-            "outcome": "failed",
+            "outcome": "retryable" if retryable else "failed",
             "action": str(event.envelope.get("action") if event else "unknown"),
             "bounty_contract": str(event.envelope.get("bounty_contract") if event else "unknown"),
             "error": str(error),
+            "error_code": error.code if isinstance(error, RelayError) else "unexpected_input",
+            "retryable": retryable,
         }
+        if isinstance(error, RelayError):
+            report.update(error.details)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     write_json(args.report, report)
     comment_id = event.comment_id if event else 0
@@ -753,7 +1086,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"autonomous_gas_relay={report['outcome']} action={report.get('action')} "
         f"contract={report.get('bounty_contract')}"
     )
-    return 0 if report["outcome"] != "failed" else 1
+    return 0 if report["outcome"] in {"validated", "relayed", "already_applied", "healthy"} else 1
 
 
 if __name__ == "__main__":
