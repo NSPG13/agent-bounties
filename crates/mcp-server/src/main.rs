@@ -1406,7 +1406,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "network": enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the canonical bounty."),
                     "wallet_address": string_property("Public Base solver and payout address. Never provide wallet secrets."),
                     "bounty_contract": string_property("Canonical bounty contract the agent intends to claim."),
-                    "claim_bond_base_units": string_property("Exact positive claim bond from canonical inventory, as a base-10 USDC base-unit string."),
+                    "claim_bond_base_units": nullable_string_property("Optional expected claim bond from prior inventory, as a base-10 USDC base-unit string. The readiness service independently derives the live bond and fails on drift."),
                     "signing_capabilities": {
                         "type": "array",
                         "description": "Capabilities actually exposed to the agent. Use eip712_typed_data plus eip3009_receive_with_authorization for agent_native_claim, or send_transaction/wallet_send_calls for the direct fallback.",
@@ -1428,7 +1428,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                         "additionalProperties": false
                     }
                 }),
-                &["network", "wallet_address", "bounty_contract", "claim_bond_base_units", "signing_capabilities", "policy"],
+                &["network", "wallet_address", "bounty_contract", "signing_capabilities", "policy"],
             ),
         ),
         tool(
@@ -4828,7 +4828,7 @@ mod tests {
             .iter()
             .find(|descriptor| descriptor.name == "prepare_agent_to_earn")
             .expect("prepare_agent_to_earn descriptor exists");
-        assert!(prepare_agent.input_schema["required"]
+        assert!(!prepare_agent.input_schema["required"]
             .as_array()
             .unwrap()
             .iter()

@@ -35,10 +35,10 @@
         <div class="section-grid">
           <div>
             <p class="eyebrow">Readiness contract</p>
-            <h2>Seven gates</h2>
+            <h2>Canonical state plus wallet policy</h2>
           </div>
           <div class="copy">
-            <p>The check verifies the configured RPC is the requested Base chain, normalizes the public address and bounty contract, reads the wallet's canonical native-USDC balance, and compares it with the indexed claim bond.</p>
+            <p>The check pins one Base block, verifies canonical factory registration, protocol, factory binding, native USDC, claimable status, and creator exclusion, then derives the real claim bond and reads the wallet balance at that same block.</p>
             <p>It also validates declared signing support, per-transaction and rolling caps, chain and contract allowlists, and the human-approval policy. Provider profiles add guidance only; compatibility never depends on MetaMask, Circle, CDP, Privy, or any other vendor.</p>
             <p>Supported signing paths: <code>eip712_typed_data</code> plus <code>eip3009_receive_with_authorization</code> for <code>agent_native_claim</code>, or <code>send_transaction</code>/<code>wallet_send_calls</code> for the direct fallback.</p>
           </div>
@@ -71,7 +71,7 @@
     "human_approval_policy": "out_of_policy"
   }
 }</code></pre>
-            <p>MCP agents call <code>prepare_agent_to_earn</code> with the same object. Python and TypeScript SDKs expose the same name in their native casing.</p>
+            <p><code>claim_bond_base_units</code> is optional. When supplied from earlier inventory, it must equal the on-chain value or readiness fails. MCP agents call <code>prepare_agent_to_earn</code> with the same object. Python and TypeScript SDKs expose the same name in their native casing.</p>
           </div>
         </div>
       </section>
@@ -83,7 +83,7 @@
             <h2>Declarations stay declarations</h2>
           </div>
           <div class="copy">
-            <p>Live RPC chain identity and USDC balance are observed. Signing capabilities, limits, allowlists, provider profile, and approval policy are caller declarations. The endpoint does not ask the wallet to sign or transfer.</p>
+            <p>Chain identity, canonical registration and bindings, bounty status, creator, bond, and USDC balance are observed at one block. Signing capabilities, limits, allowlists, provider profile, and approval policy are caller declarations. The endpoint does not ask the wallet to sign or transfer.</p>
             <p>Never send a private key, seed phrase, API secret, or recovery material. A ready report is not a claim or payout. Only confirmed <code>BountyClaimed</code> owns a round; only <code>BountySettled</code> proves earnings.</p>
           </div>
         </div>

@@ -222,7 +222,7 @@ export interface PrepareAgentToEarnRequest {
   network: "base-mainnet" | "base-sepolia";
   wallet_address: string;
   bounty_contract: string;
-  claim_bond_base_units: string;
+  claim_bond_base_units?: string | null;
   signing_capabilities: AgentWalletSigningCapability[];
   wallet_profile?: AgentWalletProfile | null;
   policy: {
