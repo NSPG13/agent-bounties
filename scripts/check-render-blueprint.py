@@ -237,9 +237,29 @@ def main() -> int:
             fail(f"{service_name} must build from the root Dockerfile")
         if "dockerContext: ." not in block:
             fail(f"{service_name} must build from the repo root context")
-        if "autoDeployTrigger: commit" not in block:
-            fail(f"{service_name} must deploy each reviewed main commit")
+        if "autoDeployTrigger: off" not in block:
+            fail(f"{service_name} must reserve deploy authority for the post-CI controller")
         require_database_ref(block)
+
+    deploy_workflow_path = repo_root / ".github" / "workflows" / "render-deploy-recovery.yml"
+    if not deploy_workflow_path.exists():
+        fail("missing deterministic Render deployment workflow")
+    deploy_workflow = deploy_workflow_path.read_text(encoding="utf-8")
+    workflow_contract = [
+        'workflows: ["CI"]',
+        "github.event.workflow_run.conclusion == 'success'",
+        "github.event.workflow_run.event == 'push'",
+        "github.event.workflow_run.head_branch == 'main'",
+        "github.event.workflow_run.head_repository.full_name == github.repository",
+        "cancel-in-progress: false",
+        "actions: read",
+        "Select latest successful main revision",
+        "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}",
+        "scripts/render_deploy_recovery.py",
+    ]
+    for required in workflow_contract:
+        if required not in deploy_workflow:
+            fail(f"Render deployment workflow missing contract: {required}")
 
     api = named_block(services, "agent-bounties-api")
     require_env_value(api, "APP_PACKAGE", "api")

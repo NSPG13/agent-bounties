@@ -38,7 +38,21 @@ Base indexer -> poll -> persist heartbeat/events/cursor
 
 malformed log/cursor/config/integrity failure -> failed heartbeat -> halt ingestion
                                                     +-> contain + incident
+
+successful main CI -> exact-SHA Render deploy controller -> API/MCP/worker live
+                                                       +-> exact web revision proof
 ```
+
+The deploy controller is separate from the public observer. It is allowed to
+deploy the latest successful reviewed application revision reachable from
+main. It resolves services against the canonical repository and branch,
+disables native commit-trigger deploys, polls all three Render deploy records,
+and writes redacted evidence. A newer failed main commit cannot suppress the
+last known-good release, and an older successful run skips after a newer
+successful run exists. It cannot deploy an unrelated branch, contract, wallet,
+or payment action. A missing credential, ambiguous service, failed build,
+timeout, or health revision mismatch fails the workflow and leaves the
+read-only operational control loop in its existing fail-closed state.
 
 Render probes web services every few seconds, stops routing after sustained
 failure, and automatically restarts an instance after 60 seconds of failed
@@ -92,6 +106,7 @@ days, feature releases pause until the cause is fixed.
 | primary RPC unavailable | switch only to preconfigured attested RPC | chain id, safe block, factory and implementation hashes | no attested endpoint |
 | verifier service unavailable | remove affected bounty from earning feed | read-model-only change | verifier policy or contract mismatch |
 | delayed Stripe webhook | replay one verified event | signature, event id, amount and destination binding | any missing binding |
+| reviewed main revision not deployed | deploy latest successful-CI application SHA once | reachable main commit, canonical service binding, terminal `live`, exact web health revision | failed build, timeout, service ambiguity, or revision mismatch |
 | low claimable inventory | publish alert and creation plan | canonical inventory count | wallet funding always needs authority |
 | database unavailable/corrupt | none | backup and migration evidence | restore or failover approval |
 | payment/ledger/hash mismatch | none | independent canonical reconciliation | SEV0 incident |
@@ -100,6 +115,12 @@ days, feature releases pause until the cause is fixed.
 but their runtime adapters must remain disabled until their required telemetry
 is available and their own failure fixtures pass. Policy eligibility is not
 proof that an adapter is deployed.
+
+`deploy_reviewed_application_revision` is implemented by the dedicated GitHub
+Actions workflow, not by the public observer. Its only secret is the GitHub
+Actions `RENDER_API_KEY`; application containers and scheduled probes do not
+receive it. Provisioning or rotating that credential remains an explicit R3
+access change; bounded use for an already-reviewed application SHA is R2.
 
 ## Prohibited Automatic Repair
 

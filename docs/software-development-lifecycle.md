@@ -182,6 +182,19 @@ R3 changes start disabled, then progress through test mode, internal canary,
 low-value public canary, and bounded expansion. R4 changes never deploy or
 activate from an unattended CI wallet.
 
+Reviewed application releases use the `Render Deploy Recovery` workflow as an
+R2 action. It runs only after successful `CI` for a same-repository push to
+`main`, requires the latest successful SHA reachable from current `main`,
+deploys that exact SHA through Render's API, waits for API, MCP, and worker to
+reach terminal `live`, and verifies API/MCP revision headers.
+Native provider commit triggers are disabled so two independent deploy
+authorities cannot race. The Render credential is isolated to this workflow;
+the scheduled observer and application containers never receive it. This
+authority does not extend to contracts, wallets, payments, verification, or
+settlement. Provisioning, rotating, or revoking the Render credential remains
+an explicit R3 access change; unattended use is limited to the allowlisted R2
+application deployment.
+
 Exit: zero-downtime deployment reports the expected revision and post-deploy
 smoke passes before traffic or feature scope expands.
 

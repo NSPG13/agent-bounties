@@ -16,7 +16,8 @@
   "automatic_action_budget": {
     "read_retries_per_cycle": 3,
     "service_restarts_per_component_per_hour": 1,
-    "indexer_restarts_per_hour": 2
+    "indexer_restarts_per_hour": 2,
+    "application_deploys_per_revision": 1
   },
   "automatic_actions": {
     "retry_probe": {
@@ -70,6 +71,18 @@
         "event_idempotency_key_present",
         "amount_binding_valid",
         "destination_binding_valid"
+      ]
+    },
+    "deploy_reviewed_application_revision": {
+      "risk_class": "R2",
+      "executor": "github_actions_render_controller",
+      "requires": [
+        "successful_main_ci",
+        "latest_successful_main_revision",
+        "canonical_repository_and_service_binding",
+        "application_services_only",
+        "terminal_live_status",
+        "exact_web_health_revision"
       ]
     }
   },
