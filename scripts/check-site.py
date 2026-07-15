@@ -356,6 +356,7 @@ def main() -> int:
         "plan_autonomous_canonical_child_terms",
         "plan_autonomous_bounty_creation",
         "plan_autonomous_bounty_contribution",
+        "agent_native_claim",
         "plan_autonomous_bounty_claim",
         "plan_autonomous_bounty_authorized_claim",
         "list_autonomous_verification_jobs",

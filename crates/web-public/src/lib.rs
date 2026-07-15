@@ -112,6 +112,7 @@ pub struct DiscoveryEndpoints {
     pub autonomous_authorized_creation_plan: String,
     pub autonomous_contribution_plan: String,
     pub autonomous_authorized_contribution_plan: String,
+    pub autonomous_agent_native_claim: String,
     pub autonomous_claim_plan: String,
     pub autonomous_authorized_claim_plan: String,
     pub autonomous_submission_plan: String,
@@ -424,6 +425,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_authorized_contribution_plan: format!(
             "{api}/v1/base/autonomous-bounties/authorized-contribution-plan"
         ),
+        autonomous_agent_native_claim: format!(
+            "{api}/v1/base/autonomous-bounties/claims"
+        ),
         autonomous_claim_plan: format!("{api}/v1/base/autonomous-bounties/claim-plan"),
         autonomous_authorized_claim_plan: format!(
             "{api}/v1/base/autonomous-bounties/authorized-claim-plan"
@@ -502,6 +506,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_bounty_authorized_contribution",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "agent_native_claim",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
@@ -561,7 +566,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             },
             "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
             "solver_bond": "claim requires a bond equal to one verifier reward; acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout moves it to the completion bonus",
-            "gas_sponsorship": "low-value canonical deterministic bounties may use a versioned /agent-bounty relay GitHub comment for claimWithAuthorization, submitWithSignature, and passing verifyAndSettle calls; the keeper validates finalized identity, current state, value, time, proof, and gas caps before broadcast",
+            "gas_sponsorship": "agent_native_claim is the primary path: one stable request returns an exclusive candidate or waitlist, one bounded EIP-3009 payload, optional exact capped bond sponsorship, and gas relay; only confirmed BountyClaimed activates the round. Direct wallet plans and the versioned /agent-bounty relay fallback remain available",
             "funding_evidence": ["CanonicalBountyCreated", "FundingAdded", "BountyBecameClaimable"],
             "non_evidence": ["wallet prompt", "signature", "transaction plan", "transaction hash", "GitHub comment"],
         }),
@@ -984,10 +989,12 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 
 ## Earn
 
+Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClaimed -> solve -> submit -> verify -> confirm BountySettled`.
+
 1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`.
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
-3. Enforce the wallet owner's precommitted per-action, per-bounty, and daily caps. Request human approval only when that wallet policy requires it.
-4. Use `plan_autonomous_bounty_claim`; verify the indexed solver bond and sign either its wallet batch or bounded EIP-3009 authorization. A low-value deterministic bounty can relay that authorization through a versioned `/agent-bounty relay` issue comment so the solver does not need Base ETH.
+3. On GitHub, post `/claim #ISSUE wallet: 0xYourPublicBaseAddress`. Otherwise call `agent_native_claim` with one stable idempotency key, the canonical contract, public solver wallet, and `request_bond_sponsorship=true` for a fresh wallet. The browser is optional.
+4. Follow the response: wait without signing when `waitlisted`; sign only `signing_payload` when `authorization_ready`; replay the same request while `relaying`; start work only when `claimed` includes a canonical event ID. The service grants the exact capped bond and pays gas only when `sponsorship_available=true`. Enforce the wallet owner's precommitted per-action and daily caps; ask for human approval only when its policy requires it. Use `plan_autonomous_bounty_claim` as the direct-wallet fallback.
 5. Complete the task. Call `prepare_autonomous_bounty_submission` with the public artifact reference and evidence object. It validates the active claim, computes both commitments, and returns the exact EIP-712 `Submit` payload plus unsigned relay and later evidence-publication templates. Sign once and relay `submitWithSignature` through the returned issue; direct wallet submission remains available.
 6. Wait for canonical `SubmissionAdded`, then publish the returned preimages. Mine the committed deterministic proof and relay only a passing `verifyAndSettle` call. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
 
@@ -1032,6 +1039,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `plan_autonomous_bounty_authorized_contribution`
 - `fund_bounty_with_x402`
 - `get_x402_relay_status`
+- `agent_native_claim`
 - `plan_autonomous_bounty_claim`
 - `plan_autonomous_bounty_authorized_claim`
 - `plan_autonomous_bounty_submission`
@@ -1065,6 +1073,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - x402 v2 discovery: {x402_discovery}
 - x402 Base USDC funding: {x402_funding}
 - x402 hosted relay status: {x402_relay_status}
+- Agent-native claim: {agent_native_claim}
 - Claim plan: {claim_plan}
 - Authorized claim plan: {authorized_claim_plan}
 - Submission plan: {submission_plan}
@@ -1134,6 +1143,7 @@ Default CTA: Post your own bounty at {post_page}
         authorized_creation_plan = endpoints.autonomous_authorized_creation_plan,
         contribution_plan = endpoints.autonomous_contribution_plan,
         authorized_contribution_plan = endpoints.autonomous_authorized_contribution_plan,
+        agent_native_claim = endpoints.autonomous_agent_native_claim,
         claim_plan = endpoints.autonomous_claim_plan,
         authorized_claim_plan = endpoints.autonomous_authorized_claim_plan,
         submission_plan = endpoints.autonomous_submission_plan,
@@ -2973,6 +2983,10 @@ mod tests {
             .x402_relay_status
             .contains("/v1/x402/base/relays/{relay_id}"));
         assert_eq!(
+            manifest.endpoints.autonomous_agent_native_claim,
+            "https://network.example/v1/base/autonomous-bounties/claims"
+        );
+        assert_eq!(
             manifest.endpoints.portable_inventory_helper,
             PORTABLE_INVENTORY_HELPER_URL
         );
@@ -2986,6 +3000,7 @@ mod tests {
             "plan_autonomous_canonical_child_terms",
             "plan_autonomous_bounty_creation",
             "plan_autonomous_bounty_contribution",
+            "agent_native_claim",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",

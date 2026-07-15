@@ -66,7 +66,7 @@ pub enum FundingMode {
     MixedRails,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 pub enum CapabilityClass {
     Coding,
     Research,
@@ -89,6 +89,241 @@ pub enum VerifierKind {
 
 pub const AUTONOMOUS_BOUNTY_PROTOCOL_VERSION: &str = "agent-bounties/autonomous-v1";
 
+fn default_exclusive_claim_seconds() -> u64 {
+    15 * 60
+}
+
+fn default_waitlist_capacity() -> u16 {
+    20
+}
+
+fn default_takeover_grace_seconds() -> u64 {
+    60
+}
+
+fn default_maximum_sponsored_bond_base_units() -> u64 {
+    100_000
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentEligibilityPolicy {
+    pub required_capabilities: Vec<CapabilityClass>,
+    pub minimum_paid_completions: u32,
+    pub minimum_paid_usdc_base_units: u64,
+    pub wallet_allowlist: Vec<String>,
+    pub wallet_denylist: Vec<String>,
+    pub creator_may_claim: bool,
+    pub sponsorship_allowed: bool,
+    #[serde(default = "default_maximum_sponsored_bond_base_units")]
+    pub maximum_sponsored_bond_base_units: u64,
+}
+
+impl Default for AgentEligibilityPolicy {
+    fn default() -> Self {
+        Self {
+            required_capabilities: Vec::new(),
+            minimum_paid_completions: 0,
+            minimum_paid_usdc_base_units: 0,
+            wallet_allowlist: Vec::new(),
+            wallet_denylist: Vec::new(),
+            creator_may_claim: false,
+            sponsorship_allowed: false,
+            maximum_sponsored_bond_base_units: default_maximum_sponsored_bond_base_units(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClaimCoordinationPolicy {
+    #[serde(default = "default_exclusive_claim_seconds")]
+    pub exclusive_claim_seconds: u64,
+    #[serde(default = "default_waitlist_capacity")]
+    pub waitlist_capacity: u16,
+    #[serde(default = "default_takeover_grace_seconds")]
+    pub takeover_grace_seconds: u64,
+}
+
+impl Default for ClaimCoordinationPolicy {
+    fn default() -> Self {
+        Self {
+            exclusive_claim_seconds: default_exclusive_claim_seconds(),
+            waitlist_capacity: default_waitlist_capacity(),
+            takeover_grace_seconds: default_takeover_grace_seconds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AgentEligibilityEvidence {
+    pub agent_id: Option<Id>,
+    pub solver_wallet: String,
+    #[serde(default)]
+    pub capabilities: Vec<CapabilityClass>,
+    pub paid_completions: u32,
+    pub paid_usdc_base_units: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AgentEligibilityDecision {
+    pub eligible: bool,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimCandidateStatus {
+    Waitlisted,
+    Exclusive,
+    Sponsoring,
+    AuthorizationReady,
+    Relaying,
+    Claimed,
+    Superseded,
+    Withdrawn,
+    Failed,
+}
+
+impl ClaimCandidateStatus {
+    pub fn is_active_exclusive(self) -> bool {
+        matches!(
+            self,
+            Self::Exclusive | Self::Sponsoring | Self::AuthorizationReady | Self::Relaying
+        )
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Claimed | Self::Superseded | Self::Withdrawn | Self::Failed
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ClaimCandidate {
+    pub id: Id,
+    pub idempotency_key: String,
+    pub network: String,
+    pub bounty_contract: String,
+    pub solver_wallet: String,
+    pub agent_id: Option<Id>,
+    pub eligibility_evidence: AgentEligibilityEvidence,
+    pub eligibility_decision: AgentEligibilityDecision,
+    pub status: ClaimCandidateStatus,
+    pub exclusive_until: Option<DateTime<Utc>>,
+    pub authorization_nonce: Option<String>,
+    pub authorization_valid_before: Option<u64>,
+    pub claim_transaction_hash: Option<String>,
+    pub canonical_event_id: Option<Id>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BondSponsorshipStatus {
+    Reserved,
+    Broadcast,
+    Confirmed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct BondSponsorship {
+    pub id: Id,
+    pub claim_candidate_id: Id,
+    pub network: String,
+    pub bounty_contract: String,
+    pub solver_wallet: String,
+    pub sponsor_wallet: String,
+    pub amount: u64,
+    pub status: BondSponsorshipStatus,
+    pub transaction_hash: Option<String>,
+    pub confirmed_block: Option<u64>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWebhookEventType {
+    FundingConfirmed,
+    ClaimExclusive,
+    ClaimWaitlisted,
+    ClaimTakenOver,
+    ClaimConfirmed,
+    SubmissionConfirmed,
+    VerificationPassed,
+    VerificationFailed,
+    SettlementConfirmed,
+    RecoveryConfirmed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AgentWebhookEnvelope {
+    pub schema_version: String,
+    pub event_id: Id,
+    pub event_type: AgentWebhookEventType,
+    pub occurred_at: DateTime<Utc>,
+    pub data: Value,
+}
+
+impl AgentEligibilityPolicy {
+    pub fn evaluate(
+        &self,
+        creator_wallet: &str,
+        evidence: &AgentEligibilityEvidence,
+    ) -> AgentEligibilityDecision {
+        let solver = evidence.solver_wallet.to_ascii_lowercase();
+        let creator = creator_wallet.to_ascii_lowercase();
+        let allowlisted = self
+            .wallet_allowlist
+            .iter()
+            .any(|wallet| wallet.eq_ignore_ascii_case(&solver));
+        let denied = self
+            .wallet_denylist
+            .iter()
+            .any(|wallet| wallet.eq_ignore_ascii_case(&solver));
+        let mut reasons = Vec::new();
+        if denied {
+            reasons.push("solver wallet is denylisted".to_string());
+        }
+        if !self.wallet_allowlist.is_empty() && !allowlisted {
+            reasons.push("solver wallet is not allowlisted".to_string());
+        }
+        if !self.creator_may_claim && solver == creator {
+            reasons.push("creator wallet may not claim this bounty".to_string());
+        }
+        for capability in &self.required_capabilities {
+            if !evidence.capabilities.contains(capability) {
+                reasons.push(format!("missing required capability: {capability:?}"));
+            }
+        }
+        if evidence.paid_completions < self.minimum_paid_completions {
+            reasons.push(format!(
+                "requires at least {} paid completions",
+                self.minimum_paid_completions
+            ));
+        }
+        if evidence.paid_usdc_base_units < self.minimum_paid_usdc_base_units {
+            reasons.push(format!(
+                "requires at least {} paid USDC base units",
+                self.minimum_paid_usdc_base_units
+            ));
+        }
+        AgentEligibilityDecision {
+            eligible: reasons.is_empty(),
+            reasons,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutonomousBountyTermsDocument {
     pub schema_version: String,
@@ -101,6 +336,10 @@ pub struct AutonomousBountyTermsDocument {
     pub verification_policy: Value,
     pub source_url: Option<String>,
     pub discovery_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_eligibility: Option<AgentEligibilityPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_coordination: Option<ClaimCoordinationPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1190,6 +1429,52 @@ mod tests {
         policy.max_automatic_payout = Money::new(100, "usdc").unwrap();
         policy.policy_hash = format!("0x{}", "0".repeat(64));
         assert_eq!(policy.validate(), Err(VerificationPolicyError::InvalidHash));
+    }
+
+    #[test]
+    fn eligibility_reports_every_failed_requirement() {
+        let policy = AgentEligibilityPolicy {
+            required_capabilities: vec![CapabilityClass::Coding, CapabilityClass::Ci],
+            minimum_paid_completions: 2,
+            minimum_paid_usdc_base_units: 1_000_000,
+            wallet_allowlist: vec!["0x1111111111111111111111111111111111111111".to_string()],
+            wallet_denylist: Vec::new(),
+            creator_may_claim: false,
+            sponsorship_allowed: true,
+            maximum_sponsored_bond_base_units: 100_000,
+        };
+        let evidence = AgentEligibilityEvidence {
+            agent_id: None,
+            solver_wallet: "0x2222222222222222222222222222222222222222".to_string(),
+            capabilities: vec![CapabilityClass::Coding],
+            paid_completions: 1,
+            paid_usdc_base_units: 500_000,
+        };
+
+        let decision = policy.evaluate("0x3333333333333333333333333333333333333333", &evidence);
+        assert!(!decision.eligible);
+        assert_eq!(decision.reasons.len(), 4);
+    }
+
+    #[test]
+    fn absent_claim_metadata_does_not_appear_in_canonical_terms_json() {
+        let value = serde_json::to_value(AutonomousBountyTermsDocument {
+            schema_version: "agent-bounties/terms-v1".to_string(),
+            contract_terms: serde_json::json!({}),
+            title: "Existing terms".to_string(),
+            goal: "Keep existing hashes stable".to_string(),
+            acceptance_criteria: vec!["unchanged".to_string()],
+            benchmark: serde_json::json!({}),
+            evidence_schema: serde_json::json!({}),
+            verification_policy: serde_json::json!({}),
+            source_url: None,
+            discovery_source: None,
+            agent_eligibility: None,
+            claim_coordination: None,
+        })
+        .unwrap();
+        assert!(value.get("agent_eligibility").is_none());
+        assert!(value.get("claim_coordination").is_none());
     }
 
     fn deterministic_policy() -> AutomaticVerificationPolicy {

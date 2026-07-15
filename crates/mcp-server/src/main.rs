@@ -320,6 +320,19 @@ struct PlanAutonomousBountyClaimArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct AgentNativeClaimArgs {
+    idempotency_key: String,
+    network: Option<String>,
+    bounty_contract: String,
+    solver_wallet: String,
+    agent_id: Option<Uuid>,
+    #[serde(default)]
+    request_bond_sponsorship: bool,
+    signature: Option<AutonomousBountyAuthorizationSignature>,
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousBountyAuthorizedClaimArgs {
     network: Option<String>,
     bounty_contract: String,
@@ -618,6 +631,7 @@ async fn main() -> anyhow::Result<()> {
             "/tools/plan_autonomous_bounty_claim",
             post(plan_autonomous_bounty_claim),
         )
+        .route("/tools/agent_native_claim", post(agent_native_claim))
         .route(
             "/tools/plan_autonomous_bounty_authorized_claim",
             post(plan_autonomous_bounty_authorized_claim),
@@ -1384,8 +1398,34 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
         ),
         tool(
+            "agent_native_claim",
+            "Primary earning-loop claim tool. Reserve an exclusive candidate or waitlist position, receive one exact EIP-3009 signing payload, then replay with its v/r/s signature. The hosted service can sponsor a capped solver bond and gas when eligible, and reports the exact failed transition or confirmed canonical BountyClaimed event.",
+            object_tool_schema(
+                json!({
+                    "idempotency_key": string_property("Stable 1-128 character key reused for every retry of this wallet+bounty claim."),
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+                    "bounty_contract": string_property("Verified, funded, claimable, verification-ready canonical bounty contract."),
+                    "solver_wallet": string_property("Public Base payout wallet. Never provide a private key or seed phrase."),
+                    "agent_id": nullable_uuid_property("Optional registered agent UUID bound to solver_wallet and capability evidence."),
+                    "request_bond_sponsorship": boolean_property("Ask for an exact capped USDC solver-bond grant. The response states whether it is available."),
+                    "signature": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "v": integer_property("EIP-3009 recovery id: 0, 1, 27, or 28."),
+                            "r": string_property("0x-prefixed bytes32 signature r."),
+                            "s": string_property("0x-prefixed bytes32 signature s.")
+                        },
+                        "required": ["v", "r", "s"],
+                        "additionalProperties": false
+                    },
+                    "source": nullable_string_property("Compact discovery/tool source such as github, mcp, curl, python, or cast.")
+                }),
+                &["idempotency_key", "bounty_contract", "solver_wallet", "request_bond_sponsorship"],
+            ),
+        ),
+        tool(
             "plan_autonomous_bounty_claim",
-            "Build a wallet-batched USDC bond approval and claim. The indexed bond equals one verifier reward: acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout adds it to the completion bonus.",
+            "Direct-wallet fallback: build a wallet-batched USDC bond approval and claim without hosted exclusivity or sponsorship. Prefer agent_native_claim for the normal machine earning loop.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -3430,6 +3470,56 @@ async fn get_x402_relay_status(
     proxy_x402_response(reqwest::Client::new().get(url)).await
 }
 
+async fn agent_native_claim(
+    State(_state): State<SharedState>,
+    Json(mut args): Json<AgentNativeClaimArgs>,
+) -> Json<serde_json::Value> {
+    if args.source.as_deref().is_none_or(str::is_empty) {
+        args.source = Some("mcp".to_string());
+    }
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/claims",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_agent_claim_response(reqwest::Client::new().post(url).json(&args)).await
+}
+
+async fn proxy_agent_claim_response(request: reqwest::RequestBuilder) -> Json<serde_json::Value> {
+    let response = match request
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return mcp_error(if error.is_timeout() {
+                "agent-native claim API timed out; replay the same idempotency_key"
+            } else {
+                "agent-native claim API is unavailable; use plan_autonomous_bounty_claim as the direct-wallet fallback"
+            })
+        }
+    };
+    let status = response.status();
+    let body_text = match response.text().await {
+        Ok(body) => body,
+        Err(_) => return mcp_error("agent-native claim response body is unavailable"),
+    };
+    let body = serde_json::from_str::<serde_json::Value>(&body_text).unwrap_or_else(|_| {
+        json!({
+            "schema_version": "agent-bounties/claim-problem-v1",
+            "state": "failed",
+            "failed_transition": "read_hosted_response",
+            "error": "invalid_hosted_response",
+            "message": if body_text.is_empty() { format!("HTTP {}", status.as_u16()) } else { body_text },
+            "next_action": "Retry with the same idempotency_key or use the direct wallet planner."
+        })
+    });
+    mcp_json(json!({
+        "http_status": status.as_u16(),
+        "body": body
+    }))
+}
+
 async fn proxy_x402_response(request: reqwest::RequestBuilder) -> Json<serde_json::Value> {
     let response = match request
         .timeout(std::time::Duration::from_secs(45))
@@ -4627,6 +4717,7 @@ mod tests {
             "plan_autonomous_bounty_authorized_contribution",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "agent_native_claim",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",

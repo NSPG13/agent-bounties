@@ -2289,7 +2289,7 @@ impl BountyNetwork {
             id: Uuid::new_v4(),
             agent_id: submission.solver_agent_id,
             bounty_id: request.bounty_id,
-            capability_class: capability_class.clone(),
+            capability_class,
             template_slug: template_slug.clone(),
             delta: 10,
             reason: reputation_reason.to_string(),

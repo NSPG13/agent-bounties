@@ -40,19 +40,22 @@ use chain_base::{
     AutonomousVerificationAttestationRequest, AutonomousVerificationAttestationTypedData,
     AutonomousVerificationJob, BaseNetworkDescriptor, BaseRelayedTransaction, BaseRpcUrlConfig,
     BaseTransactionRelayer, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
-    ChainBaseError, EthGetTransactionReceiptRequest, EthSendRawTransactionRequest, EvmLog,
-    EvmTransactionIntent, RpcTransactionReceipt, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
-    AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
+    ChainBaseError, Eip3009AuthorizationTypedData, EthGetTransactionReceiptRequest,
+    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, RpcTransactionReceipt,
+    AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION, AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
 };
 use chrono::Utc;
 use db::{
-    BountyStatusScope, DbError, GitHubIssueSyncBountyUpsert, NewX402RelayAttempt, PostgresStore,
-    X402RelayAttempt, X402RelayStatus,
+    BountyStatusScope, ClaimCandidateReservation, DbError, GitHubIssueSyncBountyUpsert,
+    NewBondSponsorship, NewClaimCandidate, NewX402RelayAttempt, PostgresStore, X402RelayAttempt,
+    X402RelayStatus,
 };
 use domain::{
-    Agent, AudienceInteraction, AudienceMember, AudienceReport, AutonomousBountyTermsDocument,
-    AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord, BountyStatus, Capability,
-    CapabilityClass, ContributorContact, DiscoveryResponse, EvalRun, HelpRequest, Money,
+    Agent, AgentEligibilityDecision, AgentEligibilityEvidence, AgentEligibilityPolicy, AgentStatus,
+    AudienceInteraction, AudienceMember, AudienceReport, AutonomousBountyTermsDocument,
+    AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord, BondSponsorship,
+    BondSponsorshipStatus, BountyStatus, Capability, CapabilityClass, ClaimCandidate,
+    ClaimCandidateStatus, ContributorContact, DiscoveryResponse, EvalRun, HelpRequest, Money,
     OutreachAttempt, PaymentRail, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord,
     VerificationDecision, VerifierKind,
 };
@@ -75,9 +78,9 @@ use payments_stripe::{
 };
 use payments_x402::{
     base_usdc_funding_challenge, decode_payment_signature_header, encode_payment_required_header,
-    encode_payment_response_header, validate_funding_payload, PaymentRequired, SettlementResponse,
-    AGENT_BOUNTY_FUND_SCHEME, PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER,
-    PAYMENT_SIGNATURE_HEADER, X402_VERSION,
+    encode_payment_response_header, validate_funding_payload, Eip3009Authorization, Eip3009Payload,
+    PaymentPayload, PaymentRequired, SettlementResponse, AGENT_BOUNTY_FUND_SCHEME,
+    PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER, PAYMENT_SIGNATURE_HEADER, X402_VERSION,
 };
 use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
@@ -146,6 +149,7 @@ use uuid::Uuid;
         plan_autonomous_bounty_authorized_contribution,
         plan_autonomous_bounty_claim,
         plan_autonomous_bounty_authorized_claim,
+        agent_native_claim,
         plan_autonomous_bounty_submission,
         prepare_autonomous_bounty_submission,
         plan_autonomous_bounty_submission_authorization,
@@ -261,6 +265,7 @@ struct AppState {
     public_base_url: String,
     mcp_base_url: String,
     x402_relayer: X402HostedRelayerConfig,
+    bond_sponsor: BondSponsorConfig,
     recovery_reservations: AutonomousBountyRecoveryReservations,
 }
 
@@ -357,6 +362,78 @@ impl X402HostedRelayerConfig {
 
     fn address(&self) -> Option<String> {
         self.relayer.as_ref().map(|relayer| relayer.address())
+    }
+}
+
+#[derive(Clone)]
+struct BondSponsorConfig {
+    enabled: bool,
+    sponsor: Option<Arc<BaseTransactionRelayer>>,
+    max_bond: u64,
+    max_network_amount_24h: u64,
+    max_solver_amount_24h: u64,
+    max_gas: u64,
+    max_fee_per_gas_wei: u128,
+    confirmations: u64,
+    wait_seconds: u64,
+    rpc_timeout_seconds: u64,
+}
+
+impl Default for BondSponsorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sponsor: None,
+            max_bond: 100_000,
+            max_network_amount_24h: 1_000_000,
+            max_solver_amount_24h: 100_000,
+            max_gas: 100_000,
+            max_fee_per_gas_wei: 10_000_000_000,
+            confirmations: 2,
+            wait_seconds: 20,
+            rpc_timeout_seconds: 15,
+        }
+    }
+}
+
+impl BondSponsorConfig {
+    fn from_env() -> anyhow::Result<Self> {
+        let enabled = env_flag("ENABLE_BOND_SPONSORSHIP");
+        let sponsor = env::var("BOND_SPONSOR_PRIVATE_KEY")
+            .ok()
+            .and_then(non_empty_secret)
+            .map(|private_key| BaseTransactionRelayer::from_private_key(&private_key))
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("BOND_SPONSOR_PRIVATE_KEY is invalid"))?
+            .map(Arc::new);
+        if enabled && sponsor.is_none() {
+            anyhow::bail!("ENABLE_BOND_SPONSORSHIP requires BOND_SPONSOR_PRIVATE_KEY");
+        }
+        let max_bond = env_u64("BOND_SPONSOR_MAX_BOND_BASE_UNITS", 100_000)?;
+        let max_network_amount_24h = env_u64("BOND_SPONSOR_MAX_NETWORK_24H_BASE_UNITS", 1_000_000)?;
+        let max_solver_amount_24h = env_u64("BOND_SPONSOR_MAX_SOLVER_24H_BASE_UNITS", 100_000)?;
+        let max_gas = env_u64("BOND_SPONSOR_MAX_GAS", 100_000)?;
+        let max_fee_per_gas_wei = env_u128("BOND_SPONSOR_MAX_FEE_PER_GAS_WEI", 10_000_000_000)?;
+        if max_bond == 0
+            || max_solver_amount_24h < max_bond
+            || max_network_amount_24h < max_solver_amount_24h
+            || max_gas == 0
+            || max_fee_per_gas_wei == 0
+        {
+            anyhow::bail!("bond sponsor amount, gas, and fee caps are invalid");
+        }
+        Ok(Self {
+            enabled,
+            sponsor,
+            max_bond,
+            max_network_amount_24h,
+            max_solver_amount_24h,
+            max_gas,
+            max_fee_per_gas_wei,
+            confirmations: env_u64("BOND_SPONSOR_CONFIRMATIONS", 2)?.max(1),
+            wait_seconds: env_u64("BOND_SPONSOR_WAIT_SECONDS", 20)?.min(60),
+            rpc_timeout_seconds: env_u64("BOND_SPONSOR_RPC_TIMEOUT_SECONDS", 15)?.clamp(1, 30),
+        })
     }
 }
 
@@ -612,6 +689,38 @@ struct PlanAutonomousBountyAuthorizedClaimRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentNativeClaimRequest {
+    idempotency_key: String,
+    network: Option<String>,
+    bounty_contract: String,
+    solver_wallet: String,
+    agent_id: Option<Uuid>,
+    #[serde(default)]
+    request_bond_sponsorship: bool,
+    signature: Option<AutonomousBountyAuthorizationSignature>,
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AgentNativeClaimResponse {
+    schema_version: String,
+    candidate: ClaimCandidate,
+    waitlist_position: Option<u32>,
+    claim_bond: String,
+    sponsorship_requested: bool,
+    sponsorship_available: bool,
+    sponsorship: Option<BondSponsorship>,
+    signing_payload: Option<Eip3009AuthorizationTypedData>,
+    claim_transaction_hash: Option<String>,
+    canonical_event_id: Option<Uuid>,
+    next_action: String,
+    next_request: Option<serde_json::Value>,
+    browser_fallback_url: String,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanAutonomousBountySubmissionRequest {
     network: Option<String>,
     bounty_contract: String,
@@ -801,8 +910,12 @@ async fn main() -> anyhow::Result<()> {
         Vec::new()
     };
     let x402_relayer = X402HostedRelayerConfig::from_env()?;
+    let bond_sponsor = BondSponsorConfig::from_env()?;
     if x402_relayer.enabled && store.is_none() {
         anyhow::bail!("ENABLE_X402_HOSTED_RELAY requires DATABASE_URL");
+    }
+    if bond_sponsor.enabled && (store.is_none() || !x402_relayer.enabled) {
+        anyhow::bail!("ENABLE_BOND_SPONSORSHIP requires DATABASE_URL and ENABLE_X402_HOSTED_RELAY");
     }
     let recovery_reservations_raw = env::var("BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS").ok();
     let recovery_reservations =
@@ -844,6 +957,7 @@ async fn main() -> anyhow::Result<()> {
         mcp_base_url: env::var("MCP_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8090".to_string()),
         x402_relayer,
+        bond_sponsor,
         recovery_reservations,
     });
     let app = Router::new()
@@ -958,6 +1072,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/authorized-claim-plan",
             post(plan_autonomous_bounty_authorized_claim),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/claims",
+            post(agent_native_claim),
         )
         .route(
             "/v1/base/autonomous-bounties/submission-plan",
@@ -3511,6 +3629,1599 @@ async fn plan_autonomous_bounty_authorized_claim(
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+type AgentClaimProblem = (StatusCode, Json<serde_json::Value>);
+
+#[utoipa::path(
+    post,
+    path = "/v1/base/autonomous-bounties/claims",
+    responses(
+        (status = 200, description = "Exclusive claim handoff prepared or canonical claim confirmed"),
+        (status = 202, description = "Candidate waitlisted or transaction confirmation pending"),
+        (status = 409, description = "Claim transition conflicts with canonical or hosted coordination state"),
+        (status = 422, description = "Eligibility, authorization, or bounded relay validation failed"),
+        (status = 429, description = "Sponsorship or waitlist cap reached"),
+        (status = 503, description = "Canonical index, sponsor, relayer, database, or RPC unavailable")
+    )
+)]
+async fn agent_native_claim(
+    State(state): State<SharedState>,
+    Json(request): Json<AgentNativeClaimRequest>,
+) -> Result<Response, AgentClaimProblem> {
+    validate_agent_native_claim_request(&request)?;
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let descriptor = base_network_descriptor(network).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "request_invalid",
+            "validate_request",
+            "network must be base-mainnet or base-sepolia",
+            "Use the network named by the canonical bounty inventory.",
+        )
+    })?;
+    let network = canonical_base_network_key(descriptor.chain_id).ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "request_invalid",
+            "validate_request",
+            "network must be Base mainnet or Base Sepolia",
+            "Use the network named by the canonical bounty inventory.",
+        )
+    })?;
+    let bounty_contract = normalize_evm_address(&request.bounty_contract).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "request_invalid",
+            "validate_request",
+            "bounty_contract is not a valid EVM address",
+            "Use the contract from verified claimable inventory.",
+        )
+    })?;
+    let solver_wallet = normalize_evm_address(&request.solver_wallet).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "request_invalid",
+            "validate_request",
+            "solver_wallet is not a valid EVM address",
+            "Provide the public Base payout wallet; never provide its private key.",
+        )
+    })?;
+    let item = indexed_autonomous_bounty(&state, network, &bounty_contract)
+        .await
+        .map_err(|status| {
+            agent_claim_problem(
+                status,
+                "canonical_inventory_unavailable",
+                "load_canonical_bounty",
+                "the bounty is not available in verified hosted inventory",
+                "Refresh verified claimable inventory and retry only if verification_ready=true.",
+            )
+        })?;
+    require_claimable_autonomous_item(&item).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::CONFLICT,
+            "bounty_not_claimable",
+            "reserve_candidate",
+            "the canonical bounty is not currently funded, claimable, and verification-ready",
+            "Choose another verified claimable bounty or wait for the canonical state to reopen.",
+        )
+    })?;
+    let claim_bond = item.claim_bond.parse::<u64>().map_err(|_| {
+        agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid_indexed_bond",
+            "load_canonical_bounty",
+            "the indexed claim bond cannot be represented safely",
+            "Do not sign; report the bounty contract to maintainers.",
+        )
+    })?;
+    if claim_bond == 0 {
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "unsupported_zero_bond",
+            "prepare_authorization",
+            "autonomous-v1 agent-native claims require a positive indexed solver bond",
+            "Use the direct claim planner only if the canonical contract explicitly supports zero bond.",
+        ));
+    }
+
+    let terms = item.terms.as_ref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::CONFLICT,
+            "terms_unavailable",
+            "evaluate_eligibility",
+            "content-addressed bounty terms are unavailable",
+            "Do not claim until the terms document is present and terms_valid=true.",
+        )
+    })?;
+    let policy = terms.document.agent_eligibility.clone().unwrap_or_default();
+    let coordination = terms
+        .document
+        .claim_coordination
+        .clone()
+        .unwrap_or_default();
+    let sponsorship_allowed = terms
+        .document
+        .agent_eligibility
+        .as_ref()
+        .map(|policy| policy.sponsorship_allowed)
+        .unwrap_or(true);
+    let (evidence, decision) = build_agent_eligibility(
+        &state,
+        network,
+        &item.creator,
+        &solver_wallet,
+        request.agent_id,
+        &policy,
+    )
+    .await?;
+    if !decision.eligible {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "schema_version": "agent-bounties/claim-problem-v1",
+                "state": "ineligible",
+                "failed_transition": "evaluate_eligibility",
+                "error": "agent_ineligible",
+                "reasons": decision.reasons,
+                "next_action": "Choose a bounty whose published eligibility policy this wallet satisfies."
+            })),
+        ));
+    }
+    let store = state.store.as_ref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "coordination_unavailable",
+            "reserve_candidate",
+            "hosted durable claim coordination is unavailable",
+            "Use plan_autonomous_bounty_claim for a direct permissionless wallet claim.",
+        )
+    })?;
+    store
+        .promote_waitlisted_claimant_after_canonical_reopen(
+            network,
+            &bounty_contract,
+            coordination.exclusive_claim_seconds,
+        )
+        .await
+        .map_err(map_agent_claim_db_error)?;
+    let reservation = store
+        .reserve_claim_candidate(
+            &NewClaimCandidate {
+                id: Uuid::new_v4(),
+                idempotency_key: request.idempotency_key.trim().to_string(),
+                network: network.to_string(),
+                bounty_contract: bounty_contract.clone(),
+                solver_wallet: solver_wallet.clone(),
+                agent_id: request.agent_id,
+                eligibility_evidence: evidence,
+                eligibility_decision: decision,
+            },
+            coordination.exclusive_claim_seconds,
+            coordination.waitlist_capacity,
+        )
+        .await
+        .map_err(map_agent_claim_db_error)?;
+
+    if reservation.candidate.status == ClaimCandidateStatus::Waitlisted {
+        return Ok(agent_claim_response(
+            &state,
+            StatusCode::ACCEPTED,
+            reservation,
+            claim_bond,
+            request.request_bond_sponsorship,
+            false,
+            None,
+            None,
+            "Wait for claim_exclusive notification or poll with the same idempotency_key. Do not sign while waitlisted.",
+            None,
+        ));
+    }
+    if reservation.candidate.status == ClaimCandidateStatus::Claimed {
+        let sponsorship = store
+            .get_bond_sponsorship_for_candidate(reservation.candidate.id)
+            .await
+            .map_err(map_agent_claim_db_error)?;
+        return Ok(agent_claim_response(
+            &state,
+            StatusCode::OK,
+            reservation,
+            claim_bond,
+            request.request_bond_sponsorship,
+            sponsorship_allowed && state.bond_sponsor.enabled,
+            sponsorship,
+            None,
+            "The canonical BountyClaimed event is confirmed. Complete the task and prepare the exact submission evidence.",
+            None,
+        ));
+    }
+    if reservation.candidate.status.is_terminal() {
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "candidate_terminal",
+            "prepare_authorization",
+            "this hosted claim candidate is terminal",
+            "Retry with a new idempotency_key if the canonical bounty is still claimable.",
+        ));
+    }
+
+    let sponsorship_available = sponsorship_allowed
+        && state.bond_sponsor.enabled
+        && claim_bond <= state.bond_sponsor.max_bond
+        && claim_bond <= policy.maximum_sponsored_bond_base_units;
+    let mut candidate = reservation.candidate.clone();
+    if candidate.authorization_nonce.is_none() {
+        let (nonce, valid_before) = claim_authorization_window(&candidate)?;
+        candidate = store
+            .set_claim_candidate_authorization(candidate.id, &nonce, valid_before)
+            .await
+            .map_err(map_agent_claim_db_error)?;
+    }
+    let nonce = candidate.authorization_nonce.clone().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "authorization_missing",
+            "prepare_authorization",
+            "the reserved candidate has no authorization nonce",
+            "Retry with the same idempotency_key.",
+        )
+    })?;
+    let valid_before = candidate.authorization_valid_before.ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "authorization_missing",
+            "prepare_authorization",
+            "the reserved candidate has no authorization deadline",
+            "Retry with the same idempotency_key.",
+        )
+    })?;
+    let claim_plan = configured_autonomous_planner(network)
+        .and_then(|planner| {
+            planner
+                .plan_claim(
+                    network,
+                    &bounty_contract,
+                    &solver_wallet,
+                    u128::from(claim_bond),
+                    Some(&nonce),
+                    Some(valid_before),
+                )
+                .map_err(|_| StatusCode::BAD_REQUEST)
+        })
+        .map_err(|status| {
+            agent_claim_problem(
+                status,
+                "authorization_plan_failed",
+                "prepare_authorization",
+                "the exact bounded USDC authorization could not be prepared",
+                "Do not sign; retry from fresh canonical inventory.",
+            )
+        })?;
+    let signing_payload = claim_plan.eip3009_authorization.clone().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "authorization_plan_failed",
+            "prepare_authorization",
+            "the planner omitted the required EIP-3009 payload",
+            "Do not sign; report the candidate ID.",
+        )
+    })?;
+    let reservation = ClaimCandidateReservation {
+        candidate,
+        waitlist_position: reservation.waitlist_position,
+    };
+    let Some(signature) = request.signature.as_ref() else {
+        let next_request = signed_claim_request_template(&request);
+        let next_action = if request.request_bond_sponsorship && !sponsorship_available {
+            "Bond sponsorship is unavailable for these terms or caps. Fund the solver wallet with the exact bond, or use the direct wallet plan."
+        } else {
+            "Sign signing_payload once with solver_wallet, then replay next_request with v, r, and s. The platform will relay gas and, when requested and eligible, sponsor the exact bond."
+        };
+        return Ok(agent_claim_response(
+            &state,
+            StatusCode::OK,
+            reservation,
+            claim_bond,
+            request.request_bond_sponsorship,
+            sponsorship_available,
+            None,
+            Some(signing_payload),
+            next_action,
+            Some(next_request),
+        ));
+    };
+    if request.request_bond_sponsorship && !sponsorship_available {
+        return Err(agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sponsorship_unavailable",
+            "sponsor_bond",
+            "bond sponsorship is disabled or exceeds the bounty/global cap",
+            "Fund the solver wallet with the exact indexed bond and retry without request_bond_sponsorship.",
+        ));
+    }
+    validate_claim_authorization_signature(
+        &descriptor,
+        &bounty_contract,
+        &solver_wallet,
+        claim_bond,
+        &nonce,
+        valid_before,
+        signature,
+    )?;
+
+    let mut sponsorship = store
+        .get_bond_sponsorship_for_candidate(reservation.candidate.id)
+        .await
+        .map_err(map_agent_claim_db_error)?;
+    if request.request_bond_sponsorship {
+        sponsorship = Some(
+            process_bond_sponsorship(&state, &reservation.candidate, claim_bond, sponsorship)
+                .await?,
+        );
+        if sponsorship
+            .as_ref()
+            .is_none_or(|item| item.status != BondSponsorshipStatus::Confirmed)
+        {
+            return Ok(agent_claim_response(
+                &state,
+                StatusCode::ACCEPTED,
+                reservation,
+                claim_bond,
+                true,
+                true,
+                sponsorship,
+                None,
+                "The exact bond grant was broadcast. Replay this signed request until sponsorship.status=confirmed; the claim relay will then continue automatically.",
+                None,
+            ));
+        }
+    }
+
+    let candidate = relay_agent_native_claim(
+        &state,
+        &reservation.candidate,
+        claim_bond,
+        &nonce,
+        valid_before,
+        signature,
+    )
+    .await?;
+    let confirmed = candidate.status == ClaimCandidateStatus::Claimed;
+    Ok(agent_claim_response(
+        &state,
+        if confirmed {
+            StatusCode::OK
+        } else {
+            StatusCode::ACCEPTED
+        },
+        ClaimCandidateReservation {
+            candidate,
+            waitlist_position: reservation.waitlist_position,
+        },
+        claim_bond,
+        request.request_bond_sponsorship,
+        sponsorship_available,
+        sponsorship,
+        None,
+        if confirmed {
+            "Canonical BountyClaimed is confirmed. Complete the task and prepare the exact submission evidence."
+        } else {
+            "The exact claim transaction was broadcast. Replay this signed request until candidate.status=claimed."
+        },
+        None,
+    ))
+}
+
+fn validate_agent_native_claim_request(
+    request: &AgentNativeClaimRequest,
+) -> Result<(), AgentClaimProblem> {
+    if request.idempotency_key.trim().is_empty() || request.idempotency_key.len() > 128 {
+        return Err(agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "request_invalid",
+            "validate_request",
+            "idempotency_key must contain 1-128 characters",
+            "Generate one stable key for this wallet and bounty, then reuse it for every retry.",
+        ));
+    }
+    if request
+        .source
+        .as_ref()
+        .is_some_and(|source| source.len() > 128)
+    {
+        return Err(agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "request_invalid",
+            "validate_request",
+            "source must be at most 128 characters",
+            "Use a compact source such as github, mcp, curl, python, or cast.",
+        ));
+    }
+    Ok(())
+}
+
+fn canonical_base_network_key(chain_id: u64) -> Option<&'static str> {
+    match chain_id {
+        8_453 => Some("base-mainnet"),
+        84_532 => Some("base-sepolia"),
+        _ => None,
+    }
+}
+
+async fn build_agent_eligibility(
+    state: &SharedState,
+    network: &str,
+    creator_wallet: &str,
+    solver_wallet: &str,
+    agent_id: Option<Uuid>,
+    policy: &AgentEligibilityPolicy,
+) -> Result<(AgentEligibilityEvidence, AgentEligibilityDecision), AgentClaimProblem> {
+    let store = state.store.as_ref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "coordination_unavailable",
+            "evaluate_eligibility",
+            "durable agent eligibility data is unavailable",
+            "Use the direct permissionless claim planner or retry later.",
+        )
+    })?;
+    let events = store
+        .list_autonomous_bounty_events(network)
+        .await
+        .map_err(|_| {
+            agent_claim_problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "eligibility_unavailable",
+                "evaluate_eligibility",
+                "canonical earning history could not be loaded",
+                "Retry without signing anything.",
+            )
+        })?;
+    let settlements = events.iter().filter(|event| {
+        event.kind == AutonomousBountyEventKind::BountySettled
+            && event.data["solver"]
+                .as_str()
+                .is_some_and(|wallet| wallet.eq_ignore_ascii_case(solver_wallet))
+    });
+    let mut paid_completions = 0u32;
+    let mut paid_usdc_base_units = 0u64;
+    for event in settlements {
+        paid_completions = paid_completions.saturating_add(1);
+        let reward = json_u128(&event.data["solver_reward"]).unwrap_or(0);
+        let bonus = json_u128(&event.data["timeout_bond_bonus"]).unwrap_or(0);
+        paid_usdc_base_units = paid_usdc_base_units
+            .saturating_add(u64::try_from(reward.saturating_add(bonus)).unwrap_or(u64::MAX));
+    }
+    let mut capabilities = Vec::new();
+    let mut additional_reasons = Vec::new();
+    if let Some(agent_id) = agent_id {
+        let agents = store.list_agents().await.map_err(|_| {
+            agent_claim_problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "eligibility_unavailable",
+                "evaluate_eligibility",
+                "registered agent identity could not be loaded",
+                "Retry without signing anything.",
+            )
+        })?;
+        match agents.into_iter().find(|agent| agent.id == agent_id) {
+            Some(agent) => {
+                if agent.status != AgentStatus::Active {
+                    additional_reasons.push("registered agent is not active".to_string());
+                }
+                if agent
+                    .payout_wallet
+                    .as_deref()
+                    .is_none_or(|wallet| !wallet.eq_ignore_ascii_case(solver_wallet))
+                {
+                    additional_reasons.push(
+                        "registered agent payout wallet does not match solver_wallet".to_string(),
+                    );
+                }
+            }
+            None => additional_reasons.push("agent_id is not registered".to_string()),
+        }
+        capabilities = store
+            .list_capabilities()
+            .await
+            .map_err(|_| {
+                agent_claim_problem(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "eligibility_unavailable",
+                    "evaluate_eligibility",
+                    "registered agent capabilities could not be loaded",
+                    "Retry without signing anything.",
+                )
+            })?
+            .into_iter()
+            .filter(|capability| capability.agent_id == agent_id)
+            .map(|capability| capability.class)
+            .collect();
+        capabilities.sort_by_key(|class| format!("{class:?}"));
+        capabilities.dedup();
+    }
+    let evidence = AgentEligibilityEvidence {
+        agent_id,
+        solver_wallet: solver_wallet.to_string(),
+        capabilities,
+        paid_completions,
+        paid_usdc_base_units,
+    };
+    let mut decision = policy.evaluate(creator_wallet, &evidence);
+    decision.reasons.extend(additional_reasons);
+    decision.eligible = decision.reasons.is_empty();
+    Ok((evidence, decision))
+}
+
+fn claim_authorization_window(
+    candidate: &ClaimCandidate,
+) -> Result<(String, u64), AgentClaimProblem> {
+    let now = u64::try_from(Utc::now().timestamp()).unwrap_or_default();
+    let exclusive_until = candidate
+        .exclusive_until
+        .and_then(|value| u64::try_from(value.timestamp()).ok())
+        .ok_or_else(|| {
+            agent_claim_problem(
+                StatusCode::CONFLICT,
+                "exclusive_window_missing",
+                "prepare_authorization",
+                "candidate does not own a live exclusive window",
+                "Poll until promoted from the waitlist, then request a fresh authorization.",
+            )
+        })?;
+    let valid_before = exclusive_until
+        .saturating_sub(15)
+        .min(now.saturating_add(600));
+    if valid_before < now.saturating_add(60) {
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "exclusive_window_expiring",
+            "prepare_authorization",
+            "fewer than 60 seconds remain in the hosted exclusive window",
+            "Retry with a new idempotency_key after the canonical bounty is available again.",
+        ));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"agent-bounties/claim-authorization-v1");
+    hasher.update(candidate.id.as_bytes());
+    hasher.update(candidate.network.as_bytes());
+    hasher.update(candidate.bounty_contract.as_bytes());
+    hasher.update(candidate.solver_wallet.as_bytes());
+    Ok((
+        format!("0x{}", hex::encode(hasher.finalize())),
+        valid_before,
+    ))
+}
+
+fn signed_claim_request_template(request: &AgentNativeClaimRequest) -> serde_json::Value {
+    serde_json::json!({
+        "method": "POST",
+        "path": "/v1/base/autonomous-bounties/claims",
+        "body": {
+            "idempotency_key": request.idempotency_key,
+            "network": request.network.as_deref().unwrap_or("base-mainnet"),
+            "bounty_contract": request.bounty_contract,
+            "solver_wallet": request.solver_wallet,
+            "agent_id": request.agent_id,
+            "request_bond_sponsorship": request.request_bond_sponsorship,
+            "source": request.source
+        },
+        "insert_signature_at": "body.signature",
+        "signature_schema": { "v": "integer 27 or 28", "r": "0x plus 64 hex characters", "s": "0x plus 64 hex characters" },
+        "signature_source": "the wallet signature over signing_payload"
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn agent_claim_response(
+    state: &SharedState,
+    status: StatusCode,
+    reservation: ClaimCandidateReservation,
+    claim_bond: u64,
+    sponsorship_requested: bool,
+    sponsorship_available: bool,
+    sponsorship: Option<BondSponsorship>,
+    signing_payload: Option<Eip3009AuthorizationTypedData>,
+    next_action: &str,
+    next_request: Option<serde_json::Value>,
+) -> Response {
+    let browser_fallback_url = format!(
+        "https://nspg13.github.io/agent-bounties/earn.html?bountyContract={}&solver={}",
+        reservation.candidate.bounty_contract, reservation.candidate.solver_wallet
+    );
+    let response = AgentNativeClaimResponse {
+        schema_version: "agent-bounties/agent-native-claim-v1".to_string(),
+        waitlist_position: reservation.waitlist_position,
+        claim_bond: claim_bond.to_string(),
+        sponsorship_requested,
+        sponsorship_available,
+        sponsorship,
+        signing_payload,
+        claim_transaction_hash: reservation.candidate.claim_transaction_hash.clone(),
+        canonical_event_id: reservation.candidate.canonical_event_id,
+        next_action: next_action.to_string(),
+        next_request: next_request.map(|mut value| {
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "url".to_string(),
+                    serde_json::json!(format!(
+                        "{}/v1/base/autonomous-bounties/claims",
+                        state.public_base_url.trim_end_matches('/')
+                    )),
+                );
+            }
+            value
+        }),
+        browser_fallback_url,
+        evidence_boundary: "Hosted exclusivity, sponsorship, signatures, and transaction hashes are coordination evidence only. Only confirmed canonical BountyClaimed owns the round; only confirmed canonical BountySettled proves payout.".to_string(),
+        candidate: reservation.candidate,
+    };
+    (status, Json(response)).into_response()
+}
+
+fn agent_claim_problem(
+    status: StatusCode,
+    code: &str,
+    failed_transition: &str,
+    message: &str,
+    next_action: &str,
+) -> AgentClaimProblem {
+    (
+        status,
+        Json(serde_json::json!({
+            "schema_version": "agent-bounties/claim-problem-v1",
+            "state": "failed",
+            "failed_transition": failed_transition,
+            "error": code,
+            "message": message,
+            "next_action": next_action
+        })),
+    )
+}
+
+fn map_agent_claim_db_error(error: DbError) -> AgentClaimProblem {
+    match error {
+        DbError::ClaimWaitlistFull => agent_claim_problem(
+            StatusCode::TOO_MANY_REQUESTS,
+            "waitlist_full",
+            "reserve_candidate",
+            "the bounded waitlist is full",
+            "Choose another bounty or retry after a canonical claim timeout/settlement.",
+        ),
+        DbError::ClaimCandidateConflict(message) => agent_claim_problem(
+            StatusCode::CONFLICT,
+            "candidate_conflict",
+            "reserve_candidate",
+            &message,
+            "Replay the original idempotency_key, or use a new key only after the prior candidate becomes terminal.",
+        ),
+        DbError::BondSponsorshipQuotaExceeded(message) => agent_claim_problem(
+            StatusCode::TOO_MANY_REQUESTS,
+            "sponsorship_cap_reached",
+            "sponsor_bond",
+            &message,
+            "Fund the exact bond from the solver wallet or retry after the rolling cap clears.",
+        ),
+        _ => agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "coordination_storage_failed",
+            "persist_state",
+            "durable claim state could not be updated",
+            "Retry with the same idempotency_key; do not create a second authorization.",
+        ),
+    }
+}
+
+fn validate_claim_authorization_signature(
+    network: &BaseNetworkDescriptor,
+    bounty_contract: &str,
+    solver_wallet: &str,
+    claim_bond: u64,
+    nonce: &str,
+    valid_before: u64,
+    signature: &AutonomousBountyAuthorizationSignature,
+) -> Result<(), AgentClaimProblem> {
+    let now = u64::try_from(Utc::now().timestamp()).unwrap_or_default();
+    let timeout = valid_before.saturating_sub(now);
+    if timeout < 6 {
+        return Err(agent_claim_problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "authorization_expired",
+            "verify_authorization",
+            "the bounded USDC authorization expires too soon",
+            "Request a fresh candidate after the hosted exclusive window reopens.",
+        ));
+    }
+    let resource = format!(
+        "urn:agent-bounties:claim:{}:{}",
+        network.chain_id, bounty_contract
+    );
+    let required = base_usdc_funding_challenge(
+        resource,
+        format!("eip155:{}", network.chain_id),
+        &network.native_usdc_token_address,
+        bounty_contract,
+        claim_bond,
+        timeout,
+    )
+    .map_err(|_| {
+        agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "authorization_challenge_failed",
+            "verify_authorization",
+            "the exact USDC authorization challenge could not be reconstructed",
+            "Do not sign or transfer funds; retry with the same idempotency_key.",
+        )
+    })?;
+    let signature_hex = joined_signature(signature)?;
+    let payload = PaymentPayload {
+        x402_version: X402_VERSION,
+        resource: Some(required.resource.clone()),
+        accepted: required.accepts[0].clone(),
+        payload: serde_json::to_value(Eip3009Payload {
+            signature: signature_hex,
+            authorization: Eip3009Authorization {
+                from: solver_wallet.to_string(),
+                to: bounty_contract.to_string(),
+                value: claim_bond.to_string(),
+                valid_after: "0".to_string(),
+                valid_before: valid_before.to_string(),
+                nonce: nonce.to_string(),
+            },
+        })
+        .map_err(|_| {
+            agent_claim_problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "authorization_encoding_failed",
+                "verify_authorization",
+                "the signature payload could not be encoded",
+                "Do not retry with a different signature; report the candidate ID.",
+            )
+        })?,
+        extensions: required.extensions.clone(),
+    };
+    validate_funding_payload(&payload, &required, now).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "authorization_invalid",
+            "verify_authorization",
+            "signature recovery did not match the solver wallet and exact bounded authorization",
+            "Sign the returned signing_payload with solver_wallet; do not sign arbitrary calldata.",
+        )
+    })?;
+    Ok(())
+}
+
+fn joined_signature(
+    signature: &AutonomousBountyAuthorizationSignature,
+) -> Result<String, AgentClaimProblem> {
+    let r = signature.r.strip_prefix("0x").unwrap_or(&signature.r);
+    let s = signature.s.strip_prefix("0x").unwrap_or(&signature.s);
+    if r.len() != 64
+        || s.len() != 64
+        || !r.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !s.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(agent_claim_problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "signature_invalid",
+            "verify_authorization",
+            "signature r and s must each be one bytes32 hex value",
+            "Return the wallet's exact typed-data signature as v, r, and s.",
+        ));
+    }
+    let v = match signature.v {
+        0 | 27 => "1b",
+        1 | 28 => "1c",
+        _ => {
+            return Err(agent_claim_problem(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "signature_invalid",
+                "verify_authorization",
+                "signature v must be 0, 1, 27, or 28",
+                "Return the wallet's exact typed-data signature as v, r, and s.",
+            ))
+        }
+    };
+    Ok(format!("0x{r}{s}{v}").to_ascii_lowercase())
+}
+
+async fn process_bond_sponsorship(
+    state: &SharedState,
+    candidate: &ClaimCandidate,
+    claim_bond: u64,
+    existing: Option<BondSponsorship>,
+) -> Result<BondSponsorship, AgentClaimProblem> {
+    let store = state.store.as_ref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sponsorship_unavailable",
+            "sponsor_bond",
+            "durable sponsorship state is unavailable",
+            "Retry later or fund the exact bond from the solver wallet.",
+        )
+    })?;
+    let sponsor = state
+        .bond_sponsor
+        .sponsor
+        .as_ref()
+        .filter(|_| state.bond_sponsor.enabled)
+        .ok_or_else(|| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "sponsorship_unavailable",
+                "sponsor_bond",
+                "the capped bond sponsor is not enabled",
+                "Fund the exact bond from the solver wallet and retry without sponsorship.",
+            )
+        })?;
+    let mut sponsorship = match existing {
+        Some(sponsorship) => sponsorship,
+        None => store
+            .reserve_bond_sponsorship(
+                &NewBondSponsorship {
+                    id: Uuid::new_v4(),
+                    claim_candidate_id: candidate.id,
+                    network: candidate.network.clone(),
+                    bounty_contract: candidate.bounty_contract.clone(),
+                    solver_wallet: candidate.solver_wallet.clone(),
+                    sponsor_wallet: sponsor.address(),
+                    amount: claim_bond,
+                },
+                state.bond_sponsor.max_network_amount_24h,
+                state.bond_sponsor.max_solver_amount_24h,
+            )
+            .await
+            .map_err(map_agent_claim_db_error)?,
+    };
+    if sponsorship.status == BondSponsorshipStatus::Failed {
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "sponsorship_failed",
+            "sponsor_bond",
+            sponsorship
+                .failure_message
+                .as_deref()
+                .unwrap_or("the exact bond grant failed"),
+            "Fund the bond directly or create a fresh claim candidate after this one becomes terminal.",
+        ));
+    }
+    if sponsorship.status == BondSponsorshipStatus::Broadcast {
+        sponsorship = reconcile_bond_sponsorship(state, sponsorship).await?;
+    }
+    if sponsorship.status != BondSponsorshipStatus::Reserved {
+        return Ok(sponsorship);
+    }
+
+    let descriptor = base_network_descriptor(&candidate.network).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "network_invalid",
+            "sponsor_bond",
+            "candidate network is unsupported",
+            "Do not sign or transfer funds; report the candidate ID.",
+        )
+    })?;
+    let intent = erc20_transfer_intent(
+        &descriptor.native_usdc_token_address,
+        &sponsor.address(),
+        &candidate.solver_wallet,
+        claim_bond,
+    )?;
+    validate_bond_sponsorship_intent(
+        &intent,
+        &descriptor.native_usdc_token_address,
+        &sponsor.address(),
+        &candidate.solver_wallet,
+        claim_bond,
+    )?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(&candidate.network)
+        .map_err(|_| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "rpc_unavailable",
+                "sponsor_bond",
+                "Base RPC is unavailable",
+                "Retry with the same idempotency_key and signature.",
+            )
+        })?;
+    let lease = store
+        .acquire_x402_relayer_lease(&candidate.network, state.x402_relayer.lease_seconds)
+        .await
+        .map_err(map_agent_claim_db_error)?
+        .ok_or_else(|| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "relay_busy",
+                "sponsor_bond",
+                "the bounded transaction relay is busy",
+                "Retry with the same idempotency_key and signature.",
+            )
+        })?;
+    let relay_result = tokio::time::timeout(
+        Duration::from_secs(state.bond_sponsor.rpc_timeout_seconds),
+        sponsor.simulate_and_broadcast(
+            &rpc_url,
+            descriptor.chain_id,
+            &intent,
+            state.bond_sponsor.max_gas,
+            state.bond_sponsor.max_fee_per_gas_wei,
+        ),
+    )
+    .await;
+    let release_result = store
+        .release_x402_relayer_lease(&candidate.network, lease)
+        .await
+        .map_err(map_agent_claim_db_error);
+    let transaction = match relay_result {
+        Ok(Ok(transaction)) => transaction,
+        Ok(Err(error)) => {
+            store
+                .mark_bond_sponsorship_failed(
+                    sponsorship.id,
+                    "broadcast_unknown",
+                    &error.to_string(),
+                )
+                .await
+                .map_err(map_agent_claim_db_error)?;
+            release_result?;
+            return Err(agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "sponsorship_broadcast_unknown",
+                "sponsor_bond",
+                "the sponsor RPC did not prove whether the exact USDC grant was accepted",
+                "Do not request another grant. Inspect the solver balance or sponsor Transfer history; if the bond is present, replay the same signature with request_bond_sponsorship=false.",
+            ));
+        }
+        Err(_) => {
+            store
+                .mark_bond_sponsorship_failed(
+                    sponsorship.id,
+                    "broadcast_unknown",
+                    "RPC deadline elapsed after the bounded broadcast attempt began",
+                )
+                .await
+                .map_err(map_agent_claim_db_error)?;
+            release_result?;
+            return Err(agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "sponsorship_rpc_timeout",
+                "sponsor_bond",
+                "the sponsor RPC deadline elapsed without proving whether the exact USDC grant was accepted",
+                "Do not request another grant. Inspect the solver balance or sponsor Transfer history; if the bond is present, replay the same signature with request_bond_sponsorship=false.",
+            ));
+        }
+    };
+    release_result?;
+    sponsorship = store
+        .mark_bond_sponsorship_broadcast(sponsorship.id, &transaction.tx_hash)
+        .await
+        .map_err(map_agent_claim_db_error)?;
+    reconcile_bond_sponsorship(state, sponsorship).await
+}
+
+async fn reconcile_bond_sponsorship(
+    state: &SharedState,
+    sponsorship: BondSponsorship,
+) -> Result<BondSponsorship, AgentClaimProblem> {
+    if sponsorship.status != BondSponsorshipStatus::Broadcast {
+        return Ok(sponsorship);
+    }
+    let tx_hash = sponsorship.transaction_hash.as_deref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sponsorship_tx_missing",
+            "confirm_sponsorship",
+            "broadcast sponsorship has no transaction hash",
+            "Retry with the same idempotency_key; do not create a second authorization.",
+        )
+    })?;
+    let descriptor = base_network_descriptor(&sponsorship.network).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "network_invalid",
+            "confirm_sponsorship",
+            "sponsorship network is unsupported",
+            "Report the candidate ID.",
+        )
+    })?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(&sponsorship.network)
+        .map_err(|_| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "rpc_unavailable",
+                "confirm_sponsorship",
+                "Base RPC is unavailable",
+                "Retry with the same signed request.",
+            )
+        })?;
+    let confirmed_block = wait_for_usdc_transfer_confirmation(
+        &rpc_url,
+        tx_hash,
+        &descriptor.native_usdc_token_address,
+        &sponsorship.sponsor_wallet,
+        &sponsorship.solver_wallet,
+        sponsorship.amount,
+        state.bond_sponsor.confirmations,
+        state.bond_sponsor.wait_seconds,
+    )
+    .await?;
+    let Some(confirmed_block) = confirmed_block else {
+        return Ok(sponsorship);
+    };
+    state
+        .store
+        .as_ref()
+        .ok_or_else(|| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "coordination_unavailable",
+                "confirm_sponsorship",
+                "durable sponsorship state is unavailable",
+                "Retry with the same signed request.",
+            )
+        })?
+        .mark_bond_sponsorship_confirmed(sponsorship.id, confirmed_block)
+        .await
+        .map_err(map_agent_claim_db_error)
+}
+
+fn erc20_transfer_intent(
+    token: &str,
+    from: &str,
+    recipient: &str,
+    amount: u64,
+) -> Result<EvmTransactionIntent, AgentClaimProblem> {
+    let token = normalize_evm_address(token).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "token_invalid",
+            "sponsor_bond",
+            "configured USDC token is invalid",
+            "Do not sign or transfer funds.",
+        )
+    })?;
+    let from = normalize_evm_address(from).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sponsor_invalid",
+            "sponsor_bond",
+            "configured sponsor wallet is invalid",
+            "Do not sign or transfer funds.",
+        )
+    })?;
+    let recipient = normalize_evm_address(recipient).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "solver_invalid",
+            "sponsor_bond",
+            "solver wallet is invalid",
+            "Provide a valid public Base wallet.",
+        )
+    })?;
+    if amount == 0 {
+        return Err(agent_claim_problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bond_invalid",
+            "sponsor_bond",
+            "sponsored bond must be positive",
+            "Use the exact positive claim_bond from canonical inventory.",
+        ));
+    }
+    Ok(EvmTransactionIntent {
+        from: Some(from),
+        to: token,
+        value_wei: 0,
+        data: format!(
+            "0xa9059cbb{:0>64}{:064x}",
+            recipient.trim_start_matches("0x"),
+            amount
+        ),
+        function: "transfer(address,uint256)".to_string(),
+    })
+}
+
+fn validate_bond_sponsorship_intent(
+    intent: &EvmTransactionIntent,
+    token: &str,
+    sponsor: &str,
+    recipient: &str,
+    amount: u64,
+) -> Result<(), AgentClaimProblem> {
+    let expected = erc20_transfer_intent(token, sponsor, recipient, amount)?;
+    if intent.value_wei != 0
+        || intent.function != expected.function
+        || !intent.to.eq_ignore_ascii_case(&expected.to)
+        || intent
+            .from
+            .as_deref()
+            .zip(expected.from.as_deref())
+            .is_none_or(|(actual, expected)| !actual.eq_ignore_ascii_case(expected))
+        || !intent.data.eq_ignore_ascii_case(&expected.data)
+    {
+        return Err(agent_claim_problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "sponsorship_intent_invalid",
+            "sponsor_bond",
+            "generated sponsorship transaction exceeded the exact token/recipient/amount policy",
+            "Do not broadcast; report the candidate ID.",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn wait_for_usdc_transfer_confirmation(
+    rpc_url: &str,
+    tx_hash: &str,
+    token: &str,
+    from: &str,
+    recipient: &str,
+    amount: u64,
+    required_confirmations: u64,
+    wait_seconds: u64,
+) -> Result<Option<u64>, AgentClaimProblem> {
+    let deadline = Instant::now() + Duration::from_secs(wait_seconds);
+    loop {
+        let receipt = fetch_transaction_receipt(rpc_url, tx_hash, 1)
+            .await
+            .map_err(|_| {
+                agent_claim_problem(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "rpc_unavailable",
+                    "confirm_sponsorship",
+                    "the sponsorship receipt could not be fetched",
+                    "Retry with the same signed request.",
+                )
+            })?
+            .result;
+        if let Some(receipt) = receipt {
+            if receipt.succeeded().map_err(|_| {
+                agent_claim_problem(
+                    StatusCode::BAD_GATEWAY,
+                    "receipt_invalid",
+                    "confirm_sponsorship",
+                    "the sponsorship receipt status is invalid",
+                    "Retry with the same signed request.",
+                )
+            })? == Some(false)
+            {
+                return Err(agent_claim_problem(
+                    StatusCode::BAD_GATEWAY,
+                    "sponsorship_reverted",
+                    "confirm_sponsorship",
+                    "the exact bond grant reverted",
+                    "Fund the bond directly or retry after the sponsor is repaired.",
+                ));
+            }
+            let block = receipt.block_number().map_err(|_| {
+                agent_claim_problem(
+                    StatusCode::BAD_GATEWAY,
+                    "receipt_invalid",
+                    "confirm_sponsorship",
+                    "the sponsorship receipt block is invalid",
+                    "Retry with the same signed request.",
+                )
+            })?;
+            if let Some(block) = block {
+                let logs = receipt.logs_to_evm_logs().map_err(|_| {
+                    agent_claim_problem(
+                        StatusCode::BAD_GATEWAY,
+                        "receipt_invalid",
+                        "confirm_sponsorship",
+                        "the sponsorship logs are invalid",
+                        "Retry with the same signed request.",
+                    )
+                })?;
+                if !logs
+                    .iter()
+                    .any(|log| exact_erc20_transfer(log, token, from, recipient, amount))
+                {
+                    return Err(agent_claim_problem(
+                        StatusCode::BAD_GATEWAY,
+                        "sponsorship_event_mismatch",
+                        "confirm_sponsorship",
+                        "the confirmed transaction did not emit the exact USDC Transfer",
+                        "Do not treat the bond as sponsored; report the transaction hash.",
+                    ));
+                }
+                let latest = fetch_block_number(rpc_url, 2).await.map_err(|_| {
+                    agent_claim_problem(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "rpc_unavailable",
+                        "confirm_sponsorship",
+                        "latest Base block could not be fetched",
+                        "Retry with the same signed request.",
+                    )
+                })?;
+                if latest.saturating_sub(block).saturating_add(1) >= required_confirmations {
+                    return Ok(Some(block));
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
+fn exact_erc20_transfer(
+    log: &EvmLog,
+    token: &str,
+    from: &str,
+    recipient: &str,
+    amount: u64,
+) -> bool {
+    const TRANSFER_TOPIC: &str =
+        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    let address_topic = |address: &str| {
+        format!(
+            "0x{:0>64}",
+            address.trim_start_matches("0x").to_ascii_lowercase()
+        )
+    };
+    log.address.eq_ignore_ascii_case(token)
+        && log.topics.len() == 3
+        && log.topics[0].eq_ignore_ascii_case(TRANSFER_TOPIC)
+        && log.topics[1].eq_ignore_ascii_case(&address_topic(from))
+        && log.topics[2].eq_ignore_ascii_case(&address_topic(recipient))
+        && log.data.eq_ignore_ascii_case(&format!("0x{amount:064x}"))
+}
+
+async fn relay_agent_native_claim(
+    state: &SharedState,
+    candidate: &ClaimCandidate,
+    claim_bond: u64,
+    nonce: &str,
+    valid_before: u64,
+    signature: &AutonomousBountyAuthorizationSignature,
+) -> Result<ClaimCandidate, AgentClaimProblem> {
+    if candidate.status == ClaimCandidateStatus::Relaying {
+        return reconcile_agent_native_claim(state, candidate.clone(), claim_bond).await;
+    }
+    let relayer = state
+        .x402_relayer
+        .relayer
+        .as_ref()
+        .filter(|_| state.x402_relayer.enabled)
+        .ok_or_else(|| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "claim_relayer_unavailable",
+                "relay_claim",
+                "the hosted gas relayer is unavailable",
+                "Use the direct wallet_calls from plan_autonomous_bounty_claim.",
+            )
+        })?;
+    let planner = configured_autonomous_planner(&candidate.network).map_err(|status| {
+        agent_claim_problem(
+            status,
+            "planner_unavailable",
+            "relay_claim",
+            "the canonical claim planner is unavailable",
+            "Do not sign arbitrary calldata; retry later.",
+        )
+    })?;
+    let plan = planner
+        .plan_authorized_claim(
+            &candidate.network,
+            &candidate.bounty_contract,
+            &candidate.solver_wallet,
+            u128::from(claim_bond),
+            nonce,
+            valid_before,
+            signature,
+            Some(&relayer.address()),
+        )
+        .map_err(|_| {
+            agent_claim_problem(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "claim_plan_invalid",
+                "relay_claim",
+                "the signed claim could not be converted into the exact relay transaction",
+                "Sign only the returned signing_payload and retry with the same idempotency_key.",
+            )
+        })?;
+    validate_agent_claim_relay_intent(
+        &plan.relay_transaction,
+        &candidate.bounty_contract,
+        &relayer.address(),
+    )?;
+    let descriptor = base_network_descriptor(&candidate.network).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "network_invalid",
+            "relay_claim",
+            "candidate network is unsupported",
+            "Do not sign or broadcast anything.",
+        )
+    })?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(&candidate.network)
+        .map_err(|_| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "rpc_unavailable",
+                "relay_claim",
+                "Base RPC is unavailable",
+                "Retry the same signed request.",
+            )
+        })?;
+    let store = state.store.as_ref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "coordination_unavailable",
+            "relay_claim",
+            "durable claim state is unavailable",
+            "Use the direct wallet claim plan or retry later.",
+        )
+    })?;
+    let lease = store
+        .acquire_x402_relayer_lease(&candidate.network, state.x402_relayer.lease_seconds)
+        .await
+        .map_err(map_agent_claim_db_error)?
+        .ok_or_else(|| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "relay_busy",
+                "relay_claim",
+                "the bounded gas relay is busy",
+                "Retry the same signed request.",
+            )
+        })?;
+    let relay_result = tokio::time::timeout(
+        Duration::from_secs(state.x402_relayer.rpc_timeout_seconds),
+        relayer.simulate_and_broadcast(
+            &rpc_url,
+            descriptor.chain_id,
+            &plan.relay_transaction,
+            state.x402_relayer.max_gas,
+            state.x402_relayer.max_fee_per_gas_wei,
+        ),
+    )
+    .await;
+    let release_result = store
+        .release_x402_relayer_lease(&candidate.network, lease)
+        .await
+        .map_err(map_agent_claim_db_error);
+    let transaction = match relay_result {
+        Ok(Ok(transaction)) => transaction,
+        Ok(Err(error)) => {
+            release_result?;
+            return Err(agent_claim_problem(
+                if error.to_string().to_ascii_lowercase().contains("revert") {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                },
+                "claim_broadcast_failed",
+                "relay_claim",
+                "the exact claim transaction failed simulation or broadcast",
+                "Check canonical claimability and solver bond balance, then retry the same signed request before it expires.",
+            ));
+        }
+        Err(_) => {
+            release_result?;
+            return Err(agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "claim_rpc_timeout",
+                "relay_claim",
+                "the relay RPC deadline elapsed before broadcast was recorded",
+                "Retry the same signed request; EIP-3009 nonce reuse cannot double-claim.",
+            ));
+        }
+    };
+    release_result?;
+    let candidate = store
+        .mark_claim_candidate_relaying(candidate.id, &transaction.tx_hash)
+        .await
+        .map_err(map_agent_claim_db_error)?;
+    reconcile_agent_native_claim(state, candidate, claim_bond).await
+}
+
+fn validate_agent_claim_relay_intent(
+    intent: &EvmTransactionIntent,
+    bounty_contract: &str,
+    relayer: &str,
+) -> Result<(), AgentClaimProblem> {
+    let calldata = intent.data.strip_prefix("0x").unwrap_or_default();
+    if intent.value_wei != 0
+        || intent.function
+            != "claimWithAuthorization(address,uint256,uint256,bytes32,uint8,bytes32,bytes32)"
+        || !intent.to.eq_ignore_ascii_case(bounty_contract)
+        || intent
+            .from
+            .as_deref()
+            .is_none_or(|from| !from.eq_ignore_ascii_case(relayer))
+        || calldata.len() != 8 + 7 * 64
+    {
+        return Err(agent_claim_problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "claim_intent_invalid",
+            "relay_claim",
+            "generated claim transaction exceeded the exact no-ETH claimWithAuthorization policy",
+            "Do not broadcast; report the candidate ID.",
+        ));
+    }
+    Ok(())
+}
+
+async fn reconcile_agent_native_claim(
+    state: &SharedState,
+    candidate: ClaimCandidate,
+    claim_bond: u64,
+) -> Result<ClaimCandidate, AgentClaimProblem> {
+    if candidate.status == ClaimCandidateStatus::Claimed {
+        return Ok(candidate);
+    }
+    let tx_hash = candidate.claim_transaction_hash.as_deref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "claim_tx_missing",
+            "confirm_claim",
+            "relaying candidate has no transaction hash",
+            "Retry with the same idempotency_key.",
+        )
+    })?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(&candidate.network)
+        .map_err(|_| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "rpc_unavailable",
+                "confirm_claim",
+                "Base RPC is unavailable",
+                "Retry the same signed request.",
+            )
+        })?;
+    let deadline = Instant::now() + Duration::from_secs(state.x402_relayer.wait_seconds);
+    loop {
+        let receipt = fetch_transaction_receipt(&rpc_url, tx_hash, 1)
+            .await
+            .map_err(|_| {
+                agent_claim_problem(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "rpc_unavailable",
+                    "confirm_claim",
+                    "the claim receipt could not be fetched",
+                    "Retry the same signed request.",
+                )
+            })?
+            .result;
+        if let Some(receipt) = receipt {
+            if receipt.succeeded().map_err(|_| {
+                agent_claim_problem(
+                    StatusCode::BAD_GATEWAY,
+                    "receipt_invalid",
+                    "confirm_claim",
+                    "the claim receipt status is invalid",
+                    "Retry the same signed request.",
+                )
+            })? == Some(false)
+            {
+                let store = state.store.as_ref().ok_or_else(|| {
+                    agent_claim_problem(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "coordination_unavailable",
+                        "confirm_claim",
+                        "durable claim state is unavailable",
+                        "Retry later.",
+                    )
+                })?;
+                store
+                    .mark_claim_candidate_failed(
+                        candidate.id,
+                        "transaction_reverted",
+                        "The confirmed claim transaction reverted; no canonical claim was created.",
+                    )
+                    .await
+                    .map_err(map_agent_claim_db_error)?;
+                return Err(agent_claim_problem(
+                    StatusCode::BAD_GATEWAY,
+                    "claim_reverted",
+                    "confirm_claim",
+                    "the confirmed transaction reverted and emitted no canonical claim",
+                    "If the bounty is still claimable, start a fresh candidate with a new idempotency_key.",
+                ));
+            }
+            if let Some(block) = receipt.block_number().map_err(|_| {
+                agent_claim_problem(
+                    StatusCode::BAD_GATEWAY,
+                    "receipt_invalid",
+                    "confirm_claim",
+                    "the claim receipt block is invalid",
+                    "Retry the same signed request.",
+                )
+            })? {
+                let events =
+                    decode_autonomous_bounty_logs(receipt.logs_to_evm_logs().map_err(|_| {
+                        agent_claim_problem(
+                            StatusCode::BAD_GATEWAY,
+                            "receipt_invalid",
+                            "confirm_claim",
+                            "the claim receipt logs are invalid",
+                            "Retry the same signed request.",
+                        )
+                    })?)
+                    .map_err(|_| {
+                        agent_claim_problem(
+                            StatusCode::BAD_GATEWAY,
+                            "claim_event_invalid",
+                            "confirm_claim",
+                            "the claim receipt could not be decoded",
+                            "Do not treat the round as claimed; report the transaction hash.",
+                        )
+                    })?;
+                let claim = events.iter().find(|event| {
+                    event.kind == AutonomousBountyEventKind::BountyClaimed
+                        && event
+                            .contract_address
+                            .eq_ignore_ascii_case(&candidate.bounty_contract)
+                        && event.data["solver"].as_str().is_some_and(|solver| {
+                            solver.eq_ignore_ascii_case(&candidate.solver_wallet)
+                        })
+                        && json_u128(&event.data["claim_bond"]) == Some(u128::from(claim_bond))
+                });
+                let Some(claim) = claim else {
+                    return Err(agent_claim_problem(
+                        StatusCode::BAD_GATEWAY,
+                        "claim_event_mismatch",
+                        "confirm_claim",
+                        "the confirmed transaction did not emit the exact canonical BountyClaimed event",
+                        "Do not start work; report the transaction hash.",
+                    ));
+                };
+                let latest = fetch_block_number(&rpc_url, 2).await.map_err(|_| {
+                    agent_claim_problem(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "rpc_unavailable",
+                        "confirm_claim",
+                        "latest Base block could not be fetched",
+                        "Retry the same signed request.",
+                    )
+                })?;
+                if latest.saturating_sub(block).saturating_add(1)
+                    >= state.x402_relayer.confirmations
+                {
+                    let store = state.store.as_ref().ok_or_else(|| {
+                        agent_claim_problem(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "coordination_unavailable",
+                            "confirm_claim",
+                            "durable claim state is unavailable",
+                            "Retry the same signed request.",
+                        )
+                    })?;
+                    for event in events.iter().filter(|event| {
+                        event
+                            .contract_address
+                            .eq_ignore_ascii_case(&candidate.bounty_contract)
+                    }) {
+                        store
+                            .upsert_autonomous_bounty_event(&candidate.network, event)
+                            .await
+                            .map_err(map_agent_claim_db_error)?;
+                    }
+                    return store
+                        .mark_claim_candidate_claimed(candidate.id, claim.id)
+                        .await
+                        .map_err(map_agent_claim_db_error);
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Ok(candidate);
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
 fn require_claimable_autonomous_item(item: &AutonomousBountyFeedItem) -> Result<(), StatusCode> {
     if !autonomous_bounty_is_earning_ready(item) {
         return Err(StatusCode::CONFLICT);
@@ -5883,6 +7594,79 @@ mod tests {
     }
 
     #[test]
+    fn bond_sponsorship_builds_only_the_exact_usdc_transfer() {
+        let token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+        let sponsor = "0x2222222222222222222222222222222222222222";
+        let solver = "0x3333333333333333333333333333333333333333";
+        let intent = erc20_transfer_intent(token, sponsor, solver, 10_000).unwrap();
+
+        assert_eq!(intent.function, "transfer(address,uint256)");
+        assert_eq!(intent.value_wei, 0);
+        assert_eq!(intent.from.as_deref(), Some(sponsor));
+        assert!(validate_bond_sponsorship_intent(&intent, token, sponsor, solver, 10_000).is_ok());
+
+        let mut changed = intent.clone();
+        changed.data.replace_range(changed.data.len() - 1.., "1");
+        assert!(
+            validate_bond_sponsorship_intent(&changed, token, sponsor, solver, 10_000).is_err()
+        );
+    }
+
+    #[test]
+    fn bond_sponsorship_requires_exact_transfer_evidence() {
+        let token = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+        let sponsor = "0x2222222222222222222222222222222222222222";
+        let solver = "0x3333333333333333333333333333333333333333";
+        let topic = |address: &str| format!("0x{:0>64}", address.trim_start_matches("0x"));
+        let mut log = EvmLog {
+            address: token.to_string(),
+            topics: vec![
+                "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef".to_string(),
+                topic(sponsor),
+                topic(solver),
+            ],
+            data: format!("0x{:064x}", 10_000u64),
+            tx_hash: format!("0x{:064x}", 1),
+            block_number: 1,
+            log_index: 0,
+            occurred_at: None,
+        };
+
+        assert!(exact_erc20_transfer(&log, token, sponsor, solver, 10_000));
+        log.data = format!("0x{:064x}", 9_999u64);
+        assert!(!exact_erc20_transfer(&log, token, sponsor, solver, 10_000));
+    }
+
+    #[test]
+    fn agent_claim_relay_rejects_value_or_wrong_shape() {
+        let bounty = "0x1111111111111111111111111111111111111111";
+        let relayer = "0x2222222222222222222222222222222222222222";
+        let mut intent = EvmTransactionIntent {
+            from: Some(relayer.to_string()),
+            to: bounty.to_string(),
+            value_wei: 0,
+            data: format!("0x{:0>456}", "abcd1234"),
+            function:
+                "claimWithAuthorization(address,uint256,uint256,bytes32,uint8,bytes32,bytes32)"
+                    .to_string(),
+        };
+        assert!(validate_agent_claim_relay_intent(&intent, bounty, relayer).is_ok());
+        intent.value_wei = 1;
+        assert!(validate_agent_claim_relay_intent(&intent, bounty, relayer).is_err());
+    }
+
+    #[test]
+    fn malformed_solver_signature_is_rejected_before_sponsorship() {
+        let signature = AutonomousBountyAuthorizationSignature {
+            v: 27,
+            r: "0x01".to_string(),
+            s: format!("0x{:064x}", 2),
+        };
+        let error = joined_signature(&signature).unwrap_err();
+        assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
     fn x402_payment_required_response_uses_v2_wire_header_and_no_store() {
         let challenge = base_usdc_funding_challenge(
             "https://api.example/v1/x402/base/bounties/0x1111111111111111111111111111111111111111/funding?network=base-mainnet&amount=150000",
@@ -7343,6 +9127,13 @@ mod tests {
     }
 
     #[test]
+    fn agent_claim_network_keys_match_indexer_storage_keys() {
+        assert_eq!(canonical_base_network_key(8_453), Some("base-mainnet"));
+        assert_eq!(canonical_base_network_key(84_532), Some("base-sepolia"));
+        assert_eq!(canonical_base_network_key(1), None);
+    }
+
+    #[test]
     fn mainnet_readiness_uses_canonical_factory_and_rejects_drift() {
         assert_eq!(
             canonical_mainnet_factory(None, None).as_deref(),
@@ -7421,6 +9212,7 @@ mod tests {
             "/v1/base/autonomous-bounties/authorized-creation-plan",
             "/v1/base/autonomous-bounties/contribution-plan",
             "/v1/base/autonomous-bounties/authorized-contribution-plan",
+            "/v1/base/autonomous-bounties/claims",
             "/v1/base/autonomous-bounties/claim-plan",
             "/v1/base/autonomous-bounties/authorized-claim-plan",
             "/v1/base/autonomous-bounties/submission-plan",
@@ -8424,6 +10216,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
@@ -8451,6 +10244,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
@@ -8473,6 +10267,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
@@ -8495,6 +10290,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
@@ -8521,6 +10317,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
@@ -8549,6 +10346,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
@@ -8574,6 +10372,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
@@ -8599,6 +10398,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }
@@ -8625,6 +10425,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
+            bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
     }

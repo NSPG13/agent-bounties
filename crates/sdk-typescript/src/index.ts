@@ -134,6 +134,36 @@ export interface AutonomousAuthorizationSignature {
   s: string;
 }
 
+export interface AgentNativeClaimRequest {
+  idempotency_key?: string;
+  network?: "base-mainnet" | "base-sepolia";
+  bounty_contract: string;
+  solver_wallet: string;
+  agent_id?: string | null;
+  request_bond_sponsorship?: boolean;
+  source?: string;
+}
+
+export interface AgentNativeClaimResponse {
+  schema_version: string;
+  candidate: Record<string, unknown> & { status?: string };
+  waitlist_position?: number | null;
+  claim_bond: string;
+  sponsorship_available: boolean;
+  signing_payload?: Record<string, unknown> | null;
+  canonical_event_id?: string | null;
+  next_action: string;
+}
+
+export type AgentClaimSigner = (
+  signingPayload: Record<string, unknown>,
+) => Promise<AutonomousAuthorizationSignature>;
+
+export interface AgentClaimLoopOptions {
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}
+
 export interface AutonomousLifecycleRequest {
   bounty_contract: string;
   network?: string | null;
@@ -832,6 +862,53 @@ export class AgentBountiesClient {
       authorization_nonce: request.authorization_nonce ?? null,
       authorization_valid_before: request.authorization_valid_before ?? null,
     });
+  }
+
+  async agentNativeClaim(
+    request: AgentNativeClaimRequest,
+    signer?: AgentClaimSigner,
+    options: AgentClaimLoopOptions = {},
+  ): Promise<AgentNativeClaimResponse> {
+    const body: AgentNativeClaimRequest & { signature?: AutonomousAuthorizationSignature } = {
+      ...request,
+      idempotency_key: request.idempotency_key ?? `sdk-typescript-${globalThis.crypto.randomUUID()}`,
+      network: request.network ?? "base-mainnet",
+      request_bond_sponsorship: request.request_bond_sponsorship ?? false,
+      source: request.source ?? "sdk-typescript",
+    };
+    let response = (await this.request("/v1/base/autonomous-bounties/claims", {
+      method: "POST",
+      body: JSON.stringify(body),
+    })) as AgentNativeClaimResponse;
+    if (!signer || !response.signing_payload) return response;
+
+    const signature = await signer(response.signing_payload);
+    if (!signature?.r || !signature?.s || !Number.isInteger(signature.v)) {
+      throw new Error("agent claim signer must return v, r, and s");
+    }
+    body.signature = signature;
+    const deadline = Date.now() + (options.timeoutMs ?? 60_000);
+    while (true) {
+      response = (await this.request("/v1/base/autonomous-bounties/claims", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })) as AgentNativeClaimResponse;
+      const status = response.candidate?.status;
+      if (status === "claimed") {
+        if (!response.canonical_event_id) {
+          throw new Error("claimed response is missing canonical_event_id");
+        }
+        return response;
+      }
+      if (["failed", "superseded", "withdrawn"].includes(status ?? "")) {
+        throw new Error(`agent claim ended in terminal state ${status}`);
+      }
+      if (status === "waitlisted") return response;
+      if (Date.now() >= deadline) {
+        throw new Error("agent claim timed out; replay the same idempotency key and signature");
+      }
+      await new Promise((resolve) => setTimeout(resolve, options.pollIntervalMs ?? 1_000));
+    }
   }
 
   async planAutonomousBountyAuthorizedClaim(request: {
