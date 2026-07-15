@@ -12,6 +12,7 @@ CONTRACT = "0x4000000000000000000000000000000000000004"
 NOW = 1_800_000_000
 HASH_A = "0x" + "11" * 32
 HASH_B = "0x" + "22" * 32
+PRIVATE_KEY = "0x" + "01" * 32
 
 
 def bounty_state(**overrides: object) -> relay.BountyState:
@@ -122,6 +123,9 @@ class FakeClient:
     def keeper_address(self, private_key: str) -> str:
         self.private_key = private_key
         return "0x3000000000000000000000000000000000000003"
+
+    def chain_id(self) -> int:
+        return relay.CHAIN_ID
 
     def estimate(self, keeper: str, contract: str, signature: str, *args: str) -> int:
         self.estimated = True
@@ -258,11 +262,116 @@ class RelayTests(unittest.TestCase):
         relay.read_state = lambda ignored, contract, block=None: states.pop(0)  # type: ignore[assignment]
         try:
             report = relay.relay(
-                client, event(envelope), execute=True, private_key="secret"
+                client, event(envelope), execute=True, private_key=PRIVATE_KEY
             )
             return report, client
         finally:
             relay.read_state = original
+
+    def test_keeper_preflight_rejects_malformed_secret_before_chain_state(self) -> None:
+        original = relay.read_state
+        relay.read_state = (  # type: ignore[assignment]
+            lambda *args, **kwargs: self.fail("chain state read before signer preflight")
+        )
+        try:
+            with self.assertRaises(relay.RelayError) as raised:
+                relay.relay(
+                    FakeClient(),
+                    event(claim_envelope()),
+                    execute=True,
+                    private_key="not-a-key",
+                )
+        finally:
+            relay.read_state = original
+        self.assertEqual(raised.exception.code, "keeper_configuration_invalid")
+        self.assertTrue(raised.exception.retryable)
+
+    def test_keeper_health_checks_signer_chain_and_gas_reserve(self) -> None:
+        report = relay.keeper_health(FakeClient(), PRIVATE_KEY)
+        self.assertEqual(report["outcome"], "healthy")
+        self.assertEqual(report["chain_id"], relay.CHAIN_ID)
+        self.assertGreaterEqual(
+            report["keeper_balance_wei"], report["minimum_balance_wei"]
+        )
+
+    def test_settlement_uses_latest_state_after_bounded_predecessor_wait(self) -> None:
+        claimed = bounty_state(
+            status=relay.STATUS_CLAIMED,
+            round=1,
+            solver=SOLVER,
+            claim_expires_at=NOW + 1_000,
+            active_claim_bond=100_000,
+        )
+        submitted = bounty_state(
+            status=relay.STATUS_SUBMITTED,
+            round=1,
+            solver=SOLVER,
+            verification_expires_at=NOW + 1_000,
+            active_claim_bond=100_000,
+            submission_hash=HASH_A,
+            evidence_hash=HASH_B,
+        )
+        settled = bounty_state(
+            status=relay.STATUS_SETTLED,
+            round=1,
+            solver=SOLVER,
+            funded_amount=0,
+            submission_hash=HASH_A,
+            evidence_hash=HASH_B,
+        )
+        states = [claimed, submitted, settled]
+        blocks: list[str | None] = []
+        original = relay.read_state
+
+        def read(ignored, contract, block=None):
+            blocks.append(block)
+            return states.pop(0)
+
+        relay.read_state = read  # type: ignore[assignment]
+        try:
+            report = relay.relay(
+                FakeClient(),
+                event(settle_envelope()),
+                execute=True,
+                private_key=PRIVATE_KEY,
+                state_wait_seconds=5,
+                state_poll_seconds=0.1,
+                sleep_fn=lambda ignored: None,
+                clock=lambda: 0.0,
+            )
+        finally:
+            relay.read_state = original
+        self.assertEqual(report["outcome"], "relayed")
+        self.assertEqual(report["lifecycle_block_tag"], "latest")
+        self.assertEqual(report["state_attempts"], 2)
+        self.assertEqual(blocks, ["latest", "latest", "0x1234"])
+
+    def test_predecessor_wait_times_out_with_retryable_terminal_status(self) -> None:
+        client = FakeClient()
+        claimed = bounty_state(
+            status=relay.STATUS_CLAIMED,
+            round=1,
+            solver=SOLVER,
+            claim_expires_at=NOW + 1_000,
+            active_claim_bond=100_000,
+        )
+        original = relay.read_state
+        relay.read_state = lambda ignored, contract, block=None: claimed  # type: ignore[assignment]
+        try:
+            with self.assertRaises(relay.RelayError) as raised:
+                relay.relay(
+                    client,
+                    event(settle_envelope()),
+                    execute=True,
+                    private_key=PRIVATE_KEY,
+                    state_wait_seconds=0,
+                )
+        finally:
+            relay.read_state = original
+        self.assertEqual(raised.exception.code, "lifecycle_state_timeout")
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(raised.exception.details["observed_status"], "claimed")
+        self.assertFalse(client.sent)
 
     def test_executes_claim_once_and_validates_post_state(self) -> None:
         report, client = self.run_relay(
@@ -335,7 +444,7 @@ class RelayTests(unittest.TestCase):
         relay.read_state = lambda ignored, contract, block=None: state  # type: ignore[assignment]
         try:
             report = relay.relay(
-                client, event(claim_envelope()), execute=True, private_key="secret"
+                client, event(claim_envelope()), execute=True, private_key=PRIVATE_KEY
             )
         finally:
             relay.read_state = original
@@ -350,7 +459,7 @@ class RelayTests(unittest.TestCase):
         try:
             with self.assertRaisesRegex(relay.RelayError, "gas limit"):
                 relay.relay(
-                    client, event(claim_envelope()), execute=True, private_key="secret"
+                    client, event(claim_envelope()), execute=True, private_key=PRIVATE_KEY
                 )
         finally:
             relay.read_state = original
@@ -378,6 +487,17 @@ class RelayTests(unittest.TestCase):
         )
         self.assertIn("only `BountySettled` proves solver payment", comment)
         self.assertIn("Source comment id: `99`", comment)
+        processing = relay.render_comment(
+            {
+                "outcome": "processing",
+                "action": "settle",
+                "bounty_contract": CONTRACT,
+                "state_wait_seconds": 120,
+            },
+            100,
+        )
+        self.assertIn("Request received", processing)
+        self.assertIn("bounded lifecycle wait of 120 seconds", processing)
 
 
 if __name__ == "__main__":
