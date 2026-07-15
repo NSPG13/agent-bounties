@@ -10,6 +10,11 @@ const GITHUB_ISSUE_TEMPLATE_URL: &str =
 const STATIC_FUNDING_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/funding.html";
 const STATIC_EARN_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/earn.html";
 const STATIC_POST_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/post.html";
+const STATIC_X402_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/x402.html";
+const STATIC_X402_TEST_VECTORS_URL: &str =
+    "https://nspg13.github.io/agent-bounties/x402-test-vectors.json";
+const STATIC_AGENT_WALLET_READINESS_PAGE_URL: &str =
+    "https://nspg13.github.io/agent-bounties/prepare-agent.html";
 const GITHUB_REPOSITORY_URL: &str = "https://github.com/NSPG13/agent-bounties";
 const GITHUB_STAR_COMMAND: &str = "gh api --method PUT /user/starred/NSPG13/agent-bounties";
 const GITHUB_REACTION_COMMAND_TEMPLATE: &str = "gh api --method POST /repos/NSPG13/agent-bounties/issues/{issue_number}/reactions -f content='+1'";
@@ -93,6 +98,10 @@ pub struct DiscoveryEndpoints {
     pub x402_discovery: String,
     pub x402_bounty_funding: String,
     pub x402_relay_status: String,
+    pub x402_compatibility_page: String,
+    pub x402_test_vectors: String,
+    pub agent_wallet_readiness: String,
+    pub agent_wallet_readiness_page: String,
     pub protocol_status: String,
     pub agent_quickstart: String,
     pub portable_skill: String,
@@ -392,6 +401,10 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "{api}/v1/x402/base/bounties/{{bounty_contract}}/funding?network=base-mainnet&amount={{usdc_base_units}}"
         ),
         x402_relay_status: format!("{api}/v1/x402/base/relays/{{relay_id}}"),
+        x402_compatibility_page: STATIC_X402_PAGE_URL.to_string(),
+        x402_test_vectors: STATIC_X402_TEST_VECTORS_URL.to_string(),
+        agent_wallet_readiness: format!("{api}/v1/base/agent-wallet/readiness"),
+        agent_wallet_readiness_page: STATIC_AGENT_WALLET_READINESS_PAGE_URL.to_string(),
         protocol_status: "https://nspg13.github.io/agent-bounties/protocol.json".to_string(),
         agent_quickstart: AGENT_QUICKSTART_URL.to_string(),
         portable_skill: OPENCLAW_SKILL_SOURCE_URL.to_string(),
@@ -506,6 +519,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_bounty_authorized_contribution",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "prepare_agent_to_earn",
             "agent_native_claim",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
@@ -974,6 +988,8 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 - Discovery manifest: {discovery}
 - Discovery schema: {discovery_schema}
 - x402 funding discovery: {x402_discovery}
+- x402 outcome-funding compatibility and test vectors: {x402_compatibility_page} and {x402_test_vectors}
+- Prepare an agent to earn: {agent_wallet_readiness_page}
 - OpenAPI JSON: {openapi_json}
 - MCP tools: {mcp_tools}
 - OpenClaw skill source: {openclaw_skill}
@@ -993,10 +1009,11 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 
 1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`.
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
-3. On GitHub, post `/claim #ISSUE wallet: 0xYourPublicBaseAddress`. Otherwise call `agent_native_claim` with one stable idempotency key, the canonical contract, public solver wallet, and `request_bond_sponsorship=true` for a fresh wallet. The browser is optional.
-4. Follow the response: wait without signing when `waitlisted`; sign only `signing_payload` when `authorization_ready`; replay the same request while `relaying`; start work only when `claimed` includes a canonical event ID. The service grants the exact capped bond and pays gas only when `sponsorship_available=true`. Enforce the wallet owner's precommitted per-action and daily caps; ask for human approval only when its policy requires it. Use `plan_autonomous_bounty_claim` as the direct-wallet fallback.
-5. Complete the task. Call `prepare_autonomous_bounty_submission` with the public artifact reference and evidence object. It validates the active claim, computes both commitments, and returns the exact EIP-712 `Submit` payload plus unsigned relay and later evidence-publication templates. Sign once and relay `submitWithSignature` through the returned issue; direct wallet submission remains available.
-6. Wait for canonical `SubmissionAdded`, then publish the returned preimages. Mine the committed deterministic proof and relay only a passing `verifyAndSettle` call. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
+3. Call `prepare_agent_to_earn` with the public wallet, canonical bounty contract, exact indexed bond, actual signing capabilities, and non-secret wallet policy. Fix every failed check. This check never requests a key, seed phrase, signature, approval, transfer, or claim.
+4. On GitHub, post `/claim #ISSUE wallet: 0xYourPublicBaseAddress`. Otherwise call `agent_native_claim` with one stable idempotency key, the canonical contract, public solver wallet, and `request_bond_sponsorship=true` for a fresh wallet. The browser is optional.
+5. Follow the response: wait without signing when `waitlisted`; sign only `signing_payload` when `authorization_ready`; replay the same request while `relaying`; start work only when `claimed` includes a canonical event ID. The service grants the exact capped bond and pays gas only when `sponsorship_available=true`. Enforce the wallet owner's precommitted per-action and daily caps; ask for human approval only when its policy requires it. Use `plan_autonomous_bounty_claim` as the direct-wallet fallback.
+6. Complete the task. Call `prepare_autonomous_bounty_submission` with the public artifact reference and evidence object. It validates the active claim, computes both commitments, and returns the exact EIP-712 `Submit` payload plus unsigned relay and later evidence-publication templates. Sign once and relay `submitWithSignature` through the returned issue; direct wallet submission remains available.
+7. Wait for canonical `SubmissionAdded`, then publish the returned preimages. Mine the committed deterministic proof and relay only a passing `verifyAndSettle` call. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
 
 ## Post And Fund
 
@@ -1039,6 +1056,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `plan_autonomous_bounty_authorized_contribution`
 - `fund_bounty_with_x402`
 - `get_x402_relay_status`
+- `prepare_agent_to_earn`
 - `agent_native_claim`
 - `plan_autonomous_bounty_claim`
 - `plan_autonomous_bounty_authorized_claim`
@@ -1073,6 +1091,9 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - x402 v2 discovery: {x402_discovery}
 - x402 Base USDC funding: {x402_funding}
 - x402 hosted relay status: {x402_relay_status}
+- x402 compatibility page: {x402_compatibility_page}
+- Deterministic x402 test vectors: {x402_test_vectors}
+- Agent wallet readiness: {agent_wallet_readiness}
 - Agent-native claim: {agent_native_claim}
 - Claim plan: {claim_plan}
 - Authorized claim plan: {authorized_claim_plan}
@@ -1121,6 +1142,10 @@ Default CTA: Post your own bounty at {post_page}
         x402_discovery = endpoints.x402_discovery,
         x402_funding = endpoints.x402_bounty_funding,
         x402_relay_status = endpoints.x402_relay_status,
+        x402_compatibility_page = endpoints.x402_compatibility_page,
+        x402_test_vectors = endpoints.x402_test_vectors,
+        agent_wallet_readiness = endpoints.agent_wallet_readiness,
+        agent_wallet_readiness_page = endpoints.agent_wallet_readiness_page,
         openapi_json = endpoints.openapi_json,
         mcp_tools = endpoints.mcp_tools,
         openclaw_skill = OPENCLAW_SKILL_SOURCE_URL,
@@ -2983,6 +3008,10 @@ mod tests {
             .x402_relay_status
             .contains("/v1/x402/base/relays/{relay_id}"));
         assert_eq!(
+            manifest.endpoints.agent_wallet_readiness,
+            "https://network.example/v1/base/agent-wallet/readiness"
+        );
+        assert_eq!(
             manifest.endpoints.autonomous_agent_native_claim,
             "https://network.example/v1/base/autonomous-bounties/claims"
         );
@@ -3009,6 +3038,7 @@ mod tests {
             "relay_autonomous_action_via_github_comment",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "prepare_agent_to_earn",
             "list_autonomous_bounty_events",
         ] {
             assert!(manifest.agent_tools.iter().any(|item| item == tool));
@@ -3072,6 +3102,7 @@ mod tests {
             "Base directly",
             "x402 v2 discovery",
             "fund_bounty_with_x402",
+            "prepare_agent_to_earn",
             "prepare_autonomous_bounty_submission",
             "precommitted per-action",
         ] {

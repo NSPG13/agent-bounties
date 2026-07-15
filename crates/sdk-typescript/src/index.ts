@@ -205,6 +205,44 @@ export interface AgentBountiesClientOptions {
   operatorApiToken?: string | null;
 }
 
+export type AgentWalletSigningCapability =
+  | "eip712_typed_data"
+  | "eip3009_receive_with_authorization"
+  | "send_transaction"
+  | "wallet_send_calls";
+
+export type AgentWalletProfile =
+  | "generic-evm"
+  | "metamask-agent-wallet"
+  | "circle-agent-wallet"
+  | "cdp-server-wallet"
+  | "privy-server-wallet";
+
+export interface PrepareAgentToEarnRequest {
+  network: "base-mainnet" | "base-sepolia";
+  wallet_address: string;
+  bounty_contract: string;
+  claim_bond_base_units: string;
+  signing_capabilities: AgentWalletSigningCapability[];
+  wallet_profile?: AgentWalletProfile | null;
+  policy: {
+    allowed_chain_ids: number[];
+    allowed_contracts: string[];
+    per_transaction_usdc_base_units: string;
+    rolling_24h_usdc_base_units: string;
+    human_approval_policy: "always" | "out_of_policy" | "never";
+  };
+}
+
+export interface AgentWalletReadinessReport extends Record<string, unknown> {
+  schema_version: "agent-bounties/agent-wallet-readiness-v1";
+  ready: boolean;
+  status: "ready" | "blocked";
+  recommended_claim_path: "agent_native_claim" | "direct_wallet_claim_plan" | null;
+  checks: Array<Record<string, unknown>>;
+  next_actions: string[];
+}
+
 export interface PlanStripeCheckoutTopUpRequest {
   organization_id: string;
   amount_minor: number;
@@ -509,6 +547,15 @@ export class AgentBountiesClient {
     if (network) params.set("network", network);
     const query = params.toString();
     return this.request(`/v1/readiness/live-money${query ? `?${query}` : ""}`);
+  }
+
+  async prepareAgentToEarn(
+    request: PrepareAgentToEarnRequest,
+  ): Promise<AgentWalletReadinessReport> {
+    return this.request("/v1/base/agent-wallet/readiness", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }) as Promise<AgentWalletReadinessReport>;
   }
 
   async getRiskEvents(request: RiskEventsRequest = {}): Promise<unknown> {

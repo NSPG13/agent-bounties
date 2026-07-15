@@ -31,6 +31,12 @@
     "authorizationReplay": "USDC EIP-3009 nonces are single-use on-chain",
     "paymentProof": "transaction plans, signatures, broadcasts, and transaction hashes are not funding evidence"
   },
+  "documentation": {
+    "compatibility": "https://nspg13.github.io/agent-bounties/x402.html",
+    "testVectors": "https://nspg13.github.io/agent-bounties/x402-test-vectors.json",
+    "fundingEvidence": "FundingAdded",
+    "payoutEvidence": "BountySettled"
+  },
   "bazaar": {
     "status": "custom funding scheme is self-described here and is not falsely advertised as supported by generic exact facilitators",
     "next": "add a separate standard exact paid resource only when it provides distinct agent value and a production facilitator is configured"

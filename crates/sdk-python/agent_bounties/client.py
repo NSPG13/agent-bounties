@@ -215,6 +215,31 @@ class AgentBountiesClient:
             params={"network": network},
         )
 
+    def prepare_agent_to_earn(
+        self,
+        wallet_address: str,
+        bounty_contract: str,
+        claim_bond_base_units: str,
+        signing_capabilities: list[str],
+        policy: dict,
+        network: str = "base-mainnet",
+        wallet_profile: str | None = None,
+    ):
+        """Check public wallet readiness without requesting wallet secrets or a signature."""
+        return self._request(
+            "POST",
+            "/v1/base/agent-wallet/readiness",
+            json={
+                "network": network,
+                "wallet_address": wallet_address,
+                "bounty_contract": bounty_contract,
+                "claim_bond_base_units": str(claim_bond_base_units),
+                "signing_capabilities": signing_capabilities,
+                "wallet_profile": wallet_profile,
+                "policy": policy,
+            },
+        )
+
     def get_risk_events(
         self,
         action: str | None = None,
