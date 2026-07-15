@@ -6,10 +6,10 @@ use domain::{
     AutonomousSubmissionEvidenceRecord, Bounty, BountyStatus, Capability, CapabilityClass, Claim,
     ContributorContact, DiscoveryResponse, Escrow, EscrowStatus, EvalRun, FundingContribution,
     FundingContributionStatus, FundingIntent, FundingIntentStatus, FundingMode, HelpRequest, Id,
-    Money, OutreachAttempt, OutreachChannel, OutreachStatus, PaymentEvent, PaymentEventStatus,
-    PaymentRail, PrivacyLevel, ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent,
-    RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal,
-    VerificationDecision, VerifierKind, VerifierResult,
+    Money, Objective, ObjectiveStatus, OutreachAttempt, OutreachChannel, OutreachStatus,
+    PaymentEvent, PaymentEventStatus, PaymentRail, PrivacyLevel, ProofRecord, Quote,
+    ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface,
+    Settlement, Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{LedgerEntry, Posting};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,8 @@ pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql
 pub const AUTONOMOUS_PROTOCOL_MIGRATION: &str =
     include_str!("../../../migrations/0002_autonomous_protocol.sql");
 pub const X402_RELAYER_MIGRATION: &str = include_str!("../../../migrations/0003_x402_relayer.sql");
+pub const OBJECTIVE_COORDINATION_MIGRATION: &str =
+    include_str!("../../../migrations/0004_objective_coordination.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -95,6 +97,15 @@ pub enum DbError {
     X402RelayConflict(String),
     #[error("x402 hosted relay quota exceeded: {0}")]
     X402RelayQuotaExceeded(String),
+    #[error("objective {0} already exists")]
+    ObjectiveAlreadyExists(Id),
+    #[error("objective {0} was not found")]
+    ObjectiveNotFound(Id),
+    #[error("objective {objective_id} revision conflict: expected {expected_revision}")]
+    ObjectiveRevisionConflict {
+        objective_id: Id,
+        expected_revision: u64,
+    },
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -280,6 +291,7 @@ impl PostgresStore {
                 CORE_MIGRATION,
                 AUTONOMOUS_PROTOCOL_MIGRATION,
                 X402_RELAYER_MIGRATION,
+                OBJECTIVE_COORDINATION_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -303,6 +315,110 @@ impl PostgresStore {
             (Err(error), Ok(_)) => Err(error.into()),
             (Ok(()), Err(error)) | (Err(_), Err(error)) => Err(error.into()),
         }
+    }
+
+    pub async fn create_objective(&self, objective: &Objective) -> DbResult<()> {
+        let status = objective_status_value(objective.status)?;
+        let result = sqlx::query(
+            r#"
+            INSERT INTO objective_aggregates
+              (id, schema_version, revision, status, requesting_party_id, record, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (id) DO NOTHING
+            "#,
+        )
+        .bind(objective.id)
+        .bind(&objective.schema_version)
+        .bind(i64_from_u64(objective.revision)?)
+        .bind(status)
+        .bind(objective.requesting_party_id)
+        .bind(serde_json::to_value(objective)?)
+        .bind(objective.created_at)
+        .bind(objective.updated_at)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(DbError::ObjectiveAlreadyExists(objective.id));
+        }
+        Ok(())
+    }
+
+    pub async fn replace_objective(
+        &self,
+        objective: &Objective,
+        expected_revision: u64,
+    ) -> DbResult<()> {
+        if objective.revision <= expected_revision {
+            return Err(DbError::ObjectiveRevisionConflict {
+                objective_id: objective.id,
+                expected_revision,
+            });
+        }
+        let status = objective_status_value(objective.status)?;
+        let result = sqlx::query(
+            r#"
+            UPDATE objective_aggregates
+            SET schema_version = $2,
+                revision = $3,
+                status = $4,
+                requesting_party_id = $5,
+                record = $6,
+                updated_at = $7
+            WHERE id = $1 AND revision = $8
+            "#,
+        )
+        .bind(objective.id)
+        .bind(&objective.schema_version)
+        .bind(i64_from_u64(objective.revision)?)
+        .bind(status)
+        .bind(objective.requesting_party_id)
+        .bind(serde_json::to_value(objective)?)
+        .bind(objective.updated_at)
+        .bind(i64_from_u64(expected_revision)?)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 1 {
+            return Ok(());
+        }
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM objective_aggregates WHERE id = $1)")
+                .bind(objective.id)
+                .fetch_one(&self.pool)
+                .await?;
+        if exists {
+            Err(DbError::ObjectiveRevisionConflict {
+                objective_id: objective.id,
+                expected_revision,
+            })
+        } else {
+            Err(DbError::ObjectiveNotFound(objective.id))
+        }
+    }
+
+    pub async fn get_objective(&self, id: Id) -> DbResult<Option<Objective>> {
+        let record = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT record FROM objective_aggregates WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        record
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn list_objectives(&self) -> DbResult<Vec<Objective>> {
+        let records = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT record FROM objective_aggregates ORDER BY created_at DESC, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        records
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     pub async fn reserve_x402_relay_attempt(
@@ -3039,6 +3155,13 @@ fn persisted_nonnegative_money(amount: i64, currency: String) -> DbResult<Money>
     }
 }
 
+fn objective_status_value(status: ObjectiveStatus) -> DbResult<String> {
+    serde_json::to_value(status)?
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| DbError::InvalidEnum("objective status".to_string()))
+}
+
 fn parse_capability_class(value: String) -> DbResult<CapabilityClass> {
     match value.as_str() {
         "Coding" => Ok(CapabilityClass::Coding),
@@ -3276,7 +3399,17 @@ fn bounty_from_row(row: &PgRow) -> DbResult<Bounty> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::{FundingMode, Money};
+    use alloy::{
+        primitives::B256,
+        signers::{local::PrivateKeySigner, SignerSync},
+    };
+    use domain::{
+        DeliverableAccessPolicy, FundingMode, IdentityDisclosure, Money, Objective,
+        ObjectiveAuthority, ObjectiveAuthorityKind, ObjectiveCreationDraft, ObjectiveParticipant,
+        ObjectivePrivacyDeclaration, ObjectiveVerificationMechanism, ObjectiveVerificationPolicy,
+        ParticipantKind, PublicEvidencePolicy, RightsPolicy, SignedObjectiveCreation,
+        WalletApproval,
+    };
 
     #[test]
     fn store_tracks_agents_and_bounties() {
@@ -3391,6 +3524,123 @@ mod tests {
                 "missing x402 invariant {invariant}"
             );
         }
+    }
+
+    #[test]
+    fn objective_migration_keeps_one_versioned_aggregate_with_cas_fields() {
+        for invariant in [
+            "objective_aggregates",
+            "schema_version TEXT NOT NULL",
+            "revision BIGINT NOT NULL CHECK (revision > 0)",
+            "requesting_party_id UUID NOT NULL",
+            "record JSONB NOT NULL",
+            "agent-bounties/objective-v1",
+            "idx_objective_aggregates_status_updated",
+        ] {
+            assert!(
+                OBJECTIVE_COORDINATION_MIGRATION.contains(invariant),
+                "missing objective persistence invariant {invariant}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn objective_aggregate_compare_and_swap_is_durable() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let signer: PrivateKeySigner =
+            "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+                .parse()
+                .unwrap();
+        let requester_id = Uuid::new_v4();
+        let draft = ObjectiveCreationDraft {
+            id: Uuid::new_v4(),
+            title: "Durable objective".to_string(),
+            desired_outcome: "A revisioned aggregate survives process boundaries.".to_string(),
+            human_purpose: "Prevent lost signed actions.".to_string(),
+            participants: vec![ObjectiveParticipant {
+                id: requester_id,
+                kind: ParticipantKind::Organization,
+                display_name: "Persistence test requester".to_string(),
+                wallet: format!("{:#x}", signer.address()),
+                identity_disclosure: IdentityDisclosure::Pseudonymous,
+                public_identity_reference: None,
+            }],
+            requesting_party_id: requester_id,
+            beneficiary_ids: vec![requester_id],
+            affected_parties: Vec::new(),
+            authority: ObjectiveAuthority {
+                kind: ObjectiveAuthorityKind::SingleWallet,
+                member_ids: vec![requester_id],
+                threshold: 1,
+                public_statement: "One declared organization wallet controls this test objective."
+                    .to_string(),
+            },
+            available_resources: Vec::new(),
+            expected_final_deliverable: "Durable revision evidence".to_string(),
+            requested_access_policy: DeliverableAccessPolicy::Public,
+            requested_rights_policy: RightsPolicy {
+                owner_ids: vec![requester_id],
+                license_or_terms: "CC0-1.0".to_string(),
+                restrictions: Vec::new(),
+            },
+            requested_final_verification: ObjectiveVerificationPolicy {
+                mechanism: ObjectiveVerificationMechanism::CommittedVerifier {
+                    verifier_id: requester_id,
+                },
+                acceptance_criteria: vec!["The stored revision can be read back.".to_string()],
+                evidence_schema: "https://example.test/objective-cas.schema.json".to_string(),
+                evidence_schema_hash: format!("0x{}", "11".repeat(32)),
+                trust_assumptions: vec![
+                    "The declared test wallet signs the verification statement.".to_string(),
+                ],
+            },
+            privacy: ObjectivePrivacyDeclaration {
+                blockchain_information_is_public: true,
+                evidence_policy: PublicEvidencePolicy::Public,
+                redaction_limits: "No private data is used in this test.".to_string(),
+            },
+        };
+        let plan = Objective::plan_creation(draft).unwrap();
+        let commitment = plan.commitment_hash.parse::<B256>().unwrap();
+        let signature = signer.sign_message_sync(commitment.as_slice()).unwrap();
+        let objective = Objective::create(
+            SignedObjectiveCreation {
+                approvals: vec![WalletApproval {
+                    participant_id: requester_id,
+                    signature: signature.to_string(),
+                }],
+                plan,
+            },
+            Utc::now(),
+        )
+        .unwrap();
+
+        store.create_objective(&objective).await.unwrap();
+        assert_eq!(
+            store.get_objective(objective.id).await.unwrap(),
+            Some(objective.clone())
+        );
+
+        let mut next = objective.clone();
+        next.revision += 1;
+        next.title = "Durable objective, revision two".to_string();
+        next.updated_at = Utc::now();
+        store
+            .replace_objective(&next, objective.revision)
+            .await
+            .unwrap();
+
+        let mut stale = next.clone();
+        stale.revision += 1;
+        assert!(matches!(
+            store.replace_objective(&stale, objective.revision).await,
+            Err(DbError::ObjectiveRevisionConflict { .. })
+        ));
+        assert_eq!(store.get_objective(objective.id).await.unwrap(), Some(next));
     }
 
     #[tokio::test]

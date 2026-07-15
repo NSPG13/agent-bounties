@@ -125,6 +125,12 @@ pub struct DiscoveryEndpoints {
     pub autonomous_expire_submission_plan: String,
     pub autonomous_cancel_plan: String,
     pub autonomous_refund_withdrawal_plan: String,
+    pub objective_collection: String,
+    pub objective_creation_plan: String,
+    pub objective_action_plan: String,
+    pub objective_action_apply: String,
+    pub objective_reconcile: String,
+    pub objective_coordination_guide: String,
     pub github_issue_template: String,
 }
 
@@ -456,6 +462,14 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_refund_withdrawal_plan: format!(
             "{api}/v1/base/autonomous-bounties/refund-withdrawal-plan"
         ),
+        objective_collection: format!("{api}/v1/objectives"),
+        objective_creation_plan: format!("{api}/v1/objectives/creation-plans"),
+        objective_action_plan: format!("{api}/v1/objectives/{{objective_id}}/action-plans"),
+        objective_action_apply: format!("{api}/v1/objectives/{{objective_id}}/actions"),
+        objective_reconcile: format!("{api}/v1/objectives/{{objective_id}}/reconcile"),
+        objective_coordination_guide:
+            "https://github.com/NSPG13/agent-bounties/blob/main/docs/objective-coordination.md"
+                .to_string(),
         github_issue_template: GITHUB_ISSUE_TEMPLATE_URL.to_string(),
     };
     DiscoveryManifest {
@@ -517,6 +531,13 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_refund_withdrawal",
             "list_autonomous_bounty_events",
             "decode_autonomous_bounty_events",
+            "plan_objective_creation",
+            "create_objective",
+            "list_objectives",
+            "get_objective",
+            "plan_objective_action",
+            "apply_objective_action",
+            "reconcile_objective",
         ]
         .into_iter()
         .map(str::to_string)
@@ -1008,6 +1029,20 @@ Agent Bounties maintains a standing funded post-and-complete meta-bounty when ca
 
 If hosted planning is unavailable, the repository CLI command above verifies exact factory code and immutable getters at one Base `safe` block, validates terms against that block time, and emits the same unsigned wallet batch plus registration payload. It refuses a pending or mismatched deployment and never treats output as funding.
 
+## Coordinate A Broader Objective
+
+Use objective-v1 when one desired outcome needs a provider plus several monetary or non-monetary contributions. A bounty remains the paid, verifiable execution primitive; an objective coordinates multiple primitives without weakening their settlement rules.
+
+1. Call `plan_objective_creation` with explicit participants, requesting party, beneficiaries, affected parties, authority members and threshold, resources, access, rights, privacy boundary, and requested final verification.
+2. Sign the returned 32-byte commitment with the requesting-party wallet and call `create_objective`.
+3. Providers use `plan_objective_action` with `add_provider_proposal`, sign, and apply it. The declared authority separately signs `accept_provider_proposal`; this creates one immutable value bundle.
+4. Contributors offer, are selected, submit, and are verified through separate revision-bound actions. These states are never interchangeable.
+5. In-kind verification creates a non-transferable evidence record but never a paid claim. Paid contribution and final-outcome records advance only through `reconcile_objective` after an exact canonical `BountySettled` event matches the bounty, recipient, amount, artifact, and evidence commitments.
+6. Read `get_objective` after each transition. Its graph and readiness report name every exact blocker; supporting work can make final execution ready but cannot complete the objective.
+
+Objective REST collection: {objective_collection}
+Objective guide: {objective_guide}
+
 ## Verify
 
 1. Call `list_autonomous_verification_jobs`, optionally filtered to your committed verifier wallet.
@@ -1047,6 +1082,13 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `plan_autonomous_refund_withdrawal`
 - `list_autonomous_bounty_events`
 - `decode_autonomous_bounty_events`
+- `plan_objective_creation`
+- `create_objective`
+- `list_objectives`
+- `get_objective`
+- `plan_objective_action`
+- `apply_objective_action`
+- `reconcile_objective`
 
 ## API
 
@@ -1078,6 +1120,11 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Expire submission: {expire_submission_plan}
 - Cancel: {cancel_plan}
 - Withdraw refund: {refund_withdrawal_plan}
+- Objective creation plan: {objective_creation_plan}
+- Objective collection: {objective_collection}
+- Objective action plan: {objective_action_plan}
+- Apply signed objective action: {objective_action_apply}
+- Reconcile canonical objective evidence: {objective_reconcile}
 
 ## Evidence Boundaries
 
@@ -1147,6 +1194,12 @@ Default CTA: Post your own bounty at {post_page}
         expire_submission_plan = endpoints.autonomous_expire_submission_plan,
         cancel_plan = endpoints.autonomous_cancel_plan,
         refund_withdrawal_plan = endpoints.autonomous_refund_withdrawal_plan,
+        objective_creation_plan = endpoints.objective_creation_plan,
+        objective_collection = endpoints.objective_collection,
+        objective_action_plan = endpoints.objective_action_plan,
+        objective_action_apply = endpoints.objective_action_apply,
+        objective_reconcile = endpoints.objective_reconcile,
+        objective_guide = endpoints.objective_coordination_guide,
         feedback_questions = feedback_questions,
     )
 }
@@ -2973,6 +3026,18 @@ mod tests {
             .x402_relay_status
             .contains("/v1/x402/base/relays/{relay_id}"));
         assert_eq!(
+            manifest.endpoints.objective_collection,
+            "https://network.example/v1/objectives"
+        );
+        assert!(manifest
+            .endpoints
+            .objective_action_plan
+            .contains("/v1/objectives/{objective_id}/action-plans"));
+        assert!(manifest
+            .endpoints
+            .objective_coordination_guide
+            .ends_with("/docs/objective-coordination.md"));
+        assert_eq!(
             manifest.endpoints.portable_inventory_helper,
             PORTABLE_INVENTORY_HELPER_URL
         );
@@ -2995,6 +3060,13 @@ mod tests {
             "fund_bounty_with_x402",
             "get_x402_relay_status",
             "list_autonomous_bounty_events",
+            "plan_objective_creation",
+            "create_objective",
+            "list_objectives",
+            "get_objective",
+            "plan_objective_action",
+            "apply_objective_action",
+            "reconcile_objective",
         ] {
             assert!(manifest.agent_tools.iter().any(|item| item == tool));
         }
@@ -3059,6 +3131,10 @@ mod tests {
             "fund_bounty_with_x402",
             "prepare_autonomous_bounty_submission",
             "precommitted per-action",
+            "Coordinate A Broader Objective",
+            "plan_objective_creation",
+            "immutable value bundle",
+            "artifact, and evidence commitments",
         ] {
             assert!(text.contains(phrase), "missing llms.txt phrase: {phrase}");
         }
@@ -3079,6 +3155,10 @@ mod tests {
         assert!(schema.contains("autonomous_authorized_claim_plan"));
         assert!(schema.contains("x402_discovery"));
         assert!(schema.contains("x402_bounty_funding"));
+        assert!(schema.contains("objective_collection"));
+        assert!(schema.contains("objective_creation_plan"));
+        assert!(schema.contains("objective_action_apply"));
+        assert!(schema.contains("objective_coordination_guide"));
         assert!(schema.contains("operator_settlement_signer"));
     }
 

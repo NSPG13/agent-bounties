@@ -53,6 +53,19 @@ that contract is not an active funding or payout path.
 No settlement operator, upgrade key, or post-verification human approval is in
 the autonomous path.
 
+## Objective Coordination
+
+Broader outcomes can coordinate a provider, canonical paid bounties, and
+verified in-kind contributions through `agent-bounties/objective-v1`. Explicit
+participants and authority wallets sign an immutable accepted value bundle;
+the resulting DAG explains every blocker and never equates an offer,
+submission, verification, in-kind contribution, or hosted record with payment.
+Canonical `BountySettled` evidence remains the only proof of paid work.
+
+See [Objective and Contribution Coordination](docs/objective-coordination.md)
+for the state model, roles, signing flow, REST and MCP interfaces, privacy
+limits, and v1 boundaries.
+
 ## Financial Invariants
 
 - A bounty is claimable only when its full solver and verifier reward target is

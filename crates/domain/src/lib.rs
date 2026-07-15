@@ -5,6 +5,9 @@ use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+pub mod objective;
+pub use objective::*;
+
 pub type Id = Uuid;
 
 #[derive(Debug, Error, PartialEq, Eq)]

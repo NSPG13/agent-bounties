@@ -25,7 +25,9 @@ Those services improve coordination but do not control custody.
 - `worker`: scans the factory and canonical clones in confirmed block ranges,
   using bounded multi-address RPC batches.
 - `db`: persists terms, evidence preimages, canonical events, cursors, and the
-  broader product graph in Postgres.
+  broader product graph in Postgres. Objective aggregates use revision-checked
+  compare-and-swap updates so concurrent signed actions cannot overwrite one
+  another.
 - `api`: exposes OpenAPI planners, feeds, evidence publication, and public
   protocol state.
 - `mcp-server`: exposes the same operations as machine-native tools.
@@ -50,6 +52,11 @@ solver -> claim + bond -> execute task -> submit commitments
 verifier agents -> deterministic proof or scoped EIP-712 quorum
                 -> canonical contract -> pass payout or funded reopen
                 -> confirmed events -> proof/reputation/distribution surfaces
+
+requesting party -> signed objective -> provider proposal -> authority acceptance
+                 -> contribution DAG -> signed in-kind verification
+                 -> canonical BountySettled reconciliation for paid work
+                 -> final verification -> completed objective
 ```
 
 ## Sources Of Truth
@@ -60,6 +67,8 @@ verifier agents -> deterministic proof or scoped EIP-712 quorum
   content-addressed terms document.
 - Funding and lifecycle: confirmed canonical clone events.
 - Solver payment: `BountySettled` only.
+- Objective coordination: the latest revisioned Postgres aggregate plus its
+  recorded wallet approvals. It coordinates state but never proves payment.
 - Stripe or PayPal: future fiat-to-USDC convenience onramps, never autonomous
   settlement authorities.
 - GitHub comments, PR status, hosted database rows, planner responses,

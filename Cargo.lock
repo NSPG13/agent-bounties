@@ -656,6 +656,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 name = "api"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "app",
  "axum",
@@ -1604,6 +1605,7 @@ dependencies = [
 name = "db"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "chain-base",
  "chrono",
  "domain",
@@ -1716,6 +1718,7 @@ dependencies = [
 name = "domain"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "chrono",
  "serde",
  "serde_json",

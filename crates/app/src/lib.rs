@@ -1,16 +1,19 @@
 use bounty_router::{template_for_class, BountyRouter};
-use chain_base::{base_network_descriptor, ChainBaseError};
+use chain_base::{
+    base_network_descriptor, AutonomousBountyEventKind, AutonomousBountyFeedItem, ChainBaseError,
+};
 use chrono::{DateTime, Utc};
 use domain::{
     Agent, AudienceInteraction, AudienceInteractionKind, AudienceLifecycleStage, AudienceMember,
     AudienceMetric, AudienceProvider, AudienceReport, AudienceRole, Bounty, BountyStatus,
-    Capability, CapabilityClass, Claim, ContributorContact, DiscoveryResponse, Escrow,
-    EscrowStatus, FundingContribution, FundingContributionStatus, FundingIntent,
-    FundingIntentStatus, FundingMode, FundingPartitionTarget, HelpRequest, Id, Money,
-    OutreachAttempt, OutreachChannel, OutreachStatus, PaymentEvent, PaymentEventStatus,
-    PaymentRail, PayoutIntent, PayoutStatus, PrivacyLevel, ProofRecord, Quote, ReputationEvent,
-    RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement,
-    Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
+    CanonicalBountyBinding, CanonicalFundingEvidence, CanonicalSettlementEvidence, Capability,
+    CapabilityClass, Claim, ContributorContact, DiscoveryResponse, Escrow, EscrowStatus,
+    FundingContribution, FundingContributionStatus, FundingIntent, FundingIntentStatus,
+    FundingMode, FundingPartitionTarget, HelpRequest, Id, Money, Objective,
+    ObjectiveCanonicalEvidence, OutreachAttempt, OutreachChannel, OutreachStatus, PaymentEvent,
+    PaymentEventStatus, PaymentRail, PayoutIntent, PayoutStatus, PrivacyLevel, ProofRecord, Quote,
+    ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface,
+    Settlement, Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{credit, debit, AccountCode, Ledger, LedgerEntry};
 use payments_stripe::{
@@ -961,6 +964,7 @@ pub struct BountyNetwork {
     pub help_requests: HashMap<Id, HelpRequest>,
     pub quotes: HashMap<Id, Quote>,
     pub bounties: HashMap<Id, Bounty>,
+    pub objectives: HashMap<Id, Objective>,
     pub funding_intents: HashMap<Id, FundingIntent>,
     pub funding_contributions: HashMap<Id, FundingContribution>,
     pub escrows: HashMap<Id, Escrow>,
@@ -991,6 +995,7 @@ impl Default for BountyNetwork {
             help_requests: HashMap::new(),
             quotes: HashMap::new(),
             bounties: HashMap::new(),
+            objectives: HashMap::new(),
             funding_intents: HashMap::new(),
             funding_contributions: HashMap::new(),
             escrows: HashMap::new(),
@@ -1008,6 +1013,78 @@ impl Default for BountyNetwork {
             risk_policy: RiskPolicy::default(),
         }
     }
+}
+
+pub fn build_objective_canonical_evidence(
+    network: &str,
+    feed: &[AutonomousBountyFeedItem],
+) -> ObjectiveCanonicalEvidence {
+    let mut evidence = ObjectiveCanonicalEvidence::default();
+    for item in feed {
+        let binding = CanonicalBountyBinding {
+            network: network.to_string(),
+            bounty_contract: item.bounty_contract.clone(),
+            bounty_id: item.bounty_id.clone(),
+            terms_hash: item.terms_hash.clone(),
+        };
+        if let (Ok(funded_atomic_amount), Ok(target_atomic_amount)) = (
+            item.funded_amount.parse::<u64>(),
+            item.target_amount.parse::<u64>(),
+        ) {
+            let confirming_event_id = item
+                .events
+                .iter()
+                .rev()
+                .find(|event| {
+                    matches!(
+                        event.kind,
+                        AutonomousBountyEventKind::FundingAdded
+                            | AutonomousBountyEventKind::BountyBecameClaimable
+                    )
+                })
+                .map(|event| event.log_key.clone())
+                .unwrap_or_default();
+            evidence.funding.push(CanonicalFundingEvidence {
+                binding: binding.clone(),
+                funded_atomic_amount,
+                target_atomic_amount,
+                status: item.status.clone(),
+                verification_ready: item.verification_ready,
+                verification_readiness_reason: item.verification_readiness_reason.clone(),
+                confirming_event_id,
+            });
+        }
+        for event in item
+            .events
+            .iter()
+            .filter(|event| event.kind == AutonomousBountyEventKind::BountySettled)
+        {
+            let Some(recipient_wallet) = event.data["solver"].as_str() else {
+                continue;
+            };
+            let Some(solver_payout_atomic_amount) = event.data["solver_payout"].as_u64() else {
+                continue;
+            };
+            let Some(submission_hash) = event.data["submission_hash"].as_str() else {
+                continue;
+            };
+            let Some(evidence_hash) = event.data["evidence_hash"].as_str() else {
+                continue;
+            };
+            evidence.settlements.push(CanonicalSettlementEvidence {
+                binding: binding.clone(),
+                event_id: event.log_key.clone(),
+                tx_hash: event.tx_hash.clone(),
+                block_number: event.block_number,
+                log_index: event.log_index,
+                recipient_wallet: recipient_wallet.to_string(),
+                solver_payout_atomic_amount,
+                submission_hash: submission_hash.to_string(),
+                evidence_hash: evidence_hash.to_string(),
+            });
+        }
+    }
+    evidence
 }
 
 pub fn build_audience_report(

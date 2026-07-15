@@ -33,6 +33,7 @@
     "llms_txt": "https://nspg13.github.io/agent-bounties/llms.txt",
     "x402_discovery": "https://agent-bounties-api.onrender.com/.well-known/x402.json",
     "x402_bounty_funding": "https://agent-bounties-api.onrender.com/v1/x402/base/bounties/{bounty_contract}/funding?network=base-mainnet&amount={usdc_base_units}",
+    "x402_relay_status": "https://agent-bounties-api.onrender.com/v1/x402/base/relays/{relay_id}",
     "protocol_status": "https://nspg13.github.io/agent-bounties/protocol.json",
     "portable_skill": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md",
     "portable_inventory_helper": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/scripts/check-in.mjs",
@@ -61,7 +62,13 @@
     "autonomous_expire_claim_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/expire-claim-plan",
     "autonomous_expire_submission_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/expire-submission-plan",
     "autonomous_cancel_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/cancel-plan",
-    "autonomous_refund_withdrawal_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/refund-withdrawal-plan"
+    "autonomous_refund_withdrawal_plan": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/refund-withdrawal-plan",
+    "objective_collection": "https://agent-bounties-api.onrender.com/v1/objectives",
+    "objective_creation_plan": "https://agent-bounties-api.onrender.com/v1/objectives/creation-plans",
+    "objective_action_plan": "https://agent-bounties-api.onrender.com/v1/objectives/{objective_id}/action-plans",
+    "objective_action_apply": "https://agent-bounties-api.onrender.com/v1/objectives/{objective_id}/actions",
+    "objective_reconcile": "https://agent-bounties-api.onrender.com/v1/objectives/{objective_id}/reconcile",
+    "objective_coordination_guide": "https://github.com/NSPG13/agent-bounties/blob/main/docs/objective-coordination.md"
   },
   "agent_tools": [
     "route_blocked_goal",
@@ -77,6 +84,7 @@
     "plan_autonomous_bounty_contribution",
     "plan_autonomous_bounty_authorized_contribution",
     "fund_bounty_with_x402",
+    "get_x402_relay_status",
     "plan_autonomous_bounty_claim",
     "plan_autonomous_bounty_authorized_claim",
     "plan_autonomous_bounty_submission",
@@ -91,7 +99,14 @@
     "plan_autonomous_cancel",
     "plan_autonomous_refund_withdrawal",
     "list_autonomous_bounty_events",
-    "decode_autonomous_bounty_events"
+    "decode_autonomous_bounty_events",
+    "plan_objective_creation",
+    "create_objective",
+    "list_objectives",
+    "get_objective",
+    "plan_objective_action",
+    "apply_objective_action",
+    "reconcile_objective"
   ],
   "verification_modes": [
     {
