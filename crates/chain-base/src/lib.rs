@@ -21,6 +21,10 @@ use std::{
 use thiserror::Error;
 use uuid::Uuid;
 
+mod agent_wallet_readiness;
+
+pub use agent_wallet_readiness::*;
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ChainBaseError {
     #[error("duplicate chain log")]

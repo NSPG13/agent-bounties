@@ -28,7 +28,7 @@ use chain_base::{
     AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
     AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
     AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, CanonicalChildBountyTermsRequest, EvmLog,
+    BaseRpcUrlConfig, CanonicalChildBountyTermsRequest, EvmLog, PrepareAgentToEarnInput,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
@@ -627,6 +627,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/tools/fund_bounty_with_x402", post(fund_bounty_with_x402))
         .route("/tools/get_x402_relay_status", post(get_x402_relay_status))
+        .route("/tools/prepare_agent_to_earn", post(prepare_agent_to_earn))
         .route(
             "/tools/plan_autonomous_bounty_claim",
             post(plan_autonomous_bounty_claim),
@@ -1395,6 +1396,39 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "relay_id": string_property("Relay UUID returned by fund_bounty_with_x402.")
                 }),
                 &["relay_id"],
+            ),
+        ),
+        tool(
+            "prepare_agent_to_earn",
+            "Wallet-neutral preflight for one earning attempt. It checks the live Base chain and native-USDC bond balance, then validates declared signing capabilities, spend caps, chain/contract allowlists, and human-approval policy. Never provide a private key or seed phrase.",
+            object_tool_schema(
+                json!({
+                    "network": enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the canonical bounty."),
+                    "wallet_address": string_property("Public Base solver and payout address. Never provide wallet secrets."),
+                    "bounty_contract": string_property("Canonical bounty contract the agent intends to claim."),
+                    "claim_bond_base_units": string_property("Exact positive claim bond from canonical inventory, as a base-10 USDC base-unit string."),
+                    "signing_capabilities": {
+                        "type": "array",
+                        "description": "Capabilities actually exposed to the agent. Use eip712_typed_data plus eip3009_receive_with_authorization for agent_native_claim, or send_transaction/wallet_send_calls for the direct fallback.",
+                        "items": { "type": "string", "enum": ["eip712_typed_data", "eip3009_receive_with_authorization", "send_transaction", "wallet_send_calls"] },
+                        "uniqueItems": true
+                    },
+                    "wallet_profile": nullable_enum_property(&["generic-evm", "metamask-agent-wallet", "circle-agent-wallet", "cdp-server-wallet", "privy-server-wallet"], "Optional declared provider profile used only for guidance; providers are never inferred from addresses."),
+                    "policy": {
+                        "type": "object",
+                        "description": "Non-secret wallet policy declaration.",
+                        "properties": {
+                            "allowed_chain_ids": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "uniqueItems": true },
+                            "allowed_contracts": string_array_property("Contract allowlist containing canonical native USDC and the intended bounty contract."),
+                            "per_transaction_usdc_base_units": nullable_string_property("Per-transaction USDC cap as a base-10 base-unit string."),
+                            "rolling_24h_usdc_base_units": nullable_string_property("Rolling 24-hour USDC cap as a base-10 base-unit string."),
+                            "human_approval_policy": nullable_enum_property(&["always", "out_of_policy", "never"], "When the wallet must escalate to a human; out_of_policy is recommended for bounded autonomy.")
+                        },
+                        "required": ["allowed_chain_ids", "allowed_contracts", "per_transaction_usdc_base_units", "rolling_24h_usdc_base_units", "human_approval_policy"],
+                        "additionalProperties": false
+                    }
+                }),
+                &["network", "wallet_address", "bounty_contract", "claim_bond_base_units", "signing_capabilities", "policy"],
             ),
         ),
         tool(
@@ -3470,6 +3504,46 @@ async fn get_x402_relay_status(
     proxy_x402_response(reqwest::Client::new().get(url)).await
 }
 
+async fn prepare_agent_to_earn(
+    State(_state): State<SharedState>,
+    Json(args): Json<PrepareAgentToEarnInput>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/agent-wallet/readiness",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().post(url).json(&args),
+        "agent wallet readiness API",
+    )
+    .await
+}
+
+async fn proxy_public_json_response(
+    request: reqwest::RequestBuilder,
+    service: &str,
+) -> Json<serde_json::Value> {
+    let response = match request
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return mcp_error(if error.is_timeout() {
+                format!("{service} timed out")
+            } else {
+                format!("{service} is unavailable")
+            })
+        }
+    };
+    let status = response.status();
+    match response.json::<serde_json::Value>().await {
+        Ok(body) => mcp_json(json!({"http_status": status.as_u16(), "body": body})),
+        Err(_) => mcp_error(format!("{service} returned an unreadable response")),
+    }
+}
+
 async fn agent_native_claim(
     State(_state): State<SharedState>,
     Json(mut args): Json<AgentNativeClaimArgs>,
@@ -4717,6 +4791,7 @@ mod tests {
             "plan_autonomous_bounty_authorized_contribution",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "prepare_agent_to_earn",
             "agent_native_claim",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
@@ -4748,6 +4823,21 @@ mod tests {
             .iter()
             .any(|value| value == "bounty_contract"));
         assert!(x402_funding.authorization.is_none());
+
+        let prepare_agent = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "prepare_agent_to_earn")
+            .expect("prepare_agent_to_earn descriptor exists");
+        assert!(prepare_agent.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "claim_bond_base_units"));
+        assert_eq!(
+            prepare_agent.input_schema["properties"]["policy"]["additionalProperties"],
+            false
+        );
+        assert!(prepare_agent.authorization.is_none());
 
         let prepare_submission = descriptors
             .iter()

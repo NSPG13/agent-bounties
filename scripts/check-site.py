@@ -13,6 +13,9 @@ REQUIRED_FILES = [
     "earn.html",
     "post.html",
     "funding.html",
+    "x402.html",
+    "x402-test-vectors.json",
+    "prepare-agent.html",
     "operator.html",
     "recovery.html",
     "terms.html",
@@ -133,6 +136,7 @@ def main() -> int:
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text(encoding="utf-8"))
     x402_discovery = json.loads((site_dir / ".well-known/x402.json").read_text(encoding="utf-8"))
+    x402_vectors = json.loads((site_dir / "x402-test-vectors.json").read_text(encoding="utf-8"))
     protocol = json.loads((site_dir / "protocol.json").read_text(encoding="utf-8"))
     deployment = json.loads((repo_root / "deployments" / "base-mainnet.json").read_text(encoding="utf-8"))
     check_protocol(protocol, deployment)
@@ -407,6 +411,64 @@ def main() -> int:
         fail("static x402 discovery must bind funding state to FundingAdded")
     if x402_discovery.get("mpp", {}).get("status") != "planned":
         fail("static x402 discovery must keep MPP behind the planned adapter boundary")
+    x402_docs = x402_discovery.get("documentation", {})
+    if x402_docs.get("compatibility") != "https://nspg13.github.io/agent-bounties/x402.html":
+        fail("static x402 discovery must publish the compatibility page")
+    if x402_docs.get("testVectors") != "https://nspg13.github.io/agent-bounties/x402-test-vectors.json":
+        fail("static x402 discovery must publish deterministic test vectors")
+    if x402_vectors.get("schema_version") != "agent-bounties/x402-test-vectors-v1":
+        fail("x402 test vectors have the wrong schema")
+    if x402_vectors.get("scheme") != "agent-bounty-fund":
+        fail("x402 vectors must exercise the custom funding scheme")
+    vectors = {item.get("id"): item for item in x402_vectors.get("vectors", [])}
+    for vector_id in [
+        "valid_custom_bounty_funding",
+        "reject_standard_exact_direct_transfer",
+        "pending_relay_is_not_funding",
+        "confirmed_funding",
+        "solver_payment_boundary",
+    ]:
+        if vector_id not in vectors:
+            fail(f"missing x402 test vector: {vector_id}")
+    if vectors["pending_relay_is_not_funding"].get("expected", {}).get("funded") is not False:
+        fail("pending x402 relay vector must remain non-evidence")
+    if vectors["confirmed_funding"].get("expected", {}).get("paid") is not False:
+        fail("FundingAdded vector must not claim solver payment")
+    if vectors["solver_payment_boundary"].get("input", {}).get("canonical_event") != "BountySettled":
+        fail("x402 payout vector must bind payment to BountySettled")
+    x402_page = (site_dir / "x402.html").read_text(encoding="utf-8")
+    require_phrases(
+        "x402.html",
+        x402_page,
+        [
+            "Agent Bounties x402 compatibility",
+            "agent-bounty-fund",
+            "not the standard <code>exact</code>",
+            "FundingAdded",
+            "BountySettled",
+            "x402-test-vectors.json",
+            "Post your own bounty",
+        ],
+    )
+    prepare_agent_page = (site_dir / "prepare-agent.html").read_text(encoding="utf-8")
+    require_phrases(
+        "prepare-agent.html",
+        prepare_agent_page,
+        [
+            "Prepare an agent to earn",
+            "/v1/base/agent-wallet/readiness",
+            "prepare_agent_to_earn",
+            "allowed_chain_ids",
+            "human_approval_policy",
+            "Never send a private key",
+            "Post your own bounty",
+        ],
+    )
+    discovery_endpoints = discovery.get("endpoints", {})
+    if discovery_endpoints.get("agent_wallet_readiness") != "https://agent-bounties-api.onrender.com/v1/base/agent-wallet/readiness":
+        fail("static discovery has the wrong agent wallet readiness endpoint")
+    if "prepare_agent_to_earn" not in discovery.get("agent_tools", []):
+        fail("static discovery must expose prepare_agent_to_earn")
     base_rail = next(
         (
             rail

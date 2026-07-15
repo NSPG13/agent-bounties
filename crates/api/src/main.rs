@@ -28,12 +28,14 @@ use chain_base::{
     eth_get_transaction_receipt_request, eth_send_raw_transaction_request, fetch_block_number,
     fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
+    prepare_agent_to_earn as inspect_agent_wallet_readiness,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
-    AutonomousBountyAuthorizationSignature, AutonomousBountyAuthorizedClaimPlan,
-    AutonomousBountyAuthorizedContributionPlan, AutonomousBountyAuthorizedCreationPlan,
-    AutonomousBountyClaimPlan, AutonomousBountyContribution, AutonomousBountyContributionPlan,
-    AutonomousBountyCreate, AutonomousBountyCreationPlan, AutonomousBountyEvent,
-    AutonomousBountyEventKind, AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
+    AgentWalletReadinessReport, AutonomousBountyAuthorizationSignature,
+    AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
+    AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
+    AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
+    AutonomousBountyCreationPlan, AutonomousBountyEvent, AutonomousBountyEventKind,
+    AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
     AutonomousBountySubmissionAuthorizationRequest,
     AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountySubmissionPreparation,
     AutonomousBountyTxPlanner, AutonomousSignedAttestation,
@@ -41,8 +43,9 @@ use chain_base::{
     AutonomousVerificationJob, BaseNetworkDescriptor, BaseRelayedTransaction, BaseRpcUrlConfig,
     BaseTransactionRelayer, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
     ChainBaseError, Eip3009AuthorizationTypedData, EthGetTransactionReceiptRequest,
-    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, RpcTransactionReceipt,
-    AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION, AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
+    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, PrepareAgentToEarnInput,
+    RpcTransactionReceipt, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
+    AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
 };
 use chrono::Utc;
 use db::{
@@ -105,6 +108,7 @@ use uuid::Uuid;
         x402_discovery,
         risk_policy,
         live_money_readiness,
+        prepare_agent_wallet_to_earn,
         list_risk_events,
         list_risk_reviews,
         approve_risk_bounty,
@@ -975,6 +979,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
+        .route(
+            "/v1/base/agent-wallet/readiness",
+            post(prepare_agent_wallet_to_earn),
+        )
         .route("/v1/risk/events", get(list_risk_events))
         .route("/v1/risk/reviews", get(list_risk_reviews))
         .route("/v1/risk/bounty-approvals", post(approve_risk_bounty))
@@ -1391,6 +1399,12 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
             "paymentProof": "transaction plans, signatures, broadcasts, and transaction hashes are not funding evidence",
             "relayerCustody": "the hosted relayer holds gas only; the funder signs an exact amount, bounty, network, nonce, and expiration and the contract pulls USDC directly from that funder"
         },
+        "documentation": {
+            "compatibility": "https://nspg13.github.io/agent-bounties/x402.html",
+            "testVectors": "https://nspg13.github.io/agent-bounties/x402-test-vectors.json",
+            "fundingEvidence": "FundingAdded",
+            "payoutEvidence": "BountySettled"
+        },
         "hostedRelay": {
             "enabled": state.x402_relayer.enabled,
             "address": hosted_relayer_address,
@@ -1440,6 +1454,44 @@ async fn live_money_readiness(
     build_live_money_readiness_report(live_money_readiness_config(&state, &network))
         .map(Json)
         .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/base/agent-wallet/readiness",
+    responses(
+        (status = 200, description = "Wallet-neutral readiness report with live Base chain and native-USDC balance evidence"),
+        (status = 400, description = "Invalid network, address, bounty, or claim-bond amount"),
+        (status = 503, description = "Configured Base RPC is unavailable")
+    )
+)]
+async fn prepare_agent_wallet_to_earn(
+    State(state): State<SharedState>,
+    Json(request): Json<PrepareAgentToEarnInput>,
+) -> Result<Json<AgentWalletReadinessReport>, StatusCode> {
+    let (_, rpc_url) =
+        state
+            .base_rpc_urls
+            .resolve(&request.network)
+            .map_err(|error| match error {
+                ChainBaseError::UnknownNetwork(_)
+                | ChainBaseError::InvalidAddress(_)
+                | ChainBaseError::InvalidAmount => StatusCode::BAD_REQUEST,
+                _ => StatusCode::SERVICE_UNAVAILABLE,
+            })?;
+    tokio::time::timeout(
+        Duration::from_secs(12),
+        inspect_agent_wallet_readiness(&rpc_url, &request),
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+    .map(Json)
+    .map_err(|error| match error {
+        ChainBaseError::UnknownNetwork(_)
+        | ChainBaseError::InvalidAddress(_)
+        | ChainBaseError::InvalidAmount => StatusCode::BAD_REQUEST,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    })
 }
 
 fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
@@ -9188,6 +9240,7 @@ mod tests {
         assert!(paths.contains_key("/schemas/discovery-manifest.v2.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
+        assert!(paths.contains_key("/v1/base/agent-wallet/readiness"));
         assert!(paths.contains_key("/v1/risk/events"));
         assert!(paths.contains_key("/v1/risk/reviews"));
         assert!(paths.contains_key("/v1/risk/bounty-approvals"));

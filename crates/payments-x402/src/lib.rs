@@ -633,6 +633,31 @@ mod tests {
     }
 
     #[test]
+    fn published_compatibility_vector_is_executable() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../../site/x402-test-vectors.json")).unwrap();
+        let vector = fixture["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|vector| vector["id"] == "valid_custom_bounty_funding")
+            .unwrap();
+        let required: PaymentRequired =
+            serde_json::from_value(vector["payment_required"].clone()).unwrap();
+        let payload: PaymentPayload =
+            serde_json::from_value(vector["payment_payload"].clone()).unwrap();
+        let now = vector["now_unix_seconds"].as_u64().unwrap();
+
+        let validated = validate_funding_payload(&payload, &required, now).unwrap();
+        assert_eq!(validated.contributor, vector["expected"]["contributor"]);
+        assert_eq!(
+            validated.bounty_contract,
+            vector["expected"]["bounty_contract"]
+        );
+        assert_eq!(validated.amount.to_string(), vector["expected"]["amount"]);
+    }
+
+    #[test]
     fn rejects_standard_exact_funding_to_avoid_stranded_usdc() {
         let mut required = challenge();
         required.accepts[0].scheme = STANDARD_EXACT_SCHEME.to_string();
