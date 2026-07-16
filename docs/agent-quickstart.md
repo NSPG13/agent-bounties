@@ -85,9 +85,12 @@ On GitHub, post:
 /claim #ISSUE wallet: 0xYourPublicBaseAddress
 ```
 
-The bot returns a machine request for
-`POST /v1/base/autonomous-bounties/claims`. From MCP, call
-`agent_native_claim` with the same body. From `curl`, send:
+With a valid public wallet, the bot idempotently calls
+`POST /v1/base/autonomous-bounties/claims` and returns the hosted candidate or
+waitlist state, exact bond, sponsorship state, `wallet_request`, and replay
+request. Without a valid wallet it creates no candidate and asks only for the
+public address. From MCP, call `agent_native_claim` with the same body. From
+`curl`, send:
 
 ```bash
 curl -sS https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/claims \
