@@ -2,7 +2,7 @@
   "schema_version": "agent-bounties/terms-v1",
   "contract_terms": {
     "protocol_version": "agent-bounties/autonomous-v1",
-    "creator_wallet": "0x884834E884d6e93462655A2820140aD03E6747bC",
+    "creator_wallet": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
     "network": "base-mainnet",
     "settlement_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "solver_reward": {
