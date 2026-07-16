@@ -136,24 +136,24 @@ Before any deployment:
 ## Testnet Deployment
 
 Use a dedicated deployer wallet with only testnet funds. Do not paste a seed
-phrase or private key into chat, Git, shell history, or committed files.
+phrase or private key into chat, Git, shell history, browser storage, or
+committed files. The current exact addresses, constructor inputs, bytecode, and
+test-USDC seed are pinned in
+[`deployments/base-sepolia-sponsor-activation.json`](../deployments/base-sepolia-sponsor-activation.json).
 
 ```powershell
 $env:Path = "$PWD\.tools\foundry;$env:Path"
-cd contracts\base-escrow
-forge test --fuzz-runs 1000
-forge create `
-  --broadcast `
-  --chain 84532 `
-  --rpc-url $env:BASE_SEPOLIA_RPC_URL `
-  --private-key $env:BASE_DEPLOYER_PRIVATE_KEY `
-  src/AgentBountyFactory.sol:AgentBountyFactory `
-  --constructor-args 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+forge test --root contracts\base-escrow --fuzz-runs 1000
+python -m http.server 8879 --bind 127.0.0.1
 ```
 
-After confirmation, read `implementation()` from the factory, verify both
-contracts on a Base-compatible explorer, record runtime code hashes and the
-deployment block, then set the Sepolia environment variables.
+Open
+`http://127.0.0.1:8879/tools/base-sepolia-sponsor-activation.html` in the
+browser profile containing the deployer wallet. The locked console verifies
+every action before requesting a wallet confirmation and supports safe resume
+after each confirmed component. See
+[`base-sepolia-runbook.md`](base-sepolia-runbook.md) for regeneration, native
+USDC fork, post-deploy attestation, hosted configuration, and full-loop gates.
 
 ## Mainnet Activation
 

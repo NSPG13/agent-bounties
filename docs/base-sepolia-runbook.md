@@ -1,115 +1,112 @@
-# Base Sepolia Runbook
+# Base Sepolia Autonomous Runbook
 
-> [!WARNING]
-> Historical V1 material only. The operator-controlled escrow was refunded and
-> retired; do not use these instructions for new funding or settlement. New
-> bounties use `agent-bounties/autonomous-v1` as described in
-> [the autonomous protocol](autonomous-protocol.md).
+Base Sepolia is the required live rehearsal rail for
+`agent-bounties/autonomous-v1`. It uses native test USDC and the same factory,
+bounty, deterministic-verifier, and atomic-sponsor bytecode as production.
+Testnet receipts are rehearsal evidence only and never prove a real payout.
 
-Base Sepolia is the first open testnet rail for escrow and payout rehearsal.
-This runbook keeps signing outside the app: the platform generates deterministic
-transaction intent and operator commands, while Foundry signs and broadcasts.
+## Pinned Activation
 
-## Environment
+The unsigned bundle in
+[`deployments/base-sepolia-sponsor-activation.json`](../deployments/base-sepolia-sponsor-activation.json)
+pins:
 
-Use a low-value test wallet. Never place private keys in source files.
+- chain ID `84532`;
+- native test USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`;
+- deployer `0x884834E884d6e93462655A2820140aD03E6747bC`;
+- factory `0x9601a40b35Ad6843846732C6CB73c4C82f9Ba850`;
+- implementation `0xe70b9d541a176307e50f308aa370a1661eabfd99`;
+- 16-bit verifier `0x7231f1312448Fa60078Fb56cDB6e2c392Bd1269b`;
+- atomic sponsor `0xa1E2E93530114F7FE64c251556b8De13Dad7d157`;
+- one dedicated policy-signer address and capped sponsor economics;
+- exactly `0.10` test USDC of initial acquisition budget.
+
+The bundle contains no private key and proves no live deployment. Regenerate it
+when the deployer nonce, constructor inputs, source bytecode, or pinned chain
+state changes.
+
+## Deterministic Gates
 
 ```powershell
-$env:BASE_SEPOLIA_RPC_URL = "https://..."
-$env:BASE_DEPLOYER_PRIVATE_KEY = "0x..."
-$env:BASE_PAYER_PRIVATE_KEY = "0x..."
-$env:BASE_SETTLEMENT_SIGNER_PRIVATE_KEY = "0x..."
+$env:Path = "$PWD\.tools\foundry;$env:Path"
+cd contracts\base-escrow
+forge test --fuzz-runs 1000
+
+$env:RUN_SEPOLIA_FORK = "true"
+$env:BASE_SEPOLIA_RPC_URL = "https://your-managed-base-sepolia-rpc"
+forge test `
+  --match-contract AtomicClaimSponsorMainnetForkTest `
+  --match-test testRealUsdcZeroBalanceSolverCompletesSponsoredLoopOnBaseSepolia -vv
 ```
 
-The runbook command requires the current settlement signer, escrow contract, and
-USDC token addresses. For a fresh deploy, use the deploy command first, then
-rerun the command with the deployed escrow address.
+The first gate covers replay, race rollback, quota, ownership, and conservation
+invariants. The second runs the zero-balance solver path against native Base
+Sepolia USDC on a fork. Neither broadcasts.
+
+## Locked Wallet Flow
+
+Serve the repository from localhost; do not open the HTML directly:
 
 ```powershell
-cargo run -p cli -- base-sepolia-runbook `
-  --settlement-signer 0x5555555555555555555555555555555555555555 `
-  --escrow-contract 0x1111111111111111111111111111111111111111 `
-  --usdc-token 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+python -m http.server 8879 --bind 127.0.0.1
 ```
 
-The output includes:
+Open
+`http://127.0.0.1:8879/tools/base-sepolia-sponsor-activation.html` in the
+browser profile containing the deployer wallet. The page discovers injected
+wallets through EIP-6963 and does not discriminate by provider.
 
-- `forge create` commands for `AgentBountyEscrow`,
-- Base Sepolia chain metadata on funding and settlement steps,
-- `cast send --data ...` commands for USDC approval and `createEscrow`,
-- API/MCP funding planning is also available through `POST
-  /v1/base/funding-plan` and MCP `plan_base_funding`,
-- `cast send --data ...` command for settlement-signer release,
-- refund and dispute transaction planning is available through
-  `base-refund-plan`, `base-dispute-plan`, `POST /v1/base/refund-plan`,
-  `POST /v1/base/dispute-plan`, MCP `plan_base_refund`, and MCP
-  `plan_base_dispute`,
-- `eth_getLogs` request planning is available through `base-log-query`,
-- configured RPC fetch and reconciliation is available through
-  `base-fetch-logs`, `POST /v1/base/fetch-rpc-logs`, or MCP
-  `fetch_base_rpc_logs`,
-- signed release transaction broadcast is available through
-  `base-broadcast-signed-transaction`, `POST /v1/base/broadcast-signed-transaction`,
-  or MCP `broadcast_base_signed_transaction` when operator-enabled,
-- receipt polling and optional log reconciliation is available through
-  `base-transaction-receipt`, `POST /v1/base/transaction-receipt`, or MCP
-  `get_base_transaction_receipt`,
-- the expected signer role for each transaction.
+The console requires four explicit confirmations:
 
-## Operator Flow
+1. deploy the exact factory and implementation;
+2. deploy the exact deterministic verifier;
+3. deploy the exact capped atomic sponsor;
+4. transfer exactly `0.10` test USDC to the verified sponsor.
 
-1. Run `forge test` from `contracts/base-escrow`.
-2. Deploy `AgentBountyEscrow` with the settlement signer address.
-3. Fund a bounty on the platform and keep its terms hash.
-4. Execute the generated USDC `approve` transaction from the payer wallet.
-5. Execute the generated `createEscrow` transaction from the payer wallet.
-6. Build an escrow log query with:
+Before each request it rechecks account, chain, nonce, address occupancy,
+runtime bytecode, immutable getters, balances, and live gas estimation. It has
+no editable address, amount, calldata, nonce, RPC, or contract field. A nonce
+change before the three deployments requires bundle regeneration because it
+changes the predicted addresses.
 
-   ```powershell
-   cargo run -p cli -- base-log-query `
-     --escrow-contract 0x1111111111111111111111111111111111111111 `
-     --from-block <deployment-or-bounty-block>
-   ```
+## Live Evidence
 
-7. Reconcile the funding log. If the API/MCP service has
-   `BASE_SEPOLIA_RPC_URL` configured, call `POST /v1/base/fetch-rpc-logs` or MCP
-   `fetch_base_rpc_logs` with the same contract and block range. For an
-   operator-local fetch, run `cargo run -p cli -- base-fetch-logs ...`. The
-   manual fallback is still to execute the returned `eth_getLogs` request
-   against `$env:BASE_SEPOLIA_RPC_URL` and submit the provider response to
-   `POST /v1/base/rpc-logs`.
-8. After deterministic verification accepts the work, get the release queue from
-   `POST /v1/base/release-queue`.
-   If the work needs to be refunded or marked disputed instead, generate an
-   unsigned settlement-signer transaction with `POST /v1/base/refund-plan` or
-   `POST /v1/base/dispute-plan`. The local equivalents are:
+After all four transactions confirm:
 
-   ```powershell
-   cargo run -p cli -- base-refund-plan `
-     --escrow-contract 0x1111111111111111111111111111111111111111 `
-     --onchain-escrow-id <escrow-id> `
-     --reason-hash 0x<32-byte-reason-hash>
+1. record transaction hashes and deployment blocks;
+2. independently read factory `implementation()` and `settlementToken()`;
+3. compare all runtime bytecode with the bundle;
+4. read verifier difficulty and every sponsor address/cap getter;
+5. confirm the sponsor's native test-USDC balance;
+6. run the indexer from the factory deployment block;
+7. configure hosted Sepolia values only after those checks pass.
 
-   cargo run -p cli -- base-dispute-plan `
-     --escrow-contract 0x1111111111111111111111111111111111111111 `
-     --onchain-escrow-id <escrow-id> `
-     --dispute-hash 0x<32-byte-dispute-hash>
-   ```
-9. Execute the generated `release` transaction from the settlement signer
-   wallet, or the generated `refund`/`markDisputed` transaction for a non-happy
-   path. Operators can use Foundry `cast send` directly, or sign elsewhere and
-   submit the signed raw transaction through `base-broadcast-signed-transaction`,
-   `POST /v1/base/broadcast-signed-transaction`, or MCP
-   `broadcast_base_signed_transaction`. Hosted broadcast requires
-   `ENABLE_BASE_TX_BROADCAST=true`.
-10. Historical V1 only: receipt-triggered reconciliation is retired. The
-    autonomous protocol indexer independently consumes canonical factory and
-    bounty logs; receipt polling is read-only.
-11. Fetch/reconcile logs again from the last indexed block if receipt polling was
-    not used. The response must include the emitted `EscrowReleased` log, whether
-    ingested through `/v1/base/fetch-rpc-logs`, MCP `fetch_base_rpc_logs`, or the
-    manual `/v1/base/rpc-logs` provider-response path.
+Required hosted settings are:
 
-The platform should move a Base bounty to `Paid`, `Refunded`, or `Disputed`
-only after the matching escrow log is indexed. The transaction itself is not
-treated as proof of settlement.
+```text
+BASE_SEPOLIA_BOUNTY_FACTORY=0x9601a40b35ad6843846732c6cb73c4c82f9ba850
+BASE_SEPOLIA_BOUNTY_IMPLEMENTATION=0xe70b9d541a176307e50f308aa370a1661eabfd99
+BOND_SPONSOR_BASE_SEPOLIA_CONTRACT=0xa1e2e93530114f7fe64c251556b8de13dad7d157
+BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY=<secret matching the committed public signer>
+ENABLE_BOND_SPONSORSHIP=true
+```
+
+The API also requires Postgres, the hosted x402 gas relayer, and its existing
+bounded gas/fee controls. Store the policy key only in the hosted secret store;
+never place it in Git, a GitHub issue, browser storage, shell history, or a
+wallet-import form.
+
+## Full Live Loop
+
+Activation is complete only after a fresh zero-USDC, zero-ETH solver:
+
+1. receives one exact sponsorship offer;
+2. signs the bounded USDC EIP-3009 claim authorization;
+3. reaches confirmed canonical `BountyClaimed` through one atomic relay;
+4. submits committed evidence;
+5. passes the precommitted deterministic verifier;
+6. reaches confirmed canonical `BountySettled` on Base Sepolia.
+
+A grant, signature, relay row, transaction hash, submission, or verifier output
+is not payment evidence. Only `BountySettled` proves protocol settlement, and a
+Base Sepolia settlement still has no monetary value.
