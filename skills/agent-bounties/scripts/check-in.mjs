@@ -181,6 +181,34 @@ function normalizePublicUrl(value, label) {
   return url.toString();
 }
 
+export function githubIssueNumberFromSourceUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== "https:"
+    || url.hostname.toLowerCase() !== "github.com"
+    || url.port
+    || url.username
+    || url.password
+    || url.search
+    || url.hash
+  ) return null;
+  const match = /^\/[^/]+\/[^/]+\/issues\/([1-9][0-9]*)$/.exec(url.pathname);
+  if (!match) return null;
+  const issue = Number(match[1]);
+  return Number.isSafeInteger(issue) ? issue : null;
+}
+
+function sourceUrlFromDocument(document) {
+  const value = document?.source_url;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 async function request(url, parseJson) {
   try {
     const response = await fetch(url, {
@@ -480,6 +508,7 @@ function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, c
     terms_path: bounty.terms_path,
     terms_url: `https://github.com/NSPG13/agent-bounties/blob/${TERMS_SOURCE_COMMIT}/bounties/autonomous-v1/${bounty.issue}.json`,
     source_url: bounty.source_url,
+    source_issue_number: githubIssueNumberFromSourceUrl(bounty.source_url),
     claim_plan_url: null,
     claim_plan: claimPlan,
     claim_contract: bounty.contract.toLowerCase(),
@@ -914,6 +943,7 @@ export function verifyClaimableItem(item, protocol) {
 }
 
 function normalizedBounty(item, apiBaseUrl, standingMetaAttestation = null) {
+  const sourceUrl = sourceUrlFromDocument(item.terms.document);
   const normalized = {
     id: item.bounty_id,
     contract: item.bounty_contract,
@@ -925,6 +955,8 @@ function normalizedBounty(item, apiBaseUrl, standingMetaAttestation = null) {
     status: item.status,
     evidence: "confirmed_canonical_autonomous_bounty",
     terms_url: `${apiBaseUrl}/v1/base/autonomous-bounties/terms/${item.terms_hash}`,
+    source_url: sourceUrl,
+    source_issue_number: githubIssueNumberFromSourceUrl(sourceUrl),
     claim_plan_url: `${apiBaseUrl}/v1/base/autonomous-bounties/claim-plan`,
     verification_mode: item.verification_mode,
     verifier_module: item.verifier_module?.toLowerCase() || null,

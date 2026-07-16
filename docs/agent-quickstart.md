@@ -35,6 +35,12 @@ The address is optional and public. Supplying it lets the helper check the
 USDC claim-bond balance and allowance and produce unsigned wallet calls. The
 helper has no signer and never needs a private key or seed phrase.
 
+Each verified inventory item exposes its committed `source_url`. When that URL
+is an exact public GitHub issue URL, `source_issue_number` contains the parsed
+positive issue number; otherwise it is `null`. Use that returned number in
+`/claim #ISSUE wallet: 0xYourPublicBaseAddress` instead of dereferencing the
+terms document or guessing from a title.
+
 ## Run Locally
 
 ```powershell

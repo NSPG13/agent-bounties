@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   collectInventory,
+  githubIssueNumberFromSourceUrl,
   keccak256Hex,
   normalizeApiBaseUrl,
   rpcBatchTransport,
@@ -111,6 +112,24 @@ test("local Ethereum Keccak-256 matches canonical vectors", () => {
     keccak256Hex("0x68656c6c6f"),
     "0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8",
   );
+});
+
+test("source issue parsing accepts only exact public GitHub issue URLs", () => {
+  assert.equal(
+    githubIssueNumberFromSourceUrl("https://github.com/NSPG13/agent-bounties/issues/275"),
+    275,
+  );
+  for (const value of [
+    undefined,
+    "",
+    "not a URL",
+    "http://github.com/NSPG13/agent-bounties/issues/275",
+    "https://github.com/NSPG13/agent-bounties/pull/275",
+    "https://github.com/NSPG13/agent-bounties/issues/0",
+    "https://github.com/NSPG13/agent-bounties/issues/275?claim=true",
+    "https://github.com/NSPG13/agent-bounties/issues/275#comment",
+    "https://example.com/NSPG13/agent-bounties/issues/275",
+  ]) assert.equal(githubIssueNumberFromSourceUrl(value), null);
 });
 
 function directTransport(manifest, mutate = null) {
@@ -420,6 +439,7 @@ test("direct safe-chain verifier accepts deterministic module earning inventory"
   assert.equal(report.excluded.length, 0);
   for (const item of report.verified) {
     assert.equal(item.evidence_source, "direct_safe_chain");
+    assert.equal(item.source_issue_number, item.issue);
     assert.equal(item.claim_plan.ready, true);
     assert.deepEqual(
       item.claim_plan.wallet_calls.map((call) => call.function),
@@ -586,6 +606,11 @@ test("only active canonical autonomous inventory is claimable", async () => {
     report.verified_claimable_bounties[0].claim_plan_url,
     "https://api.example.test/v1/base/autonomous-bounties/claim-plan",
   );
+  assert.equal(
+    report.verified_claimable_bounties[0].source_url,
+    "https://github.com/NSPG13/agent-bounties/issues/275",
+  );
+  assert.equal(report.verified_claimable_bounties[0].source_issue_number, 275);
   assert.deepEqual(
     report.excluded_claimable_candidates.map((item) => [item.id, item.reason]),
     [
@@ -598,6 +623,21 @@ test("only active canonical autonomous inventory is claimable", async () => {
   assert.equal(report.recommended_action, "claim_verified_bounty");
   assert.equal(report.funding_candidates.length, 1);
   assert.equal(report.live_verification_jobs.length, 1);
+});
+
+test("hosted inventory keeps absent or malformed source metadata non-authoritative", async () => {
+  for (const sourceUrl of [undefined, "not a URL"]) {
+    const input = await fixture("verified-claimable.json");
+    if (sourceUrl === undefined) delete input.autonomous_feed.body[0].terms.document.source_url;
+    else input.autonomous_feed.body[0].terms.document.source_url = sourceUrl;
+    const report = await collectInventory({
+      apiBaseUrl: "https://api.example.test",
+      fixture: input,
+    });
+    const bounty = report.verified_claimable_bounties[0];
+    assert.equal(bounty.source_url, sourceUrl ?? null);
+    assert.equal(bounty.source_issue_number, null);
+  }
 });
 
 test("hosted inventory emits a standing meta marker after exact-code safe-block attestation", async () => {
