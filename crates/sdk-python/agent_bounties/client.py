@@ -699,6 +699,7 @@ class AgentBountiesClient:
         parent_round: int,
         parent_solver: str,
         parent_solver_reward: dict,
+        child_acceptance_criteria: list[str],
         verifier_module: str,
     ):
         return self._request(
@@ -709,6 +710,7 @@ class AgentBountiesClient:
                 "parent_round": parent_round,
                 "parent_solver": parent_solver,
                 "parent_solver_reward": parent_solver_reward,
+                "child_acceptance_criteria": child_acceptance_criteria,
                 "verifier_module": verifier_module,
             },
         )

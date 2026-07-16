@@ -871,6 +871,36 @@ struct PublishAutonomousBountyTermsRequest {
     document: AutonomousBountyTermsDocument,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct AgentActionError {
+    schema_version: String,
+    error_code: String,
+    message: String,
+    retryable: bool,
+    next_action: String,
+}
+
+type AgentActionApiError = (StatusCode, Json<AgentActionError>);
+
+fn agent_action_error(
+    status: StatusCode,
+    error_code: &str,
+    message: impl Into<String>,
+    retryable: bool,
+    next_action: &str,
+) -> AgentActionApiError {
+    (
+        status,
+        Json(AgentActionError {
+            schema_version: "agent-bounties/action-error-v1".to_string(),
+            error_code: error_code.to_string(),
+            message: message.into(),
+            retryable,
+            next_action: next_action.to_string(),
+        }),
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PublishAutonomousSubmissionEvidenceRequest {
     network: Option<String>,
@@ -3695,10 +3725,18 @@ async fn indexed_autonomous_bounty(
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/canonical-child-terms-plan", responses((status = 200, description = "Exact settled-child bounty terms and commitment plan")))]
 async fn plan_autonomous_canonical_child_terms(
     Json(request): Json<CanonicalChildBountyTermsRequest>,
-) -> Result<Json<CanonicalChildBountyTermsPlan>, StatusCode> {
+) -> Result<Json<CanonicalChildBountyTermsPlan>, AgentActionApiError> {
     build_canonical_child_bounty_terms_plan(&request)
         .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+        .map_err(|error| {
+            agent_action_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_canonical_child_terms_plan",
+                error.to_string(),
+                false,
+                "Correct the parent binding, child acceptance criteria, or child task verifier and rerun plan_autonomous_canonical_child_terms. Do not create or fund the child from a rejected plan.",
+            )
+        })
 }
 
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/creation-plan", responses((status = 200, description = "Unsigned canonical autonomous bounty creation and initial-funding plan")))]
@@ -6400,11 +6438,22 @@ async fn list_autonomous_bounty_events(
 
 fn autonomous_terms_record(
     request: PublishAutonomousBountyTermsRequest,
-) -> Result<AutonomousBountyTermsRecord, StatusCode> {
+) -> Result<AutonomousBountyTermsRecord, AgentActionApiError> {
     build_autonomous_bounty_terms_record(&request.creator_wallet, request.document, Utc::now())
-        .map_err(|error| match error {
-            ChainBaseError::TermsDocumentTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            _ => StatusCode::BAD_REQUEST,
+        .map_err(|error| {
+            let (status, code) = match &error {
+                ChainBaseError::TermsDocumentTooLarge => {
+                    (StatusCode::PAYLOAD_TOO_LARGE, "terms_document_too_large")
+                }
+                _ => (StatusCode::BAD_REQUEST, "invalid_autonomous_bounty_terms"),
+            };
+            agent_action_error(
+                status,
+                code,
+                error.to_string(),
+                false,
+                "Correct the terms document and publish it before creating or funding a bounty. The returned terms hash must be committed on-chain unchanged.",
+            )
         })
 }
 
@@ -6412,16 +6461,29 @@ fn autonomous_terms_record(
 async fn publish_autonomous_bounty_terms(
     State(state): State<SharedState>,
     Json(request): Json<PublishAutonomousBountyTermsRequest>,
-) -> Result<Json<AutonomousBountyTermsRecord>, StatusCode> {
+) -> Result<Json<AutonomousBountyTermsRecord>, AgentActionApiError> {
     let record = autonomous_terms_record(request)?;
-    let store = state
-        .store
-        .as_ref()
-        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let store = state.store.as_ref().ok_or_else(|| {
+        agent_action_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "terms_store_unavailable",
+            "DATABASE_URL is required to publish public bounty terms",
+            true,
+            "Retry after the hosted terms store is healthy; do not create the bounty until publication succeeds.",
+        )
+    })?;
     store
         .upsert_autonomous_bounty_terms(&record)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|error| {
+            agent_action_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "terms_store_write_failed",
+                error.to_string(),
+                true,
+                "Retry publication with the identical document. Do not alter the document or create the bounty until the terms hash can be read back.",
+            )
+        })?;
     Ok(Json(record))
 }
 
@@ -9934,6 +9996,53 @@ mod tests {
         );
         assert_eq!(plan.required_child_status, "settled");
         assert_eq!(plan.minimum_child_target.amount, 900_000);
+    }
+
+    #[tokio::test]
+    async fn canonical_child_terms_endpoint_explains_rejected_canary_verifier() {
+        let error = plan_autonomous_canonical_child_terms(Json(CanonicalChildBountyTermsRequest {
+            parent_bounty_id: format!("0x{}", "ab".repeat(32)),
+            parent_round: 1,
+            parent_solver: "0x3333333333333333333333333333333333333333".to_string(),
+            parent_solver_reward: Money::new(900_000, "usdc").unwrap(),
+            child_acceptance_criteria: vec!["Produce the committed digital artifact.".to_string()],
+            verifier_module: chain_base::BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER.to_string(),
+        }))
+        .await
+        .unwrap_err();
+
+        let (status, Json(body)) = error;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.error_code, "invalid_canonical_child_terms_plan");
+        assert!(body
+            .message
+            .contains("leading-zero work canary cannot verify a canonical child task"));
+        assert!(!body.retryable);
+        assert!(body.next_action.contains("Do not create or fund"));
+    }
+
+    #[test]
+    fn terms_publication_returns_actionable_semantic_error() {
+        let mut document: AutonomousBountyTermsDocument =
+            serde_json::from_str(include_str!("../../../bounties/autonomous-v1/244.json")).unwrap();
+        document.benchmark = serde_json::json!({
+            "engine": "github_ci",
+            "required_checks": ["ci"]
+        });
+
+        let error = autonomous_terms_record(PublishAutonomousBountyTermsRequest {
+            creator_wallet: "0x884834E884d6E93462655A2820140aD03E6747bC".to_string(),
+            document,
+        })
+        .unwrap_err();
+
+        let (status, Json(body)) = error;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.error_code, "invalid_autonomous_bounty_terms");
+        assert!(body
+            .message
+            .contains("known leading-zero verifier must use its exact 16-bit"));
+        assert!(body.next_action.contains("before creating or funding"));
     }
 
     #[tokio::test]

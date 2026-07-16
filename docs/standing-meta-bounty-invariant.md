@@ -50,6 +50,13 @@ after it verifies:
 - the verifier's exact runtime code hash at a Base `safe` block; and
 - the explicit different-wallet and settled-child requirements.
 
+The child must independently publish retrievable terms and use a task-specific
+deterministic verifier whose payout condition matches those terms. The parent
+canonical-child verifier and the leading-zero proof-of-work canary are not
+valid child task verifiers. A direct on-chain child with missing or invalid
+terms does not count as healthy inventory even if its immutable contract can be
+claimed.
+
 The guard rejects malformed or spoofed standing-meta descriptors. Only a
 confirmed canonical `BountySettled` event proves eventual payout.
 

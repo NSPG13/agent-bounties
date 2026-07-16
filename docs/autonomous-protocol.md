@@ -241,7 +241,16 @@ child, so a parent solver can earn while recruiting funders; a self-funded
 solver instead converts capital into paid work for the child solver. The child
 uses its own explicit task acceptance criteria and deterministic verifier. This
 module verifies only the post-fund-complete-and-pay loop. It must not be
-presented as verification of unrelated code, research, or subjective work.
+presented as verification of unrelated code, research, or subjective work. It
+must also not be used as the child's verifier, which would create a recursive
+loop. The deployed
+leading-zero module is also excluded by the hosted canonical-child planner: its
+fixed proof-of-work benchmark cannot simultaneously carry the exact
+parent-and-round benchmark required by this module. A child needs a
+task-specific verifier whose actual payout condition matches its published
+criteria. The complete content-addressed child terms must be published and
+retrievable before creation; direct factory calls do not repair missing or
+invalid terms.
 
 ### Signed Quorum
 

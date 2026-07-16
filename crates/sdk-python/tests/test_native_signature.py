@@ -42,6 +42,21 @@ class NativeSignatureTests(unittest.TestCase):
         self.assertEqual(client.requests[1]["wallet_signature"], wallet_signature)
         self.assertNotIn("signature", client.requests[1])
 
+    def test_canonical_child_plan_sends_task_acceptance_criteria(self):
+        client = StubAgentBountiesClient([{"benchmark_hash": "0x1234"}])
+        criteria = ["The committed regression test passes."]
+
+        client.plan_autonomous_canonical_child_terms(
+            f"0x{'11' * 32}",
+            1,
+            "0x2222222222222222222222222222222222222222",
+            {"amount": 2_000_000, "currency": "usdc"},
+            criteria,
+            "0x3333333333333333333333333333333333333333",
+        )
+
+        self.assertEqual(client.requests[0]["child_acceptance_criteria"], criteria)
+
 
 if __name__ == "__main__":
     unittest.main()
