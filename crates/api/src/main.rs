@@ -734,6 +734,7 @@ struct AgentNativeClaimRequest {
     #[serde(default)]
     request_bond_sponsorship: bool,
     signature: Option<AutonomousBountyAuthorizationSignature>,
+    wallet_signature: Option<String>,
     source: Option<String>,
 }
 
@@ -754,6 +755,7 @@ struct AgentNativeClaimResponse {
     sponsor_contract: Option<String>,
     sponsorship: Option<BondSponsorship>,
     signing_payload: Option<Eip3009AuthorizationTypedData>,
+    wallet_request: Option<serde_json::Value>,
     claim_transaction_hash: Option<String>,
     canonical_event_id: Option<Uuid>,
     next_action: String,
@@ -3851,6 +3853,7 @@ async fn agent_native_claim(
     Json(request): Json<AgentNativeClaimRequest>,
 ) -> Result<Response, AgentClaimProblem> {
     validate_agent_native_claim_request(&request)?;
+    let request_signature = resolve_agent_claim_signature(&request)?;
     let network = request.network.as_deref().unwrap_or("base-mainnet");
     let descriptor = base_network_descriptor(network).map_err(|_| {
         agent_claim_problem(
@@ -4254,9 +4257,9 @@ async fn agent_native_claim(
         candidate,
         waitlist_position: reservation.waitlist_position,
     };
-    let Some(signature) = request.signature.as_ref() else {
+    let Some(signature) = request_signature.as_ref() else {
         let next_request = signed_claim_request_template(&request);
-        let next_action = "Sign signing_payload once with solver_wallet, then replay next_request with v, r, and s. The platform will relay one atomic claim and, when requested, provide the exact bond inside that same transaction.";
+        let next_action = "Send wallet_request to the solver wallet, then copy its 65-byte result unchanged into next_request.body.wallet_signature. The platform will relay one atomic claim and, when requested, provide the exact bond inside that same transaction.";
         return Ok(agent_claim_response(
             &state,
             StatusCode::OK,
@@ -4400,7 +4403,74 @@ fn validate_agent_native_claim_request(
             "Use a compact source such as github, mcp, curl, python, or cast.",
         ));
     }
+    if request.signature.is_some() && request.wallet_signature.is_some() {
+        return Err(agent_claim_problem(
+            StatusCode::BAD_REQUEST,
+            "request_invalid",
+            "validate_request",
+            "provide either wallet_signature or signature, not both",
+            "Prefer the wallet's unchanged 65-byte result in wallet_signature; use signature only for legacy v/r/s integrations.",
+        ));
+    }
     Ok(())
+}
+
+fn resolve_agent_claim_signature(
+    request: &AgentNativeClaimRequest,
+) -> Result<Option<AutonomousBountyAuthorizationSignature>, AgentClaimProblem> {
+    if let Some(signature) = request.signature.as_ref() {
+        return Ok(Some(signature.clone()));
+    }
+    request
+        .wallet_signature
+        .as_deref()
+        .map(parse_native_wallet_signature)
+        .transpose()
+}
+
+fn parse_native_wallet_signature(
+    signature: &str,
+) -> Result<AutonomousBountyAuthorizationSignature, AgentClaimProblem> {
+    let Some(encoded) = signature
+        .strip_prefix("0x")
+        .or_else(|| signature.strip_prefix("0X"))
+    else {
+        return Err(invalid_native_wallet_signature(
+            "wallet_signature must be 0x-prefixed",
+        ));
+    };
+    if encoded.len() != 130 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(invalid_native_wallet_signature(
+            "wallet_signature must be exactly one 65-byte hex signature",
+        ));
+    }
+    let v = u8::from_str_radix(&encoded[128..], 16).map_err(|_| {
+        invalid_native_wallet_signature("wallet_signature has an invalid recovery byte")
+    })?;
+    let v = match v {
+        0 | 27 => 27,
+        1 | 28 => 28,
+        _ => {
+            return Err(invalid_native_wallet_signature(
+                "wallet_signature recovery byte must be 0, 1, 27, or 28",
+            ))
+        }
+    };
+    Ok(AutonomousBountyAuthorizationSignature {
+        v,
+        r: format!("0x{}", &encoded[..64]).to_ascii_lowercase(),
+        s: format!("0x{}", &encoded[64..128]).to_ascii_lowercase(),
+    })
+}
+
+fn invalid_native_wallet_signature(message: &str) -> AgentClaimProblem {
+    agent_claim_problem(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "signature_invalid",
+        "verify_authorization",
+        message,
+        "Return the wallet's unchanged 0x-prefixed EIP-712 result in wallet_signature.",
+    )
 }
 
 fn validate_persisted_claim_candidate_scope(
@@ -4700,11 +4770,25 @@ fn signed_claim_request_template(request: &AgentNativeClaimRequest) -> serde_jso
             "solver_wallet": request.solver_wallet,
             "agent_id": request.agent_id,
             "request_bond_sponsorship": request.request_bond_sponsorship,
+            "wallet_signature": "<replace with the unchanged 0x-prefixed result from wallet_request>",
             "source": request.source
         },
-        "insert_signature_at": "body.signature",
-        "signature_schema": { "v": "integer 27 or 28", "r": "0x plus 64 hex characters", "s": "0x plus 64 hex characters" },
-        "signature_source": "the wallet signature over signing_payload"
+        "insert_signature_at": "body.wallet_signature",
+        "wallet_signature_schema": "0x plus 130 hex characters (65 bytes: r || s || v)",
+        "legacy_signature_at": "body.signature",
+        "legacy_signature_schema": { "v": "integer 0, 1, 27, or 28", "r": "0x plus 64 hex characters", "s": "0x plus 64 hex characters" },
+        "signature_source": "the unchanged wallet result from wallet_request"
+    })
+}
+
+fn eip1193_wallet_request(
+    solver_wallet: &str,
+    signing_payload: &Eip3009AuthorizationTypedData,
+) -> serde_json::Value {
+    let payload = serde_json::json!(signing_payload);
+    serde_json::json!({
+        "method": "eth_signTypedData_v4",
+        "params": [solver_wallet, payload.to_string()]
     })
 }
 
@@ -4741,6 +4825,9 @@ fn agent_claim_response(
     let sponsorship_protocol = sponsor_contract
         .as_ref()
         .map(|_| "agent-bounties/atomic-claim-sponsor-v1".to_string());
+    let wallet_request = signing_payload
+        .as_ref()
+        .map(|payload| eip1193_wallet_request(&reservation.candidate.solver_wallet, payload));
     let response = AgentNativeClaimResponse {
         schema_version: "agent-bounties/agent-native-claim-v1".to_string(),
         waitlist_position: reservation.waitlist_position,
@@ -4751,6 +4838,7 @@ fn agent_claim_response(
         sponsor_contract,
         sponsorship,
         signing_payload,
+        wallet_request,
         claim_transaction_hash: reservation.candidate.claim_transaction_hash.clone(),
         canonical_event_id: reservation.candidate.canonical_event_id,
         next_action: next_action.to_string(),
@@ -8384,6 +8472,119 @@ mod tests {
         };
         let error = joined_signature(&signature).unwrap_err();
         assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn native_wallet_signature_is_split_and_normalized() {
+        for (input_v, expected_v) in [(0_u8, 27_u8), (1, 28), (27, 27), (28, 28)] {
+            let encoded = format!("0x{}{}{:02x}", "11".repeat(32), "22".repeat(32), input_v);
+
+            let parsed = parse_native_wallet_signature(&encoded).unwrap();
+
+            assert_eq!(parsed.v, expected_v);
+            assert_eq!(parsed.r, format!("0x{}", "11".repeat(32)));
+            assert_eq!(parsed.s, format!("0x{}", "22".repeat(32)));
+            assert_eq!(
+                joined_signature(&parsed).unwrap(),
+                format!("0x{}{}{:02x}", "11".repeat(32), "22".repeat(32), expected_v)
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_native_wallet_signatures_are_rejected() {
+        let invalid = [
+            "0x01".to_string(),
+            format!("{}{}1b", "11".repeat(32), "22".repeat(32)),
+            format!("0x{}zz", "11".repeat(64)),
+            format!("0x{}{}02", "11".repeat(32), "22".repeat(32)),
+        ];
+
+        for signature in invalid {
+            let error = parse_native_wallet_signature(&signature).unwrap_err();
+            assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+    }
+
+    #[test]
+    fn agent_claim_rejects_ambiguous_signature_forms_and_preserves_legacy_form() {
+        let legacy = AutonomousBountyAuthorizationSignature {
+            v: 27,
+            r: format!("0x{}", "11".repeat(32)),
+            s: format!("0x{}", "22".repeat(32)),
+        };
+        let mut request = AgentNativeClaimRequest {
+            idempotency_key: "native-signature-test".to_string(),
+            network: Some("base-mainnet".to_string()),
+            bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            solver_wallet: "0x2222222222222222222222222222222222222222".to_string(),
+            agent_id: None,
+            request_bond_sponsorship: true,
+            signature: Some(legacy.clone()),
+            wallet_signature: None,
+            source: Some("test".to_string()),
+        };
+
+        let resolved = resolve_agent_claim_signature(&request).unwrap().unwrap();
+        assert_eq!(resolved.v, legacy.v);
+        assert_eq!(resolved.r, legacy.r);
+        assert_eq!(resolved.s, legacy.s);
+
+        request.wallet_signature = Some(format!("0x{}{}1b", "11".repeat(32), "22".repeat(32)));
+        let error = validate_agent_native_claim_request(&request).unwrap_err();
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn agent_claim_returns_an_exact_eip1193_wallet_request_and_replay_path() {
+        let payload: Eip3009AuthorizationTypedData = serde_json::from_value(serde_json::json!({
+            "types": {},
+            "domain": {
+                "name": "USD Coin",
+                "version": "2",
+                "chainId": 8453,
+                "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+            },
+            "primaryType": "ReceiveWithAuthorization",
+            "message": {
+                "from": "0x2222222222222222222222222222222222222222",
+                "to": "0x1111111111111111111111111111111111111111",
+                "value": "10000",
+                "validAfter": "0",
+                "validBefore": "1800000000",
+                "nonce": format!("0x{}", "33".repeat(32))
+            }
+        }))
+        .unwrap();
+        let solver = "0x2222222222222222222222222222222222222222";
+
+        let wallet_request = eip1193_wallet_request(solver, &payload);
+
+        assert_eq!(wallet_request["method"], "eth_signTypedData_v4");
+        assert_eq!(wallet_request["params"][0], solver);
+        let encoded_payload = wallet_request["params"][1].as_str().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(encoded_payload).unwrap(),
+            serde_json::json!(payload)
+        );
+
+        let request = AgentNativeClaimRequest {
+            idempotency_key: "wallet-request-test".to_string(),
+            network: Some("base-mainnet".to_string()),
+            bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            solver_wallet: solver.to_string(),
+            agent_id: None,
+            request_bond_sponsorship: true,
+            signature: None,
+            wallet_signature: None,
+            source: Some("test".to_string()),
+        };
+        let replay = signed_claim_request_template(&request);
+        assert_eq!(replay["insert_signature_at"], "body.wallet_signature");
+        assert!(replay["body"]["wallet_signature"]
+            .as_str()
+            .unwrap()
+            .contains("wallet_request"));
     }
 
     #[test]

@@ -141,7 +141,7 @@
     },
     "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
     "solver_bond": "claim requires a bond equal to one verifier reward; acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout moves it to the completion bonus",
-    "gas_sponsorship": "agent_native_claim is the primary path: one stable request returns an exclusive candidate or waitlist, one bounded EIP-3009 payload, optional exact capped bond sponsorship, and gas relay; only confirmed BountyClaimed activates the round. Direct wallet plans and the versioned /agent-bounty relay fallback remain available",
+    "gas_sponsorship": "agent_native_claim is the primary path: one stable request returns an exclusive candidate or waitlist, one bounded EIP-3009 payload, and an exact EIP-1193 wallet_request. Replay the wallet's native 65-byte result unchanged as wallet_signature; legacy split signatures remain accepted. Optional exact capped bond sponsorship and gas relay remain available; only confirmed BountyClaimed activates the round. Direct wallet plans and the versioned /agent-bounty relay fallback remain available",
     "funding_evidence": [
       "CanonicalBountyCreated",
       "FundingAdded",

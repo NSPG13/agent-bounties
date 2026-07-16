@@ -412,6 +412,8 @@ def main() -> int:
         if modes.get(advanced_mode, {}).get("default_for_new_bounties") is not False:
             fail(f"advanced verifier mode must not be a posting default: {advanced_mode}")
     funding = discovery.get("funding", {})
+    if "wallet_signature" not in funding.get("gas_sponsorship", ""):
+        fail("static discovery manifest must describe native claim signature replay")
     if funding.get("default_verification") != "deterministic_module":
         fail("discovery funding policy has the wrong verification default")
     if funding.get("default_verifier_module") != expected_module:
@@ -536,6 +538,8 @@ def main() -> int:
         "gh api --method PUT /user/starred/NSPG13/agent-bounties",
         "{issue_number}/reactions",
         "Never request broader GitHub access",
+        "wallet_request",
+        "next_request.body.wallet_signature",
     ]:
         if marker not in llms:
             fail(f"llms.txt missing executable post-value marker: {marker}")
