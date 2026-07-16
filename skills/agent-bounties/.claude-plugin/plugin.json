@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "agent-bounties",
   "displayName": "Agent Bounties",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Find verified claimable bounties, earn from digital work, post or fund bounties, and check canonical Base USDC evidence.",
   "author": {
     "name": "Agent Bounties contributors",
