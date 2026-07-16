@@ -850,12 +850,12 @@ fn parse_claim_comment_signal(
                     "request_bond_sponsorship": true,
                     "source": "github"
                 },
-                "result": "The first response returns candidate.status, waitlist_position, the exact indexed bond as claim_bond, sponsorship_available, signing_payload, and next_request. Sign signing_payload once and replay next_request with v/r/s. Only candidate.status=claimed plus canonical_event_id means the round is owned."
+                "result": "The first response returns candidate.status, waitlist_position, the exact indexed bond as claim_bond, sponsorship_available, wallet_request, and next_request. Send wallet_request to the solver wallet once and copy its unchanged 65-byte result into next_request.body.wallet_signature. Only candidate.status=claimed plus canonical_event_id means the round is owned."
             })
         });
         let contract_instruction = match (&bounty_contract, &solver_wallet) {
             (Some(address), Some(wallet)) => format!(
-                "Canonical contract: {address}. Public solver wallet: {wallet}. Send the machine request above, sign only its exact EIP-3009 payload, then replay the returned next_request. The service can sponsor the bounded bond and gas when eligible."
+                "Canonical contract: {address}. Public solver wallet: {wallet}. Send the machine request above, pass only the returned wallet_request to that wallet, then replay the unchanged result as next_request.body.wallet_signature. The service can sponsor the bounded bond and gas when eligible."
             ),
             (Some(address), None) => format!(
                 "Canonical contract: {address}. Add the public payout wallet to the command, for example `/claim wallet: 0xYourBaseAddress`, then send the returned machine request. Never post a private key or seed phrase."
@@ -1183,10 +1183,21 @@ fn claim_wallet_address(comment_body: &str) -> Option<String> {
 fn first_evm_address(value: &str) -> Option<String> {
     let lower = value.to_ascii_lowercase();
     for (index, _) in lower.match_indices("0x") {
-        if let Some(candidate) = value.get(index..index + 42) {
-            if candidate[2..].bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return Some(candidate.to_ascii_lowercase());
-            }
+        let end = index + 42;
+        let Some(candidate) = value.get(index..end) else {
+            continue;
+        };
+        let embedded_before = index > 0
+            && value
+                .as_bytes()
+                .get(index - 1)
+                .is_some_and(u8::is_ascii_hexdigit);
+        let embedded_after = value.as_bytes().get(end).is_some_and(u8::is_ascii_hexdigit);
+        if !embedded_before
+            && !embedded_after
+            && candidate[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Some(candidate.to_ascii_lowercase());
         }
     }
     None
@@ -2162,6 +2173,38 @@ extract-data-to-schema
         );
         assert!(signal.operator_note.contains("Public solver wallet"));
         assert!(!signal.operator_note.contains("connect the payout wallet"));
+    }
+
+    #[test]
+    fn autonomous_claim_rejects_truncated_or_embedded_wallets() {
+        for wallet in [
+            "0x11111111111111111111111111111111111111111",
+            "f0x1111111111111111111111111111111111111111",
+        ] {
+            let plan = claim_comment_plan(GitHubClaimCommentInput {
+                repository: "agent-bounties/agent-bounties".to_string(),
+                issue_url: "https://github.com/agent-bounties/agent-bounties/issues/187"
+                    .to_string(),
+                title: "[funded][claimable]: autonomous loop".to_string(),
+                body: autonomous_issue_body(Some("0x2222222222222222222222222222222222222222")),
+                comment_body: format!("/claim #187 wallet: {wallet}"),
+                contributor_login: Some("cli-agent".to_string()),
+                comment_id: Some("1876".to_string()),
+                claim_age_minutes: Some(0),
+                progress_signal_count: 0,
+                active_claim_login: None,
+            });
+
+            let request = plan
+                .signal
+                .expect("claim signal")
+                .claim_plan_request
+                .expect("machine request");
+            assert_eq!(
+                request["body"]["solver_wallet"],
+                "0xYOUR_PUBLIC_BASE_WALLET"
+            );
+        }
     }
 
     #[test]
