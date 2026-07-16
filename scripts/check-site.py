@@ -529,7 +529,10 @@ def main() -> int:
         bounded_javascript,
         [
             'CHAIN_ID = "0x2105"',
+            'createAndFund: "0x86f357d0"',
             'createWithAuthorization: "0x9b2065e0"',
+            'approve: "0x095ea7b3"',
+            'allowance: "0xdd62ed3e"',
             'predictWallet: "0x240fa116"',
             'revokePolicy: "0x9eba3667"',
             "manifest.contract_source_dirty !== false",
@@ -541,8 +544,12 @@ def main() -> int:
             "eth_signTypedData_v4",
             "clone_runtime_code_hash",
             "policy-bound wallet",
+            "Smart-account activation requires one exact USDC approval",
+            "Factory allowance was not fully consumed by activation",
         ],
     )
+    if "This owner is a contract account. Use the manifest's approve" in bounded_javascript:
+        fail("smart-account activation must use the reviewed allowance fallback instead of stopping")
     for forbidden in ["privateKey", "mnemonic", "seedInput", "wallet_import"]:
         if forbidden in bounded_javascript:
             fail(f"agent budget activation contains forbidden secret handling: {forbidden}")

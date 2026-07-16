@@ -29,6 +29,7 @@
   });
   const SELECTORS = Object.freeze({
     predictWallet: "0x240fa116",
+    createAndFund: "0x86f357d0",
     createWithAuthorization: "0x9b2065e0",
     isFactoryWallet: "0xf48f2346",
     implementation: "0x5c60da1b",
@@ -38,6 +39,8 @@
     policy: "0x0505c8c9",
     revokePolicy: "0x9eba3667",
     balanceOf: "0x70a08231",
+    allowance: "0xdd62ed3e",
+    approve: "0x095ea7b3",
   });
   const CLONE_PREFIX = "3d602d80600a3d3981f3" + "363d3d373d3d3d363d73";
   const CLONE_SUFFIX = "5af43d82803e903d91602b57fd5bf3";
@@ -443,6 +446,8 @@
       ));
       if (predicted !== derived.wallet) throw new Error("Local and on-chain wallet predictions differ.");
     }
+    const ownerCode = String(await request("eth_getCode", [state.account, "latest"])).toLowerCase();
+    const ownerIsContract = ownerCode !== "0x" && ownerCode !== "0x0";
     state.plan = {
       account: state.account,
       snapshot: snapshot(),
@@ -450,6 +455,7 @@
       policy,
       policyWords: policyWords(policy),
       userSalt,
+      ownerIsContract,
       ...derived,
     };
     form().elements.existingWallet.value = derived.wallet;
@@ -459,7 +465,9 @@
       `Initial / lifetime: ${Number(initialFunding) / 1_000_000} / ${Number(policy.maxLifetimeSpend) / 1_000_000} USDC`,
       `Per action / 24 hours: ${Number(policy.maxPerAction) / 1_000_000} / ${Number(policy.maxPerPeriod) / 1_000_000} USDC`,
       `Policy hash: ${derived.policyHash}`,
-      "Review these values. Activation requires one funding authorization and one gas transaction; future in-policy actions do not require the owner.",
+      ownerIsContract
+        ? "Smart-account activation requires one exact USDC approval and one factory transaction; future in-policy actions do not require the owner."
+        : "EOA activation requires one funding authorization and one gas transaction; future in-policy actions do not require the owner.",
     ], "pending");
     updateButtons();
   }
@@ -479,6 +487,44 @@
       await sleep(1_500);
     }
     throw new Error(`Transaction confirmation timed out: ${hashValue}`);
+  }
+
+  async function ownerFactoryAllowance() {
+    const data = `${SELECTORS.allowance}${addressWord(state.account)}${addressWord(state.manifest.wallet_factory.address)}`;
+    return resultUint(await call(state.manifest.canonical.settlement_token, data));
+  }
+
+  async function activateWithAllowance(plan) {
+    const factory = state.manifest.wallet_factory.address;
+    const token = state.manifest.canonical.settlement_token;
+    let allowance = await ownerFactoryAllowance();
+    let approvalHash = null;
+    if (allowance !== plan.initialFunding) {
+      output([
+        `Confirm an exact ${Number(plan.initialFunding) / 1_000_000} USDC approval to the reviewed factory.`,
+        `Factory: ${factory}`,
+        "This approval cannot create, fund, or settle a bounty by itself.",
+      ], "pending");
+      await ensureConnectedOwner();
+      const approvalData = `${SELECTORS.approve}${addressWord(factory)}${uintWord(plan.initialFunding)}`;
+      approvalHash = await sendTransaction(token, approvalData);
+      await waitReceipt(approvalHash);
+      allowance = await ownerFactoryAllowance();
+      if (allowance !== plan.initialFunding) throw new Error("Confirmed USDC allowance differs from the reviewed amount.");
+    }
+    const activationData = `${SELECTORS.createAndFund}`
+      + `${plan.policyWords.join("")}${bytes32Word(plan.userSalt)}${uintWord(plan.initialFunding)}`;
+    output([
+      "Approval confirmed. Confirm the zero-value factory transaction that deploys and funds only the reviewed wallet.",
+      `Wallet: ${plan.wallet}`,
+      `Policy hash: ${plan.policyHash}`,
+    ], "pending");
+    await ensureConnectedOwner();
+    const transactionHash = await sendTransaction(factory, activationData);
+    await waitReceipt(transactionHash);
+    const remainingAllowance = await ownerFactoryAllowance();
+    if (remainingAllowance !== 0n) throw new Error("Factory allowance was not fully consumed by activation.");
+    return { transactionHash, approvalHash };
   }
 
   async function deployFactory() {
@@ -547,57 +593,62 @@
       ));
       if (predicted !== state.plan.wallet) throw new Error("On-chain prediction changed after deployment.");
       const ownerCode = String(await request("eth_getCode", [state.account, "latest"])).toLowerCase();
-      if (ownerCode !== "0x" && ownerCode !== "0x0") {
-        throw new Error("This owner is a contract account. Use the manifest's approve + createWalletAndFund fallback.");
+      const ownerIsContract = ownerCode !== "0x" && ownerCode !== "0x0";
+      if (ownerIsContract !== state.plan.ownerIsContract) throw new Error("Owner account type changed. Review the exact wallet again.");
+      let txHash;
+      let approvalHash = null;
+      if (ownerIsContract) {
+        ({ transactionHash: txHash, approvalHash } = await activateWithAllowance(state.plan));
+      } else {
+        const now = await latestTimestamp();
+        const validAfter = Math.max(0, now - 1);
+        const validBefore = now + 1_800;
+        const nonce = randomBytes32();
+        const typedData = {
+          types: {
+            EIP712Domain: [
+              { name: "name", type: "string" },
+              { name: "version", type: "string" },
+              { name: "chainId", type: "uint256" },
+              { name: "verifyingContract", type: "address" },
+            ],
+            TransferWithAuthorization: [
+              { name: "from", type: "address" },
+              { name: "to", type: "address" },
+              { name: "value", type: "uint256" },
+              { name: "validAfter", type: "uint256" },
+              { name: "validBefore", type: "uint256" },
+              { name: "nonce", type: "bytes32" },
+            ],
+          },
+          primaryType: "TransferWithAuthorization",
+          domain: {
+            name: "USD Coin",
+            version: "2",
+            chainId: 8453,
+            verifyingContract: state.manifest.canonical.settlement_token,
+          },
+          message: {
+            from: state.account,
+            to: state.plan.wallet,
+            value: state.plan.initialFunding.toString(),
+            validAfter: String(validAfter),
+            validBefore: String(validBefore),
+            nonce,
+          },
+        };
+        output("Review one USDC authorization. It is bound to the exact policy-derived wallet and amount.", "pending");
+        const signature = await request("eth_signTypedData_v4", [state.account, JSON.stringify(typedData)]);
+        const parts = signatureParts(signature);
+        const activationData = `${SELECTORS.createWithAuthorization}`
+          + `${addressWord(state.account)}${state.plan.policyWords.join("")}${bytes32Word(state.plan.userSalt)}`
+          + `${uintWord(state.plan.initialFunding)}${uintWord(validAfter)}${uintWord(validBefore)}${bytes32Word(nonce)}`
+          + `${uintWord(parts.v)}${bytes32Word(parts.r)}${bytes32Word(parts.s)}`;
+        output("Authorization signed. Confirm the zero-value gas transaction that atomically deploys and funds the wallet.", "pending");
+        await ensureConnectedOwner();
+        txHash = await sendTransaction(state.manifest.wallet_factory.address, activationData);
+        await waitReceipt(txHash);
       }
-      const now = await latestTimestamp();
-      const validAfter = Math.max(0, now - 1);
-      const validBefore = now + 1_800;
-      const nonce = randomBytes32();
-      const typedData = {
-        types: {
-          EIP712Domain: [
-            { name: "name", type: "string" },
-            { name: "version", type: "string" },
-            { name: "chainId", type: "uint256" },
-            { name: "verifyingContract", type: "address" },
-          ],
-          TransferWithAuthorization: [
-            { name: "from", type: "address" },
-            { name: "to", type: "address" },
-            { name: "value", type: "uint256" },
-            { name: "validAfter", type: "uint256" },
-            { name: "validBefore", type: "uint256" },
-            { name: "nonce", type: "bytes32" },
-          ],
-        },
-        primaryType: "TransferWithAuthorization",
-        domain: {
-          name: "USD Coin",
-          version: "2",
-          chainId: 8453,
-          verifyingContract: state.manifest.canonical.settlement_token,
-        },
-        message: {
-          from: state.account,
-          to: state.plan.wallet,
-          value: state.plan.initialFunding.toString(),
-          validAfter: String(validAfter),
-          validBefore: String(validBefore),
-          nonce,
-        },
-      };
-      output("Review one USDC authorization. It is bound to the exact policy-derived wallet and amount.", "pending");
-      const signature = await request("eth_signTypedData_v4", [state.account, JSON.stringify(typedData)]);
-      const parts = signatureParts(signature);
-      const activationData = `${SELECTORS.createWithAuthorization}`
-        + `${addressWord(state.account)}${state.plan.policyWords.join("")}${bytes32Word(state.plan.userSalt)}`
-        + `${uintWord(state.plan.initialFunding)}${uintWord(validAfter)}${uintWord(validBefore)}${bytes32Word(nonce)}`
-        + `${uintWord(parts.v)}${bytes32Word(parts.r)}${bytes32Word(parts.s)}`;
-      output("Authorization signed. Confirm the zero-value gas transaction that atomically deploys and funds the wallet.", "pending");
-      await ensureConnectedOwner();
-      const txHash = await sendTransaction(state.manifest.wallet_factory.address, activationData);
-      await waitReceipt(txHash);
       const balance = await inspectActivatedWallet(state.plan);
       form().elements.existingWallet.value = state.plan.wallet;
       localStorage.setItem("agent-bounties-bounded-wallet", JSON.stringify({ owner: state.account, wallet: state.plan.wallet }));
@@ -606,6 +657,7 @@
       output([
         `Bounded wallet active: ${state.plan.wallet}`,
         `Confirmed wallet balance: ${Number(balance) / 1_000_000} USDC`,
+        ...(approvalHash ? [`Exact approval transaction: ${approvalHash}`] : []),
         `Activation transaction: ${txHash}`,
         "The delegate may now execute in-policy canonical actions without another owner prompt. Revoke here at any time.",
       ], "success");

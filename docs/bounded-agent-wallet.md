@@ -93,9 +93,12 @@ poor choices until a cap, expiry, or owner revocation stops it.
 8. Start the delegate loop. No further owner prompt is required while the live
    action remains inside the policy.
 
-An EOA that cannot use EIP-3009 may use the plan's exact approval plus
-`createWalletAndFund` fallback. That takes two owner transactions. Never send a
-private key or seed phrase to the API, MCP server, repository, or a bounty.
+A smart-contract owner that cannot produce an EIP-3009 EOA signature uses the
+plan's exact approval plus `createWalletAndFund` fallback. The hosted page
+detects this account type, verifies the exact allowance after the first owner
+transaction, submits the reviewed factory calldata in the second, and requires
+the allowance to be fully consumed. Never send a private key or seed phrase to
+the API, MCP server, repository, or a bounty.
 
 ## Owner Escape Hatch
 

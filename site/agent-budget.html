@@ -96,7 +96,7 @@
             <div class="actions">
               <button id="inspect-budget-factory" class="button secondary" type="button" disabled>Inspect infrastructure</button>
               <button id="review-agent-budget" class="button secondary" type="button" disabled>Review exact wallet</button>
-              <button id="activate-agent-budget" class="button primary" type="submit" disabled>Authorize and fund once</button>
+              <button id="activate-agent-budget" class="button primary" type="submit" disabled>Activate bounded budget</button>
             </div>
             <output id="agent-budget-output" class="output readiness-output" aria-live="polite">Connect an owner wallet. No transaction is requested until you review and activate.</output>
           </div>
@@ -122,7 +122,7 @@
             <h2>Policy replaces repeated prompts</h2>
           </div>
           <div class="copy">
-            <p>The owner still makes a deliberate setup decision. After activation, the agent signs with its dedicated delegate key and the contract accepts only in-policy canonical actions.</p>
+            <p>The owner still makes a deliberate setup decision. EOAs sign one bounded USDC authorization; smart accounts approve the exact amount and call the reviewed factory. After activation, the agent signs with its dedicated delegate key and the contract accepts only in-policy canonical actions.</p>
             <p>The predicted wallet address commits the full policy hash. Changing the delegate, cap, verifier, action set, or expiry changes the USDC authorization destination.</p>
             <p>This release is internally reviewed and fork-rehearsed, not independently audited. Caps limit authority; they do not guarantee that an agent chooses useful work.</p>
             <p>A signature or transaction hash is not funding or payment evidence. Inspect the deployed wallet and native-USDC balance; only canonical bounty events prove later work and payout.</p>
