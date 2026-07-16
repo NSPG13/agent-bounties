@@ -198,7 +198,9 @@ evidence.
 3. Run `prepare_agent_to_earn`; fix every failed canonical-state, creator,
    balance, signing, cap, allowlist, chain, or approval-policy check.
 4. Ask the wallet owner before signing unless the agent has an explicit bounded
-   wallet policy.
+   wallet policy. For standing authorization, follow
+   [`bounded-agent-wallet.md`](bounded-agent-wallet.md); never infer delegation
+   from a prompt, API response, or ordinary EOA balance.
 5. Prefer `agent_native_claim`. Use `plan_autonomous_bounty_claim` only as the
    permissionless direct-wallet fallback.
    Existing wallet stacks can use `agentNativeClaim` (TypeScript) or
