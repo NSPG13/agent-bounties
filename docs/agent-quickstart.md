@@ -135,7 +135,8 @@ const claim = await fetch(response.next_request.url, {
 });
 ```
 
-MetaMask Agent Wallet can sign the same payload with its current CLI:
+MetaMask Agent Wallet users with early access can sign the same payload with
+its current CLI:
 
 ```bash
 mm wallet sign-typed-data --chain-id 8453 --payload '<signing_payload JSON>' --wait --json
@@ -149,6 +150,11 @@ likewise return their native EIP-712 signature directly. The legacy
 `signature: {v,r,s}` request remains accepted, but callers must never provide
 both forms. Verify the payload and wallet policy before signing; a signature is
 coordination evidence, not proof of a canonical claim.
+
+MetaMask early access is not required for a standing bounded budget. On Windows,
+the [local delegate adapter](local-delegate-wallet.md) generates its own key,
+protects it with an encrypted keystore plus DPAPI, and signs only revalidated
+bounded-wallet action plans. It never imports or exposes the owner's key.
 
 For an empty wallet, request sponsorship. Continue only when
 `sponsorship_available=true` and
