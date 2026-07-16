@@ -105,6 +105,8 @@ node --check tools/autonomous-activation.js
 node scripts/test-autonomous-activation-console.js
 node --check tools/canonical-child-verifier-deployment.js
 node scripts/test-canonical-child-verifier-deployment-console.js
+node --check tools/base-sepolia-sponsor-activation.js
+node scripts/test-base-sepolia-sponsor-activation-console.js
 "${python_cmd[@]}" -m pip install -r scripts/requirements-attest.txt
 "${python_cmd[@]}" scripts/check-render-blueprint.py
 "${python_cmd[@]}" scripts/test_stage_review_contract_root.py -v
@@ -141,7 +143,8 @@ cargo run -p cli -- pooled-funding-demo
   scripts/validate_real_funding_rehearsal.py \
   scripts/rehearse_autonomous_activation.py \
   scripts/build_canonical_child_verifier_bundle.py \
-  scripts/rehearse_canonical_child_verifier.py
+  scripts/rehearse_canonical_child_verifier.py \
+  scripts/build_base_sepolia_sponsor_bundle.py
 
 cd "$repo_root/crates/sdk-typescript"
 npm ci
@@ -152,6 +155,21 @@ cd "$repo_root/contracts/base-escrow"
 forge test --fuzz-runs 1000
 
 cd "$repo_root"
+sepolia_bundle="deployments/base-sepolia-sponsor-activation.json"
+sepolia_check="target/tmp/base-sepolia-sponsor-activation.json"
+"${python_cmd[@]}" scripts/build_base_sepolia_sponsor_bundle.py \
+  --offline \
+  --deployer "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["deployer"])' "$sepolia_bundle")" \
+  --grant-signer "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["grant_signer"])' "$sepolia_bundle")" \
+  --deployer-nonce "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["preflight_block"]["deployer_nonce"])' "$sepolia_bundle")" \
+  --source-commit "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$sepolia_bundle")" \
+  --preflight-block-number "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["preflight_block"]["number"])' "$sepolia_bundle")" \
+  --preflight-block-hash "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["preflight_block"]["hash"])' "$sepolia_bundle")" \
+  --preflight-deployer-eth-wei "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["preflight_block"]["deployer_eth_wei"])' "$sepolia_bundle")" \
+  --preflight-deployer-usdc-base-units "$("${python_cmd[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["preflight_block"]["deployer_usdc_base_units"])' "$sepolia_bundle")" \
+  --output "$sepolia_check"
+cmp "$sepolia_bundle" "$sepolia_check"
+
 verifier_bundle="deployments/canonical-child-verifier-base-mainnet-deployment.json"
 verifier_check="target/tmp/canonical-child-verifier-base-mainnet-deployment.json"
 "${python_cmd[@]}" scripts/build_canonical_child_verifier_bundle.py \

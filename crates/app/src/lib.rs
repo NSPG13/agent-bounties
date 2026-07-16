@@ -145,6 +145,17 @@ pub fn build_live_money_readiness_report(
 ) -> Result<LiveMoneyReadinessReport, ChainBaseError> {
     let network_descriptor = base_network_descriptor(&config.network)?;
     let rpc_env = network_descriptor.rpc_url_env.clone();
+    let (factory_env, implementation_env) = match network_descriptor.chain_id {
+        8_453 => (
+            "BASE_MAINNET_BOUNTY_FACTORY",
+            "BASE_MAINNET_BOUNTY_IMPLEMENTATION",
+        ),
+        84_532 => (
+            "BASE_SEPOLIA_BOUNTY_FACTORY",
+            "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION",
+        ),
+        _ => unreachable!("base_network_descriptor returned an unsupported Base chain"),
+    };
     let stripe_secret_key_mode = config.stripe_secret_key_mode.trim().to_ascii_lowercase();
     let stripe_webhook_secret = config.stripe_webhook_secret_configured;
     let unsigned_stripe_webhooks = config.allow_unsigned_stripe_webhooks;
@@ -267,10 +278,7 @@ pub fn build_live_money_readiness_report(
             "Autonomous bounty factory",
             factory_configured && token_configured && token_matches_native,
             "planning canonical bounty creation, pooled funding, claims, and settlement",
-            vec![
-                "BASE_MAINNET_BOUNTY_FACTORY".to_string(),
-                "BASE_MAINNET_BOUNTY_IMPLEMENTATION".to_string(),
-            ],
+            vec![factory_env.to_string(), implementation_env.to_string()],
             if factory_configured && token_configured && token_matches_native {
                 "Canonical factory and the selected network's native USDC address are configured."
             } else if factory_configured && token_configured {
@@ -4163,6 +4171,18 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains(chain_base::BASE_SEPOLIA_USDC_TOKEN_ADDRESS)));
+        let factory_check = report
+            .checks
+            .iter()
+            .find(|check| check.name == "Autonomous bounty factory")
+            .unwrap();
+        assert_eq!(
+            factory_check.env_vars,
+            vec![
+                "BASE_SEPOLIA_BOUNTY_FACTORY".to_string(),
+                "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION".to_string(),
+            ]
+        );
     }
 
     fn stripe_funding_credit(

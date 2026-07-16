@@ -69,6 +69,8 @@ Invoke-Checked { node --check tools\autonomous-activation.js }
 Invoke-Checked { node scripts\test-autonomous-activation-console.js }
 Invoke-Checked { node --check tools\canonical-child-verifier-deployment.js }
 Invoke-Checked { node scripts\test-canonical-child-verifier-deployment-console.js }
+Invoke-Checked { node --check tools\base-sepolia-sponsor-activation.js }
+Invoke-Checked { node scripts\test-base-sepolia-sponsor-activation-console.js }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m pip install -r scripts\requirements-attest.txt }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\check-render-blueprint.py }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\test_stage_review_contract_root.py -v }
@@ -77,7 +79,7 @@ Invoke-Checked { cargo run -p cli -- demo }
 Invoke-Checked { cargo run -p cli -- pooled-funding-demo }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile crates\sdk-python\agent_bounties\client.py crates\sdk-python\agent_bounties\smoke.py crates\sdk-python\agent_bounties\__init__.py }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\diagnose_hosted_api.py scripts\test_diagnose_hosted_api.py scripts\github_audience_audit.py scripts\test_github_audience_audit.py scripts\ruleset_drift_check.py scripts\test_ruleset_drift_check.py scripts\relay_autonomous_action.py scripts\test_relay_autonomous_action.py scripts\self_heal.py scripts\test_self_heal.py scripts\github_issue_plan_comment.py scripts\github_funding_comment.py scripts\github_claim_comment.py scripts\github_proof_comment.py scripts\sync_hosted_bounty_inventory.py scripts\test_sync_hosted_bounty_inventory.py scripts\reconcile_github_bounty_labels.py scripts\test_reconcile_github_bounty_labels.py scripts\validate_real_funding_rehearsal.py }
-Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py scripts\check-migration-history.py scripts\check-render-blueprint.py scripts\stage_review_contract_root.py scripts\test_stage_review_contract_root.py scripts\rehearse_autonomous_activation.py scripts\build_canonical_child_verifier_bundle.py scripts\rehearse_canonical_child_verifier.py }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs -m py_compile scripts\check-site.py scripts\check-migration-history.py scripts\check-render-blueprint.py scripts\stage_review_contract_root.py scripts\test_stage_review_contract_root.py scripts\rehearse_autonomous_activation.py scripts\build_canonical_child_verifier_bundle.py scripts\rehearse_canonical_child_verifier.py scripts\build_base_sepolia_sponsor_bundle.py }
 Pop-Location
 
 Push-Location (Join-Path $repoRoot "crates\sdk-typescript")
@@ -89,6 +91,28 @@ Pop-Location
 Push-Location (Join-Path $repoRoot "contracts\base-escrow")
 Invoke-Checked { forge test --fuzz-runs 1000 }
 Pop-Location
+
+$sepoliaBundlePath = Join-Path $repoRoot "deployments\base-sepolia-sponsor-activation.json"
+$sepoliaBundle = Get-Content $sepoliaBundlePath -Raw | ConvertFrom-Json
+$sepoliaCheck = Join-Path $repoRoot "target\tmp\base-sepolia-sponsor-activation.json"
+Invoke-Checked {
+    & $pythonCommand.Source @pythonArgs scripts\build_base_sepolia_sponsor_bundle.py `
+        --offline `
+        --deployer $sepoliaBundle.deployer `
+        --grant-signer $sepoliaBundle.grant_signer `
+        --deployer-nonce $sepoliaBundle.preflight_block.deployer_nonce `
+        --source-commit $sepoliaBundle.source_commit `
+        --preflight-block-number $sepoliaBundle.preflight_block.number `
+        --preflight-block-hash $sepoliaBundle.preflight_block.hash `
+        --preflight-deployer-eth-wei $sepoliaBundle.preflight_block.deployer_eth_wei `
+        --preflight-deployer-usdc-base-units $sepoliaBundle.preflight_block.deployer_usdc_base_units `
+        --output $sepoliaCheck
+}
+$generatedSepoliaBundle = Get-Content $sepoliaCheck -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+$committedSepoliaBundle = $sepoliaBundle | ConvertTo-Json -Depth 100 -Compress
+if ($generatedSepoliaBundle -ne $committedSepoliaBundle) {
+    throw "deployments/base-sepolia-sponsor-activation.json is stale; regenerate it with build_base_sepolia_sponsor_bundle.py"
+}
 
 $verifierBundlePath = Join-Path $repoRoot "deployments\canonical-child-verifier-base-mainnet-deployment.json"
 $verifierBundle = Get-Content $verifierBundlePath -Raw | ConvertFrom-Json
