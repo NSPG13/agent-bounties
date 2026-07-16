@@ -32,8 +32,8 @@ the MCP tool `agent_native_claim`. Call it without a signature first. It
 returns exactly one of these actionable states:
 
 - `waitlisted`: wait; do not sign yet;
-- `authorization_ready`: sign only `signing_payload`, then replay the returned
-  `next_request` with `v`, `r`, and `s`;
+- `authorization_ready`: send the exact `wallet_request`, then copy its native
+  65-byte result unchanged into `next_request.body.wallet_signature`;
 - `relaying`: replay the same idempotent request while confirmation is pending;
 - `claimed`: canonical `BountyClaimed` is confirmed; start the task;
 - `failed`: read `failed_transition`, `error`, and `next_action`.

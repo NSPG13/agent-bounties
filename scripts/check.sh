@@ -145,10 +145,12 @@ cargo run -p cli -- pooled-funding-demo
   scripts/build_canonical_child_verifier_bundle.py \
   scripts/rehearse_canonical_child_verifier.py \
   scripts/build_base_sepolia_sponsor_bundle.py
+"${python_cmd[@]}" -m pip install -e crates/sdk-python
+"${python_cmd[@]}" -m unittest discover -s crates/sdk-python/tests -t crates/sdk-python -v
 
 cd "$repo_root/crates/sdk-typescript"
 npm ci
-npm run build
+npm test
 npm run check:examples
 
 cd "$repo_root/contracts/base-escrow"

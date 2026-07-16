@@ -141,6 +141,8 @@ export interface AgentNativeClaimRequest {
   solver_wallet: string;
   agent_id?: string | null;
   request_bond_sponsorship?: boolean;
+  wallet_signature?: string;
+  signature?: AutonomousAuthorizationSignature;
   source?: string;
 }
 
@@ -155,6 +157,10 @@ export interface AgentNativeClaimResponse {
   sponsor_contract?: string | null;
   sponsorship?: Record<string, unknown> | null;
   signing_payload?: Record<string, unknown> | null;
+  wallet_request?: {
+    method: "eth_signTypedData_v4";
+    params: [string, string];
+  } | null;
   claim_transaction_hash?: string | null;
   canonical_event_id?: string | null;
   next_action: string;
@@ -165,7 +171,8 @@ export interface AgentNativeClaimResponse {
 
 export type AgentClaimSigner = (
   signingPayload: Record<string, unknown>,
-) => Promise<AutonomousAuthorizationSignature>;
+  walletRequest?: NonNullable<AgentNativeClaimResponse["wallet_request"]>,
+) => Promise<string | AutonomousAuthorizationSignature>;
 
 export interface AgentClaimLoopOptions {
   pollIntervalMs?: number;
@@ -958,7 +965,7 @@ export class AgentBountiesClient {
     signer?: AgentClaimSigner,
     options: AgentClaimLoopOptions = {},
   ): Promise<AgentNativeClaimResponse> {
-    const body: AgentNativeClaimRequest & { signature?: AutonomousAuthorizationSignature } = {
+    const body: AgentNativeClaimRequest = {
       ...request,
       idempotency_key: request.idempotency_key ?? `sdk-typescript-${globalThis.crypto.randomUUID()}`,
       network: request.network ?? "base-mainnet",
@@ -971,11 +978,18 @@ export class AgentBountiesClient {
     })) as AgentNativeClaimResponse;
     if (!signer || !response.signing_payload) return response;
 
-    const signature = await signer(response.signing_payload);
-    if (!signature?.r || !signature?.s || !Number.isInteger(signature.v)) {
-      throw new Error("agent claim signer must return v, r, and s");
+    const signature = await signer(response.signing_payload, response.wallet_request ?? undefined);
+    if (typeof signature === "string") {
+      if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) {
+        throw new Error("agent claim signer must return one 65-byte 0x-prefixed signature");
+      }
+      body.wallet_signature = signature;
+    } else {
+      if (!signature?.r || !signature?.s || !Number.isInteger(signature.v)) {
+        throw new Error("agent claim signer must return a wallet signature or legacy v, r, and s");
+      }
+      body.signature = signature;
     }
-    body.signature = signature;
     const deadline = Date.now() + (options.timeoutMs ?? 60_000);
     while (true) {
       response = (await this.request("/v1/base/autonomous-bounties/claims", {

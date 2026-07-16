@@ -329,6 +329,7 @@ struct AgentNativeClaimArgs {
     #[serde(default)]
     request_bond_sponsorship: bool,
     signature: Option<AutonomousBountyAuthorizationSignature>,
+    wallet_signature: Option<String>,
     source: Option<String>,
 }
 
@@ -1433,7 +1434,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "agent_native_claim",
-            "Primary earning-loop claim tool. Reserve an exclusive candidate or waitlist position, receive one exact EIP-3009 signing payload, then replay with its v/r/s signature. When eligible, the hosted service atomically provides the exact capped solver bond and claims in one all-or-nothing transaction while paying gas; there is no separate grant transaction. The response reports the sponsor protocol/contract, exact failed transition, or confirmed canonical BountyClaimed event.",
+            "Primary earning-loop claim tool. Reserve an exclusive candidate or waitlist position, send the exact returned EIP-1193 wallet_request to the solver wallet, then replay its unchanged 65-byte result as wallet_signature. Legacy v/r/s input remains accepted. When eligible, the hosted service atomically provides the exact capped solver bond and claims in one all-or-nothing transaction while paying gas; there is no separate grant transaction. The response reports the sponsor protocol/contract, exact failed transition, or confirmed canonical BountyClaimed event.",
             object_tool_schema(
                 json!({
                     "idempotency_key": string_property("Stable 1-128 character key reused for every retry of this wallet+bounty claim."),
@@ -1444,6 +1445,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "request_bond_sponsorship": boolean_property("Ask the configured sponsor vault to provide the exact capped USDC bond and call claim atomically after one solver signature. The response states availability and identifies the protocol/contract."),
                     "signature": {
                         "type": ["object", "null"],
+                        "description": "Legacy split signature. Omit when wallet_signature is provided.",
                         "properties": {
                             "v": integer_property("EIP-3009 recovery id: 0, 1, 27, or 28."),
                             "r": string_property("0x-prefixed bytes32 signature r."),
@@ -1452,6 +1454,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                         "required": ["v", "r", "s"],
                         "additionalProperties": false
                     },
+                    "wallet_signature": nullable_string_property("Preferred unchanged 0x-prefixed 65-byte result returned by wallet_request. Do not provide this together with signature."),
                     "source": nullable_string_property("Compact discovery/tool source such as github, mcp, curl, python, or cast.")
                 }),
                 &["idempotency_key", "bounty_contract", "solver_wallet", "request_bond_sponsorship"],
@@ -4838,6 +4841,22 @@ mod tests {
             false
         );
         assert!(prepare_agent.authorization.is_none());
+
+        let agent_claim = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "agent_native_claim")
+            .expect("agent_native_claim descriptor exists");
+        assert_eq!(
+            agent_claim.input_schema["properties"]["wallet_signature"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        assert!(
+            agent_claim.input_schema["properties"]["wallet_signature"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged")
+        );
+        assert!(agent_claim.authorization.is_none());
 
         let prepare_submission = descriptors
             .iter()

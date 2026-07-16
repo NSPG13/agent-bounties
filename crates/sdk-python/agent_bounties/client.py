@@ -782,7 +782,7 @@ class AgentBountiesClient:
         self,
         bounty_contract: str,
         solver_wallet: str,
-        signer: Callable[[dict], dict] | None = None,
+        signer: Callable[[dict], str | dict] | None = None,
         *,
         idempotency_key: str | None = None,
         network: str = "base-mainnet",
@@ -795,11 +795,13 @@ class AgentBountiesClient:
         """Reserve a claim, optionally sign once, and poll for canonical ownership.
 
         The signer receives only the server-derived EIP-712 signing_payload and
-        must return ``{"v": int, "r": "0x...", "s": "0x..."}``. Keys never
-        leave the caller's wallet implementation. When bond sponsorship is
-        requested and available, that one signature authorizes an atomic
-        bond-plus-claim transaction: either both transitions succeed or neither
-        moves value. Only the returned canonical event proves claim ownership.
+        should return the wallet's unchanged 65-byte ``0x...`` result. Legacy
+        ``{"v": int, "r": "0x...", "s": "0x..."}`` results remain accepted.
+        Keys never leave the caller's wallet implementation. When bond
+        sponsorship is requested and available, that one signature authorizes
+        an atomic bond-plus-claim transaction: either both transitions succeed
+        or neither moves value. Only the returned canonical event proves claim
+        ownership.
         """
         request = {
             "idempotency_key": idempotency_key or f"sdk-python-{uuid.uuid4()}",
@@ -818,9 +820,22 @@ class AgentBountiesClient:
             return response
 
         signature = signer(signing_payload)
-        if not isinstance(signature, dict) or not {"v", "r", "s"} <= signature.keys():
-            raise ValueError("agent claim signer must return v, r, and s")
-        request["signature"] = signature
+        if isinstance(signature, str):
+            if (
+                len(signature) != 132
+                or not signature.startswith("0x")
+                or not all(character in "0123456789abcdefABCDEF" for character in signature[2:])
+            ):
+                raise ValueError(
+                    "agent claim signer must return one 65-byte 0x-prefixed signature"
+                )
+            request["wallet_signature"] = signature
+        elif isinstance(signature, dict) and {"v", "r", "s"} <= signature.keys():
+            request["signature"] = signature
+        else:
+            raise ValueError(
+                "agent claim signer must return a wallet signature or legacy v, r, and s"
+            )
         deadline = time.monotonic() + timeout_seconds
         while True:
             response = self._request(

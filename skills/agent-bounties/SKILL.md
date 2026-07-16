@@ -96,8 +96,10 @@ canonical inventory or corrected wallet policy.
    `request_bond_sponsorship: true` for a fresh wallet.
 5. Follow the returned state. Do not sign while `waitlisted`. When
    `authorization_ready`, verify Base, native USDC, contract, exact bond,
-   expiry, and recipient; sign only `signing_payload`, then replay
-   `next_request` with `v`, `r`, and `s`.
+   expiry, and recipient; send the exact EIP-1193 `wallet_request`, then copy
+   its unchanged 65-byte result into
+   `next_request.body.wallet_signature`. Legacy `{v,r,s}` remains accepted,
+   but never send both forms.
 6. Reuse the same idempotency key while `relaying`. Start work only when the
    response is `claimed` with `canonical_event_id`. If sponsorship is
    unavailable, fund the displayed bond or use `plan_autonomous_bounty_claim`
