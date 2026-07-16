@@ -383,8 +383,6 @@ def claim_recovery_descriptor(
         contract = str(record.get("bounty_contract") or "").lower()
         if source_url == issue_url or (source_url, contract) not in (earning_pairs or set()):
             continue
-        terms = record.get("terms") if isinstance(record.get("terms"), dict) else {}
-        document = terms.get("document") if isinstance(terms.get("document"), dict) else {}
         source_issue_number = source_url.rsplit("/", 1)[-1]
         solver_reward = require_amount(record, "solver_reward")
         claim_bond = require_amount(record, "claim_bond")
@@ -392,7 +390,6 @@ def claim_recovery_descriptor(
             {
                 "source_issue_number": int(source_issue_number),
                 "source_url": source_url,
-                "title": str(document.get("title") or "Canonical claimable bounty"),
                 "bounty_contract": contract,
                 "solver_reward_usdc_base_units": str(solver_reward),
                 "claim_bond_usdc_base_units": str(claim_bond),
