@@ -134,6 +134,13 @@ aggregate candidate, signing, relay, canonical-claim, sponsorship, and failure
 counts without exposing wallet addresses or signatures. Treat those rows as
 coordination telemetry; only canonical events prove claims and payouts.
 
+In `agent-bounties/claim-funnel-v2`, `stages` and `sponsorship` describe only
+the hosted candidate path. `canonical_outcomes` separately counts every
+indexed `BountyClaimed`, `SubmissionAdded`, and `BountySettled` event in the
+window, including repeat paid solvers. A claim under
+`unattributed_claims_confirmed` was not linked to a hosted candidate; that does
+not prove which direct wallet, relay, or client produced it.
+
 Do not claim an issue labeled `recovery-reserved`. Its contract may be
 technically claimable after a timeout while the existing solver is still owed
 incident recovery. The GitHub workflow intentionally withholds the wallet

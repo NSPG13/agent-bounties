@@ -163,6 +163,18 @@ pub struct ClaimSponsorshipFunnelCounts {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CanonicalClaimOutcomeCounts {
+    pub claims_confirmed: u64,
+    pub unique_claimed_solver_wallets: u64,
+    pub hosted_claims_confirmed: u64,
+    pub unattributed_claims_confirmed: u64,
+    pub submissions_confirmed: u64,
+    pub settlements_confirmed: u64,
+    pub unique_paid_solver_wallets: u64,
+    pub repeat_paid_solver_wallets: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ClaimFunnelStats {
     pub schema_version: String,
     pub window_hours: u32,
@@ -170,6 +182,7 @@ pub struct ClaimFunnelStats {
     pub generated_at: DateTime<Utc>,
     pub stages: ClaimFunnelStageCounts,
     pub sponsorship: ClaimSponsorshipFunnelCounts,
+    pub canonical_outcomes: CanonicalClaimOutcomeCounts,
     pub failure_codes: BTreeMap<String, u64>,
     pub evidence_boundary: String,
 }
@@ -1264,6 +1277,71 @@ impl PostgresStore {
                 .claimed_canonical
                 .saturating_sub(sponsored_claims_confirmed),
         };
+        let canonical_row = sqlx::query(
+            r#"
+            WITH window_events AS (
+              SELECT id, kind, NULLIF(lower(data->>'solver'), '') AS solver_wallet
+              FROM autonomous_bounty_events
+              WHERE occurred_at >= $1
+                AND kind IN ('bounty_claimed', 'submission_added', 'bounty_settled')
+            ), paid_solvers AS (
+              SELECT solver_wallet, COUNT(*) AS settlement_count
+              FROM window_events
+              WHERE kind = 'bounty_settled' AND solver_wallet IS NOT NULL
+              GROUP BY solver_wallet
+            )
+            SELECT
+              COUNT(*) FILTER (WHERE event.kind = 'bounty_claimed') AS claims_confirmed,
+              COUNT(DISTINCT event.solver_wallet) FILTER (
+                WHERE event.kind = 'bounty_claimed'
+              ) AS unique_claimed_solver_wallets,
+              COUNT(*) FILTER (
+                WHERE event.kind = 'bounty_claimed'
+                  AND EXISTS (
+                    SELECT 1 FROM claim_candidates candidate
+                    WHERE candidate.canonical_event_id = event.id
+                  )
+              ) AS hosted_claims_confirmed,
+              COUNT(*) FILTER (
+                WHERE event.kind = 'bounty_claimed'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM claim_candidates candidate
+                    WHERE candidate.canonical_event_id = event.id
+                  )
+              ) AS unattributed_claims_confirmed,
+              COUNT(*) FILTER (WHERE event.kind = 'submission_added') AS submissions_confirmed,
+              COUNT(*) FILTER (WHERE event.kind = 'bounty_settled') AS settlements_confirmed,
+              COUNT(DISTINCT event.solver_wallet) FILTER (
+                WHERE event.kind = 'bounty_settled'
+              ) AS unique_paid_solver_wallets,
+              (SELECT COUNT(*) FROM paid_solvers WHERE settlement_count > 1)
+                AS repeat_paid_solver_wallets
+            FROM window_events event
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_one(&self.pool)
+        .await?;
+        let canonical_outcomes = CanonicalClaimOutcomeCounts {
+            claims_confirmed: u64_from_i64(canonical_row.try_get("claims_confirmed")?)?,
+            unique_claimed_solver_wallets: u64_from_i64(
+                canonical_row.try_get("unique_claimed_solver_wallets")?,
+            )?,
+            hosted_claims_confirmed: u64_from_i64(
+                canonical_row.try_get("hosted_claims_confirmed")?,
+            )?,
+            unattributed_claims_confirmed: u64_from_i64(
+                canonical_row.try_get("unattributed_claims_confirmed")?,
+            )?,
+            submissions_confirmed: u64_from_i64(canonical_row.try_get("submissions_confirmed")?)?,
+            settlements_confirmed: u64_from_i64(canonical_row.try_get("settlements_confirmed")?)?,
+            unique_paid_solver_wallets: u64_from_i64(
+                canonical_row.try_get("unique_paid_solver_wallets")?,
+            )?,
+            repeat_paid_solver_wallets: u64_from_i64(
+                canonical_row.try_get("repeat_paid_solver_wallets")?,
+            )?,
+        };
         let failure_rows = sqlx::query(
             r#"
             SELECT failure_code, COUNT(*) AS count
@@ -1284,14 +1362,15 @@ impl PostgresStore {
             );
         }
         Ok(ClaimFunnelStats {
-            schema_version: "agent-bounties/claim-funnel-v1".to_string(),
+            schema_version: "agent-bounties/claim-funnel-v2".to_string(),
             window_hours,
             window_started_at,
             generated_at,
             stages,
             sponsorship,
+            canonical_outcomes,
             failure_codes,
-            evidence_boundary: "Candidate and sponsorship rows measure hosted coordination. Only confirmed canonical BountyClaimed events count as claims, and only canonical BountySettled events prove payout.".to_string(),
+            evidence_boundary: "Stages and sponsorship measure hosted coordination. Canonical outcomes count indexed contract events across every path; an unattributed claim is not proof of a specific client. Only confirmed canonical BountyClaimed events count as claims, and only canonical BountySettled events prove payout.".to_string(),
         })
     }
 
@@ -4649,8 +4728,9 @@ mod tests {
             .mark_claim_candidate_relaying(direct.id, &format!("0x{}", "22".repeat(32)))
             .await
             .unwrap();
+        let direct_claim_event_id = Uuid::new_v4();
         store
-            .mark_claim_candidate_claimed(direct.id, Uuid::new_v4())
+            .mark_claim_candidate_claimed(direct.id, direct_claim_event_id)
             .await
             .unwrap();
 
@@ -4692,10 +4772,93 @@ mod tests {
             )
             .await
             .unwrap();
+        let sponsored_claim_event_id = Uuid::new_v4();
         store
-            .mark_atomic_sponsored_claim_confirmed(sponsored.id, sponsorship.id, Uuid::new_v4(), 1)
+            .mark_atomic_sponsored_claim_confirmed(
+                sponsored.id,
+                sponsorship.id,
+                sponsored_claim_event_id,
+                1,
+            )
             .await
             .unwrap();
+
+        let event = |id: Uuid,
+                     kind: AutonomousBountyEventKind,
+                     bounty_contract: &str,
+                     solver_wallet: &str,
+                     block_number: u64| {
+            let tx_hash = format!("0x{}", Uuid::new_v4().simple().to_string().repeat(2));
+            AutonomousBountyEvent {
+                id,
+                log_key: format!("{tx_hash}:0"),
+                tx_hash,
+                block_number,
+                log_index: 0,
+                contract_address: bounty_contract.to_string(),
+                bounty_id: format!("0x{}", Uuid::new_v4().simple().to_string().repeat(2)),
+                kind,
+                data: serde_json::json!({"round": 1, "solver": solver_wallet}),
+                occurred_at: Utc::now(),
+            }
+        };
+        let mut events = Vec::new();
+        {
+            let mut add_loop =
+                |claim_id: Uuid, bounty_contract: &str, solver_wallet: &str, first_block: u64| {
+                    events.extend([
+                        event(
+                            claim_id,
+                            AutonomousBountyEventKind::BountyClaimed,
+                            bounty_contract,
+                            solver_wallet,
+                            first_block,
+                        ),
+                        event(
+                            Uuid::new_v4(),
+                            AutonomousBountyEventKind::SubmissionAdded,
+                            bounty_contract,
+                            solver_wallet,
+                            first_block + 1,
+                        ),
+                        event(
+                            Uuid::new_v4(),
+                            AutonomousBountyEventKind::BountySettled,
+                            bounty_contract,
+                            solver_wallet,
+                            first_block + 2,
+                        ),
+                    ]);
+                };
+            add_loop(
+                direct_claim_event_id,
+                &direct.bounty_contract,
+                &direct.solver_wallet,
+                1,
+            );
+            add_loop(
+                sponsored_claim_event_id,
+                &sponsored.bounty_contract,
+                &sponsored.solver_wallet,
+                4,
+            );
+            let unattributed_solver = address(Uuid::new_v4());
+            for offset in 0..2_u64 {
+                let bounty_contract = address(Uuid::new_v4());
+                add_loop(
+                    Uuid::new_v4(),
+                    &bounty_contract,
+                    &unattributed_solver,
+                    7 + offset * 3,
+                );
+            }
+        }
+        for event in events {
+            store
+                .upsert_autonomous_bounty_event(&network, &event)
+                .await
+                .unwrap();
+        }
 
         let observed = store.claim_funnel_stats(1).await.unwrap();
         assert_eq!(observed.stages.observed, baseline.stages.observed + 2);
@@ -4722,6 +4885,38 @@ mod tests {
         assert_eq!(
             observed.sponsorship.direct_claims_confirmed,
             baseline.sponsorship.direct_claims_confirmed + 1
+        );
+        assert_eq!(
+            observed.canonical_outcomes.claims_confirmed,
+            baseline.canonical_outcomes.claims_confirmed + 4
+        );
+        assert_eq!(
+            observed.canonical_outcomes.unique_claimed_solver_wallets,
+            baseline.canonical_outcomes.unique_claimed_solver_wallets + 3
+        );
+        assert_eq!(
+            observed.canonical_outcomes.hosted_claims_confirmed,
+            baseline.canonical_outcomes.hosted_claims_confirmed + 2
+        );
+        assert_eq!(
+            observed.canonical_outcomes.unattributed_claims_confirmed,
+            baseline.canonical_outcomes.unattributed_claims_confirmed + 2
+        );
+        assert_eq!(
+            observed.canonical_outcomes.submissions_confirmed,
+            baseline.canonical_outcomes.submissions_confirmed + 4
+        );
+        assert_eq!(
+            observed.canonical_outcomes.settlements_confirmed,
+            baseline.canonical_outcomes.settlements_confirmed + 4
+        );
+        assert_eq!(
+            observed.canonical_outcomes.unique_paid_solver_wallets,
+            baseline.canonical_outcomes.unique_paid_solver_wallets + 3
+        );
+        assert_eq!(
+            observed.canonical_outcomes.repeat_paid_solver_wallets,
+            baseline.canonical_outcomes.repeat_paid_solver_wallets + 1
         );
     }
 
