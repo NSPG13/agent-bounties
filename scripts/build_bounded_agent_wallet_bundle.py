@@ -19,7 +19,7 @@ BOUNTY_FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 VERIFIER = "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e"
 SALT_LABEL = "agent-bounties/base-mainnet/bounded-agent-wallet-factory/v1"
-SOURCE_INPUTS = ("contracts/base-escrow/src", "contracts/base-escrow/foundry.toml")
+SOURCE_INPUTS = ("contracts/base-escrow",)
 
 
 def executable(name: str) -> str:
@@ -157,9 +157,8 @@ def build_bundle() -> dict:
     clone_runtime = f"0x363d3d373d3d3d363d73{implementation[2:]}5af43d82803e903d91602b57fd5bf3"
     return {
         "schema": "agent-bounties/bounded-agent-wallet-deployment-v1",
-        "contract_source_revision": run(
-            ["git", "log", "-1", "--format=%H", "--", *SOURCE_INPUTS]
-        ),
+        "contract_source_revision": run(["git", "rev-parse", "HEAD:contracts/base-escrow"]),
+        "contract_source_revision_kind": "git-tree",
         "contract_source_dirty": bool(
             run(["git", "status", "--short", "--", *SOURCE_INPUTS])
         ),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -533,7 +534,7 @@ def main() -> int:
             'revokePolicy: "0x9eba3667"',
             "manifest.contract_source_dirty !== false",
             "contract_source_revision",
-            "sourceRevision: \"af10c827244a0d16b71340175019c78c61f30267\"",
+            "contract_source_revision_kind",
             "ensureConnectedOwner",
             "eth_getBlockByNumber",
             "wallet_switchEthereumChain",
@@ -551,8 +552,19 @@ def main() -> int:
         fail("bounded-wallet deployment manifest must target Base mainnet")
     if bounded_deployment.get("contract_source_dirty") is not False:
         fail("bounded-wallet deployment manifest must come from committed contract source")
+    if bounded_deployment.get("contract_source_revision_kind") != "git-tree":
+        fail("bounded-wallet deployment manifest must pin a content-addressed Git tree")
     if not re.fullmatch(r"[0-9a-f]{40}", bounded_deployment.get("contract_source_revision", "")):
         fail("bounded-wallet deployment manifest must pin a contract source revision")
+    observed_tree = subprocess.run(
+        ["git", "rev-parse", "HEAD:contracts/base-escrow"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if bounded_deployment["contract_source_revision"] != observed_tree:
+        fail("bounded-wallet deployment manifest Git tree does not match contracts/base-escrow")
     contract_dir = repo_root / "contracts" / "base-escrow" / "src"
     source_files = {path.stem: path for path in contract_dir.glob("*.sol")}
     recorded_sources = bounded_deployment.get("contracts", {})

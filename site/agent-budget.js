@@ -15,7 +15,7 @@
   const CHAIN_ID = "0x2105";
   const ZERO_HASH = `0x${"00".repeat(32)}`;
   const EXPECTED = Object.freeze({
-    sourceRevision: "af10c827244a0d16b71340175019c78c61f30267",
+    sourceRevision: "7708253cd4914eaa06109523f565751f7d83b6f1",
     bountyFactory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     settlementToken: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     deterministicVerifier: "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
@@ -149,6 +149,9 @@
     if (manifest.contract_source_dirty !== false
       || !/^[0-9a-f]{40}$/i.test(String(manifest.contract_source_revision || ""))) {
       throw new Error("The bounded-wallet manifest is stale or was generated from uncommitted contract source.");
+    }
+    if (manifest.contract_source_revision_kind !== "git-tree") {
+      throw new Error("The bounded-wallet manifest does not use a content-addressed source tree.");
     }
     const pinned = [
       [manifest.contract_source_revision, EXPECTED.sourceRevision, "source revision"],

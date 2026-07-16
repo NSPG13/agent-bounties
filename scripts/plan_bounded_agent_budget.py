@@ -91,6 +91,8 @@ def validate_manifest(manifest: dict) -> dict:
         raise SystemExit("bounded-wallet manifest must target Base mainnet")
     if manifest.get("contract_source_dirty") is not False:
         raise SystemExit("bounded-wallet manifest was generated from dirty contract inputs")
+    if manifest.get("contract_source_revision_kind") != "git-tree":
+        raise SystemExit("bounded-wallet manifest must use a content-addressed Git tree revision")
     if not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("contract_source_revision", ""))):
         raise SystemExit("bounded-wallet manifest does not pin a source revision")
     canonical = manifest.get("canonical") or {}
