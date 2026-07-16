@@ -36,6 +36,9 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: unit-tests
     runs-on: ubuntu-latest
+    concurrency:
+      group: canonical-github-bounty-reconciliation
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write
@@ -44,7 +47,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Reconcile GitHub labels from canonical Base state
+      - name: Reconcile GitHub state from canonical Base evidence
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
