@@ -18,6 +18,7 @@ from typing import Any, Callable
 SCHEMA = "agent-bounties/render-deploy-evidence-v1"
 REPOSITORY = "github.com/nspg13/agent-bounties"
 PROTOCOL = "agent-bounties/autonomous-v1"
+HEALTH_STABILITY_PROBES = 8
 ACTIVE_STATUSES = {
     "created",
     "queued",
@@ -344,10 +345,18 @@ def poll_deploys(
 
 
 def fetch_health(url: str, timeout_seconds: float) -> tuple[int, str, dict[str, str]]:
+    separator = "&" if "?" in url else "?"
+    probe_url = f"{url}{separator}_agent_bounties_probe={time.time_ns()}"
     request = urllib.request.Request(
-        url,
+        probe_url,
         method="GET",
-        headers={"Accept": "text/plain", "User-Agent": "agent-bounties-render-recovery/1"},
+        headers={
+            "Accept": "text/plain",
+            "Cache-Control": "no-cache, no-store",
+            "Connection": "close",
+            "Pragma": "no-cache",
+            "User-Agent": "agent-bounties-render-recovery/1",
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
@@ -394,16 +403,26 @@ def wait_for_health(
     probe: Callable[[str, float], tuple[int, str, dict[str, str]]] = fetch_health,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
+    required_consecutive: int = HEALTH_STABILITY_PROBES,
 ) -> dict[str, Any]:
     if spec.health_url is None:
         raise RecoveryError(f"{spec.name} has no public health contract")
+    if required_consecutive < 1:
+        raise RecoveryError("health stability probe count must be positive")
     deadline = clock() + timeout_seconds
     last_error = "health did not become ready"
+    consecutive = 0
     while True:
         try:
-            return validate_health(spec.name, revision, probe(spec.health_url, 10))
+            evidence = validate_health(spec.name, revision, probe(spec.health_url, 10))
+            consecutive += 1
+            if consecutive >= required_consecutive:
+                evidence["consecutive_exact_probes"] = consecutive
+                evidence["stability_window_seconds"] = (consecutive - 1) * poll_seconds
+                return evidence
         except RecoveryError as error:
             last_error = str(error)
+            consecutive = 0
         if clock() >= deadline:
             raise RecoveryError(f"{spec.name} health verification timed out: {last_error}")
         sleeper(poll_seconds)

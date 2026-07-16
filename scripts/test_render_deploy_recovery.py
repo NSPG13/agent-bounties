@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("render_deploy_recovery.py")
@@ -259,6 +260,109 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         wrong = (200, "ok", {**response[2], "x-agent-bounties-revision": "b" * 40})
         with self.assertRaisesRegex(recovery.RecoveryError, "different revision"):
             recovery.validate_health("api", revision, wrong)
+
+    def test_health_transport_bypasses_cache_and_closes_each_connection(self) -> None:
+        class Response:
+            status = 200
+            headers = {
+                "X-Agent-Bounties-Revision": "a" * 40,
+                "X-Agent-Bounties-Protocol": recovery.PROTOCOL,
+            }
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            @staticmethod
+            def read():
+                return b"ok"
+
+        with mock.patch.object(
+            recovery.urllib.request, "urlopen", return_value=Response()
+        ) as urlopen:
+            status, body, _headers = recovery.fetch_health(
+                "https://example.test/health?existing=1", 5
+            )
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "ok")
+        self.assertIn("existing=1&_agent_bounties_probe=", request.full_url)
+        self.assertEqual(request.get_header("Cache-control"), "no-cache, no-store")
+        self.assertEqual(request.get_header("Connection"), "close")
+
+    def test_health_wait_requires_a_stable_exact_revision_window(self) -> None:
+        revision = "a" * 40
+        exact = (
+            200,
+            "ok",
+            {
+                "x-agent-bounties-revision": revision,
+                "x-agent-bounties-protocol": recovery.PROTOCOL,
+            },
+        )
+        stale = (
+            200,
+            "ok",
+            {
+                "x-agent-bounties-revision": "b" * 40,
+                "x-agent-bounties-protocol": recovery.PROTOCOL,
+            },
+        )
+        responses = [exact, exact, stale, exact, exact, exact]
+        clock = FakeClock()
+
+        def probe(_url, _timeout):
+            return responses.pop(0)
+
+        result = recovery.wait_for_health(
+            recovery.SERVICE_SPECS[0],
+            revision,
+            timeout_seconds=20,
+            poll_seconds=1,
+            probe=probe,
+            clock=clock,
+            sleeper=clock.sleep,
+            required_consecutive=3,
+        )
+
+        self.assertEqual(result["consecutive_exact_probes"], 3)
+        self.assertEqual(result["stability_window_seconds"], 2)
+        self.assertEqual(responses, [])
+
+    def test_health_wait_fails_when_old_and_new_revisions_keep_alternating(self) -> None:
+        revision = "a" * 40
+        calls = 0
+        clock = FakeClock()
+
+        def probe(_url, _timeout):
+            nonlocal calls
+            calls += 1
+            observed = revision if calls % 2 else "b" * 40
+            return (
+                200,
+                "ok",
+                {
+                    "x-agent-bounties-revision": observed,
+                    "x-agent-bounties-protocol": recovery.PROTOCOL,
+                },
+            )
+
+        with self.assertRaisesRegex(recovery.RecoveryError, "timed out"):
+            recovery.wait_for_health(
+                recovery.SERVICE_SPECS[0],
+                revision,
+                timeout_seconds=4,
+                poll_seconds=1,
+                probe=probe,
+                clock=clock,
+                sleeper=clock.sleep,
+                required_consecutive=3,
+            )
+
+        self.assertGreaterEqual(calls, 5)
 
     def test_redaction_removes_credentials(self) -> None:
         value = recovery.redact(
