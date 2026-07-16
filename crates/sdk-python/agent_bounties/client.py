@@ -7,6 +7,19 @@ from typing import Callable
 import httpx
 
 
+class AgentBountiesHttpError(httpx.HTTPStatusError):
+    """HTTP error that preserves the platform's parsed machine-readable problem."""
+
+    def __init__(self, response: httpx.Response, body):
+        super().__init__(
+            f"{response.request.url.path} failed: {response.status_code}",
+            request=response.request,
+            response=response,
+        )
+        self.status_code = response.status_code
+        self.body = body
+
+
 def hash_artifact(body: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
@@ -53,8 +66,13 @@ class AgentBountiesClient:
             headers=self._headers(),
             timeout=30,
         )
-        response.raise_for_status()
-        return response.json()
+        try:
+            body = response.json()
+        except ValueError:
+            body = {"error": response.text or f"HTTP {response.status_code}"}
+        if response.is_error:
+            raise AgentBountiesHttpError(response, body)
+        return body
 
     def route_blocked_goal(self, goal: str, context: str, budget_minor: int, currency: str = "usdc", privacy: str = "Public"):
         return self._request(
