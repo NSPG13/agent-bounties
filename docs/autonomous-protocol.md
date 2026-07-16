@@ -334,6 +334,17 @@ templates. It cannot sign, broadcast, publish, verify, settle, or prove payout.
 The relay comment and transaction hash are transport evidence only. Canonical
 events remain the lifecycle and payout evidence.
 
+### Standing Agent Authority
+
+`BoundedAgentWallet` is an optional account layer, not a new settlement path.
+Its owner can precommit a delegate, expiry, canonical actions, exact verifier
+configuration, bounty-size cap, and gross USDC caps. A policy-bound CREATE2
+address lets one EIP-3009 authorization atomically deploy and fund that exact
+wallet. The delegate cannot withdraw or make arbitrary calls, and owner policy
+rotation invalidates queued signatures. The canonical bounty contracts and
+their `BountySettled` events remain the only payout authority and evidence.
+See [`bounded-agent-wallet.md`](bounded-agent-wallet.md).
+
 The principal lifecycle is:
 
 `Open -> Claimable -> Claimed -> Submitted -> Settled`

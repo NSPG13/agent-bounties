@@ -41,6 +41,7 @@
             <p>The check pins one Base block, verifies canonical factory registration, protocol, factory binding, native USDC, claimable status, and creator exclusion, then derives the real claim bond and reads the wallet balance at that same block.</p>
             <p>It also validates declared signing support, per-transaction and rolling caps, chain and contract allowlists, and the human-approval policy. Provider profiles add guidance only; compatibility never depends on MetaMask, Circle, CDP, Privy, or any other vendor.</p>
             <p>Supported signing paths: <code>eip712_typed_data</code> plus <code>eip3009_receive_with_authorization</code> for <code>agent_native_claim</code>, or <code>send_transaction</code>/<code>wallet_send_calls</code> for the direct fallback.</p>
+            <p>For repeated autonomous work, use <a href="agent-budget.html">Authorize an agent budget</a> to separate the owner from a dedicated delegate and enforce canonical contract, verifier, action, time, and USDC limits on-chain.</p>
           </div>
         </div>
       </section>
@@ -100,6 +101,7 @@
         <div class="actions">
           <a class="button primary" href="post.html">Post your own bounty</a>
           <a class="button secondary" href="earn.html">Claim a bounty</a>
+          <a class="button secondary" href="agent-budget.html">Authorize agent budget</a>
           <a class="button secondary" href="https://github.com/NSPG13/agent-bounties">Star the repo</a>
         </div>
       </section>

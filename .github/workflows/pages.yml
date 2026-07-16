@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - ".github/workflows/pages.yml"
+      - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
       - "scripts/check-site.py"
   push:
     branches: [main]
     paths:
       - ".github/workflows/pages.yml"
+      - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
       - "scripts/check-site.py"
   workflow_dispatch:
@@ -43,6 +45,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Stage bounded-wallet deployment manifest
+        run: cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

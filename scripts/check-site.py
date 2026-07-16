@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -16,6 +17,8 @@ REQUIRED_FILES = [
     "x402.html",
     "x402-test-vectors.json",
     "prepare-agent.html",
+    "agent-budget.html",
+    "agent-budget.js",
     "operator.html",
     "recovery.html",
     "terms.html",
@@ -139,6 +142,12 @@ def main() -> int:
     x402_vectors = json.loads((site_dir / "x402-test-vectors.json").read_text(encoding="utf-8"))
     protocol = json.loads((site_dir / "protocol.json").read_text(encoding="utf-8"))
     deployment = json.loads((repo_root / "deployments" / "base-mainnet.json").read_text(encoding="utf-8"))
+    bounded_deployment = json.loads(
+        (repo_root / "deployments" / "bounded-agent-wallet-base-mainnet.json").read_text(encoding="utf-8")
+    )
+    bounded_page = (site_dir / "agent-budget.html").read_text(encoding="utf-8")
+    bounded_javascript = (site_dir / "agent-budget.js").read_text(encoding="utf-8")
+    pages_workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     check_protocol(protocol, deployment)
 
     for name, page in pages.items():
@@ -489,7 +498,92 @@ def main() -> int:
             "allowed_chain_ids",
             "human_approval_policy",
             "Never send a private key",
+            "agent-budget.html",
             "Post your own bounty",
+        ],
+    )
+    require_phrases(
+        "agent-budget.html",
+        bounded_page,
+        [
+            "Authorize an agent budget",
+            "Connect wallet",
+            "Agent delegate address",
+            "Initial funding, USDC",
+            "Lifetime gross spend, USDC",
+            "exact approved deterministic verifier only",
+            "Owner escape hatch",
+            "not independently audited",
+            "Post your own bounty",
+            "agent-budget.js",
+        ],
+    )
+    if "import wallet" in bounded_page.lower() or any(
+        marker in bounded_page.lower()
+        for marker in ['name="private', 'name="seed', 'name="mnemonic', 'type="password"']
+    ):
+        fail("agent budget activation must use connect-wallet onboarding only")
+    require_phrases(
+        "agent-budget.js",
+        bounded_javascript,
+        [
+            'CHAIN_ID = "0x2105"',
+            'createWithAuthorization: "0x9b2065e0"',
+            'predictWallet: "0x240fa116"',
+            'revokePolicy: "0x9eba3667"',
+            "manifest.contract_source_dirty !== false",
+            "contract_source_revision",
+            "sourceRevision: \"af10c827244a0d16b71340175019c78c61f30267\"",
+            "ensureConnectedOwner",
+            "eth_getBlockByNumber",
+            "wallet_switchEthereumChain",
+            "eth_signTypedData_v4",
+            "clone_runtime_code_hash",
+            "policy-bound wallet",
+        ],
+    )
+    for forbidden in ["privateKey", "mnemonic", "seedInput", "wallet_import"]:
+        if forbidden in bounded_javascript:
+            fail(f"agent budget activation contains forbidden secret handling: {forbidden}")
+    if bounded_deployment.get("schema") != "agent-bounties/bounded-agent-wallet-deployment-v1":
+        fail("bounded-wallet deployment manifest has the wrong schema")
+    if bounded_deployment.get("chain_id") != 8453 or bounded_deployment.get("network") != "base-mainnet":
+        fail("bounded-wallet deployment manifest must target Base mainnet")
+    if bounded_deployment.get("contract_source_dirty") is not False:
+        fail("bounded-wallet deployment manifest must come from committed contract source")
+    if not re.fullmatch(r"[0-9a-f]{40}", bounded_deployment.get("contract_source_revision", "")):
+        fail("bounded-wallet deployment manifest must pin a contract source revision")
+    contract_dir = repo_root / "contracts" / "base-escrow" / "src"
+    source_files = {path.stem: path for path in contract_dir.glob("*.sol")}
+    recorded_sources = bounded_deployment.get("contracts", {})
+    if set(recorded_sources) != set(source_files):
+        fail("bounded-wallet deployment manifest must hash every Solidity source input")
+    for name, path in source_files.items():
+        observed_hash = f"0x{hashlib.sha256(path.read_bytes()).hexdigest()}"
+        if recorded_sources[name].get("source_sha256") != observed_hash:
+            fail(f"bounded-wallet source hash drifted: {path.name}")
+    pinned_values = {
+        "sourceRevision": bounded_deployment["contract_source_revision"],
+        "bountyFactory": bounded_deployment["canonical"]["bounty_factory"],
+        "settlementToken": bounded_deployment["canonical"]["settlement_token"],
+        "deterministicVerifier": bounded_deployment["canonical"]["deterministic_verifier"],
+        "deterministicDeployer": bounded_deployment["deterministic_deployer"]["address"],
+        "deterministicDeployerHash": bounded_deployment["deterministic_deployer"]["runtime_code_hash"],
+        "walletFactory": bounded_deployment["wallet_factory"]["address"],
+        "implementation": bounded_deployment["wallet_factory"]["implementation"],
+        "factoryRuntimeHash": bounded_deployment["wallet_factory"]["runtime_code_hash"],
+        "implementationRuntimeHash": bounded_deployment["wallet_factory"]["implementation_runtime_code_hash"],
+        "cloneRuntimeHash": bounded_deployment["wallet_factory"]["clone_runtime_code_hash"],
+    }
+    for name, value in pinned_values.items():
+        if f'{name}: "{value.lower()}"' not in bounded_javascript:
+            fail(f"agent budget activation does not pin manifest field: {name}")
+    require_phrases(
+        "pages.yml bounded wallet",
+        pages_workflow,
+        [
+            '"deployments/bounded-agent-wallet-base-mainnet.json"',
+            "cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json",
         ],
     )
     discovery_endpoints = discovery.get("endpoints", {})

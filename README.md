@@ -68,6 +68,15 @@ The current internal security review, static-analysis results, accepted
 findings, and unresolved audit gate are recorded in
 [`docs/security/autonomous-v1-review.md`](docs/security/autonomous-v1-review.md).
 
+Humans who want an agent to act repeatedly without approving every transaction
+can use the revocable, policy-bound [`BoundedAgentWallet`](docs/bounded-agent-wallet.md).
+It separates the owner's wallet from a dedicated delegate signer and enforces
+canonical contracts, exact verifiers, action, time, bounty-size, per-action,
+period, and lifetime USDC limits on-chain.
+The hosted setup flow is [`site/agent-budget.html`](site/agent-budget.html); it
+connects an owner wallet, derives a policy-bound address, and requests only the
+initial deployment and funding authorization.
+
 The previous operator-signed escrow is retired. Its only funded escrow was
 refunded in
 [`0xf350...f84e`](https://base.blockscout.com/tx/0xf35041282cdafb312fa7d282ee80fb9ee0ec7171a73905573a84bc703c74f84e),
