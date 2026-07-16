@@ -62,9 +62,10 @@ poor choices until a cap, expiry, or owner revocation stops it.
 
 ## One-Time Setup
 
-1. Create a dedicated durable delegate signer. MetaMask Agent Wallet, Circle,
-   CDP, an HSM, or a local encrypted keystore can hold it. Record only its
-   public Base address in the policy.
+1. Create a dedicated durable delegate signer. The currently available operator
+   path is the [DPAPI-protected local delegate](local-delegate-wallet.md).
+   Circle, CDP, Turnkey, an HSM, or MetaMask Agent Wallet can replace that
+   adapter later. Record only its public Base address in the policy.
 2. Build and review the deterministic factory manifest:
 
    ```powershell

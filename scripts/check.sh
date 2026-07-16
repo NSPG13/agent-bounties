@@ -80,6 +80,8 @@ cargo run -p cli -- github-claim-comment-plan \
 "${python_cmd[@]}" scripts/test_github_audience_audit.py -v
 "${python_cmd[@]}" scripts/test_ruleset_drift_check.py -v
 "${python_cmd[@]}" scripts/test_relay_autonomous_action.py -v
+"${python_cmd[@]}" -m pip install -r scripts/requirements-wallet.txt
+"${python_cmd[@]}" scripts/test_local_delegate_wallet.py -v
 "${python_cmd[@]}" scripts/test_self_heal.py -v
 "${python_cmd[@]}" scripts/self_heal.py bench \
   --policy ops/self-healing-policy.json \
@@ -133,6 +135,8 @@ cargo run -p cli -- pooled-funding-demo
   scripts/test_ruleset_drift_check.py \
   scripts/relay_autonomous_action.py \
   scripts/test_relay_autonomous_action.py \
+  scripts/local_delegate_wallet.py \
+  scripts/test_local_delegate_wallet.py \
   scripts/self_heal.py \
   scripts/test_self_heal.py \
   scripts/check-site.py \

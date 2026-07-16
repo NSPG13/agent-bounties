@@ -73,6 +73,9 @@ can use the revocable, policy-bound [`BoundedAgentWallet`](docs/bounded-agent-wa
 It separates the owner's wallet from a dedicated delegate signer and enforces
 canonical contracts, exact verifiers, action, time, bounty-size, per-action,
 period, and lifetime USDC limits on-chain.
+The available unattended signer path is the
+[DPAPI-protected local delegate](docs/local-delegate-wallet.md); it can later be
+rotated to a managed agent-wallet provider without changing bounty contracts.
 The hosted setup flow is [`site/agent-budget.html`](site/agent-budget.html); it
 connects an owner wallet, derives a policy-bound address, and requests only the
 initial deployment and funding authorization.

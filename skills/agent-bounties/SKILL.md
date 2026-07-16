@@ -47,6 +47,14 @@ unsigned calldata only. Re-read chain state and use an already authorized
 bounded wallet policy or obtain the wallet owner's approval before
 broadcasting it. Never provide a private key or seed phrase.
 
+When managed agent-wallet access is unavailable, a Windows operator can use
+`scripts/local_delegate_wallet.py` as the bounded delegate. Initialize it once,
+install its public address in the owner-approved policy, bind it to the exact
+inspected wallet/owner/policy hash, and pass only fresh
+`agent-bounties/bounded-agent-action-plan-v1` files to `execute-plan`. The
+adapter stores its encrypted key outside the repository and refuses arbitrary
+targets, calldata, ETH value, stale state, and changed policies.
+
 - Use only `verified_claimable_bounties` with `verification_ready: true` as
   earnable inventory. Quorum bounties fail closed until verifier-service
   availability is canonically attestable.
