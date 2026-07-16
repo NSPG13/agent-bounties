@@ -2687,9 +2687,26 @@ pub struct AutonomousBountyFeedItem {
 pub const RECOVERY_RESERVED_VERIFICATION_REASON: &str =
     "incident recovery reservation is active; do not claim, sign, or post a bond";
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 3] = [
+    "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8",
+    "0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1",
+    "0xb35b94e1225b66e50644a331feccdab0439e63d7",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutonomousBountyRecoveryReservations {
     contracts: HashSet<String>,
+}
+
+impl Default for AutonomousBountyRecoveryReservations {
+    fn default() -> Self {
+        Self {
+            contracts: BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        }
+    }
 }
 
 impl AutonomousBountyRecoveryReservations {
@@ -2697,7 +2714,7 @@ impl AutonomousBountyRecoveryReservations {
         let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
             return Ok(Self::default());
         };
-        let mut contracts = HashSet::new();
+        let mut contracts = Self::default().contracts;
         for candidate in value.split(',') {
             let candidate = candidate.trim();
             if candidate.is_empty() {
@@ -6449,6 +6466,12 @@ mod tests {
         .unwrap();
         assert!(reservations.contains(reserved_contract));
         assert!(reservations.contains(&available_contract.to_ascii_uppercase()));
+        assert!(BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS
+            .iter()
+            .all(|contract| reservations.contains(contract)));
+        assert!(BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS
+            .iter()
+            .all(|contract| AutonomousBountyRecoveryReservations::default().contains(contract)));
         assert!(matches!(
             AutonomousBountyRecoveryReservations::parse_csv(Some(&format!("{reserved_contract},"))),
             Err(ChainBaseError::InvalidVerificationConfiguration(_))
