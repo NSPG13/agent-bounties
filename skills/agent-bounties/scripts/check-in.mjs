@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 export const DEFAULT_API_BASE_URL = "https://agent-bounties-api.onrender.com";
 export const DEFAULT_PROTOCOL_URL = "https://nspg13.github.io/agent-bounties/protocol.json";
 export const DEFAULT_BASE_RPC_URL = "https://base-rpc.publicnode.com";
+export const CLAIM_HANDOFF_SCHEMA_VERSION = "agent-bounties/check-in-claim-handoff-v1";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
@@ -207,6 +208,128 @@ export function githubIssueNumberFromSourceUrl(value) {
 function sourceUrlFromDocument(document) {
   const value = document?.source_url;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function normalizeSolverWallet(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const wallet = String(value).trim().toLowerCase();
+  if (!ADDRESS.test(wallet)) throw new Error("solver wallet is not an address");
+  return wallet;
+}
+
+function claimIdempotencyKey(contract, solverWallet) {
+  return `portable-check-in:${contract.slice(2)}:${solverWallet.slice(2)}`;
+}
+
+export function buildClaimHandoff(bounty, solverWallet, apiBaseUrl) {
+  const solver = normalizeSolverWallet(solverWallet);
+  const creator = normalizeSolverWallet(bounty.creator);
+  const sourceIssueNumber = bounty.source_issue_number;
+  const githubAvailable = Number.isSafeInteger(sourceIssueNumber) && sourceIssueNumber > 0;
+  const ready = solver !== null && solver !== creator;
+  const reason = solver === null
+    ? "public_solver_wallet_required"
+    : (solver === creator ? "creator_cannot_claim" : "claim_handoff_complete");
+  const requiredInput = solver === creator
+    ? "non_creator_public_base_address"
+    : (solver === null ? "public_base_address" : null);
+  const claimRequest = ready ? {
+    idempotency_key: claimIdempotencyKey(bounty.contract, solver),
+    network: "base-mainnet",
+    bounty_contract: bounty.contract,
+    solver_wallet: solver,
+    request_bond_sponsorship: true,
+    source: "portable-check-in",
+  } : null;
+  const addressTemplate = "0xYOUR_PUBLIC_BASE_ADDRESS";
+  const issueCommandTemplate = githubAvailable
+    ? `/claim #${sourceIssueNumber} wallet: ${addressTemplate}`
+    : null;
+
+  return {
+    schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+    ready,
+    ready_scope: "claim_handoff_only",
+    wallet_readiness_checked: false,
+    reason,
+    required_input: requiredInput,
+    preferred_path: githubAvailable ? "github_claim_comment" : "agent_native_claim",
+    rerun_command: ready
+      ? null
+      : `node skills/agent-bounties/scripts/check-in.mjs --solver-wallet ${addressTemplate}`,
+    github_claim: githubAvailable ? {
+      issue_url: bounty.source_url,
+      comment_body: ready ? `/claim #${sourceIssueNumber} wallet: ${solver}` : null,
+      comment_body_template: issueCommandTemplate,
+      effect: "Creates or replays hosted claim coordination; it does not claim the contract by itself.",
+    } : null,
+    mcp: {
+      tool: "agent_native_claim",
+      arguments: claimRequest,
+    },
+    api: {
+      method: "POST",
+      url: `${apiBaseUrl}/v1/base/autonomous-bounties/claims`,
+      body: claimRequest,
+    },
+    direct_wallet_fallback: {
+      claim_plan_url: bounty.claim_plan_url,
+      unsigned_plan: bounty.claim_plan || null,
+    },
+    follow_up:
+      "Confirm the wallet can sign under its bounded policy, then follow the returned state. Sign only its exact wallet_request, replay next_request with the unchanged wallet_signature, and start work only after a canonical claim event.",
+    evidence_boundary:
+      "This handoff is read-only output. It did not post a comment, create a candidate, sign, broadcast, claim, fund, submit, verify, or settle.",
+  };
+}
+
+function nextActionFor(verified) {
+  if (verified.length === 0) {
+    return {
+      schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+      action: "post_own_bounty",
+      ready: true,
+      url: "https://nspg13.github.io/agent-bounties/post.html",
+    };
+  }
+  const selected = verified.find((item) => item.claim_handoff.ready) || verified[0];
+  const handoff = selected.claim_handoff;
+  if (!handoff.ready) {
+    return {
+      schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+      action: "rerun_with_solver_wallet",
+      ready: false,
+      reason: handoff.reason,
+      required_input: handoff.required_input,
+      command: handoff.rerun_command,
+      bounty_id: selected.id,
+      source_issue_number: selected.source_issue_number,
+      never_request: ["private_key", "seed_phrase"],
+    };
+  }
+  if (handoff.github_claim) {
+    return {
+      schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+      action: "post_github_claim_comment",
+      ready: true,
+      ready_scope: "claim_handoff_only",
+      bounty_id: selected.id,
+      source_issue_number: selected.source_issue_number,
+      issue_url: handoff.github_claim.issue_url,
+      comment_body: handoff.github_claim.comment_body,
+      follow_up: handoff.follow_up,
+    };
+  }
+  return {
+    schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+    action: "call_agent_native_claim",
+    ready: true,
+    ready_scope: "claim_handoff_only",
+    bounty_id: selected.id,
+    mcp: handoff.mcp,
+    api: handoff.api,
+    follow_up: handoff.follow_up,
+  };
 }
 
 async function request(url, parseJson) {
@@ -493,6 +616,7 @@ function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, c
   const normalized = {
     id: bounty.bounty_id.toLowerCase(),
     contract: bounty.contract.toLowerCase(),
+    creator: bounty.creator.toLowerCase(),
     issue: bounty.issue,
     title: bounty.title,
     solver_reward_minor: bounty.solver_reward_minor,
@@ -947,6 +1071,7 @@ function normalizedBounty(item, apiBaseUrl, standingMetaAttestation = null) {
   const normalized = {
     id: item.bounty_id,
     contract: item.bounty_contract,
+    creator: item.creator.toLowerCase(),
     title: item.terms.document.title,
     solver_reward_minor: integerOf(item.solver_reward),
     completion_bonus_minor: integerOf(item.timeout_bond_pool),
@@ -998,6 +1123,7 @@ export async function collectInventory({
   fixture = null,
 }) {
   const api = normalizeApiBaseUrl(apiBaseUrl || DEFAULT_API_BASE_URL);
+  const solver = normalizeSolverWallet(solverWallet);
   const protocolEndpoint = normalizePublicUrl(protocolUrl, "Protocol URL");
   const [health, protocolResponse, feedResponse, jobsResponse] = await Promise.all([
     fixture ? fixture.health : request(`${api}/health`, false),
@@ -1050,7 +1176,7 @@ export async function collectInventory({
       manifest,
       rpcUrl: baseRpcUrl,
       rpcTransport,
-      solverWallet,
+      solverWallet: solver,
     });
     const existingIds = new Set(verified.map((item) => item.id.toLowerCase()));
     for (const item of direct.verified) {
@@ -1074,6 +1200,10 @@ export async function collectInventory({
   if (standingMetaAttestation?.warning) warnings.push(standingMetaAttestation.warning);
   if (!verified.length) warnings.push("no_verified_funded_bounty_is_claimable");
 
+  for (const item of verified) {
+    item.claim_handoff = buildClaimHandoff(item, solver, api);
+  }
+
   return {
     observed_at: new Date().toISOString(),
     api_base_url: api,
@@ -1093,6 +1223,7 @@ export async function collectInventory({
     live_verification_jobs:
       jobsResponse?.status === 200 ? itemsFrom(jobsResponse.body) : [],
     recommended_action: verified.length ? "claim_verified_bounty" : "post_own_bounty",
+    next_action: nextActionFor(verified),
     links: {
       post_own_bounty: "https://nspg13.github.io/agent-bounties/post.html",
       fund_bounty: "https://nspg13.github.io/agent-bounties/funding.html",

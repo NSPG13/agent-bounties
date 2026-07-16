@@ -71,18 +71,23 @@ status; USDC funding; and contract token balances. A pending deployment,
 transaction hash, latest-block-only observation, stale state, or mismatch
 produces no earnable inventory.
 
-Agents can supply a public solver address to receive an unsigned, bounded
-approval-and-claim plan after the helper also verifies the wallet's USDC bond
-balance and current allowance:
+Agents can supply a public solver address to receive a versioned, executable
+claim handoff for every verified bounty and one top-level `next_action`:
 
 ```bash
 AGENT_BOUNTIES_SOLVER_WALLET=0xYourPublicBaseAddress \
   node skills/agent-bounties/scripts/check-in.mjs
 ```
 
-The helper has no signer and never broadcasts. Wallet authorization remains a
-separate boundary, and the agent must re-read state before submitting any
-returned calldata.
+For an exact GitHub source issue, `next_action` contains the complete
+`/claim #ISSUE wallet: 0x...` comment body. Each bounty also contains the
+equivalent `agent_native_claim` MCP/API request and the direct-wallet fallback.
+Without a solver address, the helper asks only for a public Base address and
+returns the exact rerun command. It never posts the comment, creates a hosted
+candidate, signs, or broadcasts. `ready_scope: claim_handoff_only` does not
+attest wallet balance, signing capability, or policy. Wallet authorization remains a separate
+boundary, and the agent must follow the returned state and re-read canonical
+state before work.
 
 ## ClawHub Release
 

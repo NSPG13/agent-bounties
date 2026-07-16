@@ -288,7 +288,7 @@ test("portable skill metadata and install contracts remain publishable", async (
   const activationItems = [...activation.bounties, ...standingMetaActivation.bounties];
 
   assert.match(skill, /^---\r?\nname: agent-bounties\r?\n/);
-  assert.match(skill, /\r?\nversion: 1\.4\.0\r?\n/);
+  assert.match(skill, /\r?\nversion: 1\.4\.1\r?\n/);
   assert.match(skill, /\r?\nauthor: Agent Bounties contributors\r?\n/);
   assert.match(skill, /\r?\n  hermes:\r?\n/);
   assert.match(skill, /\r?\n    category: agent-commerce\r?\n/);
@@ -303,7 +303,7 @@ test("portable skill metadata and install contracts remain publishable", async (
 
   assert.equal(plugin.name, "agent-bounties");
   assert.equal(plugin.displayName, "Agent Bounties");
-  assert.equal(plugin.version, "1.4.0");
+  assert.equal(plugin.version, "1.4.1");
   assert.equal(plugin.license, "MIT");
   assert.equal(plugin.repository, "https://github.com/NSPG13/agent-bounties");
   assert.equal(plugin.homepage, "https://nspg13.github.io/agent-bounties/");
@@ -611,6 +611,18 @@ test("only active canonical autonomous inventory is claimable", async () => {
     "https://github.com/NSPG13/agent-bounties/issues/275",
   );
   assert.equal(report.verified_claimable_bounties[0].source_issue_number, 275);
+  assert.equal(report.verified_claimable_bounties[0].claim_handoff.ready, false);
+  assert.equal(
+    report.verified_claimable_bounties[0].claim_handoff.reason,
+    "public_solver_wallet_required",
+  );
+  assert.equal(
+    report.verified_claimable_bounties[0].claim_handoff.github_claim.comment_body_template,
+    "/claim #275 wallet: 0xYOUR_PUBLIC_BASE_ADDRESS",
+  );
+  assert.equal(report.next_action.action, "rerun_with_solver_wallet");
+  assert.equal(report.next_action.required_input, "public_base_address");
+  assert.deepEqual(report.next_action.never_request, ["private_key", "seed_phrase"]);
   assert.deepEqual(
     report.excluded_claimable_candidates.map((item) => [item.id, item.reason]),
     [
@@ -625,6 +637,80 @@ test("only active canonical autonomous inventory is claimable", async () => {
   assert.equal(report.live_verification_jobs.length, 1);
 });
 
+test("hosted check-in emits an exact side-effect-free claim handoff", async () => {
+  const solver = "0x7777777777777777777777777777777777777777";
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: await fixture("verified-claimable.json"),
+    solverWallet: solver,
+  });
+  const bounty = report.verified_claimable_bounties[0];
+  const handoff = bounty.claim_handoff;
+
+  assert.equal(handoff.schema_version, "agent-bounties/check-in-claim-handoff-v1");
+  assert.equal(handoff.ready, true);
+  assert.equal(handoff.ready_scope, "claim_handoff_only");
+  assert.equal(handoff.wallet_readiness_checked, false);
+  assert.equal(handoff.reason, "claim_handoff_complete");
+  assert.equal(handoff.preferred_path, "github_claim_comment");
+  assert.equal(handoff.github_claim.issue_url, bounty.source_url);
+  assert.equal(handoff.github_claim.comment_body, `/claim #275 wallet: ${solver}`);
+  assert.equal(handoff.mcp.tool, "agent_native_claim");
+  assert.deepEqual(handoff.mcp.arguments, {
+    idempotency_key: `portable-check-in:${bounty.contract.slice(2)}:${solver.slice(2)}`,
+    network: "base-mainnet",
+    bounty_contract: bounty.contract,
+    solver_wallet: solver,
+    request_bond_sponsorship: true,
+    source: "portable-check-in",
+  });
+  assert.equal(handoff.api.method, "POST");
+  assert.equal(
+    handoff.api.url,
+    "https://api.example.test/v1/base/autonomous-bounties/claims",
+  );
+  assert.deepEqual(handoff.api.body, handoff.mcp.arguments);
+  assert.match(handoff.evidence_boundary, /did not post a comment/);
+  assert.deepEqual(report.next_action, {
+    schema_version: "agent-bounties/check-in-claim-handoff-v1",
+    action: "post_github_claim_comment",
+    ready: true,
+    ready_scope: "claim_handoff_only",
+    bounty_id: bounty.id,
+    source_issue_number: 275,
+    issue_url: bounty.source_url,
+    comment_body: `/claim #275 wallet: ${solver}`,
+    follow_up: handoff.follow_up,
+  });
+});
+
+test("check-in refuses a creator wallet and invalid public addresses", async () => {
+  const input = await fixture("verified-claimable.json");
+  const creator = input.autonomous_feed.body[0].creator;
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: input,
+    solverWallet: creator,
+  });
+  const handoff = report.verified_claimable_bounties[0].claim_handoff;
+  assert.equal(handoff.ready, false);
+  assert.equal(handoff.reason, "creator_cannot_claim");
+  assert.equal(handoff.required_input, "non_creator_public_base_address");
+  assert.equal(handoff.github_claim.comment_body, null);
+  assert.equal(handoff.mcp.arguments, null);
+  assert.equal(handoff.api.body, null);
+  assert.equal(report.next_action.action, "rerun_with_solver_wallet");
+
+  await assert.rejects(
+    collectInventory({
+      apiBaseUrl: "https://api.example.test",
+      fixture: await fixture("verified-claimable.json"),
+      solverWallet: "not-a-wallet",
+    }),
+    /solver wallet is not an address/,
+  );
+});
+
 test("hosted inventory keeps absent or malformed source metadata non-authoritative", async () => {
   for (const sourceUrl of [undefined, "not a URL"]) {
     const input = await fixture("verified-claimable.json");
@@ -637,6 +723,8 @@ test("hosted inventory keeps absent or malformed source metadata non-authoritati
     const bounty = report.verified_claimable_bounties[0];
     assert.equal(bounty.source_url, sourceUrl ?? null);
     assert.equal(bounty.source_issue_number, null);
+    assert.equal(bounty.claim_handoff.preferred_path, "agent_native_claim");
+    assert.equal(bounty.claim_handoff.github_claim, null);
   }
 });
 
@@ -696,6 +784,7 @@ test("unavailable hosted API cannot create imaginary inventory", async () => {
   assert.equal(report.hosted_api_healthy, false);
   assert.deepEqual(report.verified_claimable_bounties, []);
   assert.equal(report.recommended_action, "post_own_bounty");
+  assert.equal(report.next_action.action, "post_own_bounty");
   assert.ok(report.warnings.includes("hosted_api_health_not_confirmed"));
   assert.ok(report.warnings.includes("autonomous_feed_unavailable"));
   assert.ok(report.warnings.includes("autonomous_protocol_not_active"));
