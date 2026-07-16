@@ -1,6 +1,6 @@
 {
   "schema": "agent-bounties/bounded-agent-wallet-deployment-v1",
-  "contract_source_revision": "7708253cd4914eaa06109523f565751f7d83b6f1",
+  "contract_source_revision": "c09ecad36a9d6d93d1272e81819c7196d0d97214",
   "contract_source_revision_kind": "git-tree",
   "contract_source_dirty": false,
   "network": "base-mainnet",
@@ -45,11 +45,20 @@
     "CanonicalChildBountyVerifier": {
       "source_sha256": "0xc7b58a7ccfe0dc6d6d72934b9b361024e3c04db012ffd0346ae09f7ecd9e0429"
     },
+    "CanonicalIndependentChildVerifierV2": {
+      "source_sha256": "0x229dc4cf79dfd59815a2d2227e0bbbad03992514fdb7d04d9a5b76a1623a47d5"
+    },
     "IAgentBounty": {
       "source_sha256": "0xede2df7af3f07c825a2769da37f7ad1f240fc9e64ae812fe4ce229d89e1785fd"
     },
     "LeadingZeroWorkVerifier": {
       "source_sha256": "0x9ff8543422aa6c203f3934f1f7ce8f02a0331265ef3bda4ae9c41314ae30ef6b"
+    },
+    "OnchainTermsRegistry": {
+      "source_sha256": "0x8c02a7c182b7900806fdc4fa63abbebebec8618b47f20f0e7ba4261d21553739"
+    },
+    "ParticipantEligibilityRegistry": {
+      "source_sha256": "0x97240c200d183296e45422bce310616b61bc03ba4cf71b5913eaa7689a63f72a"
     }
   },
   "evidence_boundary": "This manifest derives exact addresses, bytecode, and unsigned deployment calldata. It is not deployment, delegation, funding, completion, payout, or settlement evidence."
