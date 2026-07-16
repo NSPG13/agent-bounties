@@ -643,7 +643,7 @@ pub fn stage_regression_input(
         if copied != source_snapshot {
             return Err(anyhow!("sandbox input changed while it was being staged"));
         }
-        make_tree_read_only(&temporary)?;
+        make_tree_contents_read_only(&temporary)?;
         Ok(copied)
     });
     let copied = match copy_result {
@@ -654,7 +654,12 @@ pub fn stage_regression_input(
         }
     };
     match fs::rename(&temporary, &target) {
-        Ok(()) => {}
+        Ok(()) => {
+            if let Err(error) = make_directory_read_only(&target) {
+                remove_tree_best_effort(&target);
+                return Err(error).context("failed to secure staged regression input");
+            }
+        }
         Err(_) if target.exists() => {
             remove_tree_best_effort(&temporary);
             let existing = snapshot_directory(&target, max_bytes, max_files)?;
@@ -814,7 +819,7 @@ fn copy_directory_tree(source: &Path, destination: &Path) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn make_tree_read_only(root: &Path) -> anyhow::Result<()> {
+fn make_tree_contents_read_only(root: &Path) -> anyhow::Result<()> {
     let mut directories = vec![root.to_path_buf()];
     let mut all_directories = Vec::new();
     while let Some(directory) = directories.pop() {
@@ -836,14 +841,46 @@ fn make_tree_read_only(root: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        for directory in all_directories.into_iter().rev() {
+        for directory in all_directories
+            .into_iter()
+            .rev()
+            .filter(|directory| directory != root)
+        {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o555))?;
         }
     }
     Ok(())
 }
 
+#[cfg(unix)]
+fn make_directory_read_only(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o555))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_directory_read_only(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
 fn remove_tree_best_effort(path: &Path) {
+    #[cfg(unix)]
+    fn clear(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = fs::symlink_metadata(path) {
+            if metadata.is_dir() {
+                if let Ok(entries) = fs::read_dir(path) {
+                    for entry in entries.flatten() {
+                        clear(&entry.path());
+                    }
+                }
+                let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+            } else if metadata.is_file() {
+                let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
     #[cfg(windows)]
     #[allow(clippy::permissions_set_readonly_false)]
     fn clear(path: &Path) {
@@ -860,7 +897,7 @@ fn remove_tree_best_effort(path: &Path) {
             let _ = fs::set_permissions(path, permissions);
         }
     }
-    #[cfg(windows)]
+    #[cfg(any(unix, windows))]
     clear(path);
     let _ = fs::remove_dir_all(path);
 }
@@ -954,7 +991,9 @@ mod tests {
     fn staged_inputs_are_digest_derived_and_immutable() {
         let input = temp_directory("stage-input");
         let staging = temp_directory("stage-root");
+        fs::create_dir(input.join("nested")).unwrap();
         fs::write(input.join("result.txt"), b"expected").unwrap();
+        fs::write(input.join("nested").join("details.txt"), b"stable").unwrap();
 
         let staged =
             stage_regression_input(&input, &staging, RegressionInputKind::Source, 1_024, 10)
@@ -971,9 +1010,18 @@ mod tests {
             .unwrap()
             .permissions()
             .readonly());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&staged.path).unwrap().permissions().mode() & 0o222,
+                0
+            );
+        }
 
         remove_tree_best_effort(&input);
         remove_tree_best_effort(&staging);
+        assert!(!staging.exists());
     }
 
     #[test]
