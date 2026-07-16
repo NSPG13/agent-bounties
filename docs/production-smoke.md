@@ -58,13 +58,15 @@ to the canonical Render API and MCP URLs and the checked-out `main` revision,
 so missing repository variables cannot turn the gate into a successful skip.
 Repository variables can still override the URLs for a planned migration.
 
-The workflow deliberately does not run as a pull-request or push check. Render
-is configured with `autoDeployTrigger: commit` because `main` is already
-protected by required pre-merge CI. A pre-deploy smoke cannot observe the new
-revision, and making it required would create a deployment dependency cycle.
-CI validates the local contract before merge, Render deploys the reviewed main
-commit, and scheduled/manual production smoke validates the deployed result
-afterward.
+The workflow deliberately does not run as a pull-request or push check. Native
+Render auto-deploy is disabled. After same-repository `main` CI succeeds, the
+`Render Deploy Recovery` workflow asks Render to deploy that exact reviewed
+SHA, waits for API, MCP, and worker deploys to become live, and checks stable
+revision headers. A pre-deploy smoke cannot observe the new revision, and
+making it required would create a deployment dependency cycle. Scheduled or
+manual production smoke independently validates the deployed result afterward.
+See [ADR 0002](adr/0002-github-controlled-render-deploys.md) for the release
+authority and failure boundaries.
 
 ## Coverage
 
