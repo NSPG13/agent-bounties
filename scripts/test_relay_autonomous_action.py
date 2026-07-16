@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import relay_autonomous_action as relay
 
@@ -181,6 +182,110 @@ class RelayTests(unittest.TestCase):
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaisesRegex(relay.RelayError, "disabled"):
                 relay.parse_event(path)
+
+    def test_invalid_network_replay_retains_source_and_gives_exact_correction(self) -> None:
+        fixture = Path(__file__).with_name("fixtures") / "autonomous_relay_invalid_network.json"
+        source, body = relay.parse_event_source(fixture)
+        self.assertEqual(source.issue_number, 244)
+        self.assertEqual(source.comment_id, 424424)
+        with self.assertRaises(relay.RelayError) as raised:
+            relay.parse_event_request(source, body)
+        self.assertIn('received \'Base\'', str(raised.exception))
+        self.assertEqual(
+            raised.exception.details["correction"],
+            'Set "network" to "base-mainnet" and post a new `/agent-bounty relay` command.',
+        )
+
+    def test_published_invalid_request_is_handled_without_initializing_keeper(self) -> None:
+        fixture = Path(__file__).with_name("fixtures") / "autonomous_relay_invalid_network.json"
+        published: list[tuple[relay.RelaySource, str]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "report.json"
+            comment_path = Path(directory) / "comment.md"
+            with (
+                mock.patch.object(
+                    relay,
+                    "publish_comment",
+                    side_effect=lambda source, comment, env: published.append((source, comment)),
+                ),
+                mock.patch.object(
+                    relay,
+                    "CastClient",
+                    side_effect=AssertionError("keeper must not initialize for malformed input"),
+                ),
+            ):
+                result = relay.main(
+                    [
+                        "--event",
+                        str(fixture),
+                        "--execute",
+                        "--publish",
+                        "--report",
+                        str(report_path),
+                        "--comment",
+                        str(comment_path),
+                    ]
+                )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            comment = comment_path.read_text(encoding="utf-8")
+        self.assertEqual(result, 0)
+        self.assertEqual(report["outcome"], "refused")
+        self.assertEqual(report["error_code"], "request_invalid")
+        self.assertEqual(report["workflow_disposition"], "handled_after_feedback")
+        self.assertEqual(report["action"], "submit")
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0][0].comment_id, 424424)
+        self.assertIn('Set "network" to "base-mainnet"', comment)
+        self.assertIn("No transaction was broadcast", comment)
+
+    def test_operational_relay_failure_remains_red_after_feedback(self) -> None:
+        payload = json.loads(
+            (Path(__file__).with_name("fixtures") / "autonomous_relay_invalid_network.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        body = str(payload["comment"]["body"]).replace('"network":"Base"', '"network":"base-mainnet"')
+        payload["comment"]["body"] = body
+        published: list[str] = []
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            report_path = Path(directory) / "report.json"
+            comment_path = Path(directory) / "comment.md"
+            event_path.write_text(json.dumps(payload), encoding="utf-8")
+            with (
+                mock.patch.object(relay, "CastClient", return_value=object()),
+                mock.patch.object(
+                    relay,
+                    "relay",
+                    side_effect=relay.RelayError(
+                        "keeper chain unavailable",
+                        code="keeper_chain_unavailable",
+                        retryable=True,
+                    ),
+                ),
+                mock.patch.object(
+                    relay,
+                    "publish_comment",
+                    side_effect=lambda source, comment, env: published.append(comment),
+                ),
+            ):
+                result = relay.main(
+                    [
+                        "--event",
+                        str(event_path),
+                        "--execute",
+                        "--publish",
+                        "--report",
+                        str(report_path),
+                        "--comment",
+                        str(comment_path),
+                    ]
+                )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(result, 1)
+        self.assertEqual(report["outcome"], "retryable")
+        self.assertEqual(report["error_code"], "keeper_chain_unavailable")
+        self.assertEqual(len(published), 2)
 
     def test_common_validation_rejects_noncanonical_and_large_bounties(self) -> None:
         with self.assertRaisesRegex(relay.RelayError, "canonical"):

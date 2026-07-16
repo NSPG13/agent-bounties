@@ -117,16 +117,20 @@ def require_exact_keys(value: Mapping[str, object], expected: set[str], context:
 
 
 @dataclass(frozen=True)
-class RelayEvent:
+class RelaySource:
     repository: str
     issue_number: int
     comment_id: int
     comment_author: str
     labels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RelayEvent(RelaySource):
     envelope: dict[str, object]
 
 
-def parse_event(path: pathlib.Path) -> RelayEvent:
+def parse_event_source(path: pathlib.Path) -> tuple[RelaySource, str]:
     raw = path.read_bytes()
     if len(raw) > 2_000_000:
         raise RelayError("GitHub event payload is too large")
@@ -159,13 +163,30 @@ def parse_event(path: pathlib.Path) -> RelayEvent:
         for item in labels_value or []
         if isinstance(item, dict) and item.get("name")
     )
+    body = str(comment.get("body") or "")
+    return RelaySource(full_name, issue_number, comment_id, author, labels), body
+
+
+def parse_event_request(source: RelaySource, body: str) -> RelayEvent:
+    labels = source.labels
     if "funded-live" not in labels:
         raise RelayError("issue is not labeled funded-live")
     if "verification-unavailable" in labels or "legacy-canary" in labels:
         raise RelayError("relay is disabled for unavailable or legacy verification")
-    body = str(comment.get("body") or "")
     envelope = parse_comment(body)
-    return RelayEvent(full_name, issue_number, comment_id, author, labels, envelope)
+    return RelayEvent(
+        source.repository,
+        source.issue_number,
+        source.comment_id,
+        source.comment_author,
+        source.labels,
+        envelope,
+    )
+
+
+def parse_event(path: pathlib.Path) -> RelayEvent:
+    source, body = parse_event_source(path)
+    return parse_event_request(source, body)
 
 
 def parse_comment(body: str) -> dict[str, object]:
@@ -186,7 +207,14 @@ def parse_comment(body: str) -> dict[str, object]:
         raise RelayError(f"relay envelope is not valid JSON: {error.msg}") from error
     if not isinstance(value, dict):
         raise RelayError("relay envelope must be a JSON object")
-    return validate_envelope(value)
+    try:
+        return validate_envelope(value)
+    except RelayError as error:
+        error.details.setdefault("action", str(value.get("action") or "unknown"))
+        error.details.setdefault(
+            "bounty_contract", str(value.get("bounty_contract") or "unknown")
+        )
+        raise
 
 
 def validate_envelope(value: dict[str, object]) -> dict[str, object]:
@@ -204,7 +232,15 @@ def validate_envelope(value: dict[str, object]) -> dict[str, object]:
     if value["schema"] != SCHEMA:
         raise RelayError(f"schema must be {SCHEMA}")
     if value["network"] != "base-mainnet":
-        raise RelayError("network must be base-mainnet")
+        raise RelayError(
+            f'network must be exactly "base-mainnet"; received {value["network"]!r}',
+            details={
+                "correction": (
+                    'Set "network" to "base-mainnet" and post a new '
+                    f'`{COMMAND}` command.'
+                )
+            },
+        )
     value["bounty_contract"] = normalize_address(str(value["bounty_contract"]))
     if action == "claim":
         value["solver"] = normalize_address(str(value["solver"]))
@@ -775,6 +811,13 @@ def render_comment(report: Mapping[str, object], comment_id: int) -> str:
         lines.extend(["", f"Relay refused: {report['error']}"])
     if report.get("error_code"):
         lines.append(f"Failure code: `{report['error_code']}`")
+    if report.get("correction"):
+        lines.extend(["", f"Next step: {report['correction']}"])
+    if report.get("workflow_disposition") == "handled_after_feedback":
+        lines.append(
+            "No transaction was broadcast. This refusal is handled only because the "
+            "originating issue received this actionable feedback."
+        )
     if report.get("retryable"):
         lines.append(
             "Retryable: yes. The same bounded request may be retried while its signature, "
@@ -797,7 +840,7 @@ def render_comment(report: Mapping[str, object], comment_id: int) -> str:
     return "\n".join(lines)
 
 
-def publish_comment(event: RelayEvent, comment: str, env: Mapping[str, str]) -> None:
+def publish_comment(event: RelaySource, comment: str, env: Mapping[str, str]) -> None:
     gh = shutil.which("gh") or shutil.which("gh.exe")
     if not gh:
         raise RelayError("gh is required to publish relay results")
@@ -1011,52 +1054,85 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.event and not args.health_check:
         print("autonomous_gas_relay=failed error=GITHUB_EVENT_PATH is required", file=sys.stderr)
         return 1
+    source: RelaySource | None = None
     event: RelayEvent | None = None
+    request_refused = False
     try:
-        client = CastClient(
-            args.cast_bin,
-            args.rpc_url,
-            args.block_tag,
-            args.command_timeout_seconds,
-            args.operation_timeout_seconds,
-        )
         if args.health_check:
+            client = CastClient(
+                args.cast_bin,
+                args.rpc_url,
+                args.block_tag,
+                args.command_timeout_seconds,
+                args.operation_timeout_seconds,
+            )
             report = keeper_health(client, os.environ.get("BASE_KEEPER_PRIVATE_KEY"))
         else:
-            event = parse_event(pathlib.Path(args.event))
-            if args.publish:
-                processing = {
+            source, body = parse_event_source(pathlib.Path(args.event))
+            try:
+                event = parse_event_request(source, body)
+            except RelayError as error:
+                request_refused = True
+                report = {
                     "schema": SCHEMA,
-                    "outcome": "processing",
-                    "action": str(event.envelope["action"]),
-                    "bounty_contract": str(event.envelope["bounty_contract"]),
-                    "state_wait_seconds": args.state_wait_seconds,
+                    "outcome": "refused",
+                    "workflow_disposition": "handled_after_feedback",
+                    "action": str(error.details.get("action") or "unknown"),
+                    "bounty_contract": str(
+                        error.details.get("bounty_contract") or "unknown"
+                    ),
+                    "issue_number": source.issue_number,
+                    "source_comment_id": source.comment_id,
+                    "source_comment_author": source.comment_author,
+                    "error": str(error),
+                    "error_code": "request_invalid",
+                    "retryable": False,
+                    "correction": str(
+                        error.details.get("correction")
+                        or f"Correct the envelope and post a new `{COMMAND}` command."
+                    ),
                 }
-                try:
-                    publish_comment(
-                        event,
-                        render_comment(processing, event.comment_id),
-                        os.environ,
-                    )
-                except (
-                    RelayError,
-                    OSError,
-                    subprocess.SubprocessError,
-                    json.JSONDecodeError,
-                ) as error:
-                    print(
-                        "autonomous_gas_relay=warning "
-                        f"error=unable to publish processing status: {error}",
-                        file=sys.stderr,
-                    )
-            report = relay(
-                client,
-                event,
-                execute=args.execute,
-                private_key=os.environ.get("BASE_KEEPER_PRIVATE_KEY"),
-                state_wait_seconds=args.state_wait_seconds,
-                state_poll_seconds=args.state_poll_seconds,
-            )
+            else:
+                client = CastClient(
+                    args.cast_bin,
+                    args.rpc_url,
+                    args.block_tag,
+                    args.command_timeout_seconds,
+                    args.operation_timeout_seconds,
+                )
+                if args.publish:
+                    processing = {
+                        "schema": SCHEMA,
+                        "outcome": "processing",
+                        "action": str(event.envelope["action"]),
+                        "bounty_contract": str(event.envelope["bounty_contract"]),
+                        "state_wait_seconds": args.state_wait_seconds,
+                    }
+                    try:
+                        publish_comment(
+                            event,
+                            render_comment(processing, event.comment_id),
+                            os.environ,
+                        )
+                    except (
+                        RelayError,
+                        OSError,
+                        subprocess.SubprocessError,
+                        json.JSONDecodeError,
+                    ) as error:
+                        print(
+                            "autonomous_gas_relay=warning "
+                            f"error=unable to publish processing status: {error}",
+                            file=sys.stderr,
+                        )
+                report = relay(
+                    client,
+                    event,
+                    execute=args.execute,
+                    private_key=os.environ.get("BASE_KEEPER_PRIVATE_KEY"),
+                    state_wait_seconds=args.state_wait_seconds,
+                    state_poll_seconds=args.state_poll_seconds,
+                )
     except (RelayError, json.JSONDecodeError, OSError, ValueError) as error:
         retryable = isinstance(error, RelayError) and error.retryable
         report = {
@@ -1072,13 +1148,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             report.update(error.details)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     write_json(args.report, report)
-    comment_id = event.comment_id if event else 0
+    comment_id = source.comment_id if source else 0
     comment = render_comment(report, comment_id)
     args.comment.parent.mkdir(parents=True, exist_ok=True)
     args.comment.write_text(comment, encoding="utf-8")
-    if args.publish and event:
+    published = False
+    if args.publish and source:
         try:
-            publish_comment(event, comment, os.environ)
+            publish_comment(source, comment, os.environ)
+            published = True
         except (RelayError, OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
             print(f"autonomous_gas_relay=failed error=unable to publish result: {error}", file=sys.stderr)
             return 1
@@ -1086,6 +1164,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"autonomous_gas_relay={report['outcome']} action={report.get('action')} "
         f"contract={report.get('bounty_contract')}"
     )
+    if request_refused:
+        return 0 if published else 1
     return 0 if report["outcome"] in {"validated", "relayed", "already_applied", "healthy"} else 1
 
 
