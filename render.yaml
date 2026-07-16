@@ -37,7 +37,7 @@ envVarGroups:
       - key: BASE_MAINNET_BOUNTY_IMPLEMENTATION
         value: 0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9
       - key: BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS
-        value: "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1"
+        value: "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1,0xb35b94e1225b66e50644a331feccdab0439e63d7"
 
   - name: agent-bounties-x402-relayer
     envVars:
