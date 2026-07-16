@@ -1265,7 +1265,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_canonical_child_terms",
-            "Derive the exact task criteria, parent-and-round benchmark commitment, minimum USDC target, deterministic verifier configuration, and proof encoding for a canonical child bounty. The parent cannot pass until a different wallet completes the child and receives canonical settlement.",
+            "Validate the child task criteria and its task-specific deterministic verifier, then derive the parent-and-round benchmark commitment, minimum USDC target, and proof encoding. The parent cannot pass until a different wallet completes the child and receives canonical settlement.",
             object_tool_schema(
                 json!({
                     "parent_bounty_id": string_property("Parent canonical bytes32 bounty ID."),
@@ -1279,7 +1279,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                         "minItems": 1,
                         "maxItems": 20
                     },
-                    "verifier_module": string_property("Deployed canonical-child-v1 verifier module committed by the parent bounty.")
+                    "verifier_module": string_property("Deployed deterministic verifier for the child task. Do not pass the parent's canonical-child verifier or the leading-zero proof-of-work canary.")
                 }),
                 &[
                     "parent_bounty_id", "parent_round", "parent_solver", "parent_solver_reward",
@@ -4886,6 +4886,18 @@ mod tests {
             canonical_child_terms.input_schema["properties"]["child_acceptance_criteria"]
                 ["minItems"],
             1
+        );
+        assert!(
+            canonical_child_terms.input_schema["properties"]["verifier_module"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("child task")
+        );
+        assert!(
+            canonical_child_terms.input_schema["properties"]["verifier_module"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Do not pass the parent's canonical-child verifier")
         );
 
         let get_live_money_readiness = descriptors

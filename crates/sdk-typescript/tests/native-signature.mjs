@@ -45,3 +45,32 @@ test("agentNativeClaim replays a native wallet signature unchanged", async () =>
     globalThis.fetch = originalFetch;
   }
 });
+
+test("canonical child planning sends task acceptance criteria", async () => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ benchmark_hash: "0x1234" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const client = new AgentBountiesClient("https://api.example");
+    const criteria = ["The committed regression test passes."];
+    await client.planAutonomousCanonicalChildTerms({
+      parent_bounty_id: `0x${"11".repeat(32)}`,
+      parent_round: 1,
+      parent_solver: "0x2222222222222222222222222222222222222222",
+      parent_solver_reward: { amount: 2_000_000, currency: "usdc" },
+      child_acceptance_criteria: criteria,
+      verifier_module: "0x3333333333333333333333333333333333333333",
+    });
+
+    assert.deepEqual(requests[0].child_acceptance_criteria, criteria);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

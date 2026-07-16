@@ -125,6 +125,7 @@ export interface CanonicalChildBountyTermsRequest {
   parent_round: number;
   parent_solver: string;
   parent_solver_reward: { amount: number; currency: "usdc" };
+  child_acceptance_criteria: string[];
   verifier_module: string;
 }
 

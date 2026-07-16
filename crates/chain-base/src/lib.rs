@@ -454,6 +454,18 @@ pub fn plan_canonical_child_bounty_terms(
             "canonical child solver and verifier module must be nonzero".to_string(),
         ));
     }
+    if verifier_module.eq_ignore_ascii_case(BASE_MAINNET_CANONICAL_CHILD_VERIFIER) {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "the parent canonical-child verifier cannot verify its own child task; choose the child's task-specific deterministic verifier"
+                .to_string(),
+        ));
+    }
+    if verifier_module.eq_ignore_ascii_case(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER) {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "the leading-zero work canary cannot verify a canonical child task: its exact proof-of-work benchmark conflicts with the required parent-bound child benchmark; deploy or choose a task-specific deterministic verifier"
+                .to_string(),
+        ));
+    }
     autonomous_money_to_uint256(&request.parent_solver_reward, false)?;
     if request.child_acceptance_criteria.is_empty()
         || request.child_acceptance_criteria.len() > 20
@@ -1568,6 +1580,8 @@ pub const BASE_MAINNET_USDC_TOKEN_ADDRESS: &str = "0x833589fCD6eDb6E08f4c7C32D4f
 pub const BASE_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 pub const BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER: &str =
     "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e";
+pub const BASE_MAINNET_CANONICAL_CHILD_VERIFIER: &str =
+    "0x40adac5a1d00a725f77682f8940b893eaed31ecf";
 pub const AUTONOMOUS_BOUNTY_PROTOCOL_HASH: &str =
     "0x0afcbf01041498cc301207aa5cd21a838c522d8c057d9b29c2dd83d7d94053e7";
 pub const AUTONOMOUS_SUBMISSION_AUTHORIZATION_TTL_SECONDS: u64 = 1_800;
@@ -5655,6 +5669,19 @@ mod tests {
             plan_canonical_child_bounty_terms(&request),
             Err(ChainBaseError::InvalidVerificationConfiguration(_))
         ));
+
+        request.child_acceptance_criteria = vec!["Return a nonempty artifact.".to_string()];
+        request.verifier_module = BASE_MAINNET_CANONICAL_CHILD_VERIFIER.to_string();
+        let recursive_error = plan_canonical_child_bounty_terms(&request).unwrap_err();
+        assert!(recursive_error
+            .to_string()
+            .contains("parent canonical-child verifier cannot verify its own child task"));
+
+        request.verifier_module = BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER.to_string();
+        let canary_error = plan_canonical_child_bounty_terms(&request).unwrap_err();
+        assert!(canary_error
+            .to_string()
+            .contains("leading-zero work canary cannot verify a canonical child task"));
     }
 
     #[test]

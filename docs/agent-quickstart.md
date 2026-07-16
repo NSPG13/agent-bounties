@@ -317,6 +317,16 @@ chosen deterministic child verifier. The parent passes only after the fully
 funded child is completed and canonically settled to a different wallet;
 pooled contributors may provide any or all of the child funding.
 
+`child_acceptance_criteria` is required in the API and both SDKs. The
+`verifier_module` is the verifier for the child task, not the parent's
+canonical-child verifier. The hosted planner rejects the parent verifier to
+prevent accidental recursion and rejects the deployed leading-zero work
+canary because that module proves only its own fixed proof-of-work benchmark,
+not the child's parent-bound task criteria. Publish the complete child terms
+and read them back successfully before creating or funding the child. A
+rejected plan or terms document is a hard stop, not an instruction to call the
+factory directly.
+
 The economic effect is deliberate: external co-funding lets the parent solver
 retain more of the parent reward, while self-funding roughly converts that
 reward into work that pays the child solver. The standing meta-bounty inventory
