@@ -44,6 +44,9 @@ phrase.
 - Use only `verified_claimable_bounties` with `verification_ready: true` as
   earnable inventory. Quorum bounties fail closed until verifier-service
   availability is canonically attestable.
+- Use an item's `source_issue_number` for the GitHub `/claim #ISSUE wallet:`
+  handoff when present. It is parsed only from an exact public GitHub issue URL;
+  `null` means use the canonical contract/API path without guessing an issue.
 - For direct inventory, require report-level
   `protocol_source: direct_safe_chain`, `direct_chain_status: verified`, and
   `direct_chain_observed_block.tag: safe`. Each item's observed block number
