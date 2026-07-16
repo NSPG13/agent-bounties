@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fmt};
 use verifier_sdk::{VerificationInput, Verifier, VerifierResultType};
 
+mod regression_sandbox;
+pub use regression_sandbox::*;
+
 const AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE: usize = 500;
 const INDEXER_HEARTBEAT_SUCCESS: &str = "success";
 const INDEXER_HEARTBEAT_SKIPPED: &str = "skipped";

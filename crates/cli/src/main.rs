@@ -3457,7 +3457,8 @@ fn print_production_smoke_report(report: &ProductionSmokeReport) -> Result<()> {
 async fn service_smoke(api_base_url: String, mcp_base_url: String) -> Result<()> {
     let api = normalize_base_url(&api_base_url);
     let mcp = normalize_base_url(&mcp_base_url);
-    let report = service_smoke_check(&api, &mcp).await?;
+    let operator_token = env::var("OPERATOR_API_TOKEN").ok();
+    let report = service_smoke_check(&api, &mcp, operator_token.as_deref()).await?;
     print_service_smoke_report(&report)
 }
 
@@ -3472,7 +3473,11 @@ struct ServiceSmokeReport {
     mcp_tools: usize,
 }
 
-async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport> {
+async fn service_smoke_check(
+    api: &str,
+    mcp: &str,
+    operator_token: Option<&str>,
+) -> Result<ServiceSmokeReport> {
     wait_for_health(&format!("{api}/health"))?;
     wait_for_health(&format!("{mcp}/health"))?;
     let _production_contract = production_smoke_check(api, mcp, false, None).await?;
@@ -3589,7 +3594,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     )?;
     let submission_id =
         value_str(&submission, "/id").context("service smoke submission id missing")?;
-    let proof = post_json(
+    let proof = post_json_with_operator_token(
         &format!("{api}/v1/bounties/{bounty_id}/verify"),
         serde_json::json!({
             "bounty_id": bounty_id,
@@ -3600,6 +3605,9 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             "evidence": null,
             "approved_risk_event_id": null
         }),
+        operator_token.context(
+            "OPERATOR_API_TOKEN is required for the legacy simulated verification smoke step",
+        )?,
     )?;
     require(
         value_str(&proof, "/proof_hash").is_some(),
@@ -3692,6 +3700,7 @@ async fn service_smoke_spawn(
     database_url: Option<String>,
     verify_restart_persistence: bool,
 ) -> Result<()> {
+    const SMOKE_OPERATOR_TOKEN: &str = "agent-bounties-local-service-smoke";
     let api = normalize_base_url(&api_base_url);
     let mcp = normalize_base_url(&mcp_base_url);
     if verify_restart_persistence && database_url.is_none() {
@@ -3708,6 +3717,7 @@ async fn service_smoke_spawn(
             ("API_BIND_ADDR", api_bind.as_str()),
             ("PUBLIC_BASE_URL", api.as_str()),
             ("MCP_BASE_URL", mcp.as_str()),
+            ("OPERATOR_API_TOKEN", SMOKE_OPERATOR_TOKEN),
         ],
         database_url.as_deref(),
     )
@@ -3728,7 +3738,7 @@ async fn service_smoke_spawn(
         }
     };
 
-    let result = service_smoke_check(&api, &mcp).await;
+    let result = service_smoke_check(&api, &mcp, Some(SMOKE_OPERATOR_TOKEN)).await;
     stop_child(&mut api_child);
     stop_child(&mut mcp_child);
     let report = result?;
@@ -3739,6 +3749,7 @@ async fn service_smoke_spawn(
             &mcp,
             database_url.as_deref().unwrap(),
             &report,
+            SMOKE_OPERATOR_TOKEN,
         )?;
     }
 
@@ -3750,6 +3761,7 @@ fn verify_service_smoke_restart_persistence(
     mcp: &str,
     database_url: &str,
     report: &ServiceSmokeReport,
+    operator_token: &str,
 ) -> Result<()> {
     let api_bind = bind_addr_from_base_url(api)?;
     let mcp_bind = bind_addr_from_base_url(mcp)?;
@@ -3762,6 +3774,7 @@ fn verify_service_smoke_restart_persistence(
             ("API_BIND_ADDR", api_bind.as_str()),
             ("PUBLIC_BASE_URL", api),
             ("MCP_BASE_URL", mcp),
+            ("OPERATOR_API_TOKEN", operator_token),
         ],
         Some(database_url),
     )
@@ -3875,6 +3888,22 @@ fn post_json(url: &str, body: serde_json::Value) -> Result<serde_json::Value> {
         "POST",
         url,
         Some(body.to_string()),
+    )?)?)
+}
+
+fn post_json_with_operator_token(
+    url: &str,
+    body: serde_json::Value,
+    operator_token: &str,
+) -> Result<serde_json::Value> {
+    if operator_token.is_empty() || operator_token.bytes().any(|byte| byte.is_ascii_control()) {
+        bail!("operator token cannot be empty or contain control characters");
+    }
+    Ok(serde_json::from_str(&http_request_with_headers(
+        "POST",
+        url,
+        Some(body.to_string()),
+        &[("x-operator-token", operator_token)],
     )?)?)
 }
 
@@ -4008,6 +4037,15 @@ async fn production_get_text(client: &reqwest::Client, url: &str) -> Result<Stri
 }
 
 fn http_request(method: &str, url: &str, body: Option<String>) -> Result<String> {
+    http_request_with_headers(method, url, body, &[])
+}
+
+fn http_request_with_headers(
+    method: &str,
+    url: &str,
+    body: Option<String>,
+    headers: &[(&str, &str)],
+) -> Result<String> {
     let parsed = parse_http_url(url)?;
     let body = body.unwrap_or_default();
     let content_headers = if method == "POST" {
@@ -4018,10 +4056,25 @@ fn http_request(method: &str, url: &str, body: Option<String>) -> Result<String>
     } else {
         String::new()
     };
+    let mut extra_headers = String::new();
+    for (name, value) in headers {
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || value.bytes().any(|byte| byte.is_ascii_control())
+        {
+            bail!("service smoke HTTP header is invalid");
+        }
+        extra_headers.push_str(name);
+        extra_headers.push_str(": ");
+        extra_headers.push_str(value);
+        extra_headers.push_str("\r\n");
+    }
     let request = format!(
         "{method} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n{}\
-         \r\n{}",
-        parsed.path, parsed.authority, content_headers, body
+         {}\r\n{}",
+        parsed.path, parsed.authority, content_headers, extra_headers, body
     );
     let mut stream = TcpStream::connect((parsed.host.as_str(), parsed.port))
         .with_context(|| format!("failed to connect to {}", parsed.authority))?;
