@@ -260,6 +260,30 @@ The contract rejects unauthorized, duplicate, expired, invalid, or mixed
 verdict signatures. Any caller may relay exactly one threshold through
 `settleWithAttestations`.
 
+#### Sandboxed Regression Candidates
+
+Coding bounties may commit `sandboxed_regression_v1` under `signed_quorum` with
+a threshold of at least two. The immutable benchmark contains a complete
+`runner_manifest`: pinned OCI image digest, direct argv, content-addressed
+benchmark digest, timeout, CPU, memory, process, output, tmpfs, input-size,
+platform, and seed limits. Submission evidence must include the exact source
+snapshot digest.
+
+The no-secrets runner binds its receipt to network, bounty id and contract,
+round, solver, submission and evidence hashes, terms and policy hashes, and the
+verification expiry. Exit zero produces a `passed` candidate; a completed
+ordinary nonzero exit produces `failed`. Timeout, output overflow, resource
+kill, missing input, digest mismatch, malformed policy, or runtime failure
+produces no verdict. The candidate is unsigned and cannot settle funds. Each
+precommitted verifier must independently evaluate and sign the exact current
+scope before the contract can settle.
+
+The repository currently contains the local runner and abuse harness only. It
+does not advertise quorum bounties as verification-ready, deploy a Docker
+runner beside the indexer, hold verifier keys, or sign/relay a verdict. Those
+require separately reviewed independent runner and signer services. See
+[`sandboxed-regression-verifier.md`](sandboxed-regression-verifier.md).
+
 ### AI Judge Quorum
 
 AI judging uses the signed-quorum path and requires threshold two or greater.

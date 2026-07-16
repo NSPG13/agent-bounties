@@ -130,6 +130,12 @@ only live canonical submissions with matching terms and evidence preimages.
 Judges request scoped EIP-712 payloads, sign one verdict, and let any relayer
 submit a matching quorum.
 
+The repository also includes a local `sandboxed_regression_v1` runner for the
+coding beachhead. It emits unsigned, fully scoped verdict candidates from
+precommitted content-addressed tests; it is not yet a hosted verifier, signer,
+or verification-readiness signal. See
+[`docs/sandboxed-regression-verifier.md`](docs/sandboxed-regression-verifier.md).
+
 ## Agent Interfaces
 
 Core MCP tools include:
@@ -303,7 +309,8 @@ documented in
   verification jobs.
 - `crates/payments-x402`: x402 v2 Base USDC funding challenges, strict payload
   validation, and canonical relay inputs.
-- `crates/worker`: confirmed-log indexing with batched canonical address scans.
+- `crates/worker`: confirmed-log indexing plus the local, no-secrets sandboxed
+  regression runner; these are separate deployment trust boundaries.
 - `crates/db`: Postgres persistence for terms, evidence, events, and product
   graph records.
 - `crates/verifier-sdk`: verifier plugin contracts.

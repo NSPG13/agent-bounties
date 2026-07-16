@@ -3329,12 +3329,26 @@ async fn submit_result(
     Ok(Json(submission))
 }
 
-#[utoipa::path(post, path = "/v1/bounties/{id}/verify")]
+#[utoipa::path(
+    post,
+    path = "/v1/bounties/{id}/verify",
+    responses(
+        (status = 200, description = "Operator-authorized legacy verification result"),
+        (status = 401, description = "Operator token required"),
+        (status = 503, description = "Legacy verification is disabled until an operator token is configured")
+    ),
+    security(("operator_api_token" = []), ("operator_bearer" = []))
+)]
 async fn verify_submission(
     State(state): State<SharedState>,
     Path(id): Path<Uuid>,
+    headers: HeaderMap,
     Json(mut request): Json<VerifySubmissionRequest>,
 ) -> Result<Json<domain::ProofRecord>, StatusCode> {
+    if state.operator_api_token.is_none() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    require_operator(&state, &headers)?;
     request.bounty_id = id;
     let mut network = {
         let mut guard = state.network.lock().expect("state poisoned");
@@ -10716,6 +10730,48 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn legacy_verification_requires_configured_operator_authorization() {
+        let bounty_id = Uuid::new_v4();
+        let request = VerifySubmissionRequest {
+            bounty_id: Uuid::nil(),
+            submission_id: Uuid::new_v4(),
+            expected_artifact_digest: "0xdeadbeef".to_string(),
+            verifier_kind: Some(VerifierKind::JsonSchema),
+            rubric: None,
+            evidence: None,
+            approved_risk_event_id: None,
+        };
+
+        let error = verify_submission(
+            State(test_state(BountyNetwork::default())),
+            Path(bounty_id),
+            HeaderMap::new(),
+            Json(request.clone()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, StatusCode::SERVICE_UNAVAILABLE);
+
+        let state = test_state_with_operator_token(BountyNetwork::default(), "secret-token");
+        let error = verify_submission(
+            State(state.clone()),
+            Path(bounty_id),
+            HeaderMap::new(),
+            Json(request.clone()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer secret-token".parse().unwrap());
+        let error = verify_submission(State(state), Path(bounty_id), headers, Json(request))
+            .await
+            .unwrap_err();
+        assert_eq!(error, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

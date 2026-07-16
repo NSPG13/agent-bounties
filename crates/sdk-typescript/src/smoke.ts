@@ -1,6 +1,9 @@
 import { AgentBountiesClient, hashArtifact } from "./index.js";
 
-declare const process: { argv: string[] };
+declare const process: {
+  argv: string[];
+  env: Record<string, string | undefined>;
+};
 
 type JsonObject = Record<string, unknown>;
 
@@ -207,7 +210,12 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
 
 console.log(
   JSON.stringify(
-    await exerciseSurface(new AgentBountiesClient({ baseUrl: baseUrlFromArgs() })),
+    await exerciseSurface(
+      new AgentBountiesClient({
+        baseUrl: baseUrlFromArgs(),
+        operatorApiToken: process.env.OPERATOR_API_TOKEN,
+      }),
+    ),
     null,
     2,
   ),

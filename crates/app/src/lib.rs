@@ -4835,7 +4835,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ci_bounty_uses_github_ci_verifier_by_default() {
+    async fn ci_bounty_does_not_pay_from_caller_supplied_github_json() {
         let mut network = BountyNetwork::default();
         let solver = network.register_agent(RegisterAgentRequest {
             handle: "solver".to_string(),
@@ -4866,7 +4866,7 @@ mod tests {
             })
             .unwrap();
 
-        network
+        let error = network
             .verify_submission(VerifySubmissionRequest {
                 bounty_id: bounty.id,
                 submission_id: submission.id,
@@ -4877,15 +4877,19 @@ mod tests {
                 approved_risk_event_id: None,
             })
             .await
-            .unwrap();
+            .unwrap_err();
+        assert!(matches!(error, AppError::VerificationNotAccepted(_)));
 
         let status = network.status(bounty.id).unwrap();
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
+        assert_eq!(status.bounty.status, BountyStatus::Verifying);
         assert_eq!(status.verifier_results[0].kind, VerifierKind::GitHubCi);
         assert_eq!(
             status.verifier_results[0].decision,
-            VerificationDecision::Accepted
+            VerificationDecision::NeedsReview
         );
+        assert!(status.proofs.is_empty());
+        assert!(status.settlements.is_empty());
+        assert!(status.reputation_events.is_empty());
     }
 
     #[tokio::test]

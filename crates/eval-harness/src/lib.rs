@@ -1245,7 +1245,7 @@ async fn verifier_suite() -> Result<EvalSuiteResult, EvalError> {
         )
         .await?,
         verifier_case(
-            "github_ci_accepts_success",
+            "github_ci_requires_authenticated_provenance_for_success",
             VerifierKind::GitHubCi,
             "abc123abc123abc123",
             None,
@@ -1254,11 +1254,11 @@ async fn verifier_suite() -> Result<EvalSuiteResult, EvalError> {
                 "success",
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )),
-            VerificationDecision::Accepted,
+            VerificationDecision::NeedsReview,
         )
         .await?,
         verifier_case(
-            "github_ci_rejects_failure",
+            "github_ci_requires_authenticated_provenance_for_failure",
             VerifierKind::GitHubCi,
             "abc123abc123abc123",
             None,
@@ -1267,7 +1267,7 @@ async fn verifier_suite() -> Result<EvalSuiteResult, EvalError> {
                 "failure",
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )),
-            VerificationDecision::Rejected,
+            VerificationDecision::NeedsReview,
         )
         .await?,
         verifier_case(
@@ -1286,23 +1286,23 @@ async fn verifier_suite() -> Result<EvalSuiteResult, EvalError> {
         )
         .await?,
         verifier_case(
-            "docker_accepts_zero_exit_and_digest",
+            "docker_self_reported_success_needs_sandbox",
             VerifierKind::DockerCommand,
             "abc123abc123abc123",
             Some("abc123abc123abc123".to_string()),
             None,
             Some(serde_json::json!({ "exit_code": 0 })),
-            VerificationDecision::Accepted,
+            VerificationDecision::NeedsReview,
         )
         .await?,
         verifier_case(
-            "docker_rejects_nonzero_exit",
+            "docker_self_reported_failure_needs_sandbox",
             VerifierKind::DockerCommand,
             "abc123abc123abc123",
             Some("abc123abc123abc123".to_string()),
             None,
             Some(serde_json::json!({ "exit_code": 1 })),
-            VerificationDecision::Rejected,
+            VerificationDecision::NeedsReview,
         )
         .await?,
         verifier_case(

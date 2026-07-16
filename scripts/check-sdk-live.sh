@@ -39,6 +39,7 @@ fi
 api_bind_addr="127.0.0.1:18280"
 api_base_url="http://127.0.0.1:18280"
 sdk_python_path="$repo_root/crates/sdk-python"
+export OPERATOR_API_TOKEN="agent-bounties-local-sdk-smoke"
 if [[ "$api_bin" == *.exe ]] && [[ -f /proc/version ]] && grep -qi microsoft /proc/version; then
   echo "scripts/check-sdk-live.sh needs a native Unix API binary under WSL; use scripts/check-sdk-live.ps1 with the Windows Rust toolchain, or install Rust inside WSL." >&2
   exit 2
