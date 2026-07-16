@@ -68,6 +68,16 @@ assert.strictEqual(protocol.default_verification.mode, "deterministic_module");
 assert.strictEqual(protocol.default_verification.module_id, "leading_zero_work_v1");
 assert.strictEqual(protocol.default_verification.verifier_reward_recipient, "creator_wallet");
 assert.strictEqual(protocol.default_verification.threshold, 1);
+assert.strictEqual(protocol.deterministic_modules.leading_zero_work_v1.usage, "protocol_canary_only");
+assert.strictEqual(
+  protocol.deterministic_modules.leading_zero_work_v1.benchmark.engine,
+  "leading_zero_work_v1",
+);
+assert.strictEqual(protocol.deterministic_modules.leading_zero_work_v1.benchmark.difficulty_bits, 16);
+assert.strictEqual(
+  protocol.deterministic_modules.leading_zero_work_v1.benchmark.verifier_module,
+  protocol.deterministic_modules.leading_zero_work_v1.contract,
+);
 
 const postHtml = fs.readFileSync(path.join(repoRoot, "site", "post.html"), "utf8");
 assert(
@@ -75,6 +85,9 @@ assert(
   "public posting must default to deterministic verification",
 );
 assert(postHtml.includes("Verifier wallet quorum (advanced)"));
+assert(postHtml.includes("16-bit work-proof canary"));
+assert(postHtml.includes("does not evaluate task output, acceptance criteria, GitHub CI, or artifact quality"));
+assert(!postHtml.includes('{"engine":"github_ci"'));
 assert(postHtml.includes('name="solverReward" type="number" min="0.01" step="0.01" value="2.00"'));
 assert(postHtml.includes('name="verifierReward" type="number" min="0.01" step="0.01" value="0.01"'));
 
@@ -100,6 +113,7 @@ async function testDeterministicPostingDefaults() {
   const documentListeners = {};
   const formListeners = {};
   const controlListeners = {};
+  const scope = { textContent: "" };
   const elements = {
     verificationMode: {
       value: "deterministic_module",
@@ -111,6 +125,19 @@ async function testDeterministicPostingDefaults() {
     verifierRewardRecipient: { value: "", disabled: false },
     verifiers: { value: "", disabled: false },
     threshold: { value: "8", readOnly: false },
+    benchmark: { value: '{"engine":"tampered"}', readOnly: false },
+    title: { value: "Canary" },
+    goal: { value: "Complete the exact work proof." },
+    acceptance: { value: "The scope-bound proof passes." },
+    evidenceSchema: { value: '{"type":"object","additionalProperties":true}' },
+    aiProvider: { value: "" },
+    aiModel: { value: "" },
+    aiModelVersion: { value: "" },
+    systemPrompt: { value: "" },
+    rubric: { value: "" },
+    decodingParameters: { value: '{"temperature":0,"seed":0}' },
+    sourceUrl: { value: "" },
+    discoverySource: { value: "" },
   };
   const form = {
     id: "autonomous-post-form",
@@ -118,8 +145,8 @@ async function testDeterministicPostingDefaults() {
     addEventListener(name, handler) {
       formListeners[name] = handler;
     },
-    querySelector() {
-      return null;
+    querySelector(selector) {
+      return selector === "[data-verifier-scope]" ? scope : null;
     },
   };
   const document = {
@@ -152,7 +179,11 @@ async function testDeterministicPostingDefaults() {
       return 1;
     },
   });
-  new vm.Script(source, { filename: "site/autonomous.js" }).runInContext(context);
+  const instrumentedSource = source.replace(
+    /\}\)\(\);\s*$/,
+    "globalThis.__agentBountiesTest = { termsDocument }; })();",
+  );
+  new vm.Script(instrumentedSource, { filename: "site/autonomous.js" }).runInContext(context);
   await documentListeners.DOMContentLoaded();
 
   assert.strictEqual(
@@ -164,6 +195,15 @@ async function testDeterministicPostingDefaults() {
   assert.strictEqual(elements.verifiers.disabled, true);
   assert.strictEqual(elements.threshold.value, "1");
   assert.strictEqual(elements.threshold.readOnly, true);
+  assert.strictEqual(elements.benchmark.readOnly, true);
+  assert.deepStrictEqual(
+    JSON.parse(elements.benchmark.value),
+    protocol.deterministic_modules.leading_zero_work_v1.benchmark,
+  );
+  assert.strictEqual(
+    scope.textContent,
+    protocol.deterministic_modules.leading_zero_work_v1.scope_notice,
+  );
 
   elements.verificationMode.value = "signed_quorum";
   controlListeners.change();
@@ -171,12 +211,33 @@ async function testDeterministicPostingDefaults() {
   assert.strictEqual(elements.verifierRewardRecipient.disabled, true);
   assert.strictEqual(elements.verifiers.disabled, false);
   assert.strictEqual(elements.threshold.readOnly, false);
+  assert.strictEqual(elements.benchmark.readOnly, false);
 
+  elements.benchmark.value = '{"engine":"github_ci"}';
   elements.verificationMode.value = "deterministic_module";
   controlListeners.change();
   assert.strictEqual(elements.verifierModule.disabled, false);
   assert.strictEqual(elements.verifiers.disabled, true);
   assert.strictEqual(elements.threshold.value, "1");
+  assert.strictEqual(elements.benchmark.readOnly, true);
+  assert.deepStrictEqual(
+    JSON.parse(elements.benchmark.value),
+    protocol.deterministic_modules.leading_zero_work_v1.benchmark,
+  );
+
+  elements.benchmark.value = '{"engine":"github_ci"}';
+  elements.verifierRewardRecipient.value = "0x1111111111111111111111111111111111111111";
+  const terms = context.__agentBountiesTest.termsDocument(
+    form,
+    { verifier_reward: { amount: 10_000, currency: "usdc" } },
+    protocol,
+  );
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(terms.benchmark)),
+    protocol.deterministic_modules.leading_zero_work_v1.benchmark,
+  );
+  assert.strictEqual(terms.verification_policy.module_id, "leading_zero_work_v1");
+  assert.strictEqual(terms.verification_policy.settlement_scope, "protocol_canary_only");
 }
 
 testDeterministicPostingDefaults()

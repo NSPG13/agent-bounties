@@ -221,11 +221,12 @@ def main() -> int:
         [
             "Sign and post bounty",
             "Create unfunded and open it for pooled funding",
-            "Permissionless on-chain verifier",
+            "16-bit work-proof canary",
             "Verifier wallet quorum (advanced)",
             "AI judge quorum (advanced)",
-            "Benchmark JSON",
-            "Evidence schema JSON",
+            "Benchmark JSON (payout condition)",
+            "Evidence record schema (hash-bound context)",
+            "does not evaluate task output, acceptance criteria, GitHub CI, or artifact quality",
             "How did you find Agent Bounties?",
         ],
     )
@@ -317,6 +318,7 @@ def main() -> int:
             "/agent-bounty relay",
             "list_autonomous_verification_jobs",
             "solver bond",
+            "protocol canary, not a code-quality verifier",
             "ai_judge_quorum",
             "at least two",
             "BountySettled",
@@ -353,6 +355,30 @@ def main() -> int:
         fail("default deterministic verifier reward recipient must be the creator wallet")
     if default_verification.get("threshold") != 1:
         fail("default deterministic verifier threshold must be one")
+    default_module = protocol["deterministic_modules"][default_verification["module_id"]]
+    expected_work_benchmark = {
+        "engine": "leading_zero_work_v1",
+        "difficulty_bits": 16,
+        "hash_function": "keccak256",
+        "preimage_abi_types": [
+            "bytes32",
+            "uint64",
+            "address",
+            "bytes32",
+            "bytes32",
+            "bytes32",
+            "uint256",
+        ],
+        "proof_encoding": "abi.encode(uint256 nonce)",
+        "verifier_module": default_module.get("contract"),
+        "reference_command": "cargo run -p cli -- autonomous-mine-work-proof",
+    }
+    if default_module.get("usage") != "protocol_canary_only":
+        fail("default work verifier must be scoped to protocol canaries")
+    if default_module.get("benchmark") != expected_work_benchmark:
+        fail("default work verifier benchmark does not match its exact contract semantics")
+    if '{"engine":"github_ci"' in pages["post.html"]:
+        fail("public posting must not pair GitHub CI with the leading-zero work verifier")
     tools = discovery.get("agent_tools", [])
     for tool in [
         "list_autonomous_bounties",

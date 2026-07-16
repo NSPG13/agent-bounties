@@ -205,9 +205,15 @@
     }
     const module = protocol.deterministic_modules && protocol.deterministic_modules[config.module_id];
     if (!module) throw new Error("The default deterministic verifier is unavailable.");
+    if (!module.benchmark || module.benchmark.engine !== config.module_id) {
+      throw new Error("The default deterministic verifier has no exact benchmark commitment.");
+    }
     return {
       ...config,
       contract: requiredAddress(module.contract || "", "Deterministic verifier module"),
+      benchmark: module.benchmark,
+      scope_notice: module.scope_notice || "The selected module controls payout.",
+      usage: module.usage || "custom",
     };
   }
 
@@ -220,6 +226,8 @@
     const recipient = form.elements.verifierRewardRecipient;
     const verifiers = form.elements.verifiers;
     const threshold = form.elements.threshold;
+    const benchmark = form.elements.benchmark;
+    const scope = form.querySelector("[data-verifier-scope]");
 
     module.value = defaults.contract;
     module.readOnly = true;
@@ -227,11 +235,16 @@
     recipient.disabled = !deterministic;
     verifiers.disabled = deterministic;
     threshold.readOnly = deterministic;
+    benchmark.readOnly = deterministic;
     if (deterministic) {
       threshold.value = String(defaults.threshold);
+      benchmark.value = canonicalJsonString(defaults.benchmark);
+      if (scope) scope.textContent = defaults.scope_notice;
       if (defaults.verifier_reward_recipient === "creator_wallet" && account && !recipient.value.trim()) {
         recipient.value = account;
       }
+    } else if (scope) {
+      scope.textContent = "Advanced modes pay only from the verifier wallets and threshold committed in the terms. Confirm verifier availability before funding.";
     }
   }
 
@@ -640,8 +653,11 @@
     };
   }
 
-  function termsDocument(form, committed) {
+  function termsDocument(form, committed, protocol) {
     const mode = form.elements.verificationMode.value;
+    const deterministicDefaults = mode === "deterministic_module"
+      ? defaultVerification(protocol)
+      : null;
     const verifiers = splitAddresses(form.elements.verifiers.value);
     const threshold = Number(form.elements.threshold.value);
     const module = optionalAddress(form.elements.verifierModule.value);
@@ -672,10 +688,16 @@
       title: form.elements.title.value.trim(),
       goal: form.elements.goal.value.trim(),
       acceptance_criteria: splitLines(form.elements.acceptance.value),
-      benchmark: parseJson(form.elements.benchmark.value, "Benchmark"),
+      benchmark: deterministicDefaults
+        ? deterministicDefaults.benchmark
+        : parseJson(form.elements.benchmark.value, "Benchmark"),
       evidence_schema: parseJson(form.elements.evidenceSchema.value, "Evidence schema"),
       verification_policy: {
         mechanism: mode,
+        ...(deterministicDefaults ? {
+          module_id: deterministicDefaults.module_id,
+          settlement_scope: deterministicDefaults.usage,
+        } : {}),
         verifier_module: mode === "deterministic_module" ? module : null,
         verifier_reward_recipient: mode === "deterministic_module" ? verifierRecipient : null,
         verifiers: mode === "deterministic_module" ? [] : verifiers,
@@ -702,7 +724,7 @@
       const api = apiBase(form);
       output(result, ["Publishing content-addressed terms...", `Creator: ${account}`]);
       const committed = contractTerms(form, account, protocol);
-      const document = termsDocument(form, committed);
+      const document = termsDocument(form, committed, protocol);
       const terms = await requestJson(`${api}/v1/base/autonomous-bounties/terms`, {
         method: "POST",
         body: JSON.stringify({ creator_wallet: account, document }),

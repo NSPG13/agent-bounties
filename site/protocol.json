@@ -17,8 +17,28 @@
   },
   "deterministic_modules": {
     "leading_zero_work_v1": {
+      "label": "16-bit scope-bound work proof",
       "contract": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
       "difficulty_bits": 16,
+      "usage": "protocol_canary_only",
+      "scope_notice": "This module verifies only the locked 16-bit scope-bound work proof. It does not evaluate task output, acceptance criteria, GitHub CI, or artifact quality.",
+      "benchmark": {
+        "engine": "leading_zero_work_v1",
+        "difficulty_bits": 16,
+        "hash_function": "keccak256",
+        "preimage_abi_types": [
+          "bytes32",
+          "uint64",
+          "address",
+          "bytes32",
+          "bytes32",
+          "bytes32",
+          "uint256"
+        ],
+        "proof_encoding": "abi.encode(uint256 nonce)",
+        "verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+        "reference_command": "cargo run -p cli -- autonomous-mine-work-proof"
+      },
       "deployment_transaction": "0xd1cc22fbd07aaaf19ccd7bf78f1ad452349303c3ba17229500398eab91f6b44e",
       "deployment_block": 48499521,
       "runtime_code_hash": "0xbaa3a8305c4b65d0dc20131d0ef207fdaf4763f345393a831370cd04077df9b3"

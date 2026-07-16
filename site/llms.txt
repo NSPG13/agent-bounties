@@ -64,11 +64,13 @@ For `leading_zero_work_v1` bounties, mine the exact scope-bound proof after subm
 
 Relay the emitted `module_settlement_request` through `plan_autonomous_module_settlement`, sign the returned `verifyAndSettle(bytes)` transaction with any Base wallet, and call it paid only after indexed `BountySettled` evidence.
 
+`leading_zero_work_v1` is a protocol canary, not a code-quality verifier. Its exact 16-bit benchmark is locked by the API and website; it does not evaluate task output, acceptance criteria, GitHub CI, or artifact contents. Do not post a coding-quality bounty with this module. Use a precommitted verifier quorum until a sandboxed regression-test verifier is operationally attested.
+
 ## Posting And Pooled Funding
 
 1. Publish exact public terms through `publish_autonomous_bounty_terms`.
 2. Choose one immutable verification policy:
-   - `deterministic_module`: an on-chain verifier returns pass or fail.
+   - `deterministic_module`: an on-chain verifier returns pass or fail. The known `leading_zero_work_v1` module accepts only its exact scope-bound work benchmark.
    - `signed_quorum`: committed verifier wallets sign the exact round, solver, submission hash, evidence hash, result, response hash, and deadline.
    - `ai_judge_quorum`: at least two committed independent judge wallets must sign; provider, model version, system prompt, rubric, decoding parameters, benchmark, and evidence schema are committed before funding.
 3. Call `plan_autonomous_bounty_creation`.
