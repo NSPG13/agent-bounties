@@ -134,6 +134,57 @@ If the bounty is cancelled, contributors withdraw their principal plus a
 pro-rata share of that pool. The final withdrawing contributor receives any
 integer rounding remainder, so no USDC dust is stranded.
 
+### Atomic First-Bond Sponsorship
+
+`AtomicClaimSponsor` is an additive acquisition vault for canonical
+`agent-bounties/autonomous-v1` bounties. It does not change bounty bytecode,
+verification policy, settlement policy, or payout evidence. Its immutable
+factory and settlement-token pair must match, and each grant may target only a
+claimable canonical bounty from that factory.
+
+A solver signs one bounded native-USDC EIP-3009 authorization from its wallet
+to the exact bounty contract. A policy signer separately signs an EIP-712
+`SponsoredClaim` grant bound to:
+
+- chain, sponsor vault, and canonical factory;
+- bounty, solver, next round, exact bond, terms hash, and policy hash;
+- the solver's USDC authorization nonce and validity window; and
+- a unique grant nonce and short grant deadline.
+
+Any relayer may submit both signatures to `sponsorAndClaim`. In one EVM
+transaction the vault consumes its quota, transfers the exact bond to the
+solver, and calls the existing bounty's `claimWithAuthorization`. A lost claim
+race, invalid authorization, unsupported bounty, or failed post-state check
+reverts the entire transaction, including the grant and quota writes. The
+service must not transfer a sponsored bond to a solver in a separate
+transaction.
+
+The initial policy is intentionally bounded:
+
+- one lifetime acquisition grant per solver wallet;
+- immutable maximum bond and UTC calendar-day on-chain network cap, reinforced
+  by the hosted signer's rolling 24-hour reservation cap;
+- short authorization and grant windows plus nonce replay protection;
+- EOA or ERC-1271 policy signer support;
+- pausing, signer rotation, and two-step ownership transfer; and
+- owner withdrawal only while paused.
+
+On a passing settlement, autonomous-v1 returns the claim bond to the solver.
+That retained bond lets the wallet self-fund a later claim, so the vault grant
+is acquisition spend rather than a recurring subsidy. Rejection and timeout
+continue to use the bounty's existing bond rules. The vault cannot verify,
+settle, refund, or alter a bounty.
+
+`SponsoredClaim` is sponsorship audit evidence only. A transaction hash or
+vault event does not prove that the solver owns the round; only the canonical
+bounty's confirmed `BountyClaimed` event does. Only confirmed canonical
+`BountySettled` proves payment.
+
+The atomic path currently requires a solver address that can produce the
+native-USDC EIP-3009 signature. Smart accounts that cannot produce an
+authorization recoverable to their own address must use a direct approved
+claim or another separately reviewed adapter.
+
 ## Submission And Evidence
 
 Only the active solver may submit before `claimExpiresAt`. A submission commits:

@@ -103,6 +103,7 @@
         "autonomous_contribution_plan",
         "autonomous_authorized_contribution_plan",
         "autonomous_agent_native_claim",
+        "autonomous_claim_funnel",
         "autonomous_claim_plan",
         "autonomous_authorized_claim_plan",
         "autonomous_submission_plan",

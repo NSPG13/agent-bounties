@@ -796,7 +796,10 @@ class AgentBountiesClient:
 
         The signer receives only the server-derived EIP-712 signing_payload and
         must return ``{"v": int, "r": "0x...", "s": "0x..."}``. Keys never
-        leave the caller's wallet implementation.
+        leave the caller's wallet implementation. When bond sponsorship is
+        requested and available, that one signature authorizes an atomic
+        bond-plus-claim transaction: either both transitions succeed or neither
+        moves value. Only the returned canonical event proves claim ownership.
         """
         request = {
             "idempotency_key": idempotency_key or f"sdk-python-{uuid.uuid4()}",

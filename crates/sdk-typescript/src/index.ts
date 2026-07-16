@@ -149,10 +149,18 @@ export interface AgentNativeClaimResponse {
   candidate: Record<string, unknown> & { status?: string };
   waitlist_position?: number | null;
   claim_bond: string;
+  sponsorship_requested: boolean;
   sponsorship_available: boolean;
+  sponsorship_protocol?: "agent-bounties/atomic-claim-sponsor-v1" | null;
+  sponsor_contract?: string | null;
+  sponsorship?: Record<string, unknown> | null;
   signing_payload?: Record<string, unknown> | null;
+  claim_transaction_hash?: string | null;
   canonical_event_id?: string | null;
   next_action: string;
+  next_request?: Record<string, unknown> | null;
+  browser_fallback_url: string;
+  evidence_boundary: string;
 }
 
 export type AgentClaimSigner = (

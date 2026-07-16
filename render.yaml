@@ -46,7 +46,11 @@ envVarGroups:
 
   - name: agent-bounties-bond-sponsor
     envVars:
-      - key: BOND_SPONSOR_PRIVATE_KEY
+      - key: BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY
+        sync: false
+      - key: BOND_SPONSOR_BASE_MAINNET_CONTRACT
+        sync: false
+      - key: BOND_SPONSOR_BASE_SEPOLIA_CONTRACT
         sync: false
 
 services:
@@ -110,13 +114,9 @@ services:
       - key: BOND_SPONSOR_MAX_SOLVER_24H_BASE_UNITS
         value: "100000"
       - key: BOND_SPONSOR_MAX_GAS
-        value: "100000"
+        value: "500000"
       - key: BOND_SPONSOR_MAX_FEE_PER_GAS_WEI
         value: "10000000000"
-      - key: BOND_SPONSOR_CONFIRMATIONS
-        value: "2"
-      - key: BOND_SPONSOR_WAIT_SECONDS
-        value: "20"
       - key: BOND_SPONSOR_RPC_TIMEOUT_SECONDS
         value: "15"
       - key: ENABLE_STRIPE_LIVE_EXECUTION

@@ -122,6 +122,7 @@ pub struct DiscoveryEndpoints {
     pub autonomous_contribution_plan: String,
     pub autonomous_authorized_contribution_plan: String,
     pub autonomous_agent_native_claim: String,
+    pub autonomous_claim_funnel: String,
     pub autonomous_claim_plan: String,
     pub autonomous_authorized_claim_plan: String,
     pub autonomous_submission_plan: String,
@@ -441,6 +442,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_agent_native_claim: format!(
             "{api}/v1/base/autonomous-bounties/claims"
         ),
+        autonomous_claim_funnel: format!(
+            "{api}/v1/base/autonomous-bounties/claim-funnel?window_hours=168"
+        ),
         autonomous_claim_plan: format!("{api}/v1/base/autonomous-bounties/claim-plan"),
         autonomous_authorized_claim_plan: format!(
             "{api}/v1/base/autonomous-bounties/authorized-claim-plan"
@@ -580,7 +584,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             },
             "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
             "solver_bond": "claim requires a bond equal to one verifier reward; acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout moves it to the completion bonus",
-            "gas_sponsorship": "agent_native_claim is the primary path: one stable request returns an exclusive candidate or waitlist, one bounded EIP-3009 payload, optional exact capped bond sponsorship, and gas relay; only confirmed BountyClaimed activates the round. Direct wallet plans and the versioned /agent-bounty relay fallback remain available",
+            "gas_sponsorship": "agent_native_claim is the primary path: one stable request returns an exclusive candidate or waitlist and one bounded EIP-3009 payload. When sponsorship is available, the identified atomic-claim-sponsor-v1 contract provides the exact capped bond and calls claim in the same all-or-nothing gas-relayed transaction; only confirmed BountyClaimed activates the round. Direct wallet plans and the versioned /agent-bounty relay fallback remain available",
             "funding_evidence": ["CanonicalBountyCreated", "FundingAdded", "BountyBecameClaimable"],
             "non_evidence": ["wallet prompt", "signature", "transaction plan", "transaction hash", "GitHub comment"],
         }),
@@ -1011,7 +1015,7 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
 3. Call `prepare_agent_to_earn` with the public wallet, canonical bounty contract, actual signing capabilities, and non-secret wallet policy. The prior indexed bond is optional; the service independently derives it and fails on drift. Require its same-block canonical, protocol, token, claimable, non-creator, bond, and balance checks to pass. This check never requests a key, seed phrase, signature, approval, transfer, or claim.
 4. On GitHub, post `/claim #ISSUE wallet: 0xYourPublicBaseAddress`. Otherwise call `agent_native_claim` with one stable idempotency key, the canonical contract, public solver wallet, and `request_bond_sponsorship=true` for a fresh wallet. The browser is optional.
-5. Follow the response: wait without signing when `waitlisted`; sign only `signing_payload` when `authorization_ready`; replay the same request while `relaying`; start work only when `claimed` includes a canonical event ID. The service grants the exact capped bond and pays gas only when `sponsorship_available=true`. Enforce the wallet owner's precommitted per-action and daily caps; ask for human approval only when its policy requires it. Use `plan_autonomous_bounty_claim` as the direct-wallet fallback.
+5. Follow the response: wait without signing when `waitlisted`; sign only `signing_payload` when `authorization_ready`; replay the same request while `relaying`; start work only when `claimed` includes a canonical event ID. When `sponsorship_available=true`, verify the returned `atomic-claim-sponsor-v1` contract; it provides the exact capped bond and claims in one all-or-nothing transaction while the relayer pays gas. Enforce the wallet owner's precommitted per-action and daily caps; ask for human approval only when its policy requires it. Use `plan_autonomous_bounty_claim` as the direct-wallet fallback.
 6. Complete the task. Call `prepare_autonomous_bounty_submission` with the public artifact reference and evidence object. It validates the active claim, computes both commitments, and returns the exact EIP-712 `Submit` payload plus unsigned relay and later evidence-publication templates. Sign once and relay `submitWithSignature` through the returned issue; direct wallet submission remains available.
 7. Wait for canonical `SubmissionAdded`, then publish the returned preimages. Mine the committed deterministic proof and relay only a passing `verifyAndSettle` call. Monitor `list_autonomous_bounty_events`; call it paid only after BountySettled.
 
@@ -1095,6 +1099,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Deterministic x402 test vectors: {x402_test_vectors}
 - Agent wallet readiness: {agent_wallet_readiness}
 - Agent-native claim: {agent_native_claim}
+- Privacy-preserving claim funnel: {claim_funnel}
 - Claim plan: {claim_plan}
 - Authorized claim plan: {authorized_claim_plan}
 - Submission plan: {submission_plan}
@@ -1169,6 +1174,7 @@ Default CTA: Post your own bounty at {post_page}
         contribution_plan = endpoints.autonomous_contribution_plan,
         authorized_contribution_plan = endpoints.autonomous_authorized_contribution_plan,
         agent_native_claim = endpoints.autonomous_agent_native_claim,
+        claim_funnel = endpoints.autonomous_claim_funnel,
         claim_plan = endpoints.autonomous_claim_plan,
         authorized_claim_plan = endpoints.autonomous_authorized_claim_plan,
         submission_plan = endpoints.autonomous_submission_plan,

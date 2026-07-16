@@ -16,7 +16,7 @@ use domain::{
 use ledger::{LedgerEntry, Posting};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -135,6 +135,44 @@ pub enum DbError {
 }
 
 pub type DbResult<T> = Result<T, DbError>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ClaimFunnelStageCounts {
+    pub observed: u64,
+    pub unique_solver_wallets: u64,
+    pub waitlisted_current: u64,
+    pub exclusive_current: u64,
+    pub authorization_ready_current: u64,
+    pub relaying_current: u64,
+    pub authorization_prepared: u64,
+    pub transaction_broadcast: u64,
+    pub claimed_canonical: u64,
+    pub superseded: u64,
+    pub withdrawn: u64,
+    pub failed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ClaimSponsorshipFunnelCounts {
+    pub reserved: u64,
+    pub broadcast: u64,
+    pub confirmed: u64,
+    pub failed: u64,
+    pub sponsored_claims_confirmed: u64,
+    pub direct_claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ClaimFunnelStats {
+    pub schema_version: String,
+    pub window_hours: u32,
+    pub window_started_at: DateTime<Utc>,
+    pub generated_at: DateTime<Utc>,
+    pub stages: ClaimFunnelStageCounts,
+    pub sponsorship: ClaimSponsorshipFunnelCounts,
+    pub failure_codes: BTreeMap<String, u64>,
+    pub evidence_boundary: String,
+}
 
 const SELECT_GITHUB_ISSUE_SYNC_BOUNTY_FOR_UPDATE_SQL: &str = r#"
             SELECT id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at
@@ -1084,8 +1122,8 @@ impl PostgresStore {
         }
         let usage = sqlx::query(
             r#"
-            SELECT COALESCE(SUM(amount), 0) AS network_amount,
-                   COALESCE(SUM(amount) FILTER (WHERE solver_wallet = $2), 0) AS solver_amount
+            SELECT COALESCE(SUM(amount), 0)::bigint AS network_amount,
+                   COALESCE(SUM(amount) FILTER (WHERE solver_wallet = $2), 0)::bigint AS solver_amount
             FROM bond_sponsorships
             WHERE network = $1
               AND (status <> 'failed' OR failure_code = 'broadcast_unknown')
@@ -1142,6 +1180,121 @@ impl PostgresStore {
             .transpose()
     }
 
+    pub async fn get_claim_candidate_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> DbResult<Option<ClaimCandidate>> {
+        sqlx::query(CLAIM_CANDIDATE_SELECT_BY_IDEMPOTENCY_SQL)
+            .bind(idempotency_key.trim())
+            .fetch_optional(&self.pool)
+            .await?
+            .map(claim_candidate_from_row)
+            .transpose()
+    }
+
+    pub async fn claim_funnel_stats(&self, window_hours: u32) -> DbResult<ClaimFunnelStats> {
+        let window_hours = window_hours.clamp(1, 720);
+        let generated_at = Utc::now();
+        let window_started_at = generated_at - chrono::Duration::hours(i64::from(window_hours));
+        let row = sqlx::query(
+            r#"
+            SELECT
+              COUNT(*) AS observed,
+              COUNT(DISTINCT solver_wallet) AS unique_solver_wallets,
+              COUNT(*) FILTER (WHERE status = 'waitlisted') AS waitlisted_current,
+              COUNT(*) FILTER (WHERE status IN ('exclusive', 'sponsoring')) AS exclusive_current,
+              COUNT(*) FILTER (WHERE status = 'authorization_ready') AS authorization_ready_current,
+              COUNT(*) FILTER (WHERE status = 'relaying') AS relaying_current,
+              COUNT(*) FILTER (WHERE authorization_nonce IS NOT NULL) AS authorization_prepared,
+              COUNT(*) FILTER (WHERE claim_transaction_hash IS NOT NULL) AS transaction_broadcast,
+              COUNT(*) FILTER (WHERE status = 'claimed' AND canonical_event_id IS NOT NULL) AS claimed_canonical,
+              COUNT(*) FILTER (WHERE status = 'superseded') AS superseded,
+              COUNT(*) FILTER (WHERE status = 'withdrawn') AS withdrawn,
+              COUNT(*) FILTER (WHERE status = 'failed') AS failed
+            FROM claim_candidates
+            WHERE created_at >= $1
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_one(&self.pool)
+        .await?;
+        let stages = ClaimFunnelStageCounts {
+            observed: u64_from_i64(row.try_get("observed")?)?,
+            unique_solver_wallets: u64_from_i64(row.try_get("unique_solver_wallets")?)?,
+            waitlisted_current: u64_from_i64(row.try_get("waitlisted_current")?)?,
+            exclusive_current: u64_from_i64(row.try_get("exclusive_current")?)?,
+            authorization_ready_current: u64_from_i64(row.try_get("authorization_ready_current")?)?,
+            relaying_current: u64_from_i64(row.try_get("relaying_current")?)?,
+            authorization_prepared: u64_from_i64(row.try_get("authorization_prepared")?)?,
+            transaction_broadcast: u64_from_i64(row.try_get("transaction_broadcast")?)?,
+            claimed_canonical: u64_from_i64(row.try_get("claimed_canonical")?)?,
+            superseded: u64_from_i64(row.try_get("superseded")?)?,
+            withdrawn: u64_from_i64(row.try_get("withdrawn")?)?,
+            failed: u64_from_i64(row.try_get("failed")?)?,
+        };
+        let sponsorship_row = sqlx::query(
+            r#"
+            SELECT
+              COUNT(*) FILTER (WHERE sponsorship.status = 'reserved') AS reserved,
+              COUNT(*) FILTER (WHERE sponsorship.status = 'broadcast') AS broadcast,
+              COUNT(*) FILTER (WHERE sponsorship.status = 'confirmed') AS confirmed,
+              COUNT(*) FILTER (WHERE sponsorship.status = 'failed') AS failed,
+              COUNT(*) FILTER (
+                WHERE sponsorship.status = 'confirmed'
+                  AND candidate.status = 'claimed'
+                  AND candidate.canonical_event_id IS NOT NULL
+              ) AS sponsored_claims_confirmed
+            FROM bond_sponsorships sponsorship
+            JOIN claim_candidates candidate ON candidate.id = sponsorship.claim_candidate_id
+            WHERE sponsorship.created_at >= $1
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_one(&self.pool)
+        .await?;
+        let sponsored_claims_confirmed =
+            u64_from_i64(sponsorship_row.try_get("sponsored_claims_confirmed")?)?;
+        let sponsorship = ClaimSponsorshipFunnelCounts {
+            reserved: u64_from_i64(sponsorship_row.try_get("reserved")?)?,
+            broadcast: u64_from_i64(sponsorship_row.try_get("broadcast")?)?,
+            confirmed: u64_from_i64(sponsorship_row.try_get("confirmed")?)?,
+            failed: u64_from_i64(sponsorship_row.try_get("failed")?)?,
+            sponsored_claims_confirmed,
+            direct_claims_confirmed: stages
+                .claimed_canonical
+                .saturating_sub(sponsored_claims_confirmed),
+        };
+        let failure_rows = sqlx::query(
+            r#"
+            SELECT failure_code, COUNT(*) AS count
+            FROM claim_candidates
+            WHERE created_at >= $1 AND status = 'failed' AND failure_code IS NOT NULL
+            GROUP BY failure_code
+            ORDER BY failure_code
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut failure_codes = BTreeMap::new();
+        for failure in failure_rows {
+            failure_codes.insert(
+                failure.try_get::<String, _>("failure_code")?,
+                u64_from_i64(failure.try_get("count")?)?,
+            );
+        }
+        Ok(ClaimFunnelStats {
+            schema_version: "agent-bounties/claim-funnel-v1".to_string(),
+            window_hours,
+            window_started_at,
+            generated_at,
+            stages,
+            sponsorship,
+            failure_codes,
+            evidence_boundary: "Candidate and sponsorship rows measure hosted coordination. Only confirmed canonical BountyClaimed events count as claims, and only canonical BountySettled events prove payout.".to_string(),
+        })
+    }
+
     pub async fn mark_bond_sponsorship_broadcast(
         &self,
         id: Uuid,
@@ -1173,6 +1326,185 @@ impl PostgresStore {
         message: &str,
     ) -> DbResult<BondSponsorship> {
         update_bond_sponsorship(&self.pool, id, "failed", None, None, Some((code, message))).await
+    }
+
+    pub async fn mark_atomic_sponsored_claim_broadcast(
+        &self,
+        candidate_id: Uuid,
+        sponsorship_id: Uuid,
+        tx_hash: &str,
+    ) -> DbResult<(ClaimCandidate, BondSponsorship)> {
+        let tx_hash = tx_hash.trim().to_ascii_lowercase();
+        let mut transaction = self.pool.begin().await?;
+        let candidate = sqlx::query(
+            r#"
+            UPDATE claim_candidates
+            SET status = 'relaying', claim_transaction_hash = $2, updated_at = now()
+            WHERE id = $1 AND (
+              status IN ('exclusive', 'sponsoring', 'authorization_ready')
+              OR (status = 'relaying' AND claim_transaction_hash = $2)
+            )
+            RETURNING id, idempotency_key, network, bounty_contract, solver_wallet,
+                      agent_id, eligibility_evidence, eligibility_decision, status,
+                      exclusive_until, authorization_nonce, authorization_valid_before,
+                      claim_transaction_hash, canonical_event_id, failure_code,
+                      failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(candidate_id)
+        .bind(&tx_hash)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or_else(|| {
+            DbError::ClaimCandidateConflict(
+                "atomic sponsored claim candidate cannot transition to relaying".to_string(),
+            )
+        })
+        .and_then(claim_candidate_from_row)?;
+        let sponsorship = sqlx::query(
+            r#"
+            UPDATE bond_sponsorships
+            SET status = 'broadcast', transaction_hash = $2, updated_at = now()
+            WHERE id = $1 AND claim_candidate_id = $3 AND (
+              status = 'reserved' OR (status = 'broadcast' AND transaction_hash = $2)
+            )
+            RETURNING id, claim_candidate_id, network, bounty_contract, solver_wallet,
+                      sponsor_wallet, amount, status, transaction_hash, confirmed_block,
+                      failure_code, failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(sponsorship_id)
+        .bind(&tx_hash)
+        .bind(candidate_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or_else(|| {
+            DbError::ClaimCandidateConflict(
+                "atomic bond sponsorship cannot transition to broadcast".to_string(),
+            )
+        })
+        .and_then(bond_sponsorship_from_row)?;
+        transaction.commit().await?;
+        Ok((candidate, sponsorship))
+    }
+
+    pub async fn mark_atomic_sponsored_claim_confirmed(
+        &self,
+        candidate_id: Uuid,
+        sponsorship_id: Uuid,
+        canonical_event_id: Uuid,
+        confirmed_block: u64,
+    ) -> DbResult<(ClaimCandidate, BondSponsorship)> {
+        let mut transaction = self.pool.begin().await?;
+        let candidate = sqlx::query(
+            r#"
+            UPDATE claim_candidates
+            SET status = 'claimed', canonical_event_id = $2, updated_at = now()
+            WHERE id = $1 AND status IN ('relaying', 'claimed')
+            RETURNING id, idempotency_key, network, bounty_contract, solver_wallet,
+                      agent_id, eligibility_evidence, eligibility_decision, status,
+                      exclusive_until, authorization_nonce, authorization_valid_before,
+                      claim_transaction_hash, canonical_event_id, failure_code,
+                      failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(candidate_id)
+        .bind(canonical_event_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or_else(|| {
+            DbError::ClaimCandidateConflict(
+                "atomic sponsored claim candidate cannot transition to claimed".to_string(),
+            )
+        })
+        .and_then(claim_candidate_from_row)?;
+        let sponsorship = sqlx::query(
+            r#"
+            UPDATE bond_sponsorships
+            SET status = 'confirmed', confirmed_block = $2, updated_at = now()
+            WHERE id = $1 AND claim_candidate_id = $3
+              AND status IN ('broadcast', 'confirmed')
+            RETURNING id, claim_candidate_id, network, bounty_contract, solver_wallet,
+                      sponsor_wallet, amount, status, transaction_hash, confirmed_block,
+                      failure_code, failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(sponsorship_id)
+        .bind(i64_from_u64(confirmed_block)?)
+        .bind(candidate_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or_else(|| {
+            DbError::ClaimCandidateConflict(
+                "atomic bond sponsorship cannot transition to confirmed".to_string(),
+            )
+        })
+        .and_then(bond_sponsorship_from_row)?;
+        transaction.commit().await?;
+        Ok((candidate, sponsorship))
+    }
+
+    pub async fn mark_atomic_sponsored_claim_failed(
+        &self,
+        candidate_id: Uuid,
+        sponsorship_id: Uuid,
+        code: &str,
+        message: &str,
+    ) -> DbResult<(ClaimCandidate, BondSponsorship)> {
+        let message = message.chars().take(500).collect::<String>();
+        let mut transaction = self.pool.begin().await?;
+        let candidate = sqlx::query(
+            r#"
+            UPDATE claim_candidates
+            SET status = 'failed', failure_code = $2, failure_message = $3,
+                updated_at = now()
+            WHERE id = $1 AND status IN (
+              'exclusive', 'sponsoring', 'authorization_ready', 'relaying', 'failed'
+            )
+            RETURNING id, idempotency_key, network, bounty_contract, solver_wallet,
+                      agent_id, eligibility_evidence, eligibility_decision, status,
+                      exclusive_until, authorization_nonce, authorization_valid_before,
+                      claim_transaction_hash, canonical_event_id, failure_code,
+                      failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(candidate_id)
+        .bind(code)
+        .bind(&message)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or_else(|| {
+            DbError::ClaimCandidateConflict(
+                "atomic sponsored claim candidate cannot transition to failed".to_string(),
+            )
+        })
+        .and_then(claim_candidate_from_row)?;
+        let sponsorship = sqlx::query(
+            r#"
+            UPDATE bond_sponsorships
+            SET status = 'failed', failure_code = $2, failure_message = $3,
+                updated_at = now()
+            WHERE id = $1 AND claim_candidate_id = $4
+              AND status IN ('reserved', 'broadcast', 'failed')
+            RETURNING id, claim_candidate_id, network, bounty_contract, solver_wallet,
+                      sponsor_wallet, amount, status, transaction_hash, confirmed_block,
+                      failure_code, failure_message, created_at, updated_at
+            "#,
+        )
+        .bind(sponsorship_id)
+        .bind(code)
+        .bind(&message)
+        .bind(candidate_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or_else(|| {
+            DbError::ClaimCandidateConflict(
+                "atomic bond sponsorship cannot transition to failed".to_string(),
+            )
+        })
+        .and_then(bond_sponsorship_from_row)?;
+        transaction.commit().await?;
+        Ok((candidate, sponsorship))
     }
 
     pub async fn upsert_agent(&self, agent: &Agent) -> DbResult<()> {
@@ -4264,6 +4596,133 @@ mod tests {
             .unwrap();
         assert_eq!(confirmed.status, X402RelayStatus::Confirmed);
         assert!(!confirmed.retryable);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn claim_funnel_counts_direct_and_atomic_sponsored_confirmations() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let baseline = store.claim_funnel_stats(1).await.unwrap();
+        let network = format!("funnel-test-{}", Uuid::new_v4());
+        let address = |id: Uuid| {
+            let value = id.simple().to_string();
+            format!("0x{value}{}", &value[..8])
+        };
+        let reserve = |bounty_contract: String, solver_wallet: String| NewClaimCandidate {
+            id: Uuid::new_v4(),
+            idempotency_key: format!("claim-funnel-{}", Uuid::new_v4()),
+            network: network.clone(),
+            bounty_contract,
+            solver_wallet: solver_wallet.clone(),
+            agent_id: None,
+            eligibility_evidence: AgentEligibilityEvidence {
+                agent_id: None,
+                solver_wallet,
+                capabilities: Vec::new(),
+                paid_completions: 0,
+                paid_usdc_base_units: 0,
+            },
+            eligibility_decision: AgentEligibilityDecision {
+                eligible: true,
+                reasons: Vec::new(),
+            },
+        };
+        let valid_before = u64::try_from(Utc::now().timestamp()).unwrap() + 600;
+
+        let direct_input = reserve(address(Uuid::new_v4()), address(Uuid::new_v4()));
+        let direct = store
+            .reserve_claim_candidate(&direct_input, 600, 5)
+            .await
+            .unwrap()
+            .candidate;
+        store
+            .set_claim_candidate_authorization(
+                direct.id,
+                &format!("0x{}", "11".repeat(32)),
+                valid_before,
+            )
+            .await
+            .unwrap();
+        store
+            .mark_claim_candidate_relaying(direct.id, &format!("0x{}", "22".repeat(32)))
+            .await
+            .unwrap();
+        store
+            .mark_claim_candidate_claimed(direct.id, Uuid::new_v4())
+            .await
+            .unwrap();
+
+        let sponsored_input = reserve(address(Uuid::new_v4()), address(Uuid::new_v4()));
+        let sponsored = store
+            .reserve_claim_candidate(&sponsored_input, 600, 5)
+            .await
+            .unwrap()
+            .candidate;
+        store
+            .set_claim_candidate_authorization(
+                sponsored.id,
+                &format!("0x{}", "33".repeat(32)),
+                valid_before,
+            )
+            .await
+            .unwrap();
+        let sponsorship = store
+            .reserve_bond_sponsorship(
+                &NewBondSponsorship {
+                    id: Uuid::new_v4(),
+                    claim_candidate_id: sponsored.id,
+                    network: network.clone(),
+                    bounty_contract: sponsored.bounty_contract.clone(),
+                    solver_wallet: sponsored.solver_wallet.clone(),
+                    sponsor_wallet: address(Uuid::new_v4()),
+                    amount: 10_000,
+                },
+                100_000,
+                10_000,
+            )
+            .await
+            .unwrap();
+        store
+            .mark_atomic_sponsored_claim_broadcast(
+                sponsored.id,
+                sponsorship.id,
+                &format!("0x{}", "44".repeat(32)),
+            )
+            .await
+            .unwrap();
+        store
+            .mark_atomic_sponsored_claim_confirmed(sponsored.id, sponsorship.id, Uuid::new_v4(), 1)
+            .await
+            .unwrap();
+
+        let observed = store.claim_funnel_stats(1).await.unwrap();
+        assert_eq!(observed.stages.observed, baseline.stages.observed + 2);
+        assert_eq!(
+            observed.stages.unique_solver_wallets,
+            baseline.stages.unique_solver_wallets + 2
+        );
+        assert_eq!(
+            observed.stages.authorization_prepared,
+            baseline.stages.authorization_prepared + 2
+        );
+        assert_eq!(
+            observed.stages.transaction_broadcast,
+            baseline.stages.transaction_broadcast + 2
+        );
+        assert_eq!(
+            observed.stages.claimed_canonical,
+            baseline.stages.claimed_canonical + 2
+        );
+        assert_eq!(
+            observed.sponsorship.sponsored_claims_confirmed,
+            baseline.sponsorship.sponsored_claims_confirmed + 1
+        );
+        assert_eq!(
+            observed.sponsorship.direct_claims_confirmed,
+            baseline.sponsorship.direct_claims_confirmed + 1
+        );
     }
 
     #[test]

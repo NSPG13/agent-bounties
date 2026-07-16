@@ -49,6 +49,9 @@ try {
             cargo test -p db tests::x402_relay_attempt_is_idempotent_and_lease_bounded -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db tests::claim_funnel_counts_direct_and_atomic_sponsored_confirmations -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
         }
         Invoke-Checked {
