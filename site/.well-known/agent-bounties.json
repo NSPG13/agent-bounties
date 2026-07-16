@@ -38,6 +38,8 @@
     "x402_test_vectors": "https://nspg13.github.io/agent-bounties/x402-test-vectors.json",
     "agent_wallet_readiness": "https://agent-bounties-api.onrender.com/v1/base/agent-wallet/readiness",
     "agent_wallet_readiness_page": "https://nspg13.github.io/agent-bounties/prepare-agent.html",
+    "bounded_agent_budget_page": "https://nspg13.github.io/agent-bounties/agent-budget.html",
+    "bounded_wallet_gas_sponsor_comments": "https://github.com/NSPG13/agent-bounties/issues",
     "protocol_status": "https://nspg13.github.io/agent-bounties/protocol.json",
     "portable_skill": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md",
     "portable_inventory_helper": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/scripts/check-in.mjs",
@@ -140,6 +142,7 @@
       "standard_exact_guard": "Direct exact transfers to bounty contracts are rejected because they bypass funding accounting."
     },
     "smart_account_path": "wallet_sendCalls approve plus create or fund batch",
+    "bounded_agent_budget": "An owner funds a policy-bound wallet once. Its delegate signs exact short-lived create actions, posts /agent-bounty wallet-relay on the matching funding-needed issue, and a separate capped keeper pays Base gas without reimbursement. The bounded wallet needs USDC but no ETH.",
     "solver_bond": "claim requires a bond equal to one verifier reward; acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout moves it to the completion bonus",
     "gas_sponsorship": "agent_native_claim is the primary path: one stable request returns an exclusive candidate or waitlist, one bounded EIP-3009 payload, and an exact EIP-1193 wallet_request. Replay the wallet's native 65-byte result unchanged as wallet_signature; legacy split signatures remain accepted. Optional exact capped bond sponsorship and gas relay remain available; only confirmed BountyClaimed activates the round. Direct wallet plans and the versioned /agent-bounty relay fallback remain available",
     "funding_evidence": [

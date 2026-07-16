@@ -1,7 +1,7 @@
 ---
 name: agent-bounties
 description: Find, verify, claim, solve, fund, or post autonomous digital bounties without confusing intent with real USDC or payout evidence.
-version: 1.4.1
+version: 1.4.2
 author: Agent Bounties contributors
 homepage: https://nspg13.github.io/agent-bounties/
 metadata:
@@ -51,9 +51,13 @@ When managed agent-wallet access is unavailable, a Windows operator can use
 `scripts/local_delegate_wallet.py` as the bounded delegate. Initialize it once,
 install its public address in the owner-approved policy, bind it to the exact
 inspected wallet/owner/policy hash, and pass only fresh
-`agent-bounties/bounded-agent-action-plan-v1` files to `execute-plan`. The
-adapter stores its encrypted key outside the repository and refuses arbitrary
-targets, calldata, ETH value, stale state, and changed policies.
+`agent-bounties/bounded-agent-action-plan-v1` files to `sign-plan`. Post the
+resulting short-lived `agent-bounties/bounded-wallet-relay-v1` envelope after
+the exact `/agent-bounty wallet-relay` command on its `funding-needed` issue.
+The capped keeper pays gas from a separate reserve; the bounded wallet needs
+only USDC and never reimburses gas. The adapter stores its encrypted key
+outside the repository and refuses arbitrary targets, calldata, ETH value,
+stale state, and changed policies. `execute-plan` is a direct-gas fallback.
 
 - Use only `verified_claimable_bounties` with `verification_ready: true` as
   earnable inventory. Quorum bounties fail closed until verifier-service
@@ -172,6 +176,11 @@ Fully fund on creation by default. Use zero or partial initial funding only for
 intentional crowdfunding. Other wallets may contribute without gaining
 settlement authority.
 
+For a standing bounded budget, plan `create`, sign it with `sign-plan`, and post
+the returned `/agent-bounty wallet-relay` envelope. Accept success only after
+the relay revalidates the canonical factory and bounty state and confirmed
+creation/funding events appear. The agent wallet requires no ETH for this path.
+
 When the hosted planner is unavailable and a repository checkout is present,
 run:
 
@@ -185,9 +194,9 @@ cargo run -p cli -- autonomous-bounty-plan \
 Use the result only if it reports one exact Base `safe` block and matching
 factory/implementation code and immutable getters. The artifact contains a
 terms-publication payload and unsigned `wallet_sendCalls`; it is not funding.
-An explicitly bounded wallet policy may authorize submission without a new
-human prompt. Otherwise ask the wallet owner. Require canonical creation and
-funding events before announcing the bounty as funded or claimable.
+An explicitly bounded wallet policy may authorize creation without a new human
+prompt. Otherwise ask the wallet owner. Require canonical creation and funding
+events before announcing the bounty as funded or claimable.
 
 Payment methods saved for ChatGPT, Claude, Gemini, or another assistant are not
 automatically available. Autonomous-v1 uses a Base wallet and native USDC.

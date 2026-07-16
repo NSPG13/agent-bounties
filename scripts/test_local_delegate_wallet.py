@@ -28,6 +28,7 @@ class LocalDelegateTests(unittest.TestCase):
             with (
                 patch.object(wallet, "harden_acl"),
                 patch.object(wallet, "protect_secret", side_effect=lambda value: b"protected:" + value),
+                patch.object(wallet, "unprotect_secret", side_effect=lambda value: value.removeprefix(b"protected:")),
             ):
                 result = wallet.initialize(state_dir)
             self.assertTrue(result["initialized"])
@@ -37,6 +38,32 @@ class LocalDelegateTests(unittest.TestCase):
             files = b"".join(path.read_bytes() for path in state_dir.iterdir())
             self.assertNotIn(password_blob.removeprefix(b"protected:"), files.replace(password_blob, b""))
             self.assertEqual(wallet.status(state_dir)["delegate"], result["delegate"])
+
+    def test_secure_write_retries_partial_os_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "state"
+            expected = bytes(range(256)) * 2
+            real_write = os.write
+
+            def partial_write(descriptor: int, data: bytes) -> int:
+                chunk = bytes(data[: max(1, len(data) // 3)])
+                return real_write(descriptor, chunk)
+
+            with patch.object(wallet.os, "write", side_effect=partial_write):
+                wallet.write_exclusive(path, expected)
+            self.assertEqual(path.read_bytes(), expected)
+
+    def test_init_removes_state_when_post_write_recovery_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "delegate"
+            with (
+                patch.object(wallet, "harden_acl"),
+                patch.object(wallet, "protect_secret", return_value=b"invalid"),
+                patch.object(wallet, "unprotect_secret", side_effect=SystemExit("invalid DPAPI blob")),
+            ):
+                with self.assertRaisesRegex(SystemExit, "invalid DPAPI blob"):
+                    wallet.initialize(state_dir)
+            self.assertFalse(state_dir.exists())
 
     @unittest.skipUnless(os.name == "nt", "DPAPI is Windows-only")
     def test_dpapi_round_trip(self) -> None:
@@ -85,6 +112,7 @@ class LocalDelegateTests(unittest.TestCase):
                 "owner": OWNER,
                 "policy_hash": POLICY_HASH,
                 "policy_version": 1,
+                "delegate_nonce": 4,
                 "policy": self.policy,
                 "period_bucket": "0",
                 "period_spent": "0",
@@ -111,7 +139,7 @@ class LocalDelegateTests(unittest.TestCase):
     def plan(self) -> dict:
         payload = "0xpayload"
         direct = "0xdirect"
-        return {
+        plan = {
             "schema": wallet.PLAN_SCHEMA,
             "network": "base-mainnet",
             "safe_block": {"number": 100, "hash": "0xplanned", "timestamp": 1_000},
@@ -136,6 +164,46 @@ class LocalDelegateTests(unittest.TestCase):
                 "value": "0x0",
             },
         }
+        plan["relay_authorization_typed_data"] = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
+                ],
+                "AgentAction": [
+                    {"name": "wallet", "type": "address"},
+                    {"name": "action", "type": "uint8"},
+                    {"name": "payloadHash", "type": "bytes32"},
+                    {"name": "nonce", "type": "uint256"},
+                    {"name": "deadline", "type": "uint256"},
+                    {"name": "policyVersion", "type": "uint64"},
+                ],
+            },
+            "primaryType": "AgentAction",
+            "domain": {
+                "name": "Agent Bounties Bounded Wallet",
+                "version": "1",
+                "chainId": 8453,
+                "verifyingContract": BOUNDED_WALLET,
+            },
+            "message": {
+                "wallet": BOUNDED_WALLET,
+                "action": 1,
+                "payloadHash": "0xhash",
+                "nonce": "4",
+                "deadline": "1200",
+                "policyVersion": 1,
+            },
+        }
+        plan["relay_call"] = {
+            "to": BOUNDED_WALLET,
+            "function": "executeWithSignature(uint8,bytes,uint256,uint256,bytes)",
+            "arguments_before_signature": [1, "0xpayload", 4, 1200],
+            "signature_tail": ["delegate_signature"],
+        }
+        return plan
 
     def validate(self, plan: dict) -> dict:
         with (

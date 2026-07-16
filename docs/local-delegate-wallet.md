@@ -49,29 +49,45 @@ python scripts/local_delegate_wallet.py bind `
 Binding is intentionally immutable. Rotate by creating a new delegate directory
 and installing a new owner-approved policy.
 
-## Execute One Action
+## Sign One Gas-Sponsored Creation
 
-Generate a same-state action plan with the existing planner:
+First publish terms and request the canonical creation plan from the hosted API.
+Save that JSON as `target/creation-plan.json`, then bind it to the inspected
+wallet policy and current nonce:
 
 ```powershell
-python scripts/plan_bounded_agent_action.py fund `
+python scripts/plan_bounded_agent_action.py create `
   --wallet 0xBOUNDED_WALLET `
-  --bounty 0xCANONICAL_BOUNTY `
-  --amount-usdc 2.01 `
+  --creation-plan target/creation-plan.json `
   --expect-owner 0xOWNER `
   --expect-delegate 0xDELEGATE `
   --expect-policy-hash 0xPOLICY_HASH
 ```
 
-Simulate and inspect gas without decrypting or signing:
+Sign only the resulting short-lived EIP-712 action:
 
 ```powershell
-python scripts/local_delegate_wallet.py execute-plan `
-  --plan target/bounded-agent-action-plan.json
+python scripts/local_delegate_wallet.py sign-plan `
+  --plan target/bounded-agent-action-plan.json `
+  --issue-number 123
 ```
 
-Broadcast autonomously after the agent's own task-selection policy approves the
-work:
+Post the exact output envelope on that `funding-needed` issue:
+
+```text
+/agent-bounty wallet-relay
+{...contents of target/bounded-wallet-relay-envelope.json...}
+```
+
+The trusted-main sponsor revalidates the wallet runtime, policy, nonce, budget,
+canonical ABI, factory prediction, delegate signature, gas ceiling, and final
+factory and bounty state. The bounded wallet needs no ETH and does not
+reimburse the sponsor. It spends only the signed initial USDC funding; the
+keeper pays Base gas from a separate capped reserve.
+
+## Direct-Gas Fallback
+
+An operator may still simulate or broadcast the same exact plan directly:
 
 ```powershell
 python scripts/local_delegate_wallet.py execute-plan `
@@ -83,8 +99,9 @@ The local signer re-inspects the wallet and bounty, verifies the original safe
 block is canonical and at most five minutes old, re-derives the exact action
 calldata, simulates it, and enforces local gas caps. It rejects arbitrary
 targets, arbitrary calldata, ETH value, a changed policy, stale state, and
-non-canonical bounties. The delegate address needs a small Base ETH reserve for
-gas; it does not need USDC because USDC remains in the bounded wallet.
+non-canonical bounties. This fallback requires Base ETH at the delegate address;
+the sponsored path does not. USDC always remains in the bounded wallet until an
+allowed action charges it.
 
 ## Operational Boundaries
 
@@ -97,5 +114,7 @@ gas; it does not need USDC because USDC remains in the bounded wallet.
   or rotating a delegate.
 - A successful transaction applies one bounded action. Only reconciled
   canonical events prove funding, claim, submission, or payout.
+- Keep sponsor gas accounting separate from bounty funds. Do not transfer ETH
+  into the bounded wallet merely to reimburse a relayer.
 - CDP, Circle, Turnkey, an HSM, or MetaMask Agent Wallet can later replace this
   adapter by using the same public delegate and action-plan boundaries.

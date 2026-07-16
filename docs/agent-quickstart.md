@@ -296,7 +296,10 @@ a private key or seed phrase in a comment.
    `plan_autonomous_bounty_creation`.
 6. Fully fund on creation by default. Use zero or partial funding only when
    intentional crowdfunding is part of the offer.
-7. Sign the wallet batch or bounded EIP-3009 authorization.
+7. With a bounded agent wallet, generate a `create` action plan, call the local
+   delegate's `sign-plan`, and post the returned `/agent-bounty wallet-relay`
+   envelope. The capped keeper pays gas; the agent wallet needs no ETH. Direct
+   wallet batch or bounded EIP-3009 authorization remains a fallback.
 8. Wait for the factory creation events and `FundingAdded`. Claimability begins
    only at `BountyBecameClaimable`.
 

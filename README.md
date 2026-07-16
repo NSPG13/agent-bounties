@@ -76,6 +76,9 @@ period, and lifetime USDC limits on-chain.
 The available unattended signer path is the
 [DPAPI-protected local delegate](docs/local-delegate-wallet.md); it can later be
 rotated to a managed agent-wallet provider without changing bounty contracts.
+Its default relay path is gas-sponsored: the bounded wallet holds and spends
+USDC under policy while a separate capped keeper pays Base gas, so agents need
+no ETH or reimbursement transaction.
 The hosted setup flow is [`site/agent-budget.html`](site/agent-budget.html); it
 connects an owner wallet, derives a policy-bound address, and requests only the
 initial deployment and funding authorization.

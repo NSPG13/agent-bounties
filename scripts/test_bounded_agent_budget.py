@@ -37,11 +37,25 @@ def load_action_planner():
     return module
 
 
+def load_create_helper():
+    scripts = str(ROOT / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    path = ROOT / "scripts" / "bounded_agent_create.py"
+    spec = importlib.util.spec_from_file_location("bounded_agent_create", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load bounded-agent create helper")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class BoundedAgentBudgetPlannerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.planner = load_planner()
         cls.action_planner = load_action_planner()
+        cls.create_helper = load_create_helper()
         cls.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
     def test_usdc_amounts_are_exact(self) -> None:
@@ -199,6 +213,49 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
         state["verifier_module"] = "0x4444444444444444444444444444444444444444"
         with self.assertRaises(SystemExit):
             self.action_planner.validate_bounty_policy(state, policy, factory, token)
+
+    def deterministic_create_data(self) -> str:
+        params = (
+            "(2000000,10000,"
+            + "0x" + "11" * 32 + ","
+            + "0x" + "22" * 32 + ","
+            + "0x" + "33" * 32 + ","
+            + "0x" + "44" * 32 + ","
+            + "0x" + "55" * 32 + ",1900000000,604800,259200,0,"
+            + self.manifest["canonical"]["deterministic_verifier"]
+            + ",0x8888888888888888888888888888888888888888,1)"
+        )
+        return self.planner.calldata(
+            self.create_helper.CREATE_SIGNATURE,
+            params,
+            "[]",
+            "2010000",
+            "0x" + "99" * 32,
+        )
+
+    def test_create_decoder_round_trips_exact_deterministic_calldata(self) -> None:
+        decoded = self.create_helper.decode_create_calldata(self.deterministic_create_data())
+        self.assertEqual(decoded["params"]["solver_reward"], 2_000_000)
+        self.assertEqual(decoded["params"]["verification_mode"], 0)
+        self.assertEqual(decoded["initial_funding"], 2_010_000)
+        self.assertEqual(decoded["verifiers"], [])
+        self.assertEqual(decoded["direct_data"], self.deterministic_create_data())
+
+    def test_create_decoder_rejects_noncanonical_offsets_and_trailing_data(self) -> None:
+        data = self.deterministic_create_data()
+        offset_start = 10 + 14 * 64
+        wrong_offset = data[:offset_start] + f"{32:064x}" + data[offset_start + 64 :]
+        with self.assertRaisesRegex(SystemExit, "noncanonical verifier-array offset"):
+            self.create_helper.decode_create_calldata(wrong_offset)
+        with self.assertRaisesRegex(SystemExit, "trailing or truncated"):
+            self.create_helper.decode_create_calldata(data + "00" * 32)
+
+    def test_create_decoder_rejects_zero_commitments(self) -> None:
+        data = self.deterministic_create_data()
+        terms_start = 10 + 2 * 64
+        zero_terms = data[:terms_start] + "00" * 32 + data[terms_start + 64 :]
+        with self.assertRaisesRegex(SystemExit, "terms hash cannot be zero"):
+            self.create_helper.decode_create_calldata(zero_terms)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and plan one fund, claim, or submit action for a bounded wallet."""
+"""Validate and plan one create, fund, claim, or submit action for a bounded wallet."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
+from bounded_agent_create import validate_creation_plan
 from inspect_bounded_agent_wallet import call, inspect, word_address, word_uint, words
 from plan_bounded_agent_budget import (
     ROOT,
@@ -22,7 +23,7 @@ from plan_bounded_agent_budget import (
 
 DEFAULT_MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-base-mainnet.json"
 ZERO_ADDRESS = "0x" + "00" * 20
-ACTIONS = {"fund": 1, "claim": 2, "submit": 3}
+ACTIONS = {"create": 0, "fund": 1, "claim": 2, "submit": 3}
 
 
 def one_word(rpc_url: str, target: str, signature: str, block: str, arguments: tuple[str, ...] = ()) -> str:
@@ -95,7 +96,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=sorted(ACTIONS))
     parser.add_argument("--wallet", required=True)
-    parser.add_argument("--bounty", required=True)
+    parser.add_argument("--bounty")
+    parser.add_argument("--creation-plan", type=Path)
     parser.add_argument("--amount-usdc")
     parser.add_argument("--submission-hash")
     parser.add_argument("--evidence-hash")
@@ -110,7 +112,6 @@ def main() -> None:
 
     manifest = validate_manifest(json.loads(args.manifest.read_text(encoding="utf-8")))
     wallet = require_address(args.wallet, "wallet")
-    bounty = require_address(args.bounty, "bounty")
     rpc_url = args.rpc_url or manifest["rpc_url"]
     expected_owner = require_address(args.expect_owner, "expected owner") if args.expect_owner else None
     expected_delegate = require_address(args.expect_delegate, "expected delegate") if args.expect_delegate else None
@@ -124,12 +125,47 @@ def main() -> None:
     block = hex(report["safe_block"]["number"])
     factory = require_address(manifest["canonical"]["bounty_factory"], "bounty factory")
     settlement_token = require_address(manifest["canonical"]["settlement_token"], "settlement token")
-    observed = bounty_state(rpc_url, bounty, factory, block)
     policy = report["state"]["policy"]
-    validate_bounty_policy(observed, policy, factory, settlement_token)
     action = ACTIONS[args.action]
     if not policy["allowed_actions"] & (1 << action):
         raise SystemExit("action is not enabled by the wallet policy")
+
+    creation_plan = None
+    if args.action == "create":
+        if args.bounty or args.amount_usdc or args.submission_hash or args.evidence_hash:
+            raise SystemExit("create accepts only --creation-plan")
+        if args.creation_plan is None:
+            raise SystemExit("create requires --creation-plan")
+        creation_plan = json.loads(args.creation_plan.read_text(encoding="utf-8"))
+        created = validate_creation_plan(
+            creation_plan,
+            wallet,
+            manifest,
+            report,
+            rpc_url,
+            block,
+        )
+        bounty = str(created["bounty"])
+        observed = created["summary"]
+        spend = int(created["spend"])
+        payload = str(created["payload"])
+        direct_data = str(created["direct_data"])
+        action_summary = {
+            "bounty_id": observed["bounty_id"],
+            "predicted_bounty_contract": bounty,
+            "target_amount": str(observed["target_amount"]),
+            "initial_funding": str(spend),
+            "terms_hash": observed["terms_hash"],
+            "creation_nonce": observed["creation_nonce"],
+        }
+    else:
+        if args.creation_plan is not None:
+            raise SystemExit("--creation-plan is accepted only for create")
+        if not args.bounty:
+            raise SystemExit(f"{args.action} requires --bounty")
+        bounty = require_address(args.bounty, "bounty")
+        observed = bounty_state(rpc_url, bounty, factory, block)
+        validate_bounty_policy(observed, policy, factory, settlement_token)
 
     if args.action == "fund":
         if args.amount_usdc is None:
@@ -155,7 +191,7 @@ def main() -> None:
         payload = encode("f(address)", bounty)
         direct_data = calldata("claimBounty(address)", bounty)
         action_summary = {"claim_bond": str(spend)}
-    else:
+    elif args.action == "submit":
         if args.amount_usdc:
             raise SystemExit("submit does not accept an amount")
         submission_hash = require_bytes32(args.submission_hash or "", "submission hash")
@@ -238,10 +274,13 @@ def main() -> None:
             "signature_tail": ["delegate_signature"],
         },
         "evidence_boundary": (
-            "This same-block plan is unsigned and moves no value. Re-inspect nonce, policy, counters, bounty state, "
-            "and deadline immediately before signing. Only canonical events prove an applied action or payout."
+            "This same-block plan is unsigned and moves no value. Re-inspect nonce, policy, counters, action state, "
+            "and deadline immediately before signing. A capped sponsor may pay gas, but only canonical events prove "
+            "an applied action or payout."
         ),
     }
+    if creation_plan is not None:
+        plan["creation_plan"] = creation_plan
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     print(args.output)

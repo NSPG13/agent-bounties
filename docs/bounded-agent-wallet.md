@@ -56,6 +56,11 @@ Each direct or relayed action advances one shared nonce. Relayed actions use an
 EIP-712 signature containing the wallet, action, payload hash, nonce, deadline,
 and policy version. Policy replacement invalidates every queued signature.
 
+The default agent path is gas-sponsored. A capped keeper submits the exact
+signed action and pays Base gas from its own ETH reserve. The bounded wallet can
+hold only USDC, needs no ETH, and never reimburses the keeper. Direct delegate
+broadcast remains an optional fallback, not an onboarding requirement.
+
 The caps bound financial loss; they do not prove that a task is useful. An
 agent still needs a task-selection policy, and a compromised delegate can make
 poor choices until a cap, expiry, or owner revocation stops it.
