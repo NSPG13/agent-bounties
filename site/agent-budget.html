@@ -107,10 +107,16 @@
               Existing bounded wallet
               <input name="existingWallet" placeholder="0x..." autocomplete="off">
             </label>
+            <label class="check-line">
+              <input name="rotationReviewed" type="checkbox">
+              <span>I reviewed the delegate-only policy change. All limits, allowed actions, verifier restrictions, expiry, balance, and prior spend remain unchanged.</span>
+            </label>
             <div class="actions">
+              <button id="review-delegate-rotation" class="button secondary" type="button" disabled>Review delegate rotation</button>
+              <button id="rotate-agent-delegate" class="button secondary" type="button" disabled>Rotate delegate</button>
               <button id="revoke-agent-budget" class="button secondary" type="button" disabled>Revoke agent authority</button>
             </div>
-            <p class="fine">Revocation immediately blocks new delegate actions. The owner can then withdraw the wallet's USDC or install a new reviewed policy.</p>
+            <p class="fine">Rotation replaces only the signer and invalidates queued signatures. Revocation blocks all new delegate actions. Neither action moves the wallet's USDC.</p>
           </div>
         </form>
       </section>

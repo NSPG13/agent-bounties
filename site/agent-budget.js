@@ -9,6 +9,7 @@
     infrastructureChecked: false,
     factoryReady: false,
     plan: null,
+    rotationPlan: null,
     busy: false,
   };
   const announcedProviders = [];
@@ -37,6 +38,9 @@
     settlementToken: "0x7b9e618d",
     owner: "0x8da5cb5b",
     policy: "0x0505c8c9",
+    policyVersion: "0x58355ead",
+    lifetimeSpent: "0xb80762dd",
+    configurePolicy: "0x27d3543c",
     revokePolicy: "0x9eba3667",
     balanceOf: "0x70a08231",
     allowance: "0xdd62ed3e",
@@ -261,6 +265,21 @@
     ];
   }
 
+  function exactPolicyWords(value) {
+    const raw = strip0x(value);
+    if (!/^[0-9a-f]{832}$/.test(raw)) throw new Error("Bounded wallet returned invalid policy encoding.");
+    return Array.from({ length: 13 }, (_, index) => raw.slice(index * 64, (index + 1) * 64));
+  }
+
+  function wordAddress(word, label) {
+    if (!/^0{24}[0-9a-f]{40}$/.test(word)) throw new Error(`${label} has noncanonical address encoding.`);
+    return requiredAddress(`0x${word.slice(24)}`, label);
+  }
+
+  function wordUint(word) {
+    return BigInt(`0x${word}`);
+  }
+
   async function hash(value) {
     const result = await request("web3_sha3", [value]);
     if (!/^0x[0-9a-fA-F]{64}$/.test(result || "")) throw new Error("Wallet provider cannot hash bytecode.");
@@ -308,6 +327,7 @@
     await switchToBase();
     state.account = requiredAddress(accounts[0], "Owner account");
     state.plan = null;
+    state.rotationPlan = null;
     state.infrastructureChecked = false;
     status(`Connected ${state.account.slice(0, 8)}...${state.account.slice(-4)}`, "success");
     byId("inspect-budget-factory").disabled = false;
@@ -321,7 +341,9 @@
     await switchToBase();
     const accounts = await request("eth_accounts");
     const active = requiredAddress(accounts && accounts[0], "Active owner account");
-    if (active !== state.account || (state.plan && state.plan.account !== active)) {
+    if (active !== state.account
+      || (state.plan && state.plan.account !== active)
+      || (state.rotationPlan && state.rotationPlan.account !== active)) {
       throw new Error("The active wallet account changed. Reconnect and review the policy again.");
     }
     return active;
@@ -679,6 +701,141 @@
     }
   }
 
+  async function inspectExistingWallet(wallet) {
+    const runtime = await codeHash(wallet);
+    if (runtime.hash !== state.manifest.wallet_factory.clone_runtime_code_hash) {
+      throw new Error("Existing wallet runtime does not match the reviewed bounded-wallet clone.");
+    }
+    const registered = resultUint(await call(
+      state.manifest.wallet_factory.address,
+      `${SELECTORS.isFactoryWallet}${addressWord(wallet)}`,
+    ));
+    if (registered !== 1n) throw new Error("Existing wallet is not registered by the reviewed factory.");
+    const owner = resultAddress(await call(wallet, SELECTORS.owner));
+    if (owner !== state.account) throw new Error("Connected account is not this bounded wallet's owner.");
+    const policyEncoded = String(await call(wallet, SELECTORS.policy)).toLowerCase();
+    const policy = exactPolicyWords(policyEncoded);
+    const version = resultUint(await call(wallet, SELECTORS.policyVersion));
+    const lifetimeSpent = resultUint(await call(wallet, SELECTORS.lifetimeSpent));
+    const balance = resultUint(await call(
+      state.manifest.canonical.settlement_token,
+      `${SELECTORS.balanceOf}${addressWord(wallet)}`,
+    ));
+    return { policyEncoded, policy, version, lifetimeSpent, balance };
+  }
+
+  function rotationSnapshot() {
+    return JSON.stringify({
+      wallet: form().elements.existingWallet.value,
+      delegate: form().elements.delegate.value,
+    });
+  }
+
+  async function reviewRotation() {
+    if (!state.account) throw new Error("Connect the owner wallet first.");
+    if (!state.infrastructureChecked || !state.factoryReady) throw new Error("Inspect infrastructure first.");
+    await ensureConnectedOwner();
+    const wallet = requiredAddress(form().elements.existingWallet.value, "Bounded wallet");
+    const delegate = requiredAddress(form().elements.delegate.value, "Replacement delegate");
+    if (delegate === state.account) throw new Error("Use a dedicated delegate address, not the owner wallet.");
+    const observed = await inspectExistingWallet(wallet);
+    const currentDelegate = wordAddress(observed.policy[0], "Current delegate");
+    if (delegate === currentDelegate) throw new Error("Replacement delegate is already active.");
+    if (wordAddress(observed.policy[10], "Deterministic verifier")
+      !== state.manifest.canonical.deterministic_verifier) {
+      throw new Error("Existing policy does not use the reviewed deterministic verifier.");
+    }
+    const now = BigInt(await latestTimestamp());
+    if (wordUint(observed.policy[2]) <= now) throw new Error("Existing policy is expired; create a new reviewed policy instead.");
+    const nextPolicy = [...observed.policy];
+    nextPolicy[0] = addressWord(delegate);
+    const nextEncoded = `0x${nextPolicy.join("")}`;
+    const currentHash = await hash(observed.policyEncoded);
+    const nextHash = await hash(nextEncoded);
+    state.rotationPlan = {
+      account: state.account,
+      wallet,
+      delegate,
+      currentDelegate,
+      currentPolicy: observed.policyEncoded,
+      currentHash,
+      nextPolicy: nextEncoded,
+      nextHash,
+      currentVersion: observed.version,
+      lifetimeSpent: observed.lifetimeSpent,
+      balance: observed.balance,
+      snapshot: rotationSnapshot(),
+      data: `${SELECTORS.configurePolicy}${nextPolicy.join("")}`,
+    };
+    output([
+      `Bounded wallet: ${wallet}`,
+      `Current delegate: ${currentDelegate}`,
+      `Replacement delegate: ${delegate}`,
+      `Current / next policy version: ${observed.version} / ${observed.version + 1n}`,
+      `Current / next policy hash: ${currentHash} / ${nextHash}`,
+      `Wallet balance remains ${Number(observed.balance) / 1_000_000} USDC.`,
+      "Only the delegate changes; all spending caps, actions, verifier restrictions, and expiry remain byte-for-byte identical.",
+      "The transaction transfers no USDC or ETH.",
+    ], "pending");
+    updateButtons();
+  }
+
+  async function rotateDelegate() {
+    if (!state.rotationPlan) throw new Error("Review the exact delegate rotation first.");
+    if (!form().elements.rotationReviewed.checked) throw new Error("Confirm the exact delegate-only change first.");
+    if (rotationSnapshot() !== state.rotationPlan.snapshot) {
+      state.rotationPlan = null;
+      throw new Error("Wallet or delegate changed. Review the rotation again.");
+    }
+    state.busy = true;
+    updateButtons();
+    try {
+      await ensureConnectedOwner();
+      const before = await inspectExistingWallet(state.rotationPlan.wallet);
+      if (before.policyEncoded !== state.rotationPlan.currentPolicy
+        || before.version !== state.rotationPlan.currentVersion
+        || before.lifetimeSpent !== state.rotationPlan.lifetimeSpent
+        || before.balance !== state.rotationPlan.balance) {
+        throw new Error("Bounded wallet state changed after review. Review the rotation again.");
+      }
+      await request("eth_call", [{
+        from: state.account,
+        to: state.rotationPlan.wallet,
+        data: state.rotationPlan.data,
+        value: "0x0",
+      }, "latest"]);
+      output([
+        "Confirm one zero-value owner transaction.",
+        `Wallet: ${state.rotationPlan.wallet}`,
+        `Replacement delegate: ${state.rotationPlan.delegate}`,
+        `Next policy hash: ${state.rotationPlan.nextHash}`,
+        "No token or native-ETH transfer is requested.",
+      ], "pending");
+      const transactionHash = await sendTransaction(state.rotationPlan.wallet, state.rotationPlan.data);
+      await waitReceipt(transactionHash);
+      const after = await inspectExistingWallet(state.rotationPlan.wallet);
+      if (after.policyEncoded !== state.rotationPlan.nextPolicy
+        || after.version !== state.rotationPlan.currentVersion + 1n
+        || after.lifetimeSpent !== state.rotationPlan.lifetimeSpent
+        || after.balance !== state.rotationPlan.balance) {
+        throw new Error("Confirmed rotation did not produce the exact reviewed wallet state.");
+      }
+      status("Agent delegate rotated", "success");
+      output([
+        `Rotation confirmed: ${transactionHash}`,
+        `Active delegate: ${state.rotationPlan.delegate}`,
+        `Policy hash: ${state.rotationPlan.nextHash}`,
+        `Wallet balance: ${Number(after.balance) / 1_000_000} USDC`,
+        "The agent can now sign capped actions for a separate gas sponsor; the wallet needs no ETH.",
+      ], "success");
+      state.rotationPlan = null;
+      form().elements.rotationReviewed.checked = false;
+    } finally {
+      state.busy = false;
+      updateButtons();
+    }
+  }
+
   async function revoke() {
     if (state.busy) return;
     const wallet = requiredAddress(form().elements.existingWallet.value, "Bounded wallet");
@@ -701,16 +858,26 @@
 
   function updateButtons() {
     const reviewed = Boolean(form().elements.reviewed.checked);
+    const rotationReviewed = Boolean(form().elements.rotationReviewed.checked);
     byId("connect-budget-wallet").disabled = state.busy;
     byId("inspect-budget-factory").disabled = state.busy || !state.account;
     byId("review-agent-budget").disabled = state.busy || !state.account || !state.infrastructureChecked;
     byId("activate-agent-budget").disabled = state.busy || !state.plan || !reviewed;
     const existing = String(form().elements.existingWallet.value || "").trim();
+    const delegate = String(form().elements.delegate.value || "").trim();
+    byId("review-delegate-rotation").disabled = state.busy || !state.account || !state.factoryReady
+      || !/^0x[0-9a-fA-F]{40}$/.test(existing) || !/^0x[0-9a-fA-F]{40}$/.test(delegate);
+    byId("rotate-agent-delegate").disabled = state.busy || !state.rotationPlan || !rotationReviewed;
     byId("revoke-agent-budget").disabled = state.busy || !state.account || !/^0x[0-9a-fA-F]{40}$/.test(existing);
   }
 
   function invalidatePlan(event) {
-    if (event.target.name === "reviewed" || event.target.name === "existingWallet") {
+    if (event.target.name === "reviewed" || event.target.name === "rotationReviewed") {
+      updateButtons();
+      return;
+    }
+    if (event.target.name === "existingWallet" || event.target.name === "delegate") state.rotationPlan = null;
+    if (event.target.name === "existingWallet") {
       updateButtons();
       return;
     }
@@ -736,11 +903,14 @@
     byId("connect-budget-wallet").addEventListener("click", () => handle(connect));
     byId("inspect-budget-factory").addEventListener("click", () => handle(inspectInfrastructure));
     byId("review-agent-budget").addEventListener("click", () => handle(reviewPlan));
+    byId("review-delegate-rotation").addEventListener("click", () => handle(reviewRotation));
+    byId("rotate-agent-delegate").addEventListener("click", () => handle(rotateDelegate));
     byId("revoke-agent-budget").addEventListener("click", () => handle(revoke));
     document.querySelector("[data-wallet-provider]").addEventListener("change", () => {
       state.provider = null;
       state.account = null;
       state.plan = null;
+      state.rotationPlan = null;
       state.infrastructureChecked = false;
       state.factoryReady = false;
       status("Not connected");

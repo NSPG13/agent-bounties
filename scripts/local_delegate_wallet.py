@@ -21,6 +21,7 @@ from typing import Any
 from eth_account import Account
 from eth_utils import to_checksum_address
 
+from bounded_agent_create import decode_create_calldata, validate_creation_plan
 from inspect_bounded_agent_wallet import inspect, rpc
 from plan_bounded_agent_action import (
     ACTIONS,
@@ -44,6 +45,7 @@ from plan_bounded_agent_budget import (
 STATE_SCHEMA = "agent-bounties/local-delegate-state-v1"
 BINDING_SCHEMA = "agent-bounties/local-delegate-binding-v1"
 PLAN_SCHEMA = "agent-bounties/bounded-agent-action-plan-v1"
+RELAY_SCHEMA = "agent-bounties/bounded-wallet-relay-v1"
 EXPECTED_CHAIN_ID = 8453
 EXPECTED_NETWORK = "base-mainnet"
 MAX_PLAN_AGE_SECONDS = 300
@@ -87,10 +89,20 @@ def require_private_file(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def write_all(descriptor: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            fail("secure delegate state write made no progress")
+        remaining = remaining[written:]
+
+
 def write_exclusive(path: Path, data: bytes) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags, 0o600)
     try:
-        os.write(descriptor, data)
+        write_all(descriptor, data)
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
@@ -99,7 +111,7 @@ def write_exclusive(path: Path, data: bytes) -> None:
 def write_atomic(path: Path, data: bytes) -> None:
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        os.write(descriptor, data)
+        write_all(descriptor, data)
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1
@@ -271,24 +283,38 @@ def initialize(state_dir: Path) -> dict:
         harden_acl(state_dir)
         account = Account.create(extra_entropy=secrets.token_bytes(32))
         password = bytearray(secrets.token_urlsafe(48).encode())
+        recovered_password = bytearray()
+        recovered_key = bytearray()
         try:
             encrypted = Account.encrypt(account.key, bytes(password))
             protected = protect_secret(bytes(password))
+            address = require_address(account.address, "generated delegate")
+            metadata = {
+                "schema": STATE_SCHEMA,
+                "delegate": address,
+                "created_at": int(time.time()),
+                "protection": "web3-secret-storage-v3+scrypt+windows-dpapi-current-user",
+                "bound": False,
+            }
+            write_exclusive(state_dir / KEYSTORE, json_bytes(encrypted))
+            write_exclusive(state_dir / DPAPI_BLOB, protected)
+            write_exclusive(state_dir / METADATA, json_bytes(metadata))
+
+            recovered_password.extend(unprotect_secret(require_private_file(state_dir / DPAPI_BLOB)))
+            if not secrets.compare_digest(password, recovered_password):
+                fail("delegate credential failed its post-write verification")
+            recovered_key.extend(Account.decrypt(read_json(state_dir / KEYSTORE), bytes(recovered_password)))
+            recovered_address = require_address(Account.from_key(bytes(recovered_key)).address, "recovered delegate")
+            if recovered_address != address:
+                fail("delegate keystore failed its post-write address verification")
+            return {"initialized": True, "delegate": address, "bound": False}
         finally:
             for index in range(len(password)):
                 password[index] = 0
-        address = require_address(account.address, "generated delegate")
-        metadata = {
-            "schema": STATE_SCHEMA,
-            "delegate": address,
-            "created_at": int(time.time()),
-            "protection": "web3-secret-storage-v3+scrypt+windows-dpapi-current-user",
-            "bound": False,
-        }
-        write_exclusive(state_dir / KEYSTORE, json_bytes(encrypted))
-        write_exclusive(state_dir / DPAPI_BLOB, protected)
-        write_exclusive(state_dir / METADATA, json_bytes(metadata))
-        return {"initialized": True, "delegate": address, "bound": False}
+            for index in range(len(recovered_password)):
+                recovered_password[index] = 0
+            for index in range(len(recovered_key)):
+                recovered_key[index] = 0
     except BaseException:
         for name in (KEYSTORE, DPAPI_BLOB, METADATA):
             path = state_dir / name
@@ -406,25 +432,47 @@ def validate_plan(
     current_timestamp = require_uint(report["safe_block"].get("timestamp"), "safe timestamp")
     if current_timestamp < planned_timestamp or current_timestamp - planned_timestamp > MAX_PLAN_AGE_SECONDS:
         fail("action plan is stale; generate a fresh same-state plan")
-    if plan.get("bounty_state") != observed:
-        fail("bounty state changed after planning; generate a fresh plan")
-
     action = str(plan.get("action", ""))
     if action not in ACTIONS or plan.get("action_code") != ACTIONS[action]:
         fail("action plan has an invalid action binding")
+    if plan.get("bounty_state") != observed:
+        fail("action state changed after planning; generate a fresh plan")
     policy = report["state"]["policy"]
-    validate_bounty_policy(
-        observed,
-        policy,
-        require_address(manifest["canonical"]["bounty_factory"], "bounty factory"),
-        require_address(manifest["canonical"]["settlement_token"], "settlement token"),
-    )
     if not policy["allowed_actions"] & (1 << ACTIONS[action]):
         fail("action is not enabled by the live wallet policy")
 
     summary = plan.get("action_summary")
     if not isinstance(summary, dict):
         fail("action plan summary is missing")
+    if action == "create":
+        creation_plan = plan.get("creation_plan")
+        if not isinstance(creation_plan, dict):
+            fail("create action plan is missing its canonical creation plan")
+        intent = creation_plan.get("create_bounty")
+        if not isinstance(intent, dict):
+            fail("create action plan is missing its transaction intent")
+        decoded = decode_create_calldata(intent.get("data"))
+        spend = int(decoded["initial_funding"])
+        payload = str(decoded["payload"])
+        direct_data = str(decoded["direct_data"])
+        expected_summary = {
+            "bounty_id": observed["bounty_id"],
+            "predicted_bounty_contract": bounty,
+            "target_amount": str(observed["target_amount"]),
+            "initial_funding": str(spend),
+            "terms_hash": observed["terms_hash"],
+            "creation_nonce": observed["creation_nonce"],
+        }
+        if summary != expected_summary:
+            fail("create action summary does not match canonical calldata")
+    else:
+        validate_bounty_policy(
+            observed,
+            policy,
+            require_address(manifest["canonical"]["bounty_factory"], "bounty factory"),
+            require_address(manifest["canonical"]["settlement_token"], "settlement token"),
+        )
+
     if action == "fund":
         requested = require_uint(summary.get("requested_amount"), "requested amount")
         if observed["status"] != 0 or observed["funded_amount"] >= observed["target_amount"]:
@@ -446,7 +494,7 @@ def validate_plan(
         direct_data = calldata("claimBounty(address)", bounty)
         if require_uint(summary.get("claim_bond"), "claim bond") != spend:
             fail("planned claim bond changed")
-    else:
+    elif action == "submit":
         submission_hash = require_bytes32(str(summary.get("submission_hash", "")), "submission hash")
         evidence_hash = require_bytes32(str(summary.get("evidence_hash", "")), "evidence hash")
         if observed["status"] != 2 or observed["solver"] != wallet:
@@ -465,7 +513,74 @@ def validate_plan(
         fail("action plan contains an unexpected target, sender, value, or calldata")
     if require_uint(plan.get("maximum_gross_spend"), "maximum gross spend") != spend:
         fail("action plan spend does not match the live state")
+    validate_relay_authorization(plan, binding, report, payload)
     return expected_transaction
+
+
+def validate_relay_authorization(
+    plan: dict,
+    binding: dict,
+    report: dict,
+    payload: str,
+) -> dict:
+    action = str(plan["action"])
+    action_code = ACTIONS[action]
+    nonce = int(report["state"]["delegate_nonce"])
+    policy_version = int(report["state"]["policy_version"])
+    typed = plan.get("relay_authorization_typed_data")
+    if not isinstance(typed, dict):
+        fail("action plan relay authorization is missing")
+    message = typed.get("message")
+    if not isinstance(message, dict):
+        fail("action plan relay authorization message is missing")
+    deadline = require_uint(message.get("deadline"), "relay deadline")
+    now = require_uint(report["safe_block"].get("timestamp"), "safe timestamp")
+    if deadline < now or deadline > now + 900:
+        fail("relay authorization deadline is expired or exceeds fifteen minutes")
+    expected = {
+        "types": {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "AgentAction": [
+                {"name": "wallet", "type": "address"},
+                {"name": "action", "type": "uint8"},
+                {"name": "payloadHash", "type": "bytes32"},
+                {"name": "nonce", "type": "uint256"},
+                {"name": "deadline", "type": "uint256"},
+                {"name": "policyVersion", "type": "uint64"},
+            ],
+        },
+        "primaryType": "AgentAction",
+        "domain": {
+            "name": "Agent Bounties Bounded Wallet",
+            "version": "1",
+            "chainId": EXPECTED_CHAIN_ID,
+            "verifyingContract": binding["wallet"],
+        },
+        "message": {
+            "wallet": binding["wallet"],
+            "action": action_code,
+            "payloadHash": keccak_hex(payload),
+            "nonce": str(nonce),
+            "deadline": str(deadline),
+            "policyVersion": policy_version,
+        },
+    }
+    if typed != expected:
+        fail("action plan relay authorization does not match live policy and nonce")
+    expected_call = {
+        "to": binding["wallet"],
+        "function": "executeWithSignature(uint8,bytes,uint256,uint256,bytes)",
+        "arguments_before_signature": [action_code, payload, nonce, deadline],
+        "signature_tail": ["delegate_signature"],
+    }
+    if plan.get("relay_call") != expected_call:
+        fail("action plan relay call does not match its authorization")
+    return typed
 
 
 def load_bound_context(state_dir: Path, manifest_path: Path) -> tuple[str, dict, dict, dict]:
@@ -477,6 +592,53 @@ def load_bound_context(state_dir: Path, manifest_path: Path) -> tuple[str, dict,
     if digest != binding.get("manifest_sha256"):
         fail("bounded-wallet manifest changed after binding")
     return delegate, binding, manifest, read_json(state_dir / KEYSTORE)
+
+
+def load_validated_action(
+    state_dir: Path,
+    manifest_path: Path,
+    plan_path: Path,
+    rpc_url_override: str | None,
+) -> tuple[str, dict, dict, dict, dict, str, dict, dict]:
+    delegate, binding, manifest, keystore = load_bound_context(state_dir, manifest_path)
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    if not isinstance(plan, dict):
+        fail("action plan must contain a JSON object")
+    rpc_url = rpc_url_override or manifest["rpc_url"]
+    report = inspect(
+        rpc_url,
+        binding["wallet"],
+        manifest,
+        binding["owner"],
+        delegate,
+        binding["policy_hash"],
+    )
+    bounty = require_address(str(plan.get("bounty", "")), "plan bounty")
+    if plan.get("action") == "create":
+        created = validate_creation_plan(
+            plan.get("creation_plan"),
+            binding["wallet"],
+            manifest,
+            report,
+            rpc_url,
+            hex(report["safe_block"]["number"]),
+        )
+        if created["bounty"] != bounty:
+            fail("create action bounty does not match the canonical prediction")
+        observed = created["summary"]
+    else:
+        observed = bounty_state(
+            rpc_url,
+            bounty,
+            require_address(manifest["canonical"]["bounty_factory"], "bounty factory"),
+            hex(report["safe_block"]["number"]),
+        )
+    planned_number = require_uint((plan.get("safe_block") or {}).get("number"), "plan block number")
+    plan_block = rpc(rpc_url, "eth_getBlockByNumber", [hex(planned_number), False], 100)
+    if not isinstance(plan_block, dict):
+        fail("action plan safe block is unavailable")
+    direct = validate_plan(plan, binding, manifest, report, observed, plan_block)
+    return delegate, binding, manifest, keystore, plan, rpc_url, report, direct
 
 
 def transaction_parameters(rpc_url: str, transaction: dict) -> dict:
@@ -543,31 +705,10 @@ def execute(
     broadcast: bool,
     receipt_timeout: int,
 ) -> dict:
-    delegate, binding, manifest, keystore = load_bound_context(state_dir, manifest_path)
-    plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    if not isinstance(plan, dict):
-        fail("action plan must contain a JSON object")
-    rpc_url = rpc_url_override or manifest["rpc_url"]
-    report = inspect(
-        rpc_url,
-        binding["wallet"],
-        manifest,
-        binding["owner"],
-        delegate,
-        binding["policy_hash"],
+    delegate, binding, _, keystore, plan, rpc_url, _, direct = load_validated_action(
+        state_dir, manifest_path, plan_path, rpc_url_override
     )
     bounty = require_address(str(plan.get("bounty", "")), "plan bounty")
-    observed = bounty_state(
-        rpc_url,
-        bounty,
-        require_address(manifest["canonical"]["bounty_factory"], "bounty factory"),
-        hex(report["safe_block"]["number"]),
-    )
-    planned_number = require_uint((plan.get("safe_block") or {}).get("number"), "plan block number")
-    plan_block = rpc(rpc_url, "eth_getBlockByNumber", [hex(planned_number), False], 100)
-    if not isinstance(plan_block, dict):
-        fail("action plan safe block is unavailable")
-    direct = validate_plan(plan, binding, manifest, report, observed, plan_block)
     prepared = transaction_parameters(rpc_url, direct)
     result = {
         "schema": "agent-bounties/local-delegate-execution-v1",
@@ -618,6 +759,55 @@ def execute(
     return result
 
 
+def sign_plan(
+    state_dir: Path,
+    manifest_path: Path,
+    plan_path: Path,
+    rpc_url_override: str | None,
+    issue_number: int,
+) -> dict:
+    delegate, binding, _, keystore, plan, _, report, _ = load_validated_action(
+        state_dir, manifest_path, plan_path, rpc_url_override
+    )
+    if plan.get("action") != "create":
+        fail("the public bounded-wallet relay currently accepts create plans only")
+    if issue_number <= 0:
+        fail("issue number must be positive")
+    typed_data = plan["relay_authorization_typed_data"]
+    protected = require_private_file(state_dir / DPAPI_BLOB)
+    password = bytearray(unprotect_secret(protected))
+    private_key = bytearray()
+    try:
+        private_key = bytearray(Account.decrypt(keystore, bytes(password)))
+        account = Account.from_key(bytes(private_key))
+        if require_address(account.address, "decrypted delegate") != delegate:
+            fail("decrypted key does not match the bound delegate")
+        signed = Account.sign_typed_data(bytes(private_key), full_message=typed_data)
+        signature = rpc_hex(signed.signature).lower()
+    finally:
+        for secret in (password, private_key):
+            for index in range(len(secret)):
+                secret[index] = 0
+    message = typed_data["message"]
+    summary = plan["action_summary"]
+    return {
+        "schema": RELAY_SCHEMA,
+        "network": EXPECTED_NETWORK,
+        "action": "create",
+        "issue_number": issue_number,
+        "wallet": binding["wallet"],
+        "policy_hash": binding["policy_hash"],
+        "policy_version": int(report["state"]["policy_version"]),
+        "nonce": require_uint(message["nonce"], "relay nonce"),
+        "deadline": require_uint(message["deadline"], "relay deadline"),
+        "payload": plan["payload"],
+        "payload_hash": plan["payload_hash"],
+        "signature": signature,
+        "bounty_id": summary["bounty_id"],
+        "predicted_bounty_contract": summary["predicted_bounty_contract"],
+    }
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
         description="Operate one bounded Base wallet without exposing the owner wallet or arbitrary signing."
@@ -640,6 +830,17 @@ def parser() -> argparse.ArgumentParser:
     execute_parser.add_argument("--rpc-url")
     execute_parser.add_argument("--broadcast", action="store_true")
     execute_parser.add_argument("--receipt-timeout", type=int, default=120)
+
+    sign_parser = commands.add_parser(
+        "sign-plan", help="Sign one exact plan for the capped public gas sponsor"
+    )
+    sign_parser.add_argument("--plan", type=Path, required=True)
+    sign_parser.add_argument("--issue-number", type=int, required=True)
+    sign_parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    sign_parser.add_argument("--rpc-url")
+    sign_parser.add_argument(
+        "--output", type=Path, default=ROOT / "target" / "bounded-wallet-relay-envelope.json"
+    )
     return root
 
 
@@ -659,7 +860,7 @@ def main() -> None:
             args.expect_owner,
             args.expect_policy_hash,
         )
-    else:
+    elif args.command == "execute-plan":
         if args.receipt_timeout < 15 or args.receipt_timeout > 600:
             fail("receipt-timeout must be between 15 and 600 seconds")
         result = execute(
@@ -670,6 +871,16 @@ def main() -> None:
             args.broadcast,
             args.receipt_timeout,
         )
+    else:
+        result = sign_plan(
+            state_dir,
+            args.manifest,
+            args.plan,
+            args.rpc_url,
+            args.issue_number,
+        )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
