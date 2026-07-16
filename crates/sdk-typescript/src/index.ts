@@ -243,6 +243,30 @@ export interface AgentWalletReadinessReport extends Record<string, unknown> {
   next_actions: string[];
 }
 
+export interface AgentWalletReadinessProblem extends Record<string, unknown> {
+  schema_version: "agent-bounties/agent-wallet-readiness-problem-v1";
+  state: "failed";
+  failed_transition: string;
+  error: string;
+  retryable: boolean;
+  message: string;
+  next_action: string;
+}
+
+export class AgentBountiesHttpError extends Error {
+  readonly path: string;
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(path: string, status: number, body: unknown) {
+    super(`${path} failed: ${status}`);
+    this.name = "AgentBountiesHttpError";
+    this.path = path;
+    this.status = status;
+    this.body = body;
+  }
+}
+
 export interface PlanStripeCheckoutTopUpRequest {
   organization_id: string;
   amount_minor: number;
@@ -377,6 +401,15 @@ async function x402ResponseBody(response: Response): Promise<Record<string, unkn
   }
 }
 
+function parseHttpBody(text: string, status: number): unknown {
+  if (!text) return { error: `HTTP ${status}` };
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return { error: text };
+  }
+}
+
 export class AgentBountiesClient {
   private readonly baseUrl: string;
   private readonly operatorApiToken?: string;
@@ -403,10 +436,11 @@ export class AgentBountiesClient {
         ...(init?.headers ?? {}),
       },
     });
+    const body = parseHttpBody(await response.text(), response.status);
     if (!response.ok) {
-      throw new Error(`${path} failed: ${response.status}`);
+      throw new AgentBountiesHttpError(path, response.status, body);
     }
-    return response.json();
+    return body;
   }
 
   private async autonomousPost(action: string, body: Record<string, unknown>): Promise<unknown> {

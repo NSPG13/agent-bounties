@@ -1461,38 +1461,132 @@ async fn live_money_readiness(
     path = "/v1/base/agent-wallet/readiness",
     responses(
         (status = 200, description = "Wallet-neutral readiness report with live Base chain and native-USDC balance evidence"),
-        (status = 400, description = "Invalid network, address, bounty, or claim-bond amount"),
-        (status = 503, description = "Configured Base RPC is unavailable")
+        (status = 400, description = "Machine-readable invalid network, address, bounty, or claim-bond problem"),
+        (status = 503, description = "Machine-readable Base RPC, chain, timeout, or service-configuration problem")
     )
 )]
 async fn prepare_agent_wallet_to_earn(
     State(state): State<SharedState>,
     Json(request): Json<PrepareAgentToEarnInput>,
-) -> Result<Json<AgentWalletReadinessReport>, StatusCode> {
+) -> Result<Json<AgentWalletReadinessReport>, AgentWalletReadinessProblem> {
     let (descriptor, rpc_url) = state
         .base_rpc_urls
         .resolve(&request.network)
-        .map_err(|error| match error {
-            ChainBaseError::UnknownNetwork(_)
-            | ChainBaseError::InvalidAddress(_)
-            | ChainBaseError::InvalidAmount => StatusCode::BAD_REQUEST,
-            _ => StatusCode::SERVICE_UNAVAILABLE,
-        })?;
-    let canonical_factory =
-        autonomous_factory_for_chain(descriptor.chain_id).ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        .map_err(map_agent_wallet_readiness_error)?;
+    let canonical_factory = autonomous_factory_for_chain(descriptor.chain_id).ok_or_else(|| {
+        agent_wallet_readiness_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "readiness_not_configured",
+            false,
+            "resolve_canonical_factory",
+            "Canonical readiness is not configured for this Base network.",
+            "Use a network advertised by hosted discovery, or retry after the operator configures its canonical factory.",
+        )
+    })?;
     tokio::time::timeout(
         Duration::from_secs(12),
         inspect_agent_wallet_readiness(&rpc_url, &canonical_factory, &request),
     )
     .await
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+    .map_err(|_| {
+        agent_wallet_readiness_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "base_rpc_timeout",
+            true,
+            "read_canonical_state",
+            "The Base readiness read exceeded its bounded timeout.",
+            "Retry with the same public inputs after a short delay; do not sign or fund anything from this response.",
+        )
+    })?
     .map(Json)
-    .map_err(|error| match error {
+    .map_err(map_agent_wallet_readiness_error)
+}
+
+type AgentWalletReadinessProblem = (StatusCode, Json<serde_json::Value>);
+
+fn agent_wallet_readiness_problem(
+    status: StatusCode,
+    code: &str,
+    retryable: bool,
+    failed_transition: &str,
+    message: &str,
+    next_action: &str,
+) -> AgentWalletReadinessProblem {
+    if status.is_server_error() {
+        eprintln!("agent wallet readiness failed: {code}");
+    }
+    (
+        status,
+        Json(serde_json::json!({
+            "schema_version": "agent-bounties/agent-wallet-readiness-problem-v1",
+            "state": "failed",
+            "failed_transition": failed_transition,
+            "error": code,
+            "retryable": retryable,
+            "message": message,
+            "next_action": next_action,
+            "evidence_boundary": "No readiness error is a claim, signature request, funding instruction, or settlement event."
+        })),
+    )
+}
+
+fn map_agent_wallet_readiness_error(error: ChainBaseError) -> AgentWalletReadinessProblem {
+    match error {
         ChainBaseError::UnknownNetwork(_)
         | ChainBaseError::InvalidAddress(_)
-        | ChainBaseError::InvalidAmount => StatusCode::BAD_REQUEST,
-        _ => StatusCode::SERVICE_UNAVAILABLE,
-    })
+        | ChainBaseError::InvalidAmount => agent_wallet_readiness_problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_readiness_request",
+            false,
+            "validate_request_or_bounty",
+            "The network, public address, canonical bounty, or expected bond is invalid.",
+            "Refresh canonical earning inventory and retry with its network and bounty contract plus a valid public wallet address.",
+        ),
+        ChainBaseError::RelayerChainMismatch { .. } => agent_wallet_readiness_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "base_rpc_chain_mismatch",
+            false,
+            "verify_rpc_chain",
+            "The configured RPC does not serve the requested Base network.",
+            "Do not continue with this endpoint until hosted discovery and the configured RPC agree.",
+        ),
+        ChainBaseError::RpcHttpStatus(429) => agent_wallet_readiness_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "base_rpc_rate_limited",
+            true,
+            "read_canonical_state",
+            "The Base RPC rate-limited the bounded readiness read.",
+            "Retry with the same public inputs after a short delay; do not create parallel retries.",
+        ),
+        ChainBaseError::RpcProviderError { code, message }
+            if code == -32016 || message.to_ascii_lowercase().contains("rate limit") =>
+        {
+            agent_wallet_readiness_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "base_rpc_rate_limited",
+                true,
+                "read_canonical_state",
+                "The Base RPC rate-limited the bounded readiness read.",
+                "Retry with the same public inputs after a short delay; do not create parallel retries.",
+            )
+        }
+        ChainBaseError::InvalidRpcResponse(_) => agent_wallet_readiness_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "base_rpc_invalid_response",
+            true,
+            "decode_canonical_state",
+            "The Base RPC returned a response that failed strict readiness validation.",
+            "Refresh canonical inventory and retry once; if this persists, use another advertised RPC path.",
+        ),
+        _ => agent_wallet_readiness_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "base_rpc_unavailable",
+            true,
+            "read_canonical_state",
+            "Canonical Base state could not be read.",
+            "Retry with the same public inputs after a short delay; never replace them with wallet secrets.",
+        ),
+    }
 }
 
 fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
@@ -9102,6 +9196,36 @@ mod tests {
         assert!(!serde_json::to_string(&report)
             .unwrap()
             .contains("pmc_paypal_enabled"));
+    }
+
+    #[test]
+    fn agent_wallet_readiness_rate_limit_problem_is_retryable_and_redacted() {
+        let (status, Json(problem)) =
+            map_agent_wallet_readiness_error(ChainBaseError::RpcProviderError {
+                code: -32_016,
+                message: "over rate limit at https://credential.example".to_string(),
+            });
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(problem["error"], "base_rpc_rate_limited");
+        assert_eq!(problem["retryable"], true);
+        assert!(!problem.to_string().contains("credential.example"));
+        assert!(problem["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("do not create parallel retries"));
+    }
+
+    #[test]
+    fn agent_wallet_readiness_invalid_bounty_problem_is_not_retryable() {
+        let (status, Json(problem)) = map_agent_wallet_readiness_error(
+            ChainBaseError::InvalidAddress("not canonical".to_string()),
+        );
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(problem["error"], "invalid_readiness_request");
+        assert_eq!(problem["retryable"], false);
+        assert_eq!(problem["failed_transition"], "validate_request_or_bounty");
     }
 
     #[tokio::test]

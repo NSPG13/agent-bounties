@@ -1,14 +1,40 @@
 use super::{
-    base_network_descriptor, encode_address, encode_call, fetch_block_number_with_transport,
-    fetch_contract_word, parse_bytes32, parse_rpc_quantity, rpc_result, ChainBaseError,
-    JsonRpcTransport, ReqwestJsonRpcTransport, AUTONOMOUS_BOUNTY_PROTOCOL_HASH,
+    base_network_descriptor, encode_address, encode_call, fetch_contract_word, parse_bytes32,
+    parse_rpc_quantity, rpc_result, ChainBaseError, JsonRpcTransport, ReqwestJsonRpcTransport,
+    AUTONOMOUS_BOUNTY_PROTOCOL_HASH,
+};
+use alloy::{
+    primitives::{Address, Bytes},
+    sol,
+    sol_types::SolCall,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const AGENT_WALLET_READINESS_SCHEMA: &str = "agent-bounties/agent-wallet-readiness-v1";
 const CLAIMABLE_BOUNTY_STATUS: u8 = 1;
+const BASE_MULTICALL3_ADDRESS: &str = "0xca11bde05977b3631167028862be2a173976ca11";
+
+sol! {
+    interface IMulticall3 {
+        struct ReadCall {
+            address target;
+            bool allowFailure;
+            bytes callData;
+        }
+
+        struct ReadResult {
+            bool success;
+            bytes returnData;
+        }
+
+        function aggregate3(ReadCall[] calldata calls)
+            external
+            payable
+            returns (ReadResult[] memory returnData);
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,24 +139,27 @@ where
         .map(positive_amount)
         .transpose()?;
 
-    let observed_chain_id = fetch_chain_id(rpc_url, transport).await?;
+    let preflight_results = rpc_batch_results(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!([
+                    {"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []},
+                    {"jsonrpc": "2.0", "id": 2, "method": "eth_blockNumber", "params": []},
+                ]),
+            )
+            .await?,
+        &[(1, "eth_chainId"), (2, "eth_blockNumber")],
+    )?;
+    let observed_chain_id = batch_quantity(&preflight_results, 1, "eth_chainId")?;
     if observed_chain_id != network.chain_id {
         return Err(ChainBaseError::RelayerChainMismatch {
             expected: network.chain_id,
             observed: observed_chain_id,
         });
     }
-    let observed_block_number = fetch_block_number_with_transport(rpc_url, 2, transport).await?;
+    let observed_block_number = batch_quantity(&preflight_results, 2, "eth_blockNumber")?;
     let block_tag = format!("0x{observed_block_number:x}");
-    let observed_balance = fetch_erc20_balance_at_with_transport(
-        rpc_url,
-        &network.native_usdc_token_address,
-        &wallet_address,
-        &block_tag,
-        3,
-        transport,
-    )
-    .await?;
     let canonical_word = fetch_contract_word(
         rpc_url,
         &canonical_factory,
@@ -139,7 +168,7 @@ where
             vec![encode_address(&bounty_contract)?],
         ),
         &block_tag,
-        4,
+        3,
         transport,
     )
     .await?;
@@ -149,67 +178,53 @@ where
         ));
     }
 
-    let bounty_factory = fetch_address_getter(
+    let state_words = fetch_multicall_words(
         rpc_url,
-        &bounty_contract,
-        "factory()",
         &block_tag,
-        5,
+        &[
+            (
+                network.native_usdc_token_address.clone(),
+                encode_call("balanceOf(address)", vec![encode_address(&wallet_address)?]),
+            ),
+            (
+                bounty_contract.clone(),
+                encode_call("factory()", Vec::new()),
+            ),
+            (
+                bounty_contract.clone(),
+                encode_call("settlementToken()", Vec::new()),
+            ),
+            (
+                bounty_contract.clone(),
+                encode_call("creator()", Vec::new()),
+            ),
+            (
+                bounty_contract.clone(),
+                encode_call("verifierReward()", Vec::new()),
+            ),
+            (bounty_contract.clone(), encode_call("status()", Vec::new())),
+            (
+                bounty_contract.clone(),
+                encode_call("protocolVersion()", Vec::new()),
+            ),
+        ],
+        4,
         transport,
     )
     .await?;
-    let settlement_token = fetch_address_getter(
-        rpc_url,
-        &bounty_contract,
-        "settlementToken()",
-        &block_tag,
-        6,
-        transport,
-    )
-    .await?;
-    let creator_wallet = fetch_address_getter(
-        rpc_url,
-        &bounty_contract,
-        "creator()",
-        &block_tag,
-        7,
-        transport,
-    )
-    .await?;
-    let claim_bond = fetch_u128_getter(
-        rpc_url,
-        &bounty_contract,
-        "verifierReward()",
-        &block_tag,
-        8,
-        transport,
-    )
-    .await?;
+    let observed_balance = parse_word_u128(&state_words[0])?;
+    let bounty_factory = address_from_word(&state_words[1], "factory")?;
+    let settlement_token = address_from_word(&state_words[2], "settlementToken")?;
+    let creator_wallet = address_from_word(&state_words[3], "creator")?;
+    let claim_bond = parse_word_u128(&state_words[4])?;
     if claim_bond == 0 {
         return Err(ChainBaseError::InvalidAmount);
     }
-    let bounty_status = fetch_u128_getter(
-        rpc_url,
-        &bounty_contract,
-        "status()",
-        &block_tag,
-        9,
-        transport,
-    )
-    .await?;
+    let bounty_status = parse_word_u128(&state_words[5])?;
     let bounty_status = u8::try_from(bounty_status).map_err(|_| {
         ChainBaseError::InvalidRpcResponse("bounty status does not fit uint8".to_string())
     })?;
-    let protocol_hash = fetch_contract_word(
-        rpc_url,
-        &bounty_contract,
-        &encode_call("protocolVersion()", Vec::new()),
-        &block_tag,
-        10,
-        transport,
-    )
-    .await?
-    .to_ascii_lowercase();
+    let protocol_hash = state_words[6].to_ascii_lowercase();
 
     let mut checks = Vec::new();
     checks.push(check(
@@ -452,22 +467,149 @@ where
     })
 }
 
-async fn fetch_chain_id<T>(rpc_url: &str, transport: &T) -> Result<u64, ChainBaseError>
+fn eth_call_request(id: u64, contract: &str, data: &str, block: &str) -> serde_json::Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "eth_call",
+        "params": [{"to": contract, "data": data}, block],
+    })
+}
+
+async fn fetch_multicall_words<T>(
+    rpc_url: &str,
+    block: &str,
+    calls: &[(String, String)],
+    request_id: u64,
+    transport: &T,
+) -> Result<Vec<String>, ChainBaseError>
 where
     T: JsonRpcTransport + ?Sized,
 {
+    if calls.is_empty() {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "multicall requires at least one read".to_string(),
+        ));
+    }
+    let calls = calls
+        .iter()
+        .map(|(target, call_data)| {
+            Ok(IMulticall3::ReadCall {
+                target: target
+                    .parse::<Address>()
+                    .map_err(|_| ChainBaseError::InvalidAddress(target.clone()))?,
+                allowFailure: true,
+                callData: Bytes::from(super::parse_hex_bytes(call_data)?),
+            })
+        })
+        .collect::<Result<Vec<_>, ChainBaseError>>()?;
+    let expected_results = calls.len();
+    let call_data = format!(
+        "0x{}",
+        hex::encode(IMulticall3::aggregate3Call { calls }.abi_encode())
+    );
     let result = rpc_result(
         transport
             .post_json_value(
                 rpc_url,
-                &json!({"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []}),
+                &eth_call_request(request_id, BASE_MULTICALL3_ADDRESS, &call_data, block),
             )
             .await?,
-        1,
-        "eth_chainId",
+        request_id,
+        "eth_call aggregate3",
     )?;
-    parse_rpc_quantity(result.as_str().ok_or_else(|| {
-        ChainBaseError::InvalidRpcResponse("eth_chainId result is not a quantity".to_string())
+    let encoded = super::parse_hex_bytes(result.as_str().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("eth_call aggregate3 result is not hex data".to_string())
+    })?)?;
+    let decoded =
+        IMulticall3::aggregate3Call::abi_decode_returns_validate(&encoded).map_err(|_| {
+            ChainBaseError::InvalidRpcResponse(
+                "eth_call aggregate3 result has invalid ABI encoding".to_string(),
+            )
+        })?;
+    if decoded.len() != expected_results {
+        return Err(ChainBaseError::InvalidRpcResponse(format!(
+            "multicall returned {} reads; expected {}",
+            decoded.len(),
+            expected_results
+        )));
+    }
+
+    decoded
+        .into_iter()
+        .enumerate()
+        .map(|(index, result)| {
+            if !result.success {
+                return Err(ChainBaseError::InvalidRpcResponse(format!(
+                    "multicall read {index} failed"
+                )));
+            }
+            super::normalize_hash(&format!("0x{}", hex::encode(result.returnData)))
+        })
+        .collect()
+}
+
+fn rpc_batch_results(
+    value: serde_json::Value,
+    expected: &[(u64, &str)],
+) -> Result<BTreeMap<u64, serde_json::Value>, ChainBaseError> {
+    let responses = value.as_array().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("JSON-RPC batch response is not an array".to_string())
+    })?;
+    if responses.len() != expected.len() {
+        return Err(ChainBaseError::InvalidRpcResponse(format!(
+            "JSON-RPC batch returned {} responses; expected {}",
+            responses.len(),
+            expected.len()
+        )));
+    }
+
+    let methods = expected.iter().copied().collect::<BTreeMap<_, _>>();
+    let mut results = BTreeMap::new();
+    for response in responses {
+        let id = response
+            .get("id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "JSON-RPC batch response is missing a numeric id".to_string(),
+                )
+            })?;
+        let method = methods.get(&id).copied().ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse(format!(
+                "JSON-RPC batch returned unexpected id {id}"
+            ))
+        })?;
+        if results.contains_key(&id) {
+            return Err(ChainBaseError::InvalidRpcResponse(format!(
+                "JSON-RPC batch returned duplicate id {id}"
+            )));
+        }
+        results.insert(id, rpc_result(response.clone(), id, method)?);
+    }
+    Ok(results)
+}
+
+fn batch_result<'a>(
+    results: &'a BTreeMap<u64, serde_json::Value>,
+    id: u64,
+    method: &str,
+) -> Result<&'a serde_json::Value, ChainBaseError> {
+    results.get(&id).ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse(format!(
+            "{method} result is missing from JSON-RPC batch"
+        ))
+    })
+}
+
+fn batch_quantity(
+    results: &BTreeMap<u64, serde_json::Value>,
+    id: u64,
+    method: &str,
+) -> Result<u64, ChainBaseError> {
+    let value = batch_result(results, id, method)?;
+    parse_rpc_quantity(value.as_str().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse(format!("{method} result is not a quantity"))
     })?)
 }
 
@@ -512,56 +654,14 @@ where
     parse_word_u128(&word)
 }
 
-async fn fetch_address_getter<T>(
-    rpc_url: &str,
-    contract: &str,
-    function: &str,
-    block_tag: &str,
-    request_id: u64,
-    transport: &T,
-) -> Result<String, ChainBaseError>
-where
-    T: JsonRpcTransport + ?Sized,
-{
-    let word = fetch_contract_word(
-        rpc_url,
-        contract,
-        &encode_call(function, Vec::new()),
-        block_tag,
-        request_id,
-        transport,
-    )
-    .await?;
-    let bytes = parse_bytes32(&word)?;
+fn address_from_word(word: &str, function: &str) -> Result<String, ChainBaseError> {
+    let bytes = parse_bytes32(word)?;
     if bytes[..12].iter().any(|byte| *byte != 0) {
         return Err(ChainBaseError::InvalidRpcResponse(format!(
             "{function} did not return an ABI address"
         )));
     }
     super::normalize_evm_address(format!("0x{}", hex::encode(&bytes[12..])))
-}
-
-async fn fetch_u128_getter<T>(
-    rpc_url: &str,
-    contract: &str,
-    function: &str,
-    block_tag: &str,
-    request_id: u64,
-    transport: &T,
-) -> Result<u128, ChainBaseError>
-where
-    T: JsonRpcTransport + ?Sized,
-{
-    let word = fetch_contract_word(
-        rpc_url,
-        contract,
-        &encode_call(function, Vec::new()),
-        block_tag,
-        request_id,
-        transport,
-    )
-    .await?;
-    parse_word_u128(&word)
 }
 
 fn parse_word_u128(word: &str) -> Result<u128, ChainBaseError> {
@@ -704,6 +804,7 @@ mod tests {
     use std::sync::Mutex;
 
     const FACTORY: &str = "0x3333333333333333333333333333333333333333";
+    const MAINNET_FACTORY: &str = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
     const CREATOR: &str = "0x4444444444444444444444444444444444444444";
     const USDC: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
@@ -752,6 +853,26 @@ mod tests {
         format!("0x{}{}", "0".repeat(24), &address[2..].to_ascii_lowercase())
     }
 
+    fn multicall_result(words: Vec<String>) -> String {
+        multicall_result_entries(words.into_iter().map(|word| (true, word)).collect())
+    }
+
+    fn multicall_result_entries(entries: Vec<(bool, String)>) -> String {
+        let return_value = entries
+            .into_iter()
+            .map(|(success, word)| IMulticall3::ReadResult {
+                success,
+                returnData: Bytes::from(super::super::parse_hex_bytes(&word).unwrap()),
+            })
+            .collect();
+        format!(
+            "0x{}",
+            hex::encode(IMulticall3::aggregate3Call::abi_encode_returns(
+                &return_value
+            ))
+        )
+    }
+
     fn transport(
         balance: u128,
         chain_id: u64,
@@ -762,16 +883,24 @@ mod tests {
     ) -> MockTransport {
         MockTransport {
             responses: Mutex::new(vec![
-                json!({"jsonrpc":"2.0","id":1,"result":format!("0x{chain_id:x}")}),
-                json!({"jsonrpc":"2.0","id":2,"result":"0xabc"}),
-                json!({"jsonrpc":"2.0","id":3,"result":format!("0x{balance:064x}")}),
-                json!({"jsonrpc":"2.0","id":4,"result":format!("0x{:064x}", u8::from(canonical))}),
-                json!({"jsonrpc":"2.0","id":5,"result":address_word(FACTORY)}),
-                json!({"jsonrpc":"2.0","id":6,"result":address_word(USDC)}),
-                json!({"jsonrpc":"2.0","id":7,"result":address_word(creator)}),
-                json!({"jsonrpc":"2.0","id":8,"result":format!("0x{claim_bond:064x}")}),
-                json!({"jsonrpc":"2.0","id":9,"result":format!("0x{status:064x}")}),
-                json!({"jsonrpc":"2.0","id":10,"result":AUTONOMOUS_BOUNTY_PROTOCOL_HASH}),
+                json!([
+                    {"jsonrpc":"2.0","id":2,"result":"0xabc"},
+                    {"jsonrpc":"2.0","id":1,"result":format!("0x{chain_id:x}")},
+                ]),
+                json!({"jsonrpc":"2.0","id":3,"result":format!("0x{:064x}", u8::from(canonical))}),
+                json!({
+                    "jsonrpc":"2.0",
+                    "id":4,
+                    "result":multicall_result(vec![
+                        format!("0x{balance:064x}"),
+                        address_word(FACTORY),
+                        address_word(USDC),
+                        address_word(creator),
+                        format!("0x{claim_bond:064x}"),
+                        format!("0x{status:064x}"),
+                        AUTONOMOUS_BOUNTY_PROTOCOL_HASH.to_string(),
+                    ]),
+                }),
             ]),
             requests: Mutex::new(Vec::new()),
         }
@@ -794,13 +923,23 @@ mod tests {
         assert_eq!(report.observed_block_number, 0xabc);
         assert_eq!(report.claim_bond_base_units, "100000");
         let requests = transport.requests.lock().unwrap();
-        assert_eq!(requests.len(), 10);
-        assert_eq!(requests[0]["method"], "eth_chainId");
-        assert_eq!(requests[1]["method"], "eth_blockNumber");
-        for request in &requests[2..] {
-            assert_eq!(request["method"], "eth_call");
-            assert_eq!(request["params"][1], "0xabc");
-        }
+        assert_eq!(requests.len(), 3);
+        let preflight = requests[0].as_array().unwrap();
+        assert_eq!(preflight.len(), 2);
+        assert_eq!(preflight[0]["method"], "eth_chainId");
+        assert_eq!(preflight[1]["method"], "eth_blockNumber");
+        assert_eq!(requests[1]["method"], "eth_call");
+        assert_eq!(requests[1]["params"][1], "0xabc");
+        assert_eq!(requests[2]["method"], "eth_call");
+        assert_eq!(requests[2]["params"][0]["to"], BASE_MULTICALL3_ADDRESS);
+        assert_eq!(requests[2]["params"][1], "0xabc");
+        let aggregate = IMulticall3::aggregate3Call::abi_decode_validate(
+            &super::super::parse_hex_bytes(requests[2]["params"][0]["data"].as_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(aggregate.calls.len(), 7);
+        assert!(aggregate.calls.iter().all(|call| call.allowFailure));
         assert_eq!(
             report.recommended_claim_path.as_deref(),
             Some("agent_native_claim")
@@ -903,5 +1042,64 @@ mod tests {
             error,
             ChainBaseError::InvalidAddress(message) if message.contains("not registered")
         ));
+    }
+
+    #[tokio::test]
+    async fn readiness_multicall_rejects_failed_subread() {
+        let transport = MockTransport {
+            responses: Mutex::new(vec![json!({
+                "jsonrpc":"2.0",
+                "id":4,
+                "result":multicall_result_entries(vec![
+                    (true, format!("0x{:064x}", 1)),
+                    (false, "0x".to_string()),
+                ]),
+            })]),
+            requests: Mutex::new(Vec::new()),
+        };
+
+        let error = fetch_multicall_words(
+            "https://rpc.example",
+            "0xabc",
+            &[
+                (
+                    USDC.to_string(),
+                    encode_call("balanceOf(address)", vec![encode_address(CREATOR).unwrap()]),
+                ),
+                (FACTORY.to_string(), encode_call("factory()", Vec::new())),
+            ],
+            4,
+            &transport,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ChainBaseError::InvalidRpcResponse(message) if message == "multicall read 1 failed"
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_RPC_URL, AGENT_BOUNTIES_TEST_BOUNTY_CONTRACT, and AGENT_BOUNTIES_TEST_SOLVER_WALLET"]
+    async fn readiness_live_transport_canary() {
+        let rpc_url = std::env::var("AGENT_BOUNTIES_TEST_RPC_URL")
+            .expect("AGENT_BOUNTIES_TEST_RPC_URL must be set");
+        let bounty_contract = std::env::var("AGENT_BOUNTIES_TEST_BOUNTY_CONTRACT")
+            .expect("AGENT_BOUNTIES_TEST_BOUNTY_CONTRACT must be set");
+        let wallet_address = std::env::var("AGENT_BOUNTIES_TEST_SOLVER_WALLET")
+            .expect("AGENT_BOUNTIES_TEST_SOLVER_WALLET must be set");
+        let mut request = input();
+        request.bounty_contract = bounty_contract.clone();
+        request.wallet_address = wallet_address;
+        request.claim_bond_base_units = None;
+        request.policy.allowed_contracts = vec![USDC.to_string(), bounty_contract];
+
+        let report = prepare_agent_to_earn(&rpc_url, MAINNET_FACTORY, &request)
+            .await
+            .expect("live readiness transport must return a typed report");
+
+        assert!(report.observed_block_number > 0);
+        assert_eq!(report.canonical_factory, MAINNET_FACTORY);
     }
 }

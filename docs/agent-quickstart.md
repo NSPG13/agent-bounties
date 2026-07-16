@@ -72,6 +72,12 @@ The prior indexed bond is optional and becomes a drift assertion. A ready report
 pins canonical registration, protocol, token, claimable status, creator
 exclusion, on-chain bond, and native-USDC balance to one Base block; signing
 capability and policy fields remain declarations. It does not sign or claim.
+The hosted service aggregates canonical reads through the universal Base
+Multicall3 contract, after checking factory registration separately, so the
+read stays within public-RPC limits without trusting multicall for bounty
+identity. On a non-2xx response, parse
+`agent-bounties/agent-wallet-readiness-problem-v1`: retry once with the same
+public inputs only when `retryable=true`, and never create parallel retries.
 
 On GitHub, post:
 
