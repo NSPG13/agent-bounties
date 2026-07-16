@@ -494,11 +494,67 @@ pub trait RegressionSandboxExecutor: Send + Sync {
     ) -> Result<RegressionSandboxExecution, RegressionSandboxExecutorError>;
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegressionVerificationOutcome {
     pub verdict: RegressionVerdict,
     pub receipt: RegressionSandboxReceipt,
     pub response_hash: String,
+}
+
+pub fn validate_regression_outcome(
+    policy: &RegressionSandboxPolicy,
+    task: &RegressionVerificationTask,
+    outcome: &RegressionVerificationOutcome,
+) -> VerifierResultType<()> {
+    policy.validate()?;
+    task.validate()?;
+    outcome.receipt.execution.validate(policy)?;
+    if outcome.receipt.schema_version != REGRESSION_SANDBOX_RECEIPT_VERSION
+        || outcome.receipt.scope != task.scope
+        || outcome.receipt.runner_manifest_hash != policy.runner_manifest_hash()?
+        || outcome.receipt.command_hash != policy.command_hash()?
+        || outcome.receipt.source_digest != task.source_digest
+        || outcome.receipt.benchmark_digest != policy.benchmark_digest
+        || outcome.receipt.image != policy.image
+    {
+        return Err(VerifierError::Failed(
+            "regression receipt differs from the immutable task or runner policy; no attestation is allowed"
+                .to_string(),
+        ));
+    }
+    let expected_verdict = if outcome.receipt.execution.exit_code == 0 {
+        RegressionVerdict::Passed
+    } else {
+        RegressionVerdict::Failed
+    };
+    if outcome.verdict != expected_verdict {
+        return Err(VerifierError::Failed(
+            "regression verdict differs from the completed process exit; no attestation is allowed"
+                .to_string(),
+        ));
+    }
+    #[derive(Serialize)]
+    struct ResponsePreimage<'a> {
+        schema_version: &'static str,
+        verdict: RegressionVerdict,
+        receipt: &'a RegressionSandboxReceipt,
+    }
+    let expected_response_hash = canonical_sha256_bytes32(&ResponsePreimage {
+        schema_version: REGRESSION_SANDBOX_RECEIPT_VERSION,
+        verdict: outcome.verdict,
+        receipt: &outcome.receipt,
+    })?;
+    if !outcome
+        .response_hash
+        .eq_ignore_ascii_case(&expected_response_hash)
+    {
+        return Err(VerifierError::Failed(
+            "regression response hash does not commit the exact receipt; no attestation is allowed"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub struct SandboxedRegressionVerifier<E> {
@@ -522,10 +578,10 @@ impl<E: RegressionSandboxExecutor> SandboxedRegressionVerifier<E> {
         execution.validate(&self.policy)?;
         let receipt = RegressionSandboxReceipt {
             schema_version: REGRESSION_SANDBOX_RECEIPT_VERSION.to_string(),
-            scope: task.scope,
+            scope: task.scope.clone(),
             runner_manifest_hash: self.policy.runner_manifest_hash()?,
             command_hash: self.policy.command_hash()?,
-            source_digest: task.source_digest,
+            source_digest: task.source_digest.clone(),
             benchmark_digest: self.policy.benchmark_digest.clone(),
             image: self.policy.image.clone(),
             execution,
@@ -535,22 +591,24 @@ impl<E: RegressionSandboxExecutor> SandboxedRegressionVerifier<E> {
         } else {
             RegressionVerdict::Failed
         };
+        let mut outcome = RegressionVerificationOutcome {
+            verdict,
+            receipt,
+            response_hash: String::new(),
+        };
         #[derive(Serialize)]
         struct ResponsePreimage<'a> {
             schema_version: &'static str,
             verdict: RegressionVerdict,
             receipt: &'a RegressionSandboxReceipt,
         }
-        let response_hash = canonical_sha256_bytes32(&ResponsePreimage {
+        outcome.response_hash = canonical_sha256_bytes32(&ResponsePreimage {
             schema_version: REGRESSION_SANDBOX_RECEIPT_VERSION,
-            verdict,
-            receipt: &receipt,
+            verdict: outcome.verdict,
+            receipt: &outcome.receipt,
         })?;
-        Ok(RegressionVerificationOutcome {
-            verdict,
-            receipt,
-            response_hash,
-        })
+        validate_regression_outcome(&self.policy, &task, &outcome)?;
+        Ok(outcome)
     }
 }
 
@@ -1714,6 +1772,32 @@ mod tests {
         assert!(first.response_hash.starts_with("0x"));
         assert_eq!(first.response_hash.len(), 66);
         assert_eq!(first.receipt.scope, regression_scope());
+    }
+
+    #[tokio::test]
+    async fn regression_candidate_validation_rejects_scope_verdict_and_hash_mutation() {
+        let policy = regression_policy();
+        let task = regression_task();
+        let outcome = SandboxedRegressionVerifier {
+            executor: StubRegressionExecutor::completed(0),
+            policy: policy.clone(),
+        }
+        .verify(task.clone())
+        .await
+        .unwrap();
+        validate_regression_outcome(&policy, &task, &outcome).unwrap();
+
+        let mut changed_scope = outcome.clone();
+        changed_scope.receipt.scope.round += 1;
+        assert!(validate_regression_outcome(&policy, &task, &changed_scope).is_err());
+
+        let mut changed_verdict = outcome.clone();
+        changed_verdict.verdict = RegressionVerdict::Failed;
+        assert!(validate_regression_outcome(&policy, &task, &changed_verdict).is_err());
+
+        let mut changed_hash = outcome;
+        changed_hash.response_hash = hash("a");
+        assert!(validate_regression_outcome(&policy, &task, &changed_hash).is_err());
     }
 
     #[tokio::test]

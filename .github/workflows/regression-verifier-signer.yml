@@ -1,0 +1,132 @@
+name: Regression Verifier Signer
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/regression-verifier-runner.yml"
+      - ".github/workflows/regression-verifier-signer.yml"
+      - "scripts/regression_verifier_pipeline.py"
+      - "scripts/test_regression_verifier_pipeline.py"
+  workflow_run:
+    workflows: ["Regression Verifier Runner"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/test_regression_verifier_pipeline.py -v
+
+  authorize-run:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'schedule' ||
+       github.event.workflow_run.event == 'workflow_dispatch') &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    needs: contract
+    runs-on: ubuntu-latest
+    outputs:
+      revision: ${{ steps.main.outputs.revision }}
+      run_id: ${{ steps.main.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          fetch-depth: 0
+      - id: main
+        env:
+          CANDIDATE_REVISION: ${{ github.event.workflow_run.head_sha }}
+          CANDIDATE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          current_main="$(git rev-parse refs/remotes/origin/main)"
+          if [[ "$CANDIDATE_REVISION" != "$current_main" ]]; then
+            echo "Refusing to sign a candidate from stale main" >&2
+            exit 1
+          fi
+          echo "revision=$CANDIDATE_REVISION" >> "$GITHUB_OUTPUT"
+          echo "run_id=$CANDIDATE_RUN_ID" >> "$GITHUB_OUTPUT"
+
+  sign-one:
+    needs: authorize-run
+    uses: ./.github/workflows/regression-verifier-signing-reusable.yml
+    with:
+      revision: ${{ needs.authorize-run.outputs.revision }}
+      candidate_run_id: ${{ needs.authorize-run.outputs.run_id }}
+      signer_slot: one
+      expected_signer: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+    secrets:
+      verifier_private_key: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
+
+  sign-two:
+    needs: authorize-run
+    uses: ./.github/workflows/regression-verifier-signing-reusable.yml
+    with:
+      revision: ${{ needs.authorize-run.outputs.revision }}
+      candidate_run_id: ${{ needs.authorize-run.outputs.run_id }}
+      signer_slot: two
+      expected_signer: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+    secrets:
+      verifier_private_key: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
+
+  relay:
+    needs: [authorize-run, sign-one, sign-two]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: regression-verifier-relay-mainnet
+      cancel-in-progress: false
+    env:
+      API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      VERIFIER_ONE: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+      VERIFIER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ needs.authorize-run.outputs.revision }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/download-artifact@v4
+        with:
+          name: regression-candidates-${{ needs.authorize-run.outputs.run_id }}
+          path: target/regression-candidates
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize-run.outputs.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: regression-attestations-one
+          path: target/attestations-one
+      - uses: actions/download-artifact@v4
+        with:
+          name: regression-attestations-two
+          path: target/attestations-two
+      - run: cargo build --release -p worker
+      - name: Revalidate and relay exact quorum
+        run: >-
+          python scripts/regression_verifier_pipeline.py relay
+          --api-base "$API_BASE_URL"
+          --network base-mainnet
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          --candidates target/regression-candidates
+          --attestations target/attestations-one
+          --attestations target/attestations-two
+          --verifier "$VERIFIER_ONE"
+          --verifier "$VERIFIER_TWO"
+          --worker target/release/worker

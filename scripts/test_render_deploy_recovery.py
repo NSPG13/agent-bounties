@@ -81,6 +81,9 @@ class ResolutionFailureClient:
     def ensure_deploy(self, service, revision):
         self.mutations.append(("deploy", service["name"]))
 
+    def ensure_custom_domain(self, service, domain):
+        self.mutations.append(("domain", service["name"], domain))
+
 
 class RenderDeployRecoveryTests(unittest.TestCase):
     def test_revision_requires_full_sha(self) -> None:
@@ -143,6 +146,44 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_custom_domain_is_reused_or_attached_exactly_once(self) -> None:
+        existing = RecordingClient()
+        existing._read_with_retry = lambda _path: [
+            {"customDomain": {"name": "api.bountyboard.global", "verificationStatus": "verified"}}
+        ]
+        reused = existing.ensure_custom_domain(
+            {"id": "srv-api", "name": "agent-bounties-api"},
+            "api.bountyboard.global",
+        )
+        self.assertEqual(reused["verificationStatus"], "verified")
+        self.assertEqual(existing.requests, [])
+
+        created = RecordingClient(
+            response={"customDomain": {"name": "api.bountyboard.global", "verificationStatus": "pending"}}
+        )
+        created._read_with_retry = lambda _path: []
+        attached = created.ensure_custom_domain(
+            {"id": "srv-api", "name": "agent-bounties-api"},
+            "api.bountyboard.global",
+        )
+        self.assertEqual(attached["verificationStatus"], "pending")
+        self.assertEqual(
+            created.requests,
+            [("POST", "/services/srv-api/custom-domains", {"name": "api.bountyboard.global"})],
+        )
+
+    def test_duplicate_custom_domains_fail_closed(self) -> None:
+        client = RecordingClient()
+        client._read_with_retry = lambda _path: [
+            {"name": "api.bountyboard.global"},
+            {"customDomain": {"name": "API.BOUNTYBOARD.GLOBAL"}},
+        ]
+        with self.assertRaisesRegex(recovery.RecoveryError, "duplicate"):
+            client.ensure_custom_domain(
+                {"id": "srv-api", "name": "agent-bounties-api"},
+                "api.bountyboard.global",
+            )
 
     def test_rejected_trigger_fails_without_unbounded_retry(self) -> None:
         client = RecordingClient(error=recovery.RenderHttpError(401, "unauthorized"))

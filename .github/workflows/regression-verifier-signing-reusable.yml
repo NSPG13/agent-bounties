@@ -1,0 +1,67 @@
+name: Regression Verifier Signing Slot
+
+on:
+  workflow_call:
+    inputs:
+      revision:
+        required: true
+        type: string
+      candidate_run_id:
+        required: true
+        type: string
+      signer_slot:
+        required: true
+        type: string
+      expected_signer:
+        required: true
+        type: string
+    secrets:
+      verifier_private_key:
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      REGRESSION_VERIFIER_PRIVATE_KEY: ${{ secrets.verifier_private_key }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ inputs.revision }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/download-artifact@v4
+        with:
+          name: regression-candidates-${{ inputs.candidate_run_id }}
+          path: target/regression-candidates
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+      - run: cargo build --release -p worker
+      - name: Re-fetch state and sign one exact candidate set
+        run: >-
+          python scripts/regression_verifier_pipeline.py sign
+          --api-base "$API_BASE_URL"
+          --network base-mainnet
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          --candidates target/regression-candidates
+          --output "target/attestations-${{ inputs.signer_slot }}"
+          --worker target/release/worker
+          --private-key-env REGRESSION_VERIFIER_PRIVATE_KEY
+          --expected-signer "${{ inputs.expected_signer }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: regression-attestations-${{ inputs.signer_slot }}
+          path: target/attestations-${{ inputs.signer_slot }}
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,102 @@
+name: Standing meta v2 deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_mainnet:
+        description: Deploy the tested v2 policy components to Base mainnet
+        required: true
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/standing-meta-v2-deploy.yml"
+      - "contracts/base-escrow/**"
+      - "scripts/standing_meta_v2_deploy.py"
+      - "scripts/test_standing_meta_v2_deploy.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/standing-meta-v2-deploy.yml"
+      - "contracts/base-escrow/**"
+      - "scripts/standing_meta_v2_deploy.py"
+      - "scripts/test_standing_meta_v2_deploy.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standing-meta-v2-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deterministic-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Contract and deployment harnesses
+        run: |
+          python -m unittest scripts.test_standing_meta_v2_deploy -v
+          forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV2Test -vv
+          forge build --root contracts/base-escrow --sizes
+
+  base-sepolia-rehearsal:
+    if: github.event_name == 'workflow_dispatch'
+    needs: deterministic-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      PARTICIPANT_ATTESTER_PRIVATE_KEY: ${{ secrets.PARTICIPANT_ATTESTER_PRIVATE_KEY }}
+      REGRESSION_VERIFIER_ONE_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
+      REGRESSION_VERIFIER_TWO_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
+      PARTICIPANT_ATTESTER_ADDRESS: ${{ vars.PARTICIPANT_ATTESTER_ADDRESS }}
+      REGRESSION_VERIFIER_ONE_ADDRESS: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+      REGRESSION_VERIFIER_TWO_ADDRESS: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Execute full funded Base Sepolia loop
+        run: >-
+          python scripts/standing_meta_v2_deploy.py sepolia
+          --rpc-url https://sepolia.base.org
+          --output target/base-sepolia-standing-meta-v2-rehearsal.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: base-sepolia-standing-meta-v2-rehearsal
+          path: target/base-sepolia-standing-meta-v2-*.json
+          if-no-files-found: error
+
+  base-mainnet-deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_mainnet
+    needs: base-sepolia-rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      PARTICIPANT_ATTESTER_ADDRESS: ${{ vars.PARTICIPANT_ATTESTER_ADDRESS }}
+      REGRESSION_VERIFIER_ONE_ADDRESS: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+      REGRESSION_VERIFIER_TWO_ADDRESS: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Deploy exact mainnet components after successful rehearsal
+        run: >-
+          python scripts/standing_meta_v2_deploy.py mainnet
+          --rpc-url https://mainnet.base.org
+          --output target/base-mainnet-standing-meta-v2-deployment.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: base-mainnet-standing-meta-v2-deployment
+          path: target/base-mainnet-standing-meta-v2-*.json
+          if-no-files-found: error

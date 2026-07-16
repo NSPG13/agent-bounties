@@ -19,9 +19,10 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, process::Command, task, time::Instant};
 use verifier_sdk::{
-    RegressionSandboxExecution, RegressionSandboxExecutor, RegressionSandboxExecutorError,
-    RegressionSandboxIsolation, RegressionSandboxPolicy, RegressionVerificationOutcome,
-    RegressionVerificationScope, RegressionVerificationTask, SandboxedRegressionVerifier,
+    validate_regression_outcome, RegressionSandboxExecution, RegressionSandboxExecutor,
+    RegressionSandboxExecutorError, RegressionSandboxIsolation, RegressionSandboxPolicy,
+    RegressionVerificationOutcome, RegressionVerificationScope, RegressionVerificationTask,
+    SandboxedRegressionVerifier,
 };
 
 pub const REGRESSION_SANDBOX_ENGINE: &str = "sandboxed_regression_v1";
@@ -34,6 +35,14 @@ static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[serde(deny_unknown_fields)]
 pub struct RegressionSandboxRunRequest {
     pub job: AutonomousVerificationJob,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegressionCandidateValidationRequest {
+    pub job: AutonomousVerificationJob,
+    pub current_job: AutonomousVerificationJob,
+    pub outcome: RegressionVerificationOutcome,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -524,6 +533,20 @@ pub fn prepare_regression_run(
         policy,
         task,
     })
+}
+
+pub fn validate_regression_candidate(
+    request: RegressionCandidateValidationRequest,
+    observed_at_unix: u64,
+) -> anyhow::Result<()> {
+    if serde_json::to_value(&request.job)? != serde_json::to_value(&request.current_job)? {
+        return Err(anyhow!(
+            "runner candidate no longer matches the current canonical verification job"
+        ));
+    }
+    let prepared = prepare_regression_run(request.current_job, observed_at_unix, Path::new("."))?;
+    validate_regression_outcome(&prepared.policy, &prepared.task, &request.outcome)
+        .context("regression candidate failed exact receipt validation")
 }
 
 fn validate_terms_hashes(job: &AutonomousVerificationJob) -> anyhow::Result<()> {

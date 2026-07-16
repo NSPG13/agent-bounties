@@ -1,0 +1,74 @@
+name: Participant Registration
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/participant-registration.yml"
+      - "scripts/register_participant.py"
+      - "scripts/test_register_participant.py"
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/test_register_participant.py -v
+
+  register:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request == null &&
+      startsWith(github.event.comment.body, '/agent-bounty register ')
+    permissions:
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: participant-registration-${{ github.event.sender.id }}
+      cancel-in-progress: false
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      PARTICIPANT_ATTESTER_PRIVATE_KEY: ${{ secrets.PARTICIPANT_ATTESTER_PRIVATE_KEY }}
+      PARTICIPANT_REGISTRY: ${{ vars.BASE_MAINNET_PARTICIPANT_REGISTRY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - name: Register exact GitHub participant identity
+        id: register
+        continue-on-error: true
+        run: >-
+          python scripts/register_participant.py
+          --event "$GITHUB_EVENT_PATH"
+          --repository "$GITHUB_REPOSITORY"
+          --registry "$PARTICIPANT_REGISTRY"
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          --json-out target/participant-registration.json
+          --md-out target/participant-registration.md
+      - name: Publish constructive registration result
+        if: always()
+        run: gh issue comment "${{ github.event.issue.number }}" --repo "$GITHUB_REPOSITORY" --body-file target/participant-registration.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: participant-registration-${{ github.event.comment.id }}
+          path: target/participant-registration.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Preserve fail-closed status
+        if: steps.register.outcome != 'success'
+        run: exit 1
