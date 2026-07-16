@@ -1566,6 +1566,8 @@ pub struct BaseNetworkDescriptor {
 
 pub const BASE_MAINNET_USDC_TOKEN_ADDRESS: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 pub const BASE_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+pub const BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER: &str =
+    "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e";
 pub const AUTONOMOUS_BOUNTY_PROTOCOL_HASH: &str =
     "0x0afcbf01041498cc301207aa5cd21a838c522d8c057d9b29c2dd83d7d94053e7";
 pub const AUTONOMOUS_SUBMISSION_AUTHORIZATION_TTL_SECONDS: u64 = 1_800;
@@ -3877,8 +3879,11 @@ pub fn build_autonomous_bounty_feed(
         let verifier_module =
             (!verifier_module.eq_ignore_ascii_case(zero_address)).then_some(verifier_module);
         let terms_record = terms.get(&terms_hash.to_ascii_lowercase()).cloned();
-        let validation_errors =
+        let mut validation_errors =
             validate_autonomous_terms_against_creation(&creation_data, terms_record.as_ref());
+        if let Some(error) = active_terms_semantic_error(status, terms_record.as_ref()) {
+            validation_errors.push(error);
+        }
         let terms_valid = validation_errors.is_empty();
         let (verification_ready, verification_readiness_reason) = if !terms_valid {
             (false, "content-addressed terms are invalid or unavailable")
@@ -3992,6 +3997,7 @@ pub fn build_autonomous_bounty_terms_record(
         ));
     }
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
+    validate_known_deterministic_module_semantics(&document)?;
     validate_claim_metadata(&mut document)?;
     let document_value = serde_json::to_value(&document)
         .map_err(|error| ChainBaseError::InvalidCanonicalJson(error.to_string()))?;
@@ -4013,6 +4019,85 @@ pub fn build_autonomous_bounty_terms_record(
         creator_wallet: normalized_creator,
         document,
         created_at,
+    })
+}
+
+fn leading_zero_work_v1_benchmark() -> Value {
+    json!({
+        "engine": "leading_zero_work_v1",
+        "difficulty_bits": 16,
+        "hash_function": "keccak256",
+        "preimage_abi_types": [
+            "bytes32",
+            "uint64",
+            "address",
+            "bytes32",
+            "bytes32",
+            "bytes32",
+            "uint256"
+        ],
+        "proof_encoding": "abi.encode(uint256 nonce)",
+        "verifier_module": BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER,
+        "reference_command": "cargo run -p cli -- autonomous-mine-work-proof"
+    })
+}
+
+fn validate_known_deterministic_module_semantics(
+    document: &AutonomousBountyTermsDocument,
+) -> Result<(), ChainBaseError> {
+    let Some(policy) = document.verification_policy.as_object() else {
+        return Ok(());
+    };
+    if policy.get("mechanism").and_then(Value::as_str) != Some("deterministic_module") {
+        return Ok(());
+    }
+    let Some(module) = policy.get("verifier_module").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let Some(contract_terms) = document.contract_terms.as_object() else {
+        return Ok(());
+    };
+    let network = contract_terms_string(contract_terms, "network")?;
+    if base_network_descriptor(network)?.chain_id != 8_453
+        || !module.eq_ignore_ascii_case(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER)
+    {
+        return Ok(());
+    }
+    let Some(benchmark) = document.benchmark.as_object() else {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "the known leading-zero verifier benchmark must be an object".to_string(),
+        ));
+    };
+    let mut semantic_benchmark = benchmark.clone();
+    if semantic_benchmark
+        .remove("suggested_interface")
+        .is_some_and(|value| !value.is_string())
+    {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "the leading-zero verifier suggested_interface annotation must be a string".to_string(),
+        ));
+    }
+    if Value::Object(semantic_benchmark) != leading_zero_work_v1_benchmark() {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "the known leading-zero verifier must use its exact 16-bit scope-bound work benchmark; it cannot verify GitHub CI, task quality, acceptance criteria, or artifact contents"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn active_terms_semantic_error(
+    status: &str,
+    terms: Option<&AutonomousBountyTermsRecord>,
+) -> Option<String> {
+    // Preserve settled history while failing closed before any future earning action.
+    if status == "paid" || status == "cancelled" {
+        return None;
+    }
+    terms.and_then(|record| {
+        validate_known_deterministic_module_semantics(&record.document)
+            .err()
+            .map(|error| error.to_string())
     })
 }
 
@@ -4735,6 +4820,7 @@ pub fn validate_autonomous_creation_against_terms(
     create: &AutonomousBountyCreate,
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<(), ChainBaseError> {
+    validate_known_deterministic_module_semantics(&terms.document)?;
     let hashes_match = create.terms_hash.eq_ignore_ascii_case(&terms.terms_hash)
         && create.policy_hash.eq_ignore_ascii_case(&terms.policy_hash)
         && create
@@ -4877,6 +4963,7 @@ pub fn validate_autonomous_creation_against_terms(
 pub fn autonomous_bounty_create_from_terms(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<AutonomousBountyCreate, ChainBaseError> {
+    validate_known_deterministic_module_semantics(&terms.document)?;
     let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
         ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
     })?;
@@ -6114,6 +6201,60 @@ mod tests {
         assert!(
             validate_autonomous_creation_against_terms("base-mainnet", &create, &record).is_err()
         );
+    }
+
+    #[test]
+    fn known_leading_zero_module_rejects_mismatched_benchmarks_everywhere() {
+        let now = Utc::now();
+        let mut document: AutonomousBountyTermsDocument =
+            serde_json::from_str(include_str!("../../../bounties/autonomous-v1/244.json")).unwrap();
+        document.contract_terms["funding_deadline"] = json!(now.timestamp() + 86_400);
+
+        let valid = build_autonomous_bounty_terms_record(
+            "0x884834E884d6e93462655A2820140aD03E6747bC",
+            document.clone(),
+            now,
+        )
+        .unwrap();
+        let valid_create = autonomous_bounty_create_from_terms(&valid).unwrap();
+
+        document.benchmark = json!({
+            "engine": "github_ci",
+            "required_checks": ["ci"],
+            "required_conclusion": "success"
+        });
+        let publication_error = build_autonomous_bounty_terms_record(
+            "0x884834E884d6e93462655A2820140aD03E6747bC",
+            document.clone(),
+            now,
+        )
+        .unwrap_err();
+        assert!(publication_error.to_string().contains(
+            "known leading-zero verifier must use its exact 16-bit scope-bound work benchmark"
+        ));
+
+        let mut legacy_record = valid;
+        legacy_record.document = document;
+        legacy_record.benchmark_hash =
+            keccak256_canonical_json(&legacy_record.document.benchmark).unwrap();
+        legacy_record.terms_hash =
+            keccak256_canonical_json(&serde_json::to_value(&legacy_record.document).unwrap())
+                .unwrap();
+        let mut legacy_create = valid_create;
+        legacy_create.benchmark_hash = legacy_record.benchmark_hash.clone();
+        legacy_create.terms_hash = legacy_record.terms_hash.clone();
+
+        assert!(validate_autonomous_creation_against_terms(
+            "base-mainnet",
+            &legacy_create,
+            &legacy_record,
+        )
+        .is_err());
+        assert!(autonomous_bounty_create_from_terms(&legacy_record).is_err());
+        assert!(active_terms_semantic_error("claimable", Some(&legacy_record)).is_some());
+        assert!(active_terms_semantic_error("submitted", Some(&legacy_record)).is_some());
+        assert!(active_terms_semantic_error("paid", Some(&legacy_record)).is_none());
+        assert!(active_terms_semantic_error("cancelled", Some(&legacy_record)).is_none());
     }
 
     #[test]

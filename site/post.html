@@ -91,7 +91,7 @@
               <label>
                 Mechanism
                 <select name="verificationMode">
-                  <option value="deterministic_module">Permissionless on-chain verifier</option>
+                  <option value="deterministic_module">16-bit work-proof canary</option>
                   <optgroup label="Advanced verifier services">
                     <option value="signed_quorum">Verifier wallet quorum (advanced)</option>
                     <option value="ai_judge_quorum">AI judge quorum (advanced)</option>
@@ -103,6 +103,7 @@
                 <input name="threshold" type="number" min="1" max="8" value="1" required>
               </label>
             </div>
+            <output class="fine" data-verifier-scope aria-live="polite">This module verifies only the locked 16-bit scope-bound work proof. It does not evaluate task output, acceptance criteria, GitHub CI, or artifact quality.</output>
             <label>
               Verifier wallets, comma or space separated
               <textarea name="verifiers" rows="2" placeholder="0x... 0x..."></textarea>
@@ -118,12 +119,12 @@
               </label>
             </div>
             <label>
-              Benchmark JSON
-              <textarea name="benchmark" rows="5" required>{"engine":"github_ci","required_checks":["ci"],"required_conclusion":"success"}</textarea>
+              Benchmark JSON (payout condition)
+              <textarea name="benchmark" rows="8" readonly required>{"engine":"leading_zero_work_v1","difficulty_bits":16,"hash_function":"keccak256","preimage_abi_types":["bytes32","uint64","address","bytes32","bytes32","bytes32","uint256"],"proof_encoding":"abi.encode(uint256 nonce)","verifier_module":"0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e","reference_command":"cargo run -p cli -- autonomous-mine-work-proof"}</textarea>
             </label>
             <label>
-              Evidence schema JSON
-              <textarea name="evidenceSchema" rows="5" required>{"type":"object","required":["repository","commit_sha","check_run_url","artifact_digest"]}</textarea>
+              Evidence record schema (hash-bound context)
+              <textarea name="evidenceSchema" rows="5" required>{"type":"object","description":"Hash-bound public context; not evaluated by leading_zero_work_v1.","additionalProperties":true}</textarea>
             </label>
           </div>
 

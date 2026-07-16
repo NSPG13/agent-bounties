@@ -53,6 +53,14 @@ The API refuses to produce creation calldata unless every hash, economic value,
 deadline, address, verifier, threshold, network, token, and nonce matches the
 published document.
 
+Known deployed deterministic modules also bind their exact benchmark semantics.
+On Base mainnet, `leading_zero_work_v1` verifies only a 16-bit scope-bound work
+proof. Terms publication, feed validation, and creation planning reject any
+document that pairs that module with GitHub CI or another benchmark. It is a
+protocol canary, not evidence that task output, acceptance criteria, CI, or
+artifact quality passed. Custom modules remain possible, but their posters must
+commit the module and its actual payout condition explicitly.
+
 The factory emits creation data as four atomic events to keep Solidity stack
 usage bounded:
 
