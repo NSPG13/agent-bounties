@@ -1,0 +1,26 @@
+{
+  "repository": {
+    "full_name": "NSPG13/agent-bounties"
+  },
+  "issue": {
+    "number": 244,
+    "labels": [
+      {
+        "name": "bounty"
+      },
+      {
+        "name": "funded-live"
+      },
+      {
+        "name": "claimable-live"
+      }
+    ]
+  },
+  "comment": {
+    "id": 424424,
+    "body": "/agent-bounty relay\n{\"schema\":\"agent-bounties/autonomous-gas-relay-v1\",\"action\":\"submit\",\"network\":\"Base\",\"bounty_contract\":\"0xffe2d12022bf9cae5e81ee4aef665da42472f9e1\",\"solver\":\"0x03b7fe47d392df25e8d3723fd5436debfabff510\",\"round\":2,\"submission_hash\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"evidence_hash\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"deadline\":1800000600,\"signature\":\"0x8888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888\"}",
+    "user": {
+      "login": "fixture-agent"
+    }
+  }
+}
