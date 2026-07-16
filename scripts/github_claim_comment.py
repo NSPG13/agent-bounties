@@ -21,6 +21,7 @@ from reconcile_github_bounty_labels import (
     default_http_request,
     fetch_canonical_feeds,
     normalize_api_base_url,
+    require_amount,
 )
 
 
@@ -316,6 +317,7 @@ def canonical_unavailable_plan(
     status: str,
     contract: Optional[str],
     reason: str,
+    claim_recovery: Optional[Mapping[str, object]] = None,
 ) -> Dict[str, object]:
     title_by_status = {
         "claimed": "Bounty already has an on-chain solver",
@@ -347,20 +349,87 @@ def canonical_unavailable_plan(
             "Only a confirmed BountySettled event proves payment.",
         ]
     )
+    signal: Dict[str, object] = {
+        "decision": "CanonicalStateUnavailable",
+        "reservation_id": "none",
+        "bounty_contract": contract,
+        "canonical_status": status,
+    }
+    if claim_recovery is not None:
+        signal["claim_recovery"] = dict(claim_recovery)
     return {
         "ready": False,
-        "signal": {
-            "decision": "CanonicalStateUnavailable",
-            "reservation_id": "none",
-            "bounty_contract": contract,
-            "canonical_status": status,
-        },
+        "signal": signal,
         "check": {
             "conclusion": "ActionRequired",
             "title": title_by_status.get(status, "Bounty is not currently claimable"),
             "summary": "Do not sign a claim or post a bond for the current canonical state.",
             "text": details,
         },
+    }
+
+
+def claim_recovery_descriptor(
+    meta: Mapping[str, object],
+    api_base_url: str,
+    records: Optional[Mapping[str, Mapping[str, object]]] = None,
+    earning_pairs: Optional[set[Tuple[str, str]]] = None,
+) -> Dict[str, object]:
+    repository = str(meta["repo"])
+    issue_url = str(meta["url"])
+    query = "is:issue is:open label:claimable-live"
+    alternatives: List[Dict[str, object]] = []
+    for source_url, record in (records or {}).items():
+        contract = str(record.get("bounty_contract") or "").lower()
+        if source_url == issue_url or (source_url, contract) not in (earning_pairs or set()):
+            continue
+        terms = record.get("terms") if isinstance(record.get("terms"), dict) else {}
+        document = terms.get("document") if isinstance(terms.get("document"), dict) else {}
+        source_issue_number = source_url.rsplit("/", 1)[-1]
+        solver_reward = require_amount(record, "solver_reward")
+        claim_bond = require_amount(record, "claim_bond")
+        alternatives.append(
+            {
+                "source_issue_number": int(source_issue_number),
+                "source_url": source_url,
+                "title": str(document.get("title") or "Canonical claimable bounty"),
+                "bounty_contract": contract,
+                "solver_reward_usdc_base_units": str(solver_reward),
+                "claim_bond_usdc_base_units": str(claim_bond),
+                "claim_command": (
+                    f"/claim #{source_issue_number} wallet: 0xYOUR_PUBLIC_BASE_ADDRESS"
+                ),
+            }
+        )
+    alternatives.sort(
+        key=lambda item: (
+            -int(str(item["solver_reward_usdc_base_units"])),
+            int(item["source_issue_number"]),
+        )
+    )
+    return {
+        "schema_version": "agent-bounties/claim-recovery-v1",
+        "failed_issue": issue_url,
+        "claimable_feed": (
+            f"{api_base_url}/v1/base/autonomous-bounties/feed"
+            "?network=base-mainnet&claimable_only=true"
+        ),
+        "github_query": (
+            f"https://github.com/{repository}/issues?q="
+            f"{urllib.parse.quote(query, safe='')}"
+        ),
+        "alternatives": alternatives[:3],
+        "next_action": (
+            "Choose one listed alternative or refresh claimable_feed. Then run its exact "
+            "claim_command with a public Base address. Do not work on the failed issue."
+            if alternatives
+            else "Refresh claimable_feed later. No canonical alternative is currently "
+            "available; do not work on the failed issue."
+        ),
+        "evidence_boundary": (
+            "This recovery object cannot reserve or claim work. Only confirmed canonical "
+            "BountyClaimed owns a round; only BountySettled proves payment."
+        ),
     }
 
 
@@ -379,12 +448,16 @@ def apply_canonical_claim_state(
         records, earning_pairs = load_canonical_claim_records(
             env, str(meta["repo"])
         )
+        claim_recovery = claim_recovery_descriptor(
+            meta, api_base_url, records, earning_pairs
+        )
     except (OSError, ValueError, UserError, LabelReconciliationError) as error:
         return canonical_unavailable_plan(
             meta,
             status="unavailable",
             contract=None,
             reason=str(error),
+            claim_recovery=claim_recovery_descriptor(meta, DEFAULT_API_BASE_URL),
         )
 
     issue_url = str(meta["url"])
@@ -395,6 +468,7 @@ def apply_canonical_claim_state(
             status="missing",
             contract=None,
             reason="the full canonical feed has no exact source_url match",
+            claim_recovery=claim_recovery,
         )
     contract = str(record.get("bounty_contract") or "").lower()
     status = str(record.get("status") or "unknown").lower()
@@ -423,6 +497,7 @@ def apply_canonical_claim_state(
             status=status,
             contract=contract,
             reason=reason,
+            claim_recovery=claim_recovery,
         )
 
     handoff = (
@@ -633,6 +708,7 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
     machine_request = signal.get("claim_plan_request")
     handoff_response = signal.get("claim_handoff_response")
     handoff_problem = signal.get("claim_handoff_problem")
+    claim_recovery = signal.get("claim_recovery")
     if decision == "RecoveryReserved":
         status_line = (
             "This issue is reserved for incident recovery. The claim command created no "
@@ -714,6 +790,17 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
         claim_actions.extend(
             [
                 f"Optional browser fallback: {wallet_handoff}",
+                "",
+            ]
+        )
+    if isinstance(claim_recovery, dict):
+        claim_actions.extend(
+            [
+                "**Recover into live earning inventory:**",
+                "",
+                "```json",
+                json.dumps(claim_recovery, indent=2, sort_keys=True),
+                "```",
                 "",
             ]
         )
@@ -965,12 +1052,39 @@ def run_self_test() -> int:
     canonical_record = {
         "bounty_contract": contract,
         "status": "claimable",
+        "solver_reward": "1000000",
+        "claim_bond": "10000",
         "target_amount": "1010000",
         "funded_amount": "1010000",
         "terms_valid": True,
         "verification_ready": True,
         "verification_readiness_reason": "deterministic verifier is executable",
-        "terms": {"document": {"source_url": canonical_meta["url"]}},
+        "terms": {
+            "document": {
+                "source_url": canonical_meta["url"],
+                "title": "Primary earning canary",
+            }
+        },
+        "events": [],
+    }
+    alternative_contract = "0x5555555555555555555555555555555555555555"
+    alternative_url = "https://github.com/agent-bounties/agent-bounties/issues/188"
+    alternative_record = {
+        "bounty_contract": alternative_contract,
+        "status": "claimable",
+        "solver_reward": "2000000",
+        "claim_bond": "10000",
+        "target_amount": "2010000",
+        "funded_amount": "2010000",
+        "terms_valid": True,
+        "verification_ready": True,
+        "verification_readiness_reason": "deterministic verifier is executable",
+        "terms": {
+            "document": {
+                "source_url": alternative_url,
+                "title": "Live alternative earning loop",
+            }
+        },
         "events": [],
     }
     canonical_fixture = tmp_dir / "github-claim-canonical-feed.json"
@@ -1010,6 +1124,42 @@ def run_self_test() -> int:
             raise UserError(f"self-test canonical claim route missing: {required_text}")
     if "not published yet" in executable_comment:
         raise UserError("self-test canonical claim route retained stale issue guidance")
+
+    missing_fixture = {
+        "full_feed": [alternative_record],
+        "claimable_feed": [alternative_record],
+    }
+    canonical_fixture.write_text(json.dumps(missing_fixture), encoding="utf-8")
+    missing_plan = apply_canonical_claim_state(
+        canonical_env,
+        canonical_meta,
+        json.loads(json.dumps(base_autonomous_plan)),
+    )
+    missing_comment = render_comment(canonical_meta, missing_plan)
+    for required_text in [
+        "agent-bounties/claim-recovery-v1",
+        "claimable_only=true",
+        "label%3Aclaimable-live",
+        alternative_url,
+        alternative_contract,
+        "/claim #188 wallet: 0xYOUR_PUBLIC_BASE_ADDRESS",
+        '"solver_reward_usdc_base_units": "2000000"',
+    ]:
+        if required_text not in missing_comment:
+            raise UserError(f"self-test claim recovery missing: {required_text}")
+    for forbidden_text in ["Machine claim request", "Hosted claim handoff"]:
+        if forbidden_text in missing_comment:
+            raise UserError(f"self-test claim recovery exposed: {forbidden_text}")
+
+    canonical_fixture.write_text(
+        json.dumps(
+            {
+                "full_feed": [canonical_record],
+                "claimable_feed": [canonical_record],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     solver_wallet = "0x2222222222222222222222222222222222222222"
     handoff_fixture = tmp_dir / "github-claim-native-handoff.json"
@@ -1152,7 +1302,12 @@ def run_self_test() -> int:
                 }
             ]
         canonical_fixture.write_text(
-            json.dumps({"full_feed": [blocked_record], "claimable_feed": []}),
+            json.dumps(
+                {
+                    "full_feed": [blocked_record, alternative_record],
+                    "claimable_feed": [alternative_record],
+                }
+            ),
             encoding="utf-8",
         )
         blocked_plan = apply_canonical_claim_state(
@@ -1165,6 +1320,10 @@ def run_self_test() -> int:
             raise UserError(f"self-test did not block canonical {blocked_status} state")
         if "Machine claim request" in blocked_comment:
             raise UserError(f"self-test exposed a claim CTA for {blocked_status}")
+        if alternative_contract not in blocked_comment:
+            raise UserError(
+                f"self-test did not recover canonical {blocked_status} into live inventory"
+            )
 
     unavailable_env = {
         "AGENT_BOUNTIES_CLAIM_FEED_FILE": str(tmp_dir / "missing-claim-feed.json")

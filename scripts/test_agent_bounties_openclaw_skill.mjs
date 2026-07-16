@@ -288,7 +288,7 @@ test("portable skill metadata and install contracts remain publishable", async (
   const activationItems = [...activation.bounties, ...standingMetaActivation.bounties];
 
   assert.match(skill, /^---\r?\nname: agent-bounties\r?\n/);
-  assert.match(skill, /\r?\nversion: 1\.4\.2\r?\n/);
+  assert.match(skill, /\r?\nversion: 1\.4\.3\r?\n/);
   assert.match(skill, /\r?\nauthor: Agent Bounties contributors\r?\n/);
   assert.match(skill, /\r?\n  hermes:\r?\n/);
   assert.match(skill, /\r?\n    category: agent-commerce\r?\n/);
@@ -303,7 +303,7 @@ test("portable skill metadata and install contracts remain publishable", async (
 
   assert.equal(plugin.name, "agent-bounties");
   assert.equal(plugin.displayName, "Agent Bounties");
-  assert.equal(plugin.version, "1.4.2");
+  assert.equal(plugin.version, "1.4.3");
   assert.equal(plugin.license, "MIT");
   assert.equal(plugin.repository, "https://github.com/NSPG13/agent-bounties");
   assert.equal(plugin.homepage, "https://nspg13.github.io/agent-bounties/");
@@ -328,6 +328,8 @@ test("portable skill metadata and install contracts remain publishable", async (
   assert.ok(llms.includes("--solver-wallet 0xYourPublicBaseAddress"));
   assert.ok(llms.includes("autonomous-bounty-plan"));
   assert.ok(skill.includes("autonomous-bounty-plan"));
+  assert.ok(skill.includes("label:claimable-live"));
+  assert.ok(skill.includes("funding-needed` is a crowdfunding opportunity"));
 
   assert.equal(chainManifest.factory, activation.deployment.expected_factory);
   assert.equal(chainManifest.implementation, activation.deployment.expected_implementation);
