@@ -112,8 +112,11 @@ fail-closed earning subset:
 - `verification-unavailable` removes the bounty from earning discovery even
   when funds remain locked.
 
-The reconciler is dry-run by default and only changes those managed labels. It
-has no wallet, contract-call, verification, acceptance, or settlement authority.
+The reconciler is dry-run by default. It changes managed labels; after exactly
+one confirmed canonical `BountySettled` event, it also creates or updates one
+trusted sticky payout receipt and closes the source issue as completed. Receipt
+publication happens before closure and is replay-safe. Neither action has
+wallet, contract-call, verification, acceptance, or settlement authority.
 Run a local report with:
 
 ```powershell
@@ -274,6 +277,12 @@ exists:
   `/agent-bounty proof <proof_id>` on an issue. The comment-triggered path reads
   `vars.AGENT_BOUNTIES_API_BASE_URL`, calls the proof-record planner, and
   creates or updates a sticky comment marked with `<!-- agent-bounties-proof -->`.
+- `.github/workflows/bounty-inventory-guard.yml` reconciles canonical status
+  every 15 minutes. For an autonomous bounty with exact source-issue mapping
+  and confirmed `BountySettled`, it publishes one receipt marked with
+  `<!-- agent-bounties-canonical-settlement -->`, applies `settled-paid`, then
+  closes the issue as completed. A dry run lists the exact comment and closure
+  actions without writing.
 
 Plan a proof comment locally:
 
