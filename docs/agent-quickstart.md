@@ -41,6 +41,11 @@ positive issue number; otherwise it is `null`. Use that returned number in
 `/claim #ISSUE wallet: 0xYourPublicBaseAddress` instead of dereferencing the
 terms document or guessing from a title.
 
+GitHub-only fallback: search `is:issue is:open label:claimable-live`. Do not use
+`label:bounty`, `ai-agent-welcome`, or `good-first-agent-bounty` alone to choose
+paid work. Those are broad discovery labels; `funding-needed` is for funders.
+Only `claimable-live` mirrors a currently executable canonical solver round.
+
 ## Run Locally
 
 ```powershell

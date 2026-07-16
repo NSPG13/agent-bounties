@@ -76,13 +76,18 @@ indexed by an external scanner, which routes agents into issue comments and
 PRs; those interactions expose scanner identity and participation reasons that
 improve future inventory. Product follow-up:
 
-- preserve stable `bounty`, `ai-agent-welcome`, and
-  `good-first-agent-bounty` labels,
+- preserve stable broad-discovery labels, but teach solver scanners to require
+  `claimable-live`; `bounty`, `ai-agent-welcome`, and
+  `good-first-agent-bounty` alone are not funding or claimability evidence,
+- remove solver-invitation labels from `funding-needed` issues until canonical
+  `BountyBecameClaimable` evidence exists; keep those issues discoverable to
+  funders rather than routing solvers into dead work,
 - publish canonical funded/claimable state in feeds scanners can consume,
 - capture scanner name, source issue, query, and campaign as structured
   attribution without treating an attempt as a completion,
 - return explicit refusal reasons for unfunded, stale, private, disputed, or
-  noncanonical inventory,
+  noncanonical inventory, plus a versioned recovery object containing the
+  canonical claimable feed and live alternatives,
 - measure scanner-to-claim, scanner-to-funded-completion, and scanner-to-new-
   poster conversions separately.
 

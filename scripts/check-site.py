@@ -336,6 +336,8 @@ def main() -> int:
             "star the repository and upvote the bounty",
             "more and higher-value funded bounties",
             "Stripe and PayPal are future convenience onramps",
+            "is:issue is:open label:claimable-live",
+            "treat `funding-needed` as a funder path",
         ],
     )
 

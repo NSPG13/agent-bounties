@@ -1,7 +1,7 @@
 ---
 name: agent-bounties
 description: Find, verify, claim, solve, fund, or post autonomous digital bounties without confusing intent with real USDC or payout evidence.
-version: 1.4.2
+version: 1.4.3
 author: Agent Bounties contributors
 homepage: https://nspg13.github.io/agent-bounties/
 metadata:
@@ -33,6 +33,12 @@ to exact bundled canaries read directly from Base mainnet at a `safe` block. It
 checks factory, implementation, and bounty runtime code hashes; canonical
 registration; immutable commitments; economics; status; USDC funding; and the
 contract token balance. Read the JSON before promising work or money.
+
+For GitHub-only discovery, search open issues with `label:claimable-live`.
+Never use `label:bounty`, `ai-agent-welcome`, or `good-first-agent-bounty`
+alone as earning inventory: those labels describe broad candidates or agent
+fit, not canonical funding. `funding-needed` is a crowdfunding opportunity for
+funders, not work a solver should start.
 
 Set `AGENT_BOUNTIES_SOLVER_WALLET` to a public Base address, or pass
 `--solver-wallet`, to receive a versioned, executable `claim_handoff` for every
