@@ -10,6 +10,8 @@
     "production_asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "test_asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
     "asset_name": "native USDC",
+    "production_eip712_name": "USD Coin",
+    "test_eip712_name": "USDC",
     "authorization": "EIP-3009 TransferWithAuthorization",
     "contract_method": "fundWithAuthorization",
     "funding_event": "FundingAdded"
@@ -67,6 +69,76 @@
         },
         "payload": {
           "signature": "0x525987b32d816adbfab6840381acfb64549b4f00e7d2ec2229e67182f676a80c768b69e91496161b6039cafe5a71925101fd751f06c29cd34ef3ae5cf91674601c",
+          "authorization": {
+            "from": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "to": "0x1111111111111111111111111111111111111111",
+            "value": "150000",
+            "validAfter": "0",
+            "validBefore": "1300",
+            "nonce": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      },
+      "expected": {
+        "validation": "accepted",
+        "contributor": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "bounty_contract": "0x1111111111111111111111111111111111111111",
+        "amount": "150000",
+        "funding_evidence": "confirmed canonical FundingAdded"
+      }
+    },
+    {
+      "id": "valid_base_sepolia_custom_bounty_funding",
+      "description": "Base Sepolia uses EIP-712 name USDC, not the Base-mainnet name USD Coin. This signature was generated independently with Foundry cast from crates/payments-x402/fixtures/base-sepolia-usdc-eip3009.json.",
+      "now_unix_seconds": 1000,
+      "payment_required": {
+        "x402Version": 2,
+        "resource": {
+          "url": "https://api.example/v1/x402/base/bounties/0x111/funding?network=base-sepolia&amount=150000",
+          "description": "Fund a canonical Agent Bounties contract with a bounded USDC authorization",
+          "mimeType": "application/json",
+          "serviceName": "Agent Bounties",
+          "tags": ["ai-agents", "bounties", "funding", "base", "usdc"]
+        },
+        "accepts": [
+          {
+            "scheme": "agent-bounty-fund",
+            "network": "eip155:84532",
+            "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+            "amount": "150000",
+            "payTo": "0x1111111111111111111111111111111111111111",
+            "maxTimeoutSeconds": 300,
+            "extra": {
+              "assetTransferMethod": "eip3009",
+              "fundingEvent": "FundingAdded",
+              "fundingMethod": "fundWithAuthorization",
+              "name": "USDC",
+              "protocol": "agent-bounties/autonomous-v1",
+              "version": "2"
+            }
+          }
+        ]
+      },
+      "payment_payload": {
+        "x402Version": 2,
+        "accepted": {
+          "scheme": "agent-bounty-fund",
+          "network": "eip155:84532",
+          "asset": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+          "amount": "150000",
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "maxTimeoutSeconds": 300,
+          "extra": {
+            "assetTransferMethod": "eip3009",
+            "fundingEvent": "FundingAdded",
+            "fundingMethod": "fundWithAuthorization",
+            "name": "USDC",
+            "protocol": "agent-bounties/autonomous-v1",
+            "version": "2"
+          }
+        },
+        "payload": {
+          "signature": "0x8551589ae4ba572d312a887e4efedc8cc5ce3519642e9a97c64afdd2a3e4be6b2de86e7c95e6990737efc5bac5b8cb820c5129f543a21b516c6dd6595c2e80241b",
           "authorization": {
             "from": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
             "to": "0x1111111111111111111111111111111111111111",

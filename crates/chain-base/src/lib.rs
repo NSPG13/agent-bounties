@@ -1,9 +1,9 @@
 use alloy::{
     network::TransactionBuilder,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, B256, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionRequest,
-    signers::local::PrivateKeySigner,
+    signers::{local::PrivateKeySigner, SignerSync},
 };
 use chrono::{DateTime, Utc};
 use domain::{
@@ -152,6 +152,15 @@ impl BaseTransactionRelayer {
 
     pub fn address(&self) -> String {
         format!("{:#x}", self.signer.address())
+    }
+
+    pub fn sign_digest(&self, digest: &str) -> Result<String, ChainBaseError> {
+        let digest = B256::from(parse_bytes32(digest)?);
+        let signature = self
+            .signer
+            .sign_hash_sync(&digest)
+            .map_err(|_| ChainBaseError::InvalidRelayIntent("digest signing failed".to_string()))?;
+        Ok(format!("0x{}", hex::encode(signature.as_bytes())))
     }
 
     pub async fn simulate_and_broadcast(
@@ -624,6 +633,36 @@ pub struct AutonomousBountyAuthorizedClaimPlan {
     pub bounty_contract: String,
     pub solver: String,
     pub claim_bond: String,
+    pub relay_transaction: EvmTransactionIntent,
+    pub evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AtomicClaimSponsorGrant {
+    pub sponsor_contract: String,
+    pub bounty_contract: String,
+    pub solver: String,
+    pub round: u64,
+    pub bond: u128,
+    pub terms_hash: String,
+    pub policy_hash: String,
+    pub authorization_nonce: String,
+    pub valid_after: u64,
+    pub valid_before: u64,
+    pub grant_nonce: String,
+    pub deadline: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AtomicSponsoredClaimPlan {
+    pub protocol_version: String,
+    pub network: BaseNetworkDescriptor,
+    pub sponsor_contract: String,
+    pub factory_contract: String,
+    pub bounty_contract: String,
+    pub solver: String,
+    pub grant_digest: String,
+    pub grant_signature: String,
     pub relay_transaction: EvmTransactionIntent,
     pub evidence_boundary: String,
 }
@@ -1179,6 +1218,61 @@ impl AutonomousBountyTxPlanner {
             claim_bond: claim_bond.to_string(),
             relay_transaction,
             evidence_boundary: "A signed bond authorization or relay hash is not an active claim. Wait for confirmed BountyClaimed evidence with the exact solver and claim bond.".to_string(),
+        })
+    }
+
+    pub fn atomic_sponsor_grant_digest(
+        &self,
+        network: &str,
+        grant: &AtomicClaimSponsorGrant,
+    ) -> Result<String, ChainBaseError> {
+        let network = base_network_descriptor(network)?;
+        atomic_sponsor_grant_digest(network.chain_id, &self.factory_contract, grant)
+    }
+
+    pub fn plan_atomic_sponsored_claim(
+        &self,
+        network: &str,
+        grant: &AtomicClaimSponsorGrant,
+        grant_signature: &str,
+        solver_signature: &AutonomousBountyAuthorizationSignature,
+        relayer: &str,
+    ) -> Result<AtomicSponsoredClaimPlan, ChainBaseError> {
+        validate_atomic_sponsor_grant(grant)?;
+        let network = base_network_descriptor(network)?;
+        let sponsor_contract = normalize_address(&grant.sponsor_contract)?;
+        let bounty_contract = normalize_address(&grant.bounty_contract)?;
+        let solver = normalize_address(&grant.solver)?;
+        let grant_digest =
+            atomic_sponsor_grant_digest(network.chain_id, &self.factory_contract, grant)?;
+        let grant_signature_bytes = parse_hex_bytes(grant_signature)?;
+        if grant_signature_bytes.len() != 65 || !matches!(grant_signature_bytes[64], 27 | 28) {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "atomic sponsorship grant signature must be 65 bytes with v 27 or 28".to_string(),
+            ));
+        }
+        let relay_transaction = EvmTransactionIntent {
+            from: Some(normalize_address(relayer)?),
+            to: sponsor_contract.clone(),
+            value_wei: 0,
+            data: encode_atomic_sponsored_claim_call(
+                grant,
+                &grant_signature_bytes,
+                solver_signature,
+            )?,
+            function: "sponsorAndClaim((address,address,uint64,uint256,bytes32,bytes32,bytes32,uint256,uint256,bytes32,uint256),bytes,uint8,bytes32,bytes32)".to_string(),
+        };
+        Ok(AtomicSponsoredClaimPlan {
+            protocol_version: "agent-bounties/atomic-claim-sponsor-v1".to_string(),
+            network,
+            sponsor_contract,
+            factory_contract: self.factory_contract.clone(),
+            bounty_contract,
+            solver,
+            grant_digest,
+            grant_signature: grant_signature.to_ascii_lowercase(),
+            relay_transaction,
+            evidence_boundary: "A valid sponsorship grant, solver authorization, or transaction hash is not a claim or payout. Only the canonical bounty's confirmed BountyClaimed event activates the round; only confirmed BountySettled proves payout.".to_string(),
         })
     }
 
@@ -4481,7 +4575,11 @@ fn eip3009_typed_data(
     Eip3009AuthorizationTypedData {
         types,
         domain: Eip712DomainData {
-            name: "USD Coin".to_string(),
+            name: if network.chain_id == 84_532 {
+                "USDC".to_string()
+            } else {
+                "USD Coin".to_string()
+            },
             version: "2".to_string(),
             chain_id: network.chain_id,
             verifying_contract: network.native_usdc_token_address.clone(),
@@ -5017,6 +5115,119 @@ fn encode_call(signature: &str, words: Vec<[u8; 32]>) -> String {
     format!("0x{}", hex::encode(bytes))
 }
 
+fn validate_atomic_sponsor_grant(grant: &AtomicClaimSponsorGrant) -> Result<(), ChainBaseError> {
+    if grant.round == 0
+        || grant.bond == 0
+        || grant.valid_before <= grant.valid_after
+        || grant.deadline <= grant.valid_after
+        || grant.deadline > grant.valid_before
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "atomic sponsorship grant has invalid amount, round, or validity bounds".to_string(),
+        ));
+    }
+    normalize_address(&grant.sponsor_contract)?;
+    normalize_address(&grant.bounty_contract)?;
+    normalize_address(&grant.solver)?;
+    parse_bytes32(&grant.terms_hash)?;
+    parse_bytes32(&grant.policy_hash)?;
+    parse_bytes32(&grant.authorization_nonce)?;
+    parse_bytes32(&grant.grant_nonce)?;
+    Ok(())
+}
+
+fn atomic_sponsor_grant_digest(
+    chain_id: u64,
+    factory_contract: &str,
+    grant: &AtomicClaimSponsorGrant,
+) -> Result<String, ChainBaseError> {
+    validate_atomic_sponsor_grant(grant)?;
+    let sponsor = normalize_address(&grant.sponsor_contract)?;
+    let factory = normalize_address(factory_contract)?;
+    let bounty = normalize_address(&grant.bounty_contract)?;
+    let solver = normalize_address(&grant.solver)?;
+    let domain_typehash = keccak_word(
+        b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+    );
+    let grant_typehash = keccak_word(
+        b"SponsoredClaim(address sponsor,address factory,address bounty,address solver,uint64 round,uint256 bond,bytes32 termsHash,bytes32 policyHash,bytes32 authorizationNonce,uint256 validAfter,uint256 validBefore,bytes32 grantNonce,uint256 deadline)",
+    );
+    let domain_separator = keccak_words(&[
+        domain_typehash,
+        keccak_word(b"Agent Bounties Atomic Claim Sponsor"),
+        keccak_word(b"1"),
+        encode_uint256(chain_id.into())?,
+        encode_address(&sponsor)?,
+    ]);
+    let struct_hash = keccak_words(&[
+        grant_typehash,
+        encode_address(&sponsor)?,
+        encode_address(&factory)?,
+        encode_address(&bounty)?,
+        encode_address(&solver)?,
+        encode_uint256(grant.round.into())?,
+        encode_uint256(grant.bond)?,
+        parse_bytes32(&grant.terms_hash)?,
+        parse_bytes32(&grant.policy_hash)?,
+        parse_bytes32(&grant.authorization_nonce)?,
+        encode_uint256(grant.valid_after.into())?,
+        encode_uint256(grant.valid_before.into())?,
+        parse_bytes32(&grant.grant_nonce)?,
+        encode_uint256(grant.deadline.into())?,
+    ]);
+    let mut digest = Vec::with_capacity(66);
+    digest.extend_from_slice(&[0x19, 0x01]);
+    digest.extend_from_slice(&domain_separator);
+    digest.extend_from_slice(&struct_hash);
+    Ok(format!("0x{}", hex::encode(Keccak256::digest(digest))))
+}
+
+fn encode_atomic_sponsored_claim_call(
+    grant: &AtomicClaimSponsorGrant,
+    grant_signature: &[u8],
+    solver_signature: &AutonomousBountyAuthorizationSignature,
+) -> Result<String, ChainBaseError> {
+    const FUNCTION: &str = "sponsorAndClaim((address,address,uint64,uint256,bytes32,bytes32,bytes32,uint256,uint256,bytes32,uint256),bytes,uint8,bytes32,bytes32)";
+    let mut bytes = selector(FUNCTION).to_vec();
+    let words = [
+        encode_address(&grant.bounty_contract)?,
+        encode_address(&grant.solver)?,
+        encode_uint256(grant.round.into())?,
+        encode_uint256(grant.bond)?,
+        parse_bytes32(&grant.terms_hash)?,
+        parse_bytes32(&grant.policy_hash)?,
+        parse_bytes32(&grant.authorization_nonce)?,
+        encode_uint256(grant.valid_after.into())?,
+        encode_uint256(grant.valid_before.into())?,
+        parse_bytes32(&grant.grant_nonce)?,
+        encode_uint256(grant.deadline.into())?,
+        encode_uint256(480_u128)?,
+        encode_uint256(normalized_signature_v(solver_signature.v)?.into())?,
+        parse_bytes32(&solver_signature.r)?,
+        parse_bytes32(&solver_signature.s)?,
+    ];
+    for word in words {
+        bytes.extend_from_slice(&word);
+    }
+    bytes.extend_from_slice(&encode_uint256(grant_signature.len() as u128)?);
+    bytes.extend_from_slice(grant_signature);
+    let padding = (32 - grant_signature.len() % 32) % 32;
+    bytes.resize(bytes.len() + padding, 0);
+    Ok(format!("0x{}", hex::encode(bytes)))
+}
+
+fn keccak_word(value: &[u8]) -> [u8; 32] {
+    Keccak256::digest(value).into()
+}
+
+fn keccak_words(words: &[[u8; 32]]) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(words.len() * 32);
+    for word in words {
+        bytes.extend_from_slice(word);
+    }
+    Keccak256::digest(bytes).into()
+}
+
 #[derive(Debug, Clone)]
 struct EncodedAutonomousAttestation {
     verifier: [u8; 32],
@@ -5130,6 +5341,85 @@ mod tests {
         assert_eq!(
             BaseTransactionRelayer::from_private_key("not-a-private-key").unwrap_err(),
             ChainBaseError::InvalidRelayerPrivateKey
+        );
+    }
+
+    fn atomic_sponsor_vector() -> AtomicClaimSponsorGrant {
+        AtomicClaimSponsorGrant {
+            sponsor_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            bounty_contract: "0x3333333333333333333333333333333333333333".to_string(),
+            solver: "0x4444444444444444444444444444444444444444".to_string(),
+            round: 7,
+            bond: 10_000,
+            terms_hash: format!("0x{}", "aa".repeat(32)),
+            policy_hash: format!("0x{}", "bb".repeat(32)),
+            authorization_nonce: format!("0x{}", "cc".repeat(32)),
+            valid_after: 0,
+            valid_before: 2_000_000_000,
+            grant_nonce: format!("0x{}", "dd".repeat(32)),
+            deadline: 1_999_999_700,
+        }
+    }
+
+    #[test]
+    fn atomic_sponsor_digest_matches_independent_cast_vector() {
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x2222222222222222222222222222222222222222",
+            "0x5555555555555555555555555555555555555555",
+        )
+        .unwrap();
+        assert_eq!(
+            planner
+                .atomic_sponsor_grant_digest("base-mainnet", &atomic_sponsor_vector())
+                .unwrap(),
+            "0xe37f8bbafd2b096b83b5485185e1af53e8ff12747d508afc2c42ac7aabdd3750"
+        );
+    }
+
+    #[test]
+    fn atomic_sponsor_plan_is_one_bounded_vault_call() {
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x2222222222222222222222222222222222222222",
+            "0x5555555555555555555555555555555555555555",
+        )
+        .unwrap();
+        let signer = BaseTransactionRelayer::from_private_key(
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .unwrap();
+        let grant = atomic_sponsor_vector();
+        let digest = planner
+            .atomic_sponsor_grant_digest("base-mainnet", &grant)
+            .unwrap();
+        let grant_signature = signer.sign_digest(&digest).unwrap();
+        let grant_signature_bytes = parse_hex_bytes(&grant_signature).unwrap();
+        assert_eq!(grant_signature_bytes.len(), 65);
+        assert!(matches!(grant_signature_bytes[64], 27 | 28));
+
+        let solver_signature = AutonomousBountyAuthorizationSignature {
+            v: 27,
+            r: format!("0x{}", "ee".repeat(32)),
+            s: format!("0x{}", "0f".repeat(32)),
+        };
+        let relayer = "0x6666666666666666666666666666666666666666";
+        let plan = planner
+            .plan_atomic_sponsored_claim(
+                "base-mainnet",
+                &grant,
+                &grant_signature,
+                &solver_signature,
+                relayer,
+            )
+            .unwrap();
+        assert_eq!(plan.grant_digest, digest);
+        assert_eq!(plan.sponsor_contract, grant.sponsor_contract);
+        assert_eq!(plan.relay_transaction.from.as_deref(), Some(relayer));
+        assert_eq!(plan.relay_transaction.to, grant.sponsor_contract);
+        assert_eq!(plan.relay_transaction.value_wei, 0);
+        assert!(plan.relay_transaction.data.starts_with("0xba3ddedd"));
+        assert_eq!(
+            parse_hex_bytes(&plan.relay_transaction.data).unwrap().len(),
+            612
         );
     }
 
@@ -5336,6 +5626,10 @@ mod tests {
             plan.eip3009_authorization.as_ref().unwrap().message.to,
             plan.predicted_bounty_contract
         );
+        assert_eq!(
+            plan.eip3009_authorization.as_ref().unwrap().domain.name,
+            "USD Coin"
+        );
 
         let authorized = planner
             .plan_authorized_creation(
@@ -5460,6 +5754,10 @@ mod tests {
         assert_eq!(claim.claim.data, "0x4e71d92d");
         assert_eq!(claim.wallet_calls.len(), 2);
         assert!(claim.eip3009_authorization.is_some());
+        assert_eq!(
+            claim.eip3009_authorization.as_ref().unwrap().domain.name,
+            "USDC"
+        );
         assert_eq!(authorized_claim.claim_bond, "100000");
         assert_eq!(
             authorized_claim.relay_transaction.function,

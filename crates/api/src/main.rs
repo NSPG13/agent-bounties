@@ -30,7 +30,7 @@ use chain_base::{
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     prepare_agent_to_earn as inspect_agent_wallet_readiness,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
-    AgentWalletReadinessReport, AutonomousBountyAuthorizationSignature,
+    AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
     AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
     AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
     AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
@@ -49,9 +49,9 @@ use chain_base::{
 };
 use chrono::Utc;
 use db::{
-    BountyStatusScope, ClaimCandidateReservation, DbError, GitHubIssueSyncBountyUpsert,
-    NewBondSponsorship, NewClaimCandidate, NewX402RelayAttempt, PostgresStore, X402RelayAttempt,
-    X402RelayStatus,
+    BountyStatusScope, ClaimCandidateReservation, ClaimFunnelStats, DbError,
+    GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate, NewX402RelayAttempt,
+    PostgresStore, X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     Agent, AgentEligibilityDecision, AgentEligibilityEvidence, AgentEligibilityPolicy, AgentStatus,
@@ -154,6 +154,7 @@ use uuid::Uuid;
         plan_autonomous_bounty_claim,
         plan_autonomous_bounty_authorized_claim,
         agent_native_claim,
+        claim_funnel,
         plan_autonomous_bounty_submission,
         prepare_autonomous_bounty_submission,
         plan_autonomous_bounty_submission_authorization,
@@ -372,14 +373,14 @@ impl X402HostedRelayerConfig {
 #[derive(Clone)]
 struct BondSponsorConfig {
     enabled: bool,
-    sponsor: Option<Arc<BaseTransactionRelayer>>,
+    grant_signer: Option<Arc<BaseTransactionRelayer>>,
+    base_mainnet_contract: Option<String>,
+    base_sepolia_contract: Option<String>,
     max_bond: u64,
     max_network_amount_24h: u64,
     max_solver_amount_24h: u64,
     max_gas: u64,
     max_fee_per_gas_wei: u128,
-    confirmations: u64,
-    wait_seconds: u64,
     rpc_timeout_seconds: u64,
 }
 
@@ -387,14 +388,14 @@ impl Default for BondSponsorConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            sponsor: None,
+            grant_signer: None,
+            base_mainnet_contract: None,
+            base_sepolia_contract: None,
             max_bond: 100_000,
             max_network_amount_24h: 1_000_000,
             max_solver_amount_24h: 100_000,
-            max_gas: 100_000,
+            max_gas: 500_000,
             max_fee_per_gas_wei: 10_000_000_000,
-            confirmations: 2,
-            wait_seconds: 20,
             rpc_timeout_seconds: 15,
         }
     }
@@ -403,20 +404,27 @@ impl Default for BondSponsorConfig {
 impl BondSponsorConfig {
     fn from_env() -> anyhow::Result<Self> {
         let enabled = env_flag("ENABLE_BOND_SPONSORSHIP");
-        let sponsor = env::var("BOND_SPONSOR_PRIVATE_KEY")
+        let grant_signer = env::var("BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY")
             .ok()
             .and_then(non_empty_secret)
             .map(|private_key| BaseTransactionRelayer::from_private_key(&private_key))
             .transpose()
-            .map_err(|_| anyhow::anyhow!("BOND_SPONSOR_PRIVATE_KEY is invalid"))?
+            .map_err(|_| anyhow::anyhow!("BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY is invalid"))?
             .map(Arc::new);
-        if enabled && sponsor.is_none() {
-            anyhow::bail!("ENABLE_BOND_SPONSORSHIP requires BOND_SPONSOR_PRIVATE_KEY");
+        let base_mainnet_contract = optional_evm_address("BOND_SPONSOR_BASE_MAINNET_CONTRACT")?;
+        let base_sepolia_contract = optional_evm_address("BOND_SPONSOR_BASE_SEPOLIA_CONTRACT")?;
+        if enabled
+            && (grant_signer.is_none()
+                || (base_mainnet_contract.is_none() && base_sepolia_contract.is_none()))
+        {
+            anyhow::bail!(
+                "ENABLE_BOND_SPONSORSHIP requires BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY and at least one network sponsor contract"
+            );
         }
         let max_bond = env_u64("BOND_SPONSOR_MAX_BOND_BASE_UNITS", 100_000)?;
         let max_network_amount_24h = env_u64("BOND_SPONSOR_MAX_NETWORK_24H_BASE_UNITS", 1_000_000)?;
         let max_solver_amount_24h = env_u64("BOND_SPONSOR_MAX_SOLVER_24H_BASE_UNITS", 100_000)?;
-        let max_gas = env_u64("BOND_SPONSOR_MAX_GAS", 100_000)?;
+        let max_gas = env_u64("BOND_SPONSOR_MAX_GAS", 500_000)?;
         let max_fee_per_gas_wei = env_u128("BOND_SPONSOR_MAX_FEE_PER_GAS_WEI", 10_000_000_000)?;
         if max_bond == 0
             || max_solver_amount_24h < max_bond
@@ -428,16 +436,31 @@ impl BondSponsorConfig {
         }
         Ok(Self {
             enabled,
-            sponsor,
+            grant_signer,
+            base_mainnet_contract,
+            base_sepolia_contract,
             max_bond,
             max_network_amount_24h,
             max_solver_amount_24h,
             max_gas,
             max_fee_per_gas_wei,
-            confirmations: env_u64("BOND_SPONSOR_CONFIRMATIONS", 2)?.max(1),
-            wait_seconds: env_u64("BOND_SPONSOR_WAIT_SECONDS", 20)?.min(60),
             rpc_timeout_seconds: env_u64("BOND_SPONSOR_RPC_TIMEOUT_SECONDS", 15)?.clamp(1, 30),
         })
+    }
+
+    fn contract_for(&self, network: &str) -> Option<&str> {
+        if !self.enabled {
+            return None;
+        }
+        match network {
+            "base-mainnet" => self.base_mainnet_contract.as_deref(),
+            "base-sepolia" => self.base_sepolia_contract.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn grant_signer(&self) -> Option<&BaseTransactionRelayer> {
+        self.grant_signer.as_deref().filter(|_| self.enabled)
     }
 }
 
@@ -451,6 +474,14 @@ fn non_empty_secret(secret: String) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn optional_evm_address(key: &str) -> anyhow::Result<Option<String>> {
+    env::var(key)
+        .ok()
+        .and_then(non_empty_secret)
+        .map(|value| normalize_evm_address(&value).map_err(|_| anyhow::anyhow!("{key} is invalid")))
+        .transpose()
 }
 
 fn env_flag(key: &str) -> bool {
@@ -706,6 +737,11 @@ struct AgentNativeClaimRequest {
     source: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ClaimFunnelQuery {
+    window_hours: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct AgentNativeClaimResponse {
     schema_version: String,
@@ -714,6 +750,8 @@ struct AgentNativeClaimResponse {
     claim_bond: String,
     sponsorship_requested: bool,
     sponsorship_available: bool,
+    sponsorship_protocol: Option<String>,
+    sponsor_contract: Option<String>,
     sponsorship: Option<BondSponsorship>,
     signing_payload: Option<Eip3009AuthorizationTypedData>,
     claim_transaction_hash: Option<String>,
@@ -1084,6 +1122,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/claims",
             post(agent_native_claim),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/claim-funnel",
+            get(claim_funnel),
         )
         .route(
             "/v1/base/autonomous-bounties/submission-plan",
@@ -3843,15 +3885,6 @@ async fn agent_native_claim(
                 "Refresh verified claimable inventory and retry only if verification_ready=true.",
             )
         })?;
-    require_claimable_autonomous_item(&item).map_err(|_| {
-        agent_claim_problem(
-            StatusCode::CONFLICT,
-            "bounty_not_claimable",
-            "reserve_candidate",
-            "the canonical bounty is not currently funded, claimable, and verification-ready",
-            "Choose another verified claimable bounty or wait for the canonical state to reopen.",
-        )
-    })?;
     let claim_bond = item.claim_bond.parse::<u64>().map_err(|_| {
         agent_claim_problem(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3892,28 +3925,13 @@ async fn agent_native_claim(
         .as_ref()
         .map(|policy| policy.sponsorship_allowed)
         .unwrap_or(true);
-    let (evidence, decision) = build_agent_eligibility(
-        &state,
-        network,
-        &item.creator,
-        &solver_wallet,
-        request.agent_id,
-        &policy,
-    )
-    .await?;
-    if !decision.eligible {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "schema_version": "agent-bounties/claim-problem-v1",
-                "state": "ineligible",
-                "failed_transition": "evaluate_eligibility",
-                "error": "agent_ineligible",
-                "reasons": decision.reasons,
-                "next_action": "Choose a bounty whose published eligibility policy this wallet satisfies."
-            })),
-        ));
-    }
+    let sponsorship_available = sponsorship_allowed
+        && claim_bond <= state.bond_sponsor.max_bond
+        && claim_bond <= policy.maximum_sponsored_bond_base_units
+        && state.bond_sponsor.contract_for(network).is_some()
+        && state.bond_sponsor.grant_signer().is_some()
+        && state.x402_relayer.enabled
+        && state.x402_relayer.relayer.is_some();
     let store = state.store.as_ref().ok_or_else(|| {
         agent_claim_problem(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -3923,31 +3941,201 @@ async fn agent_native_claim(
             "Use plan_autonomous_bounty_claim for a direct permissionless wallet claim.",
         )
     })?;
-    store
-        .promote_waitlisted_claimant_after_canonical_reopen(
+    let existing_candidate = store
+        .get_claim_candidate_by_idempotency_key(request.idempotency_key.trim())
+        .await
+        .map_err(map_agent_claim_db_error)?;
+    let existing_reservation = if let Some(candidate) = existing_candidate {
+        validate_persisted_claim_candidate_scope(
+            &candidate,
             network,
             &bounty_contract,
-            coordination.exclusive_claim_seconds,
+            &solver_wallet,
+            request.agent_id,
+        )?;
+        let sponsorship = store
+            .get_bond_sponsorship_for_candidate(candidate.id)
+            .await
+            .map_err(map_agent_claim_db_error)?;
+        let sponsorship_requested = request.request_bond_sponsorship || sponsorship.is_some();
+        if let Some(claim) =
+            current_indexed_claim_for_candidate(&item, &terms.policy_hash, &candidate, claim_bond)
+        {
+            let candidate =
+                reconcile_indexed_claim_candidate(&state, candidate, sponsorship.clone(), claim)
+                    .await?;
+            let recovered_sponsorship = store
+                .get_bond_sponsorship_for_candidate(candidate.id)
+                .await
+                .map_err(map_agent_claim_db_error)?;
+            return Ok(agent_claim_response(
+                &state,
+                StatusCode::OK,
+                ClaimCandidateReservation {
+                    candidate,
+                    waitlist_position: None,
+                },
+                claim_bond,
+                sponsorship_requested,
+                sponsorship_available,
+                recovered_sponsorship,
+                None,
+                "The canonical BountyClaimed event is confirmed. Complete the task and prepare the exact submission evidence.",
+                None,
+            ));
+        }
+        let reservation = ClaimCandidateReservation {
+            candidate: candidate.clone(),
+            waitlist_position: None,
+        };
+        match candidate.status {
+            ClaimCandidateStatus::Claimed => {
+                return Ok(agent_claim_response(
+                    &state,
+                    StatusCode::OK,
+                    reservation,
+                    claim_bond,
+                    sponsorship_requested,
+                    sponsorship_available,
+                    sponsorship,
+                    None,
+                    "The canonical BountyClaimed event is confirmed. Complete the task and prepare the exact submission evidence.",
+                    None,
+                ));
+            }
+            ClaimCandidateStatus::Relaying => {
+                let candidate = reconcile_agent_native_claim(&state, candidate, claim_bond).await?;
+                let sponsorship = store
+                    .get_bond_sponsorship_for_candidate(candidate.id)
+                    .await
+                    .map_err(map_agent_claim_db_error)?;
+                let confirmed = candidate.status == ClaimCandidateStatus::Claimed;
+                return Ok(agent_claim_response(
+                    &state,
+                    if confirmed {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::ACCEPTED
+                    },
+                    ClaimCandidateReservation {
+                        candidate,
+                        waitlist_position: None,
+                    },
+                    claim_bond,
+                    sponsorship_requested,
+                    sponsorship_available,
+                    sponsorship,
+                    None,
+                    if confirmed {
+                        "Canonical BountyClaimed is confirmed. Complete the task and prepare the exact submission evidence."
+                    } else {
+                        "The exact claim transaction remains pending. Replay this same signed request; do not sign or fund again."
+                    },
+                    None,
+                ));
+            }
+            ClaimCandidateStatus::Waitlisted => {
+                return Ok(agent_claim_response(
+                    &state,
+                    StatusCode::ACCEPTED,
+                    reservation,
+                    claim_bond,
+                    sponsorship_requested,
+                    sponsorship_available,
+                    sponsorship,
+                    None,
+                    "Wait for claim_exclusive notification or poll with the same idempotency_key. Do not sign while waitlisted.",
+                    None,
+                ));
+            }
+            ClaimCandidateStatus::Superseded
+            | ClaimCandidateStatus::Withdrawn
+            | ClaimCandidateStatus::Failed => {
+                return Err(agent_claim_problem(
+                    StatusCode::CONFLICT,
+                    "candidate_terminal",
+                    "prepare_authorization",
+                    "this hosted claim candidate is terminal",
+                    "Retry with a new idempotency_key if the canonical bounty is still claimable.",
+                ));
+            }
+            ClaimCandidateStatus::Exclusive
+            | ClaimCandidateStatus::Sponsoring
+            | ClaimCandidateStatus::AuthorizationReady => Some(reservation),
+        }
+    } else {
+        None
+    };
+
+    if request.request_bond_sponsorship && !sponsorship_available {
+        return Err(agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sponsorship_unavailable",
+            "evaluate_sponsorship",
+            "atomic bond sponsorship is disabled, unsupported on this network, or exceeds the published cap",
+            "Fund the exact indexed bond and retry without request_bond_sponsorship, or choose a bounty within the active sponsor policy.",
+        ));
+    }
+    require_claimable_autonomous_item(&item).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::CONFLICT,
+            "bounty_not_claimable",
+            "reserve_candidate",
+            "the canonical bounty is not currently funded, claimable, and verification-ready",
+            "Choose another verified claimable bounty or wait for the canonical state to reopen.",
         )
-        .await
-        .map_err(map_agent_claim_db_error)?;
-    let reservation = store
-        .reserve_claim_candidate(
-            &NewClaimCandidate {
-                id: Uuid::new_v4(),
-                idempotency_key: request.idempotency_key.trim().to_string(),
-                network: network.to_string(),
-                bounty_contract: bounty_contract.clone(),
-                solver_wallet: solver_wallet.clone(),
-                agent_id: request.agent_id,
-                eligibility_evidence: evidence,
-                eligibility_decision: decision,
-            },
-            coordination.exclusive_claim_seconds,
-            coordination.waitlist_capacity,
+    })?;
+    let reservation = if let Some(reservation) = existing_reservation {
+        reservation
+    } else {
+        let (evidence, decision) = build_agent_eligibility(
+            &state,
+            network,
+            &item.creator,
+            &solver_wallet,
+            request.agent_id,
+            &policy,
         )
-        .await
-        .map_err(map_agent_claim_db_error)?;
+        .await?;
+        if !decision.eligible {
+            return Err((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "schema_version": "agent-bounties/claim-problem-v1",
+                    "state": "ineligible",
+                    "failed_transition": "evaluate_eligibility",
+                    "error": "agent_ineligible",
+                    "reasons": decision.reasons,
+                    "next_action": "Choose a bounty whose published eligibility policy this wallet satisfies."
+                })),
+            ));
+        }
+        store
+            .promote_waitlisted_claimant_after_canonical_reopen(
+                network,
+                &bounty_contract,
+                coordination.exclusive_claim_seconds,
+            )
+            .await
+            .map_err(map_agent_claim_db_error)?;
+        store
+            .reserve_claim_candidate(
+                &NewClaimCandidate {
+                    id: Uuid::new_v4(),
+                    idempotency_key: request.idempotency_key.trim().to_string(),
+                    network: network.to_string(),
+                    bounty_contract: bounty_contract.clone(),
+                    solver_wallet: solver_wallet.clone(),
+                    agent_id: request.agent_id,
+                    eligibility_evidence: evidence,
+                    eligibility_decision: decision,
+                },
+                coordination.exclusive_claim_seconds,
+                coordination.waitlist_capacity,
+            )
+            .await
+            .map_err(map_agent_claim_db_error)?
+    };
 
     if reservation.candidate.status == ClaimCandidateStatus::Waitlisted {
         return Ok(agent_claim_response(
@@ -3956,7 +4144,7 @@ async fn agent_native_claim(
             reservation,
             claim_bond,
             request.request_bond_sponsorship,
-            false,
+            sponsorship_available,
             None,
             None,
             "Wait for claim_exclusive notification or poll with the same idempotency_key. Do not sign while waitlisted.",
@@ -3974,7 +4162,7 @@ async fn agent_native_claim(
             reservation,
             claim_bond,
             request.request_bond_sponsorship,
-            sponsorship_allowed && state.bond_sponsor.enabled,
+            sponsorship_available,
             sponsorship,
             None,
             "The canonical BountyClaimed event is confirmed. Complete the task and prepare the exact submission evidence.",
@@ -3991,10 +4179,6 @@ async fn agent_native_claim(
         ));
     }
 
-    let sponsorship_available = sponsorship_allowed
-        && state.bond_sponsor.enabled
-        && claim_bond <= state.bond_sponsor.max_bond
-        && claim_bond <= policy.maximum_sponsored_bond_base_units;
     let mut candidate = reservation.candidate.clone();
     if candidate.authorization_nonce.is_none() {
         let (nonce, valid_before) = claim_authorization_window(&candidate)?;
@@ -4058,11 +4242,7 @@ async fn agent_native_claim(
     };
     let Some(signature) = request.signature.as_ref() else {
         let next_request = signed_claim_request_template(&request);
-        let next_action = if request.request_bond_sponsorship && !sponsorship_available {
-            "Bond sponsorship is unavailable for these terms or caps. Fund the solver wallet with the exact bond, or use the direct wallet plan."
-        } else {
-            "Sign signing_payload once with solver_wallet, then replay next_request with v, r, and s. The platform will relay gas and, when requested and eligible, sponsor the exact bond."
-        };
+        let next_action = "Sign signing_payload once with solver_wallet, then replay next_request with v, r, and s. The platform will relay one atomic claim and, when requested, provide the exact bond inside that same transaction.";
         return Ok(agent_claim_response(
             &state,
             StatusCode::OK,
@@ -4076,15 +4256,6 @@ async fn agent_native_claim(
             Some(next_request),
         ));
     };
-    if request.request_bond_sponsorship && !sponsorship_available {
-        return Err(agent_claim_problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "sponsorship_unavailable",
-            "sponsor_bond",
-            "bond sponsorship is disabled or exceeds the bounty/global cap",
-            "Fund the solver wallet with the exact indexed bond and retry without request_bond_sponsorship.",
-        ));
-    }
     validate_claim_authorization_signature(
         &descriptor,
         &bounty_contract,
@@ -4099,39 +4270,42 @@ async fn agent_native_claim(
         .get_bond_sponsorship_for_candidate(reservation.candidate.id)
         .await
         .map_err(map_agent_claim_db_error)?;
-    if request.request_bond_sponsorship {
-        sponsorship = Some(
-            process_bond_sponsorship(&state, &reservation.candidate, claim_bond, sponsorship)
-                .await?,
-        );
-        if sponsorship
-            .as_ref()
-            .is_none_or(|item| item.status != BondSponsorshipStatus::Confirmed)
-        {
-            return Ok(agent_claim_response(
-                &state,
-                StatusCode::ACCEPTED,
-                reservation,
-                claim_bond,
-                true,
-                true,
-                sponsorship,
-                None,
-                "The exact bond grant was broadcast. Replay this signed request until sponsorship.status=confirmed; the claim relay will then continue automatically.",
-                None,
-            ));
-        }
-    }
-
-    let candidate = relay_agent_native_claim(
-        &state,
-        &reservation.candidate,
-        claim_bond,
-        &nonce,
-        valid_before,
-        signature,
-    )
-    .await?;
+    let use_atomic_sponsorship =
+        should_use_atomic_sponsorship(request.request_bond_sponsorship, sponsorship.as_ref());
+    let candidate = if use_atomic_sponsorship {
+        let reserved = reserve_atomic_bond_sponsorship(
+            &state,
+            &reservation.candidate,
+            claim_bond,
+            sponsorship,
+        )
+        .await?;
+        relay_atomic_sponsored_claim(
+            &state,
+            &reservation.candidate,
+            &item,
+            claim_bond,
+            &nonce,
+            valid_before,
+            signature,
+            &reserved,
+        )
+        .await?
+    } else {
+        relay_agent_native_claim(
+            &state,
+            &reservation.candidate,
+            claim_bond,
+            &nonce,
+            valid_before,
+            signature,
+        )
+        .await?
+    };
+    sponsorship = store
+        .get_bond_sponsorship_for_candidate(reservation.candidate.id)
+        .await
+        .map_err(map_agent_claim_db_error)?;
     let confirmed = candidate.status == ClaimCandidateStatus::Claimed;
     Ok(agent_claim_response(
         &state,
@@ -4145,17 +4319,46 @@ async fn agent_native_claim(
             waitlist_position: reservation.waitlist_position,
         },
         claim_bond,
-        request.request_bond_sponsorship,
+        use_atomic_sponsorship,
         sponsorship_available,
         sponsorship,
         None,
         if confirmed {
             "Canonical BountyClaimed is confirmed. Complete the task and prepare the exact submission evidence."
         } else {
-            "The exact claim transaction was broadcast. Replay this signed request until candidate.status=claimed."
+            "The exact claim transaction was broadcast. Replay this signed request until candidate.status=claimed; do not sign or fund again."
         },
         None,
     ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/base/autonomous-bounties/claim-funnel",
+    params(("window_hours" = Option<u32>, Query, description = "Bounded lookback window from 1 to 720 hours; defaults to 168")),
+    responses(
+        (status = 200, description = "Privacy-preserving durable claim and sponsorship funnel counts"),
+        (status = 400, description = "Window is outside the supported range"),
+        (status = 503, description = "Durable hosted coordination is unavailable")
+    )
+)]
+async fn claim_funnel(
+    State(state): State<SharedState>,
+    Query(query): Query<ClaimFunnelQuery>,
+) -> Result<Json<ClaimFunnelStats>, StatusCode> {
+    let window_hours = query.window_hours.unwrap_or(168);
+    if !(1..=720).contains(&window_hours) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    store
+        .claim_funnel_stats(window_hours)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn validate_agent_native_claim_request(
@@ -4184,6 +4387,139 @@ fn validate_agent_native_claim_request(
         ));
     }
     Ok(())
+}
+
+fn validate_persisted_claim_candidate_scope(
+    candidate: &ClaimCandidate,
+    network: &str,
+    bounty_contract: &str,
+    solver_wallet: &str,
+    agent_id: Option<Uuid>,
+) -> Result<(), AgentClaimProblem> {
+    if !candidate.network.eq_ignore_ascii_case(network)
+        || !candidate
+            .bounty_contract
+            .eq_ignore_ascii_case(bounty_contract)
+        || !candidate.solver_wallet.eq_ignore_ascii_case(solver_wallet)
+        || candidate.agent_id != agent_id
+    {
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "idempotency_conflict",
+            "load_candidate",
+            "idempotency_key was already used for different claim inputs",
+            "Replay the original network, bounty_contract, solver_wallet, and agent_id, or use a new idempotency_key for a different claim.",
+        ));
+    }
+    Ok(())
+}
+
+fn current_indexed_claim_for_candidate<'a>(
+    item: &'a AutonomousBountyFeedItem,
+    policy_hash: &str,
+    candidate: &ClaimCandidate,
+    claim_bond: u64,
+) -> Option<&'a AutonomousBountyEvent> {
+    if !matches!(item.status.as_str(), "claimed" | "submitted" | "paid") {
+        return None;
+    }
+    let current_round = item
+        .events
+        .iter()
+        .filter_map(|event| event.data.get("round").and_then(serde_json::Value::as_u64))
+        .max()?;
+    item.events
+        .iter()
+        .filter(|event| {
+            event.kind == AutonomousBountyEventKind::BountyClaimed
+                && event
+                    .contract_address
+                    .eq_ignore_ascii_case(&candidate.bounty_contract)
+                && event.data["round"].as_u64() == Some(current_round)
+                && event.data["solver"]
+                    .as_str()
+                    .is_some_and(|solver| solver.eq_ignore_ascii_case(&candidate.solver_wallet))
+                && json_u128(&event.data["claim_bond"]) == Some(u128::from(claim_bond))
+                && event.data["terms_hash"]
+                    .as_str()
+                    .is_some_and(|hash| hash.eq_ignore_ascii_case(&item.terms_hash))
+                && event.data["policy_hash"]
+                    .as_str()
+                    .is_some_and(|hash| hash.eq_ignore_ascii_case(policy_hash))
+        })
+        .max_by_key(|event| (event.block_number, event.log_index))
+}
+
+fn should_use_atomic_sponsorship(requested: bool, sponsorship: Option<&BondSponsorship>) -> bool {
+    requested || sponsorship.is_some()
+}
+
+async fn reconcile_indexed_claim_candidate(
+    state: &SharedState,
+    candidate: ClaimCandidate,
+    sponsorship: Option<BondSponsorship>,
+    claim: &AutonomousBountyEvent,
+) -> Result<ClaimCandidate, AgentClaimProblem> {
+    if candidate.status == ClaimCandidateStatus::Claimed {
+        return Ok(candidate);
+    }
+    let store = state.store.as_ref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "coordination_unavailable",
+            "confirm_claim",
+            "durable claim state is unavailable",
+            "Retry the same signed request.",
+        )
+    })?;
+    if let Some(sponsorship) = sponsorship {
+        if sponsorship.status == BondSponsorshipStatus::Broadcast
+            && candidate.status == ClaimCandidateStatus::Relaying
+            && sponsorship
+                .transaction_hash
+                .as_deref()
+                .is_some_and(|hash| hash.eq_ignore_ascii_case(&claim.tx_hash))
+            && candidate
+                .claim_transaction_hash
+                .as_deref()
+                .is_some_and(|hash| hash.eq_ignore_ascii_case(&claim.tx_hash))
+        {
+            return store
+                .mark_atomic_sponsored_claim_confirmed(
+                    candidate.id,
+                    sponsorship.id,
+                    claim.id,
+                    claim.block_number,
+                )
+                .await
+                .map(|(candidate, _)| candidate)
+                .map_err(map_agent_claim_db_error);
+        }
+        if matches!(
+            sponsorship.status,
+            BondSponsorshipStatus::Reserved | BondSponsorshipStatus::Broadcast
+        ) {
+            let (code, message) = if sponsorship.status == BondSponsorshipStatus::Reserved {
+                (
+                    "broadcast_unknown",
+                    "Canonical claim evidence exists, but no sponsor transaction hash was durably recorded. The grant remains charged to the rolling cap conservatively.",
+                )
+            } else {
+                (
+                    "canonical_claim_tx_mismatch",
+                    "The solver owns the canonical round through a different transaction; the recorded sponsor transaction did not create this claim.",
+                )
+            };
+            store
+                .mark_bond_sponsorship_failed(sponsorship.id, code, message)
+                .await
+                .map_err(map_agent_claim_db_error)?;
+        }
+    }
+    store
+        .mark_claim_candidate_claimed(candidate.id, claim.id)
+        .await
+        .map_err(map_agent_claim_db_error)
 }
 
 fn canonical_base_network_key(chain_id: u64) -> Option<&'static str> {
@@ -4375,12 +4711,30 @@ fn agent_claim_response(
         "https://nspg13.github.io/agent-bounties/earn.html?bountyContract={}&solver={}",
         reservation.candidate.bounty_contract, reservation.candidate.solver_wallet
     );
+    let sponsor_contract = sponsorship
+        .as_ref()
+        .map(|grant| grant.sponsor_wallet.clone())
+        .or_else(|| {
+            sponsorship_requested
+                .then(|| {
+                    state
+                        .bond_sponsor
+                        .contract_for(&reservation.candidate.network)
+                })
+                .flatten()
+                .map(str::to_string)
+        });
+    let sponsorship_protocol = sponsor_contract
+        .as_ref()
+        .map(|_| "agent-bounties/atomic-claim-sponsor-v1".to_string());
     let response = AgentNativeClaimResponse {
         schema_version: "agent-bounties/agent-native-claim-v1".to_string(),
         waitlist_position: reservation.waitlist_position,
         claim_bond: claim_bond.to_string(),
         sponsorship_requested,
         sponsorship_available,
+        sponsorship_protocol,
+        sponsor_contract,
         sponsorship,
         signing_payload,
         claim_transaction_hash: reservation.candidate.claim_transaction_hash.clone(),
@@ -4572,95 +4926,221 @@ fn joined_signature(
     Ok(format!("0x{r}{s}{v}").to_ascii_lowercase())
 }
 
-async fn process_bond_sponsorship(
+async fn reserve_atomic_bond_sponsorship(
     state: &SharedState,
     candidate: &ClaimCandidate,
     claim_bond: u64,
     existing: Option<BondSponsorship>,
 ) -> Result<BondSponsorship, AgentClaimProblem> {
+    if let Some(existing) = existing {
+        if existing.status == BondSponsorshipStatus::Failed {
+            return Err(agent_claim_problem(
+                StatusCode::CONFLICT,
+                "sponsorship_failed",
+                "reserve_sponsorship",
+                existing
+                    .failure_message
+                    .as_deref()
+                    .unwrap_or("the atomic sponsorship is terminal"),
+                "Start a fresh claim candidate only if the canonical bounty remains claimable.",
+            ));
+        }
+        return Ok(existing);
+    }
     let store = state.store.as_ref().ok_or_else(|| {
         agent_claim_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "sponsorship_unavailable",
-            "sponsor_bond",
+            "reserve_sponsorship",
             "durable sponsorship state is unavailable",
             "Retry later or fund the exact bond from the solver wallet.",
         )
     })?;
-    let sponsor = state
+    let sponsor_contract = state
         .bond_sponsor
-        .sponsor
-        .as_ref()
-        .filter(|_| state.bond_sponsor.enabled)
+        .contract_for(&candidate.network)
         .ok_or_else(|| {
             agent_claim_problem(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "sponsorship_unavailable",
-                "sponsor_bond",
-                "the capped bond sponsor is not enabled",
-                "Fund the exact bond from the solver wallet and retry without sponsorship.",
+                "reserve_sponsorship",
+                "no atomic sponsor vault is configured for this network",
+                "Fund the exact bond directly or choose a supported network.",
             )
         })?;
-    let mut sponsorship = match existing {
-        Some(sponsorship) => sponsorship,
-        None => store
-            .reserve_bond_sponsorship(
-                &NewBondSponsorship {
-                    id: Uuid::new_v4(),
-                    claim_candidate_id: candidate.id,
-                    network: candidate.network.clone(),
-                    bounty_contract: candidate.bounty_contract.clone(),
-                    solver_wallet: candidate.solver_wallet.clone(),
-                    sponsor_wallet: sponsor.address(),
-                    amount: claim_bond,
-                },
-                state.bond_sponsor.max_network_amount_24h,
-                state.bond_sponsor.max_solver_amount_24h,
-            )
-            .await
-            .map_err(map_agent_claim_db_error)?,
-    };
-    if sponsorship.status == BondSponsorshipStatus::Failed {
-        return Err(agent_claim_problem(
-            StatusCode::CONFLICT,
-            "sponsorship_failed",
-            "sponsor_bond",
-            sponsorship
-                .failure_message
-                .as_deref()
-                .unwrap_or("the exact bond grant failed"),
-            "Fund the bond directly or create a fresh claim candidate after this one becomes terminal.",
-        ));
-    }
-    if sponsorship.status == BondSponsorshipStatus::Broadcast {
-        sponsorship = reconcile_bond_sponsorship(state, sponsorship).await?;
+    store
+        .reserve_bond_sponsorship(
+            &NewBondSponsorship {
+                id: Uuid::new_v4(),
+                claim_candidate_id: candidate.id,
+                network: candidate.network.clone(),
+                bounty_contract: candidate.bounty_contract.clone(),
+                solver_wallet: candidate.solver_wallet.clone(),
+                sponsor_wallet: sponsor_contract.to_string(),
+                amount: claim_bond,
+            },
+            state.bond_sponsor.max_network_amount_24h,
+            state.bond_sponsor.max_solver_amount_24h,
+        )
+        .await
+        .map_err(map_agent_claim_db_error)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relay_atomic_sponsored_claim(
+    state: &SharedState,
+    candidate: &ClaimCandidate,
+    item: &AutonomousBountyFeedItem,
+    claim_bond: u64,
+    nonce: &str,
+    valid_before: u64,
+    solver_signature: &AutonomousBountyAuthorizationSignature,
+    sponsorship: &BondSponsorship,
+) -> Result<ClaimCandidate, AgentClaimProblem> {
+    if candidate.status == ClaimCandidateStatus::Relaying
+        || sponsorship.status == BondSponsorshipStatus::Broadcast
+    {
+        return reconcile_agent_native_claim(state, candidate.clone(), claim_bond).await;
     }
     if sponsorship.status != BondSponsorshipStatus::Reserved {
-        return Ok(sponsorship);
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "sponsorship_state_invalid",
+            "relay_atomic_claim",
+            "the atomic sponsorship is not reserved for relay",
+            "Replay the same request without creating another signature or sponsorship.",
+        ));
     }
-
+    let sponsor_contract = state
+        .bond_sponsor
+        .contract_for(&candidate.network)
+        .filter(|contract| contract.eq_ignore_ascii_case(&sponsorship.sponsor_wallet))
+        .ok_or_else(|| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "sponsor_contract_mismatch",
+                "relay_atomic_claim",
+                "the reserved sponsor vault does not match current network configuration",
+                "Do not sign or fund again; report the candidate ID.",
+            )
+        })?;
+    let grant_signer = state.bond_sponsor.grant_signer().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "grant_signer_unavailable",
+            "relay_atomic_claim",
+            "the atomic sponsor grant signer is unavailable",
+            "Retry the same signed request later.",
+        )
+    })?;
+    let relayer = state
+        .x402_relayer
+        .relayer
+        .as_ref()
+        .filter(|_| state.x402_relayer.enabled)
+        .ok_or_else(|| {
+            agent_claim_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "claim_relayer_unavailable",
+                "relay_atomic_claim",
+                "the hosted gas relayer is unavailable",
+                "Retry later or use the direct wallet claim plan.",
+            )
+        })?;
+    let planner = configured_autonomous_planner(&candidate.network).map_err(|status| {
+        agent_claim_problem(
+            status,
+            "planner_unavailable",
+            "relay_atomic_claim",
+            "the canonical claim planner is unavailable",
+            "Do not sign arbitrary calldata; retry later.",
+        )
+    })?;
+    let terms = item.terms.as_ref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::CONFLICT,
+            "terms_unavailable",
+            "relay_atomic_claim",
+            "the hash-verified terms needed for the sponsor grant are unavailable",
+            "Do not relay until terms_valid=true.",
+        )
+    })?;
+    let now = u64::try_from(Utc::now().timestamp()).unwrap_or_default();
+    let deadline = valid_before.min(now.saturating_add(300));
+    if deadline <= now {
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "authorization_expired",
+            "relay_atomic_claim",
+            "the solver authorization expired before the atomic grant could be issued",
+            "Start a fresh candidate and sign its new bounded payload once.",
+        ));
+    }
+    let grant = AtomicClaimSponsorGrant {
+        sponsor_contract: sponsor_contract.to_string(),
+        bounty_contract: candidate.bounty_contract.clone(),
+        solver: candidate.solver_wallet.clone(),
+        round: next_claim_round(item)?,
+        bond: u128::from(claim_bond),
+        terms_hash: item.terms_hash.clone(),
+        policy_hash: terms.policy_hash.clone(),
+        authorization_nonce: nonce.to_string(),
+        valid_after: 0,
+        valid_before,
+        grant_nonce: atomic_sponsorship_grant_nonce(sponsorship),
+        deadline,
+    };
+    let grant_digest = planner
+        .atomic_sponsor_grant_digest(&candidate.network, &grant)
+        .map_err(|_| {
+            agent_claim_problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "grant_digest_failed",
+                "relay_atomic_claim",
+                "the exact atomic sponsor grant could not be encoded",
+                "Do not sign or broadcast arbitrary data; report the candidate ID.",
+            )
+        })?;
+    let grant_signature = grant_signer.sign_digest(&grant_digest).map_err(|_| {
+        agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "grant_signing_failed",
+            "relay_atomic_claim",
+            "the bounded sponsor grant could not be signed",
+            "Retry the same solver-signed request later.",
+        )
+    })?;
+    let plan = planner
+        .plan_atomic_sponsored_claim(
+            &candidate.network,
+            &grant,
+            &grant_signature,
+            solver_signature,
+            &relayer.address(),
+        )
+        .map_err(|_| {
+            agent_claim_problem(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "atomic_claim_plan_invalid",
+                "relay_atomic_claim",
+                "the signed atomic claim could not be converted into exact vault calldata",
+                "Do not sign again; report the candidate ID.",
+            )
+        })?;
+    validate_atomic_sponsored_claim_intent(
+        &plan.relay_transaction,
+        sponsor_contract,
+        &relayer.address(),
+    )?;
     let descriptor = base_network_descriptor(&candidate.network).map_err(|_| {
         agent_claim_problem(
             StatusCode::BAD_REQUEST,
             "network_invalid",
-            "sponsor_bond",
+            "relay_atomic_claim",
             "candidate network is unsupported",
-            "Do not sign or transfer funds; report the candidate ID.",
+            "Do not sign or broadcast anything.",
         )
     })?;
-    let intent = erc20_transfer_intent(
-        &descriptor.native_usdc_token_address,
-        &sponsor.address(),
-        &candidate.solver_wallet,
-        claim_bond,
-    )?;
-    validate_bond_sponsorship_intent(
-        &intent,
-        &descriptor.native_usdc_token_address,
-        &sponsor.address(),
-        &candidate.solver_wallet,
-        claim_bond,
-    )?;
     let (_, rpc_url) = state
         .base_rpc_urls
         .resolve(&candidate.network)
@@ -4668,11 +5148,20 @@ async fn process_bond_sponsorship(
             agent_claim_problem(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "rpc_unavailable",
-                "sponsor_bond",
+                "relay_atomic_claim",
                 "Base RPC is unavailable",
-                "Retry with the same idempotency_key and signature.",
+                "Retry the same signed request.",
             )
         })?;
+    let store = state.store.as_ref().ok_or_else(|| {
+        agent_claim_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "coordination_unavailable",
+            "relay_atomic_claim",
+            "durable claim state is unavailable",
+            "Retry later.",
+        )
+    })?;
     let lease = store
         .acquire_x402_relayer_lease(&candidate.network, state.x402_relayer.lease_seconds)
         .await
@@ -4681,342 +5170,198 @@ async fn process_bond_sponsorship(
             agent_claim_problem(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "relay_busy",
-                "sponsor_bond",
-                "the bounded transaction relay is busy",
-                "Retry with the same idempotency_key and signature.",
+                "relay_atomic_claim",
+                "the bounded gas relay is busy",
+                "Retry the same signed request.",
             )
         })?;
+    let durable_state: Result<(ClaimCandidate, BondSponsorship), AgentClaimProblem> = async {
+        let durable_candidate = store
+            .get_claim_candidate(candidate.id)
+            .await
+            .map_err(map_agent_claim_db_error)?
+            .ok_or_else(|| {
+                agent_claim_problem(
+                    StatusCode::CONFLICT,
+                    "candidate_missing",
+                    "relay_atomic_claim",
+                    "the durable claim candidate disappeared before relay",
+                    "Do not sign or fund again; report the candidate ID.",
+                )
+            })?;
+        let durable_sponsorship = store
+            .get_bond_sponsorship_for_candidate(candidate.id)
+            .await
+            .map_err(map_agent_claim_db_error)?
+            .ok_or_else(|| {
+                agent_claim_problem(
+                    StatusCode::CONFLICT,
+                    "sponsorship_missing",
+                    "relay_atomic_claim",
+                    "the durable sponsorship disappeared before relay",
+                    "Do not sign or fund again; report the candidate ID.",
+                )
+            })?;
+        Ok((durable_candidate, durable_sponsorship))
+    }
+    .await;
+    let (durable_candidate, durable_sponsorship) = match durable_state {
+        Ok(state) => state,
+        Err(problem) => {
+            let _ = store
+                .release_x402_relayer_lease(&candidate.network, lease)
+                .await;
+            return Err(problem);
+        }
+    };
+    if durable_candidate.status == ClaimCandidateStatus::Claimed {
+        store
+            .release_x402_relayer_lease(&candidate.network, lease)
+            .await
+            .map_err(map_agent_claim_db_error)?;
+        return Ok(durable_candidate);
+    }
+    if durable_candidate.status == ClaimCandidateStatus::Relaying
+        && durable_sponsorship.status == BondSponsorshipStatus::Broadcast
+    {
+        store
+            .release_x402_relayer_lease(&candidate.network, lease)
+            .await
+            .map_err(map_agent_claim_db_error)?;
+        return reconcile_agent_native_claim(state, durable_candidate, claim_bond).await;
+    }
+    if durable_sponsorship.status != BondSponsorshipStatus::Reserved
+        || !matches!(
+            durable_candidate.status,
+            ClaimCandidateStatus::Exclusive
+                | ClaimCandidateStatus::Sponsoring
+                | ClaimCandidateStatus::AuthorizationReady
+        )
+    {
+        store
+            .release_x402_relayer_lease(&candidate.network, lease)
+            .await
+            .map_err(map_agent_claim_db_error)?;
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "sponsorship_state_changed",
+            "relay_atomic_claim",
+            "the durable candidate or sponsorship changed before relay",
+            "Replay the same request; do not sign or fund again.",
+        ));
+    }
     let relay_result = tokio::time::timeout(
         Duration::from_secs(state.bond_sponsor.rpc_timeout_seconds),
-        sponsor.simulate_and_broadcast(
+        relayer.simulate_and_broadcast(
             &rpc_url,
             descriptor.chain_id,
-            &intent,
+            &plan.relay_transaction,
             state.bond_sponsor.max_gas,
             state.bond_sponsor.max_fee_per_gas_wei,
         ),
     )
     .await;
-    let release_result = store
-        .release_x402_relayer_lease(&candidate.network, lease)
-        .await
-        .map_err(map_agent_claim_db_error);
     let transaction = match relay_result {
         Ok(Ok(transaction)) => transaction,
-        Ok(Err(error)) => {
+        Ok(Err(_)) => {
             store
-                .mark_bond_sponsorship_failed(
-                    sponsorship.id,
-                    "broadcast_unknown",
-                    &error.to_string(),
-                )
+                .release_x402_relayer_lease(&candidate.network, lease)
                 .await
                 .map_err(map_agent_claim_db_error)?;
-            release_result?;
             return Err(agent_claim_problem(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "sponsorship_broadcast_unknown",
-                "sponsor_bond",
-                "the sponsor RPC did not prove whether the exact USDC grant was accepted",
-                "Do not request another grant. Inspect the solver balance or sponsor Transfer history; if the bond is present, replay the same signature with request_bond_sponsorship=false.",
+                "atomic_claim_broadcast_unknown",
+                "relay_atomic_claim",
+                "the atomic claim was not returned as a recorded broadcast",
+                "Retry the same request and signatures; the grant and USDC nonces prevent duplicate use.",
             ));
         }
         Err(_) => {
             store
-                .mark_bond_sponsorship_failed(
-                    sponsorship.id,
-                    "broadcast_unknown",
-                    "RPC deadline elapsed after the bounded broadcast attempt began",
-                )
+                .release_x402_relayer_lease(&candidate.network, lease)
                 .await
                 .map_err(map_agent_claim_db_error)?;
-            release_result?;
             return Err(agent_claim_problem(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "sponsorship_rpc_timeout",
-                "sponsor_bond",
-                "the sponsor RPC deadline elapsed without proving whether the exact USDC grant was accepted",
-                "Do not request another grant. Inspect the solver balance or sponsor Transfer history; if the bond is present, replay the same signature with request_bond_sponsorship=false.",
+                "atomic_claim_rpc_timeout",
+                "relay_atomic_claim",
+                "the relay RPC deadline elapsed without returning a transaction hash",
+                "Retry the same request and signatures; do not create another sponsorship.",
             ));
         }
     };
-    release_result?;
-    sponsorship = store
-        .mark_bond_sponsorship_broadcast(sponsorship.id, &transaction.tx_hash)
-        .await
-        .map_err(map_agent_claim_db_error)?;
-    reconcile_bond_sponsorship(state, sponsorship).await
+    let mark_result = store
+        .mark_atomic_sponsored_claim_broadcast(candidate.id, sponsorship.id, &transaction.tx_hash)
+        .await;
+    let release_result = store
+        .release_x402_relayer_lease(&candidate.network, lease)
+        .await;
+    let (candidate, _) = match mark_result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = release_result;
+            return Err(map_agent_claim_db_error(error));
+        }
+    };
+    release_result.map_err(map_agent_claim_db_error)?;
+    reconcile_agent_native_claim(state, candidate, claim_bond).await
 }
 
-async fn reconcile_bond_sponsorship(
-    state: &SharedState,
-    sponsorship: BondSponsorship,
-) -> Result<BondSponsorship, AgentClaimProblem> {
-    if sponsorship.status != BondSponsorshipStatus::Broadcast {
-        return Ok(sponsorship);
-    }
-    let tx_hash = sponsorship.transaction_hash.as_deref().ok_or_else(|| {
-        agent_claim_problem(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "sponsorship_tx_missing",
-            "confirm_sponsorship",
-            "broadcast sponsorship has no transaction hash",
-            "Retry with the same idempotency_key; do not create a second authorization.",
-        )
-    })?;
-    let descriptor = base_network_descriptor(&sponsorship.network).map_err(|_| {
-        agent_claim_problem(
-            StatusCode::BAD_REQUEST,
-            "network_invalid",
-            "confirm_sponsorship",
-            "sponsorship network is unsupported",
-            "Report the candidate ID.",
-        )
-    })?;
-    let (_, rpc_url) = state
-        .base_rpc_urls
-        .resolve(&sponsorship.network)
-        .map_err(|_| {
-            agent_claim_problem(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "rpc_unavailable",
-                "confirm_sponsorship",
-                "Base RPC is unavailable",
-                "Retry with the same signed request.",
-            )
-        })?;
-    let confirmed_block = wait_for_usdc_transfer_confirmation(
-        &rpc_url,
-        tx_hash,
-        &descriptor.native_usdc_token_address,
-        &sponsorship.sponsor_wallet,
-        &sponsorship.solver_wallet,
-        sponsorship.amount,
-        state.bond_sponsor.confirmations,
-        state.bond_sponsor.wait_seconds,
-    )
-    .await?;
-    let Some(confirmed_block) = confirmed_block else {
-        return Ok(sponsorship);
-    };
-    state
-        .store
-        .as_ref()
+fn next_claim_round(item: &AutonomousBountyFeedItem) -> Result<u64, AgentClaimProblem> {
+    item.events
+        .iter()
+        .filter_map(|event| event.data.get("round").and_then(serde_json::Value::as_u64))
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
         .ok_or_else(|| {
             agent_claim_problem(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "coordination_unavailable",
-                "confirm_sponsorship",
-                "durable sponsorship state is unavailable",
-                "Retry with the same signed request.",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "round_overflow",
+                "relay_atomic_claim",
+                "the canonical bounty round cannot advance safely",
+                "Do not sign or broadcast; report the bounty contract.",
             )
-        })?
-        .mark_bond_sponsorship_confirmed(sponsorship.id, confirmed_block)
-        .await
-        .map_err(map_agent_claim_db_error)
+        })
 }
 
-fn erc20_transfer_intent(
-    token: &str,
-    from: &str,
-    recipient: &str,
-    amount: u64,
-) -> Result<EvmTransactionIntent, AgentClaimProblem> {
-    let token = normalize_evm_address(token).map_err(|_| {
-        agent_claim_problem(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "token_invalid",
-            "sponsor_bond",
-            "configured USDC token is invalid",
-            "Do not sign or transfer funds.",
-        )
-    })?;
-    let from = normalize_evm_address(from).map_err(|_| {
-        agent_claim_problem(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "sponsor_invalid",
-            "sponsor_bond",
-            "configured sponsor wallet is invalid",
-            "Do not sign or transfer funds.",
-        )
-    })?;
-    let recipient = normalize_evm_address(recipient).map_err(|_| {
-        agent_claim_problem(
-            StatusCode::BAD_REQUEST,
-            "solver_invalid",
-            "sponsor_bond",
-            "solver wallet is invalid",
-            "Provide a valid public Base wallet.",
-        )
-    })?;
-    if amount == 0 {
-        return Err(agent_claim_problem(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "bond_invalid",
-            "sponsor_bond",
-            "sponsored bond must be positive",
-            "Use the exact positive claim_bond from canonical inventory.",
-        ));
-    }
-    Ok(EvmTransactionIntent {
-        from: Some(from),
-        to: token,
-        value_wei: 0,
-        data: format!(
-            "0xa9059cbb{:0>64}{:064x}",
-            recipient.trim_start_matches("0x"),
-            amount
-        ),
-        function: "transfer(address,uint256)".to_string(),
-    })
+fn atomic_sponsorship_grant_nonce(sponsorship: &BondSponsorship) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"agent-bounties/atomic-sponsor-grant-v1");
+    hasher.update(sponsorship.id.as_bytes());
+    hasher.update(sponsorship.claim_candidate_id.as_bytes());
+    hasher.update(sponsorship.network.as_bytes());
+    hasher.update(sponsorship.bounty_contract.as_bytes());
+    hasher.update(sponsorship.solver_wallet.as_bytes());
+    format!("0x{}", hex::encode(hasher.finalize()))
 }
 
-fn validate_bond_sponsorship_intent(
+fn validate_atomic_sponsored_claim_intent(
     intent: &EvmTransactionIntent,
-    token: &str,
-    sponsor: &str,
-    recipient: &str,
-    amount: u64,
+    sponsor_contract: &str,
+    relayer: &str,
 ) -> Result<(), AgentClaimProblem> {
-    let expected = erc20_transfer_intent(token, sponsor, recipient, amount)?;
+    let calldata = intent.data.strip_prefix("0x").unwrap_or_default();
     if intent.value_wei != 0
-        || intent.function != expected.function
-        || !intent.to.eq_ignore_ascii_case(&expected.to)
+        || intent.function
+            != "sponsorAndClaim((address,address,uint64,uint256,bytes32,bytes32,bytes32,uint256,uint256,bytes32,uint256),bytes,uint8,bytes32,bytes32)"
+        || !intent.to.eq_ignore_ascii_case(sponsor_contract)
         || intent
             .from
             .as_deref()
-            .zip(expected.from.as_deref())
-            .is_none_or(|(actual, expected)| !actual.eq_ignore_ascii_case(expected))
-        || !intent.data.eq_ignore_ascii_case(&expected.data)
+            .is_none_or(|from| !from.eq_ignore_ascii_case(relayer))
+        || !calldata.starts_with("ba3ddedd")
+        || calldata.len() != 612 * 2
     {
         return Err(agent_claim_problem(
             StatusCode::UNPROCESSABLE_ENTITY,
-            "sponsorship_intent_invalid",
-            "sponsor_bond",
-            "generated sponsorship transaction exceeded the exact token/recipient/amount policy",
+            "atomic_claim_intent_invalid",
+            "relay_atomic_claim",
+            "generated transaction exceeded the exact zero-ETH sponsorAndClaim policy",
             "Do not broadcast; report the candidate ID.",
         ));
     }
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn wait_for_usdc_transfer_confirmation(
-    rpc_url: &str,
-    tx_hash: &str,
-    token: &str,
-    from: &str,
-    recipient: &str,
-    amount: u64,
-    required_confirmations: u64,
-    wait_seconds: u64,
-) -> Result<Option<u64>, AgentClaimProblem> {
-    let deadline = Instant::now() + Duration::from_secs(wait_seconds);
-    loop {
-        let receipt = fetch_transaction_receipt(rpc_url, tx_hash, 1)
-            .await
-            .map_err(|_| {
-                agent_claim_problem(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "rpc_unavailable",
-                    "confirm_sponsorship",
-                    "the sponsorship receipt could not be fetched",
-                    "Retry with the same signed request.",
-                )
-            })?
-            .result;
-        if let Some(receipt) = receipt {
-            if receipt.succeeded().map_err(|_| {
-                agent_claim_problem(
-                    StatusCode::BAD_GATEWAY,
-                    "receipt_invalid",
-                    "confirm_sponsorship",
-                    "the sponsorship receipt status is invalid",
-                    "Retry with the same signed request.",
-                )
-            })? == Some(false)
-            {
-                return Err(agent_claim_problem(
-                    StatusCode::BAD_GATEWAY,
-                    "sponsorship_reverted",
-                    "confirm_sponsorship",
-                    "the exact bond grant reverted",
-                    "Fund the bond directly or retry after the sponsor is repaired.",
-                ));
-            }
-            let block = receipt.block_number().map_err(|_| {
-                agent_claim_problem(
-                    StatusCode::BAD_GATEWAY,
-                    "receipt_invalid",
-                    "confirm_sponsorship",
-                    "the sponsorship receipt block is invalid",
-                    "Retry with the same signed request.",
-                )
-            })?;
-            if let Some(block) = block {
-                let logs = receipt.logs_to_evm_logs().map_err(|_| {
-                    agent_claim_problem(
-                        StatusCode::BAD_GATEWAY,
-                        "receipt_invalid",
-                        "confirm_sponsorship",
-                        "the sponsorship logs are invalid",
-                        "Retry with the same signed request.",
-                    )
-                })?;
-                if !logs
-                    .iter()
-                    .any(|log| exact_erc20_transfer(log, token, from, recipient, amount))
-                {
-                    return Err(agent_claim_problem(
-                        StatusCode::BAD_GATEWAY,
-                        "sponsorship_event_mismatch",
-                        "confirm_sponsorship",
-                        "the confirmed transaction did not emit the exact USDC Transfer",
-                        "Do not treat the bond as sponsored; report the transaction hash.",
-                    ));
-                }
-                let latest = fetch_block_number(rpc_url, 2).await.map_err(|_| {
-                    agent_claim_problem(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "rpc_unavailable",
-                        "confirm_sponsorship",
-                        "latest Base block could not be fetched",
-                        "Retry with the same signed request.",
-                    )
-                })?;
-                if latest.saturating_sub(block).saturating_add(1) >= required_confirmations {
-                    return Ok(Some(block));
-                }
-            }
-        }
-        if Instant::now() >= deadline {
-            return Ok(None);
-        }
-        sleep(Duration::from_secs(1)).await;
-    }
-}
-
-fn exact_erc20_transfer(
-    log: &EvmLog,
-    token: &str,
-    from: &str,
-    recipient: &str,
-    amount: u64,
-) -> bool {
-    const TRANSFER_TOPIC: &str =
-        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-    let address_topic = |address: &str| {
-        format!(
-            "0x{:0>64}",
-            address.trim_start_matches("0x").to_ascii_lowercase()
-        )
-    };
-    log.address.eq_ignore_ascii_case(token)
-        && log.topics.len() == 3
-        && log.topics[0].eq_ignore_ascii_case(TRANSFER_TOPIC)
-        && log.topics[1].eq_ignore_ascii_case(&address_topic(from))
-        && log.topics[2].eq_ignore_ascii_case(&address_topic(recipient))
-        && log.data.eq_ignore_ascii_case(&format!("0x{amount:064x}"))
 }
 
 async fn relay_agent_native_claim(
@@ -5261,14 +5606,32 @@ async fn reconcile_agent_native_claim(
                         "Retry later.",
                     )
                 })?;
-                store
-                    .mark_claim_candidate_failed(
-                        candidate.id,
-                        "transaction_reverted",
-                        "The confirmed claim transaction reverted; no canonical claim was created.",
-                    )
+                let sponsorship = store
+                    .get_bond_sponsorship_for_candidate(candidate.id)
                     .await
                     .map_err(map_agent_claim_db_error)?;
+                if let Some(sponsorship) =
+                    sponsorship.filter(|item| item.status == BondSponsorshipStatus::Broadcast)
+                {
+                    store
+                        .mark_atomic_sponsored_claim_failed(
+                            candidate.id,
+                            sponsorship.id,
+                            "transaction_reverted",
+                            "The confirmed atomic claim transaction reverted; no bond moved and no canonical claim was created.",
+                        )
+                        .await
+                        .map_err(map_agent_claim_db_error)?;
+                } else {
+                    store
+                        .mark_claim_candidate_failed(
+                            candidate.id,
+                            "transaction_reverted",
+                            "The confirmed claim transaction reverted; no canonical claim was created.",
+                        )
+                        .await
+                        .map_err(map_agent_claim_db_error)?;
+                }
                 return Err(agent_claim_problem(
                     StatusCode::BAD_GATEWAY,
                     "claim_reverted",
@@ -5354,6 +5717,24 @@ async fn reconcile_agent_native_claim(
                             .upsert_autonomous_bounty_event(&candidate.network, event)
                             .await
                             .map_err(map_agent_claim_db_error)?;
+                    }
+                    let sponsorship = store
+                        .get_bond_sponsorship_for_candidate(candidate.id)
+                        .await
+                        .map_err(map_agent_claim_db_error)?;
+                    if let Some(sponsorship) =
+                        sponsorship.filter(|item| item.status == BondSponsorshipStatus::Broadcast)
+                    {
+                        return store
+                            .mark_atomic_sponsored_claim_confirmed(
+                                candidate.id,
+                                sponsorship.id,
+                                claim.id,
+                                block,
+                            )
+                            .await
+                            .map(|(candidate, _)| candidate)
+                            .map_err(map_agent_claim_db_error);
                     }
                     return store
                         .mark_claim_candidate_claimed(candidate.id, claim.id)
@@ -7741,47 +8122,225 @@ mod tests {
     }
 
     #[test]
-    fn bond_sponsorship_builds_only_the_exact_usdc_transfer() {
-        let token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+    fn atomic_sponsorship_accepts_only_one_exact_vault_call() {
         let sponsor = "0x2222222222222222222222222222222222222222";
-        let solver = "0x3333333333333333333333333333333333333333";
-        let intent = erc20_transfer_intent(token, sponsor, solver, 10_000).unwrap();
+        let relayer = "0x3333333333333333333333333333333333333333";
+        let mut intent = EvmTransactionIntent {
+            from: Some(relayer.to_string()),
+            to: sponsor.to_string(),
+            value_wei: 0,
+            data: format!("0xba3ddedd{}", "00".repeat(608)),
+            function: "sponsorAndClaim((address,address,uint64,uint256,bytes32,bytes32,bytes32,uint256,uint256,bytes32,uint256),bytes,uint8,bytes32,bytes32)".to_string(),
+        };
 
-        assert_eq!(intent.function, "transfer(address,uint256)");
-        assert_eq!(intent.value_wei, 0);
-        assert_eq!(intent.from.as_deref(), Some(sponsor));
-        assert!(validate_bond_sponsorship_intent(&intent, token, sponsor, solver, 10_000).is_ok());
+        assert!(validate_atomic_sponsored_claim_intent(&intent, sponsor, relayer).is_ok());
+        intent.value_wei = 1;
+        assert!(validate_atomic_sponsored_claim_intent(&intent, sponsor, relayer).is_err());
+        intent.value_wei = 0;
+        intent.data.replace_range(2..10, "deadbeef");
+        assert!(validate_atomic_sponsored_claim_intent(&intent, sponsor, relayer).is_err());
+    }
 
-        let mut changed = intent.clone();
-        changed.data.replace_range(changed.data.len() - 1.., "1");
+    #[test]
+    fn atomic_sponsorship_nonce_is_stable_and_candidate_bound() {
+        let now = Utc::now();
+        let mut sponsorship = BondSponsorship {
+            id: Uuid::new_v4(),
+            claim_candidate_id: Uuid::new_v4(),
+            network: "base-mainnet".to_string(),
+            bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            solver_wallet: "0x2222222222222222222222222222222222222222".to_string(),
+            sponsor_wallet: "0x3333333333333333333333333333333333333333".to_string(),
+            amount: 10_000,
+            status: BondSponsorshipStatus::Reserved,
+            transaction_hash: None,
+            confirmed_block: None,
+            failure_code: None,
+            failure_message: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let first = atomic_sponsorship_grant_nonce(&sponsorship);
+        assert_eq!(first, atomic_sponsorship_grant_nonce(&sponsorship));
+        assert_eq!(first.len(), 66);
+        assert!(should_use_atomic_sponsorship(false, Some(&sponsorship)));
+        assert!(!should_use_atomic_sponsorship(false, None));
+        sponsorship.claim_candidate_id = Uuid::new_v4();
+        assert_ne!(first, atomic_sponsorship_grant_nonce(&sponsorship));
+    }
+
+    #[test]
+    fn indexed_claim_recovery_requires_current_round_and_exact_scope() {
+        let now = Utc::now();
+        let bounty_contract = "0x1111111111111111111111111111111111111111";
+        let solver_wallet = "0x2222222222222222222222222222222222222222";
+        let terms_hash = format!("0x{}", "33".repeat(32));
+        let policy_hash = format!("0x{}", "44".repeat(32));
+        let candidate = ClaimCandidate {
+            id: Uuid::new_v4(),
+            idempotency_key: "recover-indexed-claim".to_string(),
+            network: "base-mainnet".to_string(),
+            bounty_contract: bounty_contract.to_string(),
+            solver_wallet: solver_wallet.to_string(),
+            agent_id: None,
+            eligibility_evidence: AgentEligibilityEvidence {
+                agent_id: None,
+                solver_wallet: solver_wallet.to_string(),
+                capabilities: Vec::new(),
+                paid_completions: 0,
+                paid_usdc_base_units: 0,
+            },
+            eligibility_decision: AgentEligibilityDecision {
+                eligible: true,
+                reasons: Vec::new(),
+            },
+            status: ClaimCandidateStatus::AuthorizationReady,
+            exclusive_until: Some(now),
+            authorization_nonce: Some(format!("0x{}", "55".repeat(32))),
+            authorization_valid_before: Some(1_800_000_000),
+            claim_transaction_hash: None,
+            canonical_event_id: None,
+            failure_code: None,
+            failure_message: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let matching_claim = AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: "base-mainnet:claim:1".to_string(),
+            tx_hash: format!("0x{}", "66".repeat(32)),
+            block_number: 100,
+            log_index: 1,
+            contract_address: bounty_contract.to_string(),
+            bounty_id: format!("0x{}", "77".repeat(32)),
+            kind: AutonomousBountyEventKind::BountyClaimed,
+            data: serde_json::json!({
+                "round": 1,
+                "solver": solver_wallet,
+                "terms_hash": terms_hash,
+                "policy_hash": policy_hash,
+                "claim_bond": 100_000u64,
+                "claim_expires_at": 1_800_000_000u64
+            }),
+            occurred_at: now,
+        };
+        let mut item = AutonomousBountyFeedItem {
+            bounty_id: matching_claim.bounty_id.clone(),
+            bounty_contract: bounty_contract.to_string(),
+            creator: "0x9999999999999999999999999999999999999999".to_string(),
+            status: "claimable".to_string(),
+            solver_reward: "2000000".to_string(),
+            verifier_reward: "100000".to_string(),
+            claim_bond: "100000".to_string(),
+            timeout_bond_pool: "0".to_string(),
+            target_amount: "2100000".to_string(),
+            funded_amount: "2100000".to_string(),
+            terms_hash: terms_hash.clone(),
+            terms: None,
+            terms_valid: true,
+            verification_mode: "deterministic".to_string(),
+            verifier_module: None,
+            verification_ready: true,
+            verification_readiness_reason: "ready".to_string(),
+            validation_errors: Vec::new(),
+            events: vec![matching_claim.clone()],
+        };
+
         assert!(
-            validate_bond_sponsorship_intent(&changed, token, sponsor, solver, 10_000).is_err()
+            current_indexed_claim_for_candidate(&item, &policy_hash, &candidate, 100_000).is_none()
+        );
+        item.status = "claimed".to_string();
+        assert_eq!(
+            current_indexed_claim_for_candidate(&item, &policy_hash, &candidate, 100_000)
+                .map(|event| event.id),
+            Some(matching_claim.id)
+        );
+        assert!(current_indexed_claim_for_candidate(
+            &item,
+            &format!("0x{}", "88".repeat(32)),
+            &candidate,
+            100_000
+        )
+        .is_none());
+
+        let mut newer_other_solver = matching_claim;
+        newer_other_solver.id = Uuid::new_v4();
+        newer_other_solver.block_number = 101;
+        newer_other_solver.data["round"] = serde_json::json!(2);
+        newer_other_solver.data["solver"] =
+            serde_json::json!("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        item.events.push(newer_other_solver);
+        assert!(
+            current_indexed_claim_for_candidate(&item, &policy_hash, &candidate, 100_000).is_none()
         );
     }
 
     #[test]
-    fn bond_sponsorship_requires_exact_transfer_evidence() {
-        let token = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
-        let sponsor = "0x2222222222222222222222222222222222222222";
-        let solver = "0x3333333333333333333333333333333333333333";
-        let topic = |address: &str| format!("0x{:0>64}", address.trim_start_matches("0x"));
-        let mut log = EvmLog {
-            address: token.to_string(),
-            topics: vec![
-                "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef".to_string(),
-                topic(sponsor),
-                topic(solver),
-            ],
-            data: format!("0x{:064x}", 10_000u64),
-            tx_hash: format!("0x{:064x}", 1),
-            block_number: 1,
-            log_index: 0,
-            occurred_at: None,
+    fn persisted_claim_idempotency_is_bound_to_original_scope() {
+        let now = Utc::now();
+        let agent_id = Uuid::new_v4();
+        let candidate = ClaimCandidate {
+            id: Uuid::new_v4(),
+            idempotency_key: "claim-once".to_string(),
+            network: "base-mainnet".to_string(),
+            bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            solver_wallet: "0x2222222222222222222222222222222222222222".to_string(),
+            agent_id: Some(agent_id),
+            eligibility_evidence: AgentEligibilityEvidence {
+                agent_id: Some(agent_id),
+                solver_wallet: "0x2222222222222222222222222222222222222222".to_string(),
+                capabilities: Vec::new(),
+                paid_completions: 0,
+                paid_usdc_base_units: 0,
+            },
+            eligibility_decision: AgentEligibilityDecision {
+                eligible: true,
+                reasons: Vec::new(),
+            },
+            status: ClaimCandidateStatus::Relaying,
+            exclusive_until: Some(now),
+            authorization_nonce: Some(format!("0x{}", "11".repeat(32))),
+            authorization_valid_before: Some(1_800_000_000),
+            claim_transaction_hash: Some(format!("0x{}", "22".repeat(32))),
+            canonical_event_id: None,
+            failure_code: None,
+            failure_message: None,
+            created_at: now,
+            updated_at: now,
         };
 
-        assert!(exact_erc20_transfer(&log, token, sponsor, solver, 10_000));
-        log.data = format!("0x{:064x}", 9_999u64);
-        assert!(!exact_erc20_transfer(&log, token, sponsor, solver, 10_000));
+        assert!(validate_persisted_claim_candidate_scope(
+            &candidate,
+            "base-mainnet",
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+            Some(agent_id),
+        )
+        .is_ok());
+        assert!(validate_persisted_claim_candidate_scope(
+            &candidate,
+            "base-sepolia",
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+            Some(agent_id),
+        )
+        .is_err());
+        assert!(validate_persisted_claim_candidate_scope(
+            &candidate,
+            "base-mainnet",
+            "0x1111111111111111111111111111111111111111",
+            "0x3333333333333333333333333333333333333333",
+            Some(agent_id),
+        )
+        .is_err());
+        assert!(validate_persisted_claim_candidate_scope(
+            &candidate,
+            "base-mainnet",
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+            None,
+        )
+        .is_err());
     }
 
     #[test]
@@ -9391,6 +9950,7 @@ mod tests {
             "/v1/base/autonomous-bounties/contribution-plan",
             "/v1/base/autonomous-bounties/authorized-contribution-plan",
             "/v1/base/autonomous-bounties/claims",
+            "/v1/base/autonomous-bounties/claim-funnel",
             "/v1/base/autonomous-bounties/claim-plan",
             "/v1/base/autonomous-bounties/authorized-claim-plan",
             "/v1/base/autonomous-bounties/submission-plan",

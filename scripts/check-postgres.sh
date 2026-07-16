@@ -35,6 +35,7 @@ database_url="${DATABASE_URL:-postgres://agent_bounties:agent_bounties@localhost
 cargo build -p api -p mcp-server
 export AGENT_BOUNTIES_TEST_DATABASE_URL="$database_url"
 cargo test -p db tests::x402_relay_attempt_is_idempotent_and_lease_bounded -- --ignored --exact --nocapture
+cargo test -p db tests::claim_funnel_counts_direct_and_atomic_sponsored_confirmations -- --ignored --exact --nocapture
 cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
 cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
 cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture

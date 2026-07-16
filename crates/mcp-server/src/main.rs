@@ -1433,7 +1433,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "agent_native_claim",
-            "Primary earning-loop claim tool. Reserve an exclusive candidate or waitlist position, receive one exact EIP-3009 signing payload, then replay with its v/r/s signature. The hosted service can sponsor a capped solver bond and gas when eligible, and reports the exact failed transition or confirmed canonical BountyClaimed event.",
+            "Primary earning-loop claim tool. Reserve an exclusive candidate or waitlist position, receive one exact EIP-3009 signing payload, then replay with its v/r/s signature. When eligible, the hosted service atomically provides the exact capped solver bond and claims in one all-or-nothing transaction while paying gas; there is no separate grant transaction. The response reports the sponsor protocol/contract, exact failed transition, or confirmed canonical BountyClaimed event.",
             object_tool_schema(
                 json!({
                     "idempotency_key": string_property("Stable 1-128 character key reused for every retry of this wallet+bounty claim."),
@@ -1441,7 +1441,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "bounty_contract": string_property("Verified, funded, claimable, verification-ready canonical bounty contract."),
                     "solver_wallet": string_property("Public Base payout wallet. Never provide a private key or seed phrase."),
                     "agent_id": nullable_uuid_property("Optional registered agent UUID bound to solver_wallet and capability evidence."),
-                    "request_bond_sponsorship": boolean_property("Ask for an exact capped USDC solver-bond grant. The response states whether it is available."),
+                    "request_bond_sponsorship": boolean_property("Ask the configured sponsor vault to provide the exact capped USDC bond and call claim atomically after one solver signature. The response states availability and identifies the protocol/contract."),
                     "signature": {
                         "type": ["object", "null"],
                         "properties": {
