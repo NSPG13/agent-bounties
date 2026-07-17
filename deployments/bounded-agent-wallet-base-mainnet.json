@@ -1,6 +1,6 @@
 {
   "schema": "agent-bounties/bounded-agent-wallet-deployment-v1",
-  "contract_source_revision": "da731c015a5dbee7053fc57abd50792d0b3b30f6",
+  "contract_source_revision": "dc05b4e01474f09f02bb1bbb69651e4ce4deb338",
   "contract_source_revision_kind": "git-tree",
   "contract_source_dirty": false,
   "network": "base-mainnet",
