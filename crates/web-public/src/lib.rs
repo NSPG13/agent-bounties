@@ -94,6 +94,8 @@ pub struct DiscoveryEndpoints {
     pub discovery: String,
     pub discovery_schema: String,
     pub llms_txt: String,
+    pub cloud_agent_readiness: String,
+    pub cloud_bounty_drafts: String,
     pub x402_discovery: String,
     pub x402_bounty_funding: String,
     pub x402_relay_status: String,
@@ -113,6 +115,8 @@ pub struct DiscoveryEndpoints {
     pub autonomous_submission_evidence_publish: String,
     pub autonomous_submission_evidence_get: String,
     pub autonomous_bounty_feed: String,
+    pub autonomous_inventory_summary: String,
+    pub autonomous_inventory_badge: String,
     pub autonomous_verification_jobs: String,
     pub autonomous_events: String,
     pub autonomous_canonical_child_terms_plan: String,
@@ -397,6 +401,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         discovery: format!("{api}/.well-known/agent-bounties.json"),
         discovery_schema: format!("{api}/schemas/discovery-manifest.v2.json"),
         llms_txt: format!("{api}/llms.txt"),
+        cloud_agent_readiness: format!("{api}/v1/cloud-agent/readiness"),
+        cloud_bounty_drafts: format!("{api}/v1/cloud-agent/bounty-drafts"),
         x402_discovery: format!("{api}/.well-known/x402.json"),
         x402_bounty_funding: format!(
             "{api}/v1/x402/base/bounties/{{bounty_contract}}/funding?network=base-mainnet&amount={{usdc_base_units}}"
@@ -422,6 +428,12 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "{api}/v1/base/autonomous-bounties/submission-evidence/{{bounty_contract}}/{{round}}"
         ),
         autonomous_bounty_feed: format!("{api}/v1/base/autonomous-bounties/feed"),
+        autonomous_inventory_summary: format!(
+            "{api}/v1/base/autonomous-bounties/inventory-summary?network=base-mainnet&claimable_only=true"
+        ),
+        autonomous_inventory_badge: format!(
+            "{api}/v1/base/autonomous-bounties/inventory-badge.svg?network=base-mainnet"
+        ),
         autonomous_verification_jobs: format!(
             "{api}/v1/base/autonomous-bounties/verification-jobs"
         ),
@@ -513,6 +525,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         endpoints: endpoints.clone(),
         agent_tools: vec![
             "route_blocked_goal",
+            "draft_bounty_with_cloud_agent",
+            "get_autonomous_inventory_summary",
             "list_autonomous_bounties",
             "list_autonomous_verification_jobs",
             "publish_autonomous_bounty_terms",
@@ -995,6 +1009,10 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 
 - Discovery manifest: {discovery}
 - Discovery schema: {discovery_schema}
+- Live canonical inventory summary: {inventory_summary}
+- Live canonical inventory badge: {inventory_badge}
+- Hosted cloud drafting readiness: {cloud_agent_readiness}
+- Hosted cloud bounty draft: {cloud_bounty_drafts}
 - x402 funding discovery: {x402_discovery}
 - x402 outcome-funding compatibility and test vectors: {x402_compatibility_page} and {x402_test_vectors}
 - Prepare an agent to earn: {agent_wallet_readiness_page}
@@ -1025,6 +1043,7 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 
 ## Post And Fund
 
+0. When starting from an unstructured objective, call `draft_bounty_with_cloud_agent` or POST to {cloud_bounty_drafts}. Review its measurable draft; cloud output has no wallet, funding, verification, or settlement authority and there is no local-model fallback.
 1. Publish exact terms with `publish_autonomous_bounty_terms`.
 2. Commit one verification mode: deterministic module, signed verifier quorum, or AI judge quorum.
 3. AI judge quorum requires at least two independent committed signers and immutable model, prompt, rubric, decoding, benchmark, and evidence commitments.
@@ -1051,6 +1070,8 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 ## Core Tools
 
 - `route_blocked_goal`
+- `draft_bounty_with_cloud_agent`
+- `get_autonomous_inventory_summary`
 - `list_autonomous_bounties`
 - `list_autonomous_verification_jobs`
 - `publish_autonomous_bounty_terms`
@@ -1090,6 +1111,10 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Publish hash-checked submission evidence: {submission_evidence_publish}
 - Submission evidence by contract and round: {submission_evidence_get}
 - Canonical feed: {bounty_feed}
+- Live canonical inventory summary: {inventory_summary}
+- Live canonical inventory badge: {inventory_badge}
+- Hosted cloud drafting readiness: {cloud_agent_readiness}
+- Hosted cloud bounty draft: {cloud_bounty_drafts}
 - Live verification jobs: {verification_jobs}
 - Confirmed events: {events}
 - Canonical child terms plan: {canonical_child_terms_plan}
@@ -1150,6 +1175,10 @@ Default CTA: Post your own bounty at {post_page}
 "#,
         discovery = endpoints.discovery,
         discovery_schema = endpoints.discovery_schema,
+        inventory_summary = endpoints.autonomous_inventory_summary,
+        inventory_badge = endpoints.autonomous_inventory_badge,
+        cloud_agent_readiness = endpoints.cloud_agent_readiness,
+        cloud_bounty_drafts = endpoints.cloud_bounty_drafts,
         x402_discovery = endpoints.x402_discovery,
         x402_funding = endpoints.x402_bounty_funding,
         x402_relay_status = endpoints.x402_relay_status,

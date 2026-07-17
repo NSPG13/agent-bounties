@@ -12,6 +12,7 @@ app = { path = "../app" }
 axum.workspace = true
 bounty-router = { path = "../bounty-router" }
 chain-base = { path = "../chain-base" }
+cloud-agent = { path = "../cloud-agent" }
 chrono.workspace = true
 db = { path = "../db" }
 domain = { path = "../domain" }

@@ -6,6 +6,9 @@ import { pathToFileURL } from "node:url";
 export const DEFAULT_API_BASE_URL = "https://api.bountyboard.global";
 export const DEFAULT_PROTOCOL_URL = "https://bountyboard.global/protocol.json";
 export const DEFAULT_BASE_RPC_URL = "https://base-rpc.publicnode.com";
+export const DEFAULT_BASE_RPC_FALLBACK_URLS = Object.freeze([
+  "https://mainnet.base.org",
+]);
 export const CLAIM_HANDOFF_SCHEMA_VERSION = "agent-bounties/check-in-claim-handoff-v1";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
@@ -979,9 +982,7 @@ function standingMetaDescriptor({
   };
 }
 
-async function attestStandingMetaVerifier(rpcUrl, rpcTransport) {
-  try {
-    const rpc = normalizeRpcUrl(rpcUrl);
+async function attestStandingMetaVerifierAt(rpc, rpcTransport) {
     const blocks = await rpcTransport(rpc, [
       { key: "standing_meta_safe_block", method: "eth_getBlockByNumber", params: ["safe", false] },
     ]);
@@ -1007,19 +1008,44 @@ async function attestStandingMetaVerifier(rpcUrl, rpcTransport) {
       ready: codeHash === STANDING_META_BOUNTY.verifierRuntimeCodeHash,
       codeHash,
       observedBlock,
+      rpc_url: rpc,
       warning: codeHash === STANDING_META_BOUNTY.verifierRuntimeCodeHash
         ? null
         : "standing_meta_verifier_code_mismatch",
     };
-  } catch (error) {
-    return {
-      ready: false,
-      codeHash: null,
-      observedBlock: null,
-      warning: "standing_meta_verifier_attestation_failed",
-      detail: error instanceof Error ? error.message : String(error),
-    };
+}
+
+async function attestStandingMetaVerifier(rpcUrl, rpcTransport) {
+  const candidates = [...new Set([
+    ...String(rpcUrl || DEFAULT_BASE_RPC_URL).split(","),
+    ...DEFAULT_BASE_RPC_FALLBACK_URLS,
+  ].map((value) => value.trim()).filter(Boolean))];
+  const failures = [];
+  for (const candidate of candidates) {
+    let rpc;
+    try {
+      rpc = normalizeRpcUrl(candidate);
+    } catch (error) {
+      failures.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return await attestStandingMetaVerifierAt(rpc, rpcTransport);
+      } catch (error) {
+        failures.push(`${rpc} attempt ${attempt}: ${error instanceof Error ? error.message : String(error)}`);
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
   }
+  return {
+    ready: false,
+    codeHash: null,
+    observedBlock: null,
+    rpc_url: null,
+    warning: "standing_meta_verifier_attestation_failed",
+    detail: failures.join(" | ").slice(0, 2_000),
+  };
 }
 
 export function verifyClaimableItem(item, protocol) {

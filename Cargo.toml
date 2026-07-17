@@ -10,6 +10,7 @@ members = [
   "crates/eval-harness",
   "crates/payments-stripe",
   "crates/payments-x402",
+  "crates/cloud-agent",
   "crates/chain-base",
   "crates/db",
   "crates/github-app",

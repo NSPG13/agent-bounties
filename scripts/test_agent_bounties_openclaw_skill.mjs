@@ -295,7 +295,7 @@ test("portable skill metadata and install contracts remain publishable", async (
   const activationItems = [...activation.bounties, ...standingMetaActivation.bounties];
 
   assert.match(skill, /^---\r?\nname: agent-bounties\r?\n/);
-  assert.match(skill, /\r?\nversion: 1\.4\.4\r?\n/);
+  assert.match(skill, /\r?\nversion: 1\.4\.5\r?\n/);
   assert.match(skill, /\r?\nauthor: Agent Bounties contributors\r?\n/);
   assert.match(skill, /\r?\n  hermes:\r?\n/);
   assert.match(skill, /\r?\n    category: agent-commerce\r?\n/);
@@ -310,7 +310,7 @@ test("portable skill metadata and install contracts remain publishable", async (
 
   assert.equal(plugin.name, "agent-bounties");
   assert.equal(plugin.displayName, "Agent Bounties");
-  assert.equal(plugin.version, "1.4.4");
+  assert.equal(plugin.version, "1.4.5");
   assert.equal(plugin.license, "MIT");
   assert.equal(plugin.repository, "https://github.com/NSPG13/agent-bounties");
   assert.equal(plugin.homepage, "https://bountyboard.global/");
@@ -751,6 +751,31 @@ test("hosted inventory emits a standing meta marker after exact-code safe-block 
   assert.equal(meta.schema_version, STANDING_META_BOUNTY.schemaVersion);
   assert.equal(meta.inventory_class, STANDING_META_BOUNTY.inventoryClass);
   assert.equal(meta.observed_block_number, 0x12345);
+  assert.ok(!report.warnings.includes("standing_meta_verifier_attestation_failed"));
+});
+
+test("standing meta attestation retries and fails over without weakening bytecode checks", async () => {
+  const input = await fixture("verified-claimable.json");
+  makeHostedStandingMetaCandidate(input.autonomous_feed.body[0]);
+  const attempted = [];
+  const healthy = standingMetaTransport();
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: input,
+    baseRpcUrl: "https://unavailable-rpc.example.test",
+    rpcTransport: async (rpcUrl, calls) => {
+      attempted.push(rpcUrl);
+      if (rpcUrl.includes("unavailable-rpc")) throw new Error("transient RPC failure");
+      return healthy(rpcUrl, calls);
+    },
+  });
+
+  assert.equal(attempted.filter((url) => url.includes("unavailable-rpc")).length, 2);
+  assert.ok(attempted.some((url) => url.startsWith("https://mainnet.base.org")));
+  assert.equal(
+    report.verified_claimable_bounties[0].standing_meta_bounty.verifier_runtime_code_hash,
+    STANDING_META_BOUNTY.verifierRuntimeCodeHash,
+  );
   assert.ok(!report.warnings.includes("standing_meta_verifier_attestation_failed"));
 });
 

@@ -986,6 +986,61 @@
     }
   }
 
+  async function draftBountyWithCloudAgent(button) {
+    const form = button.closest("form");
+    const status = form.querySelector("[data-cloud-draft-status]");
+    const objective = form.elements.draftObjective.value.trim();
+    if (!objective) {
+      output(status, "Describe the digital outcome first.", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const protocol = requireActiveProtocol(await loadProtocol());
+      const api = protocol.api_base_url.replace(/\/$/, "");
+      const readiness = await requestJson(`${api}/v1/cloud-agent/readiness`, {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!readiness.available || !readiness.public_drafts) {
+        throw new Error("Hosted cloud drafting is not ready. You can still enter exact terms manually.");
+      }
+      output(status, `Drafting with ${readiness.provider} (${readiness.model})...`);
+      const constraints = splitLines(form.elements.acceptance.value);
+      const draft = await requestJson(`${api}/v1/cloud-agent/bounty-drafts`, {
+        method: "POST",
+        body: JSON.stringify({
+          objective,
+          context: form.elements.goal.value.trim() || null,
+          constraints,
+          source_url: form.elements.sourceUrl.value.trim() || null,
+          idempotency_key: `web-draft:${randomBytes32().slice(2)}`,
+        }),
+      });
+      form.elements.title.value = draft.title;
+      form.elements.goal.value = draft.goal;
+      form.elements.acceptance.value = draft.acceptance_criteria.join("\n");
+      if (form.elements.verificationMode.value !== "deterministic_module") {
+        form.elements.benchmark.value = JSON.stringify(draft.benchmark, null, 2);
+        form.elements.evidenceSchema.value = JSON.stringify(draft.evidence_schema, null, 2);
+      }
+      const notes = [
+        "Cloud draft loaded. Review every field before publishing.",
+        ...(draft.questions || []).map((item) => `Question: ${item}`),
+        ...(draft.risk_flags || []).map((item) => `Risk: ${item}`),
+      ];
+      if (form.elements.verificationMode.value === "deterministic_module") {
+        notes.push("The default work-proof verifier does not evaluate task quality. Select and commit a verifier that can enforce these acceptance criteria before funding outcome-dependent work.");
+      }
+      notes.push(draft.evidence_boundary);
+      output(status, notes, "success");
+    } catch (error) {
+      output(status, error.message || String(error), "error");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function fundBounty(event) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1110,6 +1165,11 @@
     const goal = document.createElement("p");
     goal.className = "fine";
     goal.textContent = item.terms ? item.terms.document.goal : "Public terms are not available yet.";
+    const benchmark = item.terms && item.terms.document.benchmark;
+    const isStandingMeta = benchmark && benchmark.engine === "standing_meta_v2_parent";
+    const disclosure = document.createElement("p");
+    disclosure.className = "bounty-disclosure";
+    disclosure.textContent = "Meta-bounty economics: create and fully fund a qualifying child, then a different registered participant must complete and receive settlement for it. The parent reward is not guaranteed profit.";
     const actions = document.createElement("div");
     actions.className = "actions";
     const claim = document.createElement("button");
@@ -1133,7 +1193,16 @@
     fund.href = `funding.html?bountyContract=${encodeURIComponent(item.bounty_contract)}`;
     fund.textContent = "Add funding";
     actions.append(claim, fund);
-    article.append(heading, detail, goal, actions);
+    article.append(heading, detail, goal);
+    if (isStandingMeta) article.append(disclosure);
+    if (item.terms && item.terms.document.source_url) {
+      const source = document.createElement("a");
+      source.href = item.terms.document.source_url;
+      source.textContent = "Read source issue and full acceptance criteria";
+      source.rel = "noopener noreferrer";
+      article.append(source);
+    }
+    article.append(actions);
     return article;
   }
 
@@ -1214,6 +1283,9 @@
         }
       });
     }
+    document.querySelectorAll("[data-cloud-draft]").forEach((button) => {
+      button.addEventListener("click", () => draftBountyWithCloudAgent(button));
+    });
     const fundForm = byId("autonomous-fund-form");
     if (fundForm) fundForm.addEventListener("submit", fundBounty);
     const submitForm = byId("autonomous-submit-form");

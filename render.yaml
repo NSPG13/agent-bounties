@@ -53,6 +53,11 @@ envVarGroups:
       - key: BOND_SPONSOR_BASE_SEPOLIA_CONTRACT
         sync: false
 
+  - name: agent-bounties-cloud-agent
+    envVars:
+      - key: CLOUD_AGENT_API_KEY
+        sync: false
+
 services:
   - type: web
     name: agent-bounties-api
@@ -127,11 +132,32 @@ services:
         value: "false"
       - key: ALLOW_UNSIGNED_STRIPE_WEBHOOKS
         value: "false"
+      - key: CLOUD_AGENT_ENABLED
+        value: "true"
+      - key: CLOUD_AGENT_PUBLIC_DRAFTS
+        value: "true"
+      - key: CLOUD_AGENT_PROVIDER
+        value: openai-compatible
+      - key: CLOUD_AGENT_PROTOCOL
+        value: openai_chat_completions
+      - key: CLOUD_AGENT_ENDPOINT
+        value: https://api.openai.com/v1/chat/completions
+      - key: CLOUD_AGENT_MODEL
+        value: gpt-4.1-mini
+      - key: CLOUD_AGENT_MAX_INPUT_CHARS
+        value: "12000"
+      - key: CLOUD_AGENT_MAX_OUTPUT_TOKENS
+        value: "2500"
+      - key: CLOUD_AGENT_MAX_DAILY_DRAFTS
+        value: "25"
+      - key: CLOUD_AGENT_TIMEOUT_SECONDS
+        value: "45"
       - fromGroup: agent-bounties-operator
       - fromGroup: agent-bounties-stripe
       - fromGroup: agent-bounties-base
       - fromGroup: agent-bounties-x402-relayer
       - fromGroup: agent-bounties-bond-sponsor
+      - fromGroup: agent-bounties-cloud-agent
 
   - type: web
     name: agent-bounties-mcp

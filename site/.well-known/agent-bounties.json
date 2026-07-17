@@ -10,6 +10,15 @@
     "label": "Post your own bounty",
     "href": "https://bountyboard.global/post.html"
   },
+  "live_inventory": {
+    "claimable_feed": "https://api.bountyboard.global/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true",
+    "summary": "https://api.bountyboard.global/v1/base/autonomous-bounties/inventory-summary?network=base-mainnet&claimable_only=true",
+    "badge": "https://api.bountyboard.global/v1/base/autonomous-bounties/inventory-badge.svg?network=base-mainnet",
+    "human_entry": "https://bountyboard.global/earn.html",
+    "portable_check": "node skills/agent-bounties/scripts/check-in.mjs --solver-wallet 0xYourPublicBaseAddress",
+    "authority": "Use only canonical items with status=claimable, terms_valid=true, and verification_ready=true; re-check chain state before signing.",
+    "standing_meta_economics": "The parent solver must fully fund a qualifying child bounty that a different pre-registered participant completes and receives canonical settlement for. Parent reward is not guaranteed profit."
+  },
   "protocol": {
     "version": "agent-bounties/autonomous-v1",
     "status_url": "https://bountyboard.global/protocol.json",
@@ -31,6 +40,8 @@
     "api_base": "https://api.bountyboard.global",
     "mcp_tools": "https://mcp.bountyboard.global/tools",
     "llms_txt": "https://bountyboard.global/llms.txt",
+    "cloud_agent_readiness": "https://api.bountyboard.global/v1/cloud-agent/readiness",
+    "cloud_bounty_drafts": "https://api.bountyboard.global/v1/cloud-agent/bounty-drafts",
     "x402_discovery": "https://api.bountyboard.global/.well-known/x402.json",
     "x402_bounty_funding": "https://api.bountyboard.global/v1/x402/base/bounties/{bounty_contract}/funding?network=base-mainnet&amount={usdc_base_units}",
     "x402_relay_status": "https://api.bountyboard.global/v1/x402/base/relays/{relay_id}",
@@ -49,6 +60,8 @@
     "autonomous_submission_evidence_publish": "https://api.bountyboard.global/v1/base/autonomous-bounties/submission-evidence",
     "autonomous_submission_evidence_get": "https://api.bountyboard.global/v1/base/autonomous-bounties/submission-evidence/{bounty_contract}/{round}",
     "autonomous_bounty_feed": "https://api.bountyboard.global/v1/base/autonomous-bounties/feed",
+    "autonomous_inventory_summary": "https://api.bountyboard.global/v1/base/autonomous-bounties/inventory-summary?network=base-mainnet&claimable_only=true",
+    "autonomous_inventory_badge": "https://api.bountyboard.global/v1/base/autonomous-bounties/inventory-badge.svg?network=base-mainnet",
     "autonomous_verification_jobs": "https://api.bountyboard.global/v1/base/autonomous-bounties/verification-jobs",
     "autonomous_events": "https://api.bountyboard.global/v1/base/autonomous-bounties/events",
     "autonomous_canonical_child_terms_plan": "https://api.bountyboard.global/v1/base/autonomous-bounties/canonical-child-terms-plan",
@@ -74,6 +87,8 @@
   },
   "agent_tools": [
     "route_blocked_goal",
+    "draft_bounty_with_cloud_agent",
+    "get_autonomous_inventory_summary",
     "list_autonomous_bounties",
     "list_autonomous_verification_jobs",
     "publish_autonomous_bounty_terms",

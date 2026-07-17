@@ -66,7 +66,7 @@ nav a:hover {
 
 .hero {
   position: relative;
-  min-height: calc(100svh - 64px);
+  min-height: clamp(560px, 78svh, 700px);
   display: grid;
   align-items: center;
   overflow: hidden;
@@ -91,7 +91,7 @@ nav a:hover {
 .hero-copy {
   position: relative;
   z-index: 1;
-  width: min(720px, calc(100% - 40px));
+  width: min(820px, calc(100% - 40px));
   margin-left: clamp(20px, 8vw, 112px);
   padding: 80px 0;
 }
@@ -118,7 +118,7 @@ p {
 
 h1 {
   margin-bottom: 20px;
-  font-size: 112px;
+  font-size: 96px;
   line-height: 0.9;
   letter-spacing: 0;
 }
@@ -147,6 +147,30 @@ h3 {
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 28px;
+}
+
+.live-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 28px;
+  padding: 12px 14px;
+  border: 1px solid rgba(142, 224, 203, 0.44);
+  border-radius: 6px;
+  background: rgba(16, 25, 31, 0.78);
+  color: #d7e1e4;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.live-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #8ee0cb;
 }
 
 .button {
@@ -200,6 +224,63 @@ h3 {
   gap: clamp(28px, 8vw, 110px);
   max-width: 1180px;
   margin: 0 auto;
+}
+
+.inventory-head {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(280px, auto);
+  gap: 32px;
+  align-items: end;
+  max-width: 1180px;
+  margin: 0 auto 28px;
+}
+
+.inventory-summary {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: right;
+}
+
+.inventory-summary a {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.home-bounty-feed {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.home-bounty-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.home-bounty-row .actions {
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+.bounty-disclosure,
+.inventory-note {
+  color: #754800;
+  line-height: 1.6;
+}
+
+.bounty-disclosure {
+  padding-left: 12px;
+  border-left: 3px solid #a36400;
+  font-size: 14px;
+}
+
+.inventory-note {
+  max-width: 1180px;
+  margin: 20px auto 0;
+  font-size: 14px;
 }
 
 .copy,
@@ -452,14 +533,11 @@ textarea {
 }
 
 .sticky-actions {
-  position: sticky;
-  bottom: 0;
-  z-index: 3;
-  margin-top: 0;
+  position: static;
+  margin-top: 20px;
   padding: 14px 0;
   border-top: 1px solid var(--line);
-  background: rgba(247, 248, 247, 0.96);
-  backdrop-filter: blur(12px);
+  background: transparent;
 }
 
 .wallet-picker {
@@ -656,12 +734,12 @@ code {
   }
 
   .hero {
-    min-height: 720px;
+    min-height: 600px;
   }
 
   .hero-copy {
     margin-left: 20px;
-    padding: 64px 0;
+    padding: 48px 0;
   }
 
   h1 {
@@ -692,8 +770,15 @@ code {
   .cta,
   .form-row,
   .form-row.three,
-  .feed-layout {
+  .feed-layout,
+  .inventory-head,
+  .home-bounty-feed {
     grid-template-columns: 1fr;
+  }
+
+  .inventory-summary {
+    justify-items: start;
+    text-align: left;
   }
 
   .recovery-row {
