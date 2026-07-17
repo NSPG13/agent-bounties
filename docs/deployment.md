@@ -24,6 +24,12 @@ The root `render.yaml` creates:
 - `agent-bounties-mcp`,
 - `agent-bounties-base-indexer`.
 
+The `agent-bounties-cloud-agent` environment group contains only the hosted
+model API key and is attached only to `agent-bounties-api`. MCP proxies the API
+and must not receive this secret. Set the key in Render and verify
+`GET /v1/cloud-agent/readiness`; see
+[`cloud-agent-operations.md`](cloud-agent-operations.md).
+
 Validate before synchronizing:
 
 ```powershell

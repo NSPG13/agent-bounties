@@ -662,6 +662,7 @@ dependencies = [
  "bounty-router",
  "chain-base",
  "chrono",
+ "cloud-agent",
  "db",
  "domain",
  "eval-harness",
@@ -1361,6 +1362,19 @@ dependencies = [
  "uuid",
  "verifier-sdk",
  "web-public",
+]
+
+[[package]]
+name = "cloud-agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "utoipa",
 ]
 
 [[package]]

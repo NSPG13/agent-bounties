@@ -14,7 +14,7 @@ bounties that a different participant completes.
   does not count.
 - Ordinary funded bounties do not count toward the standing-meta floor.
 
-The inventory guard runs every 15 minutes and fails closed when canonical
+The inventory guard runs every 5 minutes and fails closed when canonical
 evidence is stale, malformed, or below the configured floor.
 
 ## Qualifying Outcome

@@ -35,6 +35,14 @@
           <div class="form-section">
             <p class="eyebrow">Task</p>
             <label>
+              Describe the outcome
+              <textarea name="draftObjective" rows="3" placeholder="Describe the coding result you need. The hosted cloud agent will turn it into measurable draft terms."></textarea>
+            </label>
+            <div class="actions compact-actions">
+              <button class="button secondary" type="button" data-cloud-draft>Draft measurable terms</button>
+              <output class="fine" data-cloud-draft-status aria-live="polite">Runs in the hosted API; no local model is required. Drafts never authorize funding or payout.</output>
+            </div>
+            <label>
               Title
               <input name="title" maxlength="200" placeholder="Fix the failing payment reconciliation test" required>
             </label>

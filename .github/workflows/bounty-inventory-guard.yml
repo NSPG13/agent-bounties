@@ -2,7 +2,7 @@ name: Bounty inventory guard
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
   pull_request:
     paths:

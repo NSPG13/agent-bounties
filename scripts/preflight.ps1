@@ -54,7 +54,24 @@ function Test-MinimumVersion {
         return
     }
 
-    $versionOutput = & $Name --version 2>$null
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell can promote native stderr warnings to terminating
+        # errors even when the command exits successfully. Version checks care
+        # about the exit code and stdout, so handle those explicitly.
+        $ErrorActionPreference = "SilentlyContinue"
+        $versionOutput = & $Name --version 2>$null
+        $versionExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($versionExitCode -ne 0) {
+        $failures.Add("$Name --version failed for $Purpose with exit code $versionExitCode")
+        return
+    }
+
     if ($versionOutput -notmatch '^\S+\s+(\d+)\.(\d+)\.') {
         $failures.Add("could not parse $Name version for $Purpose")
         return
@@ -92,8 +109,14 @@ else {
 Test-OptionalCommand docker "Postgres durability smoke tests"
 
 $driveName = (Get-Item $repoRoot).PSDrive.Name
-$drive = Get-PSDrive -Name $driveName
-$freeMb = [math]::Floor($drive.Free / 1MB)
+$driveRoot = (Get-Item $repoRoot).PSDrive.Root
+try {
+    $freeBytes = [System.IO.DriveInfo]::new($driveRoot).AvailableFreeSpace
+}
+catch {
+    $freeBytes = (Get-PSDrive -Name $driveName).Free
+}
+$freeMb = [math]::Floor($freeBytes / 1MB)
 if ($freeMb -lt $minimumFreeMb) {
     $failures.Add("free disk on drive $driveName is ${freeMb}MB; $Mode mode expects at least ${minimumFreeMb}MB. If this is a development checkout, run cargo clean to remove generated target output.")
 }

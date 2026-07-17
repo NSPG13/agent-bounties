@@ -187,6 +187,22 @@ struct RouteBlockedGoalArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct DraftBountyWithCloudAgentArgs {
+    objective: String,
+    context: Option<String>,
+    #[serde(default)]
+    constraints: Vec<String>,
+    source_url: Option<String>,
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct AutonomousInventorySummaryArgs {
+    network: Option<String>,
+    claimable_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanStripeCheckoutTopUpArgs {
     organization_id: Uuid,
     amount_minor: i64,
@@ -526,6 +542,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/tools", get(tools))
         .route("/tools/route_blocked_goal", post(route_blocked_goal))
+        .route(
+            "/tools/draft_bounty_with_cloud_agent",
+            post(draft_bounty_with_cloud_agent),
+        )
+        .route(
+            "/tools/get_autonomous_inventory_summary",
+            post(get_autonomous_inventory_summary),
+        )
         .route("/tools/register_agent", post(register_agent))
         .route("/tools/register_capability", post(register_capability))
         .route("/tools/search_capabilities", post(search_capabilities))
@@ -796,6 +820,31 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "privacy": privacy_property()
                 }),
                 &["goal", "context", "budget_minor", "currency", "privacy"],
+            ),
+        ),
+        tool(
+            "draft_bounty_with_cloud_agent",
+            "Turn an unstructured digital-work objective into measurable draft terms using the hosted cloud model. The output is advisory and cannot sign, fund, verify, settle, or prove payment.",
+            object_tool_schema(
+                json!({
+                    "objective": string_property("The digital-work outcome the bounty should produce."),
+                    "context": nullable_string_property("Optional repository, workflow, constraints, prior attempts, or other task context."),
+                    "constraints": {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Optional bounded task constraints."},
+                    "source_url": nullable_string_property("Optional public HTTPS source URL."),
+                    "idempotency_key": nullable_string_property("Optional stable key for retry-safe drafting."),
+                }),
+                &["objective"],
+            ),
+        ),
+        tool(
+            "get_autonomous_inventory_summary",
+            "Read the live canonical bounty inventory summary generated from the same confirmed-event authority as the public feed.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_string_property("Network name; defaults to base-mainnet."),
+                    "claimable_only": {"type": ["boolean", "null"], "description": "Defaults to true."},
+                }),
+                &[],
             ),
         ),
         tool(
@@ -2203,6 +2252,57 @@ async fn route_blocked_goal(
         .collect::<Vec<_>>();
     let decision = BountyRouter::default().route_blocked_goal(&request, &capabilities);
     mcp_json(decision)
+}
+
+async fn draft_bounty_with_cloud_agent(
+    State(state): State<SharedState>,
+    Json(args): Json<DraftBountyWithCloudAgentArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/cloud-agent/bounty-drafts",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    let mut request = reqwest::Client::new().post(url).json(&args);
+    if let Some(token) = state.operator_api_token.as_deref() {
+        request = request.header(OPERATOR_TOKEN_HEADER, token);
+    }
+    proxy_hosted_json(request).await
+}
+
+async fn get_autonomous_inventory_summary(
+    Json(args): Json<AutonomousInventorySummaryArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/inventory-summary",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&[
+        (
+            "network",
+            args.network.unwrap_or_else(|| "base-mainnet".to_string()),
+        ),
+        (
+            "claimable_only",
+            args.claimable_only.unwrap_or(true).to_string(),
+        ),
+    ]))
+    .await
+}
+
+async fn proxy_hosted_json(request: reqwest::RequestBuilder) -> Json<serde_json::Value> {
+    match request.send().await {
+        Ok(response) => {
+            let status = response.status();
+            match response.json::<serde_json::Value>().await {
+                Ok(body) if status.is_success() => mcp_json(body),
+                Ok(body) => mcp_error(format!("hosted API returned {status}: {body}")),
+                Err(error) => mcp_error(format!(
+                    "hosted API returned {status} with invalid JSON: {error}"
+                )),
+            }
+        }
+        Err(error) => mcp_error(format!("hosted API request failed: {error}")),
+    }
 }
 
 async fn register_agent(

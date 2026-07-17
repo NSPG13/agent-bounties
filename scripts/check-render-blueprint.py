@@ -222,6 +222,12 @@ def main() -> int:
         ["X402_RELAYER_PRIVATE_KEY"],
     )
     require_env_sync_false(relayer_group, "X402_RELAYER_PRIVATE_KEY")
+    cloud_agent_group = require_group(
+        text,
+        "agent-bounties-cloud-agent",
+        ["CLOUD_AGENT_API_KEY"],
+    )
+    require_env_sync_false(cloud_agent_group, "CLOUD_AGENT_API_KEY")
     if active:
         require_env_value(base_group, "BASE_MAINNET_BOUNTY_FACTORY", str(factory["contract"]))
         require_env_value(base_group, "BASE_MAINNET_BOUNTY_IMPLEMENTATION", str(factory["implementation"]))
@@ -273,6 +279,11 @@ def main() -> int:
     require_env_value(api, "ENABLE_STRIPE_PUBLIC_CHECKOUT", '"false"')
     require_env_value(api, "ENABLE_BASE_TX_BROADCAST", '"false"')
     require_env_value(api, "ENABLE_X402_HOSTED_RELAY", '"true"')
+    require_env_value(api, "CLOUD_AGENT_ENABLED", '"true"')
+    require_env_value(api, "CLOUD_AGENT_PUBLIC_DRAFTS", '"true"')
+    require_env_value(api, "CLOUD_AGENT_PROTOCOL", "openai_chat_completions")
+    require_env_value(api, "CLOUD_AGENT_ENDPOINT", "https://api.openai.com/v1/chat/completions")
+    require_env_value(api, "CLOUD_AGENT_MAX_DAILY_DRAFTS", '"25"')
     require_env_value(api, "X402_RELAYER_MIN_USDC_BASE_UNITS", '"100000"')
     require_env_value(api, "X402_RELAYER_MAX_USDC_BASE_UNITS", '"5000000"')
     require_env_value(api, "X402_RELAYER_MAX_GAS", '"300000"')
@@ -284,6 +295,8 @@ def main() -> int:
     )
     if "fromGroup: agent-bounties-x402-relayer" not in api:
         fail("API service must receive the isolated x402 relayer secret group")
+    if "fromGroup: agent-bounties-cloud-agent" not in api:
+        fail("API service must receive the isolated cloud-agent secret group")
     if "healthCheckPath: /health" not in api:
         fail("API service must use /health")
 
@@ -297,6 +310,8 @@ def main() -> int:
     require_env_value(mcp, "ENABLE_BASE_TX_BROADCAST", '"false"')
     if "fromGroup: agent-bounties-x402-relayer" in mcp:
         fail("MCP service must not receive the x402 relayer private key")
+    if "fromGroup: agent-bounties-cloud-agent" in mcp:
+        fail("MCP service must proxy cloud drafts without receiving the model API key")
     if "healthCheckPath: /health" not in mcp:
         fail("MCP service must use /health")
 
@@ -320,6 +335,9 @@ def main() -> int:
     env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
     required_env_lines = [
         "ENABLE_BASE_TX_BROADCAST=false",
+        "CLOUD_AGENT_ENABLED=false",
+        "CLOUD_AGENT_PUBLIC_DRAFTS=false",
+        "CLOUD_AGENT_API_KEY=",
         "ENABLE_X402_HOSTED_RELAY=false",
         "X402_RELAYER_PRIVATE_KEY=",
         "X402_RELAYER_MIN_USDC_BASE_UNITS=100000",

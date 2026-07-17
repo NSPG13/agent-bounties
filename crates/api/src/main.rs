@@ -49,6 +49,10 @@ use chain_base::{
     AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR, BASE_MAINNET_STANDING_META_V2_VERIFIER,
 };
 use chrono::Utc;
+use cloud_agent::{
+    CloudAgentError, CloudAgentReadiness, CloudAgentService, CloudBountyDraft,
+    CloudBountyDraftRequest,
+};
 use db::{
     BountyStatusScope, ClaimCandidateReservation, ClaimFunnelStats, DbError,
     GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate, NewX402RelayAttempt,
@@ -109,6 +113,8 @@ use uuid::Uuid;
         x402_discovery,
         risk_policy,
         live_money_readiness,
+        cloud_agent_readiness,
+        draft_bounty_with_cloud_agent,
         prepare_agent_wallet_to_earn,
         list_risk_events,
         list_risk_reviews,
@@ -175,6 +181,8 @@ use uuid::Uuid;
         publish_autonomous_submission_evidence,
         get_autonomous_submission_evidence,
         autonomous_bounty_feed,
+        autonomous_bounty_inventory_summary,
+        autonomous_bounty_inventory_badge,
         autonomous_verification_jobs,
         plan_stripe_checkout_top_up,
         plan_stripe_connect_account,
@@ -229,6 +237,11 @@ use uuid::Uuid;
         DiscoveryResponse,
         OutreachAttempt,
         AudienceReport
+        ,CloudAgentReadiness
+        ,CloudBountyDraftRequest
+        ,CloudBountyDraft
+        ,AutonomousBountyInventorySummary
+        ,AutonomousBountyInventoryItem
     )),
     modifiers(&SecurityAddon)
 )]
@@ -274,6 +287,7 @@ struct AppState {
     x402_relayer: X402HostedRelayerConfig,
     bond_sponsor: BondSponsorConfig,
     recovery_reservations: AutonomousBountyRecoveryReservations,
+    cloud_agent: Arc<CloudAgentService>,
 }
 
 #[derive(Clone)]
@@ -925,6 +939,38 @@ struct AutonomousBountyFeedQuery {
     claimable_only: Option<bool>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct AutonomousBountyInventoryItem {
+    bounty_id: String,
+    bounty_contract: String,
+    title: Option<String>,
+    status: String,
+    funded_usdc_base_units: String,
+    solver_reward_usdc_base_units: String,
+    verifier_reward_usdc_base_units: String,
+    verification_ready: bool,
+    standing_meta_bounty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct AutonomousBountyInventorySummary {
+    schema_version: String,
+    network: String,
+    generated_at: String,
+    canonical_source: String,
+    claimable_bounty_count: usize,
+    verification_ready_bounty_count: usize,
+    standing_meta_bounty_count: usize,
+    funded_usdc_base_units: String,
+    funded_usdc: String,
+    solver_reward_usdc_base_units: String,
+    solver_reward_usdc: String,
+    verifier_reward_usdc_base_units: String,
+    verifier_reward_usdc: String,
+    items: Vec<AutonomousBountyInventoryItem>,
+    evidence_boundary: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct AutonomousVerificationJobsQuery {
     network: Option<String>,
@@ -999,6 +1045,10 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|error| {
                 anyhow::anyhow!("BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS is invalid: {error}")
             })?;
+    let cloud_agent = Arc::new(
+        CloudAgentService::from_env()
+            .map_err(|error| anyhow::anyhow!("cloud-agent configuration is invalid: {error}"))?,
+    );
     let state: SharedState = Arc::new(AppState {
         network: Arc::new(Mutex::new(network)),
         eval_runs: Arc::new(Mutex::new(eval_runs)),
@@ -1035,6 +1085,7 @@ async fn main() -> anyhow::Result<()> {
         x402_relayer,
         bond_sponsor,
         recovery_reservations,
+        cloud_agent,
     });
     let app = Router::new()
         .route("/health", get(health))
@@ -1051,6 +1102,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
+        .route("/v1/cloud-agent/readiness", get(cloud_agent_readiness))
+        .route(
+            "/v1/cloud-agent/bounty-drafts",
+            post(draft_bounty_with_cloud_agent),
+        )
         .route(
             "/v1/base/agent-wallet/readiness",
             post(prepare_agent_wallet_to_earn),
@@ -1238,6 +1294,14 @@ async fn main() -> anyhow::Result<()> {
             get(autonomous_bounty_feed),
         )
         .route(
+            "/v1/base/autonomous-bounties/inventory-summary",
+            get(autonomous_bounty_inventory_summary),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/inventory-badge.svg",
+            get(autonomous_bounty_inventory_badge),
+        )
+        .route(
             "/v1/base/autonomous-bounties/verification-jobs",
             get(autonomous_verification_jobs),
         )
@@ -1390,6 +1454,55 @@ fn health_response(revision: &str) -> impl IntoResponse {
 #[utoipa::path(get, path = "/llms.txt", responses((status = 200, body = String)))]
 async fn llms_txt(State(state): State<SharedState>) -> String {
     web_public::render_llms_txt(&state.public_base_url, &state.mcp_base_url)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/cloud-agent/readiness",
+    responses((status = 200, body = CloudAgentReadiness))
+)]
+async fn cloud_agent_readiness(State(state): State<SharedState>) -> Json<CloudAgentReadiness> {
+    Json(state.cloud_agent.readiness())
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/cloud-agent/bounty-drafts",
+    request_body = CloudBountyDraftRequest,
+    responses(
+        (status = 200, body = CloudBountyDraft),
+        (status = 400, description = "Invalid or unverifiable drafting input"),
+        (status = 401, description = "Public drafts are disabled and operator authorization is absent"),
+        (status = 429, description = "Bounded daily cloud-model quota exhausted"),
+        (status = 503, description = "Cloud model is not configured or unavailable")
+    )
+)]
+async fn draft_bounty_with_cloud_agent(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<CloudBountyDraftRequest>,
+) -> Result<Json<CloudBountyDraft>, StatusCode> {
+    if !state.cloud_agent.public_drafts() {
+        require_operator(&state, &headers)?;
+    }
+    state
+        .cloud_agent
+        .draft(request)
+        .await
+        .map(Json)
+        .map_err(cloud_agent_status)
+}
+
+fn cloud_agent_status(error: CloudAgentError) -> StatusCode {
+    match error {
+        CloudAgentError::InvalidRequest(_) | CloudAgentError::InvalidResponse(_) => {
+            StatusCode::BAD_REQUEST
+        }
+        CloudAgentError::QuotaExhausted => StatusCode::TOO_MANY_REQUESTS,
+        CloudAgentError::Unavailable
+        | CloudAgentError::InvalidConfiguration(_)
+        | CloudAgentError::Provider(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
 }
 
 #[utoipa::path(get, path = "/schemas/discovery-manifest.v2.json", responses((status = 200, body = String)))]
@@ -6681,11 +6794,24 @@ async fn autonomous_bounty_feed(
     State(state): State<SharedState>,
     Query(query): Query<AutonomousBountyFeedQuery>,
 ) -> Result<Json<Vec<AutonomousBountyFeedItem>>, StatusCode> {
+    load_autonomous_bounty_feed(
+        &state,
+        query.network.as_deref().unwrap_or("base-mainnet"),
+        query.claimable_only.unwrap_or(false),
+    )
+    .await
+    .map(Json)
+}
+
+async fn load_autonomous_bounty_feed(
+    state: &SharedState,
+    network: &str,
+    claimable_only: bool,
+) -> Result<Vec<AutonomousBountyFeedItem>, StatusCode> {
     let store = state
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let network = query.network.as_deref().unwrap_or("base-mainnet");
     let events = store
         .list_autonomous_bounty_events(network)
         .await
@@ -6696,10 +6822,125 @@ async fn autonomous_bounty_feed(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut feed = build_autonomous_bounty_feed(events, terms, false)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    state
-        .recovery_reservations
-        .apply(&mut feed, query.claimable_only.unwrap_or(false));
-    Ok(Json(feed))
+    state.recovery_reservations.apply(&mut feed, claimable_only);
+    Ok(feed)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/base/autonomous-bounties/inventory-summary",
+    responses((status = 200, body = AutonomousBountyInventorySummary))
+)]
+async fn autonomous_bounty_inventory_summary(
+    State(state): State<SharedState>,
+    Query(query): Query<AutonomousBountyFeedQuery>,
+) -> Result<Json<AutonomousBountyInventorySummary>, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let feed =
+        load_autonomous_bounty_feed(&state, network, query.claimable_only.unwrap_or(true)).await?;
+    build_autonomous_inventory_summary(&state, network, feed).map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/base/autonomous-bounties/inventory-badge.svg",
+    responses((status = 200, description = "Live canonical claimable inventory badge"))
+)]
+async fn autonomous_bounty_inventory_badge(
+    State(state): State<SharedState>,
+    Query(query): Query<AutonomousBountyFeedQuery>,
+) -> Result<Response, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let feed = load_autonomous_bounty_feed(&state, network, true).await?;
+    let summary = build_autonomous_inventory_summary(&state, network, feed)?;
+    let message = format!(
+        "{} claimable | {} USDC",
+        summary.claimable_bounty_count, summary.funded_usdc
+    );
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="290" height="20" role="img" aria-label="Agent Bounties: {message}"><title>Agent Bounties: {message}</title><linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#fff" stop-opacity=".16"/><stop offset="1" stop-opacity=".08"/></linearGradient><clipPath id="r"><rect width="290" height="20" rx="3" fill="#fff"/></clipPath><g clip-path="url(#r)"><rect width="110" height="20" fill="#20262e"/><rect x="110" width="180" height="20" fill="#087f5b"/><rect width="290" height="20" fill="url(#s)"/></g><g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11"><text x="55" y="15" fill="#010101" fill-opacity=".3">inventory</text><text x="55" y="14">inventory</text><text x="200" y="15" fill="#010101" fill-opacity=".3">{message}</text><text x="200" y="14">{message}</text></g></svg>"##
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=15, stale-while-revalidate=45",
+            ),
+        ],
+        svg,
+    )
+        .into_response())
+}
+
+fn build_autonomous_inventory_summary(
+    state: &SharedState,
+    network: &str,
+    feed: Vec<AutonomousBountyFeedItem>,
+) -> Result<AutonomousBountyInventorySummary, StatusCode> {
+    let sum = |field: fn(&AutonomousBountyFeedItem) -> &str| {
+        feed.iter().try_fold(0_u128, |total, item| {
+            field(item)
+                .parse::<u128>()
+                .ok()
+                .and_then(|amount| total.checked_add(amount))
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)
+        })
+    };
+    let funded = sum(|item| &item.funded_amount)?;
+    let solver = sum(|item| &item.solver_reward)?;
+    let verifier = sum(|item| &item.verifier_reward)?;
+    let verification_ready_bounty_count =
+        feed.iter().filter(|item| item.verification_ready).count();
+    let standing_meta_bounty_count = feed
+        .iter()
+        .filter(|item| standing_meta_v2_parent_context(item).is_ok())
+        .count();
+    let items = feed
+        .iter()
+        .map(|item| AutonomousBountyInventoryItem {
+            bounty_id: item.bounty_id.clone(),
+            bounty_contract: item.bounty_contract.clone(),
+            title: item
+                .terms
+                .as_ref()
+                .map(|terms| terms.document.title.clone()),
+            status: item.status.clone(),
+            funded_usdc_base_units: item.funded_amount.clone(),
+            solver_reward_usdc_base_units: item.solver_reward.clone(),
+            verifier_reward_usdc_base_units: item.verifier_reward.clone(),
+            verification_ready: item.verification_ready,
+            standing_meta_bounty: standing_meta_v2_parent_context(item).is_ok(),
+        })
+        .collect();
+    Ok(AutonomousBountyInventorySummary {
+        schema_version: "agent-bounties/inventory-summary-v1".to_string(),
+        network: network.to_string(),
+        generated_at: Utc::now().to_rfc3339(),
+        canonical_source: format!(
+            "{}/v1/base/autonomous-bounties/feed?network={network}&claimable_only=true",
+            state.public_base_url.trim_end_matches('/')
+        ),
+        claimable_bounty_count: feed.len(),
+        verification_ready_bounty_count,
+        standing_meta_bounty_count,
+        funded_usdc_base_units: funded.to_string(),
+        funded_usdc: format_usdc_base_units(funded),
+        solver_reward_usdc_base_units: solver.to_string(),
+        solver_reward_usdc: format_usdc_base_units(solver),
+        verifier_reward_usdc_base_units: verifier.to_string(),
+        verifier_reward_usdc: format_usdc_base_units(verifier),
+        items,
+        evidence_boundary: "This summary is derived at request time from confirmed canonical events and validated content-addressed terms in the hosted index. It proves current indexed inventory, not a future claim, completion, or payout. Only BountySettled proves payment.".to_string(),
+    })
+}
+
+fn format_usdc_base_units(amount: u128) -> String {
+    format!(
+        "{}.{:02}",
+        amount / 1_000_000,
+        (amount % 1_000_000) / 10_000
+    )
 }
 
 #[utoipa::path(get, path = "/v1/base/autonomous-bounties/verification-jobs", responses((status = 200, description = "Live verifier jobs joined to immutable terms and hash-matched evidence preimages")))]
@@ -11437,7 +11678,12 @@ mod tests {
             x402_relayer: X402HostedRelayerConfig::default(),
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+            cloud_agent: test_cloud_agent(),
         })
+    }
+
+    fn test_cloud_agent() -> Arc<CloudAgentService> {
+        Arc::new(CloudAgentService::from_env().expect("disabled test cloud agent is valid"))
     }
 
     fn postgres_test_database_url() -> String {
@@ -11465,6 +11711,7 @@ mod tests {
             x402_relayer: X402HostedRelayerConfig::default(),
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+            cloud_agent: test_cloud_agent(),
         })
     }
 
@@ -11488,6 +11735,7 @@ mod tests {
             x402_relayer: X402HostedRelayerConfig::default(),
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+            cloud_agent: test_cloud_agent(),
         })
     }
 
@@ -11511,6 +11759,7 @@ mod tests {
             x402_relayer: X402HostedRelayerConfig::default(),
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+            cloud_agent: test_cloud_agent(),
         })
     }
 
@@ -11538,6 +11787,7 @@ mod tests {
             x402_relayer: X402HostedRelayerConfig::default(),
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+            cloud_agent: test_cloud_agent(),
         })
     }
 
@@ -11567,6 +11817,7 @@ mod tests {
             x402_relayer: X402HostedRelayerConfig::default(),
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+            cloud_agent: test_cloud_agent(),
         })
     }
 
@@ -11593,6 +11844,7 @@ mod tests {
             x402_relayer: X402HostedRelayerConfig::default(),
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+            cloud_agent: test_cloud_agent(),
         })
     }
 
@@ -11619,6 +11871,7 @@ mod tests {
             x402_relayer: X402HostedRelayerConfig::default(),
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+            cloud_agent: test_cloud_agent(),
         })
     }
 
@@ -11646,6 +11899,7 @@ mod tests {
             x402_relayer: X402HostedRelayerConfig::default(),
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+            cloud_agent: test_cloud_agent(),
         })
     }
 
@@ -11665,6 +11919,44 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         format!("http://{address}")
+    }
+
+    #[test]
+    fn inventory_summary_uses_canonical_feed_amounts_without_static_counts() {
+        let state = test_state(BountyNetwork::default());
+        let summary = build_autonomous_inventory_summary(
+            &state,
+            "base-mainnet",
+            vec![AutonomousBountyFeedItem {
+                bounty_id: format!("0x{}", "11".repeat(32)),
+                bounty_contract: format!("0x{}", "22".repeat(20)),
+                creator: format!("0x{}", "33".repeat(20)),
+                status: "claimable".to_string(),
+                solver_reward: "900000".to_string(),
+                verifier_reward: "100000".to_string(),
+                claim_bond: "100000".to_string(),
+                timeout_bond_pool: "0".to_string(),
+                target_amount: "1000000".to_string(),
+                funded_amount: "1000000".to_string(),
+                terms_hash: format!("0x{}", "44".repeat(32)),
+                terms: None,
+                terms_valid: true,
+                verification_mode: "deterministic_module".to_string(),
+                verifier_module: None,
+                verification_ready: true,
+                verification_readiness_reason: "test fixture".to_string(),
+                validation_errors: Vec::new(),
+                events: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(summary.claimable_bounty_count, 1);
+        assert_eq!(summary.verification_ready_bounty_count, 1);
+        assert_eq!(summary.funded_usdc, "1.00");
+        assert_eq!(summary.solver_reward_usdc, "0.90");
+        assert_eq!(summary.verifier_reward_usdc, "0.10");
+        assert!(summary.canonical_source.contains("claimable_only=true"));
     }
 
     #[test]

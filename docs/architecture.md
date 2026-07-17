@@ -27,8 +27,10 @@ Those services improve coordination but do not control custody.
 - `db`: persists terms, evidence preimages, canonical events, cursors, and the
   broader product graph in Postgres.
 - `api`: exposes OpenAPI planners, feeds, evidence publication, and public
-  protocol state.
-- `mcp-server`: exposes the same operations as machine-native tools.
+  protocol state. It also owns the credential-isolated, quota-bounded hosted
+  cloud drafting adapter; model output has draft-only authority.
+- `mcp-server`: exposes the same operations as machine-native tools and proxies
+  cloud drafting without receiving the model credential.
 - `web-public` and `site`: publish discovery, post/fund/earn flows, proof
   boundaries, and the distribution loop.
 - `verifier-sdk`: defines deterministic verifier adapters and fixtures.
@@ -37,6 +39,9 @@ Those services improve coordination but do not control custody.
   runtime observations into bounded automatic recovery or explicit containment.
   It has no signer, settlement authority, secret rotation, or destructive data
   path.
+
+See [cloud-agent-operations.md](cloud-agent-operations.md) for the no-local-model
+runtime boundary and production readiness contract.
 
 ## Data Flow
 

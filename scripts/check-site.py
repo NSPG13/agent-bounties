@@ -215,7 +215,19 @@ def main() -> int:
     if 'name="apiBaseUrl"' in public_wallet_surface:
         fail("public transaction pages must use the deployed API from protocol.json")
 
-    require_phrases("home.js", home_javascript, ["network-canvas", "requestAnimationFrame"])
+    require_phrases(
+        "home.js",
+        home_javascript,
+        [
+            "network-canvas",
+            "requestAnimationFrame",
+            "home-live-inventory",
+            "claimable_only=true",
+            "inventory-summary",
+            "verification_ready",
+            "Meta-bounty:",
+        ],
+    )
 
     require_phrases(
         "index.html",
@@ -226,6 +238,9 @@ def main() -> int:
             "BountySettled",
             "share verified proof",
             "star and upvote",
+            "Funded work available now",
+            "standing meta-bounty",
+            "not guaranteed profit",
         ],
     )
     require_phrases(
@@ -241,6 +256,8 @@ def main() -> int:
             "Evidence record schema (hash-bound context)",
             "does not evaluate task output, acceptance criteria, GitHub CI, or artifact quality",
             "How did you find Agent Bounties?",
+            "Draft measurable terms",
+            "no local model is required",
         ],
     )
     require_phrases(
@@ -289,6 +306,8 @@ def main() -> int:
             "/v1/base/autonomous-bounties/creation-plan",
             "/v1/base/autonomous-bounties/contribution-plan",
             "/v1/base/autonomous-bounties/claims",
+            "/v1/cloud-agent/readiness",
+            "/v1/cloud-agent/bounty-drafts",
             "request_bond_sponsorship",
             "wallet_signature",
             "canonical_event_id",
@@ -345,6 +364,11 @@ def main() -> int:
             "Stripe and PayPal are future convenience onramps",
             "is:issue is:open label:claimable-live",
             "treat `funding-needed` as a funder path",
+            "Fastest Safe First Action",
+            "not guaranteed profit",
+            "draft_bounty_with_cloud_agent",
+            "/v1/cloud-agent/bounty-drafts",
+            "inventory-summary",
         ],
     )
 
@@ -354,6 +378,15 @@ def main() -> int:
         fail("static discovery manifest must advertise open_source=true")
     if discovery.get("default_cta", {}).get("label") != "Post your own bounty":
         fail("static discovery manifest has the wrong default CTA")
+    live_inventory = discovery.get("live_inventory", {})
+    if "claimable_only=true" not in live_inventory.get("claimable_feed", ""):
+        fail("static discovery manifest must expose the canonical claimable feed")
+    if "inventory-summary" not in live_inventory.get("summary", ""):
+        fail("static discovery manifest must expose the live inventory summary")
+    if "inventory-badge.svg" not in live_inventory.get("badge", ""):
+        fail("static discovery manifest must expose the live inventory badge")
+    if "not guaranteed profit" not in live_inventory.get("standing_meta_economics", ""):
+        fail("static discovery manifest must disclose standing-meta economics")
     manifest_protocol = discovery.get("protocol", {})
     if manifest_protocol.get("version") != protocol.get("protocol_version"):
         fail("static discovery manifest protocol version mismatch")
