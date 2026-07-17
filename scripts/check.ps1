@@ -69,6 +69,7 @@ Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\check-migration-his
 Invoke-Checked { node --check skills\agent-bounties\scripts\check-in.mjs }
 Invoke-Checked { node --test scripts\test_agent_bounties_openclaw_skill.mjs }
 Invoke-Checked { node benchmarks\standing-meta-v2\mcp-discovery\self-test.mjs }
+Invoke-Checked { node benchmarks\direct-v1\agent-loop\self-test.mjs }
 Invoke-Checked { node scripts\test-autonomous-wallet-flow.js }
 Invoke-Checked { node --check tools\autonomous-activation.js }
 Invoke-Checked { node scripts\test-autonomous-activation-console.js }
