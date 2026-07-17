@@ -130,6 +130,8 @@ jobs:
             --revision "${TARGET_REVISION}" \
             --api-url "${PRODUCTION_API_BASE_URL%/}/health" \
             --mcp-url "${PRODUCTION_MCP_BASE_URL%/}/health" \
+            --public-base-url "${PRODUCTION_API_BASE_URL%/}" \
+            --mcp-base-url "${PRODUCTION_MCP_BASE_URL%/}" \
             --output target/operations/render-deploy.json
 
       - name: Publish deployment evidence summary
@@ -157,6 +159,7 @@ jobs:
               f"- Verified: `{str(evidence['success']).lower()}`",
               f"- Services live: `{sum(item['status'] == 'live' for item in evidence['services'])}/3`",
               f"- Exact health attestations: `{len(evidence['health'])}/2`",
+              f"- Public endpoint variables: `{len(evidence.get('public_environment', []))}/4`",
               "",
               "The controller can deploy application services only. It cannot deploy contracts, sign wallet transactions, or authorize settlement.",
           ]

@@ -40,10 +40,11 @@ succeeds on a push to `main`, the workflow:
 3. resolves all three Render services by exact name and verifies repository,
    branch, and service type;
 4. disables any drifted native auto-deploy setting;
-5. calls Render's deploy API with the exact commit for API, MCP, and worker;
-6. waits for all three deploys to reach `live` and fails on terminal errors;
-7. verifies exact revision and protocol headers from API and MCP `/health`;
-8. stores a redacted 30-day deployment evidence artifact.
+5. reconciles `PUBLIC_BASE_URL` and `MCP_BASE_URL` on both public services;
+6. calls Render's deploy API with the exact commit for API, MCP, and worker;
+7. waits for all three deploys to reach `live` and fails on terminal errors;
+8. verifies exact revision and protocol headers from API and MCP `/health`;
+9. stores a redacted 30-day deployment evidence artifact.
 
 Configure one GitHub Actions secret named `RENDER_API_KEY`. Create it in the
 Render Dashboard for the workspace that owns these three services, then store

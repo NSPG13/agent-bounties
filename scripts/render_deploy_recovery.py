@@ -38,6 +38,10 @@ CUSTOM_DOMAINS = {
     "agent-bounties-api": "api.bountyboard.global",
     "agent-bounties-mcp": "mcp.bountyboard.global",
 }
+PUBLIC_ENV_SERVICE_NAMES = {
+    "agent-bounties-api",
+    "agent-bounties-mcp",
+}
 
 
 class RecoveryError(RuntimeError):
@@ -158,6 +162,40 @@ def unwrap_custom_domains(payload: object) -> list[dict[str, Any]]:
         if isinstance(domain, dict):
             domains.append(domain)
     return domains
+
+
+def unwrap_env_var(payload: object) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        raise RecoveryError("Render environment-variable response must be an object")
+    env_var = payload.get("envVar", payload)
+    if not isinstance(env_var, dict):
+        raise RecoveryError("Render environment-variable response is missing metadata")
+    key = env_var.get("key")
+    value = env_var.get("value")
+    if not isinstance(key, str) or not isinstance(value, str):
+        raise RecoveryError("Render environment-variable response is incomplete")
+    return {"key": key, "value": value}
+
+
+def normalize_public_base_url(name: str, value: str) -> str:
+    candidate = value.strip().rstrip("/")
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+        port = parsed.port
+    except ValueError as error:
+        raise RecoveryError(f"{name} is not a valid URL: {error}") from None
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RecoveryError(f"{name} must be an HTTPS origin without credentials or a path")
+    return candidate
 
 
 def deploy_commit(deploy: dict[str, Any]) -> str | None:
@@ -305,15 +343,55 @@ class RenderClient:
             raise RecoveryError(f"Render did not attach {domain} to {service['name']}")
         return custom_domain
 
+    def ensure_env_var(
+        self,
+        service: dict[str, Any],
+        key: str,
+        value: str,
+    ) -> dict[str, Any]:
+        service_id = service["id"]
+        encoded_key = urllib.parse.quote(key, safe="")
+        path = f"/services/{service_id}/env-vars/{encoded_key}"
+        changed = True
+        try:
+            current = unwrap_env_var(self._read_with_retry(path))
+            if current == {"key": key, "value": value}:
+                changed = False
+        except RenderHttpError as error:
+            if error.status != 404:
+                raise
+
+        if changed:
+            updated = unwrap_env_var(
+                self._request_json("PUT", path, {"value": value})
+            )
+            if updated != {"key": key, "value": value}:
+                raise RecoveryError(
+                    f"Render did not update {key} for {service['name']}"
+                )
+
+        verified = unwrap_env_var(self._read_with_retry(path))
+        if verified != {"key": key, "value": value}:
+            raise RecoveryError(
+                f"Render did not retain {key} for {service['name']}"
+            )
+        return {"key": key, "value": value, "changed": changed}
+
     def get_deploy(self, service_id: str, deploy_id: str) -> dict[str, Any]:
         return unwrap_deploy(
             self._read_with_retry(f"/services/{service_id}/deploys/{deploy_id}")
         )
 
-    def ensure_deploy(self, service: dict[str, Any], revision: str) -> dict[str, Any]:
+    def ensure_deploy(
+        self,
+        service: dict[str, Any],
+        revision: str,
+        *,
+        force: bool = False,
+    ) -> dict[str, Any]:
         service_id = service["id"]
         matched = existing_deploy(self.list_deploys(service_id), revision)
-        if matched is not None:
+        if matched is not None and not (force and matched.get("status") == "live"):
             return matched
 
         for attempt in range(1, 4):
@@ -479,6 +557,8 @@ def deploy(
     deploy_timeout_seconds: float,
     health_timeout_seconds: float,
     poll_seconds: float,
+    public_base_url: str = "https://api.bountyboard.global",
+    mcp_base_url: str = "https://mcp.bountyboard.global",
 ) -> dict[str, Any]:
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
     pending: dict[str, tuple[str, str]] = {}
@@ -489,6 +569,30 @@ def deploy(
 
     for spec, service in services:
         client.disable_native_auto_deploy(service)
+
+    public_environment_values = {
+        "PUBLIC_BASE_URL": normalize_public_base_url(
+            "PUBLIC_BASE_URL", public_base_url
+        ),
+        "MCP_BASE_URL": normalize_public_base_url("MCP_BASE_URL", mcp_base_url),
+    }
+    public_environment = []
+    public_environment_changed: dict[str, bool] = {}
+    for spec, service in services:
+        if spec.name not in PUBLIC_ENV_SERVICE_NAMES:
+            continue
+        public_environment_changed[spec.name] = False
+        for key, value in public_environment_values.items():
+            record = client.ensure_env_var(service, key, value)
+            public_environment_changed[spec.name] |= record["changed"]
+            public_environment.append(
+                {
+                    "service": spec.name,
+                    "key": key,
+                    "value": value,
+                    "changed": record["changed"],
+                }
+            )
 
     custom_domains = []
     for spec, service in services:
@@ -505,7 +609,11 @@ def deploy(
         )
 
     for spec, service in services:
-        created = client.ensure_deploy(service, revision)
+        created = client.ensure_deploy(
+            service,
+            revision,
+            force=public_environment_changed.get(spec.name, False),
+        )
         deploy_id, status = validate_deploy(created, revision, spec.name)
         initial[spec.name] = created
         if status == "live":
@@ -557,7 +665,12 @@ def deploy(
                 "native_auto_deploy": "disabled",
             }
         )
-    return {"services": service_evidence, "health": health, "custom_domains": custom_domains}
+    return {
+        "services": service_evidence,
+        "health": health,
+        "custom_domains": custom_domains,
+        "public_environment": public_environment,
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -572,6 +685,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mcp-url",
         default="https://agent-bounties-mcp.onrender.com/health",
+    )
+    parser.add_argument(
+        "--public-base-url",
+        default="https://api.bountyboard.global",
+    )
+    parser.add_argument(
+        "--mcp-base-url",
+        default="https://mcp.bountyboard.global",
     )
     parser.add_argument("--deploy-timeout-seconds", type=float, default=2400)
     parser.add_argument("--health-timeout-seconds", type=float, default=300)
@@ -595,6 +716,7 @@ def main() -> int:
         "services": [],
         "health": [],
         "custom_domains": [],
+        "public_environment": [],
         "error": None,
     }
     try:
@@ -610,6 +732,8 @@ def main() -> int:
             deploy_timeout_seconds=args.deploy_timeout_seconds,
             health_timeout_seconds=args.health_timeout_seconds,
             poll_seconds=args.poll_seconds,
+            public_base_url=args.public_base_url,
+            mcp_base_url=args.mcp_base_url,
         )
         evidence.update(result)
         evidence["revision"] = revision
