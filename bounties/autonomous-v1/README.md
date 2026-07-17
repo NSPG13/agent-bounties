@@ -63,6 +63,12 @@ remain immutable historical terms after claim, cancellation, settlement, or
 refund and must not be rewritten. Live standing-meta inventory is determined
 from canonical events, not this document.
 
+Issues `#333` through `#337` are the first standing-meta-v2 inventory set.
+Their exact terms, commitments, deterministic bounty IDs, and predicted
+contracts are locked by `standing-meta-v2-manifest.json`. Each contract starts
+with 1 USDC only after its own canonical creation and funding receipt. The
+manifest, terms publication, or predicted address is not funding evidence.
+
 Issues `#244`, `#248`, `#249`, and `#250` are an experiment testing whether a
 2 USDC solver reward improves claim and completion behavior; this amount is not
 a protocol default. Their exact terms and aggregate 7.89 USDC initial-funding
