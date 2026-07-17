@@ -261,6 +261,31 @@ def wait_for_later_timestamp(
     )
 
 
+def confirmed_terms_publication(
+    foundry: Foundry,
+    terms_registry: str,
+    transactions: Sequence[Mapping[str, Any]],
+    simulated_timestamp: int,
+) -> dict[str, int]:
+    registry = normalize_address(terms_registry, "terms registry")
+    matches = [
+        transaction
+        for transaction in transactions
+        if transaction.get("to") == registry
+        and str(transaction.get("function") or "").startswith("publish(")
+    ]
+    if len(matches) != 1:
+        raise DeploymentError("preparation must contain exactly one decoded terms publication")
+    block_number = int(matches[0]["block_number"])
+    block_timestamp = parse_cast_uint(
+        foundry.cast_run("block", str(block_number), "--field", "timestamp"),
+        "terms publication block timestamp",
+    )
+    if block_timestamp < simulated_timestamp:
+        raise DeploymentError("confirmed terms publication predates its simulation evidence")
+    return {"block_number": block_number, "timestamp": block_timestamp}
+
+
 def broadcast_path(foundry: Foundry, script_name: str, chain_id: int) -> Path:
     return foundry.contracts / "broadcast" / f"{script_name}.s.sol" / str(chain_id) / "run-latest.json"
 
@@ -431,7 +456,13 @@ def deploy_sepolia(foundry: Foundry, output: Path) -> dict[str, Any]:
     prepare_transactions = read_broadcast(
         broadcast_path(foundry, "BaseSepoliaStandingMetaV2Rehearsal", BASE_SEPOLIA_CHAIN_ID)
     )
-    observed_timestamp = wait_for_later_timestamp(foundry, int(prepare["terms_published_at"]))
+    terms_publication = confirmed_terms_publication(
+        foundry,
+        deployments["terms_registry"]["contract"],
+        prepare_transactions,
+        int(prepare["terms_published_at"]),
+    )
+    observed_timestamp = wait_for_later_timestamp(foundry, terms_publication["timestamp"])
     script_env.update(
         {
             "REHEARSAL_PHASE": "complete",
@@ -458,6 +489,7 @@ def deploy_sepolia(foundry: Foundry, output: Path) -> dict[str, Any]:
         "completion": final,
         "preparation_transactions": prepare_transactions,
         "completion_transactions": complete_transactions,
+        "terms_publication": terms_publication,
         "timestamp_after_preparation": observed_timestamp,
         "verification": verification,
     }

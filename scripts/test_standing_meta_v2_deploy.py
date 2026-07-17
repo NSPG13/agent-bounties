@@ -6,6 +6,7 @@ import unittest
 from scripts.standing_meta_v2_deploy import (
     BASE_SEPOLIA_USDC,
     DeploymentError,
+    confirmed_terms_publication,
     normalize_address,
     parse_cast_uint,
     read_broadcast,
@@ -36,6 +37,39 @@ class CastSequence:
 
 
 class StandingMetaV2DeployTests(unittest.TestCase):
+    def test_terms_wait_uses_confirmed_publication_block(self) -> None:
+        registry = "0x" + "33" * 20
+        transactions = [
+            {
+                "to": "0x" + "22" * 20,
+                "function": "transfer(address,uint256)",
+                "block_number": 40,
+            },
+            {
+                "to": registry,
+                "function": "publish(bytes,(bytes32,uint64))",
+                "block_number": 42,
+            },
+        ]
+        self.assertEqual(
+            confirmed_terms_publication(
+                CastSequence(["112 [1.12e2]"]),  # type: ignore[arg-type]
+                registry,
+                transactions,
+                110,
+            ),
+            {"block_number": 42, "timestamp": 112},
+        )
+
+    def test_terms_publication_rejects_ambiguous_evidence(self) -> None:
+        with self.assertRaises(DeploymentError):
+            confirmed_terms_publication(
+                CastSequence(["112"]),  # type: ignore[arg-type]
+                "0x" + "33" * 20,
+                [],
+                110,
+            )
+
     def test_completion_waits_for_four_base_block_margin(self) -> None:
         foundry = CastSequence(["107 [1.07e2]", "108 [1.08e2]"])
         self.assertEqual(
