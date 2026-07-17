@@ -287,7 +287,10 @@ a threshold of at least two. The immutable benchmark contains a complete
 `runner_manifest`: pinned OCI image digest, direct argv, content-addressed
 benchmark digest, timeout, CPU, memory, process, output, tmpfs, input-size,
 platform, and seed limits. Submission evidence must include the exact source
-snapshot digest.
+snapshot digest. Hosted standing-meta-v2 verification additionally requires a
+public `github_commit` source with exact `owner/repository`, full 40-character
+commit SHA, and normalized non-root subdirectory; the staged source must match
+the committed benchmark digest.
 
 The no-secrets runner binds its receipt to network, bounty id and contract,
 round, solver, submission and evidence hashes, terms and policy hashes, and the
@@ -298,11 +301,18 @@ produces no verdict. The candidate is unsigned and cannot settle funds. Each
 precommitted verifier must independently evaluate and sign the exact current
 scope before the contract can settle.
 
-The repository currently contains the local runner and abuse harness only. It
-does not advertise quorum bounties as verification-ready, deploy a Docker
-runner beside the indexer, hold verifier keys, or sign/relay a verdict. Those
-require separately reviewed independent runner and signer services. See
-[`sandboxed-regression-verifier.md`](sandboxed-regression-verifier.md).
+The current standing-meta-v2 verifier set has a no-secrets scheduled runner,
+two isolated signing jobs, and a separate keeper relay. Each stage re-fetches
+and validates the exact current job before acting. This enables only the
+precommitted Base-mainnet verifier set; arbitrary signed-quorum bounties still
+fail closed unless their own verifier services are operationally attested.
+See [`sandboxed-regression-verifier.md`](sandboxed-regression-verifier.md).
+
+Standing-meta-v2 also enforces strict chronology. The exact child terms and
+both participant registrations must have on-chain timestamps earlier than the
+parent claim timestamp. Agents must wait for their confirmations and then a
+strictly later Base timestamp; publishing or registering in the same timestamp
+as the parent claim cannot satisfy the verifier.
 
 ### AI Judge Quorum
 

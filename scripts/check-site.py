@@ -403,6 +403,7 @@ def main() -> int:
         "list_autonomous_bounties",
         "publish_autonomous_bounty_terms",
         "plan_autonomous_canonical_child_terms",
+        "prepare_standing_meta_v2_child",
         "plan_autonomous_bounty_creation",
         "plan_autonomous_bounty_contribution",
         "agent_native_claim",
@@ -620,6 +621,11 @@ def main() -> int:
     standing_components = standing_meta_deployment.get("components", {})
     if standing_components.get("verifier_module") != bounded_deployment["canonical"]["deterministic_verifier"]:
         fail("bounded wallet and standing-meta-v2 manifests disagree on the verifier")
+    if standing_components.get("verifier_wallets") != [
+        "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+        "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
+    ]:
+        fail("standing-meta-v2 deployment manifest has the wrong verifier wallets")
     if standing_components.get("verifier_runtime_code_hash") != (
         "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c"
     ):
@@ -640,6 +646,10 @@ def main() -> int:
     discovery_endpoints = discovery.get("endpoints", {})
     if discovery_endpoints.get("agent_wallet_readiness") != "https://api.bountyboard.global/v1/base/agent-wallet/readiness":
         fail("static discovery has the wrong agent wallet readiness endpoint")
+    if discovery_endpoints.get("autonomous_standing_meta_v2_child_preparation") != (
+        "https://api.bountyboard.global/v1/base/autonomous-bounties/standing-meta-v2-child-preparation"
+    ):
+        fail("static discovery has the wrong standing-meta-v2 preparation endpoint")
     if "prepare_agent_to_earn" not in discovery.get("agent_tools", []):
         fail("static discovery must expose prepare_agent_to_earn")
     base_rail = next(

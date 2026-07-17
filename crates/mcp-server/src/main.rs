@@ -23,12 +23,14 @@ use chain_base::{
     eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
     fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
-    AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
-    AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
-    AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
-    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, CanonicalChildBountyTermsRequest, EvmLog, PrepareAgentToEarnInput,
+    standing_meta_v2_parent_context, validate_attestation_request_against_feed,
+    validate_autonomous_creation_against_terms, AutonomousBountyAuthorizationSignature,
+    AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
+    AutonomousBountyRecoveryReservations, AutonomousBountySubmissionAuthorizationRequest,
+    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
+    AutonomousVerificationAttestationRequest, BaseNetworkDescriptor, BaseRpcUrlConfig,
+    CanonicalChildBountyTermsRequest, EvmLog, PrepareAgentToEarnInput,
+    StandingMetaV2ChildPreparationRequest,
 };
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
@@ -609,6 +611,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_autonomous_canonical_child_terms",
             post(plan_autonomous_canonical_child_terms),
+        )
+        .route(
+            "/tools/prepare_standing_meta_v2_child",
+            post(prepare_standing_meta_v2_child),
         )
         .route(
             "/tools/plan_autonomous_bounty_creation",
@@ -1285,6 +1291,74 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "parent_bounty_id", "parent_round", "parent_solver", "parent_solver_reward",
                     "child_acceptance_criteria", "verifier_module"
                 ],
+            ),
+        ),
+        tool(
+            "prepare_standing_meta_v2_child",
+            "Prepare the complete current standing-meta-v2 child loop from one parent contract and task: validate the exact claimable parent, publish the content-addressed terms to the hosted store, pin the canonical two-verifier sandboxed-regression quorum, and return ordered wallet calls that publish the same bytes on Base and create a fully funded child before the parent claim.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-mainnet"], "Optional network; standing-meta-v2 currently requires Base mainnet."),
+                    "parent_bounty_contract": string_property("Exact claimable standing-meta-v2 parent contract from canonical inventory."),
+                    "parent_solver": string_property("Registered wallet that will publish the child terms, create/fund the child, and claim the parent."),
+                    "intended_child_solver": string_property("Different pre-registered wallet expected to claim and complete the child. Its participant ID must also differ."),
+                    "title": string_property("Concrete coding child title."),
+                    "goal": string_property("Precise child outcome."),
+                    "acceptance_criteria": {
+                        "type": "array",
+                        "description": "Explicit deterministic criteria evaluated by the immutable regression command.",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 50
+                    },
+                    "benchmark_source": {
+                        "type": "object",
+                        "description": "Immutable public benchmark snapshot fetched by the verifier before execution.",
+                        "properties": {
+                            "kind": enum_property(&["github_commit"], "Exact supported source kind."),
+                            "repository": string_property("GitHub owner/repository without a URL or .git suffix."),
+                            "commit": string_property("Full 40-character Git commit SHA."),
+                            "subdirectory": string_property("Normalized non-root benchmark directory inside the commit; '.', '..', absolute paths, and backslashes are rejected.")
+                        },
+                        "required": ["kind", "repository", "commit", "subdirectory"],
+                        "additionalProperties": false
+                    },
+                    "runner_manifest": {
+                        "type": "object",
+                        "description": "Immutable sandboxed_regression_v1 runner. Image and benchmark inputs must be content-addressed; command is direct argv and never a shell.",
+                        "properties": {
+                            "schema_version": enum_property(&["agent-bounties/regression-sandbox-v1"], "Exact runner schema."),
+                            "image": string_property("OCI image pinned with @sha256:<64 lowercase hex>."),
+                            "command": string_array_property("Direct argv for the deterministic test command."),
+                            "workdir": enum_property(&["/workspace"], "Fixed sandbox workdir."),
+                            "benchmark_digest": string_property("sha256:<64 lowercase hex> staged benchmark snapshot digest."),
+                            "timeout_seconds": integer_property("1-900 second timeout."),
+                            "cpu_millis": integer_property("100-4000 CPU millicores."),
+                            "memory_bytes": integer_property("64 MiB to 4 GiB memory cap."),
+                            "pids_limit": integer_property("16-512 process cap."),
+                            "max_output_bytes": integer_property("1024 bytes to 16 MiB output cap."),
+                            "tmpfs_bytes": integer_property("64 MiB to 4 GiB tmpfs cap, not above memory."),
+                            "max_source_bytes": integer_property("Maximum staged source bytes."),
+                            "max_source_files": integer_property("Maximum staged source files."),
+                            "max_benchmark_bytes": integer_property("Maximum staged benchmark bytes."),
+                            "max_benchmark_files": integer_property("Maximum staged benchmark files."),
+                            "platform": enum_property(&["linux/amd64", "linux/arm64"], "Pinned execution platform."),
+                            "test_seed": integer_property("Committed deterministic test seed.")
+                        },
+                        "required": ["schema_version", "image", "command", "workdir", "benchmark_digest", "timeout_seconds", "cpu_millis", "memory_bytes", "pids_limit", "max_output_bytes", "tmpfs_bytes", "max_source_bytes", "max_source_files", "max_benchmark_bytes", "max_benchmark_files", "platform", "test_seed"],
+                        "additionalProperties": false
+                    },
+                    "evidence_schema": nullable_object_property("Optional submission schema; defaults to a required sha256 source_snapshot_digest."),
+                    "verifier_reward": nullable_object_property("Optional USDC money object; defaults to 100000 base units and must divide across two verifiers."),
+                    "funding_deadline": nullable_integer_property("Optional child funding deadline; defaults to the immutable parent deadline."),
+                    "claim_window_seconds": nullable_integer_property("Optional child claim window; defaults to 259200 seconds."),
+                    "verification_window_seconds": nullable_integer_property("Optional child verification window; defaults to 259200 seconds."),
+                    "creation_nonce": nullable_string_property("Optional bytes32 creation nonce; otherwise derived deterministically from the parent and task."),
+                    "nonce_salt": nullable_string_property("Optional public salt for preparing a distinct child from otherwise identical task input."),
+                    "source_url": nullable_string_property("Optional public task or issue URL."),
+                    "discovery_source": nullable_string_property("Optional discovery attribution for the child poster.")
+                }),
+                &["parent_bounty_contract", "parent_solver", "intended_child_solver", "title", "goal", "acceptance_criteria", "benchmark_source", "runner_manifest"],
             ),
         ),
         tool(
@@ -3361,6 +3435,49 @@ async fn plan_autonomous_canonical_child_terms(
     }
 }
 
+async fn prepare_standing_meta_v2_child(
+    State(state): State<SharedState>,
+    Json(args): Json<StandingMetaV2ChildPreparationRequest>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    if network != "base-mainnet" {
+        return mcp_error("standing-meta-v2 is deployed only on canonical Base mainnet");
+    }
+    let parent =
+        match indexed_autonomous_bounty(&state, network, &args.parent_bounty_contract).await {
+            Ok(parent) => parent,
+            Err(error) => return mcp_error(error),
+        };
+    let context = match standing_meta_v2_parent_context(&parent) {
+        Ok(context) => context,
+        Err(error) => return mcp_error(error),
+    };
+    if args.parent_solver.eq_ignore_ascii_case(&parent.creator) {
+        return mcp_error("the parent bounty creator cannot be its solver");
+    }
+    let planner = match configured_autonomous_planner(network) {
+        Ok(planner) => planner,
+        Err(error) => return mcp_error(error),
+    };
+    let mut plan = match planner.plan_standing_meta_v2_child(&args, &context, Utc::now()) {
+        Ok(plan) => plan,
+        Err(error) => return mcp_error(error),
+    };
+    let Some(store) = &state.store else {
+        return mcp_error(
+            "DATABASE_URL is required to publish child terms; do not send on-chain calls first",
+        );
+    };
+    if let Err(error) = store.upsert_autonomous_bounty_terms(&plan.terms).await {
+        return mcp_error(format!(
+            "hosted child terms publication failed: {error}; retry the identical request and do not send the on-chain calls"
+        ));
+    }
+    plan.hosted_terms_published = true;
+    plan.current_state = "hosted_child_terms_published_parent_unclaimed".to_string();
+    mcp_json(plan)
+}
+
 async fn plan_autonomous_bounty_creation(
     State(state): State<SharedState>,
     Json(args): Json<PlanAutonomousBountyCreationArgs>,
@@ -4788,6 +4905,7 @@ mod tests {
 
         for autonomous in [
             "plan_autonomous_canonical_child_terms",
+            "prepare_standing_meta_v2_child",
             "plan_autonomous_bounty_creation",
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_contribution",
@@ -4898,6 +5016,33 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("Do not pass the parent's canonical-child verifier")
+        );
+
+        let standing_meta_v2 = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "prepare_standing_meta_v2_child")
+            .expect("standing-meta-v2 preparation descriptor exists");
+        for required in [
+            "parent_bounty_contract",
+            "parent_solver",
+            "intended_child_solver",
+            "acceptance_criteria",
+            "benchmark_source",
+            "runner_manifest",
+        ] {
+            assert!(standing_meta_v2.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == required));
+        }
+        assert_eq!(
+            standing_meta_v2.input_schema["properties"]["benchmark_source"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            standing_meta_v2.input_schema["properties"]["runner_manifest"]["additionalProperties"],
+            false
         );
 
         let get_live_money_readiness = descriptors

@@ -9,6 +9,7 @@ coverage/
 *.tsbuildinfo
 __pycache__/
 *.pyc
+*.egg-info/
 .tools/
 contracts/**/out/
 contracts/**/cache/

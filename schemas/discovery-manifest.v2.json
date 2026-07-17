@@ -98,6 +98,7 @@
         "autonomous_verification_jobs",
         "autonomous_events",
         "autonomous_canonical_child_terms_plan",
+        "autonomous_standing_meta_v2_child_preparation",
         "autonomous_creation_plan",
         "autonomous_authorized_creation_plan",
         "autonomous_contribution_plan",

@@ -28,7 +28,7 @@ use chain_base::{
     eth_get_transaction_receipt_request, eth_send_raw_transaction_request, fetch_block_number,
     fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    prepare_agent_to_earn as inspect_agent_wallet_readiness,
+    prepare_agent_to_earn as inspect_agent_wallet_readiness, standing_meta_v2_parent_context,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
     AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
     AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
@@ -44,8 +44,9 @@ use chain_base::{
     BaseTransactionRelayer, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
     ChainBaseError, Eip3009AuthorizationTypedData, EthGetTransactionReceiptRequest,
     EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, PrepareAgentToEarnInput,
-    RpcTransactionReceipt, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
-    AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
+    RpcTransactionReceipt, StandingMetaV2ChildPreparationPlan,
+    StandingMetaV2ChildPreparationRequest, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
+    AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR, BASE_MAINNET_STANDING_META_V2_VERIFIER,
 };
 use chrono::Utc;
 use db::{
@@ -147,6 +148,7 @@ use uuid::Uuid;
         broadcast_base_signed_transaction,
         get_base_transaction_receipt,
         plan_autonomous_canonical_child_terms,
+        prepare_standing_meta_v2_child,
         plan_autonomous_bounty_creation,
         plan_autonomous_bounty_authorized_creation,
         plan_autonomous_bounty_contribution,
@@ -1126,6 +1128,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/canonical-child-terms-plan",
             post(plan_autonomous_canonical_child_terms),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/standing-meta-v2-child-preparation",
+            post(prepare_standing_meta_v2_child),
         )
         .route(
             "/v1/base/autonomous-bounties/creation-plan",
@@ -3737,6 +3743,109 @@ async fn plan_autonomous_canonical_child_terms(
                 "Correct the parent binding, child acceptance criteria, or child task verifier and rerun plan_autonomous_canonical_child_terms. Do not create or fund the child from a rejected plan.",
             )
         })
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/standing-meta-v2-child-preparation", responses((status = 200, description = "Hosted terms publication plus exact ordered on-chain terms and fully funded child creation calls")))]
+async fn prepare_standing_meta_v2_child(
+    State(state): State<SharedState>,
+    Json(request): Json<StandingMetaV2ChildPreparationRequest>,
+) -> Result<Json<StandingMetaV2ChildPreparationPlan>, AgentActionApiError> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    if network != "base-mainnet" {
+        return Err(agent_action_error(
+            StatusCode::BAD_REQUEST,
+            "standing_meta_v2_network_unsupported",
+            "standing-meta-v2 is deployed only on canonical Base mainnet",
+            false,
+            "Use network base-mainnet and an exact claimable standing-meta-v2 parent contract.",
+        ));
+    }
+    let parent = indexed_autonomous_bounty(&state, network, &request.parent_bounty_contract)
+        .await
+        .map_err(|status| {
+            agent_action_error(
+                status,
+                "standing_meta_v2_parent_unavailable",
+                "the parent is not available as an indexed canonical bounty",
+                status.is_server_error(),
+                "Refresh canonical inventory and retry the same parent contract. Do not publish or claim from unindexed data.",
+            )
+        })?;
+    let parent_context = standing_meta_v2_parent_context(&parent).map_err(|error| {
+        agent_action_error(
+            StatusCode::CONFLICT,
+            "standing_meta_v2_parent_invalid",
+            error.to_string(),
+            false,
+            "Choose an exact claimable standing-meta-v2 parent. Do not reuse the historical canonical-child-v1 planner.",
+        )
+    })?;
+    if request.parent_solver.eq_ignore_ascii_case(&parent.creator) {
+        return Err(agent_action_error(
+            StatusCode::CONFLICT,
+            "standing_meta_v2_creator_cannot_claim",
+            "the parent bounty creator cannot be its solver",
+            false,
+            "Use a different registered parent-solver wallet.",
+        ));
+    }
+    if !parent
+        .verifier_module
+        .as_deref()
+        .is_some_and(|module| module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER))
+    {
+        return Err(agent_action_error(
+            StatusCode::CONFLICT,
+            "standing_meta_v2_verifier_mismatch",
+            "the parent does not use the canonical standing-meta-v2 verifier",
+            false,
+            "Choose one of the verified standing-meta-v2 inventory entries.",
+        ));
+    }
+    let planner = configured_autonomous_planner(network).map_err(|_| {
+        agent_action_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "canonical_child_planner_unavailable",
+            "the canonical Base-mainnet child planner is unavailable",
+            true,
+            "Retry after canonical factory readiness is restored.",
+        )
+    })?;
+    let mut plan = planner
+        .plan_standing_meta_v2_child(&request, &parent_context, Utc::now())
+        .map_err(|error| {
+            agent_action_error(
+                StatusCode::BAD_REQUEST,
+                "standing_meta_v2_child_invalid",
+                error.to_string(),
+                false,
+                "Correct the task, immutable runner manifest, participants, or economics and request a new preparation. Do not sign a rejected plan.",
+            )
+        })?;
+    let store = state.store.as_ref().ok_or_else(|| {
+        agent_action_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "terms_store_unavailable",
+            "DATABASE_URL is required to publish the child terms",
+            true,
+            "Retry after hosted terms storage is healthy. Do not send the on-chain calls first.",
+        )
+    })?;
+    store
+        .upsert_autonomous_bounty_terms(&plan.terms)
+        .await
+        .map_err(|error| {
+            agent_action_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "standing_meta_v2_terms_store_failed",
+                error.to_string(),
+                true,
+                "Retry the identical request. Do not alter or send the returned on-chain terms until hosted publication succeeds.",
+            )
+        })?;
+    plan.hosted_terms_published = true;
+    plan.current_state = "hosted_child_terms_published_parent_unclaimed".to_string();
+    Ok(Json(plan))
 }
 
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/creation-plan", responses((status = 200, description = "Unsigned canonical autonomous bounty creation and initial-funding plan")))]
@@ -9950,6 +10059,12 @@ mod tests {
             "http://127.0.0.1:8080/v1/base/autonomous-bounties/canonical-child-terms-plan"
         );
         assert_eq!(
+            manifest
+                .endpoints
+                .autonomous_standing_meta_v2_child_preparation,
+            "http://127.0.0.1:8080/v1/base/autonomous-bounties/standing-meta-v2-child-preparation"
+        );
+        assert_eq!(
             manifest.endpoints.autonomous_creation_plan,
             "http://127.0.0.1:8080/v1/base/autonomous-bounties/creation-plan"
         );
@@ -9961,6 +10076,10 @@ mod tests {
             .agent_tools
             .iter()
             .any(|tool| tool == "plan_autonomous_canonical_child_terms"));
+        assert!(manifest
+            .agent_tools
+            .iter()
+            .any(|tool| tool == "prepare_standing_meta_v2_child"));
         assert!(manifest
             .agent_tools
             .iter()
