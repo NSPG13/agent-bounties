@@ -1,6 +1,6 @@
 {
   "schema": "agent-bounties/bounded-agent-wallet-deployment-v1",
-  "contract_source_revision": "c09ecad36a9d6d93d1272e81819c7196d0d97214",
+  "contract_source_revision": "da731c015a5dbee7053fc57abd50792d0b3b30f6",
   "contract_source_revision_kind": "git-tree",
   "contract_source_dirty": false,
   "network": "base-mainnet",
@@ -58,7 +58,10 @@
       "source_sha256": "0x8c02a7c182b7900806fdc4fa63abbebebec8618b47f20f0e7ba4261d21553739"
     },
     "ParticipantEligibilityRegistry": {
-      "source_sha256": "0x97240c200d183296e45422bce310616b61bc03ba4cf71b5913eaa7689a63f72a"
+      "source_sha256": "0xec345bbd18b749c6991249dee9f67a2331abd5a5f56edf3f785866dc79e64aa6"
+    },
+    "StandingMetaV2Bundle": {
+      "source_sha256": "0x356530a76a3cc34b4ac9cf7d0afc29d664270f3496b527f0592439f05ececf62"
     }
   },
   "evidence_boundary": "This manifest derives exact addresses, bytecode, and unsigned deployment calldata. It is not deployment, delegation, funding, completion, payout, or settlement evidence."
