@@ -105,6 +105,7 @@ cargo run -p cli -- discovery-report \
 node --check skills/agent-bounties/scripts/check-in.mjs
 node --test scripts/test_agent_bounties_openclaw_skill.mjs
 node benchmarks/standing-meta-v2/mcp-discovery/self-test.mjs
+node benchmarks/direct-v1/agent-loop/self-test.mjs
 node scripts/test-autonomous-wallet-flow.js
 node --check tools/autonomous-activation.js
 node scripts/test-autonomous-activation-console.js
