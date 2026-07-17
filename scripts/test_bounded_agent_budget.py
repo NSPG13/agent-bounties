@@ -75,9 +75,9 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
             "max_lifetime_spend": 89_000_000,
             "max_bounty_target": 5_000_000,
             "allowed_actions": 15,
-            "allowed_verification_modes": 1,
+            "allowed_verification_modes": 3,
             "deterministic_verifier_module": self.manifest["canonical"]["deterministic_verifier"],
-            "signed_quorum_verifier_set_hash": self.planner.ZERO_HASH,
+            "signed_quorum_verifier_set_hash": self.manifest["canonical"]["signed_quorum_verifier_set_hash"],
             "ai_judge_verifier_set_hash": self.planner.ZERO_HASH,
         }
         changed = {**base, "delegate": "0x2222222222222222222222222222222222222222"}
@@ -130,6 +130,11 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
             self.assertIn(str(output), result.stdout)
             plan = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(plan["initial_funding"], "89000000")
+        self.assertEqual(plan["policy"]["allowed_verification_modes"], 3)
+        self.assertEqual(
+            plan["policy"]["signed_quorum_verifier_set_hash"],
+            self.manifest["canonical"]["signed_quorum_verifier_set_hash"],
+        )
         self.assertEqual(plan["authorization_typed_data"]["message"]["to"], plan["predicted_wallet"])
         self.assertEqual(plan["relay_call"]["signature_tail"], ["v", "r", "s"])
         self.assertTrue(plan["direct_owner_fallback"]["approval"]["data"].startswith("0x095ea7b3"))
@@ -256,6 +261,37 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
         zero_terms = data[:terms_start] + "00" * 32 + data[terms_start + 64 :]
         with self.assertRaisesRegex(SystemExit, "terms hash cannot be zero"):
             self.create_helper.decode_create_calldata(zero_terms)
+
+    def test_create_verification_accepts_only_exact_regression_quorum(self) -> None:
+        params = {
+            "verification_mode": 1,
+            "verifier_module": self.create_helper.ZERO_ADDRESS,
+            "verifier_reward_recipient": self.create_helper.ZERO_ADDRESS,
+            "verifier_reward": 100_000,
+            "threshold": 2,
+        }
+        policy = {
+            "allowed_verification_modes": 3,
+            "deterministic_verifier_module": self.manifest["canonical"]["deterministic_verifier"],
+            "signed_quorum_verifier_set_hash": self.manifest["canonical"]["signed_quorum_verifier_set_hash"],
+        }
+        verifiers = list(self.create_helper.SIGNED_QUORUM_VERIFIERS)
+        self.create_helper.validate_creation_verification(params, verifiers, policy, self.manifest["canonical"])
+
+        with self.assertRaisesRegex(SystemExit, "exact signed regression"):
+            self.create_helper.validate_creation_verification(
+                params,
+                list(reversed(verifiers)),
+                policy,
+                self.manifest["canonical"],
+            )
+        with self.assertRaisesRegex(SystemExit, "only deterministic or signed regression"):
+            self.create_helper.validate_creation_verification(
+                {**params, "verification_mode": 2},
+                verifiers,
+                {**policy, "allowed_verification_modes": 7},
+                self.manifest["canonical"],
+            )
 
 
 if __name__ == "__main__":

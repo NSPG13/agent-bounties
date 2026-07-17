@@ -8,7 +8,7 @@ from dataclasses import replace
 from unittest import mock
 
 import relay_bounded_wallet_action as relay
-from plan_bounded_agent_budget import calldata
+from plan_bounded_agent_budget import POLICY_TYPE, calldata, encode, keccak_hex, policy_tuple
 
 
 NOW = 1_800_000_000
@@ -39,6 +39,31 @@ def create_data() -> str:
     )
 
 
+def signed_create_data(*, reverse_verifiers: bool = False) -> str:
+    params = (
+        "(2000000,100000,"
+        + "0x" + "11" * 32 + ","
+        + "0x" + "22" * 32 + ","
+        + "0x" + "33" * 32 + ","
+        + "0x" + "44" * 32 + ","
+        + "0x" + "55" * 32 + f",{NOW + 86_400},604800,259200,1,"
+        + relay.ZERO_ADDRESS
+        + ","
+        + relay.ZERO_ADDRESS
+        + ",2)"
+    )
+    verifiers = list(relay.SIGNED_QUORUM_VERIFIERS)
+    if reverse_verifiers:
+        verifiers.reverse()
+    return calldata(
+        relay.decode_create_calldata.__globals__["CREATE_SIGNATURE"],
+        params,
+        f"[{','.join(verifiers)}]",
+        "2100000",
+        "0x" + "98" * 32,
+    )
+
+
 def envelope(**overrides: object) -> dict[str, object]:
     value: dict[str, object] = {
         "schema": relay.SCHEMA,
@@ -47,7 +72,7 @@ def envelope(**overrides: object) -> dict[str, object]:
         "issue_number": 249,
         "wallet": relay.WALLET,
         "policy_hash": relay.POLICY_HASH,
-        "policy_version": 1,
+        "policy_version": 2,
         "nonce": 0,
         "deadline": NOW + 600,
         "payload": "0x" + create_data()[10:],
@@ -81,8 +106,9 @@ def wallet_state(**overrides: object) -> relay.WalletState:
         "allowed_actions": 15,
         "allowed_verification_modes": 1,
         "deterministic_verifier": relay.VERIFIER,
+        "signed_quorum_verifier_set_hash": relay.ZERO_HASH,
         "policy_hash": relay.POLICY_HASH,
-        "policy_version": 1,
+        "policy_version": 2,
         "delegate_nonce": 0,
         "period_bucket": NOW // 86_400,
         "period_spent": 0,
@@ -146,6 +172,25 @@ class RelayClient:
 
 
 class BoundedWalletRelayTests(unittest.TestCase):
+    def test_regression_policy_hash_matches_exact_owner_review(self) -> None:
+        policy = {
+            "delegate": relay.REGRESSION_DELEGATE,
+            "valid_after": 1784223027,
+            "valid_until": 1786815027,
+            "period_seconds": 86_400,
+            "max_per_action": 5_000_000,
+            "max_per_period": 10_000_000,
+            "max_lifetime_spend": 89_000_000,
+            "max_bounty_target": 5_000_000,
+            "allowed_actions": 15,
+            "allowed_verification_modes": 3,
+            "deterministic_verifier_module": relay.VERIFIER,
+            "signed_quorum_verifier_set_hash": relay.SIGNED_QUORUM_VERIFIER_SET_HASH,
+            "ai_judge_verifier_set_hash": relay.ZERO_HASH,
+        }
+        encoded = encode(f"f({POLICY_TYPE})", policy_tuple(policy))
+        self.assertEqual(keccak_hex(encoded), relay.REGRESSION_POLICY_HASH)
+
     def test_comment_requires_exact_command_and_schema(self) -> None:
         body = relay.COMMAND + "\n```json\n" + json.dumps(envelope()) + "\n```"
         self.assertEqual(relay.parse_comment(body)["issue_number"], 249)
@@ -169,6 +214,30 @@ class BoundedWalletRelayTests(unittest.TestCase):
         prepared = relay.validate_signed_creation(ValidationClient(), envelope(), state)
         self.assertEqual(prepared["initial_funding"], 2_010_000)
         self.assertEqual(state.wallet_eth_balance, 0)
+
+    def test_exact_regression_creation_passes_and_other_quorums_fail(self) -> None:
+        signed_envelope = envelope(
+            policy_hash=relay.REGRESSION_POLICY_HASH,
+            policy_version=3,
+            payload="0x" + signed_create_data()[10:],
+        )
+        state = wallet_state(
+            delegate=relay.REGRESSION_DELEGATE,
+            allowed_verification_modes=3,
+            signed_quorum_verifier_set_hash=relay.SIGNED_QUORUM_VERIFIER_SET_HASH,
+            policy_hash=relay.REGRESSION_POLICY_HASH,
+            policy_version=3,
+        )
+        relay.validate_wallet(state, signed_envelope)
+        prepared = relay.validate_signed_creation(ValidationClient(), signed_envelope, state)
+        self.assertEqual(prepared["initial_funding"], 2_100_000)
+
+        reversed_envelope = {
+            **signed_envelope,
+            "payload": "0x" + signed_create_data(reverse_verifiers=True)[10:],
+        }
+        with self.assertRaisesRegex(relay.RelayError, "exact signed regression"):
+            relay.validate_signed_creation(ValidationClient(), reversed_envelope, state)
 
     def test_signature_and_budget_fail_closed(self) -> None:
         with self.assertRaisesRegex(relay.RelayError, "invalid signature"):

@@ -83,7 +83,7 @@
             </div>
             <div class="readiness-panel">
               <h3>Fixed authority</h3>
-              <p>Base mainnet native USDC; create, fund, claim, and submit; exact approved deterministic verifier only. Signed-quorum and AI-judge spending are disabled.</p>
+              <p>Base mainnet native USDC; create, fund, claim, and submit; the exact standing-meta module and two-wallet sandboxed-regression quorum only. AI-judge spending is disabled.</p>
             </div>
             <label class="check-line">
               <input name="reviewed" type="checkbox" required>
@@ -109,14 +109,14 @@
             </label>
             <label class="check-line">
               <input name="rotationReviewed" type="checkbox">
-              <span>I reviewed the exact delegate and verifier change. All limits, allowed actions, verification modes, expiry, balance, and prior spend remain unchanged.</span>
+              <span>I reviewed the exact delegate and verifier change. Financial limits, actions, expiry, balance, and lifetime spend remain unchanged; the deployed wallet starts a fresh policy-period counter.</span>
             </label>
             <div class="actions">
               <button id="review-delegate-rotation" class="button secondary" type="button" disabled>Review policy update</button>
               <button id="rotate-agent-delegate" class="button secondary" type="button" disabled>Update policy</button>
               <button id="revoke-agent-budget" class="button secondary" type="button" disabled>Revoke agent authority</button>
             </div>
-            <p class="fine">The update replaces the signer and, only when required, the obsolete verifier with the reviewed standing-meta-v2 verifier. Revocation blocks all new delegate actions. Neither action moves the wallet's USDC.</p>
+            <p class="fine">The update replaces the signer, preserves the standing-meta-v2 verifier, and adds only the exact sandboxed-regression quorum. It starts a fresh policy-period counter but preserves lifetime spend. Revocation blocks all new delegate actions. Neither action moves the wallet's USDC.</p>
           </div>
         </form>
       </section>
