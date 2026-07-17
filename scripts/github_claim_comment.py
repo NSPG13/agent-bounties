@@ -497,11 +497,21 @@ def apply_canonical_claim_state(
             claim_recovery=claim_recovery,
         )
 
+    request = native_claim_request(signal, api_base_url, contract)
+    request_body = request.get("body") if isinstance(request.get("body"), dict) else {}
+    solver_wallet = str(request_body.get("solver_wallet") or "")
+    solver_query = (
+        f"&solver={urllib.parse.quote(solver_wallet, safe='')}"
+        if EVM_ADDRESS_RE.fullmatch(solver_wallet)
+        else ""
+    )
+    claim_key = str(signal.get("reservation_id") or "github-claim-comment")
     handoff = (
         f"{STATIC_EARN_PAGE_URL}?bountyContract={urllib.parse.quote(contract, safe='')}"
-        f"&source=github-claim&issue={urllib.parse.quote(issue_url, safe='')}"
+        f"&claimKey={urllib.parse.quote(claim_key, safe='')}"
+        f"&source=github-claim{solver_query}"
+        f"&issue={urllib.parse.quote(issue_url, safe='')}"
     )
-    request = native_claim_request(signal, api_base_url, contract)
     signal.update(
         {
             "bounty_contract": contract,
@@ -1221,6 +1231,8 @@ def run_self_test() -> int:
     for required_text in [
         "Exact wallet signature requested",
         "Hosted claim handoff",
+        "claimKey=",
+        f"solver={solver_wallet}",
         "eth_signTypedData_v4",
         "wallet_signature",
         "10000",

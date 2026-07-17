@@ -157,12 +157,19 @@
       }
     }
     if (!response.ok) {
-      if (response.status === 503) {
-        throw new Error("The autonomous protocol is not deployed on this network yet.");
-      }
-      throw new Error(
-        typeof body === "string" ? body : body && body.error ? body.error : `Request failed (${response.status}).`,
-      );
+      const details = body && typeof body === "object" ? body : null;
+      const message = typeof body === "string"
+        ? body
+        : details && (details.message || details.error)
+          ? details.message || details.error
+          : `Request failed (${response.status}).`;
+      const transition = details && details.failed_transition
+        ? `Failed transition: ${details.failed_transition}.`
+        : "";
+      const next = details && details.next_action ? details.next_action : "";
+      const error = new Error([message, transition, next].filter(Boolean).join("\n"));
+      error.details = details;
+      throw error;
     }
     return body;
   }
@@ -177,6 +184,189 @@
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
     return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  function hostedClaimContext(bountyContract, solverWallet) {
+    const params = new URLSearchParams(location.search);
+    const expectedSolver = params.get("solver");
+    if (expectedSolver && requiredAddress(expectedSolver, "Claim-link solver").toLowerCase()
+      !== solverWallet.toLowerCase()) {
+      throw new Error("Connect the payout wallet named by this claim link.");
+    }
+    const suppliedKey = params.get("claimKey");
+    if (suppliedKey) {
+      if (suppliedKey.length > 128 || /[\u0000-\u001f\u007f]/.test(suppliedKey)) {
+        throw new Error("The claim link contains an invalid idempotency key.");
+      }
+      return { idempotencyKey: suppliedKey, source: claimSource(params) };
+    }
+    const storageKey = `agent-bounties:claim:${bountyContract.toLowerCase()}:${solverWallet.toLowerCase()}`;
+    let idempotencyKey = null;
+    if (typeof sessionStorage !== "undefined") idempotencyKey = sessionStorage.getItem(storageKey);
+    if (!idempotencyKey) {
+      idempotencyKey = `web-claim:${randomBytes32().slice(2)}`;
+      if (typeof sessionStorage !== "undefined") sessionStorage.setItem(storageKey, idempotencyKey);
+    }
+    return { idempotencyKey, source: claimSource(params) };
+  }
+
+  function claimSource(params) {
+    const source = String(params.get("source") || "web").trim();
+    return /^[a-zA-Z0-9._:-]{1,64}$/.test(source) ? source : "web";
+  }
+
+  function validateHostedClaimHandoff(handoff, requestBody, item, account, protocol, api) {
+    if (!handoff || handoff.schema_version !== "agent-bounties/agent-native-claim-v1") {
+      throw new Error("The hosted claim response has an unsupported schema.");
+    }
+    const candidate = handoff.candidate;
+    if (!candidate
+      || String(candidate.bounty_contract).toLowerCase() !== item.bounty_contract.toLowerCase()
+      || String(candidate.solver_wallet).toLowerCase() !== account.toLowerCase()) {
+      throw new Error("The hosted claim candidate does not match this bounty and payout wallet.");
+    }
+    if (!handoff.wallet_request) return null;
+    if (candidate.status !== "authorization_ready") {
+      throw new Error(`The hosted claim requested a signature in unexpected state ${candidate.status}.`);
+    }
+    const walletRequest = handoff.wallet_request;
+    if (walletRequest.method !== "eth_signTypedData_v4"
+      || !Array.isArray(walletRequest.params)
+      || walletRequest.params.length !== 2
+      || String(walletRequest.params[0]).toLowerCase() !== account.toLowerCase()) {
+      throw new Error("The hosted claim returned an invalid wallet request.");
+    }
+    let typedData;
+    try {
+      typedData = JSON.parse(walletRequest.params[1]);
+    } catch (_error) {
+      throw new Error("The hosted claim returned unreadable typed data.");
+    }
+    const domain = typedData.domain || {};
+    const message = typedData.message || {};
+    const expectedTypes = {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+        { name: "verifyingContract", type: "address" },
+      ],
+      TransferWithAuthorization: [
+        { name: "from", type: "address" },
+        { name: "to", type: "address" },
+        { name: "value", type: "uint256" },
+        { name: "validAfter", type: "uint256" },
+        { name: "validBefore", type: "uint256" },
+        { name: "nonce", type: "bytes32" },
+      ],
+    };
+    const validAfter = Number(message.validAfter);
+    const validBefore = Number(message.validBefore);
+    if (typedData.primaryType !== "TransferWithAuthorization"
+      || JSON.stringify(typedData.types) !== JSON.stringify(expectedTypes)
+      || domain.name !== "USD Coin"
+      || domain.version !== "2"
+      || Number(domain.chainId) !== Number(protocol.chain_id)
+      || String(domain.verifyingContract).toLowerCase() !== protocol.native_usdc.toLowerCase()
+      || String(message.from).toLowerCase() !== account.toLowerCase()
+      || String(message.to).toLowerCase() !== item.bounty_contract.toLowerCase()
+      || String(message.value) !== String(item.claim_bond)
+      || !Number.isSafeInteger(validAfter)
+      || !Number.isSafeInteger(validBefore)
+      || validAfter !== 0
+      || validBefore <= Math.floor(Date.now() / 1_000)
+      || !/^0x[0-9a-fA-F]{64}$/.test(String(message.nonce))) {
+      throw new Error("The hosted claim typed data differs from the selected Base USDC bond.");
+    }
+    const nextRequest = handoff.next_request;
+    const expectedUrl = `${api}/v1/base/autonomous-bounties/claims`;
+    if (!nextRequest || nextRequest.method !== "POST" || nextRequest.url !== expectedUrl
+      || !nextRequest.body
+      || nextRequest.body.idempotency_key !== requestBody.idempotency_key
+      || nextRequest.body.network !== requestBody.network
+      || String(nextRequest.body.bounty_contract).toLowerCase() !== item.bounty_contract.toLowerCase()
+      || String(nextRequest.body.solver_wallet).toLowerCase() !== account.toLowerCase()
+      || nextRequest.body.request_bond_sponsorship !== true
+      || nextRequest.body.source !== requestBody.source) {
+      throw new Error("The hosted claim replay request differs from the prepared candidate.");
+    }
+    return walletRequest;
+  }
+
+  async function hostedClaim(item, api, account, protocol, result) {
+    const context = hostedClaimContext(item.bounty_contract, account);
+    const requestBody = {
+      idempotency_key: context.idempotencyKey,
+      network: "base-mainnet",
+      bounty_contract: item.bounty_contract,
+      solver_wallet: account,
+      request_bond_sponsorship: true,
+      source: context.source,
+    };
+    const endpoint = `${api}/v1/base/autonomous-bounties/claims`;
+    let handoff = await requestJson(endpoint, {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    });
+    validateHostedClaimHandoff(handoff, requestBody, item, account, protocol, api);
+    if (handoff.candidate.status === "waitlisted") {
+      output(result, [
+        `Waitlisted at position ${handoff.waitlist_position}.`,
+        "No signature or bond was requested. Reopen this exact link to poll.",
+      ], "pending");
+      return;
+    }
+    if (handoff.candidate.status === "claimed" && handoff.canonical_event_id) {
+      output(result, [
+        "Canonical BountyClaimed is confirmed. Start the task.",
+        `Event: ${handoff.canonical_event_id}`,
+      ], "success");
+      return;
+    }
+    const exactWalletRequest = validateHostedClaimHandoff(
+      handoff, requestBody, item, account, protocol, api,
+    );
+    if (!exactWalletRequest) {
+      throw new Error(handoff.next_action || `Claim is ${handoff.candidate.status}.`);
+    }
+    output(result, [
+      "One bounded wallet signature required. No gas transaction is requested.",
+      `Sponsored refundable bond: ${Number(handoff.claim_bond) / 1_000_000} USDC`,
+      `Bounty: ${item.bounty_contract}`,
+    ], "pending");
+    const walletSignature = await walletRequest(
+      exactWalletRequest.method, exactWalletRequest.params,
+    );
+    if (!/^0x[0-9a-fA-F]{130}$/.test(String(walletSignature))) {
+      throw new Error("The wallet did not return one 65-byte claim signature.");
+    }
+    handoff = await requestJson(endpoint, {
+      method: "POST",
+      body: JSON.stringify({ ...requestBody, wallet_signature: walletSignature }),
+    });
+    for (let attempt = 0; attempt < 36; attempt += 1) {
+      if (handoff.candidate.status === "claimed" && handoff.canonical_event_id) {
+        output(result, [
+          "Canonical BountyClaimed is confirmed. Start the task.",
+          `Event: ${handoff.canonical_event_id}`,
+          handoff.claim_transaction_hash ? `Transaction: ${protocol.explorer_url}/tx/${handoff.claim_transaction_hash}` : "",
+        ].filter(Boolean), "success");
+        return;
+      }
+      if (!["relaying", "authorization_ready", "exclusive", "sponsoring"].includes(handoff.candidate.status)) {
+        throw new Error(handoff.next_action || `Claim stopped in state ${handoff.candidate.status}.`);
+      }
+      output(result, [
+        `Claim state: ${handoff.candidate.status}.`,
+        "The sponsor is paying gas. Waiting for canonical BountyClaimed; do not sign again.",
+      ], "pending");
+      await sleep(2_500);
+      handoff = await requestJson(endpoint, {
+        method: "POST",
+        body: JSON.stringify(requestBody),
+      });
+    }
+    throw new Error("The sponsored claim is still pending. Reopen this exact link to reconcile it; do not post another bond.");
   }
 
   function usdcMinor(value) {
@@ -925,7 +1115,7 @@
     const claim = document.createElement("button");
     claim.className = "button primary";
     claim.type = "button";
-    claim.textContent = targeted ? "Connect wallet and sign claim" : "Claim bounty";
+    claim.textContent = targeted ? "Sign once to claim" : "Claim bounty";
     claim.disabled =
       state.protocol.status !== "active" || item.status !== "claimable" || !item.terms || !item.terms_valid;
     claim.addEventListener("click", async () => {
@@ -933,51 +1123,7 @@
       try {
         const protocol = requireActiveProtocol(await loadProtocol());
         const account = await connectWallet(document);
-        const authorizationNonce = randomBytes32();
-        const authorizationValidBefore = Math.floor(Date.now() / 1000) + 3_600;
-        const plan = await requestJson(`${api}/v1/base/autonomous-bounties/claim-plan`, {
-          method: "POST",
-          body: JSON.stringify({
-            network: "base-mainnet",
-            bounty_contract: item.bounty_contract,
-            solver: account,
-            authorization_nonce: authorizationNonce,
-            authorization_valid_before: authorizationValidBefore,
-          }),
-        });
-        output(result, [
-          "Wallet confirmation required.",
-          `Refundable solver bond: ${Number(plan.claim_bond) / 1_000_000} USDC`,
-          "Acceptance or verifier timeout returns the bond. Rejection pays verifiers; no-submission timeout forfeits it into the completion bonus.",
-        ]);
-        let hash = null;
-        if (!(await isContractAccount(account)) && plan.eip3009_authorization) {
-          const signature = await signTypedData(account, plan.eip3009_authorization);
-          const authorized = await requestJson(
-            `${api}/v1/base/autonomous-bounties/authorized-claim-plan`,
-            {
-              method: "POST",
-              body: JSON.stringify({
-                network: "base-mainnet",
-                bounty_contract: item.bounty_contract,
-                solver: account,
-                authorization_nonce: authorizationNonce,
-                authorization_valid_before: authorizationValidBefore,
-                signature,
-                relayer: account,
-              }),
-            },
-          );
-          hash = await sendTransaction(authorized.relay_transaction, account);
-          await waitReceipt(hash);
-        } else {
-          const sent = await sendWalletCalls(plan.wallet_calls, account, protocol);
-          if (sent.kind === "transactions") hash = sent.hashes[sent.hashes.length - 1];
-        }
-        output(result, [
-          "Claim transaction confirmed; waiting for BountyClaimed evidence.",
-          hash ? `${protocol.explorer_url}/tx/${hash}` : "Wallet batch submitted.",
-        ], "pending");
+        await hostedClaim(item, api, account, protocol, result);
       } catch (error) {
         output(result, error.message || String(error), "error");
       }
