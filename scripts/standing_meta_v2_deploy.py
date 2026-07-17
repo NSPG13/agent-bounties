@@ -340,25 +340,31 @@ def deploy_sepolia(foundry: Foundry, output: Path) -> dict[str, Any]:
         private_key,
         [deployments["token"]["contract"]],
     )
-    deployments["participant_registry"] = foundry.create(
-        "src/ParticipantEligibilityRegistry.sol:ParticipantEligibilityRegistry",
-        private_key,
-        [public["PARTICIPANT_ATTESTER_ADDRESS"]],
-    )
-    deployments["terms_registry"] = foundry.create(
-        "src/OnchainTermsRegistry.sol:OnchainTermsRegistry", private_key
-    )
-    deployments["verifier_module"] = foundry.create(
-        "src/CanonicalIndependentChildVerifierV2.sol:CanonicalIndependentChildVerifierV2",
+    deployments["bundle"] = foundry.create(
+        "src/StandingMetaV2Bundle.sol:StandingMetaV2Bundle",
         private_key,
         [
             deployments["factory"]["contract"],
-            deployments["participant_registry"]["contract"],
-            deployments["terms_registry"]["contract"],
-            set_hash,
-            "2",
+            public["PARTICIPANT_ATTESTER_ADDRESS"],
+            public["REGRESSION_VERIFIER_ONE_ADDRESS"],
+            public["REGRESSION_VERIFIER_TWO_ADDRESS"],
         ],
     )
+    bundle_address = deployments["bundle"]["contract"]
+    linked_components = {
+        "participant_registry": "participantRegistry()(address)",
+        "terms_registry": "termsRegistry()(address)",
+        "verifier_module": "verifierModule()(address)",
+    }
+    for name, signature in linked_components.items():
+        component = normalize_address(foundry.call(bundle_address, signature), f"bundle {name}")
+        if foundry.code(component) in {"0x", "0x0"}:
+            raise DeploymentError(f"bundle {name} has no runtime code")
+        deployments[name] = {
+            "contract": component,
+            "transaction_hash": deployments["bundle"]["transaction_hash"],
+            "source": f"StandingMetaV2Bundle.{signature.split('(')[0]}",
+        }
 
     target = foundry.repo / "target"
     target.mkdir(parents=True, exist_ok=True)
@@ -449,6 +455,8 @@ def deploy_mainnet(foundry: Foundry, output: Path) -> dict[str, Any]:
     transactions = read_broadcast(
         broadcast_path(foundry, "DeployStandingMetaV2", BASE_MAINNET_CHAIN_ID)
     )
+    if len(transactions) != 1 or transactions[0]["to"] is not None:
+        raise DeploymentError("mainnet policy components were not deployed atomically in one creation")
     expected = {
         "canonical_factory": BASE_MAINNET_FACTORY,
         "settlement_token": BASE_MAINNET_USDC,
@@ -462,9 +470,11 @@ def deploy_mainnet(foundry: Foundry, output: Path) -> dict[str, Any]:
         if observed != wanted:
             raise DeploymentError(f"mainnet {field} mismatch: expected {wanted}, got {observed}")
     module = normalize_address(raw.get("verifier_module"), "mainnet verifier module")
+    bundle = normalize_address(raw.get("bundle"), "mainnet deployment bundle")
     participant_registry = normalize_address(raw.get("participant_registry"), "mainnet participant registry")
     terms_registry = normalize_address(raw.get("terms_registry"), "mainnet terms registry")
     for label, address in {
+        "deployment bundle": bundle,
         "verifier module": module,
         "participant registry": participant_registry,
         "terms registry": terms_registry,
@@ -472,6 +482,18 @@ def deploy_mainnet(foundry: Foundry, output: Path) -> dict[str, Any]:
         if foundry.code(address) in {"0x", "0x0"}:
             raise DeploymentError(f"{label} has no runtime code")
     onchain = {
+        "bundle_factory": normalize_address(
+            foundry.call(bundle, "canonicalFactory()(address)"), "bundle factory"
+        ),
+        "bundle_participant_registry": normalize_address(
+            foundry.call(bundle, "participantRegistry()(address)"), "bundle participant registry"
+        ),
+        "bundle_terms_registry": normalize_address(
+            foundry.call(bundle, "termsRegistry()(address)"), "bundle terms registry"
+        ),
+        "bundle_verifier_module": normalize_address(
+            foundry.call(bundle, "verifierModule()(address)"), "bundle verifier module"
+        ),
         "factory": normalize_address(foundry.call(module, "canonicalFactory()(address)"), "module factory"),
         "token": normalize_address(foundry.call(module, "settlementToken()(address)"), "module token"),
         "participant_registry": normalize_address(
@@ -484,6 +506,10 @@ def deploy_mainnet(foundry: Foundry, output: Path) -> dict[str, Any]:
         "verifier_threshold": int(foundry.call(module, "taskVerifierThreshold()(uint8)")),
     }
     expected_onchain: dict[str, object] = {
+        "bundle_factory": BASE_MAINNET_FACTORY,
+        "bundle_participant_registry": participant_registry,
+        "bundle_terms_registry": terms_registry,
+        "bundle_verifier_module": module,
         "factory": BASE_MAINNET_FACTORY,
         "token": BASE_MAINNET_USDC,
         "participant_registry": participant_registry,

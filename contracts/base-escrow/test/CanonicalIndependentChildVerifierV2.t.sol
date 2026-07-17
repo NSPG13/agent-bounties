@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import "../src/AgentBountyFactory.sol";
 import "../src/CanonicalIndependentChildVerifierV2.sol";
+import "../src/StandingMetaV2Bundle.sol";
 
 interface IndependentChildVm {
     function addr(uint256 privateKey) external returns (address);
@@ -181,8 +182,62 @@ contract CanonicalIndependentChildVerifierV2Test {
         require(!ok, "participant identity changed");
     }
 
+    function testExpiredParticipantCannotRenewRetroactively() public {
+        _register(address(parentSolver), PARENT_PARTICIPANT);
+        vm.warp(block.timestamp + 15 days);
+        uint64 validUntil = uint64(block.timestamp + 14 days);
+        uint256 registrationNonce = participantRegistry.nonces(address(parentSolver));
+        bytes32 digest = participantRegistry.attestationDigest(
+            address(parentSolver), PARENT_PARTICIPANT, SOURCE_HASH, validUntil, registrationNonce
+        );
+
+        (bool ok,) = address(participantRegistry)
+            .call(
+                abi.encodeCall(
+                    participantRegistry.register,
+                    (
+                        address(parentSolver),
+                        PARENT_PARTICIPANT,
+                        SOURCE_HASH,
+                        validUntil,
+                        _sign(ELIGIBILITY_ATTESTER_KEY, digest)
+                    )
+                )
+            );
+
+        require(!ok, "expired participant renewed retroactively");
+    }
+
+    function testActiveParticipantCanExtendValidity() public {
+        _register(address(parentSolver), PARENT_PARTICIPANT);
+        (,,, uint64 previousValidUntil) = participantRegistry.participants(address(parentSolver));
+        uint64 nextValidUntil = previousValidUntil + 14 days;
+        uint256 registrationNonce = participantRegistry.nonces(address(parentSolver));
+        bytes32 digest = participantRegistry.attestationDigest(
+            address(parentSolver), PARENT_PARTICIPANT, SOURCE_HASH, nextValidUntil, registrationNonce
+        );
+
+        participantRegistry.register(
+            address(parentSolver),
+            PARENT_PARTICIPANT,
+            SOURCE_HASH,
+            nextValidUntil,
+            _sign(ELIGIBILITY_ATTESTER_KEY, digest)
+        );
+        (,,, uint64 observedValidUntil) = participantRegistry.participants(address(parentSolver));
+
+        require(observedValidUntil == nextValidUntil, "active participant validity did not extend");
+    }
+
+    function testRegistrationAtClaimCutoffIsNotEligible() public {
+        _register(address(parentSolver), PARENT_PARTICIPANT);
+        (,, bool eligible) = participantRegistry.eligibleAt(address(parentSolver), uint64(block.timestamp));
+        require(!eligible, "same-timestamp registration was eligible");
+    }
+
     function testEligibilityIsEvaluatedAtTheClaimCutoff() public {
         _register(address(parentSolver), PARENT_PARTICIPANT);
+        vm.warp(block.timestamp + 1);
         uint64 cutoff = uint64(block.timestamp);
 
         vm.warp(block.timestamp + 15 days);
@@ -192,6 +247,26 @@ contract CanonicalIndependentChildVerifierV2Test {
         require(eligible, "historical eligibility was lost");
         require(participantId == PARENT_PARTICIPANT, "participant mismatch");
         require(sourceHash == SOURCE_HASH, "source mismatch");
+    }
+
+    function testBundleDeploysTheExactPolicyAtomically() public {
+        StandingMetaV2Bundle bundle = new StandingMetaV2Bundle(
+            address(factory),
+            vm.addr(ELIGIBILITY_ATTESTER_KEY),
+            vm.addr(TASK_VERIFIER_ONE_KEY),
+            vm.addr(TASK_VERIFIER_TWO_KEY)
+        );
+        CanonicalIndependentChildVerifierV2 bundledModule = bundle.verifierModule();
+
+        require(bundle.canonicalFactory() == address(factory), "bundle factory mismatch");
+        require(bundledModule.canonicalFactory() == address(factory), "module factory mismatch");
+        require(
+            address(bundledModule.participantRegistry()) == address(bundle.participantRegistry()),
+            "bundle participant registry mismatch"
+        );
+        require(address(bundledModule.termsRegistry()) == address(bundle.termsRegistry()), "bundle terms mismatch");
+        require(bundledModule.taskVerifierSetHash() == keccak256(abi.encode(taskVerifiers)), "bundle quorum mismatch");
+        require(bundledModule.taskVerifierThreshold() == 2, "bundle threshold mismatch");
     }
 
     function testUnregisteredChildParticipantCannotSettleParent() public {

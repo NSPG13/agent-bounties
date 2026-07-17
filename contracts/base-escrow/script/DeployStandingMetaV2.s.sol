@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "../src/AgentBountyFactory.sol";
-import "../src/CanonicalIndependentChildVerifierV2.sol";
+import "../src/StandingMetaV2Bundle.sol";
 
 interface StandingMetaDeployVm {
     function addr(uint256 privateKey) external returns (address);
@@ -58,13 +58,14 @@ contract DeployStandingMetaV2 {
         bytes32 verifierSetHash = keccak256(abi.encode(verifiers));
 
         vm.startBroadcast(deployerKey);
-        ParticipantEligibilityRegistry participants = new ParticipantEligibilityRegistry(attester);
-        OnchainTermsRegistry terms = new OnchainTermsRegistry();
-        CanonicalIndependentChildVerifierV2 module = new CanonicalIndependentChildVerifierV2(
-            BASE_MAINNET_FACTORY, address(participants), address(terms), verifierSetHash, 2
-        );
+        StandingMetaV2Bundle bundle = new StandingMetaV2Bundle(BASE_MAINNET_FACTORY, attester, verifierOne, verifierTwo);
         vm.stopBroadcast();
 
+        ParticipantEligibilityRegistry participants = bundle.participantRegistry();
+        OnchainTermsRegistry terms = bundle.termsRegistry();
+        CanonicalIndependentChildVerifierV2 module = bundle.verifierModule();
+
+        require(bundle.canonicalFactory() == BASE_MAINNET_FACTORY, "bundle factory drift");
         require(address(module.canonicalFactory()) == BASE_MAINNET_FACTORY, "module factory drift");
         require(module.settlementToken() == BASE_MAINNET_USDC, "module token drift");
         require(address(module.participantRegistry()) == address(participants), "participant registry drift");
@@ -79,6 +80,7 @@ contract DeployStandingMetaV2 {
         vm.serializeAddress(objectKey, "canonical_factory", BASE_MAINNET_FACTORY);
         vm.serializeAddress(objectKey, "settlement_token", BASE_MAINNET_USDC);
         vm.serializeAddress(objectKey, "participant_attester", attester);
+        vm.serializeAddress(objectKey, "bundle", address(bundle));
         vm.serializeAddress(objectKey, "participant_registry", address(participants));
         vm.serializeAddress(objectKey, "terms_registry", address(terms));
         vm.serializeAddress(objectKey, "verifier_one", verifierOne);

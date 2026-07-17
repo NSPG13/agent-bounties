@@ -80,6 +80,8 @@ contract ParticipantEligibilityRegistry {
         } else {
             require(record.participantId == participantId, "participant immutable");
             require(record.sourceHash == sourceHash, "source immutable");
+            require(block.timestamp <= record.validUntil, "expired record cannot renew");
+            require(validUntil > record.validUntil, "renewal must extend validity");
         }
         record.validUntil = validUntil;
         nonces[wallet] = nonce + 1;
@@ -94,7 +96,7 @@ contract ParticipantEligibilityRegistry {
         ParticipantRecord memory record = participants[wallet];
         participantId = record.participantId;
         sourceHash = record.sourceHash;
-        eligible = participantId != bytes32(0) && record.registeredAt <= cutoff && record.validUntil >= cutoff;
+        eligible = participantId != bytes32(0) && record.registeredAt < cutoff && record.validUntil >= cutoff;
     }
 
     function _recover(bytes32 digest, bytes calldata signature) private pure returns (address recovered) {
