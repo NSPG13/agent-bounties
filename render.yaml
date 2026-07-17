@@ -56,6 +56,8 @@ envVarGroups:
 services:
   - type: web
     name: agent-bounties-api
+    domains:
+      - api.bountyboard.global
     runtime: docker
     plan: starter
     region: oregon
@@ -133,6 +135,8 @@ services:
 
   - type: web
     name: agent-bounties-mcp
+    domains:
+      - mcp.bountyboard.global
     runtime: docker
     plan: starter
     region: oregon

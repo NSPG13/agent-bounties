@@ -34,6 +34,10 @@ FAILED_STATUSES = {
     "deactivated",
 }
 TRANSIENT_HTTP_STATUSES = {429, 500, 503}
+CUSTOM_DOMAINS = {
+    "agent-bounties-api": "api.bountyboard.global",
+    "agent-bounties-mcp": "mcp.bountyboard.global",
+}
 
 
 class RecoveryError(RuntimeError):
@@ -141,6 +145,19 @@ def unwrap_deploy(payload: object) -> dict[str, Any]:
     if not isinstance(deploy, dict):
         raise RecoveryError("Render deploy response is missing deploy metadata")
     return deploy
+
+
+def unwrap_custom_domains(payload: object) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        raise RecoveryError("Render custom-domain response must be an array")
+    domains: list[dict[str, Any]] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        domain = entry.get("customDomain", entry)
+        if isinstance(domain, dict):
+            domains.append(domain)
+    return domains
 
 
 def deploy_commit(deploy: dict[str, Any]) -> str | None:
@@ -266,6 +283,27 @@ class RenderClient:
 
     def list_deploys(self, service_id: str) -> Any:
         return self._read_with_retry(f"/services/{service_id}/deploys?limit=20")
+
+    def ensure_custom_domain(self, service: dict[str, Any], domain: str) -> dict[str, Any]:
+        service_id = service["id"]
+        existing = [
+            item
+            for item in unwrap_custom_domains(
+                self._read_with_retry(f"/services/{service_id}/custom-domains?limit=100")
+            )
+            if str(item.get("name", "")).lower() == domain.lower()
+        ]
+        if len(existing) > 1:
+            raise RecoveryError(f"{service['name']} has duplicate Render custom domains for {domain}")
+        if existing:
+            return existing[0]
+        created = self._request_json(
+            "POST", f"/services/{service_id}/custom-domains", {"name": domain}
+        )
+        custom_domain = created.get("customDomain", created) if isinstance(created, dict) else None
+        if not isinstance(custom_domain, dict) or str(custom_domain.get("name", "")).lower() != domain.lower():
+            raise RecoveryError(f"Render did not attach {domain} to {service['name']}")
+        return custom_domain
 
     def get_deploy(self, service_id: str, deploy_id: str) -> dict[str, Any]:
         return unwrap_deploy(
@@ -452,6 +490,20 @@ def deploy(
     for spec, service in services:
         client.disable_native_auto_deploy(service)
 
+    custom_domains = []
+    for spec, service in services:
+        domain = CUSTOM_DOMAINS.get(spec.name)
+        if domain is None:
+            continue
+        record = client.ensure_custom_domain(service, domain)
+        custom_domains.append(
+            {
+                "service": spec.name,
+                "name": domain,
+                "status": record.get("verificationStatus", record.get("status", "attached")),
+            }
+        )
+
     for spec, service in services:
         created = client.ensure_deploy(service, revision)
         deploy_id, status = validate_deploy(created, revision, spec.name)
@@ -505,7 +557,7 @@ def deploy(
                 "native_auto_deploy": "disabled",
             }
         )
-    return {"services": service_evidence, "health": health}
+    return {"services": service_evidence, "health": health, "custom_domains": custom_domains}
 
 
 def parse_args() -> argparse.Namespace:
@@ -542,6 +594,7 @@ def main() -> int:
         "success": False,
         "services": [],
         "health": [],
+        "custom_domains": [],
         "error": None,
     }
     try:

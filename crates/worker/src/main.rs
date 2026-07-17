@@ -1,13 +1,17 @@
 use anyhow::Context;
 use db::PostgresStore;
-use std::{env, time::Duration};
+use std::{
+    env,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::time::sleep;
 use worker::{
     indexer_error_is_retryable, poll_autonomous_indexer_once_with_heartbeat,
     redact_operational_error, run_regression_sandbox_request, snapshot_directory,
-    stage_regression_input, AutonomousIndexerConfig, IndexerRecoveryDecision,
-    IndexerRecoveryPolicy, RegressionInputKind, RegressionSandboxRunRequest,
-    REGRESSION_SANDBOX_DOCKER_BINARY_ENV, REGRESSION_SANDBOX_STAGING_ROOT_ENV,
+    stage_regression_input, validate_regression_candidate, AutonomousIndexerConfig,
+    IndexerRecoveryDecision, IndexerRecoveryPolicy, RegressionCandidateValidationRequest,
+    RegressionInputKind, RegressionSandboxRunRequest, REGRESSION_SANDBOX_DOCKER_BINARY_ENV,
+    REGRESSION_SANDBOX_STAGING_ROOT_ENV,
 };
 
 #[tokio::main]
@@ -74,6 +78,25 @@ async fn main() -> anyhow::Result<()> {
             max_files,
         )?;
         println!("{}", serde_json::to_string_pretty(&staged)?);
+        return Ok(());
+    }
+    if arguments
+        .first()
+        .is_some_and(|value| value == "--validate-regression-candidate")
+    {
+        if arguments.len() != 2 {
+            anyhow::bail!("usage: worker --validate-regression-candidate <request.json>");
+        }
+        let request = std::fs::read_to_string(&arguments[1])
+            .context("failed to read regression candidate request")?;
+        let request: RegressionCandidateValidationRequest = serde_json::from_str(&request)
+            .context("failed to parse regression candidate request")?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock is before the Unix epoch")?
+            .as_secs();
+        validate_regression_candidate(request, now)?;
+        println!("ok");
         return Ok(());
     }
     let once =

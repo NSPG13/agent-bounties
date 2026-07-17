@@ -263,6 +263,8 @@ def main() -> int:
             fail(f"Render deployment workflow missing contract: {required}")
 
     api = named_block(services, "agent-bounties-api")
+    if "domains:\n      - api.bountyboard.global" not in api:
+        fail("API service must attach api.bountyboard.global")
     require_env_value(api, "APP_PACKAGE", "api")
     require_env_value(api, "APP_BINARY", "api")
     require_env_value(api, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')
@@ -284,6 +286,8 @@ def main() -> int:
         fail("API service must use /health")
 
     mcp = named_block(services, "agent-bounties-mcp")
+    if "domains:\n      - mcp.bountyboard.global" not in mcp:
+        fail("MCP service must attach mcp.bountyboard.global")
     require_env_value(mcp, "APP_PACKAGE", "mcp-server")
     require_env_value(mcp, "APP_BINARY", "mcp-server")
     require_env_value(mcp, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')

@@ -16,7 +16,7 @@
   const CHAIN_ID = "0x2105";
   const ZERO_HASH = `0x${"00".repeat(32)}`;
   const EXPECTED = Object.freeze({
-    sourceRevision: "7708253cd4914eaa06109523f565751f7d83b6f1",
+    sourceRevision: "da731c015a5dbee7053fc57abd50792d0b3b30f6",
     bountyFactory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     settlementToken: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     deterministicVerifier: "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
