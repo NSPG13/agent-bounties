@@ -40,6 +40,43 @@ class RegisterParticipantTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(registration.RegistrationError):
                 registration.parse_event(value, "NSPG13/agent-bounties")
 
+    def test_same_timestamp_registration_uses_strict_next_cutoff(self) -> None:
+        participant_id = "0x" + "1" * 64
+        source_hash = "0x" + "2" * 64
+        registered_at = 1_784_264_209
+        valid_until = registered_at + 30 * 24 * 60 * 60
+        cutoff = registration.registration_cutoff(
+            [participant_id, source_hash, registered_at, valid_until],
+            participant_id,
+            source_hash,
+            valid_until,
+        )
+        self.assertEqual(cutoff, registered_at + 1)
+        registration.validate_eligibility(
+            [participant_id, source_hash, True], participant_id, source_hash
+        )
+
+    def test_registration_record_and_eligibility_mismatches_fail_closed(self) -> None:
+        participant_id = "0x" + "1" * 64
+        source_hash = "0x" + "2" * 64
+        with self.assertRaises(registration.RegistrationError):
+            registration.registration_cutoff(
+                ["0x" + "3" * 64, source_hash, 100, 200],
+                participant_id,
+                source_hash,
+                200,
+            )
+        with self.assertRaises(registration.RegistrationError):
+            registration.validate_eligibility(
+                [participant_id, source_hash, False], participant_id, source_hash
+            )
+
+    def test_post_receipt_error_preserves_transaction_evidence(self) -> None:
+        error = registration.RegistrationError(
+            "confirmation failed", {"transaction_hash": "0x" + "4" * 64}
+        )
+        self.assertEqual(error.evidence["transaction_hash"], "0x" + "4" * 64)
+
 
 if __name__ == "__main__":
     unittest.main()

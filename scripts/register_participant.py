@@ -21,7 +21,9 @@ HASH = re.compile(r"^0x[0-9a-f]{64}$")
 
 
 class RegistrationError(RuntimeError):
-    pass
+    def __init__(self, message: str, evidence: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.evidence = evidence or {}
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,38 @@ def run(command: list[str]) -> str:
         detail = (completed.stderr or completed.stdout).strip()[:600]
         raise RegistrationError(f"participant transaction failed closed: {detail}")
     return completed.stdout.strip()
+
+
+def registration_cutoff(
+    record: object,
+    participant_id: str,
+    source_hash: str,
+    valid_until: int,
+) -> int:
+    if not isinstance(record, list) or len(record) != 4:
+        raise RegistrationError("participant registry returned an invalid record")
+    stored_participant, stored_source, registered_at, stored_valid_until = record
+    if (
+        str(stored_participant).lower() != participant_id
+        or str(stored_source).lower() != source_hash
+        or not isinstance(registered_at, int)
+        or registered_at <= 0
+        or stored_valid_until != valid_until
+        or registered_at >= stored_valid_until
+    ):
+        raise RegistrationError("participant registry stored a different identity or validity window")
+    return registered_at + 1
+
+
+def validate_eligibility(value: object, participant_id: str, source_hash: str) -> None:
+    if (
+        not isinstance(value, list)
+        or len(value) != 3
+        or str(value[0]).lower() != participant_id
+        or str(value[1]).lower() != source_hash
+        or value[2] is not True
+    ):
+        raise RegistrationError("participant registry did not confirm eligibility")
 
 
 def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str, Any]:
@@ -142,23 +176,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
     transaction_hash = str(receipt.get("transactionHash", "")).lower()
     if not HASH.fullmatch(transaction_hash) or str(receipt.get("status", "")) not in {"1", "0x1"}:
         raise RegistrationError("participant registration did not return a successful receipt")
-    eligible = run(
-        [
-            cast,
-            "call",
-            "--rpc-url",
-            args.rpc_url,
-            registry,
-            "eligibleAt(address,uint64)(bytes32,bytes32,bool)",
-            request.wallet,
-            str(int(time.time())),
-        ]
-    )
-    if "true" not in eligible.lower():
-        raise RegistrationError("participant registry did not confirm eligibility")
-    return {
-        "schema": SCHEMA,
-        "success": True,
+    receipt_evidence = {
         "repository": request.repository,
         "issue_number": request.issue_number,
         "github_login": request.github_login,
@@ -170,6 +188,54 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
         "valid_until": valid_until,
         "transaction_hash": transaction_hash,
     }
+    last_error: RegistrationError | ValueError | None = None
+    for attempt in range(6):
+        try:
+            record = json.loads(
+                run(
+                    [
+                        cast,
+                        "call",
+                        "--json",
+                        "--rpc-url",
+                        args.rpc_url,
+                        registry,
+                        "participants(address)(bytes32,bytes32,uint64,uint64)",
+                        request.wallet,
+                    ]
+                )
+            )
+            cutoff = registration_cutoff(record, participant_id, source_hash, valid_until)
+            eligibility = json.loads(
+                run(
+                    [
+                        cast,
+                        "call",
+                        "--json",
+                        "--rpc-url",
+                        args.rpc_url,
+                        registry,
+                        "eligibleAt(address,uint64)(bytes32,bytes32,bool)",
+                        request.wallet,
+                        str(cutoff),
+                    ]
+                )
+            )
+            validate_eligibility(eligibility, participant_id, source_hash)
+            break
+        except (RegistrationError, ValueError) as error:
+            last_error = error
+            if attempt < 5:
+                time.sleep(1)
+    else:
+        assert last_error is not None
+        raise RegistrationError(str(last_error), receipt_evidence) from last_error
+    return {
+        "schema": SCHEMA,
+        "success": True,
+        **receipt_evidence,
+        "eligibility_cutoff": cutoff,
+    }
 
 
 def markdown(evidence: dict[str, Any]) -> str:
@@ -180,6 +246,14 @@ def markdown(evidence: dict[str, Any]) -> str:
             f"Base transaction: `https://basescan.org/tx/{evidence['transaction_hash']}`\n\n"
             "This source-scoped identity is used only to enforce independent participation in "
             "standing meta-bounties. It is not payment, claim, completion, or payout evidence."
+        )
+    receipt = evidence.get("transaction_hash")
+    if receipt:
+        return (
+            "Participant registration transaction succeeded, but the confirmation read failed closed. "
+            "Do not resend the command until a maintainer checks the stored record.\n\n"
+            f"Base transaction: `https://basescan.org/tx/{receipt}`\n\n"
+            f"Confirmation error: {evidence.get('error', 'unknown error')}"
         )
     return (
         "Participant registration was not completed. The request failed closed: "
@@ -203,6 +277,8 @@ def main() -> int:
         request = parse_event(json.loads(args.event.read_text(encoding="utf-8")), args.repository)
         evidence = register(args, request)
     except (RegistrationError, OSError, ValueError, json.JSONDecodeError) as error:
+        if isinstance(error, RegistrationError):
+            evidence.update(error.evidence)
         evidence["error"] = str(error)[:600]
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
