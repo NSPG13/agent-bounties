@@ -37,6 +37,18 @@ def archive(entries: list[tuple[str, bytes | None, str]]) -> bytes:
 
 
 class RegressionVerifierPipelineTests(unittest.TestCase):
+    def test_stale_runner_revision_skips_every_signing_job(self) -> None:
+        workflow = (
+            SCRIPT.parent.parent / ".github" / "workflows" / "regression-verifier-signer.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('echo "authorized=false" >> "$GITHUB_OUTPUT"', workflow)
+        self.assertIn('echo "authorized=true" >> "$GITHUB_OUTPUT"', workflow)
+        self.assertEqual(
+            workflow.count("if: needs.authorize-run.outputs.authorized == 'true'"),
+            3,
+        )
+        self.assertNotIn("Refusing to sign a candidate from stale main", workflow)
+
     def test_artifact_reference_requires_an_exact_public_commit(self) -> None:
         expected = ("owner/repo", "a" * 40)
         self.assertEqual(
