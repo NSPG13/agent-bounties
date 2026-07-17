@@ -261,6 +261,30 @@ def wait_for_later_timestamp(
     )
 
 
+def wait_for_block_timestamp(
+    foundry: Foundry,
+    block_number: int,
+    *,
+    timeout_seconds: float = 90,
+    poll_interval_seconds: float = 2,
+) -> int:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: DeploymentError | None = None
+    while True:
+        try:
+            return parse_cast_uint(
+                foundry.cast_run("block", str(block_number), "--field", "timestamp"),
+                "terms publication block timestamp",
+            )
+        except DeploymentError as error:
+            last_error = error
+        if time.monotonic() >= deadline:
+            raise DeploymentError(
+                f"confirmed block {block_number} was unavailable before the RPC deadline: {last_error}"
+            ) from last_error
+        time.sleep(poll_interval_seconds)
+
+
 def confirmed_terms_publication(
     foundry: Foundry,
     terms_registry: str,
@@ -277,10 +301,7 @@ def confirmed_terms_publication(
     if len(matches) != 1:
         raise DeploymentError("preparation must contain exactly one decoded terms publication")
     block_number = int(matches[0]["block_number"])
-    block_timestamp = parse_cast_uint(
-        foundry.cast_run("block", str(block_number), "--field", "timestamp"),
-        "terms publication block timestamp",
-    )
+    block_timestamp = wait_for_block_timestamp(foundry, block_number)
     if block_timestamp < simulated_timestamp:
         raise DeploymentError("confirmed terms publication predates its simulation evidence")
     return {"block_number": block_number, "timestamp": block_timestamp}
