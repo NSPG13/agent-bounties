@@ -835,9 +835,9 @@ fn parse_claim_comment_signal(
         let bounty_contract = bounty.bounty_contract.clone();
         let solver_wallet = claim_wallet_address(&input.comment_body);
         let reservation_id = claim_reservation_id(input, command);
-        let claim_handoff_url = bounty_contract
-            .as_deref()
-            .map(|address| claim_handoff_url(input, address));
+        let claim_handoff_url = bounty_contract.as_deref().map(|address| {
+            claim_handoff_url(input, address, &reservation_id, solver_wallet.as_deref())
+        });
         let claim_plan_request = bounty_contract.as_deref().map(|address| {
             json!({
                 "method": "POST",
@@ -933,10 +933,19 @@ fn parse_claim_comment_signal(
     })
 }
 
-fn claim_handoff_url(input: &GitHubClaimCommentInput, bounty_contract: &str) -> String {
+fn claim_handoff_url(
+    input: &GitHubClaimCommentInput,
+    bounty_contract: &str,
+    reservation_id: &str,
+    solver_wallet: Option<&str>,
+) -> String {
+    let solver = solver_wallet
+        .map(|wallet| format!("&solver={}", url_query_encode(wallet)))
+        .unwrap_or_default();
     format!(
-        "{STATIC_EARN_PAGE_URL}?bountyContract={}&source=github-claim&issue={}",
+        "{STATIC_EARN_PAGE_URL}?bountyContract={}&claimKey={}&source=github-claim{solver}&issue={}",
         url_query_encode(bounty_contract),
+        url_query_encode(reservation_id),
         url_query_encode(&input.issue_url)
     )
 }
@@ -2131,6 +2140,8 @@ extract-data-to-schema
         let handoff = signal.claim_handoff_url.expect("claim handoff");
         assert!(handoff.starts_with(STATIC_EARN_PAGE_URL));
         assert!(handoff.contains("bountyContract=0x1111111111111111111111111111111111111111"));
+        assert!(handoff.contains("claimKey="));
+        assert!(handoff.contains("comment%3A1874"));
         assert!(handoff.contains("source=github-claim"));
         assert!(plan.check.text.contains("Copy-paste claim command"));
         assert!(plan.check.text.contains("curl -sS -X POST"));
@@ -2166,6 +2177,11 @@ extract-data-to-schema
         });
 
         let signal = plan.signal.expect("claim signal");
+        assert!(signal
+            .claim_handoff_url
+            .as_deref()
+            .expect("claim handoff")
+            .contains(&format!("solver={}", wallet.to_ascii_lowercase())));
         let request = signal.claim_plan_request.expect("machine request");
         assert_eq!(
             request["body"]["solver_wallet"],

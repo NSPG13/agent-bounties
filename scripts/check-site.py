@@ -288,8 +288,10 @@ def main() -> int:
             "/v1/base/autonomous-bounties/terms",
             "/v1/base/autonomous-bounties/creation-plan",
             "/v1/base/autonomous-bounties/contribution-plan",
-            "/v1/base/autonomous-bounties/claim-plan",
-            "/v1/base/autonomous-bounties/authorized-claim-plan",
+            "/v1/base/autonomous-bounties/claims",
+            "request_bond_sponsorship",
+            "wallet_signature",
+            "canonical_event_id",
             "/v1/base/autonomous-bounties/submission-plan",
             "contract_terms",
             "canonical_bounty_created",
@@ -310,6 +312,8 @@ def main() -> int:
     ]:
         if retired in active_surface:
             fail(f"active site still advertises retired escrow behavior: {retired}")
+    if "/v1/base/autonomous-bounties/authorized-claim-plan" in javascript:
+        fail("browser earning flow must use the hosted one-signature claim path")
     if "sk_live" in active_surface or "private_key" in active_surface.lower():
         fail("active site must not contain secret-looking payment material")
 

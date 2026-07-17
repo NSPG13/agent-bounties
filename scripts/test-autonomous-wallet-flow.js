@@ -23,8 +23,10 @@ for (const required of [
   "/v1/base/autonomous-bounties/authorized-creation-plan",
   "/v1/base/autonomous-bounties/contribution-plan",
   "/v1/base/autonomous-bounties/authorized-contribution-plan",
-  "/v1/base/autonomous-bounties/claim-plan",
-  "/v1/base/autonomous-bounties/authorized-claim-plan",
+  "/v1/base/autonomous-bounties/claims",
+  "request_bond_sponsorship",
+  "wallet_signature",
+  "canonical_event_id",
   "/v1/base/autonomous-bounties/submission-plan",
   "FundingAdded",
   "BountyClaimed",
@@ -92,10 +94,11 @@ assert(postHtml.includes('name="solverReward" type="number" min="0.01" step="0.0
 assert(postHtml.includes('name="verifierReward" type="number" min="0.01" step="0.01" value="0.01"'));
 
 const earnHtml = fs.readFileSync(path.join(repoRoot, "site", "earn.html"), "utf8");
-assert(earnHtml.includes("exact indexed bond before the wallet is asked to sign"));
+assert(earnHtml.includes("exact indexed bond before one bounded wallet signature"));
 assert(source.includes('params.get("bountyContract")'));
-assert(source.includes("Connect wallet and sign claim"));
-assert(source.includes("Exact refundable solver bond"));
+assert(source.includes("Sign once to claim"));
+assert(source.includes("Sponsored refundable bond"));
+assert(!source.includes("/v1/base/autonomous-bounties/authorized-claim-plan"));
 
 for (const page of ["index.html", "post.html", "funding.html", "earn.html", "operator.html", "recovery.html"]) {
   const html = fs.readFileSync(path.join(repoRoot, "site", page), "utf8");
@@ -181,7 +184,7 @@ async function testDeterministicPostingDefaults() {
   });
   const instrumentedSource = source.replace(
     /\}\)\(\);\s*$/,
-    "globalThis.__agentBountiesTest = { termsDocument }; })();",
+    "globalThis.__agentBountiesTest = { termsDocument, validateHostedClaimHandoff }; })();",
   );
   new vm.Script(instrumentedSource, { filename: "site/autonomous.js" }).runInContext(context);
   await documentListeners.DOMContentLoaded();
@@ -238,6 +241,93 @@ async function testDeterministicPostingDefaults() {
   );
   assert.strictEqual(terms.verification_policy.module_id, "leading_zero_work_v1");
   assert.strictEqual(terms.verification_policy.settlement_scope, "protocol_canary_only");
+
+  const account = "0x2222222222222222222222222222222222222222";
+  const bountyContract = "0x1111111111111111111111111111111111111111";
+  const requestBody = {
+    idempotency_key: "github-claim-comment:test",
+    network: "base-mainnet",
+    bounty_contract: bountyContract,
+    solver_wallet: account,
+    request_bond_sponsorship: true,
+    source: "github-claim",
+  };
+  const typedData = {
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+        { name: "verifyingContract", type: "address" },
+      ],
+      TransferWithAuthorization: [
+        { name: "from", type: "address" },
+        { name: "to", type: "address" },
+        { name: "value", type: "uint256" },
+        { name: "validAfter", type: "uint256" },
+        { name: "validBefore", type: "uint256" },
+        { name: "nonce", type: "bytes32" },
+      ],
+    },
+    domain: {
+      name: "USD Coin",
+      version: "2",
+      chainId: 8453,
+      verifyingContract: protocol.native_usdc,
+    },
+    primaryType: "TransferWithAuthorization",
+    message: {
+      from: account,
+      to: bountyContract,
+      value: "10000",
+      validAfter: "0",
+      validBefore: "1800000000",
+      nonce: `0x${"33".repeat(32)}`,
+    },
+  };
+  const handoff = {
+    schema_version: "agent-bounties/agent-native-claim-v1",
+    candidate: {
+      status: "authorization_ready",
+      bounty_contract: bountyContract,
+      solver_wallet: account,
+    },
+    wallet_request: {
+      method: "eth_signTypedData_v4",
+      params: [account, JSON.stringify(typedData)],
+    },
+    next_request: {
+      method: "POST",
+      url: "https://api.bountyboard.global/v1/base/autonomous-bounties/claims",
+      body: requestBody,
+    },
+  };
+  const selected = { bounty_contract: bountyContract, claim_bond: "10000" };
+  const walletRequest = context.__agentBountiesTest.validateHostedClaimHandoff(
+    handoff,
+    requestBody,
+    selected,
+    account,
+    protocol,
+    "https://api.bountyboard.global",
+  );
+  assert.strictEqual(walletRequest.method, "eth_signTypedData_v4");
+
+  const tampered = JSON.parse(JSON.stringify(handoff));
+  const tamperedTypedData = JSON.parse(tampered.wallet_request.params[1]);
+  tamperedTypedData.message.to = "0x3333333333333333333333333333333333333333";
+  tampered.wallet_request.params[1] = JSON.stringify(tamperedTypedData);
+  assert.throws(
+    () => context.__agentBountiesTest.validateHostedClaimHandoff(
+      tampered,
+      requestBody,
+      selected,
+      account,
+      protocol,
+      "https://api.bountyboard.global",
+    ),
+    /differs from the selected Base USDC bond/,
+  );
 }
 
 testDeterministicPostingDefaults()
