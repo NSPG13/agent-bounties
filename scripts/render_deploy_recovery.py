@@ -42,6 +42,19 @@ PUBLIC_ENV_SERVICE_NAMES = {
     "agent-bounties-api",
     "agent-bounties-mcp",
 }
+CLOUD_AGENT_API_SERVICE_NAME = "agent-bounties-api"
+CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
+    "CLOUD_AGENT_ENABLED": "true",
+    "CLOUD_AGENT_PUBLIC_DRAFTS": "true",
+    "CLOUD_AGENT_PROVIDER": "openai-compatible",
+    "CLOUD_AGENT_PROTOCOL": "openai_chat_completions",
+    "CLOUD_AGENT_ENDPOINT": "https://api.openai.com/v1/chat/completions",
+    "CLOUD_AGENT_MODEL": "gpt-4.1-mini",
+    "CLOUD_AGENT_MAX_INPUT_CHARS": "12000",
+    "CLOUD_AGENT_MAX_OUTPUT_TOKENS": "2500",
+    "CLOUD_AGENT_MAX_DAILY_DRAFTS": "25",
+    "CLOUD_AGENT_TIMEOUT_SECONDS": "45",
+}
 
 
 class RecoveryError(RuntimeError):
@@ -487,6 +500,73 @@ def fetch_health(url: str, timeout_seconds: float) -> tuple[int, str, dict[str, 
         raise RecoveryError(f"health probe transport failed: {redact(str(error))}") from None
 
 
+def fetch_json(url: str, timeout_seconds: float) -> dict[str, Any]:
+    separator = "&" if "?" in url else "?"
+    request = urllib.request.Request(
+        f"{url}{separator}_agent_bounties_probe={time.time_ns()}",
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            "Cache-Control": "no-cache, no-store",
+            "Connection": "close",
+            "Pragma": "no-cache",
+            "User-Agent": "agent-bounties-render-recovery/1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            status = response.status
+            body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        raise RecoveryError(
+            f"JSON readiness probe returned HTTP {error.code}"
+        ) from None
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise RecoveryError(
+            f"JSON readiness probe transport failed: {redact(str(error))}"
+        ) from None
+    if status != 200:
+        raise RecoveryError(f"JSON readiness probe returned HTTP {status}")
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise RecoveryError(f"JSON readiness probe returned invalid JSON: {error}") from None
+    if not isinstance(payload, dict):
+        raise RecoveryError("JSON readiness probe must return an object")
+    return payload
+
+
+def validate_cloud_agent_readiness(
+    payload: dict[str, Any],
+    *,
+    credential_supplied: bool,
+) -> dict[str, Any]:
+    if payload.get("schema_version") != "agent-bounties/cloud-agent-readiness-v1":
+        raise RecoveryError("cloud-agent readiness schema is invalid")
+    if payload.get("execution") != "hosted_cloud_api":
+        raise RecoveryError("cloud-agent readiness does not attest hosted execution")
+    if payload.get("local_fallback") is not False:
+        raise RecoveryError("cloud-agent readiness must prohibit a local fallback")
+    if payload.get("authority") != "draft_only":
+        raise RecoveryError("cloud-agent readiness exceeds draft-only authority")
+    available = payload.get("available")
+    missing = payload.get("missing_configuration")
+    if not isinstance(available, bool) or not isinstance(missing, list):
+        raise RecoveryError("cloud-agent readiness is incomplete")
+    if credential_supplied and (not available or missing):
+        raise RecoveryError("supplied cloud-agent credential did not become ready")
+    return {
+        "available": available,
+        "credential_supplied": credential_supplied,
+        "provider": payload.get("provider"),
+        "model": payload.get("model"),
+        "public_drafts": payload.get("public_drafts"),
+        "local_fallback": False,
+        "authority": "draft_only",
+        "missing_configuration": missing,
+    }
+
+
 def validate_health(
     service_name: str,
     revision: str,
@@ -549,6 +629,41 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> None:
     path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def reconcile_cloud_agent_environment(
+    client: RenderClient,
+    service: dict[str, Any],
+    api_key: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    runtime_environment = []
+    changed = False
+    for key, value in CLOUD_AGENT_RUNTIME_ENVIRONMENT.items():
+        record = client.ensure_env_var(service, key, value)
+        changed |= record["changed"]
+        runtime_environment.append(
+            {
+                "service": service["name"],
+                "key": key,
+                "value": value,
+                "changed": record["changed"],
+            }
+        )
+
+    secret_environment = []
+    normalized_key = api_key.strip() if isinstance(api_key, str) else ""
+    if normalized_key:
+        record = client.ensure_env_var(service, "CLOUD_AGENT_API_KEY", normalized_key)
+        changed |= record["changed"]
+        secret_environment.append(
+            {
+                "service": service["name"],
+                "key": "CLOUD_AGENT_API_KEY",
+                "configured": True,
+                "changed": record["changed"],
+            }
+        )
+    return runtime_environment, secret_environment, changed
+
+
 def deploy(
     client: RenderClient,
     revision: str,
@@ -559,6 +674,7 @@ def deploy(
     poll_seconds: float,
     public_base_url: str = "https://api.bountyboard.global",
     mcp_base_url: str = "https://mcp.bountyboard.global",
+    cloud_agent_api_key: str | None = None,
 ) -> dict[str, Any]:
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
     pending: dict[str, tuple[str, str]] = {}
@@ -593,6 +709,14 @@ def deploy(
                     "changed": record["changed"],
                 }
             )
+
+    api_service = next(
+        service for spec, service in services if spec.name == CLOUD_AGENT_API_SERVICE_NAME
+    )
+    cloud_environment, secret_environment, cloud_environment_changed = (
+        reconcile_cloud_agent_environment(client, api_service, cloud_agent_api_key)
+    )
+    public_environment_changed[CLOUD_AGENT_API_SERVICE_NAME] |= cloud_environment_changed
 
     custom_domains = []
     for spec, service in services:
@@ -649,6 +773,15 @@ def deploy(
         for spec, _ in services
         if spec.health_url is not None
     ]
+    cloud_readiness = validate_cloud_agent_readiness(
+        fetch_json(
+            f"{public_base_url.rstrip('/')}/v1/cloud-agent/readiness",
+            20,
+        ),
+        credential_supplied=bool(
+            cloud_agent_api_key and cloud_agent_api_key.strip()
+        ),
+    )
     service_evidence = []
     for spec, service in services:
         deployed = completed[spec.name]
@@ -670,6 +803,9 @@ def deploy(
         "health": health,
         "custom_domains": custom_domains,
         "public_environment": public_environment,
+        "cloud_environment": cloud_environment,
+        "secret_environment": secret_environment,
+        "cloud_readiness": cloud_readiness,
     }
 
 
@@ -717,6 +853,9 @@ def main() -> int:
         "health": [],
         "custom_domains": [],
         "public_environment": [],
+        "cloud_environment": [],
+        "secret_environment": [],
+        "cloud_readiness": {},
         "error": None,
     }
     try:
@@ -734,6 +873,7 @@ def main() -> int:
             poll_seconds=args.poll_seconds,
             public_base_url=args.public_base_url,
             mcp_base_url=args.mcp_base_url,
+            cloud_agent_api_key=os.environ.get("CLOUD_AGENT_API_KEY"),
         )
         evidence.update(result)
         evidence["revision"] = revision

@@ -60,6 +60,16 @@ class RecordingClient(recovery.RenderClient):
         return self.response
 
 
+class EnvironmentClient:
+    def __init__(self, changed=True) -> None:
+        self.changed = changed
+        self.calls = []
+
+    def ensure_env_var(self, service, key, value):
+        self.calls.append((service["name"], key, value))
+        return {"key": key, "value": value, "changed": self.changed}
+
+
 class ResolutionFailureClient:
     def __init__(self) -> None:
         self.resolved = []
@@ -280,6 +290,49 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             ],
         )
 
+    def test_cloud_environment_reconciliation_never_returns_secret_value(self) -> None:
+        client = EnvironmentClient()
+        service = {"id": "srv-api", "name": "agent-bounties-api"}
+        runtime, secrets, changed = recovery.reconcile_cloud_agent_environment(
+            client,
+            service,
+            "  model-secret-value  ",
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(len(runtime), len(recovery.CLOUD_AGENT_RUNTIME_ENVIRONMENT))
+        self.assertEqual(
+            secrets,
+            [
+                {
+                    "service": "agent-bounties-api",
+                    "key": "CLOUD_AGENT_API_KEY",
+                    "configured": True,
+                    "changed": True,
+                }
+            ],
+        )
+        self.assertEqual(client.calls[-1], (
+            "agent-bounties-api",
+            "CLOUD_AGENT_API_KEY",
+            "model-secret-value",
+        ))
+        self.assertNotIn("model-secret-value", recovery.json.dumps([runtime, secrets]))
+
+    def test_missing_cloud_secret_is_never_written_or_invented(self) -> None:
+        client = EnvironmentClient(changed=False)
+        service = {"id": "srv-api", "name": "agent-bounties-api"}
+        runtime, secrets, changed = recovery.reconcile_cloud_agent_environment(
+            client,
+            service,
+            None,
+        )
+
+        self.assertFalse(changed)
+        self.assertEqual(len(runtime), len(recovery.CLOUD_AGENT_RUNTIME_ENVIRONMENT))
+        self.assertEqual(secrets, [])
+        self.assertNotIn("CLOUD_AGENT_API_KEY", [key for _, key, _ in client.calls])
+
     def test_public_env_var_update_fails_when_readback_drifts(self) -> None:
         client = RecordingClient(
             response={
@@ -414,6 +467,52 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         wrong = (200, "ok", {**response[2], "x-agent-bounties-revision": "b" * 40})
         with self.assertRaisesRegex(recovery.RecoveryError, "different revision"):
             recovery.validate_health("api", revision, wrong)
+
+    def test_cloud_readiness_requires_supplied_credential_to_be_live(self) -> None:
+        unavailable = {
+            "schema_version": "agent-bounties/cloud-agent-readiness-v1",
+            "available": False,
+            "execution": "hosted_cloud_api",
+            "provider": "openai-compatible",
+            "model": "gpt-4.1-mini",
+            "public_drafts": True,
+            "local_fallback": False,
+            "authority": "draft_only",
+            "missing_configuration": ["CLOUD_AGENT_API_KEY"],
+        }
+        observed = recovery.validate_cloud_agent_readiness(
+            unavailable,
+            credential_supplied=False,
+        )
+        self.assertFalse(observed["available"])
+        with self.assertRaisesRegex(recovery.RecoveryError, "did not become ready"):
+            recovery.validate_cloud_agent_readiness(
+                unavailable,
+                credential_supplied=True,
+            )
+
+        ready = dict(unavailable, available=True, missing_configuration=[])
+        observed = recovery.validate_cloud_agent_readiness(
+            ready,
+            credential_supplied=True,
+        )
+        self.assertTrue(observed["available"])
+        self.assertNotIn("CLOUD_AGENT_API_KEY", recovery.json.dumps(observed))
+
+    def test_cloud_readiness_cannot_claim_a_local_fallback(self) -> None:
+        payload = {
+            "schema_version": "agent-bounties/cloud-agent-readiness-v1",
+            "available": True,
+            "execution": "hosted_cloud_api",
+            "local_fallback": True,
+            "authority": "draft_only",
+            "missing_configuration": [],
+        }
+        with self.assertRaisesRegex(recovery.RecoveryError, "local fallback"):
+            recovery.validate_cloud_agent_readiness(
+                payload,
+                credential_supplied=False,
+            )
 
     def test_health_transport_bypasses_cache_and_closes_each_connection(self) -> None:
         class Response:

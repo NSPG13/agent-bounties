@@ -53,11 +53,6 @@ envVarGroups:
       - key: BOND_SPONSOR_BASE_SEPOLIA_CONTRACT
         sync: false
 
-  - name: agent-bounties-cloud-agent
-    envVars:
-      - key: CLOUD_AGENT_API_KEY
-        sync: false
-
 services:
   - type: web
     name: agent-bounties-api
@@ -132,6 +127,8 @@ services:
         value: "false"
       - key: ALLOW_UNSIGNED_STRIPE_WEBHOOKS
         value: "false"
+      - key: CLOUD_AGENT_API_KEY
+        sync: false
       - key: CLOUD_AGENT_ENABLED
         value: "true"
       - key: CLOUD_AGENT_PUBLIC_DRAFTS
@@ -157,7 +154,6 @@ services:
       - fromGroup: agent-bounties-base
       - fromGroup: agent-bounties-x402-relayer
       - fromGroup: agent-bounties-bond-sponsor
-      - fromGroup: agent-bounties-cloud-agent
 
   - type: web
     name: agent-bounties-mcp

@@ -222,12 +222,8 @@ def main() -> int:
         ["X402_RELAYER_PRIVATE_KEY"],
     )
     require_env_sync_false(relayer_group, "X402_RELAYER_PRIVATE_KEY")
-    cloud_agent_group = require_group(
-        text,
-        "agent-bounties-cloud-agent",
-        ["CLOUD_AGENT_API_KEY"],
-    )
-    require_env_sync_false(cloud_agent_group, "CLOUD_AGENT_API_KEY")
+    if "agent-bounties-cloud-agent" in section(text, "envVarGroups"):
+        fail("CLOUD_AGENT_API_KEY cannot use sync: false inside an environment group")
     if active:
         require_env_value(base_group, "BASE_MAINNET_BOUNTY_FACTORY", str(factory["contract"]))
         require_env_value(base_group, "BASE_MAINNET_BOUNTY_IMPLEMENTATION", str(factory["implementation"]))
@@ -262,6 +258,7 @@ def main() -> int:
         "actions: read",
         "Select latest successful main revision",
         "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}",
+        "CLOUD_AGENT_API_KEY: ${{ secrets.CLOUD_AGENT_API_KEY }}",
         "scripts/render_deploy_recovery.py",
         '--public-base-url "${PRODUCTION_API_BASE_URL%/}"',
         '--mcp-base-url "${PRODUCTION_MCP_BASE_URL%/}"',
@@ -269,6 +266,18 @@ def main() -> int:
     for required in workflow_contract:
         if required not in deploy_workflow:
             fail(f"Render deployment workflow missing contract: {required}")
+
+    controller_path = repo_root / "scripts" / "render_deploy_recovery.py"
+    controller = controller_path.read_text(encoding="utf-8")
+    for required in [
+        "CLOUD_AGENT_RUNTIME_ENVIRONMENT",
+        "reconcile_cloud_agent_environment",
+        "validate_cloud_agent_readiness",
+        'cloud_agent_api_key=os.environ.get("CLOUD_AGENT_API_KEY")',
+        '"secret_environment": secret_environment',
+    ]:
+        if required not in controller:
+            fail(f"Render deployment controller missing cloud contract: {required}")
 
     api = named_block(services, "agent-bounties-api")
     if "domains:\n      - api.bountyboard.global" not in api:
@@ -279,11 +288,17 @@ def main() -> int:
     require_env_value(api, "ENABLE_STRIPE_PUBLIC_CHECKOUT", '"false"')
     require_env_value(api, "ENABLE_BASE_TX_BROADCAST", '"false"')
     require_env_value(api, "ENABLE_X402_HOSTED_RELAY", '"true"')
+    require_env_sync_false(api, "CLOUD_AGENT_API_KEY")
     require_env_value(api, "CLOUD_AGENT_ENABLED", '"true"')
     require_env_value(api, "CLOUD_AGENT_PUBLIC_DRAFTS", '"true"')
+    require_env_value(api, "CLOUD_AGENT_PROVIDER", "openai-compatible")
     require_env_value(api, "CLOUD_AGENT_PROTOCOL", "openai_chat_completions")
     require_env_value(api, "CLOUD_AGENT_ENDPOINT", "https://api.openai.com/v1/chat/completions")
+    require_env_value(api, "CLOUD_AGENT_MODEL", "gpt-4.1-mini")
+    require_env_value(api, "CLOUD_AGENT_MAX_INPUT_CHARS", '"12000"')
+    require_env_value(api, "CLOUD_AGENT_MAX_OUTPUT_TOKENS", '"2500"')
     require_env_value(api, "CLOUD_AGENT_MAX_DAILY_DRAFTS", '"25"')
+    require_env_value(api, "CLOUD_AGENT_TIMEOUT_SECONDS", '"45"')
     require_env_value(api, "X402_RELAYER_MIN_USDC_BASE_UNITS", '"100000"')
     require_env_value(api, "X402_RELAYER_MAX_USDC_BASE_UNITS", '"5000000"')
     require_env_value(api, "X402_RELAYER_MAX_GAS", '"300000"')
@@ -295,8 +310,8 @@ def main() -> int:
     )
     if "fromGroup: agent-bounties-x402-relayer" not in api:
         fail("API service must receive the isolated x402 relayer secret group")
-    if "fromGroup: agent-bounties-cloud-agent" not in api:
-        fail("API service must receive the isolated cloud-agent secret group")
+    if "fromGroup: agent-bounties-cloud-agent" in api:
+        fail("API service must keep the cloud credential as a direct sync:false secret")
     if "healthCheckPath: /health" not in api:
         fail("API service must use /health")
 
@@ -312,6 +327,8 @@ def main() -> int:
         fail("MCP service must not receive the x402 relayer private key")
     if "fromGroup: agent-bounties-cloud-agent" in mcp:
         fail("MCP service must proxy cloud drafts without receiving the model API key")
+    if "key: CLOUD_AGENT_API_KEY" in mcp:
+        fail("MCP service must not receive the model API key")
     if "healthCheckPath: /health" not in mcp:
         fail("MCP service must use /health")
 

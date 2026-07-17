@@ -21,9 +21,12 @@ executable verifier, and publish and fund through the canonical protocol.
 ## Provider Configuration
 
 The adapter supports OpenAI-compatible chat completions and Anthropic Messages.
-Render keeps `CLOUD_AGENT_API_KEY` in the isolated
-`agent-bounties-cloud-agent` environment group. Only `agent-bounties-api`
-receives that group.
+Only `agent-bounties-api` receives `CLOUD_AGENT_API_KEY`. The Blueprint declares
+it directly on that service with `sync: false`; Render does not support
+`sync: false` inside environment groups. The exact-SHA deployment controller
+reconciles all nonsecret settings and, when the repository Actions secret is
+present, copies the model credential directly to the API service without
+including its value in deployment evidence.
 
 Required production settings:
 
@@ -36,6 +39,14 @@ CLOUD_AGENT_ENDPOINT=https://api.openai.com/v1/chat/completions
 CLOUD_AGENT_MODEL=gpt-4.1-mini
 CLOUD_AGENT_API_KEY=<Render secret>
 ```
+
+Store the same credential as the repository Actions secret
+`CLOUD_AGENT_API_KEY`, then dispatch **Render Deploy Recovery**. Existing Render
+Blueprints ignore newly added `sync: false` placeholders, so the deployment
+controller is the repeatable configuration path. Rotating the Actions secret
+and dispatching again rotates the API-service value and forces a redeploy. The
+controller then fails closed unless readiness reports hosted execution,
+draft-only authority, no local fallback, and `available: true`.
 
 The default public quota is 25 fresh drafts per UTC day per API process.
 Idempotent retries return the cached draft and do not consume another model
