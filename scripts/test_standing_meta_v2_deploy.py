@@ -10,10 +10,44 @@ from scripts.standing_meta_v2_deploy import (
     parse_cast_uint,
     read_broadcast,
     require_bytes32,
+    wait_for_runtime_code,
 )
 
 
+class CodeSequence:
+    def __init__(self, values: list[str]) -> None:
+        self.values = values
+
+    def code(self, _address: str) -> str:
+        if len(self.values) > 1:
+            return self.values.pop(0)
+        return self.values[0]
+
+
 class StandingMetaV2DeployTests(unittest.TestCase):
+    def test_runtime_code_waits_for_rpc_propagation(self) -> None:
+        foundry = CodeSequence(["0x", "0x6000"])
+        self.assertEqual(
+            wait_for_runtime_code(
+                foundry,  # type: ignore[arg-type]
+                "0x" + "11" * 20,
+                "test contract",
+                timeout_seconds=1,
+                poll_interval_seconds=0,
+            ),
+            "0x6000",
+        )
+
+    def test_runtime_code_timeout_fails_closed(self) -> None:
+        with self.assertRaises(DeploymentError):
+            wait_for_runtime_code(
+                CodeSequence(["0x"]),  # type: ignore[arg-type]
+                "0x" + "11" * 20,
+                "test contract",
+                timeout_seconds=0,
+                poll_interval_seconds=0,
+            )
+
     def test_cast_uint_accepts_foundry_annotations(self) -> None:
         self.assertEqual(parse_cast_uint("3000000 [3e6]"), 3_000_000)
         self.assertEqual(parse_cast_uint("0x2a [42]"), 42)
