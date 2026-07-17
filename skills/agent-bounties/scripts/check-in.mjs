@@ -32,17 +32,18 @@ const KECCAK_ROUND_CONSTANTS = Object.freeze([
 ]);
 const TERMS_SOURCE_COMMIT = "907f8741f8127a9610aa796cbce15c91a0bc690a";
 export const STANDING_META_BOUNTY = Object.freeze({
-  schemaVersion: "agent-bounties/standing-meta-bounty-v1",
+  schemaVersion: "agent-bounties/standing-meta-bounty-v2",
   inventoryClass: "post_bounty_third_party_completion",
-  verifierProtocol: "agent-bounties/canonical-child-v1",
-  verifierModule: "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
-  verifierRuntimeCodeHash: "0xbb6d6df11b85f59b5010aa61f4caf499fb27b94a0f5978aff85fa97ed2bbd2c3",
-  acceptanceCriteriaHash: "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
+  verifierProtocol: "agent-bounties/independent-child-v2",
+  verifierModule: "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+  verifierRuntimeCodeHash: "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c",
+  acceptanceCriteriaHash: "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
   acceptanceCriteria: Object.freeze([
-    "Post a canonical autonomous-v1 child bounty whose creator is the active solver.",
-    "Fully fund the child to at least the parent solver reward; pooled contributors are allowed.",
-    "Bind the child benchmark to the parent bounty ID and round and use an explicit deterministic verifier.",
-    "Have a different wallet complete the child and receive canonical settlement before the parent verification deadline.",
+    "Publish the exact child terms on Base from the parent solver wallet before claiming this bounty.",
+    "Create and fully fund the parent-bound canonical child to at least this bounty solver reward.",
+    "Use the committed sandboxed-regression signed verifier quorum and immutable task criteria.",
+    "Have a participant registered before the parent claim, with a different participant ID, complete the child.",
+    "Receive canonical child settlement before submitting the child address to this verifier.",
   ]),
 });
 

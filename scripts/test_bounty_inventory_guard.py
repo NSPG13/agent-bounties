@@ -53,19 +53,19 @@ def standing_meta_report(*, corrupt_code_hash: bool = False) -> Path:
     item.update(
         {
             "verification_mode": "deterministic_module",
-            "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+            "verifier_module": "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
             "verification_ready": True,
             "standing_meta_bounty": {
-                "schema_version": "agent-bounties/standing-meta-bounty-v1",
+                "schema_version": "agent-bounties/standing-meta-bounty-v2",
                 "inventory_class": "post_bounty_third_party_completion",
-                "verifier_protocol": "agent-bounties/canonical-child-v1",
-                "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
+                "verifier_protocol": "agent-bounties/independent-child-v2",
+                "verifier_module": "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
                 "verifier_runtime_code_hash": (
                     "0x" + "66" * 32
                     if corrupt_code_hash
-                    else "0xbb6d6df11b85f59b5010aa61f4caf499fb27b94a0f5978aff85fa97ed2bbd2c3"
+                    else "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c"
                 ),
-                "acceptance_criteria_hash": "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
+                "acceptance_criteria_hash": "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
                 "requires_funded_canonical_child": True,
                 "requires_different_solver_wallet": True,
                 "required_child_status": "settled",

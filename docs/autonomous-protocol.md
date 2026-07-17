@@ -252,6 +252,17 @@ criteria. The complete content-addressed child terms must be published and
 retrievable before creation; direct factory calls do not repair missing or
 invalid terms.
 
+#### Independent Child Distribution Module V2
+
+`agent-bounties/independent-child-v2` is the current standing-meta policy. Its
+proof remains exactly `abi.encode(address childBounty)`, but the module also
+requires pre-claim terms publication in `OnchainTermsRegistry`, pre-claim
+eligibility in `ParticipantEligibilityRegistry`, different immutable
+participant IDs, and a child committed to the exact sandboxed-regression signed
+verifier set at threshold two. The child must be canonically settled before the
+parent submission. This closes the late-terms, same-operator multi-wallet, and
+unverifiable-child gaps in canonical-child-v1.
+
 ### Signed Quorum
 
 The bounty commits one to eight verifier wallets and a threshold. Each verifier

@@ -146,6 +146,9 @@ def main() -> int:
     bounded_deployment = json.loads(
         (repo_root / "deployments" / "bounded-agent-wallet-base-mainnet.json").read_text(encoding="utf-8")
     )
+    standing_meta_deployment = json.loads(
+        (repo_root / "deployments" / "standing-meta-v2-base-mainnet.json").read_text(encoding="utf-8")
+    )
     bounded_page = (site_dir / "agent-budget.html").read_text(encoding="utf-8")
     bounded_javascript = (site_dir / "agent-budget.js").read_text(encoding="utf-8")
     pages_workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
@@ -516,8 +519,8 @@ def main() -> int:
             "Lifetime gross spend, USDC",
             "exact approved deterministic verifier only",
             "Owner escape hatch",
-            "Review delegate rotation",
-            "Rotate delegate",
+            "Review policy update",
+            "Update policy",
             "not independently audited",
             "Post your own bounty",
             "agent-budget.js",
@@ -540,7 +543,8 @@ def main() -> int:
             'predictWallet: "0x240fa116"',
             'revokePolicy: "0x9eba3667"',
             'configurePolicy: "0x27d3543c"',
-            "Only the delegate changes",
+            "Only the delegate and deterministic verifier change",
+            "OBSOLETE_DETERMINISTIC_VERIFIER",
             "manifest.contract_source_dirty !== false",
             "contract_source_revision",
             "contract_source_revision_kind",
@@ -603,6 +607,24 @@ def main() -> int:
     for name, value in pinned_values.items():
         if f'{name}: "{value.lower()}"' not in bounded_javascript:
             fail(f"agent budget activation does not pin manifest field: {name}")
+    if standing_meta_deployment.get("schema") != "agent-bounties/standing-meta-v2-deployment-v1":
+        fail("standing-meta-v2 deployment manifest has the wrong schema")
+    if standing_meta_deployment.get("chain_id") != 8453 or standing_meta_deployment.get("network") != "base-mainnet":
+        fail("standing-meta-v2 deployment manifest must target Base mainnet")
+    if standing_meta_deployment.get("deployment", {}).get("receipt_status") != 1:
+        fail("standing-meta-v2 deployment manifest requires a successful receipt")
+    standing_components = standing_meta_deployment.get("components", {})
+    if standing_components.get("verifier_module") != bounded_deployment["canonical"]["deterministic_verifier"]:
+        fail("bounded wallet and standing-meta-v2 manifests disagree on the verifier")
+    if standing_components.get("verifier_runtime_code_hash") != (
+        "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c"
+    ):
+        fail("standing-meta-v2 deployment manifest has the wrong verifier runtime hash")
+    reserve = standing_meta_deployment.get("keeper_reserve", {})
+    if reserve.get("functional_relay_receipt_status") != 1:
+        fail("keeper reserve evidence requires a successful relay receipt")
+    if reserve.get("confirmed_balance_wei", 0) < reserve.get("floor_wei", 1):
+        fail("keeper reserve evidence is below its configured floor")
     require_phrases(
         "pages.yml bounded wallet",
         pages_workflow,
