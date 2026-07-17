@@ -24,9 +24,11 @@ The root `render.yaml` creates:
 - `agent-bounties-mcp`,
 - `agent-bounties-base-indexer`.
 
-The `agent-bounties-cloud-agent` environment group contains only the hosted
-model API key and is attached only to `agent-bounties-api`. MCP proxies the API
-and must not receive this secret. Set the key in Render and verify
+`CLOUD_AGENT_API_KEY` is a direct `sync: false` secret on
+`agent-bounties-api`; Render ignores `sync: false` inside environment groups.
+MCP proxies the API and must not receive this secret. The exact-SHA controller
+reconciles nonsecret model settings and copies the optional repository Actions
+secret `CLOUD_AGENT_API_KEY` into the API service without logging it. Verify
 `GET /v1/cloud-agent/readiness`; see
 [`cloud-agent-operations.md`](cloud-agent-operations.md).
 
@@ -47,12 +49,16 @@ succeeds on a push to `main`, the workflow:
    branch, and service type;
 4. disables any drifted native auto-deploy setting;
 5. reconciles `PUBLIC_BASE_URL` and `MCP_BASE_URL` on both public services;
-6. calls Render's deploy API with the exact commit for API, MCP, and worker;
-7. waits for all three deploys to reach `live` and fails on terminal errors;
-8. verifies exact revision and protocol headers from API and MCP `/health`;
-9. stores a redacted 30-day deployment evidence artifact.
+6. reconciles all nonsecret cloud-agent settings on API and copies the optional
+   GitHub-held model key without including its value in evidence;
+7. calls Render's deploy API with the exact commit for API, MCP, and worker;
+8. waits for all three deploys to reach `live` and fails on terminal errors;
+9. verifies exact revision and protocol headers from API and MCP `/health`;
+10. attests cloud readiness and fails if a supplied model credential did not
+    become usable;
+11. stores a redacted 30-day deployment evidence artifact.
 
-Configure one GitHub Actions secret named `RENDER_API_KEY`. Create it in the
+Configure the GitHub Actions secret `RENDER_API_KEY`. Create it in the
 Render Dashboard for the workspace that owns these three services, then store
 it only under repository **Settings > Secrets and variables > Actions**. Never
 put the key in Render variables, workflow inputs, logs, issues, or Git. A
@@ -61,6 +67,12 @@ The key can deploy application services, so rotate it after suspected exposure.
 Creating, rotating, or revoking the credential is an explicit R3 access change;
 using the already-provisioned credential for the bounded exact-SHA application
 deploy is R2.
+
+To enable hosted bounty drafting, also configure the repository Actions secret
+`CLOUD_AGENT_API_KEY`. It is passed only to the bounded deployment job, written
+only to `agent-bounties-api`, and redacted from evidence. If it is absent, the
+deployment still succeeds but `/v1/cloud-agent/readiness` remains unavailable
+and reports the missing credential explicitly; no local-model fallback runs.
 
 The controller can be rehearsed without credentials:
 
@@ -108,12 +120,15 @@ control. Every address must have a public incident record. Malformed values stop
 API and MCP startup; configured contracts remain visible in the full canonical
 feed but cannot appear as earning-ready work or verifier jobs.
 
-Secrets belong in Render environment groups, never in Git:
+Shared secrets belong in Render environment groups, never in Git:
 
 - `DATABASE_URL`,
 - managed RPC credentials,
 - optional `OPERATOR_API_TOKEN` for non-protocol administrative surfaces,
 - future Stripe secrets and verified webhook secret.
+
+The hosted model credential is a direct API-service secret, not a shared
+environment-group value. This prevents MCP and the indexer from receiving it.
 
 The separate `RENDER_API_KEY` belongs only in GitHub Actions and is never
 injected into an application container.
