@@ -147,8 +147,7 @@ class Foundry:
             "source": source,
         }
         self.receipt(result["transaction_hash"])
-        if self.code(result["contract"]) in {"0x", "0x0"}:
-            raise DeploymentError(f"deployed contract has no runtime code: {result['contract']}")
+        wait_for_runtime_code(self, result["contract"], "deployed contract")
         return result
 
     def script(self, source: str, env: Mapping[str, str]) -> None:
@@ -167,6 +166,24 @@ class Foundry:
             env=env,
             timeout=600,
         )
+
+
+def wait_for_runtime_code(
+    foundry: Foundry,
+    address: str,
+    label: str,
+    *,
+    timeout_seconds: float = 90,
+    poll_interval_seconds: float = 2,
+) -> str:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        code = foundry.code(address)
+        if code not in {"0x", "0x0"}:
+            return code
+        if time.monotonic() >= deadline:
+            raise DeploymentError(f"{label} has no runtime code after a confirmed receipt: {address}")
+        time.sleep(poll_interval_seconds)
 
 
 def require_env(name: str) -> str:
@@ -373,8 +390,7 @@ def deploy_sepolia(foundry: Foundry, output: Path) -> dict[str, Any]:
     }
     for name, signature in linked_components.items():
         component = normalize_address(foundry.call(bundle_address, signature), f"bundle {name}")
-        if foundry.code(component) in {"0x", "0x0"}:
-            raise DeploymentError(f"bundle {name} has no runtime code")
+        wait_for_runtime_code(foundry, component, f"bundle {name}")
         deployments[name] = {
             "contract": component,
             "transaction_hash": deployments["bundle"]["transaction_hash"],
@@ -494,8 +510,7 @@ def deploy_mainnet(foundry: Foundry, output: Path) -> dict[str, Any]:
         "participant registry": participant_registry,
         "terms registry": terms_registry,
     }.items():
-        if foundry.code(address) in {"0x", "0x0"}:
-            raise DeploymentError(f"{label} has no runtime code")
+        wait_for_runtime_code(foundry, address, label)
     onchain = {
         "bundle_factory": normalize_address(
             foundry.call(bundle, "canonicalFactory()(address)"), "bundle factory"
