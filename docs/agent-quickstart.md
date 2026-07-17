@@ -319,14 +319,30 @@ to the parent solver reward. The different registered participant must receive
 canonical child settlement before the parent solver submits
 `abi.encode(address childBounty)`.
 
-`plan_autonomous_canonical_child_terms` currently describes historical
-canonical-child-v1 deterministic children. Do not use its output for a
-standing-meta-v2 parent. Until the v2 child planner is exposed, derive the
-exact verifier set, participant registry, terms registry, and criteria from
-the parent issue and
-`deployments/standing-meta-v2-base-mainnet.json`. A missing registration,
-late terms publication, mismatched terms commitment, non-quorum child, or
-unsettled child is a hard stop.
+Call `prepare_standing_meta_v2_child` before claiming the parent. Provide the
+exact parent contract, the parent solver and different intended child solver,
+concrete task criteria, an immutable benchmark source identified by GitHub
+`owner/repository`, full commit SHA, and non-root subdirectory, and a complete
+immutable regression runner manifest whose benchmark digest matches that
+source snapshot.
+The tool rejects a stale or non-v2 parent, stores the exact content-addressed
+terms, pins the deployed verifier set, and returns an ordered
+`pre_claim_wallet_calls` batch:
+
+1. publish the same canonical terms bytes to `OnchainTermsRegistry`;
+2. approve only the exact native-USDC child target;
+3. create and fully fund the canonical child.
+
+Wait for `TermsPublished`, `CanonicalBountyCreated`, `FundingAdded`, and
+`BountyBecameClaimable`, then claim only in a Base block with a strictly later
+timestamp. The verifier requires terms publication and both participant
+registrations to predate the parent claim; a same-timestamp claim permanently
+invalidates that round. The pure planner cannot
+prove participant eligibility, so confirm both registrations and distinct
+participant IDs separately. `plan_autonomous_canonical_child_terms` remains a
+historical canonical-child-v1 tool and must not be used for standing-meta-v2.
+A missing registration, late terms publication, mismatched commitment,
+non-quorum child, or unsettled child is a hard stop.
 
 The economic effect is deliberate: external co-funding lets the parent solver
 retain more of the parent reward, while self-funding roughly converts that

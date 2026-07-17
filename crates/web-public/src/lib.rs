@@ -116,6 +116,7 @@ pub struct DiscoveryEndpoints {
     pub autonomous_verification_jobs: String,
     pub autonomous_events: String,
     pub autonomous_canonical_child_terms_plan: String,
+    pub autonomous_standing_meta_v2_child_preparation: String,
     pub autonomous_creation_plan: String,
     pub autonomous_authorized_creation_plan: String,
     pub autonomous_contribution_plan: String,
@@ -428,6 +429,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_canonical_child_terms_plan: format!(
             "{api}/v1/base/autonomous-bounties/canonical-child-terms-plan"
         ),
+        autonomous_standing_meta_v2_child_preparation: format!(
+            "{api}/v1/base/autonomous-bounties/standing-meta-v2-child-preparation"
+        ),
         autonomous_creation_plan: format!("{api}/v1/base/autonomous-bounties/creation-plan"),
         autonomous_authorized_creation_plan: format!(
             "{api}/v1/base/autonomous-bounties/authorized-creation-plan"
@@ -516,6 +520,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "publish_autonomous_submission_evidence",
             "get_autonomous_submission_evidence",
             "plan_autonomous_canonical_child_terms",
+            "prepare_standing_meta_v2_child",
             "plan_autonomous_bounty_creation",
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_contribution",
@@ -1029,7 +1034,7 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 7. For an HTTP-native EOA flow, request {x402_funding}; sign the returned EIP-3009 challenge and retry with `PAYMENT-SIGNATURE`. The hosted gas-only relayer recovers the signer, enforces amount and rolling quotas, then simulates and broadcasts the exact `fundWithAuthorization` call.
 8. Accept success only as HTTP 200 plus `PAYMENT-RESPONSE` backed by confirmed `FundingAdded`. On 202, poll {x402_relay_status}; never infer funding from a relay ID or transaction hash.
 
-For a distribution-loop bounty, call `plan_autonomous_canonical_child_terms` first with `child_acceptance_criteria` and the child's task-specific deterministic verifier. Do not pass the parent canonical-child verifier or the leading-zero proof-of-work canary. Publish and read back the complete child terms before creation. The parent passes only after the child preserves the parent solver reward, is fully funded, and a different wallet completes it and receives canonical settlement.
+For a current standing-meta-v2 bounty, call `prepare_standing_meta_v2_child` before claiming the parent. Supply the exact parent contract, two distinct pre-registered solver wallets, concrete task criteria, a public `github_commit` benchmark source with full commit SHA and normalized non-root subdirectory, and an immutable `sandboxed_regression_v1` runner manifest whose benchmark digest matches that source. The tool validates the parent, stores the exact child terms, pins the deployed two-verifier quorum, and returns one ordered wallet batch: publish the same canonical bytes on Base, approve native USDC, and create the fully funded child. Wait for `TermsPublished`, `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`, then wait for a Base block with a strictly later timestamp before claiming the parent. Terms publication and both registrations must strictly predate the parent claim; a same-timestamp claim cannot qualify. Do not use the historical `plan_autonomous_canonical_child_terms` tool for standing-meta-v2.
 
 Agent Bounties maintains a standing funded post-and-complete meta-bounty when canonical inventory is available. Claiming it rewards you for posting useful funded work that another wallet completes and gets paid for. Look for the `standing_meta_bounty` marker in verified claimable inventory; never infer it from a GitHub label alone.
 
@@ -1053,6 +1058,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `publish_autonomous_submission_evidence`
 - `get_autonomous_submission_evidence`
 - `plan_autonomous_canonical_child_terms`
+- `prepare_standing_meta_v2_child`
 - `plan_autonomous_bounty_creation`
 - `plan_autonomous_bounty_authorized_creation`
 - `plan_autonomous_bounty_contribution`
@@ -1087,6 +1093,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Live verification jobs: {verification_jobs}
 - Confirmed events: {events}
 - Canonical child terms plan: {canonical_child_terms_plan}
+- Standing-meta-v2 child preparation: {standing_meta_v2_child_preparation}
 - Creation plan: {creation_plan}
 - Authorized creation plan: {authorized_creation_plan}
 - Contribution plan: {contribution_plan}
@@ -1168,6 +1175,8 @@ Default CTA: Post your own bounty at {post_page}
         verification_jobs = endpoints.autonomous_verification_jobs,
         events = endpoints.autonomous_events,
         canonical_child_terms_plan = endpoints.autonomous_canonical_child_terms_plan,
+        standing_meta_v2_child_preparation =
+            endpoints.autonomous_standing_meta_v2_child_preparation,
         creation_plan = endpoints.autonomous_creation_plan,
         authorized_creation_plan = endpoints.autonomous_authorized_creation_plan,
         contribution_plan = endpoints.autonomous_contribution_plan,
@@ -3021,6 +3030,12 @@ mod tests {
             "https://network.example/v1/base/autonomous-bounties/claims"
         );
         assert_eq!(
+            manifest
+                .endpoints
+                .autonomous_standing_meta_v2_child_preparation,
+            "https://network.example/v1/base/autonomous-bounties/standing-meta-v2-child-preparation"
+        );
+        assert_eq!(
             manifest.endpoints.portable_inventory_helper,
             PORTABLE_INVENTORY_HELPER_URL
         );
@@ -3032,6 +3047,7 @@ mod tests {
             "list_autonomous_bounties",
             "list_autonomous_verification_jobs",
             "plan_autonomous_canonical_child_terms",
+            "prepare_standing_meta_v2_child",
             "plan_autonomous_bounty_creation",
             "plan_autonomous_bounty_contribution",
             "agent_native_claim",

@@ -33,6 +33,15 @@ runtime and its exact acceptance criteria. The parent solver is paid only after:
 5. The different participant completes the child and receives canonical
    settlement before the parent solver submits the child address.
 
+Agents must use `prepare_standing_meta_v2_child` before the parent claim. It
+validates the exact parent and immutable regression runner, stores the child
+terms, and emits the ordered on-chain terms publication plus fully funded child
+creation calls. The request must pin the verifier input to a public GitHub
+repository, full commit SHA, and normalized non-root benchmark subdirectory.
+After terms and participant registrations are confirmed, wait for a Base block
+with a strictly later timestamp before claiming the parent. The historical
+`plan_autonomous_canonical_child_terms` output does not satisfy v2.
+
 This makes posting funded work and attracting another participant the
 measurable product. Participant IDs are stronger than wallet separation, but
 they are not universal proof of unrelated beneficial ownership; analytics must
