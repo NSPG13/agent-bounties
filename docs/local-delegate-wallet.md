@@ -49,6 +49,19 @@ python scripts/local_delegate_wallet.py bind `
 Binding is intentionally immutable. Rotate by creating a new delegate directory
 and installing a new owner-approved policy.
 
+For a verifier upgrade, keep the old signer recoverable until confirmation by
+using a separate state directory:
+
+```powershell
+$state = Join-Path $env:LOCALAPPDATA "AgentBounties\delegate-v2"
+python scripts/local_delegate_wallet.py --state-dir $state init
+python scripts/local_delegate_wallet.py --state-dir $state status
+```
+
+Enter only the printed public address on `agent-budget.html`. After the exact
+zero-value update is confirmed and independently inspected, bind that directory
+to the new on-chain policy hash with `--state-dir $state`.
+
 ## Sign One Gas-Sponsored Creation
 
 First publish terms and request the canonical creation plan from the hosted API.

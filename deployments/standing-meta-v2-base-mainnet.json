@@ -1,0 +1,45 @@
+{
+  "schema": "agent-bounties/standing-meta-v2-deployment-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "source_revision": "3224cc7fdec4087cfb2cb522019c0954a2d965da",
+  "workflow_run": "https://github.com/NSPG13/agent-bounties/actions/runs/29547580559",
+  "deployment": {
+    "transaction_hash": "0x6a75ecbd630e3f31513cfb9e967120f670d176d7e2e903d977d8b087b32e9190",
+    "block_number": 48731293,
+    "receipt_status": 1,
+    "deployer": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
+  },
+  "components": {
+    "bundle": "0x8dc3819dcbbf87015b4312808c1d1080956d3def",
+    "canonical_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+    "participant_registry": "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294",
+    "terms_registry": "0x35e5d49c12b75c119d33951c2c4f054c5732208c",
+    "verifier_module": "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+    "verifier_runtime_code_hash": "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c",
+    "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "participant_attester": "0x5563ca06363eedb3d39ae1733bb8aa6eca3d5728",
+    "verifier_set_hash": "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+    "verifier_threshold": 2,
+    "acceptance_criteria_hash": "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54"
+  },
+  "keeper_reserve": {
+    "keeper": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+    "floor_wei": 100000000000000,
+    "confirmed_balance_wei": 970365530562740,
+    "functional_relay_transaction": "0x65ad6d2faa353b5fb424e5dfe82c2ee769a901e1a647faf9df20f3f9034441e1",
+    "functional_relay_block": 48710634,
+    "functional_relay_receipt_status": 1,
+    "functional_relay_workflow": "https://github.com/NSPG13/agent-bounties/actions/runs/29538881444"
+  },
+  "base_sepolia_rehearsal": {
+    "parent_bounty": "0xf089b7f92543adcce8de4035d1252d4505d20d70",
+    "child_bounty": "0xb4239b41c85e5564d174634756b7b0e5892e49db",
+    "parent_solver": "0x155586f20e44a8c967bd06779433d01c87a3d01d",
+    "child_solver": "0xdd0389565aa1e5f114747e5a58dbda370b6212e8",
+    "parent_status": 4,
+    "child_status": 4,
+    "evidence": "Both contracts emitted canonical settlement events in the protected rehearsal. This is testnet evidence, not a mainnet payout."
+  },
+  "evidence_boundary": "The deployment receipt, exact immutable getters, runtime code hash, keeper balance, and relay receipt are confirmed Base-mainnet evidence. Only a canonical BountySettled event proves a future bounty payout."
+}

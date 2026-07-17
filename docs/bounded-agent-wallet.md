@@ -25,7 +25,11 @@ The proposed first mainnet policy is:
 | Actions | create, fund, claim, submit |
 | Verification | exact approved deterministic module only |
 
-Signed-quorum and AI-judge bounties are disabled in the initial policy. Returned
+The first live policy allowed the permissionless proof-of-work module. Policy
+version two replaces that module with the standing-meta-v2 verifier while
+preserving every financial cap, action permission, expiry, wallet balance, and
+prior spend counter. Signed-quorum and AI-judge actions remain disabled at the
+bounded-wallet layer. Returned
 claim bonds and bounty earnings increase the wallet balance but do not restore
 the gross lifetime budget. The owner must explicitly replace the policy to
 extend authority.
@@ -111,6 +115,14 @@ The plan includes exact calldata for `revokePolicy()`. Revocation stops new
 delegate actions immediately. The owner may then call
 `withdrawToken(nativeUsdc, owner, balance)` or install a reviewed replacement
 policy. Ownership transfer is two-step.
+
+An existing wallet may move from the obsolete verifier to the reviewed
+standing-meta-v2 verifier with one zero-value `configurePolicy` transaction.
+Use a fresh delegate at the same time because local bindings are intentionally
+immutable. The activation page reads the complete live policy, accepts only the
+known obsolete verifier or current reviewed verifier, changes only the delegate
+and verifier words, simulates the call, and then verifies the exact receipt,
+version increment, unchanged caps, unchanged balance, and unchanged prior spend.
 
 ## Activation State
 

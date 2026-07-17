@@ -19,7 +19,7 @@
     sourceRevision: "dc05b4e01474f09f02bb1bbb69651e4ce4deb338",
     bountyFactory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     settlementToken: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    deterministicVerifier: "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+    deterministicVerifier: "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
     deterministicDeployer: "0x4e59b44847b379578588920ca78fbf26c0b4956c",
     deterministicDeployerHash: "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989",
     walletFactory: "0x3840936351049aed639780a16845e6094c1f17f6",
@@ -28,6 +28,7 @@
     implementationRuntimeHash: "0x7fb59d5add3ac348ac3d7e6a5aa6b22ad542a6e6093a1ceb8d535f747ed536df",
     cloneRuntimeHash: "0xc663bed9b4097e22e5a18c0ecb662561bf45df1829e6412cdd0d8568d05ca1b6",
   });
+  const OBSOLETE_DETERMINISTIC_VERIFIER = "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e";
   const SELECTORS = Object.freeze({
     predictWallet: "0x240fa116",
     createAndFund: "0x86f357d0",
@@ -740,15 +741,20 @@
     if (delegate === state.account) throw new Error("Use a dedicated delegate address, not the owner wallet.");
     const observed = await inspectExistingWallet(wallet);
     const currentDelegate = wordAddress(observed.policy[0], "Current delegate");
-    if (delegate === currentDelegate) throw new Error("Replacement delegate is already active.");
-    if (wordAddress(observed.policy[10], "Deterministic verifier")
-      !== state.manifest.canonical.deterministic_verifier) {
-      throw new Error("Existing policy does not use the reviewed deterministic verifier.");
+    const currentVerifier = wordAddress(observed.policy[10], "Deterministic verifier");
+    const nextVerifier = state.manifest.canonical.deterministic_verifier;
+    if (currentVerifier !== nextVerifier && currentVerifier !== OBSOLETE_DETERMINISTIC_VERIFIER) {
+      throw new Error("Existing policy uses an unknown verifier; this page will not replace it.");
+    }
+    const verifierChanged = currentVerifier !== nextVerifier;
+    if (delegate === currentDelegate && !verifierChanged) {
+      throw new Error("The replacement delegate and reviewed verifier are already active.");
     }
     const now = BigInt(await latestTimestamp());
     if (wordUint(observed.policy[2]) <= now) throw new Error("Existing policy is expired; create a new reviewed policy instead.");
     const nextPolicy = [...observed.policy];
     nextPolicy[0] = addressWord(delegate);
+    nextPolicy[10] = addressWord(nextVerifier);
     const nextEncoded = `0x${nextPolicy.join("")}`;
     const currentHash = await hash(observed.policyEncoded);
     const nextHash = await hash(nextEncoded);
@@ -757,6 +763,9 @@
       wallet,
       delegate,
       currentDelegate,
+      currentVerifier,
+      nextVerifier,
+      verifierChanged,
       currentPolicy: observed.policyEncoded,
       currentHash,
       nextPolicy: nextEncoded,
@@ -771,10 +780,14 @@
       `Bounded wallet: ${wallet}`,
       `Current delegate: ${currentDelegate}`,
       `Replacement delegate: ${delegate}`,
+      `Current verifier: ${currentVerifier}`,
+      `Reviewed verifier: ${nextVerifier}`,
       `Current / next policy version: ${observed.version} / ${observed.version + 1n}`,
       `Current / next policy hash: ${currentHash} / ${nextHash}`,
       `Wallet balance remains ${Number(observed.balance) / 1_000_000} USDC.`,
-      "Only the delegate changes; all spending caps, actions, verifier restrictions, and expiry remain byte-for-byte identical.",
+      verifierChanged
+        ? "Only the delegate and deterministic verifier change; all caps, actions, modes, expiry, balance, and prior spend remain byte-for-byte identical."
+        : "Only the delegate changes; all caps, actions, verifier restrictions, expiry, balance, and prior spend remain byte-for-byte identical.",
       "The transaction transfers no USDC or ETH.",
     ], "pending");
     updateButtons();
@@ -782,7 +795,7 @@
 
   async function rotateDelegate() {
     if (!state.rotationPlan) throw new Error("Review the exact delegate rotation first.");
-    if (!form().elements.rotationReviewed.checked) throw new Error("Confirm the exact delegate-only change first.");
+    if (!form().elements.rotationReviewed.checked) throw new Error("Confirm the exact reviewed policy change first.");
     if (rotationSnapshot() !== state.rotationPlan.snapshot) {
       state.rotationPlan = null;
       throw new Error("Wallet or delegate changed. Review the rotation again.");
@@ -808,6 +821,7 @@
         "Confirm one zero-value owner transaction.",
         `Wallet: ${state.rotationPlan.wallet}`,
         `Replacement delegate: ${state.rotationPlan.delegate}`,
+        `Reviewed verifier: ${state.rotationPlan.nextVerifier}`,
         `Next policy hash: ${state.rotationPlan.nextHash}`,
         "No token or native-ETH transfer is requested.",
       ], "pending");
@@ -820,10 +834,11 @@
         || after.balance !== state.rotationPlan.balance) {
         throw new Error("Confirmed rotation did not produce the exact reviewed wallet state.");
       }
-      status("Agent delegate rotated", "success");
+      status(state.rotationPlan.verifierChanged ? "Agent policy upgraded" : "Agent delegate rotated", "success");
       output([
-        `Rotation confirmed: ${transactionHash}`,
+        `Policy update confirmed: ${transactionHash}`,
         `Active delegate: ${state.rotationPlan.delegate}`,
+        `Active verifier: ${state.rotationPlan.nextVerifier}`,
         `Policy hash: ${state.rotationPlan.nextHash}`,
         `Wallet balance: ${Number(after.balance) / 1_000_000} USDC`,
         "The agent can now sign capped actions for a separate gas sponsor; the wallet needs no ETH.",

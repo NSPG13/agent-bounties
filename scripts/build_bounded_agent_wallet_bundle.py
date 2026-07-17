@@ -17,7 +17,7 @@ CREATE2_DEPLOYER = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
 CREATE2_DEPLOYER_CODE_HASH = "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989"
 BOUNTY_FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
-VERIFIER = "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e"
+VERIFIER = "0xe573cb4f471d38b5bf10ce82237251ac902c9867"
 SALT_LABEL = "agent-bounties/base-mainnet/bounded-agent-wallet-factory/v1"
 SOURCE_INPUTS = ("contracts/base-escrow",)
 

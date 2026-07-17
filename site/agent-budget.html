@@ -109,14 +109,14 @@
             </label>
             <label class="check-line">
               <input name="rotationReviewed" type="checkbox">
-              <span>I reviewed the delegate-only policy change. All limits, allowed actions, verifier restrictions, expiry, balance, and prior spend remain unchanged.</span>
+              <span>I reviewed the exact delegate and verifier change. All limits, allowed actions, verification modes, expiry, balance, and prior spend remain unchanged.</span>
             </label>
             <div class="actions">
-              <button id="review-delegate-rotation" class="button secondary" type="button" disabled>Review delegate rotation</button>
-              <button id="rotate-agent-delegate" class="button secondary" type="button" disabled>Rotate delegate</button>
+              <button id="review-delegate-rotation" class="button secondary" type="button" disabled>Review policy update</button>
+              <button id="rotate-agent-delegate" class="button secondary" type="button" disabled>Update policy</button>
               <button id="revoke-agent-budget" class="button secondary" type="button" disabled>Revoke agent authority</button>
             </div>
-            <p class="fine">Rotation replaces only the signer and invalidates queued signatures. Revocation blocks all new delegate actions. Neither action moves the wallet's USDC.</p>
+            <p class="fine">The update replaces the signer and, only when required, the obsolete verifier with the reviewed standing-meta-v2 verifier. Revocation blocks all new delegate actions. Neither action moves the wallet's USDC.</p>
           </div>
         </form>
       </section>
