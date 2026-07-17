@@ -21,6 +21,7 @@ BASE_SEPOLIA_USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
 MIN_MAINNET_KEEPER_WEI = 100_000_000_000_000
 MIN_MAINNET_DEPLOY_WEI = 500_000_000_000_000
 MIN_SEPOLIA_DEPLOY_WEI = 90_000_000_000_000
+MIN_COMPLETION_TIMESTAMP_DELTA = 8
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 CREATE_JSON_RE = re.compile(r"\{\s*\"deployer\".*?\}\s*$", re.DOTALL)
@@ -239,17 +240,25 @@ def read_broadcast(path: Path) -> list[dict[str, Any]]:
     return result
 
 
-def wait_for_later_timestamp(foundry: Foundry, published_at: int, timeout_seconds: int = 90) -> int:
+def wait_for_later_timestamp(
+    foundry: Foundry,
+    published_at: int,
+    timeout_seconds: float = 90,
+    poll_interval_seconds: float = 2,
+) -> int:
     deadline = time.monotonic() + timeout_seconds
+    required_timestamp = published_at + MIN_COMPLETION_TIMESTAMP_DELTA
     while time.monotonic() < deadline:
         observed = parse_cast_uint(
             foundry.cast_run("block", "latest", "--field", "timestamp"),
             "block timestamp",
         )
-        if observed > published_at:
+        if observed >= required_timestamp:
             return observed
-        time.sleep(2)
-    raise DeploymentError("Base did not produce a timestamp later than the terms publication")
+        time.sleep(poll_interval_seconds)
+    raise DeploymentError(
+        f"Base did not reach the completion timestamp margin: required {required_timestamp}"
+    )
 
 
 def broadcast_path(foundry: Foundry, script_name: str, chain_id: int) -> Path:

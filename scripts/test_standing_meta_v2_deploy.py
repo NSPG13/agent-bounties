@@ -11,6 +11,7 @@ from scripts.standing_meta_v2_deploy import (
     read_broadcast,
     require_bytes32,
     wait_for_runtime_code,
+    wait_for_later_timestamp,
 )
 
 
@@ -24,7 +25,29 @@ class CodeSequence:
         return self.values[0]
 
 
+class CastSequence:
+    def __init__(self, values: list[str]) -> None:
+        self.values = values
+
+    def cast_run(self, *_args: str) -> str:
+        if len(self.values) > 1:
+            return self.values.pop(0)
+        return self.values[0]
+
+
 class StandingMetaV2DeployTests(unittest.TestCase):
+    def test_completion_waits_for_four_base_block_margin(self) -> None:
+        foundry = CastSequence(["107 [1.07e2]", "108 [1.08e2]"])
+        self.assertEqual(
+            wait_for_later_timestamp(
+                foundry,  # type: ignore[arg-type]
+                100,
+                timeout_seconds=1,
+                poll_interval_seconds=0,
+            ),
+            108,
+        )
+
     def test_runtime_code_waits_for_rpc_propagation(self) -> None:
         foundry = CodeSequence(["0x", "0x6000"])
         self.assertEqual(
