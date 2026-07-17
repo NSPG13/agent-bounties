@@ -38,6 +38,7 @@ jobs:
     needs: contract
     runs-on: ubuntu-latest
     outputs:
+      authorized: ${{ steps.main.outputs.authorized }}
       revision: ${{ steps.main.outputs.revision }}
       run_id: ${{ steps.main.outputs.run_id }}
     steps:
@@ -52,13 +53,23 @@ jobs:
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           current_main="$(git rev-parse refs/remotes/origin/main)"
           if [[ "$CANDIDATE_REVISION" != "$current_main" ]]; then
-            echo "Refusing to sign a candidate from stale main" >&2
-            exit 1
+            echo "authorized=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Stale regression candidate skipped::Runner revision $CANDIDATE_REVISION is not current main $current_main; no signer or relay job will run."
+            {
+              echo "## Stale regression candidate skipped"
+              echo
+              echo "- candidate: \`$CANDIDATE_REVISION\`"
+              echo "- current main: \`$current_main\`"
+              echo "- effect: both signers and the relay are skipped"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+          echo "authorized=true" >> "$GITHUB_OUTPUT"
           echo "revision=$CANDIDATE_REVISION" >> "$GITHUB_OUTPUT"
           echo "run_id=$CANDIDATE_RUN_ID" >> "$GITHUB_OUTPUT"
 
   sign-one:
+    if: needs.authorize-run.outputs.authorized == 'true'
     needs: authorize-run
     uses: ./.github/workflows/regression-verifier-signing-reusable.yml
     with:
@@ -70,6 +81,7 @@ jobs:
       verifier_private_key: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
 
   sign-two:
+    if: needs.authorize-run.outputs.authorized == 'true'
     needs: authorize-run
     uses: ./.github/workflows/regression-verifier-signing-reusable.yml
     with:
@@ -81,6 +93,7 @@ jobs:
       verifier_private_key: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
 
   relay:
+    if: needs.authorize-run.outputs.authorized == 'true'
     needs: [authorize-run, sign-one, sign-two]
     runs-on: ubuntu-latest
     timeout-minutes: 20
