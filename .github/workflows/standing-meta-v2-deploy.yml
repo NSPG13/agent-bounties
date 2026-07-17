@@ -42,6 +42,7 @@ jobs:
         run: |
           python -m unittest scripts.test_standing_meta_v2_deploy -v
           forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV2Test -vv
+          forge test --root contracts/base-escrow --match-contract BaseSepoliaStandingMetaV2RehearsalBalanceTest -vv
           forge build --root contracts/base-escrow --sizes
 
   base-sepolia-rehearsal:
