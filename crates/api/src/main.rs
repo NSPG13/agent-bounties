@@ -1474,8 +1474,8 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
             "relayerCustody": "the hosted relayer holds gas only; the funder signs an exact amount, bounty, network, nonce, and expiration and the contract pulls USDC directly from that funder"
         },
         "documentation": {
-            "compatibility": "https://nspg13.github.io/agent-bounties/x402.html",
-            "testVectors": "https://nspg13.github.io/agent-bounties/x402-test-vectors.json",
+            "compatibility": "https://bountyboard.global/x402.html",
+            "testVectors": "https://bountyboard.global/x402-test-vectors.json",
             "fundingEvidence": "FundingAdded",
             "payoutEvidence": "BountySettled"
         },
@@ -4844,7 +4844,7 @@ fn agent_claim_response(
     next_request: Option<serde_json::Value>,
 ) -> Response {
     let browser_fallback_url = format!(
-        "https://nspg13.github.io/agent-bounties/earn.html?bountyContract={}&solver={}",
+        "https://bountyboard.global/earn.html?bountyContract={}&solver={}",
         reservation.candidate.bounty_contract, reservation.candidate.solver_wallet
     );
     let sponsor_contract = sponsorship
@@ -9175,12 +9175,8 @@ mod tests {
                     currency: "usd".to_string(),
                     rail: domain::PaymentRail::StripeFiat,
                     external_reference: Some("card-funding-test".to_string()),
-                    stripe_success_url: Some(
-                        "https://nspg13.github.io/agent-bounties/success.html".to_string(),
-                    ),
-                    stripe_cancel_url: Some(
-                        "https://nspg13.github.io/agent-bounties/cancel.html".to_string(),
-                    ),
+                    stripe_success_url: Some("https://bountyboard.global/success.html".to_string()),
+                    stripe_cancel_url: Some("https://bountyboard.global/cancel.html".to_string()),
                 },
                 "http://127.0.0.1:8080",
             )
@@ -9211,11 +9207,11 @@ mod tests {
         );
         assert_eq!(
             report.request.body["success_url"],
-            "https://nspg13.github.io/agent-bounties/success.html"
+            "https://bountyboard.global/success.html"
         );
         assert_eq!(
             report.request.body["cancel_url"],
-            "https://nspg13.github.io/agent-bounties/cancel.html"
+            "https://bountyboard.global/cancel.html"
         );
         assert_eq!(
             report.request.body["metadata"]["bounty_id"],
@@ -9787,7 +9783,7 @@ mod tests {
         assert!(plan.ready);
         let signal = plan.signal.expect("funding signal");
         let handoff = signal.funding_handoff_url.expect("handoff url");
-        assert!(handoff.contains("https://nspg13.github.io/agent-bounties/funding.html"));
+        assert!(handoff.contains("https://bountyboard.global/funding.html"));
         assert!(handoff.contains("apiBaseUrl=https%3A%2F%2Fapi.agentbounties.example"));
         assert!(handoff.contains("rail=StripeFiat"));
         assert!(handoff.contains("externalReference=github-funding-comment%3A"));

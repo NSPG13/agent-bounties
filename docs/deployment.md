@@ -242,8 +242,8 @@ persistence.
 python scripts\check-site.py
 python scripts\check-render-blueprint.py
 cargo run -p cli -- production-smoke `
-  --api-base-url https://agent-bounties-api.onrender.com `
-  --mcp-base-url https://agent-bounties-mcp.onrender.com
+  --api-base-url https://api.bountyboard.global `
+  --mcp-base-url https://mcp.bountyboard.global
 ```
 
 Check:
@@ -261,8 +261,8 @@ Run the bounded operational controller after production smoke:
 ```powershell
 python scripts\self_heal.py observe `
   --policy ops\self-healing-policy.json `
-  --api-url https://agent-bounties-api.onrender.com `
-  --mcp-url https://agent-bounties-mcp.onrender.com `
+  --api-url https://api.bountyboard.global `
+  --mcp-url https://mcp.bountyboard.global `
   --expected-revision <deployed-git-sha> `
   --snapshot-out target\operations\snapshot.json `
   --plan-out target\operations\recovery-plan.json

@@ -28,8 +28,8 @@ PowerShell:
 
 ```powershell
 .\scripts\check-production-smoke.ps1 `
-  -ApiBaseUrl https://agent-bounties-api.onrender.com `
-  -McpBaseUrl https://agent-bounties-mcp.onrender.com `
+  -ApiBaseUrl https://api.bountyboard.global `
+  -McpBaseUrl https://mcp.bountyboard.global `
   -ExpectedRevision 0123456789abcdef0123456789abcdef01234567
 ```
 
@@ -37,8 +37,8 @@ Unix-like shells:
 
 ```bash
 bash scripts/check-production-smoke.sh \
-  --api-base-url https://agent-bounties-api.onrender.com \
-  --mcp-base-url https://agent-bounties-mcp.onrender.com \
+  --api-base-url https://api.bountyboard.global \
+  --mcp-base-url https://mcp.bountyboard.global \
   --expected-revision 0123456789abcdef0123456789abcdef01234567
 ```
 

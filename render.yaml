@@ -76,9 +76,9 @@ services:
       - key: RUST_LOG
         value: info
       - key: PUBLIC_BASE_URL
-        value: https://agent-bounties-api.onrender.com
+        value: https://api.bountyboard.global
       - key: MCP_BASE_URL
-        value: https://agent-bounties-mcp.onrender.com
+        value: https://mcp.bountyboard.global
       - key: DATABASE_URL
         fromDatabase:
           name: agent-bounties-postgres
@@ -155,9 +155,9 @@ services:
       - key: RUST_LOG
         value: info
       - key: PUBLIC_BASE_URL
-        value: https://agent-bounties-api.onrender.com
+        value: https://api.bountyboard.global
       - key: MCP_BASE_URL
-        value: https://agent-bounties-mcp.onrender.com
+        value: https://mcp.bountyboard.global
       - key: DATABASE_URL
         fromDatabase:
           name: agent-bounties-postgres

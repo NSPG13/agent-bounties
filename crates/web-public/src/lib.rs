@@ -7,14 +7,13 @@ use serde::{Deserialize, Serialize};
 const DISCOVERY_SCHEMA: &str = "https://agentbounties.org/schemas/discovery-manifest.v2.json";
 const GITHUB_ISSUE_TEMPLATE_URL: &str =
     "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml";
-const STATIC_FUNDING_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/funding.html";
-const STATIC_EARN_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/earn.html";
-const STATIC_POST_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/post.html";
-const STATIC_X402_PAGE_URL: &str = "https://nspg13.github.io/agent-bounties/x402.html";
-const STATIC_X402_TEST_VECTORS_URL: &str =
-    "https://nspg13.github.io/agent-bounties/x402-test-vectors.json";
+const STATIC_FUNDING_PAGE_URL: &str = "https://bountyboard.global/funding.html";
+const STATIC_EARN_PAGE_URL: &str = "https://bountyboard.global/earn.html";
+const STATIC_POST_PAGE_URL: &str = "https://bountyboard.global/post.html";
+const STATIC_X402_PAGE_URL: &str = "https://bountyboard.global/x402.html";
+const STATIC_X402_TEST_VECTORS_URL: &str = "https://bountyboard.global/x402-test-vectors.json";
 const STATIC_AGENT_WALLET_READINESS_PAGE_URL: &str =
-    "https://nspg13.github.io/agent-bounties/prepare-agent.html";
+    "https://bountyboard.global/prepare-agent.html";
 const GITHUB_REPOSITORY_URL: &str = "https://github.com/NSPG13/agent-bounties";
 const GITHUB_STAR_COMMAND: &str = "gh api --method PUT /user/starred/NSPG13/agent-bounties";
 const GITHUB_REACTION_COMMAND_TEMPLATE: &str = "gh api --method POST /repos/NSPG13/agent-bounties/issues/{issue_number}/reactions -f content='+1'";
@@ -406,7 +405,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         x402_test_vectors: STATIC_X402_TEST_VECTORS_URL.to_string(),
         agent_wallet_readiness: format!("{api}/v1/base/agent-wallet/readiness"),
         agent_wallet_readiness_page: STATIC_AGENT_WALLET_READINESS_PAGE_URL.to_string(),
-        protocol_status: "https://nspg13.github.io/agent-bounties/protocol.json".to_string(),
+        protocol_status: "https://bountyboard.global/protocol.json".to_string(),
         agent_quickstart: AGENT_QUICKSTART_URL.to_string(),
         portable_skill: OPENCLAW_SKILL_SOURCE_URL.to_string(),
         portable_inventory_helper: PORTABLE_INVENTORY_HELPER_URL.to_string(),
@@ -488,7 +487,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 .to_string(),
         open_source: true,
         repository: GITHUB_REPOSITORY_URL.to_string(),
-        website: "https://nspg13.github.io/agent-bounties/".to_string(),
+        website: "https://bountyboard.global/".to_string(),
         default_cta: serde_json::json!({
             "label": DEFAULT_FLYWHEEL_CTA,
             "href": STATIC_POST_PAGE_URL,
@@ -3341,7 +3340,7 @@ mod tests {
 
         assert!(html.contains(r#"data-agent-action="open_stripe_checkout_funding_page""#));
         assert!(html.contains("Open Stripe Checkout funding page"));
-        assert!(html.contains("https://nspg13.github.io/agent-bounties/funding.html?"));
+        assert!(html.contains("https://bountyboard.global/funding.html?"));
         assert!(html.contains("apiBaseUrl=https%3A%2F%2Fnetwork.example"));
         assert!(html.contains(&format!("bountyId={}", item.bounty_id)));
         assert!(html.contains("amountMinor=500"));

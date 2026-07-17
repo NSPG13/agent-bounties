@@ -21,7 +21,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 DEFAULT_BASE = os.environ.get(
-    "PUBLIC_BASE_URL", "https://agent-bounties-api.onrender.com"
+    "PUBLIC_BASE_URL", "https://api.bountyboard.global"
 ).rstrip("/")
 
 CHECK_PATHS = [
@@ -122,8 +122,8 @@ def diagnose(base_url: str) -> Diagnosis:
             overall="invalid_url",
             likely_causes=[str(exc)],
             repair_steps=[
-                "Pass a full URL, e.g. https://agent-bounties-api.onrender.com",
-                "Or a hostname only (https will be assumed), e.g. agent-bounties-api.onrender.com",
+                "Pass a full URL, e.g. https://api.bountyboard.global",
+                "Or a hostname only (https will be assumed), e.g. api.bountyboard.global",
             ],
         )
 

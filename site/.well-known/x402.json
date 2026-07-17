@@ -6,7 +6,7 @@
     {
       "name": "canonical-bounty-funding",
       "method": "GET",
-      "urlTemplate": "https://agent-bounties-api.onrender.com/v1/x402/base/bounties/{bounty_contract}/funding?network=base-mainnet&amount={usdc_base_units}",
+      "urlTemplate": "https://api.bountyboard.global/v1/x402/base/bounties/{bounty_contract}/funding?network=base-mainnet&amount={usdc_base_units}",
       "scheme": "agent-bounty-fund",
       "networks": ["eip155:8453", "eip155:84532"],
       "asset": "native USDC",
@@ -22,7 +22,7 @@
     {
       "name": "open-bounty-discovery",
       "method": "GET",
-      "url": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/feed",
+      "url": "https://api.bountyboard.global/v1/base/autonomous-bounties/feed",
       "price": "free"
     }
   ],
@@ -32,8 +32,8 @@
     "paymentProof": "transaction plans, signatures, broadcasts, and transaction hashes are not funding evidence"
   },
   "documentation": {
-    "compatibility": "https://nspg13.github.io/agent-bounties/x402.html",
-    "testVectors": "https://nspg13.github.io/agent-bounties/x402-test-vectors.json",
+    "compatibility": "https://bountyboard.global/x402.html",
+    "testVectors": "https://bountyboard.global/x402-test-vectors.json",
     "fundingEvidence": "FundingAdded",
     "payoutEvidence": "BountySettled"
   },

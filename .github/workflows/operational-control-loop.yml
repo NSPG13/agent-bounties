@@ -30,8 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
-      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://agent-bounties-mcp.onrender.com' }}
+      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
+      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.bountyboard.global' }}
       PRODUCTION_EXPECTED_REVISION: ${{ inputs.expected_revision || github.sha }}
     steps:
       - uses: actions/checkout@v4
