@@ -45,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          if python -c "import json,sys; sys.exit(0 if json.load(open('target/bounded-wallet-relay.json'))['claimable'] else 1)"; then
+          if python -c "import json,sys; r=json.load(open('target/bounded-wallet-relay.json')); sys.exit(0 if r.get('outcome') in {'relayed','already-relayed'} and r.get('claimable') is True else 1)"; then
             gh issue edit "$ISSUE_NUMBER" --remove-label funding-needed --add-label funded-live --add-label claimable-live
           fi
 
