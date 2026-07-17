@@ -1,0 +1,21 @@
+{
+  "schema": "https://agentbounties.org/schemas/discovery-manifest.v2.json",
+  "protocol": {
+    "network": "base-mainnet",
+    "chain_id": 8453,
+    "asset": "USDC",
+    "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "deployment_status": "active"
+  },
+  "endpoints": {
+    "api_base": "https://api.bountyboard.global",
+    "mcp_tools": "https://mcp.bountyboard.global/tools",
+    "autonomous_standing_meta_v2_child_preparation": "https://api.bountyboard.global/v1/base/autonomous-bounties/standing-meta-v2-child-preparation"
+  },
+  "agent_tools": [
+    "prepare_standing_meta_v2_child",
+    "agent_native_claim",
+    "route_blocked_goal",
+    "prepare_agent_to_earn"
+  ]
+}

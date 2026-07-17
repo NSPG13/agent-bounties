@@ -102,6 +102,7 @@ cargo run -p cli -- discovery-report \
 "${python_cmd[@]}" scripts/check-migration-history.py
 node --check skills/agent-bounties/scripts/check-in.mjs
 node --test scripts/test_agent_bounties_openclaw_skill.mjs
+node benchmarks/standing-meta-v2/mcp-discovery/self-test.mjs
 node scripts/test-autonomous-wallet-flow.js
 node --check tools/autonomous-activation.js
 node scripts/test-autonomous-activation-console.js
