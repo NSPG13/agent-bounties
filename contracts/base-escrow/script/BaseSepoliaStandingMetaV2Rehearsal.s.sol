@@ -96,6 +96,8 @@ contract BaseSepoliaStandingMetaV2Rehearsal {
 
     function _complete(RehearsalActors memory actors, Deployment memory deployment) private {
         AgentBounty parent = AgentBounty(vm.envAddress("REHEARSAL_PARENT_BOUNTY"));
+        uint256 parentBalanceBefore = deployment.token.balanceOf(actors.parentSolver);
+        uint256 childBalanceBefore = deployment.token.balanceOf(actors.childSolver);
         require(deployment.factory.isCanonicalBounty(address(parent)), "prepared parent is not canonical");
         require(parent.verifierModule() == address(deployment.module), "prepared parent module drift");
         OnchainTermsRegistry.TermsCommitment memory published = deployment.terms.commitment(keccak256(CHILD_TERMS));
@@ -109,11 +111,26 @@ contract BaseSepoliaStandingMetaV2Rehearsal {
 
         require(parent.bountyStatus() == AgentBounty.BountyStatus.Settled, "parent not settled");
         require(child.bountyStatus() == AgentBounty.BountyStatus.Settled, "child not settled");
-        require(deployment.token.balanceOf(actors.parentSolver) == 1_000_000, "parent net payout mismatch");
-        require(deployment.token.balanceOf(actors.childSolver) == 1_000_000, "child net payout mismatch");
+        _assertCompletionBalanceDeltas(
+            parentBalanceBefore,
+            childBalanceBefore,
+            deployment.token.balanceOf(actors.parentSolver),
+            deployment.token.balanceOf(actors.childSolver)
+        );
         _writeEvidence(
             actors.deployer, deployment, parent, child, actors.parentSolver, actors.childSolver, actors.verifiers
         );
+    }
+
+    function _assertCompletionBalanceDeltas(
+        uint256 parentBalanceBefore,
+        uint256 childBalanceBefore,
+        uint256 parentBalanceAfter,
+        uint256 childBalanceAfter
+    ) internal pure {
+        require(parentBalanceBefore >= 100_000, "parent rehearsal balance underflow");
+        require(parentBalanceAfter == parentBalanceBefore - 100_000, "parent net payout mismatch");
+        require(childBalanceAfter == childBalanceBefore + 900_000, "child net payout mismatch");
     }
 
     function _loadActors() private returns (RehearsalActors memory actors) {
