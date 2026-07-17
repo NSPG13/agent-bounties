@@ -804,7 +804,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--api-base-url",
         default=os.environ.get(
-            "AGENT_BOUNTIES_API_BASE_URL", "https://agent-bounties-api.onrender.com"
+            "AGENT_BOUNTIES_API_BASE_URL", "https://api.bountyboard.global"
         ),
     )
     parser.add_argument("--network", default="base-mainnet")

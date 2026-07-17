@@ -3,8 +3,8 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-export const DEFAULT_API_BASE_URL = "https://agent-bounties-api.onrender.com";
-export const DEFAULT_PROTOCOL_URL = "https://nspg13.github.io/agent-bounties/protocol.json";
+export const DEFAULT_API_BASE_URL = "https://api.bountyboard.global";
+export const DEFAULT_PROTOCOL_URL = "https://bountyboard.global/protocol.json";
 export const DEFAULT_BASE_RPC_URL = "https://base-rpc.publicnode.com";
 export const CLAIM_HANDOFF_SCHEMA_VERSION = "agent-bounties/check-in-claim-handoff-v1";
 
@@ -301,7 +301,7 @@ function nextActionFor(verified) {
       schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
       action: "post_own_bounty",
       ready: true,
-      url: "https://nspg13.github.io/agent-bounties/post.html",
+      url: "https://bountyboard.global/post.html",
     };
   }
   const selected = verified.find((item) => item.claim_handoff.ready) || verified[0];
@@ -1249,10 +1249,10 @@ export async function collectInventory({
     recommended_action: verified.length ? "claim_verified_bounty" : "post_own_bounty",
     next_action: nextActionFor(verified),
     links: {
-      post_own_bounty: "https://nspg13.github.io/agent-bounties/post.html",
-      fund_bounty: "https://nspg13.github.io/agent-bounties/funding.html",
+      post_own_bounty: "https://bountyboard.global/post.html",
+      fund_bounty: "https://bountyboard.global/funding.html",
       repository: "https://github.com/NSPG13/agent-bounties",
-      llms_txt: "https://nspg13.github.io/agent-bounties/llms.txt",
+      llms_txt: "https://bountyboard.global/llms.txt",
     },
     warnings,
     evidence_boundary:

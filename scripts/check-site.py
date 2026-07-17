@@ -440,7 +440,7 @@ def main() -> int:
         fail("discovery funding policy must advertise x402 v2 agent-bounty-fund")
     if "FundingAdded" not in x402_funding.get("settlement_boundary", ""):
         fail("x402 funding policy must bind evidence to FundingAdded")
-    if discovery.get("endpoints", {}).get("x402_discovery") != "https://agent-bounties-api.onrender.com/.well-known/x402.json":
+    if discovery.get("endpoints", {}).get("x402_discovery") != "https://api.bountyboard.global/.well-known/x402.json":
         fail("static discovery manifest has the wrong x402 discovery endpoint")
     if x402_discovery.get("x402Version") != 2:
         fail("static x402 discovery must use version 2")
@@ -455,9 +455,9 @@ def main() -> int:
     if x402_discovery.get("mpp", {}).get("status") != "planned":
         fail("static x402 discovery must keep MPP behind the planned adapter boundary")
     x402_docs = x402_discovery.get("documentation", {})
-    if x402_docs.get("compatibility") != "https://nspg13.github.io/agent-bounties/x402.html":
+    if x402_docs.get("compatibility") != "https://bountyboard.global/x402.html":
         fail("static x402 discovery must publish the compatibility page")
-    if x402_docs.get("testVectors") != "https://nspg13.github.io/agent-bounties/x402-test-vectors.json":
+    if x402_docs.get("testVectors") != "https://bountyboard.global/x402-test-vectors.json":
         fail("static x402 discovery must publish deterministic test vectors")
     if x402_vectors.get("schema_version") != "agent-bounties/x402-test-vectors-v1":
         fail("x402 test vectors have the wrong schema")
@@ -634,7 +634,7 @@ def main() -> int:
         ],
     )
     discovery_endpoints = discovery.get("endpoints", {})
-    if discovery_endpoints.get("agent_wallet_readiness") != "https://agent-bounties-api.onrender.com/v1/base/agent-wallet/readiness":
+    if discovery_endpoints.get("agent_wallet_readiness") != "https://api.bountyboard.global/v1/base/agent-wallet/readiness":
         fail("static discovery has the wrong agent wallet readiness endpoint")
     if "prepare_agent_to_earn" not in discovery.get("agent_tools", []):
         fail("static discovery must expose prepare_agent_to_earn")

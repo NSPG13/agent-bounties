@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       api_base_url:
-        description: "Deployed API base URL, for example https://agent-bounties-api.onrender.com"
+        description: "Deployed API base URL, for example https://api.bountyboard.global"
         required: false
         type: string
       mcp_base_url:
-        description: "Deployed MCP base URL, for example https://agent-bounties-mcp.onrender.com"
+        description: "Deployed MCP base URL, for example https://mcp.bountyboard.global"
         required: false
         type: string
       expected_revision:
@@ -35,8 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
-      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://agent-bounties-mcp.onrender.com' }}
+      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
+      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.bountyboard.global' }}
       PRODUCTION_EXPECTED_REVISION: ${{ inputs.expected_revision || github.sha }}
       REQUIRE_EVAL_HISTORY_INPUT: ${{ inputs.require_eval_history || 'false' }}
       REQUIRE_EVAL_HISTORY_VAR: ${{ vars.PRODUCTION_SMOKE_REQUIRE_EVAL_HISTORY || 'false' }}

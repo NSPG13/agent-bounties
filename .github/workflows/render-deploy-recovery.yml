@@ -64,8 +64,8 @@ jobs:
       cancel-in-progress: false
     env:
       TARGET_REVISION: ${{ github.event.workflow_run.head_sha || inputs.revision || github.sha }}
-      PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
-      PRODUCTION_MCP_BASE_URL: ${{ vars.PRODUCTION_MCP_BASE_URL || 'https://agent-bounties-mcp.onrender.com' }}
+      PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
+      PRODUCTION_MCP_BASE_URL: ${{ vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.bountyboard.global' }}
     steps:
       - uses: actions/checkout@v4
         with:

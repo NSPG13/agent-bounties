@@ -313,7 +313,7 @@ test("portable skill metadata and install contracts remain publishable", async (
   assert.equal(plugin.version, "1.4.3");
   assert.equal(plugin.license, "MIT");
   assert.equal(plugin.repository, "https://github.com/NSPG13/agent-bounties");
-  assert.equal(plugin.homepage, "https://nspg13.github.io/agent-bounties/");
+  assert.equal(plugin.homepage, "https://bountyboard.global/");
   assert.equal(plugin.mcpServers, undefined);
   assert.equal(plugin.hooks, undefined);
   assert.equal(plugin.experimental, undefined);
