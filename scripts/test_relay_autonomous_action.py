@@ -288,6 +288,9 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(len(published), 2)
 
     def test_common_validation_rejects_noncanonical_and_large_bounties(self) -> None:
+        relay.validate_common(
+            bounty_state(verifier_module=relay.STANDING_META_V2_VERIFIER_MODULE)
+        )
         with self.assertRaisesRegex(relay.RelayError, "canonical"):
             relay.validate_common(bounty_state(canonical=False))
         with self.assertRaisesRegex(relay.RelayError, "5 USDC"):
