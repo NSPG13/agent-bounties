@@ -1350,9 +1350,9 @@ fn artifact_runtime_with_immutables(
     }
     let mut declarations = BTreeMap::new();
     collect_immutable_address_declarations(
-        artifact
-            .get("ast")
-            .context("contract artifact is missing its source AST")?,
+        artifact.get("ast").context(
+            "contract artifact is missing its source AST; rebuild with forge build --ast",
+        )?,
         &mut declarations,
     )?;
     let mut patched = BTreeSet::new();

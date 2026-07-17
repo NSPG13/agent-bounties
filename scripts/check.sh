@@ -159,6 +159,7 @@ npm run check:examples
 
 cd "$repo_root/contracts/base-escrow"
 forge test --fuzz-runs 1000
+forge build --force --ast
 
 cd "$repo_root"
 sepolia_bundle="deployments/base-sepolia-sponsor-activation.json"

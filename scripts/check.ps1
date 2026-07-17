@@ -94,6 +94,7 @@ Pop-Location
 
 Push-Location (Join-Path $repoRoot "contracts\base-escrow")
 Invoke-Checked { forge test --fuzz-runs 1000 }
+Invoke-Checked { forge build --force --ast }
 Pop-Location
 
 $sepoliaBundlePath = Join-Path $repoRoot "deployments\base-sepolia-sponsor-activation.json"
