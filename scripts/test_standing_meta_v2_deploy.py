@@ -7,12 +7,20 @@ from scripts.standing_meta_v2_deploy import (
     BASE_SEPOLIA_USDC,
     DeploymentError,
     normalize_address,
+    parse_cast_uint,
     read_broadcast,
     require_bytes32,
 )
 
 
 class StandingMetaV2DeployTests(unittest.TestCase):
+    def test_cast_uint_accepts_foundry_annotations(self) -> None:
+        self.assertEqual(parse_cast_uint("3000000 [3e6]"), 3_000_000)
+        self.assertEqual(parse_cast_uint("0x2a [42]"), 42)
+        self.assertEqual(parse_cast_uint("4"), 4)
+        with self.assertRaises(DeploymentError):
+            parse_cast_uint("[3e6]")
+
     def test_rehearsal_uses_canonical_base_sepolia_usdc(self) -> None:
         self.assertEqual(BASE_SEPOLIA_USDC, "0x036cbd53842c5426634e7929541ec2318f3dcf7e")
 

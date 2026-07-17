@@ -24,10 +24,19 @@ MIN_SEPOLIA_DEPLOY_WEI = 90_000_000_000_000
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 CREATE_JSON_RE = re.compile(r"\{\s*\"deployer\".*?\}\s*$", re.DOTALL)
+CAST_UINT_RE = re.compile(r"^(0x[0-9a-fA-F]+|[0-9]+)(?:\s|$)")
 
 
 class DeploymentError(RuntimeError):
     pass
+
+
+def parse_cast_uint(value: object, label: str = "cast uint") -> int:
+    text = str(value).strip()
+    match = CAST_UINT_RE.match(text)
+    if not match:
+        raise DeploymentError(f"{label} is not an unsigned integer")
+    return int(match.group(1), 0)
 
 
 def normalize_address(value: object, label: str) -> str:
@@ -81,7 +90,7 @@ class Foundry:
         return run([self.cast, *args, "--rpc-url", self.rpc_url], cwd=self.repo)
 
     def chain_id(self) -> int:
-        return int(self.cast_run("chain-id"))
+        return parse_cast_uint(self.cast_run("chain-id"), "chain id")
 
     def address_for_key(self, private_key: str) -> str:
         return normalize_address(
@@ -93,7 +102,7 @@ class Foundry:
         )
 
     def balance(self, address: str) -> int:
-        return int(self.cast_run("balance", address))
+        return parse_cast_uint(self.cast_run("balance", address), "native balance")
 
     def call(self, address: str, signature: str, *args: str) -> str:
         return self.cast_run("call", address, signature, *args).strip()
@@ -216,7 +225,10 @@ def read_broadcast(path: Path) -> list[dict[str, Any]]:
 def wait_for_later_timestamp(foundry: Foundry, published_at: int, timeout_seconds: int = 90) -> int:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        observed = int(foundry.cast_run("block", "latest", "--field", "timestamp"))
+        observed = parse_cast_uint(
+            foundry.cast_run("block", "latest", "--field", "timestamp"),
+            "block timestamp",
+        )
         if observed > published_at:
             return observed
         time.sleep(2)
@@ -266,8 +278,8 @@ def verify_rehearsal(
             require_bytes32(foundry.call(module, "taskVerifierSetHash()(bytes32)"), "module verifier set"),
             expected_verifier_set_hash,
         ),
-        "parent_status": (int(foundry.call(parent, "status()(uint8)")), 4),
-        "child_status": (int(foundry.call(child, "status()(uint8)")), 4),
+        "parent_status": (parse_cast_uint(foundry.call(parent, "status()(uint8)")), 4),
+        "child_status": (parse_cast_uint(foundry.call(child, "status()(uint8)")), 4),
         "parent_canonical": (foundry.call(factory, "isCanonicalBounty(address)(bool)", parent).lower(), "true"),
         "child_canonical": (foundry.call(factory, "isCanonicalBounty(address)(bool)", child).lower(), "true"),
     }
@@ -326,7 +338,10 @@ def deploy_sepolia(foundry: Foundry, output: Path) -> dict[str, Any]:
     )
     if foundry.code(BASE_SEPOLIA_USDC) in {"0x", "0x0"}:
         raise DeploymentError("canonical Base Sepolia USDC has no runtime code")
-    if int(foundry.call(BASE_SEPOLIA_USDC, "balanceOf(address)(uint256)", deployer)) < 2_200_000:
+    if parse_cast_uint(
+        foundry.call(BASE_SEPOLIA_USDC, "balanceOf(address)(uint256)", deployer),
+        "Base Sepolia USDC balance",
+    ) < 2_200_000:
         raise DeploymentError(f"Base Sepolia keeper {deployer} needs at least 2.2 canonical test USDC")
     deployments: dict[str, dict[str, Any]] = {
         "token": {
@@ -503,7 +518,10 @@ def deploy_mainnet(foundry: Foundry, output: Path) -> dict[str, Any]:
         "verifier_set_hash": require_bytes32(
             foundry.call(module, "taskVerifierSetHash()(bytes32)"), "module verifier set"
         ),
-        "verifier_threshold": int(foundry.call(module, "taskVerifierThreshold()(uint8)")),
+        "verifier_threshold": parse_cast_uint(
+            foundry.call(module, "taskVerifierThreshold()(uint8)"),
+            "task verifier threshold",
+        ),
     }
     expected_onchain: dict[str, object] = {
         "bundle_factory": BASE_MAINNET_FACTORY,
