@@ -38,6 +38,17 @@ export const STANDING_META_BOUNTY = Object.freeze({
   verifierModule: "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
   verifierRuntimeCodeHash: "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c",
   acceptanceCriteriaHash: "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
+  childEngine: "sandboxed_regression_v1",
+  childVerifierSetHash: "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+  childVerifierThreshold: 2,
+  participantRegistry: "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294",
+  termsRegistry: "0x35e5d49c12b75c119d33951c2c4f054c5732208c",
+  requiredEvidence: Object.freeze([
+    "child_bounty_contract",
+    "discovery_source",
+    "participation_reason",
+    "improvement_feedback",
+  ]),
   acceptanceCriteria: Object.freeze([
     "Publish the exact child terms on Base from the parent solver wallet before claiming this bounty.",
     "Create and fully fund the parent-bound canonical child to at least this bounty solver reward.",
@@ -913,15 +924,27 @@ function hostedStandingMetaCandidate(item) {
   return Boolean(
     item?.verification_mode === "deterministic_module"
       && String(item?.verifier_module || "").toLowerCase() === STANDING_META_BOUNTY.verifierModule
+      && String(item?.terms?.acceptance_criteria_hash || "").toLowerCase()
+        === STANDING_META_BOUNTY.acceptanceCriteriaHash
       && exactStrings(document?.acceptance_criteria, STANDING_META_BOUNTY.acceptanceCriteria)
       && policy?.mechanism === "deterministic_module"
       && String(policy?.verifier_module || "").toLowerCase() === STANDING_META_BOUNTY.verifierModule
       && policy?.threshold === 1
-      && benchmark?.engine === "canonical_child_loop_v1"
+      && policy?.self_verification_forbidden === true
+      && benchmark?.engine === "standing_meta_v2_parent"
+      && typeof benchmark?.lane === "string"
+      && benchmark.lane.trim().length > 0
+      && benchmark?.required_child_engine === STANDING_META_BOUNTY.childEngine
       && benchmark?.required_child_status === "settled"
-      && String(benchmark?.verifier_module || "").toLowerCase() === STANDING_META_BOUNTY.verifierModule
-      && Array.isArray(requiredEvidence)
-      && requiredEvidence.includes("child_bounty_contract"),
+      && String(benchmark?.required_child_verifier_set_hash || "").toLowerCase()
+        === STANDING_META_BOUNTY.childVerifierSetHash
+      && benchmark?.required_child_verifier_threshold
+        === STANDING_META_BOUNTY.childVerifierThreshold
+      && String(benchmark?.participant_registry || "").toLowerCase()
+        === STANDING_META_BOUNTY.participantRegistry
+      && String(benchmark?.terms_registry || "").toLowerCase()
+        === STANDING_META_BOUNTY.termsRegistry
+      && exactStrings(requiredEvidence, STANDING_META_BOUNTY.requiredEvidence),
   );
 }
 

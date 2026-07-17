@@ -7,9 +7,9 @@ bounties that a different participant completes.
 
 - A qualifying bounty is canonical, fully funded, claimable, and verified by
   the exact standing-meta-v2 module on Base mainnet.
-- The current migration floor is one and the replenishment target is two. The
-  floor moves to five only after five v2 contracts are canonically funded and
-  independently reconciled; changing a CI number does not create inventory.
+- The hard floor and replenishment target are both five. This became enforceable
+  only after five v2 contracts were canonically funded and independently
+  reconciled; changing a CI number does not create inventory.
 - An issue, unsigned plan, signature, broadcast hash, or unconfirmed index row
   does not count.
 - Ordinary funded bounties do not count toward the standing-meta floor.
@@ -58,9 +58,9 @@ and keeper reserve proof are recorded in
 
 ## Replenishment
 
-When inventory falls below the configured target, replenishment is the
-highest-priority liquidity operation. Create and fully fund another canonical
-standing-meta-v2 bounty and wait for canonical indexing before counting it.
+When inventory falls below five, replenishment is the highest-priority
+liquidity operation. Create and fully fund another canonical standing-meta-v2
+bounty and wait for canonical indexing before counting it.
 
 The contracts do not atomically reserve a replacement when inventory is
 claimed. Monitoring and a preauthorized bounded reserve reduce this gap but do
