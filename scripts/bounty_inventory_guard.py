@@ -141,14 +141,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--meta-threshold",
         type=int,
-        default=int(os.environ.get("META_BOUNTY_INVENTORY_THRESHOLD", "1")),
-        help="Hard floor for funded, claimable standing meta-bounties (default 1)",
+        default=int(os.environ.get("META_BOUNTY_INVENTORY_THRESHOLD", "5")),
+        help="Hard floor for funded, claimable standing meta-bounties (default 5)",
     )
     p.add_argument(
         "--meta-replenishment-target",
         type=int,
-        default=int(os.environ.get("META_BOUNTY_REPLENISHMENT_TARGET", "2")),
-        help="Target that creates a buffer above the standing meta-bounty floor (default 2)",
+        default=int(os.environ.get("META_BOUNTY_REPLENISHMENT_TARGET", "5")),
+        help="Target for funded, claimable standing meta-bounties (default 5)",
     )
     p.add_argument(
         "--claimable-report",

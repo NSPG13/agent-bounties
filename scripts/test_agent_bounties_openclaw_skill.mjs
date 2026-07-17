@@ -216,20 +216,27 @@ function standingMetaTransport(runtimeCodeHash = STANDING_META_BOUNTY.verifierRu
 
 function makeHostedStandingMetaCandidate(item) {
   item.verifier_module = STANDING_META_BOUNTY.verifierModule;
+  item.terms.acceptance_criteria_hash = STANDING_META_BOUNTY.acceptanceCriteriaHash;
   item.terms.document.acceptance_criteria = [...STANDING_META_BOUNTY.acceptanceCriteria];
   item.terms.document.benchmark = {
-    engine: "canonical_child_loop_v1",
+    engine: "standing_meta_v2_parent",
+    lane: "cli",
+    required_child_engine: STANDING_META_BOUNTY.childEngine,
     required_child_status: "settled",
-    verifier_module: STANDING_META_BOUNTY.verifierModule,
+    required_child_verifier_set_hash: STANDING_META_BOUNTY.childVerifierSetHash,
+    required_child_verifier_threshold: STANDING_META_BOUNTY.childVerifierThreshold,
+    participant_registry: STANDING_META_BOUNTY.participantRegistry,
+    terms_registry: STANDING_META_BOUNTY.termsRegistry,
   };
   item.terms.document.evidence_schema = {
     type: "object",
-    required: ["child_bounty_contract"],
+    required: [...STANDING_META_BOUNTY.requiredEvidence],
   };
   item.terms.document.verification_policy = {
     mechanism: "deterministic_module",
     verifier_module: STANDING_META_BOUNTY.verifierModule,
     threshold: 1,
+    self_verification_forbidden: true,
   };
   return item;
 }
@@ -760,6 +767,21 @@ test("hosted meta-looking terms do not count when verifier bytecode differs", as
   assert.equal(report.verified_claimable_bounties.length, 1);
   assert.equal(report.verified_claimable_bounties[0].standing_meta_bounty, undefined);
   assert.ok(report.warnings.includes("standing_meta_verifier_code_mismatch"));
+});
+
+test("hosted meta-looking terms do not count when the child quorum drifts", async () => {
+  const input = await fixture("verified-claimable.json");
+  const item = makeHostedStandingMetaCandidate(input.autonomous_feed.body[0]);
+  item.terms.document.benchmark.required_child_verifier_set_hash = `0x${"66".repeat(32)}`;
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: input,
+    baseRpcUrl: "https://rpc.example.test",
+    rpcTransport: standingMetaTransport(),
+  });
+
+  assert.equal(report.verified_claimable_bounties.length, 1);
+  assert.equal(report.verified_claimable_bounties[0].standing_meta_bounty, undefined);
 });
 
 test("hosted quorum bounty is excluded without a service availability attestation", async () => {

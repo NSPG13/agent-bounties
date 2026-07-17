@@ -81,8 +81,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           BOUNTY_INVENTORY_THRESHOLD: "5"
-          META_BOUNTY_INVENTORY_THRESHOLD: "1"
-          META_BOUNTY_REPLENISHMENT_TARGET: "2"
+          META_BOUNTY_INVENTORY_THRESHOLD: "5"
+          META_BOUNTY_REPLENISHMENT_TARGET: "5"
         run: |
           python scripts/bounty_inventory_guard.py \
             --claimable-report claimable-inventory.json \
