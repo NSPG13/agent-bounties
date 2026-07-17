@@ -9,7 +9,8 @@
   "canonical": {
     "bounty_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    "deterministic_verifier": "0xe573cb4f471d38b5bf10ce82237251ac902c9867"
+    "deterministic_verifier": "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+    "signed_quorum_verifier_set_hash": "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
   },
   "deterministic_deployer": {
     "address": "0x4e59b44847b379578588920ca78fbf26c0b4956c",

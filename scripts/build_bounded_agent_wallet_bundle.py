@@ -18,6 +18,7 @@ CREATE2_DEPLOYER_CODE_HASH = "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd095
 BOUNTY_FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 VERIFIER = "0xe573cb4f471d38b5bf10ce82237251ac902c9867"
+SIGNED_QUORUM_VERIFIER_SET_HASH = "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
 SALT_LABEL = "agent-bounties/base-mainnet/bounded-agent-wallet-factory/v1"
 SOURCE_INPUTS = ("contracts/base-escrow",)
 
@@ -169,6 +170,7 @@ def build_bundle() -> dict:
             "bounty_factory": BOUNTY_FACTORY,
             "settlement_token": USDC,
             "deterministic_verifier": VERIFIER,
+            "signed_quorum_verifier_set_hash": SIGNED_QUORUM_VERIFIER_SET_HASH,
         },
         "deterministic_deployer": {
             "address": CREATE2_DEPLOYER,

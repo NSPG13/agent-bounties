@@ -20,6 +20,7 @@
     bountyFactory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     settlementToken: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     deterministicVerifier: "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+    signedQuorumVerifierSetHash: "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
     deterministicDeployer: "0x4e59b44847b379578588920ca78fbf26c0b4956c",
     deterministicDeployerHash: "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989",
     walletFactory: "0x3840936351049aed639780a16845e6094c1f17f6",
@@ -41,6 +42,7 @@
     policy: "0x0505c8c9",
     policyVersion: "0x58355ead",
     lifetimeSpent: "0xb80762dd",
+    periodSpent: "0x81497000",
     configurePolicy: "0x27d3543c",
     revokePolicy: "0x9eba3667",
     balanceOf: "0x70a08231",
@@ -166,6 +168,7 @@
       [manifest.canonical && manifest.canonical.bounty_factory, EXPECTED.bountyFactory, "bounty factory"],
       [manifest.canonical && manifest.canonical.settlement_token, EXPECTED.settlementToken, "settlement token"],
       [manifest.canonical && manifest.canonical.deterministic_verifier, EXPECTED.deterministicVerifier, "verifier"],
+      [manifest.canonical && manifest.canonical.signed_quorum_verifier_set_hash, EXPECTED.signedQuorumVerifierSetHash, "signed quorum"],
       [manifest.deterministic_deployer && manifest.deterministic_deployer.address, EXPECTED.deterministicDeployer, "deployer"],
       [manifest.deterministic_deployer && manifest.deterministic_deployer.runtime_code_hash, EXPECTED.deterministicDeployerHash, "deployer runtime"],
       [manifest.wallet_factory && manifest.wallet_factory.address, EXPECTED.walletFactory, "wallet factory"],
@@ -429,9 +432,9 @@
         maxLifetimeSpend,
         maxBountyTarget,
         allowedActions: 15n,
-        allowedVerificationModes: 1n,
+        allowedVerificationModes: 3n,
         deterministicVerifierModule: state.manifest.canonical.deterministic_verifier,
-        signedQuorumVerifierSetHash: ZERO_HASH,
+        signedQuorumVerifierSetHash: state.manifest.canonical.signed_quorum_verifier_set_hash,
         aiJudgeVerifierSetHash: ZERO_HASH,
       },
     };
@@ -718,11 +721,12 @@
     const policy = exactPolicyWords(policyEncoded);
     const version = resultUint(await call(wallet, SELECTORS.policyVersion));
     const lifetimeSpent = resultUint(await call(wallet, SELECTORS.lifetimeSpent));
+    const periodSpent = resultUint(await call(wallet, SELECTORS.periodSpent));
     const balance = resultUint(await call(
       state.manifest.canonical.settlement_token,
       `${SELECTORS.balanceOf}${addressWord(wallet)}`,
     ));
-    return { policyEncoded, policy, version, lifetimeSpent, balance };
+    return { policyEncoded, policy, version, lifetimeSpent, periodSpent, balance };
   }
 
   function rotationSnapshot() {
@@ -742,19 +746,32 @@
     const observed = await inspectExistingWallet(wallet);
     const currentDelegate = wordAddress(observed.policy[0], "Current delegate");
     const currentVerifier = wordAddress(observed.policy[10], "Deterministic verifier");
+    const currentModes = wordUint(observed.policy[9]);
+    const currentSignedQuorum = `0x${observed.policy[11]}`;
+    const currentAiQuorum = `0x${observed.policy[12]}`;
     const nextVerifier = state.manifest.canonical.deterministic_verifier;
     if (currentVerifier !== nextVerifier && currentVerifier !== OBSOLETE_DETERMINISTIC_VERIFIER) {
       throw new Error("Existing policy uses an unknown verifier; this page will not replace it.");
     }
+    if (![1n, 3n].includes(currentModes)
+      || (currentModes === 1n && currentSignedQuorum !== ZERO_HASH)
+      || (currentModes === 3n && currentSignedQuorum !== EXPECTED.signedQuorumVerifierSetHash)
+      || currentAiQuorum !== ZERO_HASH) {
+      throw new Error("Existing policy uses unknown verification authority; this page will not replace it.");
+    }
     const verifierChanged = currentVerifier !== nextVerifier;
-    if (delegate === currentDelegate && !verifierChanged) {
-      throw new Error("The replacement delegate and reviewed verifier are already active.");
+    const signedQuorumChanged = currentModes !== 3n
+      || currentSignedQuorum !== EXPECTED.signedQuorumVerifierSetHash;
+    if (delegate === currentDelegate && !verifierChanged && !signedQuorumChanged) {
+      throw new Error("The replacement delegate and reviewed verifier policies are already active.");
     }
     const now = BigInt(await latestTimestamp());
     if (wordUint(observed.policy[2]) <= now) throw new Error("Existing policy is expired; create a new reviewed policy instead.");
     const nextPolicy = [...observed.policy];
     nextPolicy[0] = addressWord(delegate);
+    nextPolicy[9] = uintWord(3n);
     nextPolicy[10] = addressWord(nextVerifier);
+    nextPolicy[11] = bytes32Word(EXPECTED.signedQuorumVerifierSetHash);
     const nextEncoded = `0x${nextPolicy.join("")}`;
     const currentHash = await hash(observed.policyEncoded);
     const nextHash = await hash(nextEncoded);
@@ -766,12 +783,14 @@
       currentVerifier,
       nextVerifier,
       verifierChanged,
+      signedQuorumChanged,
       currentPolicy: observed.policyEncoded,
       currentHash,
       nextPolicy: nextEncoded,
       nextHash,
       currentVersion: observed.version,
       lifetimeSpent: observed.lifetimeSpent,
+      periodSpent: observed.periodSpent,
       balance: observed.balance,
       snapshot: rotationSnapshot(),
       data: `${SELECTORS.configurePolicy}${nextPolicy.join("")}`,
@@ -782,12 +801,13 @@
       `Replacement delegate: ${delegate}`,
       `Current verifier: ${currentVerifier}`,
       `Reviewed verifier: ${nextVerifier}`,
+      `Reviewed regression verifier set: ${EXPECTED.signedQuorumVerifierSetHash}`,
       `Current / next policy version: ${observed.version} / ${observed.version + 1n}`,
       `Current / next policy hash: ${currentHash} / ${nextHash}`,
       `Wallet balance remains ${Number(observed.balance) / 1_000_000} USDC.`,
-      verifierChanged
-        ? "Only the delegate and deterministic verifier change; all caps, actions, modes, expiry, balance, and prior spend remain byte-for-byte identical."
-        : "Only the delegate changes; all caps, actions, verifier restrictions, expiry, balance, and prior spend remain byte-for-byte identical.",
+      "The next policy permits only the existing deterministic module and the exact two-wallet sandboxed-regression quorum. AI-judge authority remains disabled.",
+      `Lifetime spend remains ${Number(observed.lifetimeSpent) / 1_000_000} USDC. The deployed wallet starts a fresh policy-period counter; current period spend is ${Number(observed.periodSpent) / 1_000_000} USDC.`,
+      "All financial caps, actions, expiry, owner, and wallet balance remain unchanged.",
       "The transaction transfers no USDC or ETH.",
     ], "pending");
     updateButtons();
@@ -808,6 +828,7 @@
       if (before.policyEncoded !== state.rotationPlan.currentPolicy
         || before.version !== state.rotationPlan.currentVersion
         || before.lifetimeSpent !== state.rotationPlan.lifetimeSpent
+        || before.periodSpent !== state.rotationPlan.periodSpent
         || before.balance !== state.rotationPlan.balance) {
         throw new Error("Bounded wallet state changed after review. Review the rotation again.");
       }
@@ -822,7 +843,9 @@
         `Wallet: ${state.rotationPlan.wallet}`,
         `Replacement delegate: ${state.rotationPlan.delegate}`,
         `Reviewed verifier: ${state.rotationPlan.nextVerifier}`,
+        `Reviewed regression verifier set: ${EXPECTED.signedQuorumVerifierSetHash}`,
         `Next policy hash: ${state.rotationPlan.nextHash}`,
+        "The policy transaction starts a fresh policy-period spend counter; lifetime spend is preserved.",
         "No token or native-ETH transfer is requested.",
       ], "pending");
       const transactionHash = await sendTransaction(state.rotationPlan.wallet, state.rotationPlan.data);
@@ -831,16 +854,19 @@
       if (after.policyEncoded !== state.rotationPlan.nextPolicy
         || after.version !== state.rotationPlan.currentVersion + 1n
         || after.lifetimeSpent !== state.rotationPlan.lifetimeSpent
+        || after.periodSpent !== 0n
         || after.balance !== state.rotationPlan.balance) {
         throw new Error("Confirmed rotation did not produce the exact reviewed wallet state.");
       }
-      status(state.rotationPlan.verifierChanged ? "Agent policy upgraded" : "Agent delegate rotated", "success");
+      status("Agent policy upgraded", "success");
       output([
         `Policy update confirmed: ${transactionHash}`,
         `Active delegate: ${state.rotationPlan.delegate}`,
         `Active verifier: ${state.rotationPlan.nextVerifier}`,
+        `Active regression verifier set: ${EXPECTED.signedQuorumVerifierSetHash}`,
         `Policy hash: ${state.rotationPlan.nextHash}`,
         `Wallet balance: ${Number(after.balance) / 1_000_000} USDC`,
+        "Policy-period spend counter: 0 USDC; lifetime spend is unchanged.",
         "The agent can now sign capped actions for a separate gas sponsor; the wallet needs no ETH.",
       ], "success");
       state.rotationPlan = null;

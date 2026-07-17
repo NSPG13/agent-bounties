@@ -21,6 +21,11 @@ PREDICT_SIGNATURE = f"predictBountyAddress(address,{CREATE_PARAMS_TYPE},address[
 EXPECTED_IMPLEMENTATION = "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
 ZERO_ADDRESS = "0x" + "00" * 20
 ZERO_HASH = "0x" + "00" * 32
+SIGNED_QUORUM_VERIFIERS = [
+    "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+    "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
+]
+SIGNED_QUORUM_VERIFIER_SET_HASH = "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
 HEX_DATA = re.compile(r"^0x(?:[0-9a-fA-F]{2})+$")
 
 PARAM_NAMES = (
@@ -66,6 +71,43 @@ def require_uint(value: object, label: str) -> int:
     if result < 0 or result >= 1 << 256:
         fail(f"{label} is outside uint256")
     return result
+
+
+def validate_creation_verification(
+    params: Mapping[str, object],
+    verifiers: list[str],
+    policy: Mapping[str, object],
+    canonical: Mapping[str, object],
+) -> None:
+    mode = int(params["verification_mode"])
+    if not int(policy["allowed_verification_modes"]) & (1 << mode):
+        fail("creation verification mode is not allowed")
+    if mode == 0:
+        if (
+            params["verifier_module"] != policy["deterministic_verifier_module"]
+            or params["verifier_reward_recipient"] == ZERO_ADDRESS
+            or int(params["threshold"]) != 1
+            or verifiers
+        ):
+            fail("bounded creation requires the exact deterministic verifier policy")
+        return
+    if mode != 1:
+        fail("bounded creation permits only deterministic or signed regression verification")
+    manifest_hash = require_bytes32(
+        str(canonical.get("signed_quorum_verifier_set_hash", "")),
+        "canonical signed quorum verifier set hash",
+    )
+    if manifest_hash != SIGNED_QUORUM_VERIFIER_SET_HASH:
+        fail("bounded-wallet manifest has an unexpected signed quorum")
+    if (
+        policy["signed_quorum_verifier_set_hash"] != manifest_hash
+        or params["verifier_module"] != ZERO_ADDRESS
+        or params["verifier_reward_recipient"] != ZERO_ADDRESS
+        or int(params["threshold"]) != len(SIGNED_QUORUM_VERIFIERS)
+        or verifiers != SIGNED_QUORUM_VERIFIERS
+        or int(params["verifier_reward"]) % len(SIGNED_QUORUM_VERIFIERS) != 0
+    ):
+        fail("bounded creation requires the exact signed regression verifier policy")
 
 
 def _address_word(word: str, label: str, *, allow_zero: bool = False) -> str:
@@ -319,17 +361,7 @@ def validate_creation_plan(
     assert isinstance(policy, dict)
     if not int(policy["allowed_actions"]) & 1:
         fail("create action is not enabled by the wallet policy")
-    mode = int(params["verification_mode"])
-    if not int(policy["allowed_verification_modes"]) & (1 << mode):
-        fail("creation verification mode is not allowed")
-    if (
-        mode != 0
-        or params["verifier_module"] != policy["deterministic_verifier_module"]
-        or params["verifier_reward_recipient"] == ZERO_ADDRESS
-        or int(params["threshold"]) != 1
-        or verifiers
-    ):
-        fail("bounded creation requires the exact deterministic verifier policy")
+    validate_creation_verification(params, verifiers, policy, canonical)
     if target > int(policy["max_bounty_target"]):
         fail("creation target exceeds the wallet policy")
     _validate_spend(report, initial_funding)

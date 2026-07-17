@@ -18,7 +18,10 @@ from bounded_agent_create import (
     CREATE_SELECTOR,
     EXPECTED_IMPLEMENTATION,
     PREDICT_SIGNATURE,
+    SIGNED_QUORUM_VERIFIERS,
+    SIGNED_QUORUM_VERIFIER_SET_HASH,
     ZERO_ADDRESS,
+    ZERO_HASH,
     decode_create_calldata,
 )
 from relay_autonomous_action import (
@@ -57,7 +60,23 @@ WALLET_FACTORY = "0x3840936351049aed639780a16845e6094c1f17f6"
 WALLET_CODEHASH = "0xc663bed9b4097e22e5a18c0ecb662561bf45df1829e6412cdd0d8568d05ca1b6"
 DELEGATE = "0xe98314df0e2f5657dd5ee3325f1e95f5a4249ef5"
 POLICY_HASH = "0xd5b39deb8630b258d165e94b5b74d81cb42073e895f26922e6722904b5fcc4b4"
+REGRESSION_DELEGATE = "0xe46741de0f379bff0ab8b01bce1b79a12d892fdb"
+REGRESSION_POLICY_HASH = "0x4f789c7d284541becfaee6d6136ec59a933ef06027a00d09a94d424c0a878951"
 VERIFIER = "0xe573cb4f471d38b5bf10ce82237251ac902c9867"
+POLICY_PROFILES = {
+    POLICY_HASH: {
+        "delegate": DELEGATE,
+        "policy_version": 2,
+        "allowed_verification_modes": 1,
+        "signed_quorum_verifier_set_hash": ZERO_HASH,
+    },
+    REGRESSION_POLICY_HASH: {
+        "delegate": REGRESSION_DELEGATE,
+        "policy_version": 3,
+        "allowed_verification_modes": 3,
+        "signed_quorum_verifier_set_hash": SIGNED_QUORUM_VERIFIER_SET_HASH,
+    },
+}
 MAX_COMMENT_BYTES = 12_000
 MAX_TARGET_MINOR = 5_000_000
 MAX_VERIFIER_REWARD_MINOR = 500_000
@@ -89,6 +108,7 @@ class WalletState:
     allowed_actions: int
     allowed_verification_modes: int
     deterministic_verifier: str
+    signed_quorum_verifier_set_hash: str
     policy_hash: str
     policy_version: int
     delegate_nonce: int
@@ -225,6 +245,7 @@ def read_wallet_state(client: CastClient, block: str | None = None) -> WalletSta
         allowed_actions=parse_uint(policy[8]),
         allowed_verification_modes=parse_uint(policy[9]),
         deterministic_verifier=normalize_address(policy[10]),
+        signed_quorum_verifier_set_hash=policy[11].strip().lower(),
         policy_hash=call("policyHash()(bytes32)").strip().lower(),
         policy_version=parse_uint(call("policyVersion()(uint64)")),
         delegate_nonce=parse_uint(call("delegateNonce()(uint256)")),
@@ -247,6 +268,11 @@ def validate_wallet(
     *,
     allow_next_nonce: bool = False,
 ) -> None:
+    profile = POLICY_PROFILES.get(str(envelope["policy_hash"]))
+    if profile is None:
+        raise RelayError("relay envelope uses an unreviewed bounded-wallet policy")
+    if int(envelope["policy_version"]) != profile["policy_version"]:
+        raise RelayError("relay envelope policy version does not match its reviewed policy hash")
     exact = {
         "chain_id": CHAIN_ID,
         "codehash": WALLET_CODEHASH,
@@ -254,12 +280,13 @@ def validate_wallet(
         "factory": FACTORY,
         "settlement_token": USDC,
         "deployment_factory": WALLET_FACTORY,
-        "delegate": DELEGATE,
+        "delegate": profile["delegate"],
         "deterministic_verifier": VERIFIER,
-        "policy_hash": POLICY_HASH,
-        "policy_version": int(envelope["policy_version"]),
+        "signed_quorum_verifier_set_hash": profile["signed_quorum_verifier_set_hash"],
+        "policy_hash": envelope["policy_hash"],
+        "policy_version": profile["policy_version"],
         "allowed_actions": 15,
-        "allowed_verification_modes": 1,
+        "allowed_verification_modes": profile["allowed_verification_modes"],
         "revoked": False,
     }
     for field, expected in exact.items():
@@ -273,7 +300,7 @@ def validate_wallet(
             f"bounded wallet delegate_nonce mismatch: expected {sorted(allowed_nonces)}, "
             f"got {state.delegate_nonce}"
         )
-    if envelope["wallet"] != WALLET or envelope["policy_hash"] != POLICY_HASH:
+    if envelope["wallet"] != WALLET:
         raise RelayError("relay is pinned to the activated bounded wallet and policy")
     if not state.valid_after <= state.block_timestamp <= state.valid_until:
         raise RelayError("bounded wallet policy is not active")
@@ -321,14 +348,27 @@ def validate_signed_creation(
         or initial > target
     ):
         raise RelayError("creation economics exceed the public sponsor policy")
-    if (
-        int(params["verification_mode"]) != 0
-        or params["verifier_module"] != state.deterministic_verifier
-        or params["verifier_reward_recipient"] == ZERO_ADDRESS
-        or int(params["threshold"]) != 1
-        or verifiers
-    ):
-        raise RelayError("creation must use the exact deterministic verifier policy")
+    mode = int(params["verification_mode"])
+    if mode == 0:
+        if (
+            params["verifier_module"] != state.deterministic_verifier
+            or params["verifier_reward_recipient"] == ZERO_ADDRESS
+            or int(params["threshold"]) != 1
+            or verifiers
+        ):
+            raise RelayError("creation must use the exact deterministic verifier policy")
+    elif mode == 1:
+        if (
+            state.signed_quorum_verifier_set_hash != SIGNED_QUORUM_VERIFIER_SET_HASH
+            or params["verifier_module"] != ZERO_ADDRESS
+            or params["verifier_reward_recipient"] != ZERO_ADDRESS
+            or int(params["threshold"]) != len(SIGNED_QUORUM_VERIFIERS)
+            or verifiers != SIGNED_QUORUM_VERIFIERS
+            or int(params["verifier_reward"]) % len(SIGNED_QUORUM_VERIFIERS) != 0
+        ):
+            raise RelayError("creation must use the exact signed regression verifier policy")
+    else:
+        raise RelayError("creation must use deterministic or signed regression verification")
     if (
         int(params["funding_deadline"]) <= now
         or int(params["claim_window_seconds"]) <= 0
@@ -425,9 +465,9 @@ def validate_created_bounty(
         "status": expected_status,
         "round": 0,
         "solver": ZERO_ADDRESS,
-        "verification_mode": 0,
-        "verifier_module": VERIFIER,
-        "threshold": 1,
+        "verification_mode": int(params["verification_mode"]),
+        "verifier_module": params["verifier_module"],
+        "threshold": int(params["threshold"]),
         "policy_hash": params["policy_hash"],
     }
     for field, wanted in expected.items():
@@ -451,6 +491,12 @@ def validate_created_bounty(
         )
         if observed != params[field]:
             raise RelayError(f"created bounty {field} does not match signed calldata")
+    expected_verifier_set_hash = (
+        ZERO_HASH if int(params["verification_mode"]) == 0 else SIGNED_QUORUM_VERIFIER_SET_HASH
+    )
+    observed_verifier_set_hash = client.call(predicted, "verifierSetHash()(bytes32)", block=block).strip().lower()
+    if observed_verifier_set_hash != expected_verifier_set_hash:
+        raise RelayError("created bounty verifier set does not match signed calldata")
     return asdict(bounty)
 
 

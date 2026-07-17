@@ -23,13 +23,16 @@ The proposed first mainnet policy is:
 | Maximum bounty target | 5 USDC |
 | Expiry | 30 days |
 | Actions | create, fund, claim, submit |
-| Verification | exact approved deterministic module only |
+| Verification | exact standing-meta-v2 module plus exact sandboxed-regression signed quorum |
 
 The first live policy allowed the permissionless proof-of-work module. Policy
-version two replaces that module with the standing-meta-v2 verifier while
-preserving every financial cap, action permission, expiry, wallet balance, and
-prior spend counter. Signed-quorum and AI-judge actions remain disabled at the
-bounded-wallet layer. Returned
+version two replaced that module with the standing-meta-v2 verifier. The
+reviewed version-three policy keeps that module and adds only verifier set
+`0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd`
+for `sandboxed_regression_v1`; arbitrary signed quorums and AI-judge actions
+remain disabled at the bounded-wallet layer. Until an on-chain inspection
+reports version three and its exact policy hash, version two remains active.
+Returned
 claim bonds and bounty earnings increase the wallet balance but do not restore
 the gross lifetime budget. The owner must explicitly replace the policy to
 extend authority.
@@ -116,13 +119,14 @@ delegate actions immediately. The owner may then call
 `withdrawToken(nativeUsdc, owner, balance)` or install a reviewed replacement
 policy. Ownership transfer is two-step.
 
-An existing wallet may move from the obsolete verifier to the reviewed
-standing-meta-v2 verifier with one zero-value `configurePolicy` transaction.
-Use a fresh delegate at the same time because local bindings are intentionally
-immutable. The activation page reads the complete live policy, accepts only the
-known obsolete verifier or current reviewed verifier, changes only the delegate
-and verifier words, simulates the call, and then verifies the exact receipt,
-version increment, unchanged caps, unchanged balance, and unchanged prior spend.
+An existing wallet may add the reviewed regression quorum with one zero-value
+`configurePolicy` transaction. Use a fresh delegate at the same time because
+local bindings are intentionally immutable. The activation page reads the
+complete live policy, accepts only known verifier authority, installs the exact
+dual-mode policy, simulates the call, and verifies the receipt, version, caps,
+balance, and lifetime spend. The deployed wallet starts a fresh policy-period
+counter on every policy replacement; the review page discloses the observed
+period spend before signing instead of claiming it is preserved.
 
 ## Activation State
 

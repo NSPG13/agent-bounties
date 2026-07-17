@@ -31,6 +31,7 @@ EXPECTED_CANONICAL = {
 }
 EXPECTED_CREATE2_DEPLOYER = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
 EXPECTED_CREATE2_DEPLOYER_HASH = "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989"
+EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH = "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
 
 
 def executable(name: str) -> str:
@@ -99,6 +100,11 @@ def validate_manifest(manifest: dict) -> dict:
     for name, expected in EXPECTED_CANONICAL.items():
         if require_address(str(canonical.get(name, "")), name) != expected:
             raise SystemExit(f"bounded-wallet manifest has an unexpected canonical {name}")
+    if require_bytes32(
+        str(canonical.get("signed_quorum_verifier_set_hash", "")),
+        "signed quorum verifier set hash",
+    ) != EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH:
+        raise SystemExit("bounded-wallet manifest has an unexpected signed quorum")
     deployer = manifest.get("deterministic_deployer") or {}
     if require_address(str(deployer.get("address", "")), "deterministic deployer") != EXPECTED_CREATE2_DEPLOYER:
         raise SystemExit("bounded-wallet manifest has an unexpected deterministic deployer")
@@ -191,6 +197,12 @@ def main() -> None:
     implementation = require_address(manifest["wallet_factory"]["implementation"], "implementation")
     usdc = require_address(manifest["canonical"]["settlement_token"], "settlement token")
     verifier = require_address(manifest["canonical"]["deterministic_verifier"], "verifier")
+    signed_quorum_verifier_set_hash = require_bytes32(
+        manifest["canonical"]["signed_quorum_verifier_set_hash"],
+        "signed quorum verifier set hash",
+    )
+    if signed_quorum_verifier_set_hash == ZERO_HASH:
+        raise SystemExit("signed quorum verifier set hash cannot be zero")
     now = int(time.time())
     valid_after = args.valid_after if args.valid_after is not None else now
     valid_until = args.valid_until if args.valid_until is not None else now + 30 * 86_400
@@ -219,9 +231,9 @@ def main() -> None:
         "max_lifetime_spend": max_lifetime,
         "max_bounty_target": max_bounty_target,
         "allowed_actions": 15,
-        "allowed_verification_modes": 1,
+        "allowed_verification_modes": 3,
         "deterministic_verifier_module": verifier,
-        "signed_quorum_verifier_set_hash": ZERO_HASH,
+        "signed_quorum_verifier_set_hash": signed_quorum_verifier_set_hash,
         "ai_judge_verifier_set_hash": ZERO_HASH,
     }
     policy_value = policy_tuple(policy)

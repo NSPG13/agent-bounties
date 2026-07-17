@@ -522,7 +522,7 @@ def main() -> int:
             "Agent delegate address",
             "Initial funding, USDC",
             "Lifetime gross spend, USDC",
-            "exact approved deterministic verifier only",
+            "two-wallet sandboxed-regression quorum only",
             "Owner escape hatch",
             "Review policy update",
             "Update policy",
@@ -548,7 +548,8 @@ def main() -> int:
             'predictWallet: "0x240fa116"',
             'revokePolicy: "0x9eba3667"',
             'configurePolicy: "0x27d3543c"',
-            "Only the delegate and deterministic verifier change",
+            "starts a fresh policy-period spend counter",
+            "exact two-wallet sandboxed-regression quorum",
             "OBSOLETE_DETERMINISTIC_VERIFIER",
             "manifest.contract_source_dirty !== false",
             "contract_source_revision",
@@ -601,6 +602,7 @@ def main() -> int:
         "bountyFactory": bounded_deployment["canonical"]["bounty_factory"],
         "settlementToken": bounded_deployment["canonical"]["settlement_token"],
         "deterministicVerifier": bounded_deployment["canonical"]["deterministic_verifier"],
+        "signedQuorumVerifierSetHash": bounded_deployment["canonical"]["signed_quorum_verifier_set_hash"],
         "deterministicDeployer": bounded_deployment["deterministic_deployer"]["address"],
         "deterministicDeployerHash": bounded_deployment["deterministic_deployer"]["runtime_code_hash"],
         "walletFactory": bounded_deployment["wallet_factory"]["address"],
@@ -621,6 +623,8 @@ def main() -> int:
     standing_components = standing_meta_deployment.get("components", {})
     if standing_components.get("verifier_module") != bounded_deployment["canonical"]["deterministic_verifier"]:
         fail("bounded wallet and standing-meta-v2 manifests disagree on the verifier")
+    if standing_components.get("verifier_set_hash") != bounded_deployment["canonical"]["signed_quorum_verifier_set_hash"]:
+        fail("bounded wallet and standing-meta-v2 manifests disagree on the signed quorum")
     if standing_components.get("verifier_wallets") != [
         "0xbe6292b9e465f549e2363b918d6dd9187038431e",
         "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
