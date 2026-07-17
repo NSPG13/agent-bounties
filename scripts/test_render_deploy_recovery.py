@@ -185,6 +185,119 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 "api.bountyboard.global",
             )
 
+    def test_public_base_urls_require_bare_https_origins(self) -> None:
+        self.assertEqual(
+            recovery.normalize_public_base_url(
+                "PUBLIC_BASE_URL", " https://api.bountyboard.global/ "
+            ),
+            "https://api.bountyboard.global",
+        )
+        for value in (
+            "http://api.bountyboard.global",
+            "https://user@api.bountyboard.global",
+            "https://api.bountyboard.global:8443",
+            "https://api.bountyboard.global/path",
+            "https://api.bountyboard.global?query=1",
+        ):
+            with self.subTest(value=value), self.assertRaises(recovery.RecoveryError):
+                recovery.normalize_public_base_url("PUBLIC_BASE_URL", value)
+
+    def test_matching_public_env_var_is_verified_without_mutation(self) -> None:
+        expected = {
+            "key": "PUBLIC_BASE_URL",
+            "value": "https://api.bountyboard.global",
+        }
+        client = RecordingClient()
+        client._read_with_retry = lambda _path: expected
+        result = client.ensure_env_var(
+            {"id": "srv-api", "name": "agent-bounties-api"},
+            expected["key"],
+            expected["value"],
+        )
+        self.assertFalse(result["changed"])
+        self.assertEqual(client.requests, [])
+
+    def test_stale_public_env_var_is_updated_and_read_back(self) -> None:
+        expected = {
+            "key": "MCP_BASE_URL",
+            "value": "https://mcp.bountyboard.global",
+        }
+        reads = iter(
+            [
+                {"key": "MCP_BASE_URL", "value": "https://old.example"},
+                expected,
+            ]
+        )
+        client = RecordingClient(response=expected)
+        client._read_with_retry = lambda _path: next(reads)
+        result = client.ensure_env_var(
+            {"id": "srv-mcp", "name": "agent-bounties-mcp"},
+            expected["key"],
+            expected["value"],
+        )
+        self.assertTrue(result["changed"])
+        self.assertEqual(
+            client.requests,
+            [
+                (
+                    "PUT",
+                    "/services/srv-mcp/env-vars/MCP_BASE_URL",
+                    {"value": expected["value"]},
+                )
+            ],
+        )
+
+    def test_changed_environment_forces_same_revision_redeploy(self) -> None:
+        revision = "a" * 40
+        client = RecordingClient(
+            deploys=[
+                {
+                    "deploy": {
+                        "id": "dep-live",
+                        "status": "live",
+                        "commit": {"id": revision},
+                    }
+                }
+            ],
+            response={
+                "id": "dep-new",
+                "status": "created",
+                "commit": {"id": revision},
+            },
+        )
+        result = client.ensure_deploy(
+            {"id": "srv-api"}, revision, force=True
+        )
+        self.assertEqual(result["id"], "dep-new")
+        self.assertEqual(
+            client.requests,
+            [
+                (
+                    "POST",
+                    "/services/srv-api/deploys",
+                    {"clearCache": "do_not_clear", "commitId": revision},
+                )
+            ],
+        )
+
+    def test_public_env_var_update_fails_when_readback_drifts(self) -> None:
+        client = RecordingClient(
+            response={
+                "key": "PUBLIC_BASE_URL",
+                "value": "https://api.bountyboard.global",
+            }
+        )
+        client._read_with_retry = lambda _path: {
+            "key": "PUBLIC_BASE_URL",
+            "value": "https://old.example",
+        }
+        with self.assertRaisesRegex(recovery.RecoveryError, "did not retain"):
+            client.ensure_env_var(
+                {"id": "srv-api", "name": "agent-bounties-api"},
+                "PUBLIC_BASE_URL",
+                "https://api.bountyboard.global",
+            )
+
     def test_rejected_trigger_fails_without_unbounded_retry(self) -> None:
         client = RecordingClient(error=recovery.RenderHttpError(401, "unauthorized"))
         with self.assertRaises(recovery.RenderHttpError):

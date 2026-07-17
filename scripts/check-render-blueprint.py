@@ -257,6 +257,8 @@ def main() -> int:
         "Select latest successful main revision",
         "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}",
         "scripts/render_deploy_recovery.py",
+        '--public-base-url "${PRODUCTION_API_BASE_URL%/}"',
+        '--mcp-base-url "${PRODUCTION_MCP_BASE_URL%/}"',
     ]
     for required in workflow_contract:
         if required not in deploy_workflow:
