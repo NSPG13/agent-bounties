@@ -7,7 +7,7 @@ payment.
 
 ## Current Status
 
-Implemented and tested locally:
+Implemented and enabled for the precommitted Base-mainnet verifier set:
 
 - exact autonomous verification-job validation;
 - content-addressed source and benchmark staging;
@@ -17,18 +17,16 @@ Implemented and tested locally:
 - scope-bound receipt and `0x` bytes32 response hash;
 - pass/fail candidates only for completed ordinary exits;
 - no verdict on timeout, output overflow, resource kill, input mismatch, or
-  runtime failure.
+  runtime failure;
+- a scheduled no-secrets GitHub runner that emits candidates only;
+- two isolated signing jobs that re-fetch current state before signing;
+- a separate keeper relay that revalidates the exact quorum before broadcast.
 
-Not enabled in production:
-
-- a hosted runner service;
-- verifier keys or signatures;
-- independent quorum operators;
-- attestation relay;
-- verifier-readiness publication.
-
-Until those pieces pass a separate deployment review, quorum bounties remain
-absent from earning-ready inventory.
+The two signer keys are cryptographically distinct but currently share project
+governance; this is automated quorum, not organizationally independent review.
+Only jobs committed to the exact deployed verifier set and threshold two are
+eligible. Workflow success without a canonical job or a confirmed
+`BountySettled` event is not completion or payment evidence.
 
 ## Immutable Terms
 

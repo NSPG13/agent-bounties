@@ -1,0 +1,90 @@
+{
+  "schema_version": "agent-bounties/standing-meta-v2-manifest-v1",
+  "created_at": "2026-07-17T02:11:34Z",
+  "creator": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+  "network": "base-mainnet",
+  "factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "verifier_module": "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+  "verifier_runtime_code_hash": "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c",
+  "acceptance_criteria_hash": "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
+  "economics": {
+    "solver_reward": 900000,
+    "verifier_reward": 100000,
+    "claim_bond": 100000,
+    "initial_funding": 1000000,
+    "currency": "usdc"
+  },
+  "bounties": [
+    {
+      "issue": 333,
+      "document": "bounties/autonomous-v1/333.json",
+      "commitments": {
+        "terms_hash": "0x39d498bfd2da9af7a45931b0250d9b049480a427b4b7f18d893de1337d4efa62",
+        "policy_hash": "0xba2171c6c64b009c2d61953ed745322c53b5feb6e7ab244f011114b773b0d400",
+        "acceptance_criteria_hash": "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
+        "benchmark_hash": "0x107504f48c2935c15da8f01a5aafe3d1973400cc395134253f74e18e161db43c",
+        "evidence_schema_hash": "0xa700a6a69f5e31b509d9436910eb112c4d0e6a326f9203bd4ea62fbd5cf5553e"
+      },
+      "creation_nonce": "0xc3bcd735155bcf798accbdbfb0b39f32899353ba71c9aae9e83287b3a517fcef",
+      "bounty_id": "0x7e8e455f2a454358383cb92b9db9f9e0cfa8e8a3e73caaf739a17a033ed641b6",
+      "predicted_bounty_contract": "0xfffecb0fcd36477c5f6ecec808f6f0cf53819562"
+    },
+    {
+      "issue": 334,
+      "document": "bounties/autonomous-v1/334.json",
+      "commitments": {
+        "terms_hash": "0x457fd4907f5cb1903ee877dc091a09b8d2b517e857b2ca18822377c7e1790664",
+        "policy_hash": "0xba2171c6c64b009c2d61953ed745322c53b5feb6e7ab244f011114b773b0d400",
+        "acceptance_criteria_hash": "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
+        "benchmark_hash": "0xc074de5305960511e010672244ac6686edc7499617317f9d170e785cb296121a",
+        "evidence_schema_hash": "0xa700a6a69f5e31b509d9436910eb112c4d0e6a326f9203bd4ea62fbd5cf5553e"
+      },
+      "creation_nonce": "0x718b246e7d4b66576fdaeaae4ec8b8c3ecc67896fb159b095a0e3f33182dd043",
+      "bounty_id": "0x99f668fc2f432e156033fd2fda2c9e91edffa30cc598013b4f2aaebbfd2348e3",
+      "predicted_bounty_contract": "0xbe17ef2d154265ebe3142d7bda5e99610d571455"
+    },
+    {
+      "issue": 335,
+      "document": "bounties/autonomous-v1/335.json",
+      "commitments": {
+        "terms_hash": "0xd083e2b6a3a55168828cb4d2160b0d16a87257f8f38ccc08d8081b1cdd3ac335",
+        "policy_hash": "0xba2171c6c64b009c2d61953ed745322c53b5feb6e7ab244f011114b773b0d400",
+        "acceptance_criteria_hash": "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
+        "benchmark_hash": "0x6f92ee57c6213efc6e3be6efae79947d9c984a266958032ea39ee45ee57b8ed9",
+        "evidence_schema_hash": "0xa700a6a69f5e31b509d9436910eb112c4d0e6a326f9203bd4ea62fbd5cf5553e"
+      },
+      "creation_nonce": "0x09b01185815e41b08b1ed24778fa66ebc4691123dc6d6dde7495f9e2114e5069",
+      "bounty_id": "0x12ad2fa99de272728311a3eb07c3c741048382260cb91ba1e8f001ed3b5759d0",
+      "predicted_bounty_contract": "0x43d42cb227d76588ab16693f14efd6cff851fa7a"
+    },
+    {
+      "issue": 336,
+      "document": "bounties/autonomous-v1/336.json",
+      "commitments": {
+        "terms_hash": "0x15926989b4d39b6a2c55b58fce3c4c4d6f98a99253b07f3777dff91280077491",
+        "policy_hash": "0xba2171c6c64b009c2d61953ed745322c53b5feb6e7ab244f011114b773b0d400",
+        "acceptance_criteria_hash": "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
+        "benchmark_hash": "0x5b8dc97556a5b6b1777af03438af6cd7103cbd3831ddceaf42cf0f3d18401e1a",
+        "evidence_schema_hash": "0xa700a6a69f5e31b509d9436910eb112c4d0e6a326f9203bd4ea62fbd5cf5553e"
+      },
+      "creation_nonce": "0xc045dbc58408c3cf6ac2090ba5609094632e48ea742c24262763d3fc64eed66d",
+      "bounty_id": "0xed39b0f29e43a16acff555865d464eeb94b13eac27c4ead88e598c52609ab253",
+      "predicted_bounty_contract": "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b"
+    },
+    {
+      "issue": 337,
+      "document": "bounties/autonomous-v1/337.json",
+      "commitments": {
+        "terms_hash": "0x9494176d7245e82a996759392cfecb71ae26123af6b2befe1f611f5044d142bd",
+        "policy_hash": "0xba2171c6c64b009c2d61953ed745322c53b5feb6e7ab244f011114b773b0d400",
+        "acceptance_criteria_hash": "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
+        "benchmark_hash": "0x18da83a7019b2dea37fd50c03185a66c3f43dfded244ed8bdbddbe37ae093415",
+        "evidence_schema_hash": "0xa700a6a69f5e31b509d9436910eb112c4d0e6a326f9203bd4ea62fbd5cf5553e"
+      },
+      "creation_nonce": "0xc439b031a0a6e627adc160e8439fcaf6db9f88d66835b8a420d29d1859c3d2c4",
+      "bounty_id": "0x6ffbcce798f207348d1c4d7fdf88606ac5eddbe77e6293a08097ac19e3c3267d",
+      "predicted_bounty_contract": "0x43b23888d90b36448ee4f4a1919f004c14b6bc53"
+    }
+  ],
+  "evidence_boundary": "These terms hashes and deterministic creation vectors are not funding evidence. Only confirmed canonical creation, funding, and claimability events make an entry live."
+}
