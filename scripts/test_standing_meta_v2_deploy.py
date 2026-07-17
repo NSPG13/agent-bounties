@@ -11,6 +11,7 @@ from scripts.standing_meta_v2_deploy import (
     parse_cast_uint,
     read_broadcast,
     require_bytes32,
+    wait_for_block_timestamp,
     wait_for_runtime_code,
     wait_for_later_timestamp,
 )
@@ -27,16 +28,38 @@ class CodeSequence:
 
 
 class CastSequence:
-    def __init__(self, values: list[str]) -> None:
+    def __init__(self, values: list[object]) -> None:
         self.values = values
 
     def cast_run(self, *_args: str) -> str:
         if len(self.values) > 1:
-            return self.values.pop(0)
-        return self.values[0]
+            value = self.values.pop(0)
+        else:
+            value = self.values[0]
+        if isinstance(value, Exception):
+            raise value
+        return str(value)
 
 
 class StandingMetaV2DeployTests(unittest.TestCase):
+    def test_block_timestamp_waits_for_rpc_indexing(self) -> None:
+        foundry = CastSequence([DeploymentError("block not found"), "112 [1.12e2]"])
+        self.assertEqual(
+            wait_for_block_timestamp(
+                foundry, 42, timeout_seconds=1, poll_interval_seconds=0  # type: ignore[arg-type]
+            ),
+            112,
+        )
+
+    def test_block_timestamp_timeout_fails_closed(self) -> None:
+        with self.assertRaises(DeploymentError):
+            wait_for_block_timestamp(
+                CastSequence([DeploymentError("block not found")]),  # type: ignore[arg-type]
+                42,
+                timeout_seconds=0,
+                poll_interval_seconds=0,
+            )
+
     def test_terms_wait_uses_confirmed_publication_block(self) -> None:
         registry = "0x" + "33" * 20
         transactions = [
