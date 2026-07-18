@@ -31,7 +31,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  deployment-paused:
+    if: github.event_name != 'workflow_dispatch' && vars.RENDER_DEPLOY_PAUSE_REASON != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report declared deployment pause
+        run: echo "Production smoke paused - ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}" >> "$GITHUB_STEP_SUMMARY"
+
   production-smoke:
+    if: github.event_name == 'workflow_dispatch' || vars.RENDER_DEPLOY_PAUSE_REASON == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

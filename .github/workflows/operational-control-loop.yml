@@ -26,7 +26,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  deployment-paused:
+    if: github.event_name != 'workflow_dispatch' && vars.RENDER_DEPLOY_PAUSE_REASON != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report declared deployment pause
+        run: echo "Operational control loop paused - ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}" >> "$GITHUB_STEP_SUMMARY"
+
   observe-plan-verify:
+    if: github.event_name == 'workflow_dispatch' || vars.RENDER_DEPLOY_PAUSE_REASON == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
