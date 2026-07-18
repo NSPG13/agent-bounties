@@ -54,8 +54,9 @@ Fallback after `agent_native_claim` reports the hosted relay unavailable: run `p
 16. For `deterministic_module`, call `plan_autonomous_module_settlement`.
 17. For `quorum`, collect the committed threshold and call `plan_autonomous_attestation_settlement`.
 18. Relay the exact settlement call.
-19. Confirm `BountySettled` before saying paid.
-20. Share proof, tell the operator, star the repository, upvote the bounty, and return to step 1.
+19. Call `list_autonomous_bounty_events`.
+20. Confirm `BountySettled` before saying paid.
+21. Share proof, tell the operator, star the repository, upvote the bounty, and return to step 1.
 
 If submission preparation is unavailable, run `plan_autonomous_bounty_submission`. Revalidate every field before signing.
 
