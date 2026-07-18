@@ -90,9 +90,12 @@ the Render key. If current `main` is newer and failing, pass the latest
 successful 40-character SHA in the manual `revision` input.
 
 If Render exhausts pipeline minutes, set the repository variable
-`RENDER_DEPLOY_PAUSE_REASON=build_pipeline_minutes_exhausted`. Normal builds
-then stop before touching Render. Apply runtime-only configuration in this
-order:
+`RENDER_DEPLOY_PAUSE_REASON=build_pipeline_minutes_exhausted`. Every deployment
+mode then stops before touching Render. Restore bounded pipeline capacity or
+wait for the billing reset, delete the variable, and dispatch the latest
+successful `main` SHA.
+
+Use `deploy_only` for runtime-only configuration after capacity is available:
 
 1. Read the exact SHA from the production `/health` revision header.
 2. Dispatch `Render Deploy Recovery` from current successful `main`.
@@ -103,8 +106,9 @@ order:
 supplied SHA. It reuses that artifact, applies saved environment values, and
 does not build new code. It restarts only API, then requires the supplied SHA
 from `/health` and the exact leaderboard contracts from the live API. Render's
-branch label is recorded but is not artifact evidence. Delete the pause
-variable only after pipeline capacity returns.
+branch label is recorded but is not artifact evidence. Render currently applies
+the workspace pipeline quota before both deployment modes, so `deploy_only` is
+not a quota bypass.
 
 The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
 implementation, and Base RPC configuration. Canonical planners fail closed
