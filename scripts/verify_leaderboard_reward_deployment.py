@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ NETWORKS = {
     "base-mainnet": (8453, "0x833589fCD6eDb6E08f4C7C32D4f71b54bdA02913"),
     "base-sepolia": (84532, "0x036CbD53842c5426634e7929541eC2318f3dCF7e"),
 }
+CODE_VISIBILITY_ATTEMPTS = 15
+CODE_VISIBILITY_DELAY_SECONDS = 2
 
 
 class VerificationError(RuntimeError):
@@ -77,6 +80,22 @@ def run_local_cast(cast: str, *arguments: str) -> str:
     return result.stdout.strip()
 
 
+def wait_for_runtime_code(cast: str, rpc_url: str, contract: str) -> str:
+    last_error: VerificationError | None = None
+    for attempt in range(CODE_VISIBILITY_ATTEMPTS):
+        try:
+            runtime_code = run_cast(cast, rpc_url, "code", contract)
+        except VerificationError as error:
+            last_error = error
+        else:
+            if runtime_code != "0x":
+                return runtime_code
+        if attempt + 1 < CODE_VISIBILITY_ATTEMPTS:
+            time.sleep(CODE_VISIBILITY_DELAY_SECONDS)
+    detail = f": {last_error}" if last_error else ""
+    raise VerificationError(f"deployed contract code was not visible after bounded retries{detail}")
+
+
 def transaction_hash(broadcast: dict[str, Any], contract: str) -> str:
     for transaction in broadcast.get("transactions", []):
         if not isinstance(transaction, dict):
@@ -112,9 +131,7 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     chain_id = chain_int(run_cast(args.cast, args.rpc_url, "chain-id"), "chain id")
     if chain_id != expected_chain or chain_int(manifest.get("chain_id"), "manifest chain id") != chain_id:
         raise VerificationError("deployment chain does not match the requested network")
-    runtime_code = run_cast(args.cast, args.rpc_url, "code", contract)
-    if runtime_code == "0x":
-        raise VerificationError("deployed contract has no code")
+    runtime_code = wait_for_runtime_code(args.cast, args.rpc_url, contract)
 
     def call(signature: str) -> str:
         return run_cast(args.cast, args.rpc_url, "call", contract, signature)
