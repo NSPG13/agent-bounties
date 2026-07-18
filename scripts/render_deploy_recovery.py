@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -71,6 +72,12 @@ class RenderTransportError(RecoveryError):
     pass
 
 
+class RenderDeployFailure(RecoveryError):
+    def __init__(self, message: str, evidence: dict[str, Any]) -> None:
+        self.evidence = evidence
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class ServiceSpec:
     name: str
@@ -102,6 +109,68 @@ def redact(value: str) -> str:
     value = re.sub(r"(?i)([?&](?:key|token)=)[^&\s]+", r"\1[redacted]", value)
     value = re.sub(r"(?i)(render_api_key\s*[=:]\s*)[^\s,;]+", r"\1[redacted]", value)
     return value[:1000]
+
+
+BUILD_FAILURE_PATTERNS = {
+    "cargo_lock": ("cargo.lock needs to be updated", "lock file needs to be updated"),
+    "compile": ("could not compile", "error[e", "compilation failed"),
+    "docker": ("failed to solve", "did not complete successfully"),
+    "missing_file": ("no such file or directory", "not found"),
+    "network": ("connection reset", "connection timed out", "temporary failure"),
+    "resource_limit": ("no space left", "out of memory", "signal: 9", "killed"),
+    "rust_toolchain": ("requires rustc", "rustc version", "rust version"),
+}
+BUILD_FAILURE_TERMS = tuple(
+    term for terms in BUILD_FAILURE_PATTERNS.values() for term in terms
+) + ("error", "failed", "failure", "unsupported")
+
+
+def summarize_build_logs(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("logs"), list):
+        raise RecoveryError("Render build-log response is invalid")
+    messages = [
+        item.get("message", "")
+        for item in payload["logs"]
+        if isinstance(item, dict) and isinstance(item.get("message"), str)
+    ]
+    normalized = "\n".join(messages).lower()
+    codes = sorted(
+        code
+        for code, patterns in BUILD_FAILURE_PATTERNS.items()
+        if any(pattern in normalized for pattern in patterns)
+    )
+    excerpts: list[str] = []
+    for message in reversed(messages):
+        for raw_line in reversed(message.splitlines()):
+            line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw_line).strip()
+            lowered = line.lower()
+            if not line or not any(term in lowered for term in BUILD_FAILURE_TERMS):
+                continue
+            if re.search(
+                r"(?i)(authorization|bearer|password|private|secret|token|api[_ -]?key|database_url)",
+                line,
+            ):
+                line = "[sensitive build diagnostic redacted]"
+            else:
+                line = re.sub(r"https?://\S+", "[url]", line)
+                line = re.sub(r"\b0x[0-9a-fA-F]{32,}\b", "[hex-redacted]", line)
+                line = re.sub(r"\b[A-Za-z0-9_+/=-]{40,}\b", "[value-redacted]", line)
+                line = redact(line).replace("`", "'")
+            if line not in excerpts:
+                excerpts.append(line[:300])
+            if len(excerpts) == 8:
+                break
+        if len(excerpts) == 8:
+            break
+    return {
+        "available": True,
+        "classifications": codes or ["unclassified"],
+        "excerpts": excerpts,
+        "log_count": len(messages),
+        "content_sha256": hashlib.sha256(
+            "\n".join(messages).encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def validate_revision(revision: str) -> str:
@@ -416,6 +485,30 @@ class RenderClient:
             self._read_with_retry(f"/services/{service_id}/deploys/{deploy_id}")
         )
 
+    def get_build_log_summary(
+        self,
+        service: dict[str, Any],
+        deploy: dict[str, Any],
+    ) -> dict[str, Any]:
+        service_id = service.get("id")
+        owner_id = service.get("ownerId")
+        if not isinstance(service_id, str) or not service_id.startswith("srv-"):
+            raise RecoveryError("Render service is missing its id")
+        if not isinstance(owner_id, str) or not re.fullmatch(r"[a-z]+-[0-9a-z]+", owner_id):
+            raise RecoveryError("Render service is missing its workspace id")
+        parameters: dict[str, object] = {
+            "ownerId": owner_id,
+            "resource": [service_id],
+            "type": ["build"],
+            "direction": "backward",
+            "limit": "100",
+        }
+        created_at = deploy.get("createdAt")
+        if isinstance(created_at, str) and created_at:
+            parameters["startTime"] = created_at
+        query = urllib.parse.urlencode(parameters, doseq=True)
+        return summarize_build_logs(self._read_with_retry(f"/logs?{query}"))
+
     def ensure_deploy(
         self,
         service: dict[str, Any],
@@ -462,9 +555,38 @@ def validate_deploy(deploy: dict[str, Any], revision: str, service_name: str) ->
     return deploy_id, status
 
 
+def deploy_failure(
+    client: RenderClient,
+    service_name: str,
+    service: dict[str, Any],
+    deploy: dict[str, Any],
+) -> RenderDeployFailure:
+    deploy_id = str(deploy.get("id", "unknown"))
+    status = str(deploy.get("status", "unknown"))
+    evidence: dict[str, Any] = {
+        "service": service_name,
+        "service_id": service.get("id"),
+        "deploy_id": deploy_id,
+        "status": status,
+        "build_logs": {"available": False},
+    }
+    if status == "build_failed":
+        try:
+            evidence["build_logs"] = client.get_build_log_summary(service, deploy)
+        except RecoveryError as error:
+            evidence["build_logs"] = {
+                "available": False,
+                "error": redact(str(error)),
+            }
+    return RenderDeployFailure(
+        f"{service_name} deploy {deploy_id} ended with status {status}",
+        evidence,
+    )
+
+
 def poll_deploys(
     client: RenderClient,
-    pending: dict[str, tuple[str, str]],
+    pending: dict[str, tuple[dict[str, Any], str]],
     revision: str,
     *,
     timeout_seconds: float,
@@ -475,14 +597,15 @@ def poll_deploys(
     deadline = clock() + timeout_seconds
     completed: dict[str, dict[str, Any]] = {}
     while pending:
-        for service_name, (service_id, deploy_id) in list(pending.items()):
+        for service_name, (service, deploy_id) in list(pending.items()):
+            service_id = service["id"]
             deploy = client.get_deploy(service_id, deploy_id)
             _, status = validate_deploy(deploy, revision, service_name)
             if status == "live":
                 completed[service_name] = deploy
                 pending.pop(service_name)
             elif status in FAILED_STATUSES:
-                raise RecoveryError(f"{service_name} deploy ended with status {status}")
+                raise deploy_failure(client, service_name, service, deploy)
             elif status not in ACTIVE_STATUSES:
                 raise RecoveryError(f"{service_name} deploy has unknown status {status}")
         if not pending:
@@ -700,7 +823,7 @@ def deploy(
     base_sepolia_leaderboard_reward_contract: str | None = None,
 ) -> dict[str, Any]:
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
-    pending: dict[str, tuple[str, str]] = {}
+    pending: dict[str, tuple[dict[str, Any], str]] = {}
     initial: dict[str, dict[str, Any]] = {}
 
     for spec in specs:
@@ -782,10 +905,10 @@ def deploy(
         if status == "live":
             continue
         if status in FAILED_STATUSES:
-            raise RecoveryError(f"{spec.name} deploy ended with status {status}")
+            raise deploy_failure(client, spec.name, service, created)
         if status not in ACTIVE_STATUSES:
             raise RecoveryError(f"{spec.name} deploy has unknown status {status}")
-        pending[spec.name] = (service["id"], deploy_id)
+        pending[spec.name] = (service, deploy_id)
 
     completed = {
         name: deploy_record
@@ -897,6 +1020,7 @@ def main() -> int:
         "cloud_environment": [],
         "secret_environment": [],
         "cloud_readiness": {},
+        "failure": None,
         "error": None,
     }
     try:
@@ -927,6 +1051,8 @@ def main() -> int:
         evidence["success"] = True
     except (RecoveryError, ValueError) as error:
         evidence["error"] = redact(str(error))
+        if isinstance(error, RenderDeployFailure):
+            evidence["failure"] = error.evidence
     finally:
         evidence["completed_at"] = utc_now()
         write_evidence(args.output, evidence)

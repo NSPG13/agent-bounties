@@ -173,6 +173,19 @@ jobs:
           ]
           if evidence.get("error"):
               lines.extend(["", f"Failure: `{evidence['error']}`"])
+          failure = evidence.get("failure") or {}
+          if failure:
+              logs = failure.get("build_logs") or {}
+              lines.extend(
+                  [
+                      f"- Failed service: `{failure.get('service')}`",
+                      f"- Render deploy: `{failure.get('deploy_id')}`",
+                      f"- Render status: `{failure.get('status')}`",
+                      f"- Build diagnostics: `{', '.join(logs.get('classifications', [])) or 'unavailable'}`",
+                  ]
+              )
+              for excerpt in logs.get("excerpts", []):
+                  lines.append(f"  - `{excerpt}`")
           summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
