@@ -218,12 +218,12 @@ def main() -> int:
     require_env_value(
         base_group,
         "BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT",
-        MAINNET_LEADERBOARD_REWARD_CONTRACT,
+        f'"{MAINNET_LEADERBOARD_REWARD_CONTRACT}"',
     )
     require_env_value(
         base_group,
         "BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT",
-        SEPOLIA_LEADERBOARD_REWARD_CONTRACT,
+        f'"{SEPOLIA_LEADERBOARD_REWARD_CONTRACT}"',
     )
     require_env_value(
         base_group,
