@@ -1,5 +1,5 @@
 use app::BountyStatusResponse;
-use chain_base::AutonomousBountyFeedItem;
+use chain_base::{standing_meta_v2_parent_context, AutonomousBountyFeedItem};
 use chrono::{DateTime, Utc};
 use db::{TrialBounty, UnfundedBountySolution};
 use domain::{BountyStatus, DiscoveryOpportunitySnapshot, DiscoveryRewardFilter, PrivacyLevel};
@@ -85,6 +85,7 @@ pub struct OpportunityItem {
     pub work_state: String,
     pub payment_state: String,
     pub payment_committed: bool,
+    pub standing_meta_bounty: bool,
     pub reward: OpportunityAmount,
     pub completion_bonus: Option<OpportunityAmount>,
     pub funded_amount: OpportunityAmount,
@@ -388,8 +389,11 @@ pub fn unfunded_opportunity(
         "acceptance_criteria": trial.acceptance_criteria,
         "solution_fields": ["summary", "deliverable_markdown", "evidence"]
     });
-    let (categories, skills) =
-        web_public::discovery_taxonomy(&trial.title, Some(&trial.goal), &evidence_requirements);
+    let (categories, skills, keyword_matches) = web_public::discovery_taxonomy_with_matches(
+        &trial.title,
+        Some(&trial.goal),
+        &evidence_requirements,
+    );
     OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "unfunded_offchain".to_string(),
@@ -404,6 +408,7 @@ pub fn unfunded_opportunity(
         work_state: work_state.to_string(),
         payment_state: "none".to_string(),
         payment_committed: false,
+        standing_meta_bounty: false,
         reward: OpportunityAmount::usdc_base_units("0"),
         completion_bonus: None,
         funded_amount: OpportunityAmount::usdc_base_units("0"),
@@ -429,7 +434,12 @@ pub fn unfunded_opportunity(
             instructions: "A registered agent may submit public work. No payment claim or promise is created.".to_string(),
         },
         embeds: opportunity_embed_links(api, &opportunity_id, None),
-        discovery_factors: base_factors("unfunded_offchain", work_state, "none"),
+        discovery_factors: base_factors(
+            "unfunded_offchain",
+            work_state,
+            "none",
+            &keyword_matches,
+        ),
         created_at: trial.created_at.to_rfc3339(),
         updated_at: solutions
             .iter()
@@ -493,8 +503,8 @@ pub fn legacy_opportunity(
         "terms_hash": bounty.terms_hash,
         "status_url": format!("{api}/v1/bounties/{}", bounty.id)
     });
-    let (categories, skills) =
-        web_public::discovery_taxonomy(&bounty.title, None, &evidence_requirements);
+    let (categories, skills, keyword_matches) =
+        web_public::discovery_taxonomy_with_matches(&bounty.title, None, &evidence_requirements);
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "legacy_bounty".to_string(),
@@ -509,6 +519,7 @@ pub fn legacy_opportunity(
         work_state: work_state.to_string(),
         payment_state: payment_state.to_string(),
         payment_committed,
+        standing_meta_bounty: false,
         reward: OpportunityAmount::minor_units(bounty.amount.amount, &bounty.amount.currency),
         completion_bonus: None,
         funded_amount: OpportunityAmount::minor_units(
@@ -538,7 +549,12 @@ pub fn legacy_opportunity(
         proof_urls,
         next_action,
         embeds: opportunity_embed_links(api, &opportunity_id, None),
-        discovery_factors: base_factors("legacy_bounty", work_state, payment_state),
+        discovery_factors: base_factors(
+            "legacy_bounty",
+            work_state,
+            payment_state,
+            &keyword_matches,
+        ),
         created_at: bounty.created_at.to_rfc3339(),
         updated_at: updated_at.to_rfc3339(),
         evidence_boundary: "This legacy platform record is not canonical Base autonomous-v1 evidence. Its payment state follows the configured reconciled rail; only canonical BountySettled proves payment for autonomous-v1 bounties.".to_string(),
@@ -570,8 +586,11 @@ pub fn canonical_opportunity(
         .map(|record| record.document.title.clone())
         .unwrap_or_else(|| item.bounty_id.clone());
     let goal = terms.map(|record| record.document.goal.clone());
-    let (categories, skills) =
-        web_public::discovery_taxonomy(&title, goal.as_deref(), &evidence_requirements);
+    let (categories, skills, keyword_matches) = web_public::discovery_taxonomy_with_matches(
+        &title,
+        goal.as_deref(),
+        &evidence_requirements,
+    );
     let public_url = terms
         .and_then(|record| record.document.source_url.clone())
         .unwrap_or_else(|| {
@@ -619,6 +638,7 @@ pub fn canonical_opportunity(
         work_state: work_state.to_string(),
         payment_state: payment_state.to_string(),
         payment_committed,
+        standing_meta_bounty: standing_meta_v2_parent_context(item).is_ok(),
         reward: OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
         completion_bonus: Some(OpportunityAmount::usdc_base_units(
             item.timeout_bond_pool.clone(),
@@ -635,7 +655,12 @@ pub fn canonical_opportunity(
         proof_urls,
         next_action,
         embeds: opportunity_embed_links(api, &opportunity_id, Some(network)),
-        discovery_factors: base_factors("canonical_base", work_state, payment_state),
+        discovery_factors: base_factors(
+            "canonical_base",
+            work_state,
+            payment_state,
+            &keyword_matches,
+        ),
         created_at: item
             .events
             .first()
@@ -755,12 +780,21 @@ fn deadline_distance_seconds(item: &OpportunityItem, now: DateTime<Utc>) -> Opti
         .map(|deadline| deadline.timestamp() - now.timestamp())
 }
 
-fn base_factors(source_type: &str, work_state: &str, payment_state: &str) -> Vec<String> {
-    vec![
+fn base_factors(
+    source_type: &str,
+    work_state: &str,
+    payment_state: &str,
+    keyword_matches: &[String],
+) -> Vec<String> {
+    let mut factors = vec![
         format!("source_type={source_type}"),
         format!("work_state={work_state}"),
         format!("payment_state={payment_state}"),
-    ]
+    ];
+    if !keyword_matches.is_empty() {
+        factors.push(format!("keyword_matches={}", keyword_matches.join(",")));
+    }
+    factors
 }
 
 fn opportunity_embed_links(

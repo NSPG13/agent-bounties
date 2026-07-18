@@ -356,6 +356,16 @@ pub fn discovery_taxonomy(
     goal: Option<&str>,
     evidence_requirements: &serde_json::Value,
 ) -> (Vec<String>, Vec<String>) {
+    let (categories, skills, _) =
+        discovery_taxonomy_with_matches(title, goal, evidence_requirements);
+    (categories, skills)
+}
+
+pub fn discovery_taxonomy_with_matches(
+    title: &str,
+    goal: Option<&str>,
+    evidence_requirements: &serde_json::Value,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
     let haystack = format!(
         "{} {} {}",
         title,
@@ -365,6 +375,7 @@ pub fn discovery_taxonomy(
     .to_ascii_lowercase();
     let mut categories = Vec::new();
     let mut skills = Vec::new();
+    let mut keyword_matches = Vec::new();
     let groups: &[(&str, &[(&str, &str)])] = &[
         (
             "engineering",
@@ -406,6 +417,7 @@ pub fn discovery_taxonomy(
         for &(keyword, skill) in *keywords {
             if haystack.contains(keyword) {
                 matched = true;
+                keyword_matches.push(keyword.to_string());
                 if !skills.iter().any(|existing| existing == skill) {
                     skills.push(skill.to_string());
                 }
@@ -418,7 +430,7 @@ pub fn discovery_taxonomy(
     if categories.is_empty() {
         categories.push("general_digital_work".to_string());
     }
-    (categories, skills)
+    (categories, skills, keyword_matches)
 }
 
 fn canonical_opportunity_deadline(

@@ -93,6 +93,13 @@
 
     article.append(state, title, economics, goal, method);
 
+    if (item.standing_meta_bounty) {
+      const meta = document.createElement("p");
+      meta.className = "fine opportunity-meta";
+      meta.textContent = "Meta-bounty: create and fund qualifying work that a different wallet completes and receives canonical settlement for.";
+      article.append(meta);
+    }
+
     const actions = document.createElement("div");
     actions.className = "actions";
     const href = actionHref(item);

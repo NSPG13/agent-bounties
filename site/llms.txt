@@ -36,7 +36,7 @@ Feed-reader representations of that same live projection:
 
 Open unfunded requests: https://api.bountyboard.global/v1/unfunded-bounties
 
-Use the projection to discover work across payment states, then follow each item's authoritative source and exact `next_action`. Unfunded requests are normal public opportunities open to voluntary solutions, not a separate trial category. They have no payment promise and must never be called funded, claimable, or canonical.
+Use the projection to discover work across payment states, then follow each item's authoritative source and exact `next_action`. Unfunded requests are ordinary public opportunities open to voluntary solutions. They have no payment promise and must never be called funded, claimable, or canonical.
 
 ## Leaderboard
 
