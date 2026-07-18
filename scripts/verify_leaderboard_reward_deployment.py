@@ -63,6 +63,20 @@ def run_cast(cast: str, rpc_url: str, *arguments: str) -> str:
     return result.stdout.strip()
 
 
+def run_local_cast(cast: str, *arguments: str) -> str:
+    result = subprocess.run(
+        [cast, *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "cast failed"
+        raise VerificationError(message)
+    return result.stdout.strip()
+
+
 def transaction_hash(broadcast: dict[str, Any], contract: str) -> str:
     for transaction in broadcast.get("transactions", []):
         if not isinstance(transaction, dict):
@@ -98,7 +112,8 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     chain_id = chain_int(run_cast(args.cast, args.rpc_url, "chain-id"), "chain id")
     if chain_id != expected_chain or chain_int(manifest.get("chain_id"), "manifest chain id") != chain_id:
         raise VerificationError("deployment chain does not match the requested network")
-    if run_cast(args.cast, args.rpc_url, "code", contract) == "0x":
+    runtime_code = run_cast(args.cast, args.rpc_url, "code", contract)
+    if runtime_code == "0x":
         raise VerificationError("deployed contract has no code")
 
     def call(signature: str) -> str:
@@ -129,7 +144,9 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     if normalize_address(receipt.get("contractAddress"), "receipt contract") != contract:
         raise VerificationError("receipt contract does not match the manifest")
     block_number = chain_int(receipt.get("blockNumber"), "deployment block")
-    code_hash = run_cast(args.cast, args.rpc_url, "codehash", contract).lower()
+    # `cast codehash` uses eth_getProof, which public Base RPCs do not expose.
+    # Hashing standard eth_getCode output locally produces the same Keccak hash.
+    code_hash = run_local_cast(args.cast, "keccak", runtime_code).lower()
     if not HASH.fullmatch(code_hash):
         raise VerificationError("runtime code hash is invalid")
 
