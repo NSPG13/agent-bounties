@@ -1321,7 +1321,7 @@
   }
 
   function markChatgptReturn(posted = false) {
-    const link = document.querySelector("[data-chatgpt-return]");
+    const link = byId("chatgpt-return");
     const href = chatgptReturnUrl();
     if (!link || !href) return;
     link.href = href;
