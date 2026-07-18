@@ -6,9 +6,10 @@ use std::{
 };
 use tokio::time::sleep;
 use worker::{
-    indexer_error_is_retryable, poll_autonomous_indexer_once_with_heartbeat,
-    redact_operational_error, run_regression_sandbox_request, snapshot_directory,
-    stage_regression_input, validate_regression_candidate, AutonomousIndexerConfig,
+    dispatch_discovery_webhooks_once, indexer_error_is_retryable,
+    poll_autonomous_indexer_once_with_heartbeat, redact_operational_error,
+    run_regression_sandbox_request, snapshot_directory, stage_regression_input,
+    validate_regression_candidate, AutonomousIndexerConfig, DiscoveryWebhookConfig,
     IndexerRecoveryDecision, IndexerRecoveryPolicy, RegressionCandidateValidationRequest,
     RegressionInputKind, RegressionSandboxRunRequest, REGRESSION_SANDBOX_DOCKER_BINARY_ENV,
     REGRESSION_SANDBOX_STAGING_ROOT_ENV,
@@ -114,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("BASE_INDEXER_PROTOCOL must be autonomous-v1");
     }
     let config = AutonomousIndexerConfig::from_env()?;
+    let discovery_webhooks = DiscoveryWebhookConfig::from_env()?;
     let recovery_policy = IndexerRecoveryPolicy::from_env()?;
     let mut consecutive_failures = 0u32;
 
@@ -122,6 +124,11 @@ async fn main() -> anyhow::Result<()> {
             Ok(report) => {
                 consecutive_failures = 0;
                 println!("{}", serde_json::to_string(&report)?);
+                if let Some(discovery_webhooks) = &discovery_webhooks {
+                    let delivery_report =
+                        dispatch_discovery_webhooks_once(&store, discovery_webhooks).await?;
+                    println!("{}", serde_json::to_string(&delivery_report)?);
+                }
                 if once {
                     return Ok(());
                 }

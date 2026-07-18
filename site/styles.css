@@ -265,6 +265,81 @@ h3 {
   padding-top: 16px;
 }
 
+.opportunity-board {
+  display: grid;
+  gap: 28px;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.opportunity-section {
+  display: grid;
+  gap: 14px;
+}
+
+.opportunity-section-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.opportunity-section-head h3,
+.opportunity-section-head p {
+  margin: 0;
+}
+
+.opportunity-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 34px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.opportunity-state {
+  width: fit-content;
+  margin-bottom: 4px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: rgba(16, 20, 23, 0.07);
+}
+
+.opportunity-state-none {
+  color: #5f4a00 !important;
+  background: #fff4c2;
+}
+
+.opportunity-state-seeking_funding {
+  color: #754800 !important;
+  background: #ffe7bd;
+}
+
+.opportunity-state-escrowed {
+  color: var(--accent-strong) !important;
+  background: #dff7ee;
+}
+
+.opportunity-state-paid {
+  color: #31523f !important;
+  background: #e1efe5;
+}
+
+.opportunity-method {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+}
+
+.opportunity-empty {
+  margin: 0;
+  padding: 20px;
+  background: var(--panel);
+}
+
 .bounty-disclosure,
 .inventory-note {
   color: #754800;

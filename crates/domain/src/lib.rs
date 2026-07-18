@@ -257,6 +257,8 @@ pub struct BondSponsorship {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentWebhookEventType {
+    OpportunityPublished,
+    OpportunityStateChanged,
     FundingConfirmed,
     ClaimExclusive,
     ClaimWaitlisted,
@@ -267,6 +269,99 @@ pub enum AgentWebhookEventType {
     VerificationFailed,
     SettlementConfirmed,
     RecoveryConfirmed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryRewardFilter {
+    pub amount: String,
+    pub currency: String,
+    pub unit: String,
+    pub decimals: u8,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiscoverySubscriptionFilters {
+    pub skills: Vec<String>,
+    pub categories: Vec<String>,
+    pub minimum_committed_reward: Option<DiscoveryRewardFilter>,
+    pub work_states: Vec<String>,
+    pub payment_states: Vec<String>,
+    pub verification_methods: Vec<String>,
+    pub source_types: Vec<String>,
+    pub deadline_within_hours: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DiscoveryOpportunitySnapshot {
+    pub opportunity_id: String,
+    pub source_type: String,
+    pub categories: Vec<String>,
+    pub skills: Vec<String>,
+    pub work_state: String,
+    pub payment_state: String,
+    pub payment_committed: bool,
+    pub reward: DiscoveryRewardFilter,
+    pub deadline: Option<DateTime<Utc>>,
+    pub verification_method: String,
+    pub public_url: String,
+}
+
+impl DiscoverySubscriptionFilters {
+    pub fn matches(&self, opportunity: &DiscoveryOpportunitySnapshot, now: DateTime<Utc>) -> bool {
+        overlaps_case_insensitive(&self.skills, &opportunity.skills)
+            && overlaps_case_insensitive(&self.categories, &opportunity.categories)
+            && contains_case_insensitive(&self.work_states, &opportunity.work_state)
+            && contains_case_insensitive(&self.payment_states, &opportunity.payment_state)
+            && contains_case_insensitive(
+                &self.verification_methods,
+                &opportunity.verification_method,
+            )
+            && contains_case_insensitive(&self.source_types, &opportunity.source_type)
+            && self
+                .minimum_committed_reward
+                .as_ref()
+                .is_none_or(|minimum| {
+                    opportunity.payment_committed
+                        && minimum
+                            .currency
+                            .eq_ignore_ascii_case(&opportunity.reward.currency)
+                        && minimum.unit.eq_ignore_ascii_case(&opportunity.reward.unit)
+                        && minimum.decimals == opportunity.reward.decimals
+                        && parse_unsigned_amount(&opportunity.reward.amount)
+                            .zip(parse_unsigned_amount(&minimum.amount))
+                            .is_some_and(|(reward, minimum)| reward >= minimum)
+                })
+            && self.deadline_within_hours.is_none_or(|hours| {
+                opportunity.deadline.is_some_and(|deadline| {
+                    let seconds = deadline.timestamp() - now.timestamp();
+                    (0..=i64::from(hours) * 60 * 60).contains(&seconds)
+                })
+            })
+    }
+}
+
+fn overlaps_case_insensitive(filter: &[String], values: &[String]) -> bool {
+    filter.is_empty()
+        || filter.iter().any(|expected| {
+            values
+                .iter()
+                .any(|actual| expected.eq_ignore_ascii_case(actual))
+        })
+}
+
+fn contains_case_insensitive(filter: &[String], value: &str) -> bool {
+    filter.is_empty()
+        || filter
+            .iter()
+            .any(|expected| expected.eq_ignore_ascii_case(value))
+}
+
+fn parse_unsigned_amount(value: &str) -> Option<u128> {
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse().ok())
+        .flatten()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -1266,6 +1361,52 @@ pub struct EvalRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_filters_require_committed_comparable_reward_and_all_filter_groups() {
+        let now = Utc::now();
+        let opportunity = DiscoveryOpportunitySnapshot {
+            opportunity_id: "canonical:base-mainnet:0x1".to_string(),
+            source_type: "canonical_base".to_string(),
+            categories: vec!["engineering".to_string()],
+            skills: vec!["Rust".to_string()],
+            work_state: "claimable".to_string(),
+            payment_state: "escrowed".to_string(),
+            payment_committed: true,
+            reward: DiscoveryRewardFilter {
+                amount: "1000000".to_string(),
+                currency: "USDC".to_string(),
+                unit: "base_units".to_string(),
+                decimals: 6,
+            },
+            deadline: Some(now + chrono::Duration::hours(24)),
+            verification_method: "deterministic_module".to_string(),
+            public_url: "https://example.com/opportunity".to_string(),
+        };
+        let filters = DiscoverySubscriptionFilters {
+            skills: vec!["rust".to_string()],
+            categories: vec!["engineering".to_string()],
+            minimum_committed_reward: Some(DiscoveryRewardFilter {
+                amount: "900000".to_string(),
+                currency: "usdc".to_string(),
+                unit: "base_units".to_string(),
+                decimals: 6,
+            }),
+            work_states: vec!["claimable".to_string()],
+            payment_states: vec!["escrowed".to_string()],
+            verification_methods: vec!["deterministic_module".to_string()],
+            source_types: vec!["canonical_base".to_string()],
+            deadline_within_hours: Some(48),
+        };
+        assert!(filters.matches(&opportunity, now));
+
+        let mut uncommitted = opportunity.clone();
+        uncommitted.payment_committed = false;
+        assert!(!filters.matches(&uncommitted, now));
+        let mut wrong_category = opportunity;
+        wrong_category.categories = vec!["creative".to_string()];
+        assert!(!filters.matches(&wrong_category, now));
+    }
 
     #[test]
     fn zero_money_is_explicit_and_does_not_allow_zero_value_bounties() {

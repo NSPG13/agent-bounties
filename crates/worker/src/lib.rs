@@ -1,17 +1,30 @@
 use anyhow::{anyhow, Context};
 use app::BountyNetwork;
 use chain_base::{
-    autonomous_bounty_event_topics, base_network_descriptor, decode_autonomous_bounty_logs,
-    fetch_base_contract_logs, fetch_base_multi_contract_logs, fetch_block_number,
-    fetch_block_timestamp, rpc_logs_to_evm_logs, AutonomousBountyEventKind, BaseContractLogQuery,
-    BaseMultiContractLogQuery, BaseNetworkDescriptor, ChainBaseError,
+    autonomous_bounty_event_topics, base_network_descriptor, build_autonomous_bounty_feed,
+    decode_autonomous_bounty_logs, fetch_base_contract_logs, fetch_base_multi_contract_logs,
+    fetch_block_number, fetch_block_timestamp, rpc_logs_to_evm_logs, AutonomousBountyEvent,
+    AutonomousBountyEventKind, BaseContractLogQuery, BaseMultiContractLogQuery,
+    BaseNetworkDescriptor, ChainBaseError,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use db::{BaseIndexerHeartbeat, DbError, PostgresStore};
-use domain::{Submission, VerifierResult};
+use domain::{
+    AgentWebhookEventType, DiscoveryOpportunitySnapshot, DiscoveryRewardFilter, Submission,
+    VerifierResult,
+};
+use hmac::{Hmac, Mac};
 use ledger::Ledger;
+use reqwest::{redirect::Policy, Url};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fmt};
+use sha2::Sha256;
+use std::{
+    collections::HashSet,
+    fmt,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    time::Duration,
+};
+use tokio::net::lookup_host;
 use verifier_sdk::{VerificationInput, Verifier, VerifierResultType};
 
 mod regression_sandbox;
@@ -220,6 +233,7 @@ pub struct AutonomousIndexerConfig {
     pub confirmations: u64,
     pub max_blocks_per_query: u64,
     pub request_id: u64,
+    pub public_base_url: String,
 }
 
 impl AutonomousIndexerConfig {
@@ -280,6 +294,9 @@ impl AutonomousIndexerConfig {
             .map(|value| parse_u64_env("BASE_INDEXER_REQUEST_ID", &value))
             .transpose()?
             .unwrap_or(1);
+        let public_base_url = lookup("PUBLIC_BASE_URL")
+            .filter(|value| nonempty(value))
+            .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
         let factory_contract = BaseContractLogQuery::new(
             factory_contract,
             start_block.unwrap_or(0),
@@ -296,6 +313,7 @@ impl AutonomousIndexerConfig {
             confirmations,
             max_blocks_per_query,
             request_id,
+            public_base_url,
         })
     }
 
@@ -556,11 +574,13 @@ pub async fn poll_autonomous_indexer_once(
             .upsert_autonomous_bounty_event(&config.network, event)
             .await?;
     }
-    for (block_number, occurred_at) in block_times {
+    for (&block_number, &occurred_at) in &block_times {
         store
             .confirm_autonomous_event_block_time(&config.network, block_number, occurred_at)
             .await?;
     }
+    enqueue_canonical_discovery_events(store, &config.network, &config.public_base_url, &events)
+        .await?;
     let last_log_key = events.last().map(|event| event.log_key.as_str());
     store
         .upsert_base_log_cursor(
@@ -830,10 +850,418 @@ fn nonempty(value: &str) -> bool {
     !value.trim().is_empty()
 }
 
+const DISCOVERY_WEBHOOK_SCHEMA: &str = "agent-bounties/discovery-webhook-v1";
+const DISCOVERY_WEBHOOK_MAX_ATTEMPTS: u32 = 8;
+
+#[derive(Debug, Clone)]
+pub struct DiscoveryWebhookConfig {
+    signing_key: Vec<u8>,
+    pub request_timeout_seconds: u64,
+    pub lease_seconds: u64,
+    pub batch_size: u32,
+}
+
+impl DiscoveryWebhookConfig {
+    pub fn from_env() -> anyhow::Result<Option<Self>> {
+        let Some(signing_key) = std::env::var("DISCOVERY_WEBHOOK_SIGNING_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        if signing_key.as_bytes().len() < 32 {
+            return Err(anyhow!(
+                "DISCOVERY_WEBHOOK_SIGNING_KEY must contain at least 32 bytes"
+            ));
+        }
+        Ok(Some(Self {
+            signing_key: signing_key.into_bytes(),
+            request_timeout_seconds: 10,
+            lease_seconds: 30,
+            batch_size: 25,
+        }))
+    }
+
+    pub fn signing_key(&self) -> &[u8] {
+        &self.signing_key
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveryWebhookDispatchReport {
+    pub leased: usize,
+    pub delivered: usize,
+    pub retried: usize,
+    pub dead: usize,
+}
+
+pub fn derive_discovery_webhook_secret(
+    master_key: &[u8],
+    subscription_id: uuid::Uuid,
+    secret_version: u32,
+) -> anyhow::Result<String> {
+    if master_key.len() < 32 {
+        return Err(anyhow!("discovery webhook master key is too short"));
+    }
+    let mut mac = Hmac::<Sha256>::new_from_slice(master_key)
+        .map_err(|_| anyhow!("invalid discovery webhook master key"))?;
+    mac.update(b"bountyboard.discovery.webhook.secret.v1\0");
+    mac.update(subscription_id.as_bytes());
+    mac.update(&secret_version.to_be_bytes());
+    Ok(hex::encode(mac.finalize().into_bytes()))
+}
+
+pub async fn validate_public_https_endpoint(endpoint: &str) -> anyhow::Result<Url> {
+    let url = Url::parse(endpoint).context("webhook endpoint is not a valid URL")?;
+    if url.scheme() != "https" {
+        return Err(anyhow!("webhook endpoint must use https"));
+    }
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
+        return Err(anyhow!(
+            "webhook endpoint cannot contain credentials or a fragment"
+        ));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("webhook endpoint must include a host"))?;
+    let port = url.port_or_known_default().unwrap_or(443);
+    let addresses = lookup_host((host, port))
+        .await
+        .context("webhook endpoint host could not be resolved")?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() || addresses.iter().any(|address| !public_ip(address.ip())) {
+        return Err(anyhow!(
+            "webhook endpoint must resolve only to public routable addresses"
+        ));
+    }
+    Ok(url)
+}
+
+pub async fn enqueue_discovery_event(
+    store: &PostgresStore,
+    event_id: uuid::Uuid,
+    event_type: AgentWebhookEventType,
+    occurred_at: DateTime<Utc>,
+    opportunity: &DiscoveryOpportunitySnapshot,
+    data: serde_json::Value,
+) -> anyhow::Result<usize> {
+    let subscriptions = store.list_enabled_discovery_webhook_subscriptions().await?;
+    let payload = serde_json::json!({
+        "schema_version": DISCOVERY_WEBHOOK_SCHEMA,
+        "event_id": event_id,
+        "event_type": event_type,
+        "occurred_at": occurred_at,
+        "opportunity": opportunity,
+        "data": data,
+        "evidence_boundary": "This notification mirrors public discovery state. It does not prove funding, verification, settlement, payment, or agent independence. Confirm canonical claims against the authoritative source endpoint."
+    });
+    let mut enqueued = 0usize;
+    for subscription in subscriptions {
+        if subscription.filters.matches(opportunity, Utc::now())
+            && store
+                .enqueue_webhook_delivery(subscription.id, event_id, event_type, &payload)
+                .await?
+        {
+            enqueued += 1;
+        }
+    }
+    Ok(enqueued)
+}
+
+async fn enqueue_canonical_discovery_events(
+    store: &PostgresStore,
+    network: &str,
+    public_base_url: &str,
+    new_events: &[AutonomousBountyEvent],
+) -> anyhow::Result<usize> {
+    if new_events.is_empty() {
+        return Ok(0);
+    }
+    let events = store.list_autonomous_bounty_events(network).await?;
+    let terms = store.list_autonomous_bounty_terms().await?;
+    let feed = build_autonomous_bounty_feed(events, terms, false)?;
+    let mut enqueued = 0usize;
+    for event in new_events {
+        let Some(item) = feed
+            .iter()
+            .find(|item| item.bounty_id.eq_ignore_ascii_case(&event.bounty_id))
+        else {
+            continue;
+        };
+        let state = web_public::canonical_opportunity_state(item);
+        let evidence = item
+            .terms
+            .as_ref()
+            .map(|terms| terms.document.evidence_schema.clone())
+            .unwrap_or(serde_json::Value::Null);
+        let title = item
+            .terms
+            .as_ref()
+            .map(|terms| terms.document.title.as_str())
+            .unwrap_or(&item.bounty_id);
+        let goal = item
+            .terms
+            .as_ref()
+            .map(|terms| terms.document.goal.as_str());
+        let (categories, skills) = web_public::discovery_taxonomy(title, goal, &evidence);
+        let opportunity = DiscoveryOpportunitySnapshot {
+            opportunity_id: format!("canonical:{network}:{}", item.bounty_contract),
+            source_type: "canonical_base".to_string(),
+            categories,
+            skills,
+            work_state: state.work_state,
+            payment_state: state.payment_state,
+            payment_committed: state.payment_committed,
+            reward: DiscoveryRewardFilter {
+                amount: item.solver_reward.clone(),
+                currency: "USDC".to_string(),
+                unit: "base_units".to_string(),
+                decimals: 6,
+            },
+            deadline: state.deadline.as_deref().and_then(|deadline| {
+                DateTime::parse_from_rfc3339(deadline)
+                    .ok()
+                    .map(|deadline| deadline.with_timezone(&Utc))
+            }),
+            verification_method: item.verification_mode.clone(),
+            public_url: format!(
+                "{}/v1/base/autonomous-bounties/events?network={network}&bounty_id={}",
+                public_base_url.trim_end_matches('/'),
+                item.bounty_id
+            ),
+        };
+        let event_type = if event.kind == AutonomousBountyEventKind::CanonicalBountyCreated {
+            AgentWebhookEventType::OpportunityPublished
+        } else {
+            AgentWebhookEventType::OpportunityStateChanged
+        };
+        enqueued += enqueue_discovery_event(
+            store,
+            event.id,
+            event_type,
+            event.occurred_at,
+            &opportunity,
+            serde_json::json!({
+                "network": network,
+                "canonical_event": event,
+            }),
+        )
+        .await?;
+    }
+    Ok(enqueued)
+}
+
+pub async fn dispatch_discovery_webhooks_once(
+    store: &PostgresStore,
+    config: &DiscoveryWebhookConfig,
+) -> anyhow::Result<DiscoveryWebhookDispatchReport> {
+    let lease_token = uuid::Uuid::new_v4();
+    let deliveries = store
+        .lease_webhook_deliveries(config.batch_size, lease_token, config.lease_seconds)
+        .await?;
+    let mut report = DiscoveryWebhookDispatchReport {
+        leased: deliveries.len(),
+        ..DiscoveryWebhookDispatchReport::default()
+    };
+    for delivery in deliveries {
+        let Some(subscription) = store
+            .get_webhook_subscription(delivery.subscription_id)
+            .await?
+        else {
+            continue;
+        };
+        let outcome = deliver_discovery_webhook(config, &subscription, &delivery).await;
+        match outcome {
+            Ok(status) => {
+                store
+                    .mark_webhook_delivery_delivered(delivery.id, lease_token, status)
+                    .await?;
+                report.delivered += 1;
+            }
+            Err((status, error)) => {
+                let dead = delivery.attempt_count >= DISCOVERY_WEBHOOK_MAX_ATTEMPTS;
+                let backoff =
+                    60u64.saturating_mul(1u64 << delivery.attempt_count.saturating_sub(1).min(6));
+                store
+                    .reschedule_webhook_delivery(
+                        delivery.id,
+                        lease_token,
+                        dead,
+                        backoff,
+                        status,
+                        &redact_operational_error(&error),
+                    )
+                    .await?;
+                if dead {
+                    report.dead += 1;
+                } else {
+                    report.retried += 1;
+                }
+            }
+        }
+    }
+    Ok(report)
+}
+
+async fn deliver_discovery_webhook(
+    config: &DiscoveryWebhookConfig,
+    subscription: &db::WebhookSubscription,
+    delivery: &db::WebhookDelivery,
+) -> Result<u16, (Option<u16>, String)> {
+    let url = validate_public_https_endpoint(&subscription.endpoint_url)
+        .await
+        .map_err(|error| (None, error.to_string()))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| (None, "webhook endpoint has no host".to_string()))?
+        .to_string();
+    let port = url.port_or_known_default().unwrap_or(443);
+    let addresses = lookup_host((host.as_str(), port))
+        .await
+        .map_err(|error| (None, format!("webhook DNS resolution failed: {error}")))?
+        .filter(|address| public_ip(address.ip()))
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err((
+            None,
+            "webhook endpoint has no public routable address".to_string(),
+        ));
+    }
+    let secret = derive_discovery_webhook_secret(
+        config.signing_key(),
+        subscription.id,
+        subscription.secret_version,
+    )
+    .map_err(|error| (None, error.to_string()))?;
+    let body = serde_json::to_vec(&delivery.payload).map_err(|error| {
+        (
+            None,
+            format!("webhook payload serialization failed: {error}"),
+        )
+    })?;
+    let timestamp = Utc::now().timestamp().to_string();
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .map_err(|_| (None, "invalid webhook signing secret".to_string()))?;
+    mac.update(timestamp.as_bytes());
+    mac.update(b".");
+    mac.update(&body);
+    let signature = format!("v1={}", hex::encode(mac.finalize().into_bytes()));
+    let client = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .timeout(Duration::from_secs(config.request_timeout_seconds))
+        .resolve_to_addrs(&host, &addresses)
+        .build()
+        .map_err(|error| (None, format!("webhook client setup failed: {error}")))?;
+    let response = client
+        .post(url)
+        .header("content-type", "application/json")
+        .header("user-agent", "BountyBoard-Discovery-Webhook/1.0")
+        .header("x-bountyboard-timestamp", &timestamp)
+        .header("x-bountyboard-signature", signature)
+        .header("x-bountyboard-event-id", delivery.event_id.to_string())
+        .header("idempotency-key", delivery.event_id.to_string())
+        .body(body)
+        .send()
+        .await
+        .map_err(|error| (None, format!("webhook request failed: {error}")))?;
+    let status = response.status().as_u16();
+    if response.status().is_success() {
+        Ok(status)
+    } else {
+        Err((Some(status), format!("webhook returned HTTP {status}")))
+    }
+}
+
+fn public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => public_ipv4(ip),
+        IpAddr::V6(ip) => public_ipv6(ip),
+    }
+}
+
+fn public_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, _, _] = ip.octets();
+    !(ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || a == 0
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 198 && (18..=19).contains(&b)))
+}
+
+fn public_ipv6(ip: Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    !(ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || (segments[0] & 0xfe00) == 0xfc00
+        || (segments[0] & 0xffc0) == 0xfe80
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn discovery_webhook_secret_is_scoped_and_deterministic() {
+        let master = [7u8; 32];
+        let first_id = uuid::Uuid::new_v4();
+        let second_id = uuid::Uuid::new_v4();
+        let first = derive_discovery_webhook_secret(&master, first_id, 1).unwrap();
+        assert_eq!(
+            first,
+            derive_discovery_webhook_secret(&master, first_id, 1).unwrap()
+        );
+        assert_ne!(
+            first,
+            derive_discovery_webhook_secret(&master, second_id, 1).unwrap()
+        );
+        assert_ne!(
+            first,
+            derive_discovery_webhook_secret(&master, first_id, 2).unwrap()
+        );
+        assert!(derive_discovery_webhook_secret(b"short", first_id, 1).is_err());
+    }
+
+    #[test]
+    fn discovery_webhooks_reject_non_public_address_ranges() {
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.1.1",
+            "100.64.0.1",
+            "192.0.2.1",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+        ] {
+            assert!(!public_ip(ip.parse().unwrap()), "{ip} must be rejected");
+        }
+        assert!(public_ip("8.8.8.8".parse().unwrap()));
+        assert!(public_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn discovery_webhooks_require_public_https_without_credentials() {
+        assert!(validate_public_https_endpoint("http://example.com/hook")
+            .await
+            .is_err());
+        assert!(
+            validate_public_https_endpoint("https://user:pass@example.com/hook")
+                .await
+                .is_err()
+        );
+        assert!(validate_public_https_endpoint("https://127.0.0.1/hook")
+            .await
+            .is_err());
+    }
 
     #[test]
     fn autonomous_indexer_requires_factory_and_defaults_to_mainnet() {

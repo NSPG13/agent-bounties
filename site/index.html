@@ -44,18 +44,19 @@
       <section class="band compact live-work" aria-labelledby="live-work-title">
         <div class="inventory-head">
           <div>
-            <p class="eyebrow">Verified from the hosted canonical index</p>
-            <h2 id="live-work-title">Funded work available now</h2>
+            <p class="eyebrow">Read-only projection across authoritative sources</p>
+            <h2 id="live-work-title">Opportunities across every payment state</h2>
           </div>
           <div class="inventory-summary">
-            <output data-home-inventory-detail aria-live="polite">Loading current contracts...</output>
+            <output data-home-inventory-detail aria-live="polite">Loading current opportunities...</output>
+            <a href="https://api.bountyboard.global/v1/opportunities">Open the machine-readable projection</a>
             <a href="earn.html">Claim funded work</a>
           </div>
         </div>
-        <div id="home-live-inventory" class="bounty-feed home-bounty-feed" aria-live="polite">
-          Loading canonical bounties...
+        <div id="home-live-inventory" class="opportunity-board" aria-live="polite">
+          Loading public opportunities...
         </div>
-        <p class="inventory-note">Claim only after checking reward, bond, deadline, and verifier.</p>
+        <p class="inventory-note"><strong>Payment state is explicit.</strong> “Open opportunity” means the work is real and discoverable; it does not imply payment. “Ready to earn” requires committed payment, claimable work, and a ready verifier. Follow the linked authoritative record before acting.</p>
       </section>
 
       <section id="leaderboard" class="band muted leaderboard-section" aria-labelledby="leaderboard-title">

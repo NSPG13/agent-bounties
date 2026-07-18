@@ -5315,12 +5315,16 @@ dependencies = [
  "db",
  "domain",
  "hex",
+ "hmac",
  "ledger",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
+ "uuid",
  "verifier-sdk",
+ "web-public",
 ]
 
 [[package]]

@@ -31,6 +31,12 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     )
     tools = discovery.get("agent_tools", [])
     for tool in (
+        "list_opportunities",
+        "create_discovery_subscription",
+        "get_discovery_subscription",
+        "delete_discovery_subscription",
+        "get_opportunity_conversion_funnel",
+        "analyze_bounty_fit",
         "list_autonomous_bounties",
         "get_solver_leaderboard",
         "plan_autonomous_canonical_child_terms",
@@ -51,6 +57,11 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     )
     endpoints = discovery.get("endpoints", {})
     for endpoint in (
+        "opportunities",
+        "discovery_subscriptions",
+        "discovery_subscription",
+        "opportunity_conversion_funnel",
+        "autonomous_bounty_analysis",
         "autonomous_creation_plan",
         "autonomous_agent_native_claim",
         "autonomous_bounty_feed",
@@ -83,8 +94,21 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         isinstance(client.list_autonomous_bounty_events("base-mainnet"), list),
         "autonomous event feed must be an array",
     )
+    _require(
+        isinstance(
+            client.list_opportunities(network="base-mainnet", view="recent").get("items"),
+            list,
+        ),
+        "opportunity projection items must be an array",
+    )
 
     for method in (
+        "list_opportunities",
+        "create_discovery_subscription",
+        "get_discovery_subscription",
+        "delete_discovery_subscription",
+        "get_opportunity_conversion_funnel",
+        "analyze_bounty_fit",
         "publish_autonomous_bounty_terms",
         "get_solver_leaderboard",
         "publish_autonomous_submission_evidence",

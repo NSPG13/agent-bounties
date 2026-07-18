@@ -52,6 +52,12 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
 
   const tools = asArray(discovery.agent_tools, "discovery.agent_tools");
   for (const tool of [
+    "list_opportunities",
+    "create_discovery_subscription",
+    "get_discovery_subscription",
+    "delete_discovery_subscription",
+    "get_opportunity_conversion_funnel",
+    "analyze_bounty_fit",
     "list_autonomous_bounties",
     "get_solver_leaderboard",
     "plan_autonomous_canonical_child_terms",
@@ -78,6 +84,11 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
 
   const endpoints = asObject(discovery.endpoints, "discovery.endpoints");
   for (const endpoint of [
+    "opportunities",
+    "discovery_subscriptions",
+    "discovery_subscription",
+    "opportunity_conversion_funnel",
+    "autonomous_bounty_analysis",
     "autonomous_creation_plan",
     "autonomous_bounty_feed",
     "autonomous_verification_jobs",
@@ -116,8 +127,19 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "autonomous event decoder rejected an empty batch",
   );
   asArray(await client.listAutonomousBountyEvents("base-mainnet"), "autonomous events");
+  const opportunities = asObject(
+    await client.listOpportunities({ network: "base-mainnet", view: "recent" }),
+    "opportunities",
+  );
+  asArray(opportunities.items, "opportunities.items");
 
   for (const method of [
+    "listOpportunities",
+    "createDiscoverySubscription",
+    "getDiscoverySubscription",
+    "deleteDiscoverySubscription",
+    "getOpportunityConversionFunnel",
+    "analyzeBountyFit",
     "publishAutonomousBountyTerms",
     "getSolverLeaderboard",
     "publishAutonomousSubmissionEvidence",

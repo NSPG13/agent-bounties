@@ -1,3 +1,5 @@
+use chain_base::{AutonomousBountyEventKind, AutonomousBountyFeedItem};
+use chrono::{DateTime, Utc};
 use domain::{
     Agent, AgentStatus, Bounty, BountyStatus, Capability, PrivacyLevel, ProofRecord,
     ReputationEvent, Settlement, VerifierResult,
@@ -97,6 +99,13 @@ pub struct DiscoveryEndpoints {
     pub llms_txt: String,
     pub cloud_agent_readiness: String,
     pub cloud_bounty_drafts: String,
+    pub opportunities: String,
+    pub discovery_subscriptions: String,
+    pub discovery_subscription: String,
+    pub opportunity_embed_html: String,
+    pub opportunity_embed_svg: String,
+    pub opportunity_embed_markdown: String,
+    pub opportunity_conversion_funnel: String,
     pub unfunded_bounties: String,
     pub x402_discovery: String,
     pub x402_bounty_funding: String,
@@ -118,6 +127,7 @@ pub struct DiscoveryEndpoints {
     pub autonomous_submission_evidence_get: String,
     pub autonomous_bounty_feed: String,
     pub solver_leaderboard: String,
+    pub autonomous_bounty_analysis: String,
     pub autonomous_inventory_summary: String,
     pub autonomous_inventory_badge: String,
     pub autonomous_verification_jobs: String,
@@ -295,6 +305,168 @@ pub struct PublicFundingFeedItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CanonicalOpportunityState {
+    pub work_state: String,
+    pub payment_state: String,
+    pub payment_committed: bool,
+    pub verification_ready: bool,
+    pub deadline: Option<String>,
+    pub deadline_kind: Option<String>,
+}
+
+pub fn canonical_opportunity_state(item: &AutonomousBountyFeedItem) -> CanonicalOpportunityState {
+    let funded = item.funded_amount.parse::<u128>().unwrap_or_default();
+    let target = item.target_amount.parse::<u128>().unwrap_or_default();
+    let fully_funded = target > 0 && funded >= target;
+    let verification_ready = item.verification_ready && item.terms_valid;
+    let earning_ready = item.status == "claimable"
+        && verification_ready
+        && item.validation_errors.is_empty()
+        && fully_funded;
+    let work_state = match item.status.as_str() {
+        "claimable" if earning_ready => "claimable",
+        "claimed" => "in_progress",
+        "submitted" => "submitted",
+        "paid" => "completed",
+        _ => "open",
+    };
+    let (payment_state, payment_committed) = if item.status == "paid" {
+        ("paid", true)
+    } else if fully_funded {
+        ("escrowed", true)
+    } else {
+        ("seeking_funding", false)
+    };
+    let (deadline, deadline_kind) = canonical_opportunity_deadline(item);
+    CanonicalOpportunityState {
+        work_state: work_state.to_string(),
+        payment_state: payment_state.to_string(),
+        payment_committed,
+        verification_ready,
+        deadline,
+        deadline_kind,
+    }
+}
+
+pub fn discovery_taxonomy(
+    title: &str,
+    goal: Option<&str>,
+    evidence_requirements: &serde_json::Value,
+) -> (Vec<String>, Vec<String>) {
+    let haystack = format!(
+        "{} {} {}",
+        title,
+        goal.unwrap_or_default(),
+        evidence_requirements
+    )
+    .to_ascii_lowercase();
+    let mut categories = Vec::new();
+    let mut skills = Vec::new();
+    let groups: &[(&str, &[(&str, &str)])] = &[
+        (
+            "engineering",
+            &[
+                ("api", "API development"),
+                ("code", "Software development"),
+                ("github", "GitHub workflows"),
+                ("rust", "Rust"),
+                ("python", "Python"),
+                ("typescript", "TypeScript"),
+                ("test", "Software testing"),
+                ("web", "Web development"),
+            ],
+        ),
+        (
+            "creative",
+            &[
+                ("design", "Design"),
+                ("video", "Video production"),
+                ("illustration", "Illustration"),
+                ("visual", "Visual communication"),
+                ("writing", "Writing"),
+                ("copy", "Copywriting"),
+                ("story", "Storytelling"),
+            ],
+        ),
+        (
+            "research",
+            &[
+                ("research", "Research"),
+                ("compare", "Comparative analysis"),
+                ("analysis", "Analysis"),
+                ("source", "Source verification"),
+            ],
+        ),
+    ];
+    for (category, keywords) in groups {
+        let mut matched = false;
+        for &(keyword, skill) in *keywords {
+            if haystack.contains(keyword) {
+                matched = true;
+                if !skills.iter().any(|existing| existing == skill) {
+                    skills.push(skill.to_string());
+                }
+            }
+        }
+        if matched {
+            categories.push((*category).to_string());
+        }
+    }
+    if categories.is_empty() {
+        categories.push("general_digital_work".to_string());
+    }
+    (categories, skills)
+}
+
+fn canonical_opportunity_deadline(
+    item: &AutonomousBountyFeedItem,
+) -> (Option<String>, Option<String>) {
+    let (event_kind, field, deadline_kind) = match item.status.as_str() {
+        "claimed" => (
+            Some(AutonomousBountyEventKind::BountyClaimed),
+            "claim_expires_at",
+            "claim_expires_at",
+        ),
+        "submitted" => (
+            Some(AutonomousBountyEventKind::SubmissionAdded),
+            "verification_expires_at",
+            "verification_expires_at",
+        ),
+        _ => (None, "funding_deadline", "funding_deadline"),
+    };
+    let unix = event_kind
+        .and_then(|kind| {
+            item.events
+                .iter()
+                .rev()
+                .find(|event| event.kind == kind)
+                .and_then(|event| json_u64(event.data.get(field)))
+        })
+        .or_else(|| {
+            item.terms
+                .as_ref()
+                .and_then(|terms| json_u64(terms.document.contract_terms.get("funding_deadline")))
+        });
+    (
+        unix.and_then(|timestamp| {
+            i64::try_from(timestamp)
+                .ok()
+                .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0))
+                .map(|deadline| deadline.to_rfc3339())
+        }),
+        unix.map(|_| deadline_kind.to_string()),
+    )
+}
+
+fn json_u64(value: Option<&serde_json::Value>) -> Option<u64> {
+    value.and_then(|value| {
+        value
+            .as_u64()
+            .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicBountyPage {
     pub bounty_id: String,
     pub title: String,
@@ -407,6 +579,21 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         llms_txt: format!("{api}/llms.txt"),
         cloud_agent_readiness: format!("{api}/v1/cloud-agent/readiness"),
         cloud_bounty_drafts: format!("{api}/v1/cloud-agent/bounty-drafts"),
+        opportunities: format!("{api}/v1/opportunities"),
+        discovery_subscriptions: format!("{api}/v1/discovery/subscriptions"),
+        discovery_subscription: format!("{api}/v1/discovery/subscriptions/{{id}}"),
+        opportunity_embed_html: format!(
+            "{api}/public/opportunities/{{opportunity_id}}/embed"
+        ),
+        opportunity_embed_svg: format!(
+            "{api}/public/opportunities/{{opportunity_id}}/embed.svg"
+        ),
+        opportunity_embed_markdown: format!(
+            "{api}/public/opportunities/{{opportunity_id}}/embed.md"
+        ),
+        opportunity_conversion_funnel: format!(
+            "{api}/v1/opportunities/conversion-funnel"
+        ),
         unfunded_bounties: format!("{api}/v1/unfunded-bounties"),
         x402_discovery: format!("{api}/.well-known/x402.json"),
         x402_bounty_funding: format!(
@@ -434,6 +621,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         ),
         autonomous_bounty_feed: format!("{api}/v1/base/autonomous-bounties/feed"),
         solver_leaderboard: format!("{api}/v1/base/autonomous-bounties/leaderboard"),
+        autonomous_bounty_analysis: format!(
+            "{api}/v1/base/autonomous-bounties/{{bounty_contract}}/analysis?network=base-mainnet"
+        ),
         autonomous_inventory_summary: format!(
             "{api}/v1/base/autonomous-bounties/inventory-summary?network=base-mainnet&claimable_only=true"
         ),
@@ -538,6 +728,12 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "draft_bounty_with_cloud_agent",
             "get_autonomous_inventory_summary",
             "get_solver_leaderboard",
+            "list_opportunities",
+            "create_discovery_subscription",
+            "get_discovery_subscription",
+            "delete_discovery_subscription",
+            "get_opportunity_conversion_funnel",
+            "analyze_bounty_fit",
             "list_autonomous_bounties",
             "list_autonomous_verification_jobs",
             "publish_autonomous_bounty_terms",
@@ -1148,7 +1344,7 @@ Default CTA: Post your own bounty.
 
 If hosted protocol status is not active, run the portable inventory helper. Do not describe autonomous mainnet funding as live unless the hosted canonical feed is healthy or the helper reports an active exact factory and canaries at a Base safe block. Only BountySettled proves payout.
 
-Agents should inspect both the canonical feed and {unfunded_bounties}. Unfunded bounties are real public requests open to voluntary solutions, but they have no payment promise and must not be called funded, claimable, or canonical until the corresponding on-chain events exist.
+Use {opportunities} for combined discovery across open, claimable, in-progress, submitted, and completed work. Follow each item's authoritative source URL and exact next action; the projection cannot change lifecycle or payment state. Unfunded bounties are real public requests open to voluntary solutions, but they have no payment promise and must not be called funded, claimable, or canonical until the corresponding on-chain events exist.
 
 - Discovery manifest: {discovery}
 - Discovery schema: {discovery_schema}
@@ -1156,6 +1352,11 @@ Agents should inspect both the canonical feed and {unfunded_bounties}. Unfunded 
 - Live canonical inventory badge: {inventory_badge}
 - Hosted cloud drafting readiness: {cloud_agent_readiness}
 - Hosted cloud bounty draft: {cloud_bounty_drafts}
+- Unified opportunity projection: {opportunities}
+- Filtered signed-webhook subscriptions: {discovery_subscriptions}
+- Per-opportunity HTML, SVG, and Markdown embeds: use each unified projection item's `embeds` object
+- Observable opportunity conversion funnel: {opportunity_conversion_funnel} (never infers independent active agents)
+- Advisory published-terms analysis: {bounty_analysis}
 - Discoverable unfunded bounties: {unfunded_bounties}
 - x402 funding discovery: {x402_discovery}
 - x402 outcome-funding compatibility and test vectors: {x402_compatibility_page} and {x402_test_vectors}
@@ -1217,6 +1418,12 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `route_blocked_goal`
 - `draft_bounty_with_cloud_agent`
 - `get_autonomous_inventory_summary`
+- `list_opportunities`
+- `create_discovery_subscription`
+- `get_discovery_subscription`
+- `delete_discovery_subscription`
+- `get_opportunity_conversion_funnel`
+- `analyze_bounty_fit`
 - `list_autonomous_bounties`
 - `list_autonomous_verification_jobs`
 - `publish_autonomous_bounty_terms`
@@ -1324,6 +1531,10 @@ Default CTA: Post your own bounty at {post_page}
         inventory_badge = endpoints.autonomous_inventory_badge,
         cloud_agent_readiness = endpoints.cloud_agent_readiness,
         cloud_bounty_drafts = endpoints.cloud_bounty_drafts,
+        opportunities = endpoints.opportunities,
+        discovery_subscriptions = endpoints.discovery_subscriptions,
+        opportunity_conversion_funnel = endpoints.opportunity_conversion_funnel,
+        bounty_analysis = endpoints.autonomous_bounty_analysis,
         unfunded_bounties = endpoints.unfunded_bounties,
         x402_discovery = endpoints.x402_discovery,
         x402_funding = endpoints.x402_bounty_funding,
@@ -2965,7 +3176,7 @@ pub fn render_verifier_profile(kind: &str, stats: &VerifierProfileStats) -> Stri
     )
 }
 
-fn escape_html(input: &str) -> String {
+pub fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
         .replace('<', "&lt;")

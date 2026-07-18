@@ -15,11 +15,15 @@ chrono.workspace = true
 db = { path = "../db" }
 domain = { path = "../domain" }
 hex.workspace = true
+hmac.workspace = true
 ledger = { path = "../ledger" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "process"] }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "process"] }
 verifier-sdk = { path = "../verifier-sdk" }
+web-public = { path = "../web-public" }
+uuid.workspace = true
 
 [dev-dependencies]

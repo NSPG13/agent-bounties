@@ -1,3 +1,5 @@
+mod opportunities;
+
 use app::{
     build_audience_report, build_live_money_readiness_report, hash_artifact,
     stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
@@ -53,24 +55,27 @@ use chain_base::{
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use cloud_agent::{
-    CloudAgentError, CloudAgentReadiness, CloudAgentService, CloudBountyDraft,
-    CloudBountyDraftRequest, CloudDemoSolution, CloudUnfundedBountyRequest,
+    CloudAgentError, CloudAgentReadiness, CloudAgentService, CloudBountyAnalysis,
+    CloudBountyAnalysisRequest, CloudBountyDraft, CloudBountyDraftRequest, CloudDemoSolution,
+    CloudUnfundedBountyRequest,
 };
 use db::{
     BountyStatusScope, ClaimCandidateReservation, ClaimFunnelStats, DbError,
-    GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate, NewTrialBounty,
-    NewUnfundedBountySolution, NewX402RelayAttempt, PostgresStore, TrialBounty,
-    UnfundedBountySolution, X402RelayAttempt, X402RelayStatus,
+    GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate,
+    NewDiscoveryWebhookSubscription, NewTrialBounty, NewUnfundedBountySolution,
+    NewX402RelayAttempt, OpportunityLifecycleStats, PostgresStore, TrialBounty,
+    UnfundedBountySolution, WebhookSubscription, X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
-    AgentEligibilityEvidence, AgentEligibilityPolicy, AgentStatus, AudienceInteraction,
-    AudienceMember, AudienceReport, AutonomousBountyTermsDocument, AutonomousBountyTermsRecord,
-    AutonomousSubmissionEvidenceRecord, BondSponsorship, BondSponsorshipStatus, BountyStatus,
-    Capability, CapabilityClass, ClaimCandidate, ClaimCandidateStatus, ContributorContact,
-    DiscoveryResponse, EvalRun, HelpRequest, LeaderboardPeriodKind, Money, OutreachAttempt,
-    PaymentRail, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord, SolverLeaderboardRanking,
-    VerificationDecision, VerifierKind,
+    AgentEligibilityEvidence, AgentEligibilityPolicy, AgentStatus, AgentWebhookEventType,
+    AudienceInteraction, AudienceMember, AudienceReport, AutonomousBountyTermsDocument,
+    AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord, BondSponsorship,
+    BondSponsorshipStatus, BountyStatus, Capability, CapabilityClass, ClaimCandidate,
+    ClaimCandidateStatus, ContributorContact, DiscoveryResponse, DiscoverySubscriptionFilters,
+    EvalRun, HelpRequest, LeaderboardPeriodKind, Money, OutreachAttempt, PaymentRail, PayoutStatus,
+    PrivacyLevel, RiskEvent, RiskReviewRecord, SolverLeaderboardRanking, VerificationDecision,
+    VerifierKind,
 };
 use eval_harness::{
     bundled_abuse_fixtures, bundled_fixtures, bundled_judge_fixtures, run_eval_loops, AbuseBench,
@@ -84,6 +89,11 @@ use github_app::{
     GitHubProofCommentPlan,
 };
 use ledger::Ledger;
+use opportunities::{
+    apply_query as apply_opportunity_query, canonical_opportunity, legacy_opportunity,
+    unfunded_opportunity, OpportunityItem, OpportunityProjectionResponse, OpportunityQuery,
+    OpportunitySourceStatus, OpportunityView, OPPORTUNITY_PROJECTION_SCHEMA,
+};
 use payments_stripe::{
     apply_checkout_payment_method_configuration, execute_stripe_request, verify_webhook_signature,
     CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper, StripeExecutionReport,
@@ -107,6 +117,10 @@ use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, Secur
 use utoipa::openapi::Components;
 use utoipa::{Modify, OpenApi, ToSchema};
 use uuid::Uuid;
+use worker::{
+    derive_discovery_webhook_secret, enqueue_discovery_event, validate_public_https_endpoint,
+    DiscoveryWebhookConfig,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -120,6 +134,15 @@ use uuid::Uuid;
         live_money_readiness,
         cloud_agent_readiness,
         draft_bounty_with_cloud_agent,
+        analyze_bounty_fit,
+        list_opportunities,
+        opportunity_embed_page,
+        opportunity_embed_svg,
+        opportunity_embed_markdown,
+        opportunity_conversion_funnel,
+        create_discovery_subscription,
+        get_discovery_subscription,
+        delete_discovery_subscription,
         publish_unfunded_bounty,
         list_unfunded_bounties,
         get_unfunded_bounty,
@@ -250,8 +273,26 @@ use uuid::Uuid;
         ,CloudAgentReadiness
         ,CloudBountyDraftRequest
         ,CloudBountyDraft
+        ,CloudBountyAnalysis
+        ,CloudBountyAnalysisRequest
+        ,cloud_agent::CloudBountyAnalysisReference
         ,CloudUnfundedBountyRequest
         ,CloudDemoSolution
+        ,OpportunityProjectionResponse
+        ,OpportunityItem
+        ,opportunities::OpportunityAmount
+        ,opportunities::OpportunityNextAction
+        ,opportunities::OpportunityEmbedLinks
+        ,OpportunitySourceStatus
+        ,DiscoverySubscriptionFilters
+        ,domain::DiscoveryRewardFilter
+        ,CreateDiscoverySubscriptionRequest
+        ,CreateDiscoverySubscriptionResponse
+        ,DiscoverySubscriptionResponse
+        ,OpportunityConversionFunnelResponse
+        ,OpportunityConversionStage
+        ,OpportunityConversionRate
+        ,OpportunityActorMetrics
         ,UnfundedBountyResponse
         ,UnfundedBountyAgentSolution
         ,SubmitUnfundedBountySolutionRequest
@@ -306,6 +347,7 @@ struct AppState {
     bond_sponsor: BondSponsorConfig,
     recovery_reservations: AutonomousBountyRecoveryReservations,
     cloud_agent: Arc<CloudAgentService>,
+    discovery_webhooks: Option<Arc<DiscoveryWebhookConfig>>,
 }
 
 #[derive(Clone)]
@@ -777,6 +819,54 @@ struct ClaimFunnelQuery {
     window_hours: Option<u32>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct OpportunityConversionQuery {
+    window_hours: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct OpportunityConversionStage {
+    stage: String,
+    count: u64,
+    evidence_source: String,
+    coverage_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct OpportunityConversionRate {
+    metric: String,
+    numerator: u64,
+    denominator: u64,
+    value: Option<f64>,
+    cohort: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct OpportunityActorMetrics {
+    unique_canonical_poster_wallets: u64,
+    repeat_canonical_poster_wallets: u64,
+    unique_paid_solver_wallets: u64,
+    repeat_paid_solver_wallets: u64,
+    independent_active_agents: Option<u64>,
+    independence_measurement_available: bool,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct OpportunityConversionFunnelResponse {
+    schema_version: String,
+    window_hours: u32,
+    window_started_at: String,
+    generated_at: String,
+    stages: Vec<OpportunityConversionStage>,
+    rates: Vec<OpportunityConversionRate>,
+    average_seconds_to_first_solution: Option<f64>,
+    median_seconds_to_first_solution: Option<f64>,
+    average_seconds_creation_to_settlement: Option<f64>,
+    actors: OpportunityActorMetrics,
+    evidence_boundary: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct AgentNativeClaimResponse {
     schema_version: String,
@@ -1004,6 +1094,11 @@ struct SolverLeaderboardResponse {
     evidence_boundary: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct CloudBountyAnalysisQuery {
+    network: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct AutonomousBountyInventoryItem {
     bounty_id: String,
@@ -1114,6 +1209,7 @@ async fn main() -> anyhow::Result<()> {
         CloudAgentService::from_env()
             .map_err(|error| anyhow::anyhow!("cloud-agent configuration is invalid: {error}"))?,
     );
+    let discovery_webhooks = DiscoveryWebhookConfig::from_env()?.map(Arc::new);
     let state: SharedState = Arc::new(AppState {
         network: Arc::new(Mutex::new(network)),
         eval_runs: Arc::new(Mutex::new(eval_runs)),
@@ -1151,6 +1247,7 @@ async fn main() -> anyhow::Result<()> {
         bond_sponsor,
         recovery_reservations,
         cloud_agent,
+        discovery_webhooks,
     });
     let app = Router::new()
         .route("/health", get(health))
@@ -1171,6 +1268,35 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/cloud-agent/bounty-drafts",
             post(draft_bounty_with_cloud_agent),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/:bounty_contract/analysis",
+            get(analyze_bounty_fit),
+        )
+        .route("/v1/opportunities", get(list_opportunities))
+        .route(
+            "/v1/opportunities/conversion-funnel",
+            get(opportunity_conversion_funnel),
+        )
+        .route(
+            "/public/opportunities/:opportunity_id/embed",
+            get(opportunity_embed_page),
+        )
+        .route(
+            "/public/opportunities/:opportunity_id/embed.svg",
+            get(opportunity_embed_svg),
+        )
+        .route(
+            "/public/opportunities/:opportunity_id/embed.md",
+            get(opportunity_embed_markdown),
+        )
+        .route(
+            "/v1/discovery/subscriptions",
+            post(create_discovery_subscription),
+        )
+        .route(
+            "/v1/discovery/subscriptions/:id",
+            get(get_discovery_subscription).delete(delete_discovery_subscription),
         )
         .route(
             "/v1/unfunded-bounties",
@@ -1571,6 +1697,923 @@ async fn draft_bounty_with_cloud_agent(
         .map_err(cloud_agent_status)
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/base/autonomous-bounties/{bounty_contract}/analysis",
+    params(
+        ("bounty_contract" = String, Path, description = "Indexed canonical autonomous-v1 bounty contract"),
+        ("network" = Option<String>, Query, description = "base-mainnet or base-sepolia; defaults to base-mainnet")
+    ),
+    responses(
+        (status = 200, body = CloudBountyAnalysis),
+        (status = 400, description = "Invalid network or bounded analysis input"),
+        (status = 401, description = "Public cloud analysis is disabled and operator authorization is absent"),
+        (status = 404, description = "Canonical bounty is not indexed"),
+        (status = 409, description = "Published terms are missing, invalid, or inconsistent with canonical creation"),
+        (status = 429, description = "Bounded daily cloud-model quota exhausted"),
+        (status = 503, description = "Cloud model or canonical read model is unavailable")
+    )
+)]
+async fn analyze_bounty_fit(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(bounty_contract): Path<String>,
+    Query(query): Query<CloudBountyAnalysisQuery>,
+) -> Result<Json<CloudBountyAnalysis>, StatusCode> {
+    if !state.cloud_agent.public_drafts() {
+        require_operator(&state, &headers)?;
+    }
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &bounty_contract).await?;
+    if !item.terms_valid || !item.validation_errors.is_empty() {
+        return Err(StatusCode::CONFLICT);
+    }
+    let terms = item.terms.as_ref().ok_or(StatusCode::CONFLICT)?;
+    let projected = canonical_opportunity(&item, network, &state.public_base_url)
+        .ok_or(StatusCode::CONFLICT)?;
+    let request = CloudBountyAnalysisRequest {
+        terms_hash: item.terms_hash.clone(),
+        title: terms.document.title.clone(),
+        goal: terms.document.goal.clone(),
+        acceptance_criteria: terms.document.acceptance_criteria.clone(),
+        benchmark: terms.document.benchmark.clone(),
+        evidence_schema: terms.document.evidence_schema.clone(),
+        verification_policy: terms.document.verification_policy.clone(),
+        reward: serde_json::to_value(&projected.reward)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        bond: serde_json::to_value(&projected.bond)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        deadline: projected.deadline,
+        payment_status: serde_json::json!({
+            "work_state": projected.work_state,
+            "payment_state": projected.payment_state,
+            "payment_committed": projected.payment_committed,
+            "funded_amount": projected.funded_amount,
+            "funding_target": projected.funding_target,
+            "source_status": projected.source_status,
+        }),
+    };
+    state
+        .cloud_agent
+        .analyze_bounty_fit(request)
+        .await
+        .map(Json)
+        .map_err(cloud_agent_status)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/opportunities",
+    params(
+        ("network" = Option<String>, Query, description = "Canonical network key; defaults to base-mainnet"),
+        ("view" = Option<String>, Query, description = "Deterministic view: recent, engineering, creative, urgent, seeking_funding, or ready_to_earn"),
+        ("source_type" = Option<String>, Query, description = "Filter by unfunded_offchain, legacy_bounty, or canonical_base"),
+        ("work_state" = Option<String>, Query, description = "Filter by open, claimable, in_progress, submitted, or completed"),
+        ("payment_state" = Option<String>, Query, description = "Filter by none, seeking_funding, escrowed, or paid"),
+        ("limit" = Option<u32>, Query, description = "Maximum combined results; clamped to 1..300")
+    ),
+    responses(
+        (status = 200, body = OpportunityProjectionResponse),
+        (status = 400, description = "Unknown network, view, work state, payment state, or source type")
+    )
+)]
+async fn list_opportunities(
+    State(state): State<SharedState>,
+    Query(query): Query<OpportunityQuery>,
+) -> Result<Json<OpportunityProjectionResponse>, StatusCode> {
+    build_opportunity_projection(&state, query).await.map(Json)
+}
+
+async fn build_opportunity_projection(
+    state: &SharedState,
+    query: OpportunityQuery,
+) -> Result<OpportunityProjectionResponse, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let view =
+        OpportunityView::parse(query.view.as_deref()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_opportunity_filter(
+        query.source_type.as_deref(),
+        &["unfunded_offchain", "legacy_bounty", "canonical_base"],
+    )?;
+    validate_opportunity_filter(
+        query.work_state.as_deref(),
+        &["open", "claimable", "in_progress", "submitted", "completed"],
+    )?;
+    validate_opportunity_filter(
+        query.payment_state.as_deref(),
+        &["none", "seeking_funding", "escrowed", "paid"],
+    )?;
+
+    let api = state.public_base_url.trim_end_matches('/');
+    let mut items = Vec::<OpportunityItem>::new();
+    let mut source_statuses = Vec::<OpportunitySourceStatus>::new();
+
+    let (unfunded_items, unfunded_error) = match state.store.as_ref() {
+        Some(store) => match store.list_trial_bounties(100).await {
+            Ok(trials) => {
+                let mut projected = Vec::with_capacity(trials.len());
+                let mut error = None;
+                for trial in trials {
+                    match store.list_unfunded_bounty_solutions(trial.id).await {
+                        Ok(solutions) => {
+                            projected.push(unfunded_opportunity(&trial, &solutions, api));
+                        }
+                        Err(_) => {
+                            error = Some("unfunded_solution_store_unavailable".to_string());
+                            projected.clear();
+                            break;
+                        }
+                    }
+                }
+                (projected, error)
+            }
+            Err(_) => (
+                Vec::new(),
+                Some("unfunded_bounty_store_unavailable".to_string()),
+            ),
+        },
+        None => (Vec::new(), Some("durable_store_not_configured".to_string())),
+    };
+    let unfunded_available = unfunded_error.is_none();
+    source_statuses.push(OpportunitySourceStatus {
+        source_type: "unfunded_offchain".to_string(),
+        available: unfunded_available,
+        authoritative_urls: vec![format!("{api}/v1/unfunded-bounties")],
+        item_count: unfunded_items.len(),
+        error: unfunded_error,
+    });
+    items.extend(unfunded_items);
+
+    let legacy_statuses = {
+        let network_state = state
+            .network
+            .lock()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        network_state
+            .bounties
+            .values()
+            .filter_map(|bounty| network_state.status(bounty.id).ok())
+            .collect::<Vec<_>>()
+    };
+    let legacy_items = legacy_statuses
+        .iter()
+        .filter_map(|status| legacy_opportunity(status, api))
+        .collect::<Vec<_>>();
+    source_statuses.push(OpportunitySourceStatus {
+        source_type: "legacy_bounty".to_string(),
+        available: true,
+        authoritative_urls: vec![
+            format!("{api}/v1/bounties/feed"),
+            format!("{api}/v1/bounties/funding-feed"),
+        ],
+        item_count: legacy_items.len(),
+        error: None,
+    });
+    items.extend(legacy_items);
+
+    let (canonical_items, canonical_error) =
+        match load_autonomous_bounty_feed(state, network, false).await {
+            Ok(feed) => (
+                feed.iter()
+                    .filter_map(|item| canonical_opportunity(item, network, api))
+                    .collect::<Vec<_>>(),
+                None,
+            ),
+            Err(_) => (
+                Vec::new(),
+                Some("canonical_read_model_unavailable".to_string()),
+            ),
+        };
+    source_statuses.push(OpportunitySourceStatus {
+        source_type: "canonical_base".to_string(),
+        available: canonical_error.is_none(),
+        authoritative_urls: vec![format!(
+            "{api}/v1/base/autonomous-bounties/feed?network={network}&claimable_only=false"
+        )],
+        item_count: canonical_items.len(),
+        error: canonical_error,
+    });
+    items.extend(canonical_items);
+
+    let now = Utc::now();
+    let items = apply_opportunity_query(items, &query, view, now);
+    Ok(OpportunityProjectionResponse {
+        schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
+        generated_at: now.to_rfc3339(),
+        network: network.to_string(),
+        applied_view: view.map(|view| view.as_str().to_string()),
+        degraded: source_statuses.iter().any(|source| !source.available),
+        source_statuses,
+        items,
+        evidence_boundary: "This endpoint is a read-only projection. Each listed source remains authoritative for its own records; the projection cannot create funding, claims, verification, settlement, or payment evidence. Only confirmed canonical BountySettled proves autonomous-v1 solver payment.".to_string(),
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/opportunities/conversion-funnel",
+    params(("window_hours" = Option<u32>, Query, description = "Cohort lookback from 1 to 8760 hours; defaults to 720")),
+    responses(
+        (status = 200, body = OpportunityConversionFunnelResponse),
+        (status = 400, description = "Invalid window"),
+        (status = 503, description = "Durable analytics store unavailable")
+    )
+)]
+async fn opportunity_conversion_funnel(
+    State(state): State<SharedState>,
+    Query(query): Query<OpportunityConversionQuery>,
+) -> Result<Json<OpportunityConversionFunnelResponse>, StatusCode> {
+    let window_hours = query.window_hours.unwrap_or(720);
+    if !(1..=8_760).contains(&window_hours) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let generated_at = Utc::now();
+    let window_started_at = generated_at - ChronoDuration::hours(i64::from(window_hours));
+    let stats = store
+        .opportunity_lifecycle_stats(window_started_at)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(opportunity_conversion_response(
+        stats,
+        window_hours,
+        window_started_at,
+        generated_at,
+    )))
+}
+
+fn opportunity_conversion_response(
+    stats: OpportunityLifecycleStats,
+    window_hours: u32,
+    window_started_at: chrono::DateTime<Utc>,
+    generated_at: chrono::DateTime<Utc>,
+) -> OpportunityConversionFunnelResponse {
+    let stage = |name: &str, count: u64, source: &str, note: &str| OpportunityConversionStage {
+        stage: name.to_string(),
+        count,
+        evidence_source: source.to_string(),
+        coverage_note: note.to_string(),
+    };
+    let rate =
+        |metric: &str, numerator: u64, denominator: u64, cohort: &str| OpportunityConversionRate {
+            metric: metric.to_string(),
+            numerator,
+            denominator,
+            value: (denominator > 0).then(|| numerator as f64 / denominator as f64),
+            cohort: cohort.to_string(),
+        };
+    OpportunityConversionFunnelResponse {
+        schema_version: "agent-bounties/opportunity-conversion-funnel-v1".to_string(),
+        window_hours,
+        window_started_at: window_started_at.to_rfc3339(),
+        generated_at: generated_at.to_rfc3339(),
+        stages: vec![
+            stage(
+                "unfunded_published",
+                stats.published,
+                "trial_bounties.created_at",
+                "Public off-chain publications in the selected cohort.",
+            ),
+            stage(
+                "solution_received",
+                stats.solution_received,
+                "unfunded_bounty_solutions.created_at",
+                "Distinct cohort publications with at least one registered-agent solution; agent identity is self-reported registration, not independence proof.",
+            ),
+            stage(
+                "funding_prepared",
+                stats.funding_prepared,
+                "opportunity_creation_progress.funding_prepared_at",
+                "A valid hosted creation plan was returned for immutable terms linked by source URL to the unfunded publication. A plan is not funding.",
+            ),
+            stage(
+                "wallet_signed",
+                stats.wallet_signed_observed,
+                "opportunity_creation_progress.wallet_signed_at",
+                "Observed only when a valid EIP-3009 signature is supplied to the authorized creation-plan endpoint. Direct wallet or wallet_sendCalls signatures remain client-side and are not counted.",
+            ),
+            stage(
+                "canonical_created",
+                stats.canonical_created,
+                "confirmed CanonicalBountyCreated joined by immutable terms_hash",
+                "Distinct unfunded cohort publications with confirmed canonical creation.",
+            ),
+            stage(
+                "funded",
+                stats.funded,
+                "confirmed BountyBecameClaimable",
+                "Funding is counted only when the canonical contract became fully funded and claimable.",
+            ),
+            stage(
+                "claimed",
+                stats.claimed,
+                "confirmed BountyClaimed",
+                "At least one confirmed canonical claim for the correlated bounty.",
+            ),
+            stage(
+                "submitted",
+                stats.submitted,
+                "confirmed SubmissionAdded",
+                "At least one confirmed canonical submission for the correlated bounty.",
+            ),
+            stage(
+                "settled",
+                stats.settled,
+                "confirmed BountySettled",
+                "At least one confirmed canonical settlement; this is the only stage that proves solver payment.",
+            ),
+        ],
+        rates: vec![
+            rate(
+                "time_bounded_solution_rate",
+                stats.solution_received,
+                stats.published,
+                "unfunded publications created within the selected window",
+            ),
+            rate(
+                "unfunded_to_funded_conversion",
+                stats.funded,
+                stats.published,
+                "unfunded publications created within the selected window and correlated by immutable terms hash",
+            ),
+            rate(
+                "claim_rate_after_funding",
+                stats.claimed,
+                stats.funded,
+                "correlated unfunded cohort that reached confirmed BountyBecameClaimable",
+            ),
+            rate(
+                "completion_rate_after_claim",
+                stats.settled,
+                stats.claimed,
+                "correlated unfunded cohort that reached confirmed BountyClaimed",
+            ),
+            rate(
+                "canonical_created_to_settled",
+                stats.settled,
+                stats.canonical_created,
+                "correlated unfunded cohort with confirmed CanonicalBountyCreated",
+            ),
+        ],
+        average_seconds_to_first_solution: stats.average_seconds_to_first_solution,
+        median_seconds_to_first_solution: stats.median_seconds_to_first_solution,
+        average_seconds_creation_to_settlement: stats
+            .average_seconds_creation_to_settlement,
+        actors: OpportunityActorMetrics {
+            unique_canonical_poster_wallets: stats.unique_canonical_poster_wallets,
+            repeat_canonical_poster_wallets: stats.repeat_canonical_poster_wallets,
+            unique_paid_solver_wallets: stats.unique_paid_solver_wallets,
+            repeat_paid_solver_wallets: stats.repeat_paid_solver_wallets,
+            independent_active_agents: None,
+            independence_measurement_available: false,
+            evidence_boundary: "Poster and paid-solver counts use confirmed canonical wallet addresses. A wallet is not proof of a distinct human or independent agent, and activity outside canonical events is not inferred. Therefore independent_active_agents is intentionally null."
+                .to_string(),
+        },
+        evidence_boundary: format!(
+            "The first nine stages are a cohort funnel rooted in unfunded publications. Canonical event counts outside that linked cohort are used only for settlement timing and wallet-repeat metrics: {} canonical creations, {} claims, and {} settlements occurred in the selected event window. Plans, signatures, transaction hashes, AI outputs, and webhook notifications are not settlement evidence.",
+            stats.canonical_created_in_window,
+            stats.canonical_claimed_in_window,
+            stats.canonical_settled_in_window,
+        ),
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OpportunityEmbedQuery {
+    network: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/public/opportunities/{opportunity_id}/embed",
+    params(
+        ("opportunity_id" = String, Path, description = "Unified opportunity identifier"),
+        ("network" = Option<String>, Query, description = "Canonical Base network; defaults to base-mainnet")
+    ),
+    responses(
+        (status = 200, description = "Iframe-ready live opportunity card"),
+        (status = 404, description = "Opportunity not found")
+    )
+)]
+async fn opportunity_embed_page(
+    State(state): State<SharedState>,
+    Path(opportunity_id): Path<String>,
+    Query(query): Query<OpportunityEmbedQuery>,
+) -> Result<Response, StatusCode> {
+    let item = load_embedded_opportunity(&state, &opportunity_id, query.network).await?;
+    let title = web_public::escape_html(&item.title);
+    let work_state = web_public::escape_html(&item.work_state);
+    let payment_state = web_public::escape_html(&item.payment_state);
+    let verification = web_public::escape_html(&item.verification_method);
+    let reward = web_public::escape_html(&committed_reward_label(&item));
+    let deadline =
+        web_public::escape_html(item.deadline.as_deref().unwrap_or("No deadline published"));
+    let link = web_public::escape_html(&safe_opportunity_link(&item));
+    let cta = if item.work_state == "claimable" {
+        "Work on this"
+    } else {
+        "View opportunity"
+    };
+    let latest = item
+        .proof_urls
+        .last()
+        .and_then(|url| safe_external_url(url))
+        .map(|url| {
+            format!(
+                r#"<a class="proof" href="{}" target="_blank" rel="noopener noreferrer">Latest result or settlement proof</a>"#,
+                web_public::escape_html(&url)
+            )
+        })
+        .unwrap_or_else(|| {
+            "<span class=\"proof muted\">No result or settlement proof published</span>"
+                .to_string()
+        });
+    let html = format!(
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · BountyBoard</title><style>:root{{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}}*{{box-sizing:border-box}}body{{margin:0;padding:12px;background:transparent}}article{{max-width:720px;border:1px solid #6b728066;border-radius:16px;padding:20px;background:#111827;color:#f9fafb;box-shadow:0 12px 36px #0003}}header{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.brand{{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd}}h1{{font-size:21px;line-height:1.25;margin:7px 0 16px}}.states{{display:flex;flex-wrap:wrap;gap:8px}}.pill{{padding:5px 9px;border-radius:999px;background:#1f2937;font-size:12px}}dl{{display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin:18px 0}}dt{{color:#9ca3af}}dd{{margin:0;overflow-wrap:anywhere}}footer{{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}}a{{color:#bfdbfe}}a.cta{{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:9px;font-weight:700}}.proof{{font-size:12px}}.muted{{color:#9ca3af}}</style></head><body><article data-opportunity-id="{}"><header><div><div class="brand">BountyBoard opportunity</div><h1>{title}</h1></div><div class="states"><span class="pill">Work: {work_state}</span><span class="pill">Payment: {payment_state}</span></div></header><dl><dt>Committed reward</dt><dd>{reward}</dd><dt>Deadline</dt><dd>{deadline}</dd><dt>Verification</dt><dd>{verification}</dd></dl><footer>{latest}<a class="cta" href="{link}" target="_blank" rel="noopener noreferrer">{cta}</a></footer></article></body></html>"#,
+        web_public::escape_html(&item.opportunity_id),
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=30, stale-while-revalidate=120",
+            ),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors *; base-uri 'none'; form-action 'none'",
+            ),
+        ],
+        html,
+    )
+        .into_response())
+}
+
+#[utoipa::path(
+    get,
+    path = "/public/opportunities/{opportunity_id}/embed.svg",
+    params(
+        ("opportunity_id" = String, Path, description = "Unified opportunity identifier"),
+        ("network" = Option<String>, Query, description = "Canonical Base network")
+    ),
+    responses((status = 200, description = "Live SVG opportunity card"), (status = 404))
+)]
+async fn opportunity_embed_svg(
+    State(state): State<SharedState>,
+    Path(opportunity_id): Path<String>,
+    Query(query): Query<OpportunityEmbedQuery>,
+) -> Result<Response, StatusCode> {
+    let item = load_embedded_opportunity(&state, &opportunity_id, query.network).await?;
+    let title = truncate_chars(&item.title, 70);
+    let reward = committed_reward_label(&item);
+    let deadline = item.deadline.as_deref().unwrap_or("No deadline published");
+    let link = safe_opportunity_link(&item);
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="720" height="240" role="img" aria-label="BountyBoard opportunity: {title}"><title>BountyBoard opportunity: {title}</title><rect width="720" height="240" rx="18" fill="#111827"/><rect x="1" y="1" width="718" height="238" rx="17" fill="none" stroke="#4b5563"/><text x="28" y="34" fill="#93c5fd" font-family="Arial,sans-serif" font-size="12" letter-spacing="1.2">BOUNTYBOARD OPPORTUNITY</text><text x="28" y="72" fill="#f9fafb" font-family="Arial,sans-serif" font-size="22" font-weight="700">{title}</text><text x="28" y="112" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Work: {work}  ·  Payment: {payment}</text><text x="28" y="142" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Committed reward: {reward}</text><text x="28" y="172" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Deadline: {deadline}</text><text x="28" y="202" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Verification: {verification}</text><a href="{link}" target="_blank"><rect x="550" y="184" width="142" height="36" rx="8" fill="#2563eb"/><text x="621" y="207" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="13" font-weight="700">View opportunity</text></a></svg>"##,
+        title = web_public::escape_html(&title),
+        work = web_public::escape_html(&item.work_state),
+        payment = web_public::escape_html(&item.payment_state),
+        reward = web_public::escape_html(&reward),
+        deadline = web_public::escape_html(deadline),
+        verification = web_public::escape_html(&item.verification_method),
+        link = web_public::escape_html(&link),
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=30, stale-while-revalidate=120",
+            ),
+        ],
+        svg,
+    )
+        .into_response())
+}
+
+#[utoipa::path(
+    get,
+    path = "/public/opportunities/{opportunity_id}/embed.md",
+    params(
+        ("opportunity_id" = String, Path, description = "Unified opportunity identifier"),
+        ("network" = Option<String>, Query, description = "Canonical Base network")
+    ),
+    responses((status = 200, description = "Markdown opportunity card and badge snippet"), (status = 404))
+)]
+async fn opportunity_embed_markdown(
+    State(state): State<SharedState>,
+    Path(opportunity_id): Path<String>,
+    Query(query): Query<OpportunityEmbedQuery>,
+) -> Result<Response, StatusCode> {
+    let network = query
+        .network
+        .as_deref()
+        .unwrap_or("base-mainnet")
+        .to_string();
+    let item = load_embedded_opportunity(&state, &opportunity_id, Some(network.clone())).await?;
+    let encoded_id = percent_encode_path_segment(&item.opportunity_id);
+    let base = state.public_base_url.trim_end_matches('/');
+    let svg_url = format!("{base}/public/opportunities/{encoded_id}/embed.svg?network={network}");
+    let embed_url = format!("{base}/public/opportunities/{encoded_id}/embed?network={network}");
+    let proof = item
+        .proof_urls
+        .last()
+        .and_then(|url| safe_external_url(url))
+        .map(|url| format!("[Latest result or settlement proof]({url})"))
+        .unwrap_or_else(|| "No result or settlement proof published".to_string());
+    let markdown = format!(
+        "[![BountyBoard opportunity]({svg_url})]({embed_url})\n\n### {}\n\n| Field | Current value |\n|---|---|\n| Work state | `{}` |\n| Payment state | `{}` |\n| Committed reward | {} |\n| Deadline | {} |\n| Verification | `{}` |\n| Evidence | {} |\n\n[View opportunity]({})\n",
+        markdown_cell(&item.title),
+        markdown_cell(&item.work_state),
+        markdown_cell(&item.payment_state),
+        markdown_cell(&committed_reward_label(&item)),
+        markdown_cell(item.deadline.as_deref().unwrap_or("No deadline published")),
+        markdown_cell(&item.verification_method),
+        proof,
+        safe_opportunity_link(&item),
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=30, stale-while-revalidate=120",
+            ),
+        ],
+        markdown,
+    )
+        .into_response())
+}
+
+async fn load_embedded_opportunity(
+    state: &SharedState,
+    opportunity_id: &str,
+    network: Option<String>,
+) -> Result<OpportunityItem, StatusCode> {
+    let projection = build_opportunity_projection(
+        state,
+        OpportunityQuery {
+            network,
+            limit: Some(300),
+            ..OpportunityQuery::default()
+        },
+    )
+    .await?;
+    projection
+        .items
+        .into_iter()
+        .find(|item| item.opportunity_id == opportunity_id)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+fn committed_reward_label(item: &OpportunityItem) -> String {
+    if !item.payment_committed {
+        return "Not committed".to_string();
+    }
+    format!(
+        "{} {}",
+        decimal_amount(&item.reward.amount, item.reward.decimals),
+        item.reward.currency
+    )
+}
+
+fn decimal_amount(amount: &str, decimals: u8) -> String {
+    if decimals == 0 || !amount.bytes().all(|byte| byte.is_ascii_digit()) {
+        return amount.to_string();
+    }
+    let decimals = usize::from(decimals);
+    let padded = format!("{:0>width$}", amount, width = decimals + 1);
+    let split = padded.len() - decimals;
+    let fraction = padded[split..].trim_end_matches('0');
+    if fraction.is_empty() {
+        padded[..split].to_string()
+    } else {
+        format!("{}.{}", &padded[..split], fraction)
+    }
+}
+
+fn safe_opportunity_link(item: &OpportunityItem) -> String {
+    safe_external_url(&item.public_url).unwrap_or_else(|| "https://bountyboard.global".to_string())
+}
+
+fn safe_external_url(value: &str) -> Option<String> {
+    (value.starts_with("https://") || value.starts_with("http://")).then(|| value.to_string())
+}
+
+fn truncate_chars(value: &str, maximum: usize) -> String {
+    let mut characters = value.chars();
+    let truncated = characters.by_ref().take(maximum).collect::<String>();
+    if characters.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
+fn markdown_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', " ")
+}
+
+fn percent_encode_path_segment(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+fn validate_opportunity_filter(value: Option<&str>, allowed: &[&str]) -> Result<(), StatusCode> {
+    if value.is_some_and(|value| !allowed.contains(&value)) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct CreateDiscoverySubscriptionRequest {
+    endpoint_url: String,
+    #[serde(default)]
+    filters: DiscoverySubscriptionFilters,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct DiscoverySubscriptionResponse {
+    schema_version: String,
+    subscription_id: Uuid,
+    endpoint_url: String,
+    event_types: Vec<AgentWebhookEventType>,
+    filters: DiscoverySubscriptionFilters,
+    enabled: bool,
+    created_at: String,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct CreateDiscoverySubscriptionResponse {
+    #[serde(flatten)]
+    subscription: DiscoverySubscriptionResponse,
+    management_token: String,
+    signing_secret: String,
+    signature_header: String,
+    timestamp_header: String,
+    idempotency_header: String,
+    secret_disclosure: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/discovery/subscriptions",
+    request_body = CreateDiscoverySubscriptionRequest,
+    responses(
+        (status = 201, body = CreateDiscoverySubscriptionResponse),
+        (status = 400, description = "Invalid filter or non-public HTTPS webhook endpoint"),
+        (status = 503, description = "Durable store or webhook signing is unavailable")
+    )
+)]
+async fn create_discovery_subscription(
+    State(state): State<SharedState>,
+    Json(mut request): Json<CreateDiscoverySubscriptionRequest>,
+) -> Result<(StatusCode, Json<CreateDiscoverySubscriptionResponse>), StatusCode> {
+    let webhook_config = state
+        .discovery_webhooks
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    if request.endpoint_url.len() > 2_048 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    request.endpoint_url = validate_public_https_endpoint(request.endpoint_url.trim())
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .to_string();
+    normalize_discovery_filters(&mut request.filters)?;
+    let subscription_id = Uuid::new_v4();
+    let management_token = format!("bbm_{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let management_token_hash = hex::encode(Sha256::digest(management_token.as_bytes()));
+    let subscription = store
+        .create_discovery_webhook_subscription(&NewDiscoveryWebhookSubscription {
+            id: subscription_id,
+            endpoint_url: request.endpoint_url,
+            filters: request.filters,
+            management_token_hash,
+        })
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let signing_secret = derive_discovery_webhook_secret(
+        webhook_config.signing_key(),
+        subscription.id,
+        subscription.secret_version,
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateDiscoverySubscriptionResponse {
+            subscription: discovery_subscription_response(subscription),
+            management_token,
+            signing_secret,
+            signature_header: "x-bountyboard-signature: v1=<hex HMAC-SHA256>".to_string(),
+            timestamp_header: "x-bountyboard-timestamp".to_string(),
+            idempotency_header: "idempotency-key and x-bountyboard-event-id".to_string(),
+            secret_disclosure: "The management token and signing secret are returned only by this creation response. Store them securely; never send a wallet key or seed phrase."
+                .to_string(),
+        }),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/discovery/subscriptions/{id}",
+    params(("id" = Uuid, Path, description = "Discovery subscription identifier")),
+    responses(
+        (status = 200, body = DiscoverySubscriptionResponse),
+        (status = 401, description = "Missing or invalid management token"),
+        (status = 404, description = "Subscription not found")
+    )
+)]
+async fn get_discovery_subscription(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DiscoverySubscriptionResponse>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let subscription = store
+        .get_webhook_subscription(id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .filter(|subscription| subscription.subscription_kind == "public_discovery")
+        .ok_or(StatusCode::NOT_FOUND)?;
+    require_subscription_management_token(&subscription, &headers)?;
+    Ok(Json(discovery_subscription_response(subscription)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/discovery/subscriptions/{id}",
+    params(("id" = Uuid, Path, description = "Discovery subscription identifier")),
+    responses(
+        (status = 204, description = "Subscription and queued deliveries deleted"),
+        (status = 401, description = "Missing or invalid management token"),
+        (status = 404, description = "Subscription not found")
+    )
+)]
+async fn delete_discovery_subscription(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let subscription = store
+        .get_webhook_subscription(id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .filter(|subscription| subscription.subscription_kind == "public_discovery")
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let token_hash = require_subscription_management_token(&subscription, &headers)?;
+    let deleted = store
+        .delete_discovery_webhook_subscription(id, &token_hash)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+fn normalize_discovery_filters(
+    filters: &mut DiscoverySubscriptionFilters,
+) -> Result<(), StatusCode> {
+    for values in [
+        &mut filters.skills,
+        &mut filters.categories,
+        &mut filters.work_states,
+        &mut filters.payment_states,
+        &mut filters.verification_methods,
+        &mut filters.source_types,
+    ] {
+        if values.len() > 25 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        for value in values.iter_mut() {
+            *value = value.trim().to_string();
+            if value.is_empty() || value.chars().count() > 80 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+        values.sort_by_key(|value| value.to_ascii_lowercase());
+        values.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    }
+    for (values, allowed) in [
+        (
+            &filters.work_states,
+            &["open", "claimable", "in_progress", "submitted", "completed"][..],
+        ),
+        (
+            &filters.payment_states,
+            &["none", "seeking_funding", "escrowed", "paid"][..],
+        ),
+        (
+            &filters.source_types,
+            &["unfunded_offchain", "legacy_bounty", "canonical_base"][..],
+        ),
+    ] {
+        if values
+            .iter()
+            .any(|value| !allowed.iter().any(|allowed| value == allowed))
+        {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    if filters
+        .deadline_within_hours
+        .is_some_and(|hours| hours == 0 || hours > 8_760)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if let Some(minimum) = &mut filters.minimum_committed_reward {
+        minimum.amount = minimum.amount.trim().to_string();
+        minimum.currency = minimum.currency.trim().to_ascii_uppercase();
+        minimum.unit = minimum.unit.trim().to_ascii_lowercase();
+        if minimum.amount.is_empty()
+            || minimum.amount.len() > 39
+            || !minimum.amount.bytes().all(|byte| byte.is_ascii_digit())
+            || minimum.currency.is_empty()
+            || minimum.currency.len() > 12
+            || !matches!(minimum.unit.as_str(), "base_units" | "minor_units")
+            || minimum.decimals > 18
+        {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    Ok(())
+}
+
+fn require_subscription_management_token(
+    subscription: &WebhookSubscription,
+    headers: &HeaderMap,
+) -> Result<String, StatusCode> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let actual = hex::encode(Sha256::digest(token.as_bytes()));
+    let expected = subscription
+        .management_token_hash
+        .as_deref()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !constant_time_text_eq(expected, &actual) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(actual)
+}
+
+fn constant_time_text_eq(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.as_bytes()
+        .iter()
+        .zip(right.as_bytes())
+        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
+        == 0
+}
+
+fn discovery_subscription_response(
+    subscription: WebhookSubscription,
+) -> DiscoverySubscriptionResponse {
+    DiscoverySubscriptionResponse {
+        schema_version: "agent-bounties/discovery-subscription-v1".to_string(),
+        subscription_id: subscription.id,
+        endpoint_url: subscription.endpoint_url,
+        event_types: subscription.event_types,
+        filters: subscription.filters,
+        enabled: subscription.enabled,
+        created_at: subscription.created_at.to_rfc3339(),
+        evidence_boundary: "A subscription filters and delivers discovery notifications only. A webhook is not funding, verification, settlement, payment evidence, or proof of an independent active agent."
+            .to_string(),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct UnfundedBountyResponse {
     schema_version: String,
@@ -1655,6 +2698,7 @@ async fn publish_unfunded_bounty(
         if existing.request_fingerprint != request_fingerprint {
             return Err(StatusCode::CONFLICT);
         }
+        enqueue_unfunded_publication(&state, &existing).await?;
         return unfunded_bounty_response(&state, existing).await.map(Json);
     }
 
@@ -1691,7 +2735,37 @@ async fn publish_unfunded_bounty(
             DbError::TrialBountyConflict => StatusCode::CONFLICT,
             _ => StatusCode::SERVICE_UNAVAILABLE,
         })?;
+    enqueue_unfunded_publication(&state, &trial).await?;
     unfunded_bounty_response(&state, trial).await.map(Json)
+}
+
+async fn enqueue_unfunded_publication(
+    state: &SharedState,
+    trial: &TrialBounty,
+) -> Result<(), StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let opportunity = unfunded_opportunity(trial, &[], &state.public_base_url).discovery_snapshot();
+    enqueue_discovery_event(
+        store,
+        trial.id,
+        AgentWebhookEventType::OpportunityPublished,
+        trial.created_at,
+        &opportunity,
+        serde_json::json!({
+            "unfunded_bounty_id": trial.id,
+            "source_url": format!(
+                "{}/v1/unfunded-bounties/{}",
+                state.public_base_url.trim_end_matches('/'),
+                trial.id
+            )
+        }),
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(())
 }
 
 #[utoipa::path(
@@ -4355,11 +5429,12 @@ async fn plan_autonomous_bounty_creation(
     Json(request): Json<PlanAutonomousBountyCreationRequest>,
 ) -> Result<Json<AutonomousBountyCreationPlan>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
-    require_autonomous_creation_terms(&state, network, &request.create).await?;
-    configured_autonomous_planner(network)?
+    let terms = require_autonomous_creation_terms(&state, network, &request.create).await?;
+    let plan = configured_autonomous_planner(network)?
         .plan_creation(network, &request.create)
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    record_opportunity_creation_progress(&state, network, &terms, "funding_prepared").await?;
+    Ok(Json(plan))
 }
 
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/authorized-creation-plan", responses((status = 200, description = "Relayer transaction plan after the creator signs Circle USDC EIP-3009 authorization")))]
@@ -4368,23 +5443,24 @@ async fn plan_autonomous_bounty_authorized_creation(
     Json(request): Json<PlanAutonomousBountyAuthorizedCreationRequest>,
 ) -> Result<Json<AutonomousBountyAuthorizedCreationPlan>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
-    require_autonomous_creation_terms(&state, network, &request.create).await?;
-    configured_autonomous_planner(network)?
+    let terms = require_autonomous_creation_terms(&state, network, &request.create).await?;
+    let plan = configured_autonomous_planner(network)?
         .plan_authorized_creation(
             network,
             &request.create,
             &request.signature,
             request.relayer.as_deref(),
         )
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    record_opportunity_creation_progress(&state, network, &terms, "wallet_signed").await?;
+    Ok(Json(plan))
 }
 
 async fn require_autonomous_creation_terms(
     state: &SharedState,
     network: &str,
     create: &AutonomousBountyCreate,
-) -> Result<(), StatusCode> {
+) -> Result<AutonomousBountyTermsRecord, StatusCode> {
     let terms = state
         .store
         .as_ref()
@@ -4394,7 +5470,45 @@ async fn require_autonomous_creation_terms(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     validate_autonomous_creation_against_terms(network, create, &terms)
-        .map_err(|_| StatusCode::CONFLICT)
+        .map_err(|_| StatusCode::CONFLICT)?;
+    Ok(terms)
+}
+
+async fn record_opportunity_creation_progress(
+    state: &SharedState,
+    network: &str,
+    terms: &AutonomousBountyTermsRecord,
+    stage: &str,
+) -> Result<(), StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let unfunded_bounty_id =
+        terms.document.source_url.as_deref().and_then(|source_url| {
+            unfunded_bounty_id_from_source(source_url, &state.public_base_url)
+        });
+    store
+        .record_opportunity_creation_progress(
+            &terms.terms_hash,
+            unfunded_bounty_id,
+            network,
+            stage,
+            Utc::now(),
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn unfunded_bounty_id_from_source(source_url: &str, public_base_url: &str) -> Option<Uuid> {
+    let prefix = format!(
+        "{}/v1/unfunded-bounties/",
+        public_base_url.trim_end_matches('/')
+    );
+    source_url
+        .strip_prefix(&prefix)
+        .filter(|id| !id.contains(['/', '?', '#']))
+        .and_then(|id| Uuid::parse_str(id).ok())
 }
 
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/contribution-plan", responses((status = 200, description = "Unsigned permissionless pooled USDC contribution plan")))]
@@ -11237,6 +12351,14 @@ mod tests {
         assert!(paths.contains_key("/schemas/discovery-manifest.v2.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
+        assert!(paths.contains_key("/v1/opportunities"));
+        assert!(paths.contains_key("/v1/opportunities/conversion-funnel"));
+        assert!(paths.contains_key("/v1/discovery/subscriptions"));
+        assert!(paths.contains_key("/v1/discovery/subscriptions/{id}"));
+        assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed"));
+        assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed.svg"));
+        assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed.md"));
+        assert!(paths.contains_key("/v1/base/autonomous-bounties/{bounty_contract}/analysis"));
         assert!(paths.contains_key("/v1/unfunded-bounties"));
         assert!(paths.contains_key("/v1/unfunded-bounties/{id}"));
         assert!(paths.contains_key("/v1/unfunded-bounties/{id}/solutions"));
@@ -11776,6 +12898,246 @@ mod tests {
             feed[0].public_url,
             format!("http://127.0.0.1:8080/public/bounties/{}", public.id)
         );
+    }
+
+    #[tokio::test]
+    async fn opportunity_projection_keeps_payment_and_work_state_separate() {
+        let mut network = BountyNetwork::default();
+        let claimable = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Fix public API tests".to_string(),
+                template_slug: "fix-ci-failure".to_string(),
+                amount_minor: 1_000_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        let private = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Private work".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                amount_minor: 2_000_000,
+                currency: "usd".to_string(),
+                funding_mode: FundingMode::StripeFiatLedger,
+                privacy: PrivacyLevel::Private,
+            })
+            .unwrap();
+        let state = test_state(network);
+
+        let response = list_opportunities(
+            State(state),
+            Query(OpportunityQuery {
+                view: Some("ready_to_earn".to_string()),
+                ..OpportunityQuery::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert!(response.degraded);
+        assert_eq!(response.applied_view.as_deref(), Some("ready_to_earn"));
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].source_id, claimable.id.to_string());
+        assert_ne!(response.items[0].source_id, private.id.to_string());
+        assert_eq!(response.items[0].work_state, "claimable");
+        assert_eq!(response.items[0].payment_state, "escrowed");
+        assert!(response.items[0].payment_committed);
+        assert!(response.items[0]
+            .discovery_factors
+            .iter()
+            .any(|factor| factor.contains("claimable+escrowed+verification_ready")));
+    }
+
+    #[tokio::test]
+    async fn opportunity_projection_rejects_unknown_views() {
+        let state = test_state(BountyNetwork::default());
+        let error = list_opportunities(
+            State(state),
+            Query(OpportunityQuery {
+                view: Some("agent_persona".to_string()),
+                ..OpportunityQuery::default()
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn opportunity_embed_amounts_and_links_are_evidence_bound() {
+        assert_eq!(decimal_amount("1000000", 6), "1");
+        assert_eq!(decimal_amount("1250000", 6), "1.25");
+        assert_eq!(decimal_amount("1", 6), "0.000001");
+        assert!(safe_external_url("javascript:alert(1)").is_none());
+        assert_eq!(percent_encode_path_segment("legacy:a/b"), "legacy%3Aa%2Fb");
+    }
+
+    #[tokio::test]
+    async fn opportunity_embed_reuses_live_projection_state() {
+        let mut network = BountyNetwork::default();
+        let bounty = network
+            .post_funded_bounty(PostBountyRequest {
+                title: "Build <safe> API docs".to_string(),
+                template_slug: "write-docs-for-area".to_string(),
+                amount_minor: 1_250_000,
+                currency: "usdc".to_string(),
+                funding_mode: FundingMode::Simulated,
+                privacy: PrivacyLevel::Public,
+            })
+            .unwrap();
+        let state = test_state(network);
+        let id = format!("legacy:{}", bounty.id);
+
+        let html = opportunity_embed_page(
+            State(state.clone()),
+            Path(id.clone()),
+            Query(OpportunityEmbedQuery::default()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(html.status(), StatusCode::OK);
+        assert!(html.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .contains("frame-ancestors *"));
+        let html = axum::body::to_bytes(html.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(html.to_vec()).unwrap();
+        assert!(html.contains("Work: claimable"));
+        assert!(html.contains("Payment: escrowed"));
+        assert!(html.contains("1.25 USDC"));
+        assert!(html.contains("Build &lt;safe&gt; API docs"));
+
+        let svg = opportunity_embed_svg(
+            State(state.clone()),
+            Path(id.clone()),
+            Query(OpportunityEmbedQuery::default()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            svg.headers()[header::CONTENT_TYPE],
+            "image/svg+xml; charset=utf-8"
+        );
+
+        let markdown = opportunity_embed_markdown(
+            State(state),
+            Path(id),
+            Query(OpportunityEmbedQuery::default()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            markdown.headers()[header::CONTENT_TYPE],
+            "text/markdown; charset=utf-8"
+        );
+    }
+
+    #[test]
+    fn discovery_subscription_filters_are_bounded_and_normalized() {
+        let mut filters = DiscoverySubscriptionFilters {
+            skills: vec![" Rust ".to_string(), "rust".to_string()],
+            categories: vec!["engineering".to_string()],
+            minimum_committed_reward: Some(domain::DiscoveryRewardFilter {
+                amount: "1000000".to_string(),
+                currency: " usdc ".to_string(),
+                unit: " BASE_UNITS ".to_string(),
+                decimals: 6,
+            }),
+            work_states: vec!["claimable".to_string()],
+            payment_states: vec!["escrowed".to_string()],
+            verification_methods: vec!["deterministic_module".to_string()],
+            source_types: vec!["canonical_base".to_string()],
+            deadline_within_hours: Some(72),
+        };
+        normalize_discovery_filters(&mut filters).unwrap();
+        assert_eq!(filters.skills, vec!["Rust"]);
+        let minimum = filters.minimum_committed_reward.unwrap();
+        assert_eq!(minimum.currency, "USDC");
+        assert_eq!(minimum.unit, "base_units");
+
+        filters = DiscoverySubscriptionFilters {
+            payment_states: vec!["funded-ish".to_string()],
+            ..DiscoverySubscriptionFilters::default()
+        };
+        assert_eq!(
+            normalize_discovery_filters(&mut filters),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[test]
+    fn discovery_management_token_comparison_does_not_accept_prefixes() {
+        assert!(constant_time_text_eq("abc123", "abc123"));
+        assert!(!constant_time_text_eq("abc123", "abc124"));
+        assert!(!constant_time_text_eq("abc123", "abc"));
+    }
+
+    #[test]
+    fn conversion_correlation_accepts_only_exact_hosted_unfunded_urls() {
+        let id = Uuid::new_v4();
+        let base = "https://api.bountyboard.global";
+        assert_eq!(
+            unfunded_bounty_id_from_source(&format!("{base}/v1/unfunded-bounties/{id}"), base),
+            Some(id)
+        );
+        assert_eq!(
+            unfunded_bounty_id_from_source(
+                &format!("https://evil.example/v1/unfunded-bounties/{id}"),
+                base
+            ),
+            None
+        );
+        assert_eq!(
+            unfunded_bounty_id_from_source(
+                &format!("{base}/v1/unfunded-bounties/{id}?spoof=true"),
+                base
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn conversion_response_never_infers_independent_active_agents() {
+        let response = opportunity_conversion_response(
+            OpportunityLifecycleStats {
+                published: 10,
+                solution_received: 6,
+                funding_prepared: 4,
+                wallet_signed_observed: 3,
+                canonical_created: 3,
+                funded: 2,
+                claimed: 2,
+                submitted: 1,
+                settled: 1,
+                average_seconds_to_first_solution: Some(120.0),
+                median_seconds_to_first_solution: Some(90.0),
+                average_seconds_creation_to_settlement: Some(3_600.0),
+                canonical_created_in_window: 5,
+                canonical_claimed_in_window: 4,
+                canonical_settled_in_window: 3,
+                unique_canonical_poster_wallets: 4,
+                repeat_canonical_poster_wallets: 1,
+                unique_paid_solver_wallets: 3,
+                repeat_paid_solver_wallets: 1,
+            },
+            720,
+            Utc::now() - ChronoDuration::hours(720),
+            Utc::now(),
+        );
+        assert_eq!(response.stages.len(), 9);
+        assert_eq!(response.rates[1].metric, "unfunded_to_funded_conversion");
+        assert_eq!(response.rates[1].value, Some(0.2));
+        assert_eq!(response.actors.independent_active_agents, None);
+        assert!(!response.actors.independence_measurement_available);
+        assert!(response
+            .actors
+            .evidence_boundary
+            .contains("wallet is not proof"));
     }
 
     #[tokio::test]
@@ -12367,6 +13729,7 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            discovery_webhooks: None,
         })
     }
 
@@ -12400,6 +13763,7 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            discovery_webhooks: None,
         })
     }
 
@@ -12424,6 +13788,7 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            discovery_webhooks: None,
         })
     }
 
@@ -12448,6 +13813,7 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            discovery_webhooks: None,
         })
     }
 
@@ -12476,6 +13842,7 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            discovery_webhooks: None,
         })
     }
 
@@ -12506,6 +13873,7 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            discovery_webhooks: None,
         })
     }
 
@@ -12533,6 +13901,7 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            discovery_webhooks: None,
         })
     }
 
@@ -12560,6 +13929,7 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            discovery_webhooks: None,
         })
     }
 
@@ -12588,6 +13958,7 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            discovery_webhooks: None,
         })
     }
 

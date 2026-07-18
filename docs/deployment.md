@@ -1,5 +1,11 @@
 # Deployment
 
+The API and Base indexer worker must share the generated
+`DISCOVERY_WEBHOOK_SIGNING_KEY` through the `agent-bounties-discovery` Render
+environment group. The MCP service must not receive it. The API uses it only to
+derive per-subscription secrets; the worker uses it to sign bounded webhook
+deliveries. See [`discovery-subscriptions.md`](discovery-subscriptions.md).
+
 The hosted topology is API, MCP, Postgres, and one autonomous Base event-indexer
 worker. The Base contracts are deployed separately and configured only after
 review and verification.
