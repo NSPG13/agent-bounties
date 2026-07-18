@@ -35,7 +35,8 @@ contract DeploySolverLeaderboardRewards {
 
         uint256 deployerKey = vm.envUint("BASE_KEEPER_PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
-        require(deployer.balance >= 100_000_000_000_000, "deployment gas reserve too low");
+        uint256 minimumReserve = block.chainid == 8_453 ? 100_000_000_000_000 : 50_000_000_000_000;
+        require(deployer.balance >= minimumReserve, "deployment gas reserve too low");
 
         vm.startBroadcast(deployerKey);
         SolverLeaderboardRewards rewards = new SolverLeaderboardRewards(token, signerA, signerB);
