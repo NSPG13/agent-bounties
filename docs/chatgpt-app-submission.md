@@ -2,6 +2,8 @@
 
 This is the source-of-truth copy deck and review checklist for the initial
 app-only plugin submission backed by the production BountyBoard MCP server.
+It distributes the existing MCP-backed ChatGPT app; it does not create a
+second app, connector, tool set, or MCP endpoint.
 
 ## Listing
 
@@ -92,11 +94,41 @@ on-chain wallet handoff.
 
 ## Final portal checks
 
-- Select the verified publisher identity and confirm Apps Management write access.
-- Scan the deployed production MCP endpoint after the exact release revision is live.
-- Review all five discovered tools, schemas, annotations, and the widget CSP.
-- Complete the generated domain challenge at the exact well-known URL provided by the portal.
-- Upload the production logo and optional ChatGPT/widget screenshots.
-- Enter exactly the five positive and three negative tests above.
-- Select Mexico for the initial public rollout unless the publisher explicitly approves a broader legal/support scope.
-- Complete policy attestations only after the live endpoint and public policy URLs match this document.
+- Use the OpenAI organization and project that own the verified publisher
+  identity. Confirm `api.apps.write` for drafting/submission and `api.apps.read`
+  for viewing drafts and review status. Organization owners already have both.
+- Confirm the OpenAI project uses global data residency; projects with EU data
+  residency cannot currently submit an MCP-backed app for review.
+- In the plugin submission portal, choose `Create plugin` and `With MCP`. Submit
+  the existing universal production URL, `https://mcp.bountyboard.global/mcp`;
+  do not create another ChatGPT app or submit an app ID.
+- Wait until the exact release revision and its migrations are live, then select
+  `Scan Tools`. Review all five discovered names, descriptions, schemas,
+  security schemes, annotations, `_meta` values, output structures, MCP
+  instructions, linked UI metadata, and the widget CSP. Fix discrepancies in
+  the server, redeploy, and scan again; portal justifications do not override
+  server metadata.
+- Audit representative production MCP responses against the privacy policy.
+  Remove unnecessary personal data, authentication secrets, debug payloads,
+  trace/session identifiers, and undisclosed user-related fields.
+- Complete the generated OpenAI Apps domain challenge at the exact HTTPS
+  well-known URL shown by the portal. The response must contain only the
+  portal-provided token for this plugin.
+- Upload the production logo and optional ChatGPT/widget screenshots. Do not
+  upload screenshots for a tool-only experience; BountyBoard may include them
+  because it has a review widget.
+- Enter exactly the five positive and three negative tests above, then rerun
+  them against the deployed revision in both ChatGPT web and mobile.
+- Select Mexico for the initial public rollout unless the publisher explicitly
+  approves a broader legal/support scope, and complete the required
+  localization fields for that rollout.
+- Complete policy attestations only after the live endpoint, listing, tests,
+  availability, and public policy URLs match this document. Submit for review;
+  submission does not publish the plugin.
+- After approval, return to the plugin submission portal and select `Publish`.
+  Only then is the plugin publicly available in the Plugins Directory.
+
+## Current OpenAI references
+
+- [Submit plugins](https://learn.chatgpt.com/docs/submit-plugins)
+- [Prepare and maintain an app for plugin submission](https://developers.openai.com/apps-sdk/deploy/submission)
