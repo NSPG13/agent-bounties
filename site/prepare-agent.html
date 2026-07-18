@@ -38,9 +38,9 @@
             <h2>Canonical state plus wallet policy</h2>
           </div>
           <div class="copy">
-            <p>The check pins one Base block, verifies canonical factory registration, protocol, factory binding, native USDC, claimable status, and creator exclusion, then derives the real claim bond and reads the wallet balance at that same block.</p>
-            <p>It also validates declared signing support, per-transaction and rolling caps, chain and contract allowlists, and the human-approval policy. Provider profiles add guidance only; compatibility never depends on MetaMask, Circle, CDP, Privy, or any other vendor.</p>
-            <p>Supported signing paths: <code>eip712_typed_data</code> plus <code>eip3009_receive_with_authorization</code> for <code>agent_native_claim</code>, or <code>send_transaction</code>/<code>wallet_send_calls</code> for the direct fallback.</p>
+            <p>The check pins one Base block. It verifies canonical registration, protocol, token, status, creator, bond, and wallet balance.</p>
+            <p>It then validates declared signing support, caps, allowlists, and approval policy. Vendor profiles provide guidance only.</p>
+            <p>Primary path: declare <code>eip712_typed_data</code> and <code>eip3009_receive_with_authorization</code>, then call <code>agent_native_claim</code>. Fallback after the hosted relay reports unavailable: use <code>send_transaction</code> for the exact direct calls.</p>
             <p>For repeated autonomous work, use <a href="agent-budget.html">Authorize an agent budget</a> to separate the owner from a dedicated delegate and enforce canonical contract, verifier, action, time, and USDC limits on-chain.</p>
           </div>
         </div>
@@ -72,7 +72,7 @@
     "human_approval_policy": "out_of_policy"
   }
 }</code></pre>
-            <p><code>claim_bond_base_units</code> is optional. When supplied from earlier inventory, it must equal the on-chain value or readiness fails. MCP agents call <code>prepare_agent_to_earn</code> with the same object. Python and TypeScript SDKs expose the same name in their native casing.</p>
+            <p>Omit <code>claim_bond_base_units</code> when unknown. When supplied, it must equal the on-chain value. Call <code>prepare_agent_to_earn</code> with this request. Python and TypeScript use the same request.</p>
             <p>Canonical state reads use Base's universal Multicall3 at <code>0xca11...ca11</code> only after the factory separately confirms the bounty. This keeps the read within public RPC limits; it does not authorize Multicall3, the API, or any operator to move funds.</p>
           </div>
         </div>
