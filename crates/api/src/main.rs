@@ -48,15 +48,16 @@ use chain_base::{
     StandingMetaV2ChildPreparationRequest, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
     AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR, BASE_MAINNET_STANDING_META_V2_VERIFIER,
 };
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
 use cloud_agent::{
     CloudAgentError, CloudAgentReadiness, CloudAgentService, CloudBountyDraft,
-    CloudBountyDraftRequest,
+    CloudBountyDraftRequest, CloudDemoSolution, CloudUnfundedBountyRequest,
 };
 use db::{
     BountyStatusScope, ClaimCandidateReservation, ClaimFunnelStats, DbError,
-    GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate, NewX402RelayAttempt,
-    PostgresStore, X402RelayAttempt, X402RelayStatus,
+    GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate, NewTrialBounty,
+    NewUnfundedBountySolution, NewX402RelayAttempt, PostgresStore, TrialBounty,
+    UnfundedBountySolution, X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     Agent, AgentEligibilityDecision, AgentEligibilityEvidence, AgentEligibilityPolicy, AgentStatus,
@@ -115,6 +116,10 @@ use uuid::Uuid;
         live_money_readiness,
         cloud_agent_readiness,
         draft_bounty_with_cloud_agent,
+        publish_unfunded_bounty,
+        list_unfunded_bounties,
+        get_unfunded_bounty,
+        submit_unfunded_bounty_solution,
         prepare_agent_wallet_to_earn,
         list_risk_events,
         list_risk_reviews,
@@ -240,6 +245,11 @@ use uuid::Uuid;
         ,CloudAgentReadiness
         ,CloudBountyDraftRequest
         ,CloudBountyDraft
+        ,CloudUnfundedBountyRequest
+        ,CloudDemoSolution
+        ,UnfundedBountyResponse
+        ,UnfundedBountyAgentSolution
+        ,SubmitUnfundedBountySolutionRequest
         ,AutonomousBountyInventorySummary
         ,AutonomousBountyInventoryItem
     )),
@@ -1108,6 +1118,15 @@ async fn main() -> anyhow::Result<()> {
             post(draft_bounty_with_cloud_agent),
         )
         .route(
+            "/v1/unfunded-bounties",
+            get(list_unfunded_bounties).post(publish_unfunded_bounty),
+        )
+        .route("/v1/unfunded-bounties/:id", get(get_unfunded_bounty))
+        .route(
+            "/v1/unfunded-bounties/:id/solutions",
+            post(submit_unfunded_bounty_solution),
+        )
+        .route(
             "/v1/base/agent-wallet/readiness",
             post(prepare_agent_wallet_to_earn),
         )
@@ -1491,6 +1510,316 @@ async fn draft_bounty_with_cloud_agent(
         .await
         .map(Json)
         .map_err(cloud_agent_status)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct UnfundedBountyResponse {
+    schema_version: String,
+    bounty_id: String,
+    bounty_kind: String,
+    funding_status: String,
+    status: String,
+    title: String,
+    goal: String,
+    acceptance_criteria: Vec<String>,
+    source_url: Option<String>,
+    demo_agent_solution: CloudDemoSolution,
+    agent_solutions: Vec<UnfundedBountyAgentSolution>,
+    wallet_required: bool,
+    initial_funding_usdc: String,
+    payment_promised: bool,
+    canonical_bounty_created: bool,
+    public_url: String,
+    upgrade_url: String,
+    created_at: String,
+    expires_at: String,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct UnfundedBountyAgentSolution {
+    solution_id: String,
+    agent_id: String,
+    summary: String,
+    deliverable_markdown: String,
+    evidence: serde_json::Value,
+    attribution_status: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SubmitUnfundedBountySolutionRequest {
+    agent_id: Uuid,
+    summary: String,
+    deliverable_markdown: String,
+    evidence: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct UnfundedBountyListQuery {
+    limit: Option<u32>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/unfunded-bounties",
+    request_body = CloudUnfundedBountyRequest,
+    responses(
+        (status = 200, body = UnfundedBountyResponse),
+        (status = 400, description = "Invalid or unsafe unfunded bounty input"),
+        (status = 401, description = "Public no-wallet publication is disabled and operator authorization is absent"),
+        (status = 409, description = "Idempotency key was reused for different bounty content"),
+        (status = 503, description = "Durable unfunded-bounty store is unavailable")
+    )
+)]
+async fn publish_unfunded_bounty(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<CloudUnfundedBountyRequest>,
+) -> Result<Json<UnfundedBountyResponse>, StatusCode> {
+    if !state.cloud_agent.public_drafts() {
+        require_operator(&state, &headers)?;
+    }
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let request_fingerprint = hex::encode(Sha256::digest(
+        serde_json::to_vec(&request).map_err(|_| StatusCode::BAD_REQUEST)?,
+    ));
+    if let Some(existing) = store
+        .get_trial_bounty_by_idempotency(&request.idempotency_key)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+    {
+        if existing.request_fingerprint != request_fingerprint {
+            return Err(StatusCode::CONFLICT);
+        }
+        return unfunded_bounty_response(&state, existing).await.map(Json);
+    }
+
+    let solution = match state
+        .cloud_agent
+        .solve_unfunded_bounty(request.clone())
+        .await
+    {
+        Ok(solution) => solution,
+        Err(CloudAgentError::InvalidRequest(_)) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => pending_demo_solution(&state.cloud_agent.readiness()),
+    };
+    let trial = store
+        .create_or_get_trial_bounty(&NewTrialBounty {
+            id: Uuid::new_v4(),
+            idempotency_key: request.idempotency_key,
+            request_fingerprint,
+            title: request.title.trim().to_string(),
+            goal: request.goal.trim().to_string(),
+            acceptance_criteria: request
+                .acceptance_criteria
+                .into_iter()
+                .map(|item| item.trim().to_string())
+                .collect(),
+            source_url: request.source_url,
+            discovery_source: "chatgpt_app".to_string(),
+            status: "open".to_string(),
+            demo_agent_solution: serde_json::to_value(solution)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            expires_at: Utc::now() + ChronoDuration::days(7),
+        })
+        .await
+        .map_err(|error| match error {
+            DbError::TrialBountyConflict => StatusCode::CONFLICT,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        })?;
+    unfunded_bounty_response(&state, trial).await.map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/unfunded-bounties",
+    responses((status = 200, body = [UnfundedBountyResponse]))
+)]
+async fn list_unfunded_bounties(
+    State(state): State<SharedState>,
+    Query(query): Query<UnfundedBountyListQuery>,
+) -> Result<Json<Vec<UnfundedBountyResponse>>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let trials = store
+        .list_trial_bounties(query.limit.unwrap_or(20))
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut responses = Vec::with_capacity(trials.len());
+    for trial in trials {
+        responses.push(unfunded_bounty_response(&state, trial).await?);
+    }
+    Ok(Json(responses))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/unfunded-bounties/{id}",
+    params(("id" = Uuid, Path, description = "Unfunded bounty identifier")),
+    responses(
+        (status = 200, body = UnfundedBountyResponse),
+        (status = 404, description = "Unfunded bounty not found")
+    )
+)]
+async fn get_unfunded_bounty(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<UnfundedBountyResponse>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let trial = store
+        .get_trial_bounty(id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    unfunded_bounty_response(&state, trial).await.map(Json)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/unfunded-bounties/{id}/solutions",
+    params(("id" = Uuid, Path, description = "Unfunded bounty identifier")),
+    request_body = SubmitUnfundedBountySolutionRequest,
+    responses(
+        (status = 200, body = UnfundedBountyAgentSolution),
+        (status = 400, description = "Invalid solution payload"),
+        (status = 404, description = "Agent or open unfunded bounty not found")
+    )
+)]
+async fn submit_unfunded_bounty_solution(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<SubmitUnfundedBountySolutionRequest>,
+) -> Result<Json<UnfundedBountyAgentSolution>, StatusCode> {
+    let summary = bounded_public_text(&request.summary, 1_000)?;
+    let deliverable_markdown = bounded_public_text(&request.deliverable_markdown, 40_000)?;
+    if !request.evidence.is_object() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let agent_is_registered = state
+        .network
+        .lock()
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .agents
+        .contains_key(&request.agent_id);
+    if !agent_is_registered {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let solution = store
+        .upsert_unfunded_bounty_solution(&NewUnfundedBountySolution {
+            id: Uuid::new_v4(),
+            trial_bounty_id: id,
+            agent_id: request.agent_id,
+            summary,
+            deliverable_markdown,
+            evidence: request.evidence,
+        })
+        .await
+        .map_err(|error| match error {
+            DbError::UnfundedBountyUnavailable => StatusCode::NOT_FOUND,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        })?;
+    Ok(Json(unfunded_agent_solution(solution)))
+}
+
+fn bounded_public_text(value: &str, max_chars: usize) -> Result<String, StatusCode> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > max_chars {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(value.to_string())
+}
+
+fn pending_demo_solution(readiness: &CloudAgentReadiness) -> CloudDemoSolution {
+    CloudDemoSolution {
+        schema_version: "agent-bounties/cloud-demo-solution-v1".to_string(),
+        provider: readiness.provider.clone(),
+        model: readiness
+            .model
+            .clone()
+            .unwrap_or_else(|| "not-configured".to_string()),
+        agent_name: "BountyBoard Demo Agent".to_string(),
+        completion_status: "pending".to_string(),
+        summary: "The bounty is published and discoverable, but the hosted demo agent has not produced a solution yet.".to_string(),
+        deliverable_markdown: "Other agents can discover this open opportunity through `list_unfunded_bounties` and submit work with `submit_unfunded_bounty_solution`.".to_string(),
+        evidence: serde_json::json!({"demo_response_available": false}),
+        limitations: vec![
+            "Demo-agent availability never blocks publication of an unfunded bounty.".to_string(),
+        ],
+        payment_due_usdc: "0".to_string(),
+        evidence_boundary: "This is an availability status, not an agent solution, canonical event, funding evidence, or payment promise.".to_string(),
+    }
+}
+
+async fn unfunded_bounty_response(
+    state: &SharedState,
+    trial: TrialBounty,
+) -> Result<UnfundedBountyResponse, StatusCode> {
+    let demo_agent_solution = serde_json::from_value(trial.demo_agent_solution)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let agent_solutions = store
+        .list_unfunded_bounty_solutions(trial.id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .into_iter()
+        .map(unfunded_agent_solution)
+        .collect();
+    Ok(UnfundedBountyResponse {
+        schema_version: "agent-bounties/unfunded-bounty-v1".to_string(),
+        bounty_id: trial.id.to_string(),
+        bounty_kind: "unfunded_offchain".to_string(),
+        funding_status: "unfunded".to_string(),
+        status: trial.status,
+        title: trial.title,
+        goal: trial.goal,
+        acceptance_criteria: trial.acceptance_criteria,
+        source_url: trial.source_url,
+        demo_agent_solution,
+        agent_solutions,
+        wallet_required: false,
+        initial_funding_usdc: "0".to_string(),
+        payment_promised: false,
+        canonical_bounty_created: false,
+        public_url: format!(
+            "{}/v1/unfunded-bounties/{}",
+            state.public_base_url.trim_end_matches('/'),
+            trial.id
+        ),
+        upgrade_url: "https://bountyboard.global/post.html".to_string(),
+        created_at: trial.created_at.to_rfc3339(),
+        expires_at: trial.expires_at.to_rfc3339(),
+        evidence_boundary: "This public bounty is open and discoverable but currently unfunded and off-chain: no payment is promised. The hosted demo-agent response and any self-reported registered-agent solutions are distinct. CanonicalBountyCreated is required before calling it on-chain; FundingAdded and BountyBecameClaimable are required before calling it funded or claimable.".to_string(),
+    })
+}
+
+fn unfunded_agent_solution(solution: UnfundedBountySolution) -> UnfundedBountyAgentSolution {
+    UnfundedBountyAgentSolution {
+        solution_id: solution.id.to_string(),
+        agent_id: solution.agent_id.to_string(),
+        summary: solution.summary,
+        deliverable_markdown: solution.deliverable_markdown,
+        evidence: solution.evidence,
+        attribution_status: "registered_agent_id_self_reported".to_string(),
+        created_at: solution.created_at.to_rfc3339(),
+        updated_at: solution.updated_at.to_rfc3339(),
+    }
 }
 
 fn cloud_agent_status(error: CloudAgentError) -> StatusCode {
@@ -10604,6 +10933,9 @@ mod tests {
         assert!(paths.contains_key("/schemas/discovery-manifest.v2.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
+        assert!(paths.contains_key("/v1/unfunded-bounties"));
+        assert!(paths.contains_key("/v1/unfunded-bounties/{id}"));
+        assert!(paths.contains_key("/v1/unfunded-bounties/{id}/solutions"));
         assert!(paths.contains_key("/v1/base/agent-wallet/readiness"));
         assert!(paths.contains_key("/v1/risk/events"));
         assert!(paths.contains_key("/v1/risk/reviews"));

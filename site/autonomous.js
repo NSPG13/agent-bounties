@@ -972,6 +972,7 @@
           `Bounty id: ${plan.bounty_id}`,
           "Do not describe it as funded until FundingAdded and BountyBecameClaimable appear.",
         ], "pending");
+        markChatgptReturn(true);
         return;
       }
       const claimable = events.some((item) => item.kind === "bounty_became_claimable");
@@ -981,6 +982,7 @@
         `Contract: ${plan.predicted_bounty_contract}`,
         "Default next step: Post your own bounty or share this one with solvers and funders.",
       ], "success");
+      markChatgptReturn(true);
     } catch (error) {
       output(result, error.message || String(error), "error");
     }
@@ -1256,6 +1258,108 @@
     if (params.get("amount")) form.elements.amount.value = params.get("amount");
   }
 
+  function chatgptReturnUrl() {
+    const value = new URLSearchParams(location.search).get("redirectUrl");
+    if (!value) return null;
+    try {
+      const url = new URL(value);
+      const host = url.hostname.toLowerCase();
+      if (url.protocol !== "https:" || (host !== "chatgpt.com" && !host.endsWith(".chatgpt.com"))) {
+        return null;
+      }
+      return url.toString();
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function unfundedBountyRow(item) {
+    const article = document.createElement("article");
+    article.className = "bounty-row";
+    const heading = document.createElement("h3");
+    heading.textContent = item.title || item.bounty_id;
+    const status = document.createElement("p");
+    status.textContent = "Unfunded · no payment promised · open to agent solutions";
+    const goal = document.createElement("p");
+    goal.className = "fine";
+    goal.textContent = item.goal;
+    const demo = document.createElement("p");
+    demo.className = "fine";
+    demo.textContent = item.demo_agent_solution?.summary
+      ? `Hosted demo status: ${item.demo_agent_solution.summary}`
+      : "No hosted demo response is available.";
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const details = document.createElement("a");
+    details.className = "button secondary";
+    details.href = item.public_url;
+    details.textContent = "Open public bounty data";
+    details.rel = "noopener noreferrer";
+    actions.append(details);
+    article.append(heading, status, goal, demo, actions);
+    return article;
+  }
+
+  async function loadUnfundedFeed() {
+    const container = byId("unfunded-feed");
+    if (!container) return;
+    try {
+      await loadProtocol();
+      const api = state.protocol.api_base_url.replace(/\/$/, "");
+      const items = await requestJson(`${api}/v1/unfunded-bounties?limit=20`);
+      container.textContent = "";
+      if (!items.length) {
+        const empty = document.createElement("p");
+        empty.textContent = "No unfunded bounty is open right now.";
+        container.append(empty);
+        return;
+      }
+      for (const item of items) container.append(unfundedBountyRow(item));
+    } catch (error) {
+      container.textContent = error.message || String(error);
+    }
+  }
+
+  function markChatgptReturn(posted = false) {
+    const link = byId("chatgpt-return");
+    const href = chatgptReturnUrl();
+    if (!link || !href) return;
+    link.href = href;
+    link.hidden = false;
+    link.textContent = posted ? "Return to ChatGPT" : "Return to ChatGPT without posting";
+  }
+
+  function prefillPost() {
+    const form = byId("autonomous-post-form");
+    if (!form) return;
+    const params = new URLSearchParams(location.search);
+    if (params.get("from") !== "chatgpt-app") {
+      markChatgptReturn(false);
+      return;
+    }
+    const assignments = [
+      ["title", "title"],
+      ["goal", "goal"],
+      ["sourceUrl", "sourceUrl"],
+      ["solverReward", "solverReward"],
+      ["verifierReward", "verifierReward"],
+      ["discoverySource", "discoverySource"],
+    ];
+    for (const [parameter, field] of assignments) {
+      const value = params.get(parameter);
+      if (value !== null) form.elements[field].value = value;
+    }
+    const criteria = params.getAll("criterion").map((value) => value.trim()).filter(Boolean);
+    if (criteria.length) form.elements.acceptance.value = criteria.join("\n");
+    form.elements.crowdfund.checked = params.get("crowdfund") === "true";
+    output(byId("autonomous-post-output"), [
+      "Draft imported from ChatGPT. Review every public field before continuing.",
+      "No bounty id or contract exists yet.",
+      "Connect the creator wallet, then approve only the exact Base operation shown by that wallet.",
+    ], "pending");
+    markChatgptReturn(false);
+  }
+
   async function initialize() {
     const postForm = byId("autonomous-post-form");
     try {
@@ -1307,8 +1411,10 @@
       selector.addEventListener("change", () => selectProvider(selector.closest("form") || document));
     });
     discoverProviders().catch(() => populateProviderSelectors());
+    prefillPost();
     prefillFunding();
     loadClaimableFeed();
+    loadUnfundedFeed();
   }
 
   document.addEventListener("DOMContentLoaded", initialize);

@@ -2832,6 +2832,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower-http 0.5.2",
+ "url",
  "uuid",
  "web-public",
  "worker",

@@ -248,7 +248,8 @@ def main() -> int:
         pages["post.html"],
         [
             "Sign and post bounty",
-            "Create unfunded and open it for pooled funding",
+            "Post with 0 USDC now and open it to funding later",
+            "Funding is optional when you post",
             "16-bit work-proof canary",
             "Verifier wallet quorum (advanced)",
             "AI judge quorum (advanced)",
@@ -258,6 +259,16 @@ def main() -> int:
             "How did you find Agent Bounties?",
             "Draft measurable terms",
             "no local model is required",
+        ],
+    )
+    require_phrases(
+        "earn.html unfunded discovery",
+        pages["earn.html"],
+        [
+            "Unfunded bounties",
+            "visible to agents before funding",
+            "list_unfunded_bounties",
+            "submit_unfunded_bounty_solution",
         ],
     )
     require_phrases(

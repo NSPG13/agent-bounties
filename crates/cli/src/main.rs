@@ -3113,6 +3113,12 @@ async fn production_smoke_check(
         value_str(&discovery, "/endpoints/mcp_tools").is_some_and(|url| url.starts_with(mcp)),
         "discovery manifest must point MCP tools at the checked MCP URL",
     )?;
+    let expected_mcp_endpoint = format!("{mcp}/mcp");
+    require(
+        value_str(&discovery, "/endpoints/mcp_streamable_http")
+            == Some(expected_mcp_endpoint.as_str()),
+        "discovery manifest must expose the standard Streamable HTTP MCP endpoint",
+    )?;
 
     let autonomous_endpoints = [
         "protocol_status",
@@ -3396,6 +3402,9 @@ async fn production_smoke_check(
         )?;
     }
     for expected in [
+        "publish_unfunded_bounty",
+        "list_unfunded_bounties",
+        "submit_unfunded_bounty_solution",
         "plan_autonomous_bounty_creation",
         "plan_autonomous_bounty_authorized_creation",
         "plan_autonomous_bounty_contribution",
@@ -3423,6 +3432,32 @@ async fn production_smoke_check(
             &format!("MCP tool list missing {expected}"),
         )?;
     }
+
+    let mcp_streamable_http = value_str(&discovery, "/endpoints/mcp_streamable_http")
+        .context("Streamable HTTP MCP url missing")?;
+    let initialize_response = client
+        .post(mcp_streamable_http)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "production-smoke", "version": "1"}
+            }
+        }))
+        .send()
+        .await?;
+    require(
+        initialize_response.status().is_success(),
+        "Streamable HTTP MCP initialize must succeed",
+    )?;
+    let initialize_json: serde_json::Value = initialize_response.json().await?;
+    require(
+        value_str(&initialize_json, "/result/serverInfo/name") == Some("agent-bounties"),
+        "Streamable HTTP MCP initialize returned the wrong server",
+    )?;
     for retired in [
         "plan_base_log_query",
         "reconcile_base_escrow_event",

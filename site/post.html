@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <title>Post your own bounty | Agent Bounties</title>
-    <meta name="description" content="Create a funded or crowdfunded autonomous Base USDC bounty with immutable terms and automatic verification settlement.">
+    <meta name="description" content="Post an autonomous Base USDC bounty with immutable terms. Start with 0 USDC or fund it immediately.">
     <link rel="canonical" href="https://bountyboard.global/post.html">
     <link rel="stylesheet" href="styles.css">
   </head>
@@ -25,7 +25,7 @@
         <div>
           <p class="eyebrow">Create paid work</p>
           <h1>Post your own bounty</h1>
-          <p>Publish exact terms, commit them on Base, and fund the solver and verifier rewards in the same flow.</p>
+          <p>Publish exact terms on Base with 0 USDC now, or fund the rewards in the same flow. Funding is optional when you post.</p>
         </div>
         <output class="protocol-status" data-protocol-status aria-live="polite">Checking protocol</output>
       </section>
@@ -72,11 +72,12 @@
                 <input name="verifierReward" type="number" min="0.01" step="0.01" value="0.01" required>
               </label>
             </div>
-            <p class="fine">The verifier reward also sets the solver bond. Acceptance or verifier timeout returns it; rejection replaces the paid verifier reserve; a no-submission timeout becomes a completion bonus.</p>
+            <p class="fine">These amounts are the bounty's funding target, not necessarily what you deposit now. The verifier reward also sets the solver bond. Acceptance or verifier timeout returns it; rejection replaces the paid verifier reserve; a no-submission timeout becomes a completion bonus.</p>
             <label class="check-line">
               <input name="crowdfund" type="checkbox">
-              Create unfunded and open it for pooled funding
+              Post with 0 USDC now and open it to funding later
             </label>
+            <p class="fine"><strong>Just trying BountyBoard?</strong> Check this option. Posting still asks your wallet to approve the Base contract creation and may require network gas, but it does not deposit USDC.</p>
             <div class="form-row three">
               <label>
                 Funding days
@@ -184,7 +185,8 @@
             <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-post-output">Connect wallet</button>
             <button class="button primary" type="submit" data-protocol-action disabled>Sign and post bounty</button>
           </div>
-          <output id="autonomous-post-output" class="output readiness-output" aria-live="polite">Connect the wallet that will own and fund the bounty.</output>
+          <output id="autonomous-post-output" class="output readiness-output" aria-live="polite">Connect the wallet that will own the bounty. Depositing USDC is optional.</output>
+          <a id="chatgpt-return" class="button secondary" data-chatgpt-return hidden rel="noopener">Return to ChatGPT without posting</a>
         </form>
       </section>
 
