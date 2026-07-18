@@ -432,12 +432,16 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         result = recovery.summarize_build_logs(
             {
                 "logs": [
+                    {"message": "==> Root directory ./service is missing"},
                     {"message": "error: package requires rustc 1.95 or newer"},
                     {"message": "DATABASE_URL=postgres://user:do-not-print@example/db failed"},
                 ]
             }
         )
+        self.assertIn("configuration", result["classifications"])
+        self.assertIn("missing_file", result["classifications"])
         self.assertIn("rust_toolchain", result["classifications"])
+        self.assertIn("==> Root directory ./service is missing", result["excerpts"])
         self.assertIn("[sensitive build diagnostic redacted]", result["excerpts"])
         self.assertNotIn("do-not-print", recovery.json.dumps(result))
         self.assertRegex(result["content_sha256"], r"^[0-9a-f]{64}$")

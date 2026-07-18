@@ -113,16 +113,15 @@ def redact(value: str) -> str:
 
 BUILD_FAILURE_PATTERNS = {
     "cargo_lock": ("cargo.lock needs to be updated", "lock file needs to be updated"),
+    "checkout": ("fatal:", "remote ref", "reference is not a tree", "repository not found"),
     "compile": ("could not compile", "error[e", "compilation failed"),
+    "configuration": ("docker context", "dockerfile", "invalid", "root directory"),
     "docker": ("failed to solve", "did not complete successfully"),
-    "missing_file": ("no such file or directory", "not found"),
+    "missing_file": ("does not exist", "is missing", "no such file or directory", "not found"),
     "network": ("connection reset", "connection timed out", "temporary failure"),
     "resource_limit": ("no space left", "out of memory", "signal: 9", "killed"),
     "rust_toolchain": ("requires rustc", "rustc version", "rust version"),
 }
-BUILD_FAILURE_TERMS = tuple(
-    term for terms in BUILD_FAILURE_PATTERNS.values() for term in terms
-) + ("error", "failed", "failure", "unsupported")
 
 
 def summarize_build_logs(payload: object) -> dict[str, Any]:
@@ -143,8 +142,7 @@ def summarize_build_logs(payload: object) -> dict[str, Any]:
     for message in reversed(messages):
         for raw_line in reversed(message.splitlines()):
             line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw_line).strip()
-            lowered = line.lower()
-            if not line or not any(term in lowered for term in BUILD_FAILURE_TERMS):
+            if not line:
                 continue
             if re.search(
                 r"(?i)(authorization|bearer|password|private|secret|token|api[_ -]?key|database_url)",
@@ -507,7 +505,14 @@ class RenderClient:
         if isinstance(created_at, str) and created_at:
             parameters["startTime"] = created_at
         query = urllib.parse.urlencode(parameters, doseq=True)
-        return summarize_build_logs(self._read_with_retry(f"/logs?{query}"))
+        path = f"/logs?{query}"
+        summary = summarize_build_logs(self._read_with_retry(path))
+        if summary["log_count"] < 5:
+            self._sleep(2)
+            later = summarize_build_logs(self._read_with_retry(path))
+            if later["log_count"] >= summary["log_count"]:
+                summary = later
+        return summary
 
     def ensure_deploy(
         self,
