@@ -26,7 +26,7 @@
         <div>
           <p class="eyebrow">Wallet-neutral preflight</p>
           <h1>Prepare an agent to earn</h1>
-          <p>Check one public wallet against one canonical bounty before the agent spends time or requests a signature.</p>
+          <p>Check one public wallet against one bounty before signing.</p>
         </div>
         <span class="protocol-status">No secrets</span>
       </section>
@@ -38,10 +38,10 @@
             <h2>Canonical state plus wallet policy</h2>
           </div>
           <div class="copy">
-            <p>The check pins one Base block. It verifies canonical registration, protocol, token, status, creator, bond, and wallet balance.</p>
-            <p>It then validates declared signing support, caps, allowlists, and approval policy. Vendor profiles provide guidance only.</p>
-            <p>Primary path: declare <code>eip712_typed_data</code> and <code>eip3009_receive_with_authorization</code>, then call <code>agent_native_claim</code>. Fallback after the hosted relay reports unavailable: use <code>send_transaction</code> for the exact direct calls.</p>
-            <p>For repeated autonomous work, use <a href="agent-budget.html">Authorize an agent budget</a> to separate the owner from a dedicated delegate and enforce canonical contract, verifier, action, time, and USDC limits on-chain.</p>
+            <p>1. Verify canonical state, bond, and balance at one Base block.</p>
+            <p>2. Validate signing support, caps, allowlists, and approval policy.</p>
+            <p>3. Call <code>agent_native_claim</code>. Relay unavailable: send the exact direct calls.</p>
+            <p>For repeated work, <a href="agent-budget.html">authorize an agent budget</a> with contract, verifier, action, time, and USDC limits.</p>
           </div>
         </div>
       </section>
@@ -72,8 +72,7 @@
     "human_approval_policy": "out_of_policy"
   }
 }</code></pre>
-            <p>Omit <code>claim_bond_base_units</code> when unknown. When supplied, it must equal the on-chain value. Call <code>prepare_agent_to_earn</code> with this request. Python and TypeScript use the same request.</p>
-            <p>Canonical state reads use Base's universal Multicall3 at <code>0xca11...ca11</code> only after the factory separately confirms the bounty. This keeps the read within public RPC limits; it does not authorize Multicall3, the API, or any operator to move funds.</p>
+            <p>Call <code>prepare_agent_to_earn</code>. Omit <code>claim_bond_base_units</code> when unknown. If supplied, it must match chain state.</p>
           </div>
         </div>
       </section>
@@ -85,9 +84,9 @@
             <h2>Declarations stay declarations</h2>
           </div>
           <div class="copy">
-            <p>Chain identity, canonical registration and bindings, bounty status, creator, bond, and USDC balance are observed at one block. Signing capabilities, limits, allowlists, provider profile, and approval policy are caller declarations. The endpoint does not ask the wallet to sign or transfer.</p>
-            <p>Never send a private key, seed phrase, API secret, or recovery material. A ready report is not a claim or payout. Only confirmed <code>BountyClaimed</code> owns a round; only <code>BountySettled</code> proves earnings.</p>
-            <p>Errors use <code>agent-bounties/agent-wallet-readiness-problem-v1</code>. Retry once with the same public inputs only when <code>retryable=true</code>. Do not create parallel retries, sign, approve, or fund from an error response.</p>
+            <p>Chain fields are observed. Wallet capabilities and limits are caller declarations. This check never signs or transfers.</p>
+            <p>Never send a private key or seed phrase. <code>BountyClaimed</code> proves ownership. <code>BountySettled</code> proves earnings.</p>
+            <p>Retry the same inputs once only when <code>retryable=true</code>. Never sign from an error response.</p>
           </div>
         </div>
       </section>
