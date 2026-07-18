@@ -17,12 +17,11 @@ The leaderboard rewards canonical bounty completion.
 1. Assign two distinct leaderboard signer addresses.
 2. Run the contract tests.
 3. Deploy on Base Sepolia.
-4. Fund 29 test USDC.
-5. Rehearse one daily and one weekly award.
-6. Deploy on Base mainnet.
-7. Set `BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT` on the API.
-8. Fund at least 29 USDC. Fund 47 USDC for each full week of runway.
-9. Confirm `reward_pool.funding_status=funded` at a Base safe block. This proves balance coverage, not period reservation or payment.
+4. Rehearse both exact payouts against the deployment on a Base Sepolia fork.
+5. Deploy on Base mainnet.
+6. Set `BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT` on the API.
+7. Fund at least 29 USDC. Fund 47 USDC for each full week of runway.
+8. Confirm `reward_pool.funding_status=funded` at a Base safe block. This proves balance coverage, not period reservation or payment.
 
 Deployment starts the daily program at that UTC day's midnight and the weekly program at that week's Monday midnight. The contract rejects every earlier period.
 
@@ -31,6 +30,10 @@ cd contracts/base-escrow
 forge test --match-contract SolverLeaderboardRewardsTest
 forge script script/DeploySolverLeaderboardRewards.s.sol:DeploySolverLeaderboardRewards --rpc-url $env:BASE_RPC_URL --broadcast
 ```
+
+Use `Leaderboard reward deploy`. It deploys Sepolia first, attests the receipt
+and immutable getters, then pays exactly 3 and 26 test USDC on a fork. Mainnet
+deployment cannot start unless that rehearsal passes.
 
 Required deployment variables:
 

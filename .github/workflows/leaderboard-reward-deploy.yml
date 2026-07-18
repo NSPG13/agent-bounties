@@ -1,0 +1,121 @@
+name: Leaderboard reward deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_mainnet:
+        description: Deploy after the Base Sepolia deployment and fork payout rehearsal pass
+        required: true
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/leaderboard-reward-deploy.yml"
+      - "contracts/base-escrow/script/DeploySolverLeaderboardRewards.s.sol"
+      - "contracts/base-escrow/src/SolverLeaderboardRewards.sol"
+      - "contracts/base-escrow/test/SolverLeaderboardRewards*.t.sol"
+      - "scripts/verify_leaderboard_reward_deployment.py"
+      - "scripts/test_verify_leaderboard_reward_deployment.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: leaderboard-reward-deploy
+  cancel-in-progress: false
+
+jobs:
+  deterministic-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - run: |
+          python scripts/test_verify_leaderboard_reward_deployment.py -v
+          python -m py_compile scripts/verify_leaderboard_reward_deployment.py
+          forge test --root contracts/base-escrow --match-contract SolverLeaderboardRewardsTest
+          forge build --root contracts/base-escrow --sizes
+
+  base-sepolia-rehearsal:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: deterministic-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_SEPOLIA_RPC_URL: https://sepolia.base.org
+      LEADERBOARD_SIGNER_A: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+      LEADERBOARD_SIGNER_B: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+      REGRESSION_VERIFIER_ONE_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
+      REGRESSION_VERIFIER_TWO_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
+      RUN_LEADERBOARD_SEPOLIA_FORK: "true"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - name: Deploy and attest Base Sepolia contract
+        run: |
+          mkdir -p target
+          export LEADERBOARD_DEPLOYMENT_OUTPUT="$GITHUB_WORKSPACE/target/base-sepolia-leaderboard-raw.json"
+          forge script --root contracts/base-escrow \
+            script/DeploySolverLeaderboardRewards.s.sol:DeploySolverLeaderboardRewards \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" --broadcast --slow
+          python scripts/verify_leaderboard_reward_deployment.py \
+            --network base-sepolia \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --manifest target/base-sepolia-leaderboard-raw.json \
+            --broadcast contracts/base-escrow/broadcast/DeploySolverLeaderboardRewards.s.sol/84532/run-latest.json \
+            --output target/base-sepolia-leaderboard-deployment.json
+          python -c "import json; print('LEADERBOARD_SEPOLIA_REWARD_CONTRACT=' + json.load(open('target/base-sepolia-leaderboard-deployment.json'))['reward_contract'])" >> "$GITHUB_ENV"
+      - name: Rehearse both exact payouts on a Base Sepolia fork
+        run: >-
+          forge test --root contracts/base-escrow
+          --match-contract SolverLeaderboardRewardsSepoliaForkTest -vv
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: base-sepolia-leaderboard-rehearsal
+          path: target/base-sepolia-leaderboard-*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  base-mainnet-deploy:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_mainnet
+    needs: base-sepolia-rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      LEADERBOARD_SIGNER_A: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+      LEADERBOARD_SIGNER_B: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - name: Deploy and attest Base mainnet contract
+        run: |
+          mkdir -p target
+          export LEADERBOARD_DEPLOYMENT_OUTPUT="$GITHUB_WORKSPACE/target/base-mainnet-leaderboard-raw.json"
+          forge script --root contracts/base-escrow \
+            script/DeploySolverLeaderboardRewards.s.sol:DeploySolverLeaderboardRewards \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broadcast --slow
+          python scripts/verify_leaderboard_reward_deployment.py \
+            --network base-mainnet \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --manifest target/base-mainnet-leaderboard-raw.json \
+            --broadcast contracts/base-escrow/broadcast/DeploySolverLeaderboardRewards.s.sol/8453/run-latest.json \
+            --output target/base-mainnet-leaderboard-deployment.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: base-mainnet-leaderboard-deployment
+          path: target/base-mainnet-leaderboard-*.json
+          if-no-files-found: error
+          retention-days: 90
