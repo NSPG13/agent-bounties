@@ -5495,6 +5495,109 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn opportunity_lifecycle_query_executes_against_migrated_postgres() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let stats = store
+            .opportunity_lifecycle_stats(Utc::now() - chrono::Duration::hours(1))
+            .await
+            .unwrap();
+        assert!(stats.solution_received <= stats.published);
+        assert!(stats.wallet_signed_observed <= stats.funding_prepared);
+        assert!(stats.settled <= stats.canonical_created);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn discovery_webhook_round_trip_executes_against_migrated_postgres() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let subscription_id = Uuid::new_v4();
+        let management_token_hash = format!("token-{}", Uuid::new_v4());
+        let subscription = store
+            .create_discovery_webhook_subscription(&NewDiscoveryWebhookSubscription {
+                id: subscription_id,
+                endpoint_url: "https://agent.example/bountyboard".to_string(),
+                filters: domain::DiscoverySubscriptionFilters {
+                    work_states: vec!["open".to_string()],
+                    ..domain::DiscoverySubscriptionFilters::default()
+                },
+                management_token_hash: management_token_hash.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(subscription.subscription_kind, "public_discovery");
+        assert_eq!(
+            store
+                .get_webhook_subscription(subscription_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .filters
+                .work_states,
+            vec!["open"]
+        );
+        assert!(store
+            .list_enabled_discovery_webhook_subscriptions()
+            .await
+            .unwrap()
+            .iter()
+            .any(|item| item.id == subscription_id));
+
+        let event_id = Uuid::new_v4();
+        assert!(store
+            .enqueue_webhook_delivery(
+                subscription_id,
+                event_id,
+                AgentWebhookEventType::OpportunityPublished,
+                &serde_json::json!({"opportunity_id": "unfunded:test"}),
+            )
+            .await
+            .unwrap());
+        assert!(!store
+            .enqueue_webhook_delivery(
+                subscription_id,
+                event_id,
+                AgentWebhookEventType::OpportunityPublished,
+                &serde_json::json!({"opportunity_id": "unfunded:test"}),
+            )
+            .await
+            .unwrap());
+
+        let lease_token = Uuid::new_v4();
+        let delivery = store
+            .lease_webhook_deliveries(100, lease_token, 30)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|delivery| delivery.subscription_id == subscription_id)
+            .unwrap();
+        assert_eq!(delivery.attempt_count, 1);
+        assert!(store
+            .mark_webhook_delivery_delivered(delivery.id, lease_token, 204)
+            .await
+            .unwrap());
+        assert!(!store
+            .delete_discovery_webhook_subscription(subscription_id, "wrong-token")
+            .await
+            .unwrap());
+        assert!(store
+            .delete_discovery_webhook_subscription(subscription_id, &management_token_hash)
+            .await
+            .unwrap());
+        assert!(store
+            .get_webhook_subscription(subscription_id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn x402_relay_attempt_is_idempotent_and_lease_bounded() {
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
