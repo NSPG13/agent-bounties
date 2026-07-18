@@ -88,13 +88,13 @@ assert(
 );
 assert(postHtml.includes("Verifier wallet quorum (advanced)"));
 assert(postHtml.includes("16-bit work-proof canary"));
-assert(postHtml.includes("does not evaluate task output, acceptance criteria, GitHub CI, or artifact quality"));
+assert(postHtml.includes("checks only the locked 16-bit work proof"));
 assert(!postHtml.includes('{"engine":"github_ci"'));
 assert(postHtml.includes('name="solverReward" type="number" min="0.01" step="0.01" value="2.00"'));
 assert(postHtml.includes('name="verifierReward" type="number" min="0.01" step="0.01" value="0.01"'));
 
 const earnHtml = fs.readFileSync(path.join(repoRoot, "site", "earn.html"), "utf8");
-assert(earnHtml.includes("exact indexed bond before one bounded wallet signature"));
+assert(earnHtml.includes("Sign once. Start after BountyClaimed"));
 assert(source.includes('params.get("bountyContract")'));
 assert(source.includes("Sign once to claim"));
 assert(source.includes("Sponsored refundable bond"));
