@@ -110,6 +110,42 @@ class DeploymentVerificationTest(unittest.TestCase):
         with self.assertRaisesRegex(verifier.VerificationError, "signer A"):
             verifier.verify(self.args)
 
+    def test_retries_until_code_is_visible(self):
+        code_reads = 0
+
+        def eventual(cast, rpc, *arguments):
+            nonlocal code_reads
+            if arguments == ("code", CONTRACT.lower()):
+                code_reads += 1
+                if code_reads == 1:
+                    return "0x"
+            return self.cast_result(cast, rpc, *arguments)
+
+        with (
+            patch.object(verifier, "run_cast", side_effect=eventual),
+            patch.object(verifier, "run_local_cast", side_effect=self.local_cast_result),
+            patch.object(verifier.time, "sleep") as sleep,
+        ):
+            report = verifier.verify(self.args)
+
+        self.assertEqual(report["reward_contract"], CONTRACT)
+        self.assertEqual(code_reads, 2)
+        sleep.assert_called_once_with(verifier.CODE_VISIBILITY_DELAY_SECONDS)
+
+    def test_rejects_code_that_never_becomes_visible(self):
+        def missing(cast, rpc, *arguments):
+            if arguments == ("code", CONTRACT.lower()):
+                return "0x"
+            return self.cast_result(cast, rpc, *arguments)
+
+        with (
+            patch.object(verifier, "CODE_VISIBILITY_ATTEMPTS", 2),
+            patch.object(verifier, "run_cast", side_effect=missing),
+            patch.object(verifier.time, "sleep"),
+            self.assertRaisesRegex(verifier.VerificationError, "bounded retries"),
+        ):
+            verifier.verify(self.args)
+
 
 if __name__ == "__main__":
     unittest.main()
