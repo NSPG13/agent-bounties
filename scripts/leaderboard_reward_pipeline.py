@@ -296,17 +296,30 @@ def assert_candidate_unchanged(
 
 
 def contract_call(args: argparse.Namespace, signature: str, *values: str) -> str:
-    return run(
+    output = run(
         [
             str(args.cast),
             "call",
+            "--json",
             "--rpc-url",
             args.rpc_url,
             args.contract,
             signature,
             *values,
         ]
-    ).strip().lower()
+    )
+    try:
+        decoded = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise PipelineError("cast call did not return JSON") from error
+    if not isinstance(decoded, list) or len(decoded) != 1:
+        raise PipelineError("cast call must return one value")
+    value = decoded[0]
+    if isinstance(value, bool):
+        return str(value).lower()
+    if not isinstance(value, (int, str)):
+        raise PipelineError("cast call returned an unsupported value")
+    return str(value).strip().lower()
 
 
 def chain_int(value: str, field: str) -> int:
