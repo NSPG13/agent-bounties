@@ -99,6 +99,7 @@
         "autonomous_submission_evidence_publish",
         "autonomous_submission_evidence_get",
         "autonomous_bounty_feed",
+        "solver_leaderboard",
         "autonomous_inventory_summary",
         "autonomous_inventory_badge",
         "autonomous_verification_jobs",

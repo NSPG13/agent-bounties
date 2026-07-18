@@ -659,6 +659,15 @@ class AgentBountiesClient:
             params={"network": network, "claimable_only": claimable_only},
         )
 
+    def get_solver_leaderboard(
+        self, network: str | None = None, at: str | None = None
+    ):
+        return self._request(
+            "GET",
+            "/v1/base/autonomous-bounties/leaderboard",
+            params={"network": network, "at": at},
+        )
+
     def list_autonomous_verification_jobs(
         self, network: str | None = None, verifier: str | None = None
     ):

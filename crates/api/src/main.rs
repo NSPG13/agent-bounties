@@ -26,11 +26,13 @@ use chain_base::{
     build_autonomous_submission_evidence_record, build_autonomous_submission_preparation,
     build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
     eth_get_transaction_receipt_request, eth_send_raw_transaction_request, fetch_block_number,
-    fetch_transaction_receipt, normalize_evm_address,
+    fetch_transaction_receipt, normalize_evm_address, observe_erc20_balance_safe,
+    observe_solver_leaderboard_paid_winner_safe,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    prepare_agent_to_earn as inspect_agent_wallet_readiness, standing_meta_v2_parent_context,
-    validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
-    AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
+    prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
+    standing_meta_v2_parent_context, validate_attestation_request_against_feed,
+    validate_autonomous_creation_against_terms, AgentWalletReadinessReport,
+    AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
     AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
     AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
     AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
@@ -44,11 +46,12 @@ use chain_base::{
     BaseTransactionRelayer, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
     ChainBaseError, Eip3009AuthorizationTypedData, EthGetTransactionReceiptRequest,
     EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, PrepareAgentToEarnInput,
-    RpcTransactionReceipt, StandingMetaV2ChildPreparationPlan,
-    StandingMetaV2ChildPreparationRequest, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
-    AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR, BASE_MAINNET_STANDING_META_V2_VERIFIER,
+    RpcTransactionReceipt, SolverLeaderboardAwardSafeObservation,
+    StandingMetaV2ChildPreparationPlan, StandingMetaV2ChildPreparationRequest,
+    AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION, AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
+    BASE_MAINNET_STANDING_META_V2_VERIFIER,
 };
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use cloud_agent::{
     CloudAgentError, CloudAgentReadiness, CloudAgentService, CloudBountyDraft,
     CloudBountyDraftRequest, CloudDemoSolution, CloudUnfundedBountyRequest,
@@ -60,12 +63,13 @@ use db::{
     UnfundedBountySolution, X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
-    Agent, AgentEligibilityDecision, AgentEligibilityEvidence, AgentEligibilityPolicy, AgentStatus,
-    AudienceInteraction, AudienceMember, AudienceReport, AutonomousBountyTermsDocument,
-    AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord, BondSponsorship,
-    BondSponsorshipStatus, BountyStatus, Capability, CapabilityClass, ClaimCandidate,
-    ClaimCandidateStatus, ContributorContact, DiscoveryResponse, EvalRun, HelpRequest, Money,
-    OutreachAttempt, PaymentRail, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord,
+    leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
+    AgentEligibilityEvidence, AgentEligibilityPolicy, AgentStatus, AudienceInteraction,
+    AudienceMember, AudienceReport, AutonomousBountyTermsDocument, AutonomousBountyTermsRecord,
+    AutonomousSubmissionEvidenceRecord, BondSponsorship, BondSponsorshipStatus, BountyStatus,
+    Capability, CapabilityClass, ClaimCandidate, ClaimCandidateStatus, ContributorContact,
+    DiscoveryResponse, EvalRun, HelpRequest, LeaderboardPeriodKind, Money, OutreachAttempt,
+    PaymentRail, PayoutStatus, PrivacyLevel, RiskEvent, RiskReviewRecord, SolverLeaderboardRanking,
     VerificationDecision, VerifierKind,
 };
 use eval_harness::{
@@ -186,6 +190,7 @@ use uuid::Uuid;
         publish_autonomous_submission_evidence,
         get_autonomous_submission_evidence,
         autonomous_bounty_feed,
+        solver_leaderboard,
         autonomous_bounty_inventory_summary,
         autonomous_bounty_inventory_badge,
         autonomous_verification_jobs,
@@ -252,6 +257,9 @@ use uuid::Uuid;
         ,SubmitUnfundedBountySolutionRequest
         ,AutonomousBountyInventorySummary
         ,AutonomousBountyInventoryItem
+        ,SolverLeaderboardResponse
+        ,SolverLeaderboardPeriodResponse
+        ,SolverLeaderboardRanking
     )),
     modifiers(&SecurityAddon)
 )]
@@ -949,6 +957,53 @@ struct AutonomousBountyFeedQuery {
     claimable_only: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct SolverLeaderboardQuery {
+    network: Option<String>,
+    at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SolverLeaderboardPeriodResponse {
+    period_status: String,
+    reward_usdc: String,
+    reward_funding_status: String,
+    reward_payout_status: String,
+    reward_contract: Option<String>,
+    reward_paid_wallet: Option<String>,
+    reward_payout_observed_safe_block: Option<u64>,
+    reward_payout_observed_safe_block_hash: Option<String>,
+    ranking: SolverLeaderboardRanking,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SolverLeaderboardRewardPoolResponse {
+    contract: Option<String>,
+    settlement_token: String,
+    funding_status: String,
+    balance_usdc_base_units: Option<String>,
+    balance_usdc: Option<String>,
+    current_daily_and_weekly_required_usdc: String,
+    maximum_full_weeks_at_current_balance: Option<u64>,
+    observed_safe_block: Option<u64>,
+    observed_safe_block_hash: Option<String>,
+    observation_error: Option<String>,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SolverLeaderboardResponse {
+    schema_version: String,
+    network: String,
+    generated_at: DateTime<Utc>,
+    reference_at: DateTime<Utc>,
+    reward_pool: SolverLeaderboardRewardPoolResponse,
+    daily: SolverLeaderboardPeriodResponse,
+    weekly: SolverLeaderboardPeriodResponse,
+    next_action: String,
+    evidence_boundary: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct AutonomousBountyInventoryItem {
     bounty_id: String,
@@ -1311,6 +1366,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/feed",
             get(autonomous_bounty_feed),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/leaderboard",
+            get(solver_leaderboard),
         )
         .route(
             "/v1/base/autonomous-bounties/inventory-summary",
@@ -7157,6 +7216,250 @@ async fn load_autonomous_bounty_feed(
 
 #[utoipa::path(
     get,
+    path = "/v1/base/autonomous-bounties/leaderboard",
+    params(
+        ("network" = Option<String>, Query, description = "Base network; defaults to base-mainnet"),
+        ("at" = Option<String>, Query, description = "RFC3339 instant selecting the UTC day and Monday-to-Sunday week")
+    ),
+    responses((status = 200, body = SolverLeaderboardResponse))
+)]
+async fn solver_leaderboard(
+    State(state): State<SharedState>,
+    Query(query): Query<SolverLeaderboardQuery>,
+) -> Result<Json<SolverLeaderboardResponse>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let network_descriptor =
+        base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let reference_at = query
+        .at
+        .as_deref()
+        .map(DateTime::parse_from_rfc3339)
+        .transpose()
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .map(|value| value.with_timezone(&Utc))
+        .unwrap_or_else(Utc::now);
+    let daily_period = leaderboard_period(LeaderboardPeriodKind::Daily, reference_at);
+    let weekly_period = leaderboard_period(LeaderboardPeriodKind::Weekly, reference_at);
+    let completions = store
+        .list_canonical_solver_completions(network, weekly_period.starts_at, weekly_period.ends_at)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let daily_ranking = rank_solver_completions(daily_period, completions.clone());
+    let weekly_ranking = rank_solver_completions(weekly_period, completions);
+    let reward_contract_env = match network_descriptor.chain_id {
+        8_453 => "BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT",
+        84_532 => "BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT",
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let reward_contract = env::var(reward_contract_env)
+        .ok()
+        .and_then(non_empty_secret)
+        .and_then(|value| normalize_evm_address(&value).ok());
+    let mut reward_pool = match reward_contract.as_deref() {
+        None => SolverLeaderboardRewardPoolResponse {
+            contract: None,
+            settlement_token: network_descriptor.native_usdc_token_address.clone(),
+            funding_status: "not_configured".to_string(),
+            balance_usdc_base_units: None,
+            balance_usdc: None,
+            current_daily_and_weekly_required_usdc: "29.00".to_string(),
+            maximum_full_weeks_at_current_balance: None,
+            observed_safe_block: None,
+            observed_safe_block_hash: None,
+            observation_error: None,
+            evidence_boundary: "No reward contract is configured. Rankings remain informational and no prize is represented as funded.".to_string(),
+        },
+        Some(contract) => match state.base_rpc_urls.resolve(network) {
+            Err(_) => SolverLeaderboardRewardPoolResponse {
+                contract: Some(contract.to_string()),
+                settlement_token: network_descriptor.native_usdc_token_address.clone(),
+                funding_status: "unverified".to_string(),
+                balance_usdc_base_units: None,
+                balance_usdc: None,
+                current_daily_and_weekly_required_usdc: "29.00".to_string(),
+                maximum_full_weeks_at_current_balance: None,
+                observed_safe_block: None,
+                observed_safe_block_hash: None,
+                observation_error: Some("Base RPC is not configured.".to_string()),
+                evidence_boundary: "The reward address is configured, but its native USDC balance was not verified at a Base safe block.".to_string(),
+            },
+            Ok((descriptor, rpc_url)) => match observe_erc20_balance_safe(
+                &rpc_url,
+                &descriptor.native_usdc_token_address,
+                contract,
+                90_000,
+            )
+            .await
+            {
+                Err(_) => SolverLeaderboardRewardPoolResponse {
+                    contract: Some(contract.to_string()),
+                    settlement_token: descriptor.native_usdc_token_address,
+                    funding_status: "unverified".to_string(),
+                    balance_usdc_base_units: None,
+                    balance_usdc: None,
+                    current_daily_and_weekly_required_usdc: "29.00".to_string(),
+                    maximum_full_weeks_at_current_balance: None,
+                    observed_safe_block: None,
+                    observed_safe_block_hash: None,
+                    observation_error: Some("Base safe-block balance read failed.".to_string()),
+                    evidence_boundary: "The reward address is configured, but its native USDC balance was not verified at a Base safe block.".to_string(),
+                },
+                Ok(observation) => {
+                    let funding_status = if observation.balance >= 29_000_000 {
+                        "funded"
+                    } else if observation.balance > 0 {
+                        "partially_funded"
+                    } else {
+                        "unfunded"
+                    };
+                    SolverLeaderboardRewardPoolResponse {
+                        contract: Some(observation.account),
+                        settlement_token: observation.token,
+                        funding_status: funding_status.to_string(),
+                        balance_usdc_base_units: Some(observation.balance.to_string()),
+                        balance_usdc: Some(format_usdc_base_units(observation.balance)),
+                        current_daily_and_weekly_required_usdc: "29.00".to_string(),
+                        maximum_full_weeks_at_current_balance: Some(
+                            u64::try_from(observation.balance / 47_000_000)
+                                .unwrap_or(u64::MAX),
+                        ),
+                        observed_safe_block: Some(observation.safe_block_number),
+                        observed_safe_block_hash: Some(observation.safe_block_hash),
+                        observation_error: None,
+                        evidence_boundary: "This is the reward contract's native USDC balance at one Base safe block. Funded status means the balance covers the shown 3 USDC daily and 26 USDC weekly prizes if no earlier award consumes it first. Only the paid-winner record at a Base safe block proves prize payment.".to_string(),
+                    }
+                }
+            },
+        },
+    };
+    let (daily_payout_observation, weekly_payout_observation) = match (
+        reward_contract.as_deref(),
+        state.base_rpc_urls.resolve(network),
+    ) {
+        (Some(contract), Ok((_, rpc_url))) => (
+            observe_leaderboard_payout(&rpc_url, contract, &daily_ranking, 90_100)
+                .await
+                .ok(),
+            observe_leaderboard_payout(&rpc_url, contract, &weekly_ranking, 90_200)
+                .await
+                .ok(),
+        ),
+        _ => (None, None),
+    };
+    if reward_contract.is_some()
+        && (daily_payout_observation.is_none() || weekly_payout_observation.is_none())
+    {
+        reward_pool.funding_status = "unverified".to_string();
+        reward_pool.observation_error = Some(
+            "The configured address did not return both paid-winner records at a Base safe block."
+                .to_string(),
+        );
+        reward_pool.evidence_boundary = "USDC balance alone does not prove a valid reward contract. Rankings remain informational until the balance and both paid-winner getters are verified at Base safe blocks.".to_string();
+    }
+    let reward_funding_status = reward_pool.funding_status.clone();
+    let generated_at = Utc::now();
+
+    Ok(Json(SolverLeaderboardResponse {
+        schema_version: "agent-bounties/solver-leaderboard-v1".to_string(),
+        network: network.to_string(),
+        generated_at,
+        reference_at,
+        reward_pool,
+        daily: leaderboard_period_response(
+            daily_ranking,
+            generated_at,
+            reward_contract.clone(),
+            &reward_funding_status,
+            daily_payout_observation,
+        ),
+        weekly: leaderboard_period_response(
+            weekly_ranking,
+            generated_at,
+            reward_contract,
+            &reward_funding_status,
+            weekly_payout_observation,
+        ),
+        next_action: "Claim a funded bounty worth at least 2 USDC, complete it, and confirm BountySettled before the period ends.".to_string(),
+        evidence_boundary: "Rankings count indexed canonical settlements with verified Base block time. A configured or funded reward is not payment. Only a confirmed reward transfer proves prize payment.".to_string(),
+    }))
+}
+
+async fn observe_leaderboard_payout(
+    rpc_url: &str,
+    contract: &str,
+    ranking: &SolverLeaderboardRanking,
+    request_id: u64,
+) -> Result<SolverLeaderboardAwardSafeObservation, ChainBaseError> {
+    let period_kind = match ranking.period.kind {
+        LeaderboardPeriodKind::Daily => 0,
+        LeaderboardPeriodKind::Weekly => 1,
+    };
+    let starts_at = u64::try_from(ranking.period.starts_at.timestamp()).map_err(|_| {
+        ChainBaseError::InvalidVerificationConfiguration(
+            "leaderboard period starts before Unix epoch".to_string(),
+        )
+    })?;
+    let award_id = solver_leaderboard_award_id(period_kind, starts_at)?;
+    observe_solver_leaderboard_paid_winner_safe(rpc_url, contract, &award_id, request_id).await
+}
+
+fn leaderboard_period_response(
+    ranking: SolverLeaderboardRanking,
+    now: DateTime<Utc>,
+    reward_contract: Option<String>,
+    reward_funding_status: &str,
+    payout_observation: Option<SolverLeaderboardAwardSafeObservation>,
+) -> SolverLeaderboardPeriodResponse {
+    let closed = now >= ranking.period.ends_at;
+    let has_winner = ranking.leader_wallet.is_some();
+    let paid_wallet = payout_observation
+        .as_ref()
+        .and_then(|observation| observation.paid_winner.clone());
+    let payout_status = if !closed {
+        "not_due"
+    } else if !has_winner {
+        "no_winner"
+    } else if let Some(paid) = paid_wallet.as_deref() {
+        if ranking
+            .leader_wallet
+            .as_deref()
+            .is_some_and(|leader| leader.eq_ignore_ascii_case(paid))
+        {
+            "paid"
+        } else {
+            "paid_to_different_wallet"
+        }
+    } else if reward_contract.is_none() {
+        "reward_not_configured"
+    } else if payout_observation.is_none() {
+        "payout_unverified"
+    } else if reward_funding_status != "funded" {
+        "awaiting_verified_funding"
+    } else {
+        "awaiting_finalization"
+    };
+    SolverLeaderboardPeriodResponse {
+        period_status: if closed { "closed" } else { "open" }.to_string(),
+        reward_usdc: format_usdc_base_units(ranking.period.kind.reward_usdc_base_units().into()),
+        reward_funding_status: reward_funding_status.to_string(),
+        reward_payout_status: payout_status.to_string(),
+        reward_contract,
+        reward_paid_wallet: paid_wallet,
+        reward_payout_observed_safe_block: payout_observation
+            .as_ref()
+            .map(|observation| observation.safe_block_number),
+        reward_payout_observed_safe_block_hash: payout_observation
+            .map(|observation| observation.safe_block_hash),
+        ranking,
+    }
+}
+
+#[utoipa::path(
+    get,
     path = "/v1/base/autonomous-bounties/inventory-summary",
     responses((status = 200, body = AutonomousBountyInventorySummary))
 )]
@@ -8886,6 +9189,7 @@ mod tests {
         OpenPooledBountyRequest, PostBountyRequest, RegisterAgentRequest,
         RegisterCapabilityRequest, SubmitResultRequest, VerifySubmissionRequest,
     };
+    use chrono::TimeZone;
     use domain::{
         Bounty, BountyStatus, CapabilityClass, FundingIntentStatus, FundingMode,
         PaymentEventStatus, PaymentRail, PayoutStatus, ProofRecord, VerifierKind,
@@ -11373,13 +11677,65 @@ mod tests {
 
         assert!(text.contains("# Agent Bounties"));
         assert!(text.contains("/.well-known/agent-bounties.json"));
-        assert!(text.contains("docs/agent-quickstart.md"));
         assert!(text.contains("http://127.0.0.1:8090/tools"));
-        assert!(text.contains("route_blocked_goal"));
-        assert!(text.contains("agent-bounties/autonomous-v1"));
-        assert!(text.contains("list_autonomous_bounties"));
+        assert!(text.contains("Do not skip steps"));
+        assert!(text.contains("get_solver_leaderboard"));
+        assert!(text.contains("agent_native_claim"));
         assert!(text.contains("BountySettled"));
         assert!(!text.contains("createEscrow"));
+    }
+
+    #[test]
+    fn leaderboard_reports_paid_only_for_the_ranked_winner() {
+        let reference = Utc
+            .with_ymd_and_hms(2026, 7, 17, 12, 0, 0)
+            .single()
+            .unwrap();
+        let period = leaderboard_period(LeaderboardPeriodKind::Daily, reference);
+        let ends_at = period.ends_at;
+        let ranking = rank_solver_completions(
+            period,
+            [domain::CanonicalSolverCompletion {
+                bounty_id: "bounty-1".to_string(),
+                bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                solver_wallet: "0x2222222222222222222222222222222222222222".to_string(),
+                creator_wallet: "0x3333333333333333333333333333333333333333".to_string(),
+                solver_reward_usdc_base_units: 2_000_000,
+                occurred_at: reference,
+                block_number: 42,
+                log_index: 1,
+                standing_meta_bounty: false,
+            }],
+        );
+        let unconfigured = leaderboard_period_response(
+            ranking.clone(),
+            ends_at + chrono::Duration::hours(2),
+            None,
+            "not_configured",
+            None,
+        );
+        assert_eq!(unconfigured.reward_payout_status, "reward_not_configured");
+
+        let paid = leaderboard_period_response(
+            ranking,
+            ends_at + chrono::Duration::hours(2),
+            Some("0x4444444444444444444444444444444444444444".to_string()),
+            "funded",
+            Some(SolverLeaderboardAwardSafeObservation {
+                contract: "0x4444444444444444444444444444444444444444".to_string(),
+                award_id: format!("0x{}", "55".repeat(32)),
+                paid_winner: Some("0x2222222222222222222222222222222222222222".to_string()),
+                safe_block_number: 50,
+                safe_block_hash: format!("0x{}", "66".repeat(32)),
+                safe_block_timestamp: u64::try_from(ends_at.timestamp()).unwrap(),
+            }),
+        );
+        assert_eq!(paid.reward_payout_status, "paid");
+        assert_eq!(
+            paid.reward_paid_wallet.as_deref(),
+            Some("0x2222222222222222222222222222222222222222")
+        );
+        assert_eq!(paid.reward_payout_observed_safe_block, Some(50));
     }
 
     #[tokio::test]

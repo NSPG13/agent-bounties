@@ -48,7 +48,7 @@ use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(name = "agent-bounties")]
-#[command(about = "Open-source agent bounty network CLI")]
+#[command(about = "Claim verified work. Earn Base USDC.")]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -315,6 +315,14 @@ enum Command {
         public_base_url: String,
         #[arg(long, default_value = "http://127.0.0.1:8090")]
         mcp_base_url: String,
+    },
+    Leaderboard {
+        #[arg(long, default_value = "https://api.bountyboard.global")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        at: Option<String>,
     },
     DiscoveryReport(DiscoveryReportArgs),
     DocsContractCheck {
@@ -612,6 +620,11 @@ async fn async_main() -> Result<()> {
             public_base_url,
             mcp_base_url,
         } => discovery(public_base_url, mcp_base_url),
+        Command::Leaderboard {
+            api_base_url,
+            network,
+            at,
+        } => leaderboard(api_base_url, network, at).await,
         Command::DiscoveryReport(args) => {
             discovery_report(args.input_fixture, args.json_out, args.markdown_out)
         }
@@ -4120,6 +4133,32 @@ async fn production_get_text(client: &reqwest::Client, url: &str) -> Result<Stri
         &format!("GET {url} failed with HTTP {status}"),
     )?;
     Ok(response.text().await?)
+}
+
+async fn leaderboard(api_base_url: String, network: String, at: Option<String>) -> Result<()> {
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/leaderboard",
+        api_base_url.trim_end_matches('/')
+    );
+    let mut query = vec![("network", network)];
+    if let Some(at) = at {
+        query.push(("at", at));
+    }
+    let response = reqwest::Client::new()
+        .get(&url)
+        .query(&query)
+        .send()
+        .await
+        .with_context(|| format!("GET {url} failed"))?;
+    let status = response.status();
+    let body = response.text().await?;
+    require(
+        status.is_success(),
+        &format!("GET {url} failed with HTTP {status}: {body}"),
+    )?;
+    let value: serde_json::Value = serde_json::from_str(&body)?;
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
 }
 
 fn http_request(method: &str, url: &str, body: Option<String>) -> Result<String> {

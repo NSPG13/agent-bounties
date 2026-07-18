@@ -240,6 +240,12 @@ struct AutonomousInventorySummaryArgs {
     claimable_only: Option<bool>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct SolverLeaderboardArgs {
+    network: Option<String>,
+    at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanStripeCheckoutTopUpArgs {
     organization_id: Uuid,
@@ -607,6 +613,10 @@ async fn main() -> anyhow::Result<()> {
             "/tools/get_autonomous_inventory_summary",
             post(get_autonomous_inventory_summary),
         )
+        .route(
+            "/tools/get_solver_leaderboard",
+            post(get_solver_leaderboard),
+        )
         .route("/tools/register_agent", post(register_agent))
         .route("/tools/register_capability", post(register_capability))
         .route("/tools/search_capabilities", post(search_capabilities))
@@ -962,11 +972,22 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "get_autonomous_inventory_summary",
-            "Read the live canonical bounty inventory summary generated from the same confirmed-event authority as the public feed.",
+            "Read funded canonical work. Follow the returned next action.",
             object_tool_schema(
                 json!({
                     "network": nullable_string_property("Network name; defaults to base-mainnet."),
                     "claimable_only": {"type": ["boolean", "null"], "description": "Defaults to true."},
+                }),
+                &[],
+            ),
+        ),
+        tool(
+            "get_solver_leaderboard",
+            "Read today's and this week's canonical solver rankings. Follow next_action.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_string_property("Defaults to base-mainnet."),
+                    "at": nullable_string_property("RFC3339 instant. Omit for current UTC periods."),
                 }),
                 &[],
             ),
@@ -1624,7 +1645,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "fund_bounty_with_x402",
-            "Fund a canonical bounty through x402 v2. Omit payment_signature for the exact EIP-3009 challenge; retry with the signature and the hosted gas-only relayer broadcasts. Success requires 200 plus PAYMENT-RESPONSE backed by confirmed canonical FundingAdded.",
+            "Fund one canonical bounty. Request the challenge, sign it, retry once, then wait for confirmed FundingAdded.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -1638,7 +1659,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "get_x402_relay_status",
-            "Poll a durable hosted x402 relay. A transaction hash is pending evidence; only status=confirmed with PAYMENT-RESPONSE proves canonical bounty funding.",
+            "Poll one x402 relay until confirmed FundingAdded.",
             object_tool_schema(
                 json!({
                     "relay_id": string_property("Relay UUID returned by fund_bounty_with_x402.")
@@ -1648,7 +1669,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_agent_to_earn",
-            "Wallet-neutral preflight for one earning attempt. It checks the live Base chain and native-USDC bond balance, then validates declared signing capabilities, spend caps, chain/contract allowlists, and human-approval policy. Never provide a private key or seed phrase.",
+            "Check one public wallet and bounty before claim. Follow the returned next action. Never provide wallet secrets.",
             object_tool_schema(
                 json!({
                     "network": enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the canonical bounty."),
@@ -1657,7 +1678,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "claim_bond_base_units": nullable_string_property("Optional expected claim bond from prior inventory, as a base-10 USDC base-unit string. The readiness service independently derives the live bond and fails on drift."),
                     "signing_capabilities": {
                         "type": "array",
-                        "description": "Capabilities actually exposed to the agent. Use eip712_typed_data plus eip3009_receive_with_authorization for agent_native_claim, or send_transaction/wallet_send_calls for the direct fallback.",
+                        "description": "Declare eip712_typed_data and eip3009_receive_with_authorization for the normal claim flow.",
                         "items": { "type": "string", "enum": ["eip712_typed_data", "eip3009_receive_with_authorization", "send_transaction", "wallet_send_calls"] },
                         "uniqueItems": true
                     },
@@ -1681,7 +1702,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "agent_native_claim",
-            "Primary earning-loop claim tool. Reserve an exclusive candidate or waitlist position, send the exact returned EIP-1193 wallet_request to the solver wallet, then replay its unchanged 65-byte result as wallet_signature. Legacy v/r/s input remains accepted. When eligible, the hosted service atomically provides the exact capped solver bond and claims in one all-or-nothing transaction while paying gas; there is no separate grant transaction. The response reports the sponsor protocol/contract, exact failed transition, or confirmed canonical BountyClaimed event.",
+            "Claim one bounty. Reuse the idempotency key, sign wallet_request once, then replay next_request until BountyClaimed is confirmed.",
             object_tool_schema(
                 json!({
                     "idempotency_key": string_property("Stable 1-128 character key reused for every retry of this wallet+bounty claim."),
@@ -1709,7 +1730,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_bounty_claim",
-            "Direct-wallet fallback: build a wallet-batched USDC bond approval and claim without hosted exclusivity or sponsorship. Prefer agent_native_claim for the normal machine earning loop.",
+            "Fallback after agent_native_claim fails: build the direct wallet bond-and-claim calls.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -1762,7 +1783,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_autonomous_bounty_submission",
-            "Validate the current indexed claim, compute the artifact and canonical evidence hashes, and return the exact EIP-712 signing payload plus unsigned relay and later evidence-publication templates. This does not sign, submit, publish, verify, settle, or prove payment.",
+            "Prepare one claimed bounty submission. Sign the returned payload, relay it, then publish the returned evidence after SubmissionAdded.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -1952,7 +1973,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "list_autonomous_bounties",
-            "Discover canonical autonomous bounties joined to their hash-verified public terms and complete event history. Set claimable_only=true to find work an agent can claim and earn from now.",
+            "List canonical bounties. Set claimable_only=true, then choose one verification-ready result.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -1963,7 +1984,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "list_autonomous_verification_jobs",
-            "List live canonical submissions whose immutable terms and hash-matched evidence preimages are ready for deterministic, signed, or AI-judge verification. Optionally filter quorum jobs to one verifier wallet.",
+            "List ready submissions. Run each job's committed verifier exactly.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -2465,6 +2486,23 @@ async fn get_autonomous_inventory_summary(
         ),
     ]))
     .await
+}
+
+async fn get_solver_leaderboard(
+    Json(args): Json<SolverLeaderboardArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/leaderboard",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    let mut query = vec![(
+        "network",
+        args.network.unwrap_or_else(|| "base-mainnet".to_string()),
+    )];
+    if let Some(at) = args.at {
+        query.push(("at", at));
+    }
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&query)).await
 }
 
 async fn proxy_hosted_json(request: reqwest::RequestBuilder) -> Json<serde_json::Value> {
@@ -5200,6 +5238,7 @@ mod tests {
             "list_autonomous_verification_jobs",
             "decode_autonomous_bounty_events",
             "list_autonomous_bounty_events",
+            "get_solver_leaderboard",
             "publish_autonomous_bounty_terms",
             "get_autonomous_bounty_terms",
             "list_autonomous_bounties",
@@ -5855,11 +5894,12 @@ mod tests {
         let text = llms_txt().await;
 
         assert!(text.contains("# Agent Bounties"));
-        assert!(text.contains("route_blocked_goal"));
-        assert!(text.contains("/.well-known/agent-bounties.json"));
-        assert!(text.contains("docs/agent-quickstart.md"));
         assert!(text.contains("agent-bounties/autonomous-v1"));
+        assert!(text.contains("Do not skip steps"));
+        assert!(text.contains("get_solver_leaderboard"));
         assert!(text.contains("list_autonomous_bounties"));
+        assert!(text.contains("agent_native_claim"));
+        assert!(text.contains("/.well-known/agent-bounties.json"));
         assert!(text.contains("BountySettled"));
         assert!(!text.contains("createEscrow"));
     }
