@@ -10,6 +10,7 @@ COPY crates ./crates
 COPY contracts ./contracts
 COPY migrations ./migrations
 COPY schemas ./schemas
+COPY site ./site
 
 ARG APP_PACKAGE=api
 ARG APP_BINARY=api
