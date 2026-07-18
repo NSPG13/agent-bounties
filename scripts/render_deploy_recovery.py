@@ -337,7 +337,28 @@ def existing_deploy(payload: object, revision: str) -> dict[str, Any] | None:
     return None
 
 
-def current_live_deploy(payload: object, revision: str) -> dict[str, Any]:
+def new_active_deploy(
+    payload: object,
+    baseline_ids: set[str],
+) -> dict[str, Any] | None:
+    if not isinstance(payload, list):
+        raise RecoveryError("Render deploy-list response must be an array")
+    for entry in payload:
+        try:
+            deploy = unwrap_deploy(entry)
+        except RecoveryError:
+            continue
+        deploy_id = deploy.get("id")
+        if (
+            isinstance(deploy_id, str)
+            and deploy_id not in baseline_ids
+            and deploy.get("status") in ACTIVE_STATUSES | {"live"}
+        ):
+            return deploy
+    return None
+
+
+def current_live_deploy_record(payload: object) -> dict[str, Any]:
     if not isinstance(payload, list):
         raise RecoveryError("Render deploy-list response must be an array")
     for entry in payload:
@@ -347,12 +368,17 @@ def current_live_deploy(payload: object, revision: str) -> dict[str, Any]:
             continue
         if deploy.get("status") != "live":
             continue
-        if deploy_commit(deploy) != revision:
-            raise RecoveryError(
-                "deploy_only requires the current live artifact to match the requested revision"
-            )
         return deploy
     raise RecoveryError("deploy_only requires a current live Render artifact")
+
+
+def current_live_deploy(payload: object, revision: str) -> dict[str, Any]:
+    deploy = current_live_deploy_record(payload)
+    if deploy_commit(deploy) != revision:
+        raise RecoveryError(
+            "deploy_only requires the current live artifact to match the requested revision"
+        )
+    return deploy
 
 
 class RenderClient:
@@ -551,7 +577,15 @@ class RenderClient:
     ) -> dict[str, Any]:
         deploy_mode = validate_deploy_mode(deploy_mode)
         service_id = service["id"]
-        matched = existing_deploy(self.list_deploys(service_id), revision)
+        listed_deploys = self.list_deploys(service_id)
+        matched = existing_deploy(listed_deploys, revision)
+        baseline_ids = {
+            deploy["id"]
+            for entry in listed_deploys
+            if isinstance(entry, dict)
+            for deploy in [entry.get("deploy", entry)]
+            if isinstance(deploy, dict) and isinstance(deploy.get("id"), str)
+        }
         if matched is not None and not (force and matched.get("status") == "live"):
             return matched
         replaced_live_id = (
@@ -582,18 +616,29 @@ class RenderClient:
                 if attempt == 3:
                     raise
             self._sleep(float(attempt * 2))
-            matched = existing_deploy(self.list_deploys(service_id), revision)
+            latest_deploys = self.list_deploys(service_id)
+            matched = (
+                new_active_deploy(latest_deploys, baseline_ids)
+                if deploy_mode == "deploy_only"
+                else existing_deploy(latest_deploys, revision)
+            )
             if matched is not None and matched.get("id") != replaced_live_id:
                 return matched
         raise AssertionError("unreachable")
 
 
-def validate_deploy(deploy: dict[str, Any], revision: str, service_name: str) -> tuple[str, str]:
+def validate_deploy(
+    deploy: dict[str, Any],
+    revision: str,
+    service_name: str,
+    *,
+    require_revision: bool = True,
+) -> tuple[str, str]:
     deploy_id = deploy.get("id")
     status = deploy.get("status")
     if not isinstance(deploy_id, str) or not deploy_id.startswith("dep-"):
         raise RecoveryError(f"{service_name} deploy is missing an id")
-    if deploy_commit(deploy) != revision:
+    if require_revision and deploy_commit(deploy) != revision:
         raise RecoveryError(f"{service_name} deploy does not attest the requested revision")
     if not isinstance(status, str):
         raise RecoveryError(f"{service_name} deploy is missing status")
@@ -636,6 +681,7 @@ def poll_deploys(
     *,
     timeout_seconds: float,
     poll_seconds: float,
+    metadata_revision_exempt: frozenset[str] = frozenset(),
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, dict[str, Any]]:
@@ -645,7 +691,12 @@ def poll_deploys(
         for service_name, (service, deploy_id) in list(pending.items()):
             service_id = service["id"]
             deploy = client.get_deploy(service_id, deploy_id)
-            _, status = validate_deploy(deploy, revision, service_name)
+            _, status = validate_deploy(
+                deploy,
+                revision,
+                service_name,
+                require_revision=service_name not in metadata_revision_exempt,
+            )
             if status == "live":
                 completed[service_name] = deploy
                 pending.pop(service_name)
@@ -900,13 +951,24 @@ def deploy(
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
     pending: dict[str, tuple[dict[str, Any], str]] = {}
     initial: dict[str, dict[str, Any]] = {}
+    preexisting_live: dict[str, dict[str, Any]] = {}
 
     for spec in specs:
         services.append((spec, client.resolve_service(spec)))
 
     if deploy_mode == "deploy_only":
-        for _, service in services:
-            current_live_deploy(client.list_deploys(service["id"]), revision)
+        for spec, service in services:
+            deploys = client.list_deploys(service["id"])
+            if spec.health_url is None:
+                current = current_live_deploy(deploys, revision)
+            else:
+                current = current_live_deploy_record(deploys)
+                validate_health(
+                    spec.name,
+                    revision,
+                    fetch_health(spec.health_url, 10),
+                )
+            preexisting_live[spec.name] = current
 
     for spec, service in services:
         client.disable_native_auto_deploy(service)
@@ -973,17 +1035,31 @@ def deploy(
             }
         )
 
+    metadata_revision_exempt = (
+        frozenset(spec.name for spec in specs if spec.health_url is not None)
+        if deploy_mode == "deploy_only"
+        else frozenset()
+    )
     for spec, service in services:
-        created = client.ensure_deploy(
-            service,
+        if deploy_mode == "deploy_only" and spec.name != CLOUD_AGENT_API_SERVICE_NAME:
+            created = preexisting_live[spec.name]
+        else:
+            created = client.ensure_deploy(
+                service,
+                revision,
+                force=(
+                    True
+                    if deploy_mode == "deploy_only"
+                    else public_environment_changed.get(spec.name, False)
+                ),
+                deploy_mode=deploy_mode,
+            )
+        deploy_id, status = validate_deploy(
+            created,
             revision,
-            force=(
-                deploy_mode == "deploy_only"
-                or public_environment_changed.get(spec.name, False)
-            ),
-            deploy_mode=deploy_mode,
+            spec.name,
+            require_revision=spec.name not in metadata_revision_exempt,
         )
-        deploy_id, status = validate_deploy(created, revision, spec.name)
         initial[spec.name] = created
         if status == "live":
             continue
@@ -1005,6 +1081,7 @@ def deploy(
             revision,
             timeout_seconds=deploy_timeout_seconds,
             poll_seconds=poll_seconds,
+            metadata_revision_exempt=metadata_revision_exempt,
         )
     )
 
@@ -1048,7 +1125,12 @@ def deploy(
     service_evidence = []
     for spec, service in services:
         deployed = completed[spec.name]
-        deploy_id, status = validate_deploy(deployed, revision, spec.name)
+        deploy_id, status = validate_deploy(
+            deployed,
+            revision,
+            spec.name,
+            require_revision=spec.name not in metadata_revision_exempt,
+        )
         service_evidence.append(
             {
                 "name": spec.name,
@@ -1057,6 +1139,13 @@ def deploy(
                 "deploy_id": deploy_id,
                 "status": status,
                 "commit": revision,
+                "metadata_commit": deploy_commit(deployed),
+                "runtime_revision": revision,
+                "runtime_revision_evidence": (
+                    "health_and_readiness"
+                    if spec.name in metadata_revision_exempt
+                    else "render_deploy_metadata"
+                ),
                 "trigger": deployed.get("trigger"),
                 "native_auto_deploy": "disabled",
             }

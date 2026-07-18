@@ -101,8 +101,10 @@ order:
 
 `deploy_only` rejects a service whose current live artifact does not match the
 supplied SHA. It reuses that artifact, applies saved environment values, and
-does not build new code. Delete the pause variable only after pipeline capacity
-returns.
+does not build new code. It restarts only API, then requires the supplied SHA
+from `/health` and the exact leaderboard contracts from the live API. Render's
+branch label is recorded but is not artifact evidence. Delete the pause
+variable only after pipeline capacity returns.
 
 The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
 implementation, and Base RPC configuration. Canonical planners fail closed

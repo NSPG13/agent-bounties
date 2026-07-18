@@ -104,6 +104,32 @@ class ResolutionFailureClient:
         self.mutations.append(("domain", service["name"], domain))
 
 
+class DeployOnlyPreflightClient:
+    def __init__(self) -> None:
+        self.mutations = []
+
+    def resolve_service(self, spec):
+        return {
+            "id": f"srv-{spec.name}",
+            "name": spec.name,
+            "autoDeploy": False,
+        }
+
+    def list_deploys(self, service_id):
+        return [
+            {
+                "deploy": {
+                    "id": f"dep-{service_id}",
+                    "status": "live",
+                    "commit": {"id": "a" * 40},
+                }
+            }
+        ]
+
+    def disable_native_auto_deploy(self, service):
+        self.mutations.append(("disable", service["name"]))
+
+
 class RenderDeployRecoveryTests(unittest.TestCase):
     def test_revision_requires_full_sha(self) -> None:
         self.assertEqual(recovery.validate_revision("A" * 40), "a" * 40)
@@ -160,8 +186,35 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             {"deploy": {"id": "dep-live", "status": "live", "commit": {"id": revision}}},
         ]
         self.assertEqual(recovery.current_live_deploy(payload, revision)["id"], "dep-live")
+        self.assertEqual(recovery.current_live_deploy_record(payload)["id"], "dep-live")
         with self.assertRaisesRegex(recovery.RecoveryError, "current live artifact"):
             recovery.current_live_deploy(payload, "c" * 40)
+
+        health = (
+            200,
+            "ok\n",
+            {
+                "x-agent-bounties-revision": "c" * 40,
+                "x-agent-bounties-protocol": recovery.PROTOCOL,
+            },
+        )
+        self.assertEqual(
+            recovery.validate_health("agent-bounties-api", "c" * 40, health)[
+                "revision"
+            ],
+            "c" * 40,
+        )
+
+    def test_new_active_deploy_excludes_preexisting_ids(self) -> None:
+        payload = [
+            {"deploy": {"id": "dep-new", "status": "update_in_progress"}},
+            {"deploy": {"id": "dep-old", "status": "live"}},
+        ]
+        self.assertEqual(
+            recovery.new_active_deploy(payload, {"dep-old"})["id"],
+            "dep-new",
+        )
+        self.assertIsNone(recovery.new_active_deploy(payload[1:], {"dep-old"}))
 
     def test_trigger_binds_exact_commit_and_does_not_clear_cache(self) -> None:
         revision = "a" * 40
@@ -562,6 +615,28 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         self.assertEqual(len(client.resolved), 3)
         self.assertEqual(client.mutations, [])
 
+    def test_deploy_only_health_preflight_fails_before_mutation(self) -> None:
+        client = DeployOnlyPreflightClient()
+        wrong_health = (
+            200,
+            "ok\n",
+            {
+                "x-agent-bounties-revision": "b" * 40,
+                "x-agent-bounties-protocol": recovery.PROTOCOL,
+            },
+        )
+        with mock.patch.object(recovery, "fetch_health", return_value=wrong_health):
+            with self.assertRaisesRegex(recovery.RecoveryError, "different revision"):
+                recovery.deploy(
+                    client,
+                    "a" * 40,
+                    deploy_mode="deploy_only",
+                    deploy_timeout_seconds=1,
+                    health_timeout_seconds=1,
+                    poll_seconds=0,
+                )
+        self.assertEqual(client.mutations, [])
+
     def test_poll_succeeds_only_after_exact_deploy_is_live(self) -> None:
         client = FakeClient(["build_in_progress", "live"])
         clock = FakeClock()
@@ -575,6 +650,39 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             sleeper=clock.sleep,
         )
         self.assertEqual(result["agent-bounties-api"]["status"], "live")
+
+    def test_deploy_only_poll_uses_health_for_runtime_revision(self) -> None:
+        client = FakeClient(["update_in_progress", "live"])
+        clock = FakeClock()
+        result = recovery.poll_deploys(
+            client,
+            {"agent-bounties-api": ({"id": "srv-api"}, "dep-api")},
+            "b" * 40,
+            timeout_seconds=20,
+            poll_seconds=2,
+            metadata_revision_exempt=frozenset({"agent-bounties-api"}),
+            clock=clock,
+            sleeper=clock.sleep,
+        )
+        self.assertEqual(result["agent-bounties-api"]["status"], "live")
+
+    def test_revision_metadata_mismatch_requires_explicit_exemption(self) -> None:
+        deploy = {
+            "id": "dep-api",
+            "status": "created",
+            "commit": {"id": "a" * 40},
+        }
+        with self.assertRaisesRegex(recovery.RecoveryError, "does not attest"):
+            recovery.validate_deploy(deploy, "b" * 40, "agent-bounties-api")
+        self.assertEqual(
+            recovery.validate_deploy(
+                deploy,
+                "b" * 40,
+                "agent-bounties-api",
+                require_revision=False,
+            ),
+            ("dep-api", "created"),
+        )
 
     def test_poll_fails_closed_on_build_failure(self) -> None:
         client = FakeClient(["build_failed"])
