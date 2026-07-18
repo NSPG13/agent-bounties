@@ -119,6 +119,7 @@ BUILD_FAILURE_PATTERNS = {
     "docker": ("failed to solve", "did not complete successfully"),
     "missing_file": ("does not exist", "is missing", "no such file or directory", "not found"),
     "network": ("connection reset", "connection timed out", "temporary failure"),
+    "pipeline_quota": ("build pipeline minutes", "build spend limit"),
     "resource_limit": ("no space left", "out of memory", "signal: 9", "killed"),
     "rust_toolchain": ("requires rustc", "rustc version", "rust version"),
 }

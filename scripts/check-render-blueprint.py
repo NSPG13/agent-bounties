@@ -268,6 +268,8 @@ def main() -> int:
         "github.event.workflow_run.event == 'push'",
         "github.event.workflow_run.head_branch == 'main'",
         "github.event.workflow_run.head_repository.full_name == github.repository",
+        "RENDER_DEPLOY_PAUSE_REASON",
+        "Render deployment paused:",
         "cancel-in-progress: false",
         "actions: read",
         "Select latest successful main revision",

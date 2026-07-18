@@ -89,6 +89,12 @@ read-only and continues to fail closed on revision skew; it does not possess
 the Render key. If current `main` is newer and failing, pass the latest
 successful 40-character SHA in the manual `revision` input.
 
+If Render exhausts pipeline minutes, set the repository variable
+`RENDER_DEPLOY_PAUSE_REASON=build_pipeline_minutes_exhausted`. Deployment then
+skips before touching Render. Set a bounded pipeline spend limit in Render,
+delete the variable, and dispatch `Render Deploy Recovery` for the latest
+successful `main` SHA.
+
 The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
 implementation, and Base RPC configuration. Canonical planners fail closed
 without Postgres and the active protocol addresses.

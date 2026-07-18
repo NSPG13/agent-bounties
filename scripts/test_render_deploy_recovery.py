@@ -465,6 +465,18 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         self.assertEqual(query["startTime"], ["2026-07-18T07:31:00Z"])
         self.assertIn("docker", result["classifications"])
 
+    def test_build_pipeline_quota_is_classified(self) -> None:
+        result = recovery.summarize_build_logs(
+            {
+                "logs": [
+                    {
+                        "message": "Build canceled: your workspace has run out of build pipeline minutes."
+                    }
+                ]
+            }
+        )
+        self.assertEqual(result["classifications"], ["pipeline_quota"])
+
     def test_all_service_bindings_validate_before_any_mutation(self) -> None:
         client = ResolutionFailureClient()
         with self.assertRaisesRegex(recovery.RecoveryError, "unexpected repository"):

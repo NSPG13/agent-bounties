@@ -66,6 +66,7 @@ jobs:
       TARGET_REVISION: ${{ github.event.workflow_run.head_sha || inputs.revision || github.sha }}
       PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
       PRODUCTION_MCP_BASE_URL: ${{ vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.bountyboard.global' }}
+      RENDER_DEPLOY_PAUSE_REASON: ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,6 +83,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [[ -n "${RENDER_DEPLOY_PAUSE_REASON}" ]]; then
+            if [[ ! "${RENDER_DEPLOY_PAUSE_REASON}" =~ ^[a-z0-9_-]{1,80}$ ]]; then
+              echo "RENDER_DEPLOY_PAUSE_REASON has an invalid format" >&2
+              exit 1
+            fi
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "Render deployment paused: ${RENDER_DEPLOY_PAUSE_REASON}. Clear the repository variable, then dispatch this workflow." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [[ ! "${TARGET_REVISION}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "TARGET_REVISION must be an exact 40-character Git SHA" >&2
             exit 1
