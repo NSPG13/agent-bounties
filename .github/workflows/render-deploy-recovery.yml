@@ -19,7 +19,19 @@ on:
   workflow_dispatch:
     inputs:
       revision:
-        description: "Exact current main SHA; defaults to the dispatch revision"
+        description: "Controller SHA; defaults to the dispatch revision"
+        required: false
+        type: string
+      deploy_mode:
+        description: "Build the controller SHA or redeploy the verified current artifact"
+        required: false
+        default: build_and_deploy
+        type: choice
+        options:
+          - build_and_deploy
+          - deploy_only
+      runtime_revision:
+        description: "Exact current production SHA; required for deploy_only"
         required: false
         type: string
 
@@ -64,6 +76,8 @@ jobs:
       cancel-in-progress: false
     env:
       TARGET_REVISION: ${{ github.event.workflow_run.head_sha || inputs.revision || github.sha }}
+      REQUESTED_DEPLOY_MODE: ${{ inputs.deploy_mode || 'build_and_deploy' }}
+      RUNTIME_REVISION: ${{ inputs.runtime_revision }}
       PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
       PRODUCTION_MCP_BASE_URL: ${{ vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.bountyboard.global' }}
       RENDER_DEPLOY_PAUSE_REASON: ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}
@@ -83,7 +97,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ -n "${RENDER_DEPLOY_PAUSE_REASON}" ]]; then
+          if [[ "${REQUESTED_DEPLOY_MODE}" != "build_and_deploy" && "${REQUESTED_DEPLOY_MODE}" != "deploy_only" ]]; then
+            echo "Unsupported deploy mode" >&2
+            exit 1
+          fi
+          if [[ "${REQUESTED_DEPLOY_MODE}" == "deploy_only" && "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "deploy_only is manual recovery only" >&2
+            exit 1
+          fi
+          if [[ -n "${RENDER_DEPLOY_PAUSE_REASON}" && "${REQUESTED_DEPLOY_MODE}" != "deploy_only" ]]; then
             if [[ ! "${RENDER_DEPLOY_PAUSE_REASON}" =~ ^[a-z0-9_-]{1,80}$ ]]; then
               echo "RENDER_DEPLOY_PAUSE_REASON has an invalid format" >&2
               exit 1
@@ -128,7 +150,21 @@ jobs:
             echo "Latest successful main CI is ${latest_successful}; that revision owns deployment." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          deployment_revision="${TARGET_REVISION,,}"
+          if [[ "${REQUESTED_DEPLOY_MODE}" == "deploy_only" ]]; then
+            if [[ ! "${RUNTIME_REVISION}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "RUNTIME_REVISION must be an exact 40-character Git SHA for deploy_only" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "${RUNTIME_REVISION}" "${current_main}"; then
+              echo "RUNTIME_REVISION is not reachable from current main" >&2
+              exit 1
+            fi
+            deployment_revision="${RUNTIME_REVISION,,}"
+          fi
           echo "deploy=true" >> "$GITHUB_OUTPUT"
+          echo "deploy_mode=${REQUESTED_DEPLOY_MODE}" >> "$GITHUB_OUTPUT"
+          echo "deployment_revision=${deployment_revision}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy and attest exact revision
         if: steps.target.outputs.deploy == 'true'
@@ -140,7 +176,8 @@ jobs:
           BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT: ${{ vars.BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT }}
         run: |
           python scripts/render_deploy_recovery.py \
-            --revision "${TARGET_REVISION}" \
+            --revision "${{ steps.target.outputs.deployment_revision }}" \
+            --deploy-mode "${{ steps.target.outputs.deploy_mode }}" \
             --api-url "${PRODUCTION_API_BASE_URL%/}/health" \
             --mcp-url "${PRODUCTION_MCP_BASE_URL%/}/health" \
             --public-base-url "${PRODUCTION_API_BASE_URL%/}" \
@@ -171,6 +208,7 @@ jobs:
               "# Render deployment",
               "",
               f"- Revision: `{evidence['revision']}`",
+              f"- Deploy mode: `{evidence['deploy_mode']}`",
               f"- Verified: `{str(evidence['success']).lower()}`",
               f"- Services live: `{sum(item['status'] == 'live' for item in evidence['services'])}/3`",
               f"- Exact health attestations: `{len(evidence['health'])}/2`",
@@ -178,6 +216,7 @@ jobs:
               f"- Cloud runtime variables: `{len(evidence.get('cloud_environment', []))}/10`",
               f"- Cloud model credential supplied: `{bool(evidence.get('secret_environment'))}`",
               f"- Cloud drafting ready: `{bool(evidence.get('cloud_readiness', {}).get('available'))}`",
+              f"- Leaderboard contracts ready: `{len(evidence.get('leaderboard_readiness', []))}`",
               "",
               "The controller can deploy application services only. It cannot deploy contracts, sign wallet transactions, or authorize settlement.",
           ]

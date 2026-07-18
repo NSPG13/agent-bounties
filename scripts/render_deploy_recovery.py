@@ -20,6 +20,7 @@ SCHEMA = "agent-bounties/render-deploy-evidence-v1"
 REPOSITORY = "github.com/nspg13/agent-bounties"
 PROTOCOL = "agent-bounties/autonomous-v1"
 HEALTH_STABILITY_PROBES = 8
+DEPLOY_MODES = {"build_and_deploy", "deploy_only"}
 ACTIVE_STATUSES = {
     "created",
     "queued",
@@ -179,6 +180,13 @@ def validate_revision(revision: str) -> str:
     return normalized
 
 
+def validate_deploy_mode(value: str) -> str:
+    mode = value.strip().lower()
+    if mode not in DEPLOY_MODES:
+        raise RecoveryError("deploy mode must be build_and_deploy or deploy_only")
+    return mode
+
+
 def normalize_repo(value: object) -> str:
     if not isinstance(value, str):
         return ""
@@ -327,6 +335,24 @@ def existing_deploy(payload: object, revision: str) -> dict[str, Any] | None:
     if deploys and deploy_commit(deploys[0]) == revision and deploys[0].get("status") == "live":
         return deploys[0]
     return None
+
+
+def current_live_deploy(payload: object, revision: str) -> dict[str, Any]:
+    if not isinstance(payload, list):
+        raise RecoveryError("Render deploy-list response must be an array")
+    for entry in payload:
+        try:
+            deploy = unwrap_deploy(entry)
+        except RecoveryError:
+            continue
+        if deploy.get("status") != "live":
+            continue
+        if deploy_commit(deploy) != revision:
+            raise RecoveryError(
+                "deploy_only requires the current live artifact to match the requested revision"
+            )
+        return deploy
+    raise RecoveryError("deploy_only requires a current live Render artifact")
 
 
 class RenderClient:
@@ -521,11 +547,24 @@ class RenderClient:
         revision: str,
         *,
         force: bool = False,
+        deploy_mode: str = "build_and_deploy",
     ) -> dict[str, Any]:
+        deploy_mode = validate_deploy_mode(deploy_mode)
         service_id = service["id"]
         matched = existing_deploy(self.list_deploys(service_id), revision)
         if matched is not None and not (force and matched.get("status") == "live"):
             return matched
+        replaced_live_id = (
+            matched.get("id")
+            if force and matched is not None and matched.get("status") == "live"
+            else None
+        )
+
+        payload = (
+            {"deployMode": "deploy_only"}
+            if deploy_mode == "deploy_only"
+            else {"clearCache": "do_not_clear", "commitId": revision}
+        )
 
         for attempt in range(1, 4):
             try:
@@ -533,7 +572,7 @@ class RenderClient:
                     self._request_json(
                         "POST",
                         f"/services/{service_id}/deploys",
-                        {"clearCache": "do_not_clear", "commitId": revision},
+                        payload,
                     )
                 )
             except RenderHttpError as error:
@@ -544,7 +583,7 @@ class RenderClient:
                     raise
             self._sleep(float(attempt * 2))
             matched = existing_deploy(self.list_deploys(service_id), revision)
-            if matched is not None:
+            if matched is not None and matched.get("id") != replaced_live_id:
                 return matched
         raise AssertionError("unreachable")
 
@@ -717,6 +756,34 @@ def validate_cloud_agent_readiness(
     }
 
 
+def validate_leaderboard_readiness(
+    payload: dict[str, Any],
+    *,
+    network: str,
+    expected_contract: str,
+) -> dict[str, Any]:
+    if payload.get("schema_version") != "agent-bounties/solver-leaderboard-v1":
+        raise RecoveryError("leaderboard readiness schema is invalid")
+    if payload.get("network") != network:
+        raise RecoveryError("leaderboard readiness reports a different network")
+    reward_pool = payload.get("reward_pool")
+    if not isinstance(reward_pool, dict):
+        raise RecoveryError("leaderboard readiness is missing its reward pool")
+    observed_contract = reward_pool.get("contract")
+    if (
+        not isinstance(observed_contract, str)
+        or observed_contract.lower() != expected_contract
+    ):
+        raise RecoveryError("leaderboard readiness reports a different reward contract")
+    return {
+        "network": network,
+        "contract": observed_contract.lower(),
+        "funding_status": reward_pool.get("funding_status"),
+        "balance_usdc": reward_pool.get("balance_usdc"),
+        "observed_safe_block": reward_pool.get("observed_safe_block"),
+    }
+
+
 def validate_health(
     service_name: str,
     revision: str,
@@ -818,6 +885,7 @@ def deploy(
     client: RenderClient,
     revision: str,
     *,
+    deploy_mode: str = "build_and_deploy",
     specs: tuple[ServiceSpec, ...] = SERVICE_SPECS,
     deploy_timeout_seconds: float,
     health_timeout_seconds: float,
@@ -828,12 +896,17 @@ def deploy(
     base_mainnet_leaderboard_reward_contract: str | None = None,
     base_sepolia_leaderboard_reward_contract: str | None = None,
 ) -> dict[str, Any]:
+    deploy_mode = validate_deploy_mode(deploy_mode)
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
     pending: dict[str, tuple[dict[str, Any], str]] = {}
     initial: dict[str, dict[str, Any]] = {}
 
     for spec in specs:
         services.append((spec, client.resolve_service(spec)))
+
+    if deploy_mode == "deploy_only":
+        for _, service in services:
+            current_live_deploy(client.list_deploys(service["id"]), revision)
 
     for spec, service in services:
         client.disable_native_auto_deploy(service)
@@ -904,7 +977,11 @@ def deploy(
         created = client.ensure_deploy(
             service,
             revision,
-            force=public_environment_changed.get(spec.name, False),
+            force=(
+                deploy_mode == "deploy_only"
+                or public_environment_changed.get(spec.name, False)
+            ),
+            deploy_mode=deploy_mode,
         )
         deploy_id, status = validate_deploy(created, revision, spec.name)
         initial[spec.name] = created
@@ -950,6 +1027,24 @@ def deploy(
             cloud_agent_api_key and cloud_agent_api_key.strip()
         ),
     )
+    leaderboard_readiness = []
+    for network, key in (
+        ("base-mainnet", "BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT"),
+        ("base-sepolia", "BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT"),
+    ):
+        expected_contract = leaderboard_environment.get(key)
+        if expected_contract is None:
+            continue
+        leaderboard_readiness.append(
+            validate_leaderboard_readiness(
+                fetch_json(
+                    f"{public_base_url.rstrip('/')}/v1/base/autonomous-bounties/leaderboard?network={network}",
+                    20,
+                ),
+                network=network,
+                expected_contract=expected_contract,
+            )
+        )
     service_evidence = []
     for spec, service in services:
         deployed = completed[spec.name]
@@ -967,6 +1062,7 @@ def deploy(
             }
         )
     return {
+        "deploy_mode": deploy_mode,
         "services": service_evidence,
         "health": health,
         "custom_domains": custom_domains,
@@ -974,6 +1070,7 @@ def deploy(
         "cloud_environment": cloud_environment,
         "secret_environment": secret_environment,
         "cloud_readiness": cloud_readiness,
+        "leaderboard_readiness": leaderboard_readiness,
     }
 
 
@@ -982,6 +1079,11 @@ def parse_args() -> argparse.Namespace:
         description="Deploy and attest an exact reviewed main revision on Render."
     )
     parser.add_argument("--revision", required=True)
+    parser.add_argument(
+        "--deploy-mode",
+        choices=sorted(DEPLOY_MODES),
+        default="build_and_deploy",
+    )
     parser.add_argument(
         "--api-url",
         default="https://agent-bounties-api.onrender.com/health",
@@ -1018,6 +1120,7 @@ def main() -> int:
         "started_at": utc_now(),
         "completed_at": None,
         "revision": args.revision,
+        "deploy_mode": args.deploy_mode,
         "success": False,
         "services": [],
         "health": [],
@@ -1026,6 +1129,7 @@ def main() -> int:
         "cloud_environment": [],
         "secret_environment": [],
         "cloud_readiness": {},
+        "leaderboard_readiness": [],
         "failure": None,
         "error": None,
     }
@@ -1038,6 +1142,7 @@ def main() -> int:
         result = deploy(
             client,
             revision,
+            deploy_mode=args.deploy_mode,
             specs=tuple(specs),
             deploy_timeout_seconds=args.deploy_timeout_seconds,
             health_timeout_seconds=args.health_timeout_seconds,

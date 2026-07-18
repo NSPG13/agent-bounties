@@ -111,6 +111,15 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(recovery.RecoveryError):
                 recovery.validate_revision(value)
 
+    def test_deploy_mode_is_explicit(self) -> None:
+        self.assertEqual(recovery.validate_deploy_mode("deploy_only"), "deploy_only")
+        self.assertEqual(
+            recovery.validate_deploy_mode("build_and_deploy"),
+            "build_and_deploy",
+        )
+        with self.assertRaisesRegex(recovery.RecoveryError, "deploy mode"):
+            recovery.validate_deploy_mode("latest")
+
     def test_service_resolution_is_exact_and_repository_bound(self) -> None:
         spec = recovery.SERVICE_SPECS[0]
         service = {
@@ -144,6 +153,16 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         ]
         self.assertIsNone(recovery.existing_deploy(payload, revision))
 
+    def test_deploy_only_requires_exact_current_live_artifact(self) -> None:
+        revision = "a" * 40
+        payload = [
+            {"deploy": {"id": "dep-failed", "status": "build_failed", "commit": {"id": "b" * 40}}},
+            {"deploy": {"id": "dep-live", "status": "live", "commit": {"id": revision}}},
+        ]
+        self.assertEqual(recovery.current_live_deploy(payload, revision)["id"], "dep-live")
+        with self.assertRaisesRegex(recovery.RecoveryError, "current live artifact"):
+            recovery.current_live_deploy(payload, "c" * 40)
+
     def test_trigger_binds_exact_commit_and_does_not_clear_cache(self) -> None:
         revision = "a" * 40
         client = RecordingClient(
@@ -165,6 +184,59 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_deploy_only_reuses_artifact_without_commit_or_cache_fields(self) -> None:
+        revision = "a" * 40
+        client = RecordingClient(
+            deploys=[
+                {
+                    "deploy": {
+                        "id": "dep-live",
+                        "status": "live",
+                        "commit": {"id": revision},
+                    }
+                }
+            ],
+            response={
+                "id": "dep-new",
+                "status": "created",
+                "commit": {"id": revision},
+            },
+        )
+        result = client.ensure_deploy(
+            {"id": "srv-api"},
+            revision,
+            force=True,
+            deploy_mode="deploy_only",
+        )
+        self.assertEqual(result["id"], "dep-new")
+        self.assertEqual(
+            client.requests,
+            [("POST", "/services/srv-api/deploys", {"deployMode": "deploy_only"})],
+        )
+
+    def test_forced_retry_never_mistakes_old_live_deploy_for_new_work(self) -> None:
+        revision = "a" * 40
+        client = RecordingClient(
+            deploys=[
+                {
+                    "deploy": {
+                        "id": "dep-old-live",
+                        "status": "live",
+                        "commit": {"id": revision},
+                    }
+                }
+            ],
+            error=recovery.RenderHttpError(503, "temporarily unavailable"),
+        )
+        with self.assertRaises(recovery.RenderHttpError):
+            client.ensure_deploy(
+                {"id": "srv-api"},
+                revision,
+                force=True,
+                deploy_mode="deploy_only",
+            )
+        self.assertEqual(len(client.requests), 3)
 
     def test_custom_domain_is_reused_or_attached_exactly_once(self) -> None:
         existing = RecordingClient()
@@ -580,6 +652,37 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         )
         self.assertTrue(observed["available"])
         self.assertNotIn("CLOUD_AGENT_API_KEY", recovery.json.dumps(observed))
+
+    def test_leaderboard_readiness_requires_exact_contract_and_network(self) -> None:
+        contract = "0x" + "a" * 40
+        payload = {
+            "schema_version": "agent-bounties/solver-leaderboard-v1",
+            "network": "base-mainnet",
+            "reward_pool": {
+                "contract": contract.upper().replace("0X", "0x"),
+                "funding_status": "underfunded",
+                "balance_usdc": "0.00",
+                "observed_safe_block": 123,
+            },
+        }
+        result = recovery.validate_leaderboard_readiness(
+            payload,
+            network="base-mainnet",
+            expected_contract=contract,
+        )
+        self.assertEqual(result["contract"], contract)
+        with self.assertRaisesRegex(recovery.RecoveryError, "different network"):
+            recovery.validate_leaderboard_readiness(
+                payload,
+                network="base-sepolia",
+                expected_contract=contract,
+            )
+        with self.assertRaisesRegex(recovery.RecoveryError, "different reward contract"):
+            recovery.validate_leaderboard_readiness(
+                payload,
+                network="base-mainnet",
+                expected_contract="0x" + "b" * 40,
+            )
 
     def test_cloud_readiness_cannot_claim_a_local_fallback(self) -> None:
         payload = {

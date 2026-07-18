@@ -90,10 +90,19 @@ the Render key. If current `main` is newer and failing, pass the latest
 successful 40-character SHA in the manual `revision` input.
 
 If Render exhausts pipeline minutes, set the repository variable
-`RENDER_DEPLOY_PAUSE_REASON=build_pipeline_minutes_exhausted`. Deployment then
-skips before touching Render. Set a bounded pipeline spend limit in Render,
-delete the variable, and dispatch `Render Deploy Recovery` for the latest
-successful `main` SHA.
+`RENDER_DEPLOY_PAUSE_REASON=build_pipeline_minutes_exhausted`. Normal builds
+then stop before touching Render. Apply runtime-only configuration in this
+order:
+
+1. Read the exact SHA from the production `/health` revision header.
+2. Dispatch `Render Deploy Recovery` from current successful `main`.
+3. Select `deploy_only` and enter that production SHA as `runtime_revision`.
+4. Verify the workflow's exact health and readiness evidence.
+
+`deploy_only` rejects a service whose current live artifact does not match the
+supplied SHA. It reuses that artifact, applies saved environment values, and
+does not build new code. Delete the pause variable only after pipeline capacity
+returns.
 
 The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
 implementation, and Base RPC configuration. Canonical planners fail closed
