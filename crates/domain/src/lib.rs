@@ -5,6 +5,10 @@ use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+mod leaderboard;
+
+pub use leaderboard::*;
+
 pub type Id = Uuid;
 
 #[derive(Debug, Error, PartialEq, Eq)]

@@ -867,6 +867,19 @@ export class AgentBountiesClient {
     return this.request(`/v1/base/autonomous-bounties/feed${query ? `?${query}` : ""}`);
   }
 
+  async getSolverLeaderboard(
+    network?: string | null,
+    at?: string | null,
+  ): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (network) params.set("network", network);
+    if (at) params.set("at", at);
+    const query = params.toString();
+    return this.request(
+      `/v1/base/autonomous-bounties/leaderboard${query ? `?${query}` : ""}`,
+    );
+  }
+
   async listAutonomousVerificationJobs(
     network?: string | null,
     verifier?: string | null,

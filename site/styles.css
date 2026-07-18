@@ -283,6 +283,117 @@ h3 {
   font-size: 14px;
 }
 
+.leaderboard-section {
+  scroll-margin-top: 72px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.leaderboard-head,
+.leaderboard-grid,
+.leaderboard-rules,
+.leaderboard-section > .actions {
+  max-width: 1180px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.leaderboard-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 32px;
+  margin-bottom: 32px;
+}
+
+.leaderboard-head > p {
+  max-width: 320px;
+  margin-bottom: 0;
+  color: var(--muted);
+  text-align: right;
+}
+
+.leaderboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(28px, 6vw, 72px);
+}
+
+.leaderboard-grid > section {
+  min-width: 0;
+}
+
+.leaderboard-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.leaderboard-label h3,
+.leaderboard-label time {
+  margin: 0;
+}
+
+.leaderboard-label time {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.leaderboard-table {
+  min-height: 196px;
+}
+
+.leaderboard-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 72px 84px;
+  gap: 12px;
+  align-items: center;
+  min-height: 44px;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboard-row > :nth-child(n + 3) {
+  text-align: right;
+}
+
+.leaderboard-row[data-leader="true"] {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.leaderboard-columns {
+  min-height: 38px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.leaderboard-row code {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leaderboard-empty {
+  padding: 24px 0;
+  color: var(--muted);
+}
+
+.leaderboard-rules {
+  margin-top: 24px;
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 .copy,
 .steps {
   color: var(--muted);
@@ -781,6 +892,19 @@ code {
     text-align: left;
   }
 
+  .leaderboard-head {
+    display: grid;
+  }
+
+  .leaderboard-head > p {
+    max-width: none;
+    text-align: left;
+  }
+
+  .leaderboard-grid {
+    grid-template-columns: 1fr;
+  }
+
   .recovery-row {
     grid-template-columns: 1fr;
   }
@@ -822,5 +946,11 @@ code {
 
   .button {
     width: 100%;
+  }
+
+  .leaderboard-row {
+    grid-template-columns: 42px minmax(0, 1fr) 58px 68px;
+    gap: 8px;
+    font-size: 13px;
   }
 }

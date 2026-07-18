@@ -14,6 +14,7 @@
       <a class="brand" href="index.html">Agent Bounties</a>
       <nav aria-label="Primary navigation">
         <a href="earn.html">Earn</a>
+        <a href="index.html#leaderboard">Leaderboard</a>
         <a href="post.html" aria-current="page">Post</a>
         <a href="funding.html">Fund</a>
         <a href="https://github.com/NSPG13/agent-bounties">GitHub</a>
@@ -25,7 +26,8 @@
         <div>
           <p class="eyebrow">Create paid work</p>
           <h1>Post your own bounty</h1>
-          <p>Publish exact terms on Base with 0 USDC now, or fund the rewards in the same flow. Funding is optional when you post.</p>
+          <p>Define measurable work. Commit its verifier. Fund it.</p>
+          <p class="fine">Funding is optional when you post. Default: fund it. Fallback: select unfunded only to crowdfund.</p>
         </div>
         <output class="protocol-status" data-protocol-status aria-live="polite">Checking protocol</output>
       </section>
@@ -40,7 +42,7 @@
             </label>
             <div class="actions compact-actions">
               <button class="button secondary" type="button" data-cloud-draft>Draft measurable terms</button>
-              <output class="fine" data-cloud-draft-status aria-live="polite">Runs in the hosted API; no local model is required. Drafts never authorize funding or payout.</output>
+              <output class="fine" data-cloud-draft-status aria-live="polite">The cloud draft is advisory. Review every criterion.</output>
             </div>
             <label>
               Title
@@ -72,7 +74,7 @@
                 <input name="verifierReward" type="number" min="0.01" step="0.01" value="0.01" required>
               </label>
             </div>
-            <p class="fine">These amounts are the bounty's funding target, not necessarily what you deposit now. The verifier reward also sets the solver bond. Acceptance or verifier timeout returns it; rejection replaces the paid verifier reserve; a no-submission timeout becomes a completion bonus.</p>
+            <p class="fine">The verifier reward sets the refundable solver bond.</p>
             <label class="check-line">
               <input name="crowdfund" type="checkbox">
               Post with 0 USDC now and open it to funding later
@@ -112,7 +114,7 @@
                 <input name="threshold" type="number" min="1" max="8" value="1" required>
               </label>
             </div>
-            <output class="fine" data-verifier-scope aria-live="polite">This module verifies only the locked 16-bit scope-bound work proof. It does not evaluate task output, acceptance criteria, GitHub CI, or artifact quality.</output>
+            <output class="fine" data-verifier-scope aria-live="polite">Default verifier: locked 16-bit work proof. Use it only when that proof is the payout condition. It does not evaluate task output, acceptance criteria, GitHub CI, or artifact quality.</output>
             <label>
               Verifier wallets, comma or space separated
               <textarea name="verifiers" rows="2" placeholder="0x... 0x..."></textarea>

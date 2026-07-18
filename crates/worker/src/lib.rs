@@ -3,7 +3,7 @@ use app::BountyNetwork;
 use chain_base::{
     autonomous_bounty_event_topics, base_network_descriptor, decode_autonomous_bounty_logs,
     fetch_base_contract_logs, fetch_base_multi_contract_logs, fetch_block_number,
-    rpc_logs_to_evm_logs, AutonomousBountyEventKind, BaseContractLogQuery,
+    fetch_block_timestamp, rpc_logs_to_evm_logs, AutonomousBountyEventKind, BaseContractLogQuery,
     BaseMultiContractLogQuery, BaseNetworkDescriptor, ChainBaseError,
 };
 use chrono::Utc;
@@ -395,6 +395,7 @@ pub async fn poll_autonomous_indexer_once(
     config: &AutonomousIndexerConfig,
 ) -> anyhow::Result<AutonomousIndexerPollReport> {
     let descriptor = config.network_descriptor()?;
+    backfill_autonomous_event_block_times(store, config).await?;
     let latest_block = fetch_block_number(&config.rpc_url, config.request_id).await?;
     let confirmed_to_block = latest_block.checked_sub(config.confirmations);
     let scan_cursor = store
@@ -528,9 +529,36 @@ pub async fn poll_autonomous_indexer_once(
     events.sort_by_key(|event| (event.block_number, event.log_index));
     let mut seen = HashSet::new();
     events.retain(|event| seen.insert(event.log_key.clone()));
-    for event in &events {
+    let mut event_blocks = events
+        .iter()
+        .map(|event| event.block_number)
+        .collect::<Vec<_>>();
+    event_blocks.sort_unstable();
+    event_blocks.dedup();
+    let mut block_times = std::collections::HashMap::new();
+    for (index, block_number) in event_blocks.iter().copied().enumerate() {
+        let timestamp = fetch_block_timestamp(
+            &config.rpc_url,
+            block_number,
+            config
+                .request_id
+                .saturating_add(20_000)
+                .saturating_add(index as u64),
+        )
+        .await?;
+        block_times.insert(block_number, timestamp);
+    }
+    for event in &mut events {
+        event.occurred_at = *block_times
+            .get(&event.block_number)
+            .ok_or_else(|| anyhow!("canonical event block timestamp is unavailable"))?;
         store
             .upsert_autonomous_bounty_event(&config.network, event)
+            .await?;
+    }
+    for (block_number, occurred_at) in block_times {
+        store
+            .confirm_autonomous_event_block_time(&config.network, block_number, occurred_at)
             .await?;
     }
     let last_log_key = events.last().map(|event| event.log_key.as_str());
@@ -557,6 +585,30 @@ pub async fn poll_autonomous_indexer_once(
         persisted_cursor_block: Some(to_block),
         skipped_reason: None,
     })
+}
+
+async fn backfill_autonomous_event_block_times(
+    store: &PostgresStore,
+    config: &AutonomousIndexerConfig,
+) -> anyhow::Result<()> {
+    let blocks = store
+        .list_unverified_autonomous_event_blocks(&config.network, 50)
+        .await?;
+    for (index, block_number) in blocks.into_iter().enumerate() {
+        let occurred_at = fetch_block_timestamp(
+            &config.rpc_url,
+            block_number,
+            config
+                .request_id
+                .saturating_add(10_000)
+                .saturating_add(index as u64),
+        )
+        .await?;
+        store
+            .confirm_autonomous_event_block_time(&config.network, block_number, occurred_at)
+            .await?;
+    }
+    Ok(())
 }
 
 pub async fn hydrate_bounty_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork> {

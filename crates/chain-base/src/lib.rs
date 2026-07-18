@@ -2001,6 +2001,33 @@ pub struct BaseNetworkDescriptor {
     pub native_usdc_token_address: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Erc20BalanceSafeObservation {
+    pub token: String,
+    pub account: String,
+    pub balance: u128,
+    pub safe_block_number: u64,
+    pub safe_block_hash: String,
+    pub safe_block_timestamp: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SolverLeaderboardAwardSafeObservation {
+    pub contract: String,
+    pub award_id: String,
+    pub paid_winner: Option<String>,
+    pub safe_block_number: u64,
+    pub safe_block_hash: String,
+    pub safe_block_timestamp: u64,
+}
+
+struct ContractWordSafeObservation {
+    word: [u8; 32],
+    safe_block_number: u64,
+    safe_block_hash: String,
+    safe_block_timestamp: u64,
+}
+
 pub const BASE_MAINNET_USDC_TOKEN_ADDRESS: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 pub const BASE_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 pub const BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER: &str =
@@ -2822,6 +2849,259 @@ where
         transport.post_json_value(rpc_url, &json!(request)).await?,
     )?;
     parse_rpc_quantity(&response.result)
+}
+
+pub async fn fetch_block_timestamp(
+    rpc_url: &str,
+    block_number: u64,
+    request_id: u64,
+) -> Result<DateTime<Utc>, ChainBaseError> {
+    fetch_block_timestamp_with_transport(
+        rpc_url,
+        block_number,
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_block_timestamp_with_transport<T>(
+    rpc_url: &str,
+    block_number: u64,
+    request_id: u64,
+    transport: &T,
+) -> Result<DateTime<Utc>, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let block = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_getBlockByNumber",
+                    "params": [hex_quantity(block_number), false]
+                }),
+            )
+            .await?,
+        request_id,
+        "eth_getBlockByNumber",
+    )?;
+    let timestamp = parse_rpc_quantity(
+        block
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "exact block response is missing timestamp".to_string(),
+                )
+            })?,
+    )?;
+    let timestamp = i64::try_from(timestamp).map_err(|_| {
+        ChainBaseError::InvalidRpcResponse("block timestamp exceeds i64".to_string())
+    })?;
+    DateTime::from_timestamp(timestamp, 0).ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("block timestamp is outside UTC range".to_string())
+    })
+}
+
+pub async fn observe_erc20_balance_safe(
+    rpc_url: &str,
+    token: &str,
+    account: &str,
+    request_id: u64,
+) -> Result<Erc20BalanceSafeObservation, ChainBaseError> {
+    observe_erc20_balance_safe_with_transport(
+        rpc_url,
+        token,
+        account,
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn observe_erc20_balance_safe_with_transport<T>(
+    rpc_url: &str,
+    token: &str,
+    account: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<Erc20BalanceSafeObservation, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let token = normalize_address(token)?;
+    let account = normalize_address(account)?;
+    let observation = fetch_contract_word_safe_with_transport(
+        rpc_url,
+        &token,
+        &encode_call("balanceOf(address)", vec![encode_address(&account)?]),
+        request_id,
+        transport,
+    )
+    .await?;
+    let balance = word_to_u128(observation.word)?;
+
+    Ok(Erc20BalanceSafeObservation {
+        token,
+        account,
+        balance,
+        safe_block_number: observation.safe_block_number,
+        safe_block_hash: observation.safe_block_hash,
+        safe_block_timestamp: observation.safe_block_timestamp,
+    })
+}
+
+pub fn solver_leaderboard_award_id(
+    period_kind: u8,
+    starts_at: u64,
+) -> Result<String, ChainBaseError> {
+    if period_kind > 1 {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "leaderboard period kind must be 0 or 1".to_string(),
+        ));
+    }
+    let words = [
+        encode_uint256(period_kind.into())?,
+        encode_uint256(starts_at.into())?,
+    ];
+    Ok(format!("0x{}", hex::encode(keccak_words(&words))))
+}
+
+pub async fn observe_solver_leaderboard_paid_winner_safe(
+    rpc_url: &str,
+    contract: &str,
+    award_id: &str,
+    request_id: u64,
+) -> Result<SolverLeaderboardAwardSafeObservation, ChainBaseError> {
+    observe_solver_leaderboard_paid_winner_safe_with_transport(
+        rpc_url,
+        contract,
+        award_id,
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn observe_solver_leaderboard_paid_winner_safe_with_transport<T>(
+    rpc_url: &str,
+    contract: &str,
+    award_id: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<SolverLeaderboardAwardSafeObservation, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let contract = normalize_address(contract)?;
+    let award_id = normalize_hash(award_id)?;
+    let observation = fetch_contract_word_safe_with_transport(
+        rpc_url,
+        &contract,
+        &encode_call("paidAwardWinner(bytes32)", vec![parse_bytes32(&award_id)?]),
+        request_id,
+        transport,
+    )
+    .await?;
+    if observation.word[..12].iter().any(|byte| *byte != 0) {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "paid award winner is not an ABI address".to_string(),
+        ));
+    }
+    let paid_winner = if observation.word[12..].iter().all(|byte| *byte == 0) {
+        None
+    } else {
+        Some(format!("0x{}", hex::encode(&observation.word[12..])))
+    };
+    Ok(SolverLeaderboardAwardSafeObservation {
+        contract,
+        award_id,
+        paid_winner,
+        safe_block_number: observation.safe_block_number,
+        safe_block_hash: observation.safe_block_hash,
+        safe_block_timestamp: observation.safe_block_timestamp,
+    })
+}
+
+async fn fetch_contract_word_safe_with_transport<T>(
+    rpc_url: &str,
+    contract: &str,
+    data: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<ContractWordSafeObservation, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let safe_block = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_getBlockByNumber",
+                    "params": ["safe", false]
+                }),
+            )
+            .await?,
+        request_id,
+        "eth_getBlockByNumber",
+    )?;
+    let safe_block_number = parse_rpc_quantity(
+        safe_block
+            .get("number")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing number".to_string(),
+                )
+            })?,
+    )?;
+    let safe_block_hash = normalize_hash(
+        safe_block
+            .get("hash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing hash".to_string(),
+                )
+            })?,
+    )?;
+    let safe_block_timestamp = parse_rpc_quantity(
+        safe_block
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing timestamp".to_string(),
+                )
+            })?,
+    )?;
+    let call_request_id = request_id.checked_add(1).ok_or_else(|| {
+        ChainBaseError::InvalidVerificationConfiguration(
+            "safe contract call request id overflow".to_string(),
+        )
+    })?;
+    let word = fetch_contract_word(
+        rpc_url,
+        contract,
+        data,
+        &hex_quantity(safe_block_number),
+        call_request_id,
+        transport,
+    )
+    .await?;
+    Ok(ContractWordSafeObservation {
+        word: parse_bytes32(&word)?,
+        safe_block_number,
+        safe_block_hash,
+        safe_block_timestamp,
+    })
 }
 
 pub async fn broadcast_signed_transaction(
@@ -7982,6 +8262,129 @@ mod tests {
         let request = seen_request.lock().unwrap().clone().unwrap();
         assert_eq!(request["method"], "eth_blockNumber");
         assert!(request["params"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetches_exact_block_timestamp_through_mock_transport() {
+        let seen_request = Arc::new(Mutex::new(None));
+        let transport = MockTransport {
+            seen_request: seen_request.clone(),
+            response: serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 8,
+                "result": { "number": "0x2a", "timestamp": "0x669b8f00" }
+            }),
+        };
+
+        let timestamp =
+            fetch_block_timestamp_with_transport("https://rpc.example", 42, 8, &transport)
+                .await
+                .unwrap();
+
+        assert_eq!(timestamp.timestamp(), 1_721_470_720);
+        let request = seen_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request["method"], "eth_getBlockByNumber");
+        assert_eq!(request["params"], serde_json::json!(["0x2a", false]));
+    }
+
+    #[tokio::test]
+    async fn observes_erc20_balance_at_one_safe_block() {
+        let seen_requests = Arc::new(Mutex::new(Vec::new()));
+        let token = "0x1111111111111111111111111111111111111111";
+        let account = "0x2222222222222222222222222222222222222222";
+        let transport = SequenceTransport {
+            seen_requests: seen_requests.clone(),
+            responses: Mutex::new(VecDeque::from([
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 90,
+                    "result": {
+                        "number": "0x2a",
+                        "hash": format!("0x{}", "ab".repeat(32)),
+                        "timestamp": "0x669b8f00"
+                    }
+                }),
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 91,
+                    "result": format!("0x{:064x}", 29_000_000_u128)
+                }),
+            ])),
+        };
+
+        let observation = observe_erc20_balance_safe_with_transport(
+            "https://rpc.example",
+            token,
+            account,
+            90,
+            &transport,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(observation.balance, 29_000_000);
+        assert_eq!(observation.safe_block_number, 42);
+        assert_eq!(observation.account, account);
+        let requests = seen_requests.lock().unwrap();
+        assert_eq!(requests[0]["params"], json!(["safe", false]));
+        assert_eq!(requests[1]["method"], "eth_call");
+        assert_eq!(requests[1]["params"][0]["to"], token);
+        assert_eq!(requests[1]["params"][1], "0x2a");
+        assert_eq!(
+            requests[1]["params"][0]["data"],
+            format!("0x70a08231{:0>64}", account.trim_start_matches("0x"))
+        );
+    }
+
+    #[tokio::test]
+    async fn observes_leaderboard_paid_winner_at_one_safe_block() {
+        let seen_requests = Arc::new(Mutex::new(Vec::new()));
+        let contract = "0x3333333333333333333333333333333333333333";
+        let winner = "0x4444444444444444444444444444444444444444";
+        let award_id = solver_leaderboard_award_id(0, 1_728_000_000).unwrap();
+        assert_eq!(
+            award_id,
+            "0x7e01072e59df59da214dce5f7c3e2ef0f8c8b9a2d636811251e865c1ffd8a774"
+        );
+        let transport = SequenceTransport {
+            seen_requests: seen_requests.clone(),
+            responses: Mutex::new(VecDeque::from([
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 92,
+                    "result": {
+                        "number": "0x2a",
+                        "hash": format!("0x{}", "cd".repeat(32)),
+                        "timestamp": "0x669b8f00"
+                    }
+                }),
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 93,
+                    "result": format!("0x{:0>64}", winner.trim_start_matches("0x"))
+                }),
+            ])),
+        };
+
+        let observation = observe_solver_leaderboard_paid_winner_safe_with_transport(
+            "https://rpc.example",
+            contract,
+            &award_id,
+            92,
+            &transport,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(observation.paid_winner.as_deref(), Some(winner));
+        assert_eq!(observation.safe_block_number, 42);
+        let requests = seen_requests.lock().unwrap();
+        assert_eq!(requests[1]["params"][0]["to"], contract);
+        assert_eq!(requests[1]["params"][1], "0x2a");
+        assert_eq!(
+            requests[1]["params"][0]["data"],
+            format!("0x270eca05{}", award_id.trim_start_matches("0x"))
+        );
     }
 
     #[test]

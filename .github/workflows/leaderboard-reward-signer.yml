@@ -1,0 +1,139 @@
+name: Leaderboard Reward Signer
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/leaderboard-reward-*.yml"
+      - "scripts/leaderboard_reward_pipeline.py"
+      - "scripts/test_leaderboard_reward_pipeline.py"
+  workflow_run:
+    workflows: ["Leaderboard Reward Runner"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: leaderboard-reward-signer-mainnet
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/test_leaderboard_reward_pipeline.py -v
+
+  authorize-run:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'schedule' ||
+       github.event.workflow_run.event == 'workflow_dispatch') &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT != ''
+    needs: contract
+    runs-on: ubuntu-latest
+    outputs:
+      authorized: ${{ steps.main.outputs.authorized }}
+      revision: ${{ steps.main.outputs.revision }}
+      run_id: ${{ steps.main.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          fetch-depth: 0
+      - id: main
+        env:
+          CANDIDATE_REVISION: ${{ github.event.workflow_run.head_sha }}
+          CANDIDATE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          current_main="$(git rev-parse refs/remotes/origin/main)"
+          if [[ "$CANDIDATE_REVISION" != "$current_main" ]]; then
+            echo "authorized=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Stale leaderboard candidate skipped::Runner revision is not current main."
+            exit 0
+          fi
+          echo "authorized=true" >> "$GITHUB_OUTPUT"
+          echo "revision=$CANDIDATE_REVISION" >> "$GITHUB_OUTPUT"
+          echo "run_id=$CANDIDATE_RUN_ID" >> "$GITHUB_OUTPUT"
+
+  sign-one:
+    if: needs.authorize-run.outputs.authorized == 'true'
+    needs: authorize-run
+    uses: ./.github/workflows/leaderboard-reward-signing-reusable.yml
+    with:
+      revision: ${{ needs.authorize-run.outputs.revision }}
+      candidate_run_id: ${{ needs.authorize-run.outputs.run_id }}
+      signer_slot: one
+      expected_signer: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+      reward_contract: ${{ vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT }}
+    secrets:
+      signer_private_key: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
+
+  sign-two:
+    if: needs.authorize-run.outputs.authorized == 'true'
+    needs: authorize-run
+    uses: ./.github/workflows/leaderboard-reward-signing-reusable.yml
+    with:
+      revision: ${{ needs.authorize-run.outputs.revision }}
+      candidate_run_id: ${{ needs.authorize-run.outputs.run_id }}
+      signer_slot: two
+      expected_signer: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+      reward_contract: ${{ vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT }}
+    secrets:
+      signer_private_key: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
+
+  relay:
+    if: needs.authorize-run.outputs.authorized == 'true'
+    needs: [authorize-run, sign-one, sign-two]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      LEADERBOARD_REWARD_CONTRACT: ${{ vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT }}
+      SIGNER_ONE: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+      SIGNER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ needs.authorize-run.outputs.revision }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/download-artifact@v4
+        with:
+          name: leaderboard-candidates-${{ needs.authorize-run.outputs.run_id }}
+          path: target/leaderboard-candidates
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize-run.outputs.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: leaderboard-attestations-one
+          path: target/leaderboard-attestations-one
+      - uses: actions/download-artifact@v4
+        with:
+          name: leaderboard-attestations-two
+          path: target/leaderboard-attestations-two
+      - name: Revalidate and relay exact leaderboard quorum
+        run: >-
+          python scripts/leaderboard_reward_pipeline.py relay
+          --api-base "$API_BASE_URL"
+          --network base-mainnet
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          --contract "$LEADERBOARD_REWARD_CONTRACT"
+          --candidates target/leaderboard-candidates
+          --attestations target/leaderboard-attestations-one
+          --attestations target/leaderboard-attestations-two
+          --expected-signer "$SIGNER_ONE"
+          --expected-signer "$SIGNER_TWO"

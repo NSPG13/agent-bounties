@@ -85,6 +85,7 @@ cargo run -p cli -- github-claim-comment-plan \
 "${python_cmd[@]}" -m pip install -r scripts/requirements-wallet.txt
 "${python_cmd[@]}" scripts/test_local_delegate_wallet.py -v
 "${python_cmd[@]}" scripts/test_self_heal.py -v
+"${python_cmd[@]}" scripts/test_leaderboard_reward_pipeline.py -v
 "${python_cmd[@]}" scripts/self_heal.py bench \
   --policy ops/self-healing-policy.json \
   --fixtures ops/fixtures/recovery-cases.json \
@@ -148,6 +149,8 @@ cargo run -p cli -- pooled-funding-demo
   scripts/test_local_delegate_wallet.py \
   scripts/self_heal.py \
   scripts/test_self_heal.py \
+  scripts/leaderboard_reward_pipeline.py \
+  scripts/test_leaderboard_reward_pipeline.py \
   scripts/check-site.py \
   scripts/check-migration-history.py \
   scripts/check-render-blueprint.py \

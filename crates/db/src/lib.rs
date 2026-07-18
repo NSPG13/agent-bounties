@@ -5,13 +5,13 @@ use domain::{
     AudienceInteraction, AudienceInteractionKind, AudienceLifecycleStage, AudienceMember,
     AudienceProvider, AutonomousBountyTermsDocument, AutonomousBountyTermsRecord,
     AutonomousSubmissionEvidenceRecord, BondSponsorship, BondSponsorshipStatus, Bounty,
-    BountyStatus, Capability, CapabilityClass, Claim, ClaimCandidate, ClaimCandidateStatus,
-    ContributorContact, DiscoveryResponse, Escrow, EscrowStatus, EvalRun, FundingContribution,
-    FundingContributionStatus, FundingIntent, FundingIntentStatus, FundingMode, HelpRequest, Id,
-    Money, OutreachAttempt, OutreachChannel, OutreachStatus, PaymentEvent, PaymentEventStatus,
-    PaymentRail, PrivacyLevel, ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent,
-    RiskReviewOutcome, RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal,
-    VerificationDecision, VerifierKind, VerifierResult,
+    BountyStatus, CanonicalSolverCompletion, Capability, CapabilityClass, Claim, ClaimCandidate,
+    ClaimCandidateStatus, ContributorContact, DiscoveryResponse, Escrow, EscrowStatus, EvalRun,
+    FundingContribution, FundingContributionStatus, FundingIntent, FundingIntentStatus,
+    FundingMode, HelpRequest, Id, Money, OutreachAttempt, OutreachChannel, OutreachStatus,
+    PaymentEvent, PaymentEventStatus, PaymentRail, PrivacyLevel, ProofRecord, Quote,
+    ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface,
+    Settlement, Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
 };
 use ledger::{LedgerEntry, Posting};
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,8 @@ pub const AGENT_COORDINATION_MIGRATION: &str =
     include_str!("../../../migrations/0004_agent_coordination.sql");
 pub const TRIAL_BOUNTIES_MIGRATION: &str =
     include_str!("../../../migrations/0005_trial_bounties.sql");
+pub const SOLVER_LEADERBOARD_MIGRATION: &str =
+    include_str!("../../../migrations/0006_solver_leaderboard.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -504,6 +506,7 @@ impl PostgresStore {
                 X402_RELAYER_MIGRATION,
                 AGENT_COORDINATION_MIGRATION,
                 TRIAL_BOUNTIES_MIGRATION,
+                SOLVER_LEADERBOARD_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -3075,7 +3078,11 @@ impl PostgresStore {
               bounty_id = EXCLUDED.bounty_id,
               kind = EXCLUDED.kind,
               data = EXCLUDED.data,
-              occurred_at = EXCLUDED.occurred_at
+              occurred_at = CASE
+                WHEN autonomous_bounty_events.block_time_verified
+                  THEN autonomous_bounty_events.occurred_at
+                ELSE EXCLUDED.occurred_at
+              END
             "#,
         )
         .bind(event.id)
@@ -3111,6 +3118,116 @@ impl PostgresStore {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(autonomous_event_from_row).collect()
+    }
+
+    pub async fn list_unverified_autonomous_event_blocks(
+        &self,
+        network: &str,
+        limit: u32,
+    ) -> DbResult<Vec<u64>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT block_number
+            FROM autonomous_bounty_events
+            WHERE network = $1 AND block_time_verified = FALSE
+            ORDER BY block_number
+            LIMIT $2
+            "#,
+        )
+        .bind(network)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| u64_from_i64(row.try_get("block_number")?))
+            .collect()
+    }
+
+    pub async fn confirm_autonomous_event_block_time(
+        &self,
+        network: &str,
+        block_number: u64,
+        occurred_at: DateTime<Utc>,
+    ) -> DbResult<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE autonomous_bounty_events
+            SET occurred_at = $3, block_time_verified = TRUE
+            WHERE network = $1 AND block_number = $2
+            "#,
+        )
+        .bind(network)
+        .bind(i64_from_u64(block_number)?)
+        .bind(occurred_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn list_canonical_solver_completions(
+        &self,
+        network: &str,
+        starts_at: DateTime<Utc>,
+        ends_at: DateTime<Utc>,
+    ) -> DbResult<Vec<CanonicalSolverCompletion>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT settled.bounty_id,
+                   settled.contract_address AS bounty_contract,
+                   lower(settled.data->>'solver') AS solver_wallet,
+                   lower(created.data->>'creator') AS creator_wallet,
+                   settled.data->>'solver_reward' AS solver_reward,
+                   settled.occurred_at,
+                   settled.block_number,
+                   settled.log_index,
+                   COALESCE(
+                     terms.document->'benchmark'->>'engine' = 'standing_meta_v2_parent',
+                     FALSE
+                   ) AS standing_meta_bounty
+            FROM autonomous_bounty_events settled
+            JOIN LATERAL (
+              SELECT event.data
+              FROM autonomous_bounty_events event
+              WHERE event.network = settled.network
+                AND event.bounty_id = settled.bounty_id
+                AND event.kind = 'canonical_bounty_created'
+              ORDER BY event.block_number, event.log_index
+              LIMIT 1
+            ) created ON TRUE
+            LEFT JOIN autonomous_bounty_terms terms
+              ON lower(terms.terms_hash) = lower(created.data->>'terms_hash')
+            WHERE settled.network = $1
+              AND settled.kind = 'bounty_settled'
+              AND settled.block_time_verified = TRUE
+              AND settled.occurred_at >= $2
+              AND settled.occurred_at < $3
+            ORDER BY settled.occurred_at, settled.block_number, settled.log_index
+            "#,
+        )
+        .bind(network)
+        .bind(starts_at)
+        .bind(ends_at)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let reward = row.try_get::<String, _>("solver_reward")?;
+                Ok(CanonicalSolverCompletion {
+                    bounty_id: row.try_get("bounty_id")?,
+                    bounty_contract: row.try_get("bounty_contract")?,
+                    solver_wallet: row.try_get("solver_wallet")?,
+                    creator_wallet: row.try_get("creator_wallet")?,
+                    solver_reward_usdc_base_units: reward
+                        .parse::<u64>()
+                        .map_err(|_| DbError::IntegerOverflow(format!("solver reward {reward}")))?,
+                    occurred_at: row.try_get("occurred_at")?,
+                    block_number: u64_from_i64(row.try_get("block_number")?)?,
+                    log_index: u64_from_i64(row.try_get("log_index")?)?,
+                    standing_meta_bounty: row.try_get("standing_meta_bounty")?,
+                })
+            })
+            .collect()
     }
 
     pub async fn list_canonical_autonomous_bounty_contracts(
@@ -4812,6 +4929,21 @@ mod tests {
             assert!(
                 TRIAL_BOUNTIES_MIGRATION.contains(invariant),
                 "missing unfunded bounty invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn leaderboard_migration_requires_verified_block_time_indexes() {
+        for invariant in [
+            "block_time_verified BOOLEAN NOT NULL DEFAULT FALSE",
+            "idx_autonomous_bounty_events_unverified_blocks",
+            "idx_autonomous_bounty_events_solver_leaderboard",
+            "block_time_verified = TRUE AND kind = 'bounty_settled'",
+        ] {
+            assert!(
+                SOLVER_LEADERBOARD_MIGRATION.contains(invariant),
+                "missing leaderboard invariant {invariant}"
             );
         }
     }

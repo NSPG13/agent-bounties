@@ -32,6 +32,7 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     tools = discovery.get("agent_tools", [])
     for tool in (
         "list_autonomous_bounties",
+        "get_solver_leaderboard",
         "plan_autonomous_canonical_child_terms",
         "plan_autonomous_bounty_creation",
         "plan_autonomous_bounty_contribution",
@@ -85,6 +86,7 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
 
     for method in (
         "publish_autonomous_bounty_terms",
+        "get_solver_leaderboard",
         "publish_autonomous_submission_evidence",
         "plan_autonomous_canonical_child_terms",
         "plan_autonomous_bounty_creation",
