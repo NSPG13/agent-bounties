@@ -39,6 +39,7 @@ jobs:
     if: >-
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main' &&
+      vars.LEADERBOARD_REWARD_RUNNER_ENABLED == 'true' &&
       vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT != ''
     needs: contract
     runs-on: ubuntu-latest

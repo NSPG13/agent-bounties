@@ -94,6 +94,36 @@ class LeaderboardRewardPipelineTests(unittest.TestCase):
         self.assertEqual(references["daily"].isoformat(), "2026-07-20T23:59:59+00:00")
         self.assertEqual(references["weekly"], self.reference)
 
+    def test_contract_call_uses_machine_readable_single_value(self) -> None:
+        args = Namespace(
+            cast=Path("cast"),
+            rpc_url="https://rpc.example.test",
+            contract=CONTRACT,
+        )
+        with patch.object(pipeline, "run", return_value="[1784332800]") as run:
+            value = pipeline.contract_call(args, "firstDailyStart()(uint64)")
+        self.assertEqual(value, "1784332800")
+        self.assertEqual(run.call_args.args[0][0:3], ["cast", "call", "--json"])
+        self.assertEqual(pipeline.chain_int(value, "first daily start"), 1784332800)
+
+    def test_contract_call_rejects_human_or_ambiguous_output(self) -> None:
+        args = Namespace(
+            cast=Path("cast"),
+            rpc_url="https://rpc.example.test",
+            contract=CONTRACT,
+        )
+        for output, error in (
+            ("1784332800 [1.784e9]", "did not return JSON"),
+            ('["0x1", "0x2"]', "must return one value"),
+            ("[null]", "unsupported value"),
+        ):
+            with (
+                self.subTest(output=output),
+                patch.object(pipeline, "run", return_value=output),
+                self.assertRaisesRegex(pipeline.PipelineError, error),
+            ):
+                pipeline.contract_call(args, "firstDailyStart()(uint64)")
+
     def test_candidate_commits_to_exact_ranked_evidence(self) -> None:
         candidate = pipeline.build_candidate(
             response_fixture(), "daily", CONTRACT, self.reference, self.now

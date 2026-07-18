@@ -38,6 +38,7 @@ jobs:
        github.event.workflow_run.event == 'workflow_dispatch') &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
+      vars.LEADERBOARD_REWARD_RUNNER_ENABLED == 'true' &&
       vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT != ''
     needs: contract
     runs-on: ubuntu-latest

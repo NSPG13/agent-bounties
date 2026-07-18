@@ -55,9 +55,10 @@ Activate it after deployment:
 
 1. Confirm both repository contract variables.
 2. Confirm the contract signers match both regression verifier addresses.
-3. Run `Leaderboard Reward Runner` on `main`.
-4. Confirm both signer jobs and the relay.
-5. Confirm `reward_payout_status=paid` at a safe block.
-6. Confirm `LeaderboardRewardPaid` and the USDC transfer before reporting payment.
+3. Set repository variable `LEADERBOARD_REWARD_RUNNER_ENABLED=true`.
+4. Run `Leaderboard Reward Runner` on `main`.
+5. Confirm both signer jobs and the relay.
+6. Confirm `reward_payout_status=paid` at a safe block.
+7. Confirm `LeaderboardRewardPaid` and the USDC transfer before reporting payment.
 
 Ranking never moves funds directly. A configured address, pool balance, signature, or transaction hash is not payment. The contract records the paid winner atomically with the transfer.
