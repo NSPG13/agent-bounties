@@ -1,193 +1,145 @@
-"""
-Agent Bounties Feed Generator
-Produces standards-compliant RSS 2.0 and JSON Feed from deterministic fixtures.
-Usage: python tools/feed_generator.py [--output-dir feeds] [--validate]
+"""Snapshot and validate BountyBoard's live opportunity feeds.
 
-Future: ingest from canonical hosted funding feed (/.well-known/agent-bounties.json)
-and GitHub issue inventory for live feeds.
+The API owns projection and feed rendering. This utility intentionally does not
+rebuild bounty state from fixtures, GitHub labels, or another datastore.
 """
-import json, os, sys, hashlib, argparse, xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
-FEED_TITLE = "Agent Bounties -- Live Bounties Feed"
-FEED_DESC = "Machine-readable bounty inventory for autonomous agents and operators"
-# Placeholder URL -- replace with hosted canonical feed URL when live
-FEED_URL = "https://agent-bounties.example.com"
-BOUNTY_BASE = "https://github.com/NSPG13/agent-bounties/issues"
+
+FEEDS = {
+    "rss": ("v1/opportunities/feed.rss", "bounties.rss"),
+    "atom": ("v1/opportunities/feed.atom", "bounties.atom"),
+    "json": ("v1/opportunities/feed.json", "bounties.json"),
+}
+ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 
-def rfc822(iso_str: str) -> str:
-    """Convert ISO-8601 to RFC 822 date for RSS 2.0."""
-    from email.utils import format_datetime
-    dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-    return format_datetime(dt, usegmt=True)
+def normalized_api_base(value: str) -> str:
+    parsed = urllib.parse.urlparse(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("api base URL must use http or https and include a host")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("api base URL cannot include credentials, query, or fragment")
+    if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("non-local API snapshots require https")
+    return value.strip().rstrip("/")
 
 
-def load_issues(path="feeds/fixtures/issues.json"):
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def infer_state(issue):
-    """State MUST be evidence-bound. Uses explicit '_bounty_state' field from
-    verified canonical feed, not GitHub label heuristics. A GitHub 'funded' label
-    alone does not make a bounty claimable without reconciled on-chain evidence."""
-    return issue.get("_bounty_state", "seeking_funding")
-
-
-def max_timestamp(issues):
-    """Return max updated_at from all issues, or epoch if empty."""
-    ts = [i.get("updated_at", "") for i in issues if i.get("updated_at")]
-    return max(ts) if ts else "1970-01-01T00:00:00Z"
-
-
-def build_rss(issues, last_modified: str):
-    rss = ET.Element("rss", version="2.0")
-    channel = ET.SubElement(rss, "channel")
-    ET.SubElement(channel, "title").text = FEED_TITLE
-    ET.SubElement(channel, "link").text = FEED_URL
-    ET.SubElement(channel, "description").text = FEED_DESC
-    ET.SubElement(channel, "lastBuildDate").text = rfc822(last_modified)
-
-    sorted_issues = sorted(
-        issues,
-        key=lambda i: (infer_state(i) == "claimable", i.get("updated_at", "")),
-        reverse=True
+def fetch(base_url: str, route: str) -> tuple[bytes, dict[str, str]]:
+    url = f"{base_url}/{route}"
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "bountyboard-feed-validator/1.0"},
     )
-    for issue in sorted_issues:
-        item = ET.SubElement(channel, "item")
-        state = infer_state(issue)
-        title = f"[{state.upper()}] {issue['title']}"
-        ET.SubElement(item, "title").text = title
-        ET.SubElement(item, "link").text = f"{BOUNTY_BASE}/{issue['number']}"
-        guid = ET.SubElement(item, "guid")
-        guid.text = f"agent-bounties-{issue['number']}"
-        guid.set("isPermaLink", "false")
-        desc = (issue.get("body", "") or "")[:500]
-        ET.SubElement(item, "description").text = desc
-        if issue.get("updated_at"):
-            ET.SubElement(item, "pubDate").text = rfc822(issue["updated_at"])
-        cat = ET.SubElement(item, "category")
-        cat.text = state
-    return ET.tostring(rss, encoding="unicode")
+    with urllib.request.urlopen(request, timeout=15) as response:
+        if response.status != 200:
+            raise RuntimeError(f"{url} returned HTTP {response.status}")
+        return response.read(), {key.lower(): value for key, value in response.headers.items()}
 
 
-def build_json_feed(issues):
-    sorted_issues = sorted(
-        issues,
-        key=lambda i: (infer_state(i) == "claimable", i.get("updated_at", "")),
-        reverse=True
-    )
-    items = []
-    for issue in sorted_issues:
-        state = infer_state(issue)
-        labels = sorted({l["name"] for l in issue.get("labels", [])} if issue.get("labels") else [])
-        items.append({
-            "id": f"agent-bounties-{issue['number']}",
-            "url": f"{BOUNTY_BASE}/{issue['number']}",
-            "title": f"[{state.upper()}] {issue['title']}",
-            "content_text": (issue.get("body", "") or "")[:1000],
-            "date_published": issue.get("created_at"),
-            "date_modified": issue.get("updated_at"),
-            "tags": labels,
-            "_bounty_state": state,
-        })
-    return {
-        "version": "https://jsonfeed.org/version/1.1",
-        "title": FEED_TITLE,
-        "home_page_url": FEED_URL,
-        "feed_url": f"{FEED_URL}/feed.json",
-        "description": FEED_DESC,
-        "items": items,
+def validate_rss(body: bytes) -> list[str]:
+    root = ET.fromstring(body)
+    if root.tag != "rss" or root.attrib.get("version") != "2.0":
+        raise ValueError("RSS response is not RSS 2.0")
+    channel = root.find("channel")
+    if channel is None:
+        raise ValueError("RSS response is missing channel")
+    return [guid.text or "" for guid in channel.findall("item/guid")]
+
+
+def validate_atom(body: bytes) -> list[str]:
+    root = ET.fromstring(body)
+    if root.tag != f"{ATOM_NS}feed":
+        raise ValueError("Atom response is not an Atom 1.0 feed")
+    values = []
+    for entry in root.findall(f"{ATOM_NS}entry"):
+        identifier = entry.findtext(f"{ATOM_NS}id", default="")
+        values.append(identifier.removeprefix("urn:bountyboard:"))
+    return values
+
+
+def validate_json_feed(body: bytes) -> tuple[list[str], dict]:
+    document = json.loads(body)
+    if document.get("version") != "https://jsonfeed.org/version/1.1":
+        raise ValueError("JSON response is not JSON Feed 1.1")
+    items = document.get("items")
+    if not isinstance(items, list):
+        raise ValueError("JSON Feed is missing items")
+    identifiers = []
+    for item in items:
+        identifiers.append(item["id"])
+        extension = item.get("_bountyboard")
+        if not isinstance(extension, dict):
+            raise ValueError(f"{item['id']} is missing _bountyboard state")
+        for key in ("source_type", "work_state", "payment_state", "payment_committed"):
+            if key not in extension:
+                raise ValueError(f"{item['id']} is missing _bountyboard.{key}")
+        if extension["payment_state"] == "none" and extension["payment_committed"] is not False:
+            raise ValueError(f"{item['id']} marks payment_state=none as committed")
+    return identifiers, document
+
+
+def validate_documents(documents: dict[str, bytes]) -> dict:
+    rss_ids = validate_rss(documents["rss"])
+    atom_ids = validate_atom(documents["atom"])
+    json_ids, json_feed = validate_json_feed(documents["json"])
+    if rss_ids != json_ids or atom_ids != json_ids:
+        raise ValueError("RSS, Atom, and JSON Feed item order or identifiers differ")
+    return json_feed
+
+
+def write_snapshot(api_base_url: str, output_dir: Path) -> dict:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    documents: dict[str, bytes] = {}
+    response_headers: dict[str, dict[str, str]] = {}
+    for name, (route, filename) in FEEDS.items():
+        body, headers = fetch(api_base_url, route)
+        documents[name] = body
+        response_headers[name] = headers
+        (output_dir / filename).write_bytes(body)
+
+    json_feed = validate_documents(documents)
+    manifest = {
+        "source_api": api_base_url,
+        "item_count": len(json_feed["items"]),
+        "last_modified": response_headers["json"].get("last-modified"),
+        "documents": {
+            name: {
+                "route": route,
+                "filename": filename,
+                "sha256": hashlib.sha256(documents[name]).hexdigest(),
+                "etag": response_headers[name].get("etag"),
+            }
+            for name, (route, filename) in FEEDS.items()
+        },
     }
-
-
-def compute_etag(content: str) -> str:
-    return hashlib.sha256(content.encode()).hexdigest()[:16]
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--output-dir", default="feeds")
-    ap.add_argument("--fixtures", default="feeds/fixtures/issues.json")
-    ap.add_argument("--validate", action="store_true")
-    args = ap.parse_args()
-
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    issues = load_issues(args.fixtures)
-    last_modified = max_timestamp(issues)
-    print(f"Loaded {len(issues)} issues (last modified: {last_modified})")
-
-    rss = build_rss(issues, last_modified)
-    jf = build_json_feed(issues)
-    etag = compute_etag(rss)
-
-    Path(args.output_dir, "bounties.rss").write_text(rss, encoding="utf-8")
-    Path(args.output_dir, "bounties.json").write_text(
-        json.dumps(jf, indent=2, ensure_ascii=False), encoding="utf-8"
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
+    return manifest
 
-    manifest = {"etag": etag, "last_modified": last_modified, "item_count": len(issues)}
-    Path(args.output_dir, "manifest.json").write_text(
-        json.dumps(manifest, indent=2), encoding="utf-8"
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--api-base-url", default="http://127.0.0.1:8080")
+    parser.add_argument("--output-dir", default="feeds/proof")
+    args = parser.parse_args()
+    api_base_url = normalized_api_base(args.api_base_url)
+    manifest = write_snapshot(api_base_url, Path(args.output_dir))
+    print(
+        f"feed_snapshot=ok items={manifest['item_count']} "
+        f"source={manifest['source_api']} output={args.output_dir}"
     )
-
-    print(f"RSS:  {len(rss)} bytes  |  ETag: {etag}")
-    print(f"JSON: {len(json.dumps(jf))} bytes  |  Items: {len(jf['items'])}")
-
-    if args.validate:
-        validate_output(args.output_dir)
-        verify_determinism(args.fixtures, args.output_dir)
-
-
-def validate_output(d):
-    errors = []
-    try:
-        ET.parse(os.path.join(d, "bounties.rss"))
-        print("  RSS valid XML")
-    except Exception as e:
-        errors.append(f"RSS XML error: {e}")
-    with open(os.path.join(d, "bounties.json"), encoding="utf-8") as f:
-        jf = json.load(f)
-    assert "version" in jf, "missing version"
-    assert "items" in jf, "missing items"
-    for item in jf["items"]:
-        assert "id" in item, f"missing id in {item}"
-        assert "url" in item, f"missing url in {item}"
-        assert "_bounty_state" in item, f"missing state in {item.get('id')}"
-        assert sorted(item["tags"]) == item["tags"], f"tags not sorted in {item.get('id')}"
-    print(f"  JSON Feed valid ({len(jf['items'])} items, tags deterministic)")
-
-    if errors:
-        print("FAIL:", "\n".join(errors))
-        sys.exit(1)
-    print("  All validations passed")
-
-
-def verify_determinism(fixture_path, output_dir):
-    """Run generator twice, assert identical output."""
-    import tempfile, subprocess
-    tmp = tempfile.mkdtemp()
-    try:
-        exe = sys.executable
-        subprocess.run([exe, "tools/feed_generator.py", "--fixtures", fixture_path,
-                        "--output-dir", os.path.join(tmp, "run1")], check=True,
-                       capture_output=True)
-        subprocess.run([exe, "tools/feed_generator.py", "--fixtures", fixture_path,
-                        "--output-dir", os.path.join(tmp, "run2")], check=True,
-                       capture_output=True)
-        r1 = Path(tmp, "run1", "bounties.rss").read_text()
-        r2 = Path(tmp, "run2", "bounties.rss").read_text()
-        assert r1 == r2, "RSS output is not deterministic"
-        j1 = Path(tmp, "run1", "bounties.json").read_text()
-        j2 = Path(tmp, "run2", "bounties.json").read_text()
-        assert j1 == j2, "JSON output is not deterministic"
-        print(f"  Determinism: PASS (identical RSS + JSON across runs)")
-    finally:
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

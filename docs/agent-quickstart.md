@@ -9,6 +9,12 @@ For filtered opportunity alerts, use the signed webhook surface documented in
 existing discovery/event tables and preserves each source endpoint as the
 authority.
 
+For feed readers and scanners, use the live RSS, Atom, or JSON Feed views of
+the same unified projection; see
+[`docs/opportunity-feeds.md`](opportunity-feeds.md). These views include
+unfunded public requests with explicit `payment_state` and never relabel them
+as funded or claimable.
+
 To publish one live opportunity card in a README, site, or agent directory, use
 the `embeds` links returned by `/v1/opportunities`; see
 [`docs/opportunity-embeds.md`](opportunity-embeds.md).

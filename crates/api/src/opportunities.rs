@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
 use utoipa::ToSchema;
+use web_public::escape_html;
 
 pub const OPPORTUNITY_PROJECTION_SCHEMA: &str = "agent-bounties/opportunity-projection-v1";
 
@@ -123,6 +124,187 @@ pub struct OpportunityProjectionResponse {
     pub source_statuses: Vec<OpportunitySourceStatus>,
     pub items: Vec<OpportunityItem>,
     pub evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpportunityFeedDocuments {
+    pub rss: String,
+    pub atom: String,
+    pub json: String,
+    pub updated_at: String,
+}
+
+pub fn render_opportunity_feeds(
+    projection: &OpportunityProjectionResponse,
+    public_base_url: &str,
+) -> OpportunityFeedDocuments {
+    let public_base_url = public_base_url.trim_end_matches('/');
+    let feed_root = format!("{public_base_url}/v1/opportunities");
+    let updated_at = projection
+        .items
+        .iter()
+        .filter_map(|item| DateTime::parse_from_rfc3339(&item.updated_at).ok())
+        .max()
+        .map(|value| value.with_timezone(&Utc))
+        .unwrap_or_else(|| DateTime::UNIX_EPOCH.with_timezone(&Utc));
+    let rss_date = updated_at.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+    let atom_date = updated_at.to_rfc3339();
+
+    let mut rss_items = String::new();
+    let mut atom_entries = String::new();
+    let mut json_items = Vec::with_capacity(projection.items.len());
+    for item in &projection.items {
+        let summary = feed_summary(item);
+        let title = escape_html(&item.title);
+        let public_url = escape_html(&item.public_url);
+        let opportunity_id = escape_html(&item.opportunity_id);
+        let published = normalized_feed_date(&item.created_at);
+        let modified = normalized_feed_date(&item.updated_at);
+        let rss_modified = DateTime::parse_from_rfc3339(&modified)
+            .map(|value| {
+                value
+                    .with_timezone(&Utc)
+                    .format("%a, %d %b %Y %H:%M:%S GMT")
+                    .to_string()
+            })
+            .unwrap_or_else(|_| rss_date.clone());
+
+        rss_items.push_str(&format!(
+            "<item><title>{title}</title><link>{public_url}</link><guid isPermaLink=\"false\">{opportunity_id}</guid><description>{}</description><pubDate>{rss_modified}</pubDate><category>{}</category><category>{}</category><category>{}</category></item>",
+            escape_html(&summary),
+            escape_html(&item.work_state),
+            escape_html(&item.payment_state),
+            escape_html(&item.source_type),
+        ));
+
+        let category_elements = item
+            .categories
+            .iter()
+            .chain(item.skills.iter())
+            .map(|value| format!("<category term=\"{}\"/>", escape_html(value)))
+            .collect::<String>();
+        atom_entries.push_str(&format!(
+            "<entry><id>urn:bountyboard:{opportunity_id}</id><title>{title}</title><link href=\"{public_url}\"/><published>{published}</published><updated>{modified}</updated><summary type=\"text\">{}</summary><category term=\"{}\"/><category term=\"{}\"/><category term=\"{}\"/>{category_elements}</entry>",
+            escape_html(&summary),
+            escape_html(&item.work_state),
+            escape_html(&item.payment_state),
+            escape_html(&item.source_type),
+        ));
+
+        json_items.push(json!({
+            "id": item.opportunity_id,
+            "url": item.public_url,
+            "title": item.title,
+            "content_text": summary,
+            "date_published": published,
+            "date_modified": modified,
+            "tags": feed_tags(item),
+            "_bountyboard": {
+                "source_type": item.source_type,
+                "work_state": item.work_state,
+                "payment_state": item.payment_state,
+                "payment_committed": item.payment_committed,
+                "reward": item.reward,
+                "verification_method": item.verification_method,
+                "verification_ready": item.verification_ready,
+                "terms_hash": item.terms_hash,
+                "next_action": item.next_action,
+                "evidence_boundary": item.evidence_boundary,
+            }
+        }));
+    }
+
+    let rss_url = format!("{feed_root}/feed.rss");
+    let atom_url = format!("{feed_root}/feed.atom");
+    let json_url = format!("{feed_root}/feed.json");
+    let rss = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\"><channel><title>BountyBoard opportunities</title><link>{}</link><description>Public funded and unfunded work discoverable by agents. Payment state is explicit.</description><lastBuildDate>{rss_date}</lastBuildDate><atom:link xmlns:atom=\"http://www.w3.org/2005/Atom\" href=\"{}\" rel=\"self\" type=\"application/rss+xml\"/>{rss_items}</channel></rss>",
+        escape_html(public_base_url),
+        escape_html(&rss_url),
+    );
+    let atom = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><id>{}</id><title>BountyBoard opportunities</title><updated>{atom_date}</updated><link href=\"{}\"/><link href=\"{}\" rel=\"self\" type=\"application/atom+xml\"/><subtitle>Public funded and unfunded work discoverable by agents. Payment state is explicit.</subtitle>{atom_entries}</feed>",
+        escape_html(&atom_url),
+        escape_html(public_base_url),
+        escape_html(&atom_url),
+    );
+    let json = serde_json::to_string_pretty(&json!({
+        "version": "https://jsonfeed.org/version/1.1",
+        "title": "BountyBoard opportunities",
+        "home_page_url": public_base_url,
+        "feed_url": json_url,
+        "description": "Public funded and unfunded work discoverable by agents. Payment state and commitment are explicit; only canonical settlement proves payment.",
+        "items": json_items,
+    }))
+    .unwrap_or_else(|_| "{\"version\":\"https://jsonfeed.org/version/1.1\",\"items\":[]}".to_string());
+
+    OpportunityFeedDocuments {
+        rss,
+        atom,
+        json,
+        updated_at: rss_date,
+    }
+}
+
+fn feed_summary(item: &OpportunityItem) -> String {
+    let reward = if item.payment_committed {
+        format!(
+            "Committed reward: {} {} ({}; {} decimals).",
+            item.reward.amount, item.reward.currency, item.reward.unit, item.reward.decimals
+        )
+    } else if item.reward.amount != "0" {
+        format!(
+            "Proposed reward: {} {} ({}; {} decimals); payment is not committed.",
+            item.reward.amount, item.reward.currency, item.reward.unit, item.reward.decimals
+        )
+    } else {
+        "No payment is committed.".to_string()
+    };
+    let goal = item
+        .goal
+        .as_deref()
+        .unwrap_or("No additional goal text was supplied.");
+    truncate_feed_text(
+        &format!(
+            "{goal}\n\nWork state: {}. Payment state: {}. {reward} Verification: {}. Next action: {}",
+            item.work_state,
+            item.payment_state,
+            item.verification_method,
+            item.next_action.instructions
+        ),
+        2_000,
+    )
+}
+
+fn feed_tags(item: &OpportunityItem) -> Vec<String> {
+    let mut tags = vec![
+        item.source_type.clone(),
+        item.work_state.clone(),
+        item.payment_state.clone(),
+    ];
+    tags.extend(item.categories.iter().cloned());
+    tags.extend(item.skills.iter().cloned());
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+fn normalized_feed_date(value: &str) -> String {
+    DateTime::parse_from_rfc3339(value)
+        .map(|value| value.with_timezone(&Utc).to_rfc3339())
+        .unwrap_or_else(|_| DateTime::UNIX_EPOCH.with_timezone(&Utc).to_rfc3339())
+}
+
+fn truncate_feed_text(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut truncated = value
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 impl OpportunityItem {
@@ -923,5 +1105,38 @@ mod tests {
             .discovery_factors
             .iter()
             .any(|factor| factor.contains("keyword_matches=api")));
+    }
+
+    #[test]
+    fn live_feed_formats_reuse_projection_and_disclose_unfunded_payment_state() {
+        let mut item = unfunded_opportunity(&trial(), &[], "https://api.example");
+        item.title = "Audit <unsafe> & document".to_string();
+        let projection = OpportunityProjectionResponse {
+            schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
+            generated_at: "2027-01-15T08:01:00Z".to_string(),
+            network: "base-mainnet".to_string(),
+            applied_view: None,
+            degraded: false,
+            source_statuses: Vec::new(),
+            items: vec![item],
+            evidence_boundary: "Projection only".to_string(),
+        };
+
+        let feeds = render_opportunity_feeds(&projection, "https://api.example/");
+        assert!(feeds.rss.contains("<rss version=\"2.0\">"));
+        assert!(feeds.rss.contains("Audit &lt;unsafe&gt; &amp; document"));
+        assert!(feeds.rss.contains("<category>none</category>"));
+        assert!(feeds.atom.contains("xmlns=\"http://www.w3.org/2005/Atom\""));
+        assert!(
+            feeds.atom.contains("payment is not committed")
+                || feeds.atom.contains("No payment is committed")
+        );
+
+        let json: Value = serde_json::from_str(&feeds.json).unwrap();
+        assert_eq!(json["version"], "https://jsonfeed.org/version/1.1");
+        assert_eq!(json["items"][0]["_bountyboard"]["payment_state"], "none");
+        assert_eq!(json["items"][0]["_bountyboard"]["payment_committed"], false);
+        assert!(!feeds.rss.to_ascii_lowercase().contains("trial"));
+        assert_eq!(feeds.updated_at, "Fri, 15 Jan 2027 08:00:00 GMT");
     }
 }

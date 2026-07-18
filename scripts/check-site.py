@@ -254,6 +254,11 @@ def main() -> int:
             "Opportunities across every payment state",
             "Open opportunity",
             "does not imply payment",
+            'type="application/rss+xml"',
+            'type="application/atom+xml"',
+            'type="application/feed+json"',
+            "Subscribe via RSS",
+            "Subscribe via Atom",
         ],
     )
     require_phrases(
@@ -489,6 +494,14 @@ def main() -> int:
         fail("x402 funding policy must bind evidence to FundingAdded")
     if discovery.get("endpoints", {}).get("x402_discovery") != "https://api.bountyboard.global/.well-known/x402.json":
         fail("static discovery manifest has the wrong x402 discovery endpoint")
+    expected_opportunity_feeds = {
+        "opportunity_feed_rss": "https://api.bountyboard.global/v1/opportunities/feed.rss",
+        "opportunity_feed_atom": "https://api.bountyboard.global/v1/opportunities/feed.atom",
+        "opportunity_feed_json": "https://api.bountyboard.global/v1/opportunities/feed.json",
+    }
+    for endpoint_name, endpoint_url in expected_opportunity_feeds.items():
+        if discovery.get("endpoints", {}).get(endpoint_name) != endpoint_url:
+            fail(f"static discovery manifest has the wrong {endpoint_name} endpoint")
     if x402_discovery.get("x402Version") != 2:
         fail("static x402 discovery must use version 2")
     resources = {item.get("name"): item for item in x402_discovery.get("resources", [])}

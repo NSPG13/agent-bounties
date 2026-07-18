@@ -91,8 +91,8 @@ use github_app::{
 use ledger::Ledger;
 use opportunities::{
     apply_query as apply_opportunity_query, canonical_opportunity, legacy_opportunity,
-    unfunded_opportunity, OpportunityItem, OpportunityProjectionResponse, OpportunityQuery,
-    OpportunitySourceStatus, OpportunityView, OPPORTUNITY_PROJECTION_SCHEMA,
+    render_opportunity_feeds, unfunded_opportunity, OpportunityItem, OpportunityProjectionResponse,
+    OpportunityQuery, OpportunitySourceStatus, OpportunityView, OPPORTUNITY_PROJECTION_SCHEMA,
 };
 use payments_stripe::{
     apply_checkout_payment_method_configuration, execute_stripe_request, verify_webhook_signature,
@@ -136,6 +136,9 @@ use worker::{
         draft_bounty_with_cloud_agent,
         analyze_bounty_fit,
         list_opportunities,
+        opportunity_feed_rss,
+        opportunity_feed_atom,
+        opportunity_feed_json,
         opportunity_embed_page,
         opportunity_embed_svg,
         opportunity_embed_markdown,
@@ -1274,6 +1277,9 @@ async fn main() -> anyhow::Result<()> {
             get(analyze_bounty_fit),
         )
         .route("/v1/opportunities", get(list_opportunities))
+        .route("/v1/opportunities/feed.rss", get(opportunity_feed_rss))
+        .route("/v1/opportunities/feed.atom", get(opportunity_feed_atom))
+        .route("/v1/opportunities/feed.json", get(opportunity_feed_json))
         .route(
             "/v1/opportunities/conversion-funnel",
             get(opportunity_conversion_funnel),
@@ -1782,6 +1788,87 @@ async fn list_opportunities(
     Query(query): Query<OpportunityQuery>,
 ) -> Result<Json<OpportunityProjectionResponse>, StatusCode> {
     build_opportunity_projection(&state, query).await.map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/opportunities/feed.rss",
+    responses(
+        (status = 200, description = "Live RSS 2.0 representation of the unified opportunity projection", content_type = "application/rss+xml"),
+        (status = 503, description = "Opportunity projection unavailable")
+    )
+)]
+async fn opportunity_feed_rss(State(state): State<SharedState>) -> Result<Response, StatusCode> {
+    opportunity_feed_response(&state, OpportunityFeedFormat::Rss).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/opportunities/feed.atom",
+    responses(
+        (status = 200, description = "Live Atom 1.0 representation of the unified opportunity projection", content_type = "application/atom+xml"),
+        (status = 503, description = "Opportunity projection unavailable")
+    )
+)]
+async fn opportunity_feed_atom(State(state): State<SharedState>) -> Result<Response, StatusCode> {
+    opportunity_feed_response(&state, OpportunityFeedFormat::Atom).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/opportunities/feed.json",
+    responses(
+        (status = 200, description = "Live JSON Feed 1.1 representation of the unified opportunity projection", content_type = "application/feed+json"),
+        (status = 503, description = "Opportunity projection unavailable")
+    )
+)]
+async fn opportunity_feed_json(State(state): State<SharedState>) -> Result<Response, StatusCode> {
+    opportunity_feed_response(&state, OpportunityFeedFormat::Json).await
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OpportunityFeedFormat {
+    Rss,
+    Atom,
+    Json,
+}
+
+async fn opportunity_feed_response(
+    state: &SharedState,
+    format: OpportunityFeedFormat,
+) -> Result<Response, StatusCode> {
+    let projection = build_opportunity_projection(
+        state,
+        OpportunityQuery {
+            limit: Some(300),
+            ..OpportunityQuery::default()
+        },
+    )
+    .await?;
+    let feeds = render_opportunity_feeds(&projection, &state.public_base_url);
+    let (content_type, body) = match format {
+        OpportunityFeedFormat::Rss => ("application/rss+xml; charset=utf-8", feeds.rss),
+        OpportunityFeedFormat::Atom => ("application/atom+xml; charset=utf-8", feeds.atom),
+        OpportunityFeedFormat::Json => ("application/feed+json; charset=utf-8", feeds.json),
+    };
+    let etag = format!("\"{}\"", hex::encode(Sha256::digest(body.as_bytes())));
+    let mut response = Response::new(body.into());
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=60"),
+    );
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    response.headers_mut().insert(
+        header::LAST_MODIFIED,
+        HeaderValue::from_str(&feeds.updated_at).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    Ok(response)
 }
 
 async fn build_opportunity_projection(
@@ -12352,6 +12439,9 @@ mod tests {
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
         assert!(paths.contains_key("/v1/opportunities"));
+        assert!(paths.contains_key("/v1/opportunities/feed.rss"));
+        assert!(paths.contains_key("/v1/opportunities/feed.atom"));
+        assert!(paths.contains_key("/v1/opportunities/feed.json"));
         assert!(paths.contains_key("/v1/opportunities/conversion-funnel"));
         assert!(paths.contains_key("/v1/discovery/subscriptions"));
         assert!(paths.contains_key("/v1/discovery/subscriptions/{id}"));

@@ -100,6 +100,9 @@ pub struct DiscoveryEndpoints {
     pub cloud_agent_readiness: String,
     pub cloud_bounty_drafts: String,
     pub opportunities: String,
+    pub opportunity_feed_rss: String,
+    pub opportunity_feed_atom: String,
+    pub opportunity_feed_json: String,
     pub discovery_subscriptions: String,
     pub discovery_subscription: String,
     pub opportunity_embed_html: String,
@@ -580,6 +583,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         cloud_agent_readiness: format!("{api}/v1/cloud-agent/readiness"),
         cloud_bounty_drafts: format!("{api}/v1/cloud-agent/bounty-drafts"),
         opportunities: format!("{api}/v1/opportunities"),
+        opportunity_feed_rss: format!("{api}/v1/opportunities/feed.rss"),
+        opportunity_feed_atom: format!("{api}/v1/opportunities/feed.atom"),
+        opportunity_feed_json: format!("{api}/v1/opportunities/feed.json"),
         discovery_subscriptions: format!("{api}/v1/discovery/subscriptions"),
         discovery_subscription: format!("{api}/v1/discovery/subscriptions/{{id}}"),
         opportunity_embed_html: format!(
@@ -1353,6 +1359,7 @@ Use {opportunities} for combined discovery across open, claimable, in-progress, 
 - Hosted cloud drafting readiness: {cloud_agent_readiness}
 - Hosted cloud bounty draft: {cloud_bounty_drafts}
 - Unified opportunity projection: {opportunities}
+- Live opportunity feeds: RSS {opportunity_feed_rss}, Atom {opportunity_feed_atom}, JSON Feed {opportunity_feed_json}
 - Filtered signed-webhook subscriptions: {discovery_subscriptions}
 - Per-opportunity HTML, SVG, and Markdown embeds: use each unified projection item's `embeds` object
 - Observable opportunity conversion funnel: {opportunity_conversion_funnel} (never infers independent active agents)
@@ -1532,6 +1539,9 @@ Default CTA: Post your own bounty at {post_page}
         cloud_agent_readiness = endpoints.cloud_agent_readiness,
         cloud_bounty_drafts = endpoints.cloud_bounty_drafts,
         opportunities = endpoints.opportunities,
+        opportunity_feed_rss = endpoints.opportunity_feed_rss,
+        opportunity_feed_atom = endpoints.opportunity_feed_atom,
+        opportunity_feed_json = endpoints.opportunity_feed_json,
         discovery_subscriptions = endpoints.discovery_subscriptions,
         opportunity_conversion_funnel = endpoints.opportunity_conversion_funnel,
         bounty_analysis = endpoints.autonomous_bounty_analysis,
@@ -3370,6 +3380,18 @@ mod tests {
         assert_eq!(
             manifest.endpoints.unfunded_bounties,
             "http://127.0.0.1:8080/v1/unfunded-bounties"
+        );
+        assert_eq!(
+            manifest.endpoints.opportunity_feed_rss,
+            "http://127.0.0.1:8080/v1/opportunities/feed.rss"
+        );
+        assert_eq!(
+            manifest.endpoints.opportunity_feed_atom,
+            "http://127.0.0.1:8080/v1/opportunities/feed.atom"
+        );
+        assert_eq!(
+            manifest.endpoints.opportunity_feed_json,
+            "http://127.0.0.1:8080/v1/opportunities/feed.json"
         );
     }
 
