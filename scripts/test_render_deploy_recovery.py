@@ -41,6 +41,15 @@ class FakeClient:
             "trigger": "api",
         }
 
+    def get_build_log_summary(self, service, deploy):
+        return {
+            "available": True,
+            "classifications": ["compile"],
+            "excerpts": ["error: could not compile api"],
+            "log_count": 1,
+            "content_sha256": "a" * 64,
+        }
+
 
 class RecordingClient(recovery.RenderClient):
     def __init__(self, *, deploys=None, response=None, error=None) -> None:
@@ -419,6 +428,39 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(recovery.RecoveryError, "RENDER_API_KEY"):
             recovery.RenderClient("")
 
+    def test_build_log_summary_classifies_and_redacts(self) -> None:
+        result = recovery.summarize_build_logs(
+            {
+                "logs": [
+                    {"message": "error: package requires rustc 1.95 or newer"},
+                    {"message": "DATABASE_URL=postgres://user:do-not-print@example/db failed"},
+                ]
+            }
+        )
+        self.assertIn("rust_toolchain", result["classifications"])
+        self.assertIn("[sensitive build diagnostic redacted]", result["excerpts"])
+        self.assertNotIn("do-not-print", recovery.json.dumps(result))
+        self.assertRegex(result["content_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_build_log_query_is_scoped_to_service_and_workspace(self) -> None:
+        client = RecordingClient()
+        paths = []
+        client._read_with_retry = lambda path: (
+            paths.append(path) or {"logs": [{"message": "failed to solve build"}]}
+        )
+        result = client.get_build_log_summary(
+            {"id": "srv-api", "ownerId": "tea-owner123"},
+            {"createdAt": "2026-07-18T07:31:00Z"},
+        )
+        query = recovery.urllib.parse.parse_qs(
+            recovery.urllib.parse.urlsplit(paths[0]).query
+        )
+        self.assertEqual(query["ownerId"], ["tea-owner123"])
+        self.assertEqual(query["resource"], ["srv-api"])
+        self.assertEqual(query["type"], ["build"])
+        self.assertEqual(query["startTime"], ["2026-07-18T07:31:00Z"])
+        self.assertIn("docker", result["classifications"])
+
     def test_all_service_bindings_validate_before_any_mutation(self) -> None:
         client = ResolutionFailureClient()
         with self.assertRaisesRegex(recovery.RecoveryError, "unexpected repository"):
@@ -437,7 +479,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         clock = FakeClock()
         result = recovery.poll_deploys(
             client,
-            {"agent-bounties-api": ("srv-api", "dep-api")},
+            {"agent-bounties-api": ({"id": "srv-api"}, "dep-api")},
             "a" * 40,
             timeout_seconds=20,
             poll_seconds=2,
@@ -448,14 +490,19 @@ class RenderDeployRecoveryTests(unittest.TestCase):
 
     def test_poll_fails_closed_on_build_failure(self) -> None:
         client = FakeClient(["build_failed"])
-        with self.assertRaisesRegex(recovery.RecoveryError, "build_failed"):
+        with self.assertRaisesRegex(recovery.RenderDeployFailure, "dep-api.*build_failed") as caught:
             recovery.poll_deploys(
                 client,
-                {"agent-bounties-api": ("srv-api", "dep-api")},
+                {"agent-bounties-api": ({"id": "srv-api"}, "dep-api")},
                 "a" * 40,
                 timeout_seconds=20,
                 poll_seconds=2,
             )
+        self.assertEqual(caught.exception.evidence["deploy_id"], "dep-api")
+        self.assertEqual(
+            caught.exception.evidence["build_logs"]["classifications"],
+            ["compile"],
+        )
 
     def test_poll_timeout_is_bounded(self) -> None:
         client = FakeClient(["queued"])
@@ -463,7 +510,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(recovery.RecoveryError, "timed out"):
             recovery.poll_deploys(
                 client,
-                {"agent-bounties-api": ("srv-api", "dep-api")},
+                {"agent-bounties-api": ({"id": "srv-api"}, "dep-api")},
                 "a" * 40,
                 timeout_seconds=3,
                 poll_seconds=2,
