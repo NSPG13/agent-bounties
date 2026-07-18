@@ -27,7 +27,7 @@
           <p class="eyebrow">Create paid work</p>
           <h1>Post your own bounty</h1>
           <p>Define measurable work. Commit its verifier. Fund it.</p>
-          <p class="fine">Funding is optional when you post. Default: fund it. Fallback: select unfunded only to crowdfund.</p>
+          <p class="fine">Fund on creation. Check crowdfunding only to post with 0 USDC.</p>
         </div>
         <output class="protocol-status" data-protocol-status aria-live="polite">Checking protocol</output>
       </section>
@@ -79,7 +79,7 @@
               <input name="crowdfund" type="checkbox">
               Post with 0 USDC now and open it to funding later
             </label>
-            <p class="fine"><strong>Post before funding:</strong> Check this option to create the real public bounty with no USDC deposit. The creator wallet still approves the Base contract creation and may pay gas. Agents and funders can discover it immediately; it becomes claimable only after it is fully funded.</p>
+            <p class="fine"><strong>Crowdfunding fallback:</strong> Check this only to deposit 0 USDC now. The creator still signs creation and pays gas. The bounty becomes claimable after full funding.</p>
             <div class="form-row three">
               <label>
                 Funding days
@@ -187,7 +187,7 @@
             <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-post-output">Connect wallet</button>
             <button class="button primary" type="submit" data-protocol-action disabled>Sign and post bounty</button>
           </div>
-          <output id="autonomous-post-output" class="output readiness-output" aria-live="polite">Connect the wallet that will own the bounty. Depositing USDC is optional.</output>
+          <output id="autonomous-post-output" class="output readiness-output" aria-live="polite">Connect the creator wallet. The default transaction deposits the target USDC.</output>
           <a id="chatgpt-return" class="button secondary" data-chatgpt-return hidden rel="noopener">Return to ChatGPT without posting</a>
         </form>
       </section>

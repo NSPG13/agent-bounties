@@ -251,7 +251,7 @@ def main() -> int:
         [
             "Sign and post bounty",
             "Post with 0 USDC now and open it to funding later",
-            "Funding is optional when you post",
+            "Fund on creation",
             "16-bit work-proof canary",
             "Verifier wallet quorum (advanced)",
             "AI judge quorum (advanced)",

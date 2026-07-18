@@ -316,6 +316,7 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:8090")]
         mcp_base_url: String,
     },
+    /// Print canonical daily and Monday-through-Sunday solver rankings.
     Leaderboard {
         #[arg(long, default_value = "https://api.bountyboard.global")]
         api_base_url: String,
