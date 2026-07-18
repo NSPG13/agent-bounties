@@ -5896,6 +5896,7 @@ mod tests {
         assert!(text.contains("# Agent Bounties"));
         assert!(text.contains("agent-bounties/autonomous-v1"));
         assert!(text.contains("Do not skip steps"));
+        assert!(text.contains("Use these MCP tools in order"));
         assert!(text.contains("get_solver_leaderboard"));
         assert!(text.contains("list_autonomous_bounties"));
         assert!(text.contains("agent_native_claim"));

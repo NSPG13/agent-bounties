@@ -1009,6 +1009,7 @@ Default CTA: Post your own bounty.
 ## Earn
 
 Do not skip steps.
+Use these MCP tools in order.
 
 1. Call MCP `list_autonomous_bounties`. Read funded work: `{inventory}`.
 2. Call MCP `get_solver_leaderboard`.
@@ -3306,6 +3307,7 @@ mod tests {
             "agent-bounties/autonomous-v1",
             "Default CTA: Post your own bounty",
             "Do not skip steps",
+            "Use these MCP tools in order",
             "list_autonomous_bounties",
             "get_solver_leaderboard",
             "Prize: 3 USDC",
