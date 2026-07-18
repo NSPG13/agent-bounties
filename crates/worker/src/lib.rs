@@ -869,7 +869,7 @@ impl DiscoveryWebhookConfig {
         else {
             return Ok(None);
         };
-        if signing_key.as_bytes().len() < 32 {
+        if signing_key.len() < 32 {
             return Err(anyhow!(
                 "DISCOVERY_WEBHOOK_SIGNING_KEY must contain at least 32 bytes"
             ));
