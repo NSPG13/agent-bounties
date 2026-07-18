@@ -76,22 +76,29 @@ class DeploymentVerificationTest(unittest.TestCase):
                     "blockNumber": "0x123",
                 }
             ),
-            ("codehash", CONTRACT.lower()): "0x" + "55" * 32,
         }
         if key not in values:
             raise AssertionError(f"unexpected cast call: {key}")
         return values[key]
 
+    @staticmethod
+    def local_cast_result(_cast, *arguments):
+        if arguments != ("keccak", "0x6001"):
+            raise AssertionError(f"unexpected local cast call: {arguments}")
+        return "0x" + "55" * 32
+
+    @patch.object(verifier, "run_local_cast", side_effect=local_cast_result.__func__)
     @patch.object(verifier, "run_cast", side_effect=cast_result.__func__)
-    def test_accepts_exact_deployment(self, _run):
+    def test_accepts_exact_deployment(self, _run, _local_run):
         report = verifier.verify(self.args)
         self.assertEqual(report["reward_contract"], CONTRACT)
         self.assertEqual(report["daily_reward_usdc_base_units"], 3_000_000)
         self.assertEqual(report["weekly_reward_usdc_base_units"], 26_000_000)
         self.assertEqual(report["deployment_transaction"], TX)
 
+    @patch.object(verifier, "run_local_cast", side_effect=local_cast_result.__func__)
     @patch.object(verifier, "run_cast", side_effect=cast_result.__func__)
-    def test_rejects_signer_drift(self, run):
+    def test_rejects_signer_drift(self, run, _local_run):
         original = run.side_effect
 
         def drift(cast, rpc, *arguments):
