@@ -144,10 +144,7 @@ async fn handle_request(state: SharedState, request: Value) -> Option<Value> {
             "Invalid Request",
         ));
     };
-    if id.is_none() {
-        return None;
-    }
-    let id = id.unwrap_or(Value::Null);
+    let id = id?;
     let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
 
     let result = match method {
