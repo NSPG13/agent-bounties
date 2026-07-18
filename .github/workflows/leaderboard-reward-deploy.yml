@@ -62,10 +62,12 @@ jobs:
       - name: Deploy and attest Base Sepolia contract
         run: |
           mkdir -p target
-          export LEADERBOARD_DEPLOYMENT_OUTPUT="$GITHUB_WORKSPACE/target/base-sepolia-leaderboard-raw.json"
-          forge script --root contracts/base-escrow \
+          export LEADERBOARD_DEPLOYMENT_OUTPUT="../../target/base-sepolia-leaderboard-raw.json"
+          pushd contracts/base-escrow
+          forge script \
             script/DeploySolverLeaderboardRewards.s.sol:DeploySolverLeaderboardRewards \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --broadcast --slow
+          popd
           python scripts/verify_leaderboard_reward_deployment.py \
             --network base-sepolia \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" \
@@ -103,10 +105,12 @@ jobs:
       - name: Deploy and attest Base mainnet contract
         run: |
           mkdir -p target
-          export LEADERBOARD_DEPLOYMENT_OUTPUT="$GITHUB_WORKSPACE/target/base-mainnet-leaderboard-raw.json"
-          forge script --root contracts/base-escrow \
+          export LEADERBOARD_DEPLOYMENT_OUTPUT="../../target/base-mainnet-leaderboard-raw.json"
+          pushd contracts/base-escrow
+          forge script \
             script/DeploySolverLeaderboardRewards.s.sol:DeploySolverLeaderboardRewards \
             --rpc-url "$BASE_MAINNET_RPC_URL" --broadcast --slow
+          popd
           python scripts/verify_leaderboard_reward_deployment.py \
             --network base-mainnet \
             --rpc-url "$BASE_MAINNET_RPC_URL" \
