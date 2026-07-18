@@ -212,6 +212,25 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(recovery.RecoveryError):
                 recovery.normalize_public_base_url("PUBLIC_BASE_URL", value)
 
+    def test_leaderboard_environment_requires_exact_addresses(self) -> None:
+        values = recovery.leaderboard_environment_values(
+            "0x" + "AA" * 20,
+            "0x" + "bb" * 20,
+        )
+        self.assertEqual(
+            values,
+            {
+                "BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT": "0x" + "aa" * 20,
+                "BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT": "0x" + "bb" * 20,
+            },
+        )
+        for value in ("", "0x1234", "0x" + "zz" * 20):
+            with self.subTest(value=value), self.assertRaises(recovery.RecoveryError):
+                recovery.leaderboard_environment_values(value, None)
+
+    def test_omitted_leaderboard_environment_stays_omitted(self) -> None:
+        self.assertEqual(recovery.leaderboard_environment_values(None, None), {})
+
     def test_matching_public_env_var_is_verified_without_mutation(self) -> None:
         expected = {
             "key": "PUBLIC_BASE_URL",

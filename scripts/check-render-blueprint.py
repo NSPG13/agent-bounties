@@ -16,6 +16,8 @@ RECOVERY_RESERVED_BOUNTY_CONTRACTS = (
     "0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1,"
     "0xb35b94e1225b66e50644a331feccdab0439e63d7"
 )
+MAINNET_LEADERBOARD_REWARD_CONTRACT = "0xb2637dd1dcf4ac9e22b42e9612e907ac44c52c69"
+SEPOLIA_LEADERBOARD_REWARD_CONTRACT = "0x2e84ef6708d5fff0e9909e80481a00b7ac47293e"
 
 
 def fail(message: str) -> None:
@@ -203,6 +205,8 @@ def main() -> int:
             "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION",
             "BASE_MAINNET_BOUNTY_FACTORY",
             "BASE_MAINNET_BOUNTY_IMPLEMENTATION",
+            "BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT",
+            "BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT",
             "BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS",
         ],
     )
@@ -211,6 +215,16 @@ def main() -> int:
     require_env_sync_false(base_group, "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION")
     require_env_value(base_group, "BASE_MAINNET_RPC_URL", rpc_url)
     require_env_value(base_group, "BASE_MAINNET_USDC_TOKEN", str(deployment["native_usdc"]))
+    require_env_value(
+        base_group,
+        "BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT",
+        MAINNET_LEADERBOARD_REWARD_CONTRACT,
+    )
+    require_env_value(
+        base_group,
+        "BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT",
+        SEPOLIA_LEADERBOARD_REWARD_CONTRACT,
+    )
     require_env_value(
         base_group,
         "BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS",

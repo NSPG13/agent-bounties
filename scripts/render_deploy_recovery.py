@@ -211,6 +211,27 @@ def normalize_public_base_url(name: str, value: str) -> str:
     return candidate
 
 
+def normalize_evm_address(name: str, value: str) -> str:
+    normalized = value.strip().lower()
+    if not re.fullmatch(r"0x[0-9a-f]{40}", normalized):
+        raise RecoveryError(f"{name} must be an exact EVM address")
+    return normalized
+
+
+def leaderboard_environment_values(
+    mainnet_contract: str | None,
+    sepolia_contract: str | None,
+) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for key, value in (
+        ("BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT", mainnet_contract),
+        ("BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT", sepolia_contract),
+    ):
+        if value is not None:
+            values[key] = normalize_evm_address(key, value)
+    return values
+
+
 def deploy_commit(deploy: dict[str, Any]) -> str | None:
     commit = deploy.get("commit")
     if not isinstance(commit, dict):
@@ -675,6 +696,8 @@ def deploy(
     public_base_url: str = "https://api.bountyboard.global",
     mcp_base_url: str = "https://mcp.bountyboard.global",
     cloud_agent_api_key: str | None = None,
+    base_mainnet_leaderboard_reward_contract: str | None = None,
+    base_sepolia_leaderboard_reward_contract: str | None = None,
 ) -> dict[str, Any]:
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
     pending: dict[str, tuple[str, str]] = {}
@@ -692,6 +715,10 @@ def deploy(
         ),
         "MCP_BASE_URL": normalize_public_base_url("MCP_BASE_URL", mcp_base_url),
     }
+    leaderboard_environment = leaderboard_environment_values(
+        base_mainnet_leaderboard_reward_contract,
+        base_sepolia_leaderboard_reward_contract,
+    )
     public_environment = []
     public_environment_changed: dict[str, bool] = {}
     for spec, service in services:
@@ -709,6 +736,18 @@ def deploy(
                     "changed": record["changed"],
                 }
             )
+        if spec.name == CLOUD_AGENT_API_SERVICE_NAME:
+            for key, value in leaderboard_environment.items():
+                record = client.ensure_env_var(service, key, value)
+                public_environment_changed[spec.name] |= record["changed"]
+                public_environment.append(
+                    {
+                        "service": spec.name,
+                        "key": key,
+                        "value": value,
+                        "changed": record["changed"],
+                    }
+                )
 
     api_service = next(
         service for spec, service in services if spec.name == CLOUD_AGENT_API_SERVICE_NAME
@@ -830,6 +869,8 @@ def parse_args() -> argparse.Namespace:
         "--mcp-base-url",
         default="https://mcp.bountyboard.global",
     )
+    parser.add_argument("--base-mainnet-leaderboard-reward-contract")
+    parser.add_argument("--base-sepolia-leaderboard-reward-contract")
     parser.add_argument("--deploy-timeout-seconds", type=float, default=2400)
     parser.add_argument("--health-timeout-seconds", type=float, default=300)
     parser.add_argument("--poll-seconds", type=float, default=10)
@@ -874,6 +915,12 @@ def main() -> int:
             public_base_url=args.public_base_url,
             mcp_base_url=args.mcp_base_url,
             cloud_agent_api_key=os.environ.get("CLOUD_AGENT_API_KEY"),
+            base_mainnet_leaderboard_reward_contract=(
+                args.base_mainnet_leaderboard_reward_contract
+            ),
+            base_sepolia_leaderboard_reward_contract=(
+                args.base_sepolia_leaderboard_reward_contract
+            ),
         )
         evidence.update(result)
         evidence["revision"] = revision
