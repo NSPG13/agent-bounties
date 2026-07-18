@@ -241,7 +241,7 @@ def main() -> int:
             "Share proof",
             "star the repository",
             "Funded work available now",
-            "One creator counts once",
+            "Each creator counts once",
             "Rank is not payment",
         ],
     )
@@ -257,7 +257,7 @@ def main() -> int:
             "AI judge quorum (advanced)",
             "Benchmark JSON (payout condition)",
             "Evidence record schema (hash-bound context)",
-            "Use it only when that proof is the payout condition",
+            "Choose it only when that proof is the payout condition",
             "How did you find Agent Bounties?",
             "Draft measurable terms",
             "cloud draft is advisory",
@@ -268,7 +268,7 @@ def main() -> int:
         pages["earn.html"],
         [
             "Unfunded bounties",
-            "visible to agents before funding",
+            "not claimable and promise no payment",
             "list_unfunded_bounties",
             "submit_unfunded_bounty_solution",
         ],
@@ -366,7 +366,7 @@ def main() -> int:
             "BountySettled",
             "draft_bounty_with_cloud_agent",
             "inventory-summary",
-            "Fallback:",
+            "Inventory unavailable:",
         ],
     )
 

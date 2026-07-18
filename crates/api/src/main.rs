@@ -4738,7 +4738,7 @@ async fn agent_native_claim(
             "sponsorship_unavailable",
             "evaluate_sponsorship",
             "atomic bond sponsorship is disabled, unsupported on this network, or exceeds the published cap",
-            "Fund the exact indexed bond and retry without request_bond_sponsorship, or choose a bounty within the active sponsor policy.",
+            "Fund the exact indexed bond. Replay the same idempotency_key with request_bond_sponsorship=false.",
         ));
     }
     require_claimable_autonomous_item(&item).map_err(|_| {
@@ -4747,7 +4747,7 @@ async fn agent_native_claim(
             "bounty_not_claimable",
             "reserve_candidate",
             "the canonical bounty is not currently funded, claimable, and verification-ready",
-            "Choose another verified claimable bounty or wait for the canonical state to reopen.",
+            "Choose the next verified claimable bounty. Poll this contract only after canonical state reopens.",
         )
     })?;
     let reservation = if let Some(reservation) = existing_reservation {
@@ -5056,8 +5056,8 @@ fn validate_agent_native_claim_request(
             StatusCode::BAD_REQUEST,
             "request_invalid",
             "validate_request",
-            "provide either wallet_signature or signature, not both",
-            "Prefer the wallet's unchanged 65-byte result in wallet_signature; use signature only for legacy v/r/s integrations.",
+            "provide one signature form, never both",
+            "Remove signature. Send the wallet's unchanged 65-byte result in wallet_signature. Legacy clients must remove wallet_signature and send signature.",
         ));
     }
     Ok(())
@@ -5140,7 +5140,7 @@ fn validate_persisted_claim_candidate_scope(
             "idempotency_conflict",
             "load_candidate",
             "idempotency_key was already used for different claim inputs",
-            "Replay the original network, bounty_contract, solver_wallet, and agent_id, or use a new idempotency_key for a different claim.",
+            "Replay the original inputs. Create a new idempotency_key only for a different claim.",
         ));
     }
     Ok(())
@@ -5276,7 +5276,7 @@ async fn build_agent_eligibility(
             "coordination_unavailable",
             "evaluate_eligibility",
             "durable agent eligibility data is unavailable",
-            "Use the direct permissionless claim planner or retry later.",
+            "Call plan_autonomous_bounty_claim. Submit its exact direct-wallet calls.",
         )
     })?;
     let events = store
@@ -5503,7 +5503,7 @@ fn agent_claim_response(
             value
         }),
         browser_fallback_url,
-        evidence_boundary: "Hosted exclusivity, sponsorship, signatures, and transaction hashes are coordination evidence only. Only confirmed canonical BountyClaimed owns the round; only confirmed canonical BountySettled proves payout.".to_string(),
+        evidence_boundary: "BountyClaimed proves round ownership. BountySettled proves payout. Hosted state, signatures, and transaction hashes prove neither.".to_string(),
         candidate: reservation.candidate,
     };
     (status, Json(response)).into_response()
@@ -5536,21 +5536,21 @@ fn map_agent_claim_db_error(error: DbError) -> AgentClaimProblem {
             "waitlist_full",
             "reserve_candidate",
             "the bounded waitlist is full",
-            "Choose another bounty or retry after a canonical claim timeout/settlement.",
+            "Choose the next claimable bounty. Poll this bounty after its active claim ends.",
         ),
         DbError::ClaimCandidateConflict(message) => agent_claim_problem(
             StatusCode::CONFLICT,
             "candidate_conflict",
             "reserve_candidate",
             &message,
-            "Replay the original idempotency_key, or use a new key only after the prior candidate becomes terminal.",
+            "Replay the original idempotency_key. Create a new key only after the prior candidate is terminal.",
         ),
         DbError::BondSponsorshipQuotaExceeded(message) => agent_claim_problem(
             StatusCode::TOO_MANY_REQUESTS,
             "sponsorship_cap_reached",
             "sponsor_bond",
             &message,
-            "Fund the exact bond from the solver wallet or retry after the rolling cap clears.",
+            "Fund the exact bond from the solver wallet. Request sponsorship again only after the rolling cap clears.",
         ),
         _ => agent_claim_problem(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -5703,7 +5703,7 @@ async fn reserve_atomic_bond_sponsorship(
             "sponsorship_unavailable",
             "reserve_sponsorship",
             "durable sponsorship state is unavailable",
-            "Retry later or fund the exact bond from the solver wallet.",
+            "Fund the exact bond from the solver wallet. Replay the same idempotency_key with request_bond_sponsorship=false.",
         )
     })?;
     let sponsor_contract = state
@@ -5715,7 +5715,7 @@ async fn reserve_atomic_bond_sponsorship(
                 "sponsorship_unavailable",
                 "reserve_sponsorship",
                 "no atomic sponsor vault is configured for this network",
-                "Fund the exact bond directly or choose a supported network.",
+                "Fund the exact bond directly. Replay on the canonical bounty network.",
             )
         })?;
     store
@@ -5794,7 +5794,7 @@ async fn relay_atomic_sponsored_claim(
                 "claim_relayer_unavailable",
                 "relay_atomic_claim",
                 "the hosted gas relayer is unavailable",
-                "Retry later or use the direct wallet claim plan.",
+                "Call plan_autonomous_bounty_claim. Submit its exact direct-wallet calls.",
             )
         })?;
     let planner = configured_autonomous_planner(&candidate.network).map_err(|status| {
@@ -6200,7 +6200,7 @@ async fn relay_agent_native_claim(
             "coordination_unavailable",
             "relay_claim",
             "durable claim state is unavailable",
-            "Use the direct wallet claim plan or retry later.",
+            "Call plan_autonomous_bounty_claim. Submit its exact direct-wallet calls.",
         )
     })?;
     let lease = store

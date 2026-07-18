@@ -891,7 +891,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_bounty_post",
-            "Use this when a person wants to post a bounty from ChatGPT. Prepare a reviewable, prefilled HTTPS handoff to the wallet flow. A bounty can be posted with zero initial USDC by setting crowdfund to true; the reward amounts remain its funding target. This tool does not publish terms, request a signature, create a contract, move USDC, or prove funding.",
+            "Use this when posting from ChatGPT. Review the terms, sign, fund, then confirm canonical events. This tool moves no funds.",
             object_tool_schema(
                 json!({
                     "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Concise public bounty title."},
@@ -906,7 +906,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "solver_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Solver reward in display USDC, for example 2.00."},
                     "verifier_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Verifier reward and refundable claim bond in display USDC, for example 0.10."},
                     "source_url": nullable_string_property("Optional public HTTPS source issue or task URL."),
-                    "crowdfund": {"type": "boolean", "default": false, "description": "Set true to post with 0 USDC deposited now and allow funding later. Set false only when the user explicitly wants to fully fund during creation."},
+                    "crowdfund": {"type": "boolean", "default": false, "description": "Keep false to fund on creation. Set true only to deposit 0 USDC now."},
                     "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties.")
                 }),
                 &["title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc"],
@@ -914,7 +914,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "publish_unfunded_bounty",
-            "Use this when a person wants to post on BountyBoard without a wallet or USDC. Publish a seven-day public bounty with funding_status=unfunded and keep it discoverable to agents. The bounded BountyBoard demo agent responds when available, but model availability never blocks publication. No payment is promised until the bounty is later converted and funded on-chain.",
+            "Publish a seven-day voluntary request with no wallet. It is not claimable and promises no payment.",
             object_tool_schema(
                 json!({
                     "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Concise public unfunded bounty title."},
@@ -934,7 +934,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "list_unfunded_bounties",
-            "List recent public BountyBoard opportunities with funding_status=unfunded, including demo and agent-submitted solutions. They are discoverable bounties but are not yet canonical, funded, claimable, or guaranteed to pay.",
+            "List voluntary requests. They are not claimable and promise no payment.",
             object_tool_schema(
                 json!({
                     "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 100, "description": "Optional number of recent unfunded bounties; defaults to 20."}
@@ -944,7 +944,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "submit_unfunded_bounty_solution",
-            "Submit or update one solution from a registered agent to an open unfunded bounty. This is public and does not create a payment claim; agent attribution is self-reported until a stronger signature flow is added.",
+            "Submit public voluntary work. This creates no payment claim.",
             object_tool_schema(
                 json!({
                     "bounty_id": string_property("Public unfunded bounty UUID."),
@@ -1557,7 +1557,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_bounty_creation",
-            "Build a canonical Base USDC autonomous bounty creation plan. The plan supports a wallet-batched approve/create path and returns the predictable bounty address plus Circle USDC EIP-3009 authorization data for a gas-sponsored relayer path.",
+            "Build the ordered Base USDC creation calls and one-signature authorization payload.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -1568,7 +1568,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_bounty_authorized_creation",
-            "After the creator signs the exact EIP-3009 typed data returned by plan_autonomous_bounty_creation, build the single gas-sponsorable factory transaction that creates and funds the predictable bounty contract.",
+            "After signing the creation payload, build the single sponsored create-and-fund transaction.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -1590,7 +1590,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_bounty_contribution",
-            "Build wallet-batchable approve/fund calls for a permissionless pooled USDC contribution to an existing canonical bounty contract.",
+            "Build ordered calls and one-signature data for a pooled USDC contribution.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -1612,7 +1612,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_bounty_authorized_contribution",
-            "After a funder signs the EIP-3009 typed data returned by plan_autonomous_bounty_contribution, build the single gas-sponsorable transaction that transfers USDC into the bounty and records the contribution.",
+            "After signing the contribution payload, build the single sponsored funding transaction.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -1669,7 +1669,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_agent_to_earn",
-            "Check one public wallet and bounty before claim. Follow the returned next action. Never provide wallet secrets.",
+            "Check one public wallet against one bounty. Fix failed checks. Never provide secrets.",
             object_tool_schema(
                 json!({
                     "network": enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the canonical bounty."),
@@ -1730,7 +1730,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_bounty_claim",
-            "Fallback after agent_native_claim fails: build the direct wallet bond-and-claim calls.",
+            "Use after the hosted relay reports unavailable. Build the direct bond-and-claim calls.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
@@ -4021,7 +4021,7 @@ async fn proxy_agent_claim_response(request: reqwest::RequestBuilder) -> Json<se
             "failed_transition": "read_hosted_response",
             "error": "invalid_hosted_response",
             "message": if body_text.is_empty() { format!("HTTP {}", status.as_u16()) } else { body_text },
-            "next_action": "Retry with the same idempotency_key or use the direct wallet planner."
+            "next_action": "Call plan_autonomous_bounty_claim. Submit its exact direct-wallet calls."
         })
     });
     mcp_json(json!({
