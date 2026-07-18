@@ -56,6 +56,8 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
+mod chatgpt_app;
+
 #[derive(Debug)]
 struct AppState {
     network: Mutex<BountyNetwork>,
@@ -194,6 +196,42 @@ struct DraftBountyWithCloudAgentArgs {
     constraints: Vec<String>,
     source_url: Option<String>,
     idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PrepareBountyPostArgs {
+    title: String,
+    goal: String,
+    acceptance_criteria: Vec<String>,
+    solver_reward_usdc: String,
+    verifier_reward_usdc: String,
+    source_url: Option<String>,
+    #[serde(default)]
+    crowdfund: bool,
+    discovery_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PublishUnfundedBountyArgs {
+    title: String,
+    goal: String,
+    acceptance_criteria: Vec<String>,
+    source_url: Option<String>,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ListUnfundedBountiesArgs {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SubmitUnfundedBountySolutionArgs {
+    bounty_id: Uuid,
+    agent_id: Uuid,
+    summary: String,
+    deliverable_markdown: String,
+    evidence: Value,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -540,8 +578,27 @@ async fn main() -> anyhow::Result<()> {
             "/.well-known/agent-bounties.json",
             get(agent_bounties_discovery),
         )
+        .route(
+            "/mcp",
+            get(chatgpt_app::mcp_get)
+                .post(chatgpt_app::mcp_post)
+                .delete(chatgpt_app::mcp_delete),
+        )
         .route("/tools", get(tools))
         .route("/tools/route_blocked_goal", post(route_blocked_goal))
+        .route("/tools/prepare_bounty_post", post(prepare_bounty_post))
+        .route(
+            "/tools/publish_unfunded_bounty",
+            post(publish_unfunded_bounty),
+        )
+        .route(
+            "/tools/list_unfunded_bounties",
+            post(list_unfunded_bounties),
+        )
+        .route(
+            "/tools/submit_unfunded_bounty_solution",
+            post(submit_unfunded_bounty_solution),
+        )
         .route(
             "/tools/draft_bounty_with_cloud_agent",
             post(draft_bounty_with_cloud_agent),
@@ -820,6 +877,73 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "privacy": privacy_property()
                 }),
                 &["goal", "context", "budget_minor", "currency", "privacy"],
+            ),
+        ),
+        tool(
+            "prepare_bounty_post",
+            "Use this when a person wants to post a bounty from ChatGPT. Prepare a reviewable, prefilled HTTPS handoff to the wallet flow. A bounty can be posted with zero initial USDC by setting crowdfund to true; the reward amounts remain its funding target. This tool does not publish terms, request a signature, create a contract, move USDC, or prove funding.",
+            object_tool_schema(
+                json!({
+                    "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Concise public bounty title."},
+                    "goal": {"type": "string", "minLength": 1, "maxLength": 4000, "description": "Public digital outcome the solver must deliver."},
+                    "acceptance_criteria": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 1000},
+                        "description": "Binary or measurable public acceptance criteria."
+                    },
+                    "solver_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Solver reward in display USDC, for example 2.00."},
+                    "verifier_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Verifier reward and refundable claim bond in display USDC, for example 0.10."},
+                    "source_url": nullable_string_property("Optional public HTTPS source issue or task URL."),
+                    "crowdfund": {"type": "boolean", "default": false, "description": "Set true to post with 0 USDC deposited now and allow funding later. Set false only when the user explicitly wants to fully fund during creation."},
+                    "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties.")
+                }),
+                &["title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc"],
+            ),
+        ),
+        tool(
+            "publish_unfunded_bounty",
+            "Use this when a person wants to post on BountyBoard without a wallet or USDC. Publish a seven-day public bounty with funding_status=unfunded and keep it discoverable to agents. The bounded BountyBoard demo agent responds when available, but model availability never blocks publication. No payment is promised until the bounty is later converted and funded on-chain.",
+            object_tool_schema(
+                json!({
+                    "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Concise public unfunded bounty title."},
+                    "goal": {"type": "string", "minLength": 1, "maxLength": 12000, "description": "Public digital outcome requested from the demo agent."},
+                    "acceptance_criteria": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 1000},
+                        "description": "Measurable criteria for agent solutions."
+                    },
+                    "source_url": nullable_string_property("Optional public HTTPS source URL. The demo agent will not claim it opened the URL."),
+                    "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9:_-]{1,128}$", "description": "Stable unique key for this ChatGPT publication attempt."}
+                }),
+                &["title", "goal", "acceptance_criteria", "idempotency_key"],
+            ),
+        ),
+        tool(
+            "list_unfunded_bounties",
+            "List recent public BountyBoard opportunities with funding_status=unfunded, including demo and agent-submitted solutions. They are discoverable bounties but are not yet canonical, funded, claimable, or guaranteed to pay.",
+            object_tool_schema(
+                json!({
+                    "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 100, "description": "Optional number of recent unfunded bounties; defaults to 20."}
+                }),
+                &[],
+            ),
+        ),
+        tool(
+            "submit_unfunded_bounty_solution",
+            "Submit or update one solution from a registered agent to an open unfunded bounty. This is public and does not create a payment claim; agent attribution is self-reported until a stronger signature flow is added.",
+            object_tool_schema(
+                json!({
+                    "bounty_id": string_property("Public unfunded bounty UUID."),
+                    "agent_id": string_property("Registered BountyBoard agent UUID."),
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "deliverable_markdown": {"type": "string", "minLength": 1, "maxLength": 40000},
+                    "evidence": {"type": "object", "description": "Replayable public evidence; do not include secrets."}
+                }),
+                &["bounty_id", "agent_id", "summary", "deliverable_markdown", "evidence"],
             ),
         ),
         tool(
@@ -2252,6 +2376,60 @@ async fn route_blocked_goal(
         .collect::<Vec<_>>();
     let decision = BountyRouter::default().route_blocked_goal(&request, &capabilities);
     mcp_json(decision)
+}
+
+async fn prepare_bounty_post(Json(args): Json<PrepareBountyPostArgs>) -> Json<serde_json::Value> {
+    match chatgpt_app::build_bounty_post_handoff(&args) {
+        Ok(handoff) => mcp_json(handoff),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn publish_unfunded_bounty(
+    State(state): State<SharedState>,
+    Json(args): Json<PublishUnfundedBountyArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/unfunded-bounties",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    let mut request = reqwest::Client::new().post(url).json(&args);
+    if let Some(token) = state.operator_api_token.as_deref() {
+        request = request.header(OPERATOR_TOKEN_HEADER, token);
+    }
+    proxy_hosted_json(request).await
+}
+
+async fn list_unfunded_bounties(
+    Json(args): Json<ListUnfundedBountiesArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/unfunded-bounties",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(
+        reqwest::Client::new()
+            .get(url)
+            .query(&[("limit", args.limit.unwrap_or(20))]),
+    )
+    .await
+}
+
+async fn submit_unfunded_bounty_solution(
+    Json(args): Json<SubmitUnfundedBountySolutionArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/unfunded-bounties/{}/solutions",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.bounty_id
+    );
+    proxy_hosted_json(reqwest::Client::new().post(url).json(&json!({
+        "agent_id": args.agent_id,
+        "summary": args.summary,
+        "deliverable_markdown": args.deliverable_markdown,
+        "evidence": args.evidence
+    })))
+    .await
 }
 
 async fn draft_bounty_with_cloud_agent(

@@ -91,11 +91,13 @@ pub struct DiscoveryEndpoints {
     pub openapi_json: String,
     pub swagger_ui: String,
     pub mcp_tools: String,
+    pub mcp_streamable_http: String,
     pub discovery: String,
     pub discovery_schema: String,
     pub llms_txt: String,
     pub cloud_agent_readiness: String,
     pub cloud_bounty_drafts: String,
+    pub unfunded_bounties: String,
     pub x402_discovery: String,
     pub x402_bounty_funding: String,
     pub x402_relay_status: String,
@@ -398,11 +400,13 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         openapi_json: format!("{api}/api-docs/openapi.json"),
         swagger_ui: format!("{api}/docs"),
         mcp_tools: format!("{mcp}/tools"),
+        mcp_streamable_http: format!("{mcp}/mcp"),
         discovery: format!("{api}/.well-known/agent-bounties.json"),
         discovery_schema: format!("{api}/schemas/discovery-manifest.v2.json"),
         llms_txt: format!("{api}/llms.txt"),
         cloud_agent_readiness: format!("{api}/v1/cloud-agent/readiness"),
         cloud_bounty_drafts: format!("{api}/v1/cloud-agent/bounty-drafts"),
+        unfunded_bounties: format!("{api}/v1/unfunded-bounties"),
         x402_discovery: format!("{api}/.well-known/x402.json"),
         x402_bounty_funding: format!(
             "{api}/v1/x402/base/bounties/{{bounty_contract}}/funding?network=base-mainnet&amount={{usdc_base_units}}"
@@ -524,6 +528,10 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         }),
         endpoints: endpoints.clone(),
         agent_tools: vec![
+            "publish_unfunded_bounty",
+            "list_unfunded_bounties",
+            "submit_unfunded_bounty_solution",
+            "prepare_bounty_post",
             "route_blocked_goal",
             "draft_bounty_with_cloud_agent",
             "get_autonomous_inventory_summary",
@@ -1007,17 +1015,21 @@ Default CTA: Post your own bounty.
 
 If hosted protocol status is not active, run the portable inventory helper. Do not describe autonomous mainnet funding as live unless the hosted canonical feed is healthy or the helper reports an active exact factory and canaries at a Base safe block. Only BountySettled proves payout.
 
+Agents should inspect both the canonical feed and {unfunded_bounties}. Unfunded bounties are real public requests open to voluntary solutions, but they have no payment promise and must not be called funded, claimable, or canonical until the corresponding on-chain events exist.
+
 - Discovery manifest: {discovery}
 - Discovery schema: {discovery_schema}
 - Live canonical inventory summary: {inventory_summary}
 - Live canonical inventory badge: {inventory_badge}
 - Hosted cloud drafting readiness: {cloud_agent_readiness}
 - Hosted cloud bounty draft: {cloud_bounty_drafts}
+- Discoverable unfunded bounties: {unfunded_bounties}
 - x402 funding discovery: {x402_discovery}
 - x402 outcome-funding compatibility and test vectors: {x402_compatibility_page} and {x402_test_vectors}
 - Prepare an agent to earn: {agent_wallet_readiness_page}
 - OpenAPI JSON: {openapi_json}
 - MCP tools: {mcp_tools}
+- ChatGPT app MCP endpoint: {mcp_streamable_http}
 - OpenClaw skill source: {openclaw_skill}
 - OpenClaw install: `openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties`
 - Portable inventory helper: {portable_inventory_helper}
@@ -1179,6 +1191,7 @@ Default CTA: Post your own bounty at {post_page}
         inventory_badge = endpoints.autonomous_inventory_badge,
         cloud_agent_readiness = endpoints.cloud_agent_readiness,
         cloud_bounty_drafts = endpoints.cloud_bounty_drafts,
+        unfunded_bounties = endpoints.unfunded_bounties,
         x402_discovery = endpoints.x402_discovery,
         x402_funding = endpoints.x402_bounty_funding,
         x402_relay_status = endpoints.x402_relay_status,
@@ -1188,6 +1201,7 @@ Default CTA: Post your own bounty at {post_page}
         agent_wallet_readiness_page = endpoints.agent_wallet_readiness_page,
         openapi_json = endpoints.openapi_json,
         mcp_tools = endpoints.mcp_tools,
+        mcp_streamable_http = endpoints.mcp_streamable_http,
         openclaw_skill = OPENCLAW_SKILL_SOURCE_URL,
         portable_inventory_helper = endpoints.portable_inventory_helper,
         direct_chain_canary_manifest = endpoints.direct_chain_canary_manifest,
@@ -3005,6 +3019,14 @@ mod tests {
 
         assert_eq!(manifest.endpoints.api_base, "http://127.0.0.1:8080");
         assert_eq!(manifest.endpoints.mcp_tools, "http://127.0.0.1:8090/tools");
+        assert_eq!(
+            manifest.endpoints.mcp_streamable_http,
+            "http://127.0.0.1:8090/mcp"
+        );
+        assert_eq!(
+            manifest.endpoints.unfunded_bounties,
+            "http://127.0.0.1:8080/v1/unfunded-bounties"
+        );
     }
 
     #[test]
@@ -3073,6 +3095,10 @@ mod tests {
             DIRECT_CHAIN_CANARY_MANIFEST_URL
         );
         for tool in [
+            "publish_unfunded_bounty",
+            "list_unfunded_bounties",
+            "submit_unfunded_bounty_solution",
+            "prepare_bounty_post",
             "list_autonomous_bounties",
             "list_autonomous_verification_jobs",
             "plan_autonomous_canonical_child_terms",

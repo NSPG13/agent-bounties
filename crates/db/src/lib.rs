@@ -26,6 +26,8 @@ pub const AUTONOMOUS_PROTOCOL_MIGRATION: &str =
 pub const X402_RELAYER_MIGRATION: &str = include_str!("../../../migrations/0003_x402_relayer.sql");
 pub const AGENT_COORDINATION_MIGRATION: &str =
     include_str!("../../../migrations/0004_agent_coordination.sql");
+pub const TRIAL_BOUNTIES_MIGRATION: &str =
+    include_str!("../../../migrations/0005_trial_bounties.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -130,11 +132,68 @@ pub enum DbError {
     ClaimCandidateConflict(String),
     #[error("claim waitlist is full")]
     ClaimWaitlistFull,
+    #[error("trial bounty idempotency conflict")]
+    TrialBountyConflict,
+    #[error("unfunded bounty is unavailable for solutions")]
+    UnfundedBountyUnavailable,
     #[error("bond sponsorship quota exceeded: {0}")]
     BondSponsorshipQuotaExceeded(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
+
+#[derive(Debug, Clone)]
+pub struct NewTrialBounty {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub request_fingerprint: String,
+    pub title: String,
+    pub goal: String,
+    pub acceptance_criteria: Vec<String>,
+    pub source_url: Option<String>,
+    pub discovery_source: String,
+    pub status: String,
+    pub demo_agent_solution: serde_json::Value,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrialBounty {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub request_fingerprint: String,
+    pub title: String,
+    pub goal: String,
+    pub acceptance_criteria: Vec<String>,
+    pub source_url: Option<String>,
+    pub discovery_source: String,
+    pub status: String,
+    pub demo_agent_solution: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewUnfundedBountySolution {
+    pub id: Uuid,
+    pub trial_bounty_id: Uuid,
+    pub agent_id: Uuid,
+    pub summary: String,
+    pub deliverable_markdown: String,
+    pub evidence: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnfundedBountySolution {
+    pub id: Uuid,
+    pub trial_bounty_id: Uuid,
+    pub agent_id: Uuid,
+    pub summary: String,
+    pub deliverable_markdown: String,
+    pub evidence: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ClaimFunnelStageCounts {
@@ -444,6 +503,7 @@ impl PostgresStore {
                 AUTONOMOUS_PROTOCOL_MIGRATION,
                 X402_RELAYER_MIGRATION,
                 AGENT_COORDINATION_MIGRATION,
+                TRIAL_BOUNTIES_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -467,6 +527,172 @@ impl PostgresStore {
             (Err(error), Ok(_)) => Err(error.into()),
             (Ok(()), Err(error)) | (Err(_), Err(error)) => Err(error.into()),
         }
+    }
+
+    pub async fn create_or_get_trial_bounty(
+        &self,
+        trial: &NewTrialBounty,
+    ) -> DbResult<TrialBounty> {
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO trial_bounties
+              (id, idempotency_key, request_fingerprint, title, goal,
+               acceptance_criteria, source_url, discovery_source, status,
+               demo_agent_solution, expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING id, idempotency_key, request_fingerprint, title, goal,
+                      acceptance_criteria, source_url, discovery_source, status,
+                      demo_agent_solution, created_at, expires_at
+            "#,
+        )
+        .bind(trial.id)
+        .bind(&trial.idempotency_key)
+        .bind(&trial.request_fingerprint)
+        .bind(&trial.title)
+        .bind(&trial.goal)
+        .bind(serde_json::to_value(&trial.acceptance_criteria)?)
+        .bind(&trial.source_url)
+        .bind(&trial.discovery_source)
+        .bind(&trial.status)
+        .bind(&trial.demo_agent_solution)
+        .bind(trial.expires_at)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let row = match inserted {
+            Some(row) => row,
+            None => {
+                sqlx::query(
+                    r#"
+                SELECT id, idempotency_key, request_fingerprint, title, goal,
+                       acceptance_criteria, source_url, discovery_source, status,
+                       demo_agent_solution, created_at, expires_at
+                FROM trial_bounties
+                WHERE idempotency_key = $1
+                "#,
+                )
+                .bind(&trial.idempotency_key)
+                .fetch_one(&self.pool)
+                .await?
+            }
+        };
+        let persisted = trial_bounty_from_row(row)?;
+        if persisted.request_fingerprint != trial.request_fingerprint {
+            return Err(DbError::TrialBountyConflict);
+        }
+        Ok(persisted)
+    }
+
+    pub async fn get_trial_bounty(&self, id: Uuid) -> DbResult<Option<TrialBounty>> {
+        sqlx::query(
+            r#"
+            SELECT id, idempotency_key, request_fingerprint, title, goal,
+                   acceptance_criteria, source_url, discovery_source, status,
+                   demo_agent_solution, created_at, expires_at
+            FROM trial_bounties
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(trial_bounty_from_row)
+        .transpose()
+    }
+
+    pub async fn get_trial_bounty_by_idempotency(
+        &self,
+        idempotency_key: &str,
+    ) -> DbResult<Option<TrialBounty>> {
+        sqlx::query(
+            r#"
+            SELECT id, idempotency_key, request_fingerprint, title, goal,
+                   acceptance_criteria, source_url, discovery_source, status,
+                   demo_agent_solution, created_at, expires_at
+            FROM trial_bounties
+            WHERE idempotency_key = $1
+            "#,
+        )
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(trial_bounty_from_row)
+        .transpose()
+    }
+
+    pub async fn list_trial_bounties(&self, limit: u32) -> DbResult<Vec<TrialBounty>> {
+        let limit = i64::from(limit.clamp(1, 100));
+        sqlx::query(
+            r#"
+            SELECT id, idempotency_key, request_fingerprint, title, goal,
+                   acceptance_criteria, source_url, discovery_source, status,
+                   demo_agent_solution, created_at, expires_at
+            FROM trial_bounties
+            WHERE status = 'open' AND expires_at > now()
+            ORDER BY created_at DESC, id
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(trial_bounty_from_row)
+        .collect()
+    }
+
+    pub async fn upsert_unfunded_bounty_solution(
+        &self,
+        solution: &NewUnfundedBountySolution,
+    ) -> DbResult<UnfundedBountySolution> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO unfunded_bounty_solutions
+              (id, trial_bounty_id, agent_id, summary, deliverable_markdown, evidence)
+            SELECT $1, $2, $3, $4, $5, $6
+            FROM trial_bounties
+            WHERE id = $2 AND status = 'open' AND expires_at > now()
+            ON CONFLICT (trial_bounty_id, agent_id) DO UPDATE SET
+              summary = EXCLUDED.summary,
+              deliverable_markdown = EXCLUDED.deliverable_markdown,
+              evidence = EXCLUDED.evidence,
+              updated_at = now()
+            RETURNING id, trial_bounty_id, agent_id, summary,
+                      deliverable_markdown, evidence, created_at, updated_at
+            "#,
+        )
+        .bind(solution.id)
+        .bind(solution.trial_bounty_id)
+        .bind(solution.agent_id)
+        .bind(&solution.summary)
+        .bind(&solution.deliverable_markdown)
+        .bind(&solution.evidence)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(DbError::UnfundedBountyUnavailable)?;
+        unfunded_bounty_solution_from_row(row)
+    }
+
+    pub async fn list_unfunded_bounty_solutions(
+        &self,
+        trial_bounty_id: Uuid,
+    ) -> DbResult<Vec<UnfundedBountySolution>> {
+        sqlx::query(
+            r#"
+            SELECT id, trial_bounty_id, agent_id, summary,
+                   deliverable_markdown, evidence, created_at, updated_at
+            FROM unfunded_bounty_solutions
+            WHERE trial_bounty_id = $1
+            ORDER BY created_at, id
+            "#,
+        )
+        .bind(trial_bounty_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(unfunded_bounty_solution_from_row)
+        .collect()
     }
 
     pub async fn reserve_x402_relay_attempt(
@@ -3820,6 +4046,36 @@ impl PostgresStore {
     }
 }
 
+fn trial_bounty_from_row(row: PgRow) -> DbResult<TrialBounty> {
+    Ok(TrialBounty {
+        id: row.try_get("id")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        request_fingerprint: row.try_get("request_fingerprint")?,
+        title: row.try_get("title")?,
+        goal: row.try_get("goal")?,
+        acceptance_criteria: serde_json::from_value(row.try_get("acceptance_criteria")?)?,
+        source_url: row.try_get("source_url")?,
+        discovery_source: row.try_get("discovery_source")?,
+        status: row.try_get("status")?,
+        demo_agent_solution: row.try_get("demo_agent_solution")?,
+        created_at: row.try_get("created_at")?,
+        expires_at: row.try_get("expires_at")?,
+    })
+}
+
+fn unfunded_bounty_solution_from_row(row: PgRow) -> DbResult<UnfundedBountySolution> {
+    Ok(UnfundedBountySolution {
+        id: row.try_get("id")?,
+        trial_bounty_id: row.try_get("trial_bounty_id")?,
+        agent_id: row.try_get("agent_id")?,
+        summary: row.try_get("summary")?,
+        deliverable_markdown: row.try_get("deliverable_markdown")?,
+        evidence: row.try_get("evidence")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
 fn parse_agent_status(value: String) -> DbResult<AgentStatus> {
     match value.as_str() {
         "Active" => Ok(AgentStatus::Active),
@@ -4538,6 +4794,24 @@ mod tests {
             assert!(
                 AGENT_COORDINATION_MIGRATION.contains(invariant),
                 "missing coordination invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn unfunded_bounty_migration_keeps_public_work_open_and_attribution_bounded() {
+        for table in ["trial_bounties", "unfunded_bounty_solutions"] {
+            assert!(TRIAL_BOUNTIES_MIGRATION.contains(table), "missing {table}");
+        }
+        for invariant in [
+            "idempotency_key TEXT NOT NULL UNIQUE",
+            "status IN ('open', 'closed')",
+            "UNIQUE (trial_bounty_id, agent_id)",
+            "expires_at > created_at",
+        ] {
+            assert!(
+                TRIAL_BOUNTIES_MIGRATION.contains(invariant),
+                "missing unfunded bounty invariant {invariant}"
             );
         }
     }

@@ -78,9 +78,11 @@
       "required": [
         "api_base",
         "mcp_tools",
+        "mcp_streamable_http",
         "llms_txt",
         "cloud_agent_readiness",
         "cloud_bounty_drafts",
+        "unfunded_bounties",
         "x402_discovery",
         "x402_bounty_funding",
         "x402_relay_status",
