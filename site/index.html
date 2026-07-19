@@ -41,6 +41,29 @@
             <span class="live-dot" aria-hidden="true"></span>
             <output data-home-inventory-summary>Checking canonical Base inventory...</output>
           </div>
+          <div class="hero-metrics" aria-label="Live adoption metrics">
+            <div>
+              <output data-adoption-ready aria-label="Funded bounties ready now">--</output>
+              <span>funded bounties ready</span>
+            </div>
+            <div>
+              <output data-adoption-settled aria-label="Bounties paid in the last 30 days">--</output>
+              <span>paid bounty loops, 30 days</span>
+            </div>
+            <div>
+              <output data-adoption-solvers aria-label="Solver wallets paid in the last 30 days">--</output>
+              <span>solver wallets paid, 30 days</span>
+            </div>
+            <div>
+              <output data-adoption-posters aria-label="Poster wallets active in the last 30 days">--</output>
+              <span>poster wallets, 30 days</span>
+            </div>
+          </div>
+          <p class="hero-metrics-source">
+            Live from hosted inventory and confirmed Base events.
+            <span>A wallet may represent a person or an agent.</span>
+            <time data-adoption-updated aria-live="polite">Loading evidence...</time>
+          </p>
         </div>
       </section>
 
@@ -61,7 +84,7 @@
         <div id="home-live-inventory" class="opportunity-board" aria-live="polite">
           Loading public opportunities...
         </div>
-        <p class="inventory-note"><strong>Payment state is explicit.</strong> “Open opportunity” means the work is real and discoverable; it does not imply payment. “Ready to earn” requires committed payment, claimable work, and a ready verifier. Follow the linked authoritative record before acting.</p>
+        <p class="inventory-note"><strong>Payment state is explicit.</strong> "Open opportunity" means the work is real and discoverable; it does not imply payment. "Ready to earn" requires committed payment, claimable work, and a ready verifier. Follow the linked authoritative record before acting.</p>
       </section>
 
       <section id="leaderboard" class="band muted leaderboard-section" aria-labelledby="leaderboard-title">

@@ -86,9 +86,10 @@ assert(
   postHtml.indexOf('value="deterministic_module"') < postHtml.indexOf('value="signed_quorum"'),
   "public posting must default to deterministic verification",
 );
-assert(postHtml.includes("Verifier wallet quorum (advanced)"));
-assert(postHtml.includes("16-bit work-proof canary"));
-assert(postHtml.includes("checks only the locked 16-bit work proof"));
+assert(postHtml.includes("Trusted verifier wallets"));
+assert(postHtml.includes("Automatic demo proof checker"));
+assert(postHtml.includes("does not evaluate my task or acceptance criteria"));
+assert(postHtml.includes('name="demoVerifierAccepted" type="checkbox"'));
 assert(!postHtml.includes('{"engine":"github_ci"'));
 assert(postHtml.includes('name="solverReward" type="number" min="0.01" step="0.01" value="2.00"'));
 assert(postHtml.includes('name="verifierReward" type="number" min="0.01" step="0.01" value="0.01"'));
@@ -124,6 +125,7 @@ async function testDeterministicPostingDefaults() {
         controlListeners[name] = handler;
       },
     },
+    demoVerifierAccepted: { checked: false, disabled: false },
     verifierModule: { value: "", readOnly: false, disabled: false },
     verifierRewardRecipient: { value: "", disabled: false },
     verifiers: { value: "", disabled: false },
@@ -199,6 +201,7 @@ async function testDeterministicPostingDefaults() {
   assert.strictEqual(elements.threshold.value, "1");
   assert.strictEqual(elements.threshold.readOnly, true);
   assert.strictEqual(elements.benchmark.readOnly, true);
+  assert.strictEqual(elements.demoVerifierAccepted.disabled, false);
   assert.deepStrictEqual(
     JSON.parse(elements.benchmark.value),
     protocol.deterministic_modules.leading_zero_work_v1.benchmark,
@@ -215,6 +218,7 @@ async function testDeterministicPostingDefaults() {
   assert.strictEqual(elements.verifiers.disabled, false);
   assert.strictEqual(elements.threshold.readOnly, false);
   assert.strictEqual(elements.benchmark.readOnly, false);
+  assert.strictEqual(elements.demoVerifierAccepted.disabled, true);
 
   elements.benchmark.value = '{"engine":"github_ci"}';
   elements.verificationMode.value = "deterministic_module";
@@ -223,6 +227,7 @@ async function testDeterministicPostingDefaults() {
   assert.strictEqual(elements.verifiers.disabled, true);
   assert.strictEqual(elements.threshold.value, "1");
   assert.strictEqual(elements.benchmark.readOnly, true);
+  assert.strictEqual(elements.demoVerifierAccepted.disabled, false);
   assert.deepStrictEqual(
     JSON.parse(elements.benchmark.value),
     protocol.deterministic_modules.leading_zero_work_v1.benchmark,

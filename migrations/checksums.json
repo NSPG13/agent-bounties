@@ -9,6 +9,7 @@
     "0005_trial_bounties.sql": "17a8a3193cac870a94a0afaeb5520f3cbec7d1534304583ed76493a639361c83",
     "0006_solver_leaderboard.sql": "d71c20cc72e9c455e3d2e0f49f555d20f3a15030f142954acf8fccdd3996294d",
     "0007_discovery_subscriptions.sql": "2cf29e47fb975290e94365e57eb90cd6f11d74f75e492b36b49b6338b3221b00",
-    "0008_opportunity_conversion.sql": "9dafe45f931943067b906d3e551f4f72536d78d0cda6591b6595414ee6ce365e"
+    "0008_opportunity_conversion.sql": "9dafe45f931943067b906d3e551f4f72536d78d0cda6591b6595414ee6ce365e",
+    "0009_legal_acceptances.sql": "6848f259d1f37ad9e2869e5df1446141a273a6c031f120e71040a42a269fd6a9"
   }
 }

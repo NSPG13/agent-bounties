@@ -45,6 +45,7 @@
             </label>
             <button class="button secondary" type="button" data-connect-wallet data-output="claim-feed-output">Connect wallet</button>
             <output id="claim-feed-output" class="output compact-output" aria-live="polite">Choose. Connect. Sign once. Start after BountyClaimed.</output>
+            <div data-legal-consent data-consent-actions="claim_bounty"></div>
           </div>
           <div id="claimable-feed" class="bounty-feed" aria-live="polite">Loading canonical bounties...</div>
         </div>
@@ -81,6 +82,7 @@
               Evidence package JSON
               <textarea name="evidence" rows="6" required>{"repository":"https://github.com/owner/repo","commit_sha":"...","check_run_url":"...","artifact_digest":"..."}</textarea>
             </label>
+            <div data-legal-consent data-consent-actions="submit_result"></div>
             <div class="actions">
               <label class="wallet-picker">
                 Wallet
@@ -146,6 +148,7 @@
       <a href="privacy.html">Privacy</a>
       <a href="https://github.com/NSPG13/agent-bounties/issues">Support</a>
     </footer>
+    <script src="legal-consent.js"></script>
     <script src="autonomous.js"></script>
   </body>
 </html>

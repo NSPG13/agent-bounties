@@ -62,7 +62,7 @@ use cloud_agent::{
 use db::{
     BountyStatusScope, ClaimCandidateReservation, ClaimFunnelStats, DbError,
     GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate,
-    NewDiscoveryWebhookSubscription, NewTrialBounty, NewUnfundedBountySolution,
+    NewDiscoveryWebhookSubscription, NewLegalAcceptance, NewTrialBounty, NewUnfundedBountySolution,
     NewX402RelayAttempt, OpportunityLifecycleStats, PostgresStore, TrialBounty,
     UnfundedBountySolution, WebhookSubscription, X402RelayAttempt, X402RelayStatus,
 };
@@ -127,6 +127,8 @@ use worker::{
     paths(
         health,
         llms_txt,
+        legal_policy,
+        record_legal_acceptance,
         discovery_manifest_schema,
         agent_bounties_discovery,
         x402_discovery,
@@ -304,6 +306,9 @@ use worker::{
         ,SolverLeaderboardResponse
         ,SolverLeaderboardPeriodResponse
         ,SolverLeaderboardRanking
+        ,LegalPolicyResponse
+        ,RecordLegalAcceptanceRequest
+        ,LegalAcceptanceResponse
     )),
     modifiers(&SecurityAddon)
 )]
@@ -545,6 +550,19 @@ impl BondSponsorConfig {
 
 type SharedState = Arc<AppState>;
 const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
+const LEGAL_TERMS_VERSION: &str = "2026-07-18";
+const LEGAL_PRIVACY_VERSION: &str = "2026-07-18";
+const LEGAL_ACCEPTANCE_STATEMENT: &str = "I meet the age requirement in the Terms and am authorized to use this wallet and perform this action. I understand that public and blockchain records may be permanent. I accept the posted task, verification, and settlement rules. I am responsible for legal compliance, taxes, content rights, agent authority, and wallet security. I agree to the Terms of Use and Privacy Policy.";
+const LEGAL_ACTIONS: &[&str] = &[
+    "post_bounty",
+    "fund_bounty",
+    "claim_bounty",
+    "submit_result",
+    "recover_funds",
+    "activate_agent_budget",
+    "update_agent_policy",
+    "revoke_agent_policy",
+];
 
 fn non_empty_secret(secret: String) -> Option<String> {
     let trimmed = secret.trim();
@@ -1255,6 +1273,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/llms.txt", get(llms_txt))
+        .route("/v1/legal/policy", get(legal_policy))
+        .route("/v1/legal/acceptances", post(record_legal_acceptance))
         .route(
             "/schemas/discovery-manifest.v2.json",
             get(discovery_manifest_schema),
@@ -1664,6 +1684,156 @@ fn health_response(revision: &str) -> impl IntoResponse {
 #[utoipa::path(get, path = "/llms.txt", responses((status = 200, body = String)))]
 async fn llms_txt(State(state): State<SharedState>) -> String {
     web_public::render_llms_txt(&state.public_base_url, &state.mcp_base_url)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct LegalPolicyResponse {
+    schema_version: String,
+    terms_version: String,
+    privacy_version: String,
+    statement: String,
+    statement_hash: String,
+    terms_url: String,
+    privacy_url: String,
+    supported_actions: Vec<String>,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct RecordLegalAcceptanceRequest {
+    terms_version: String,
+    privacy_version: String,
+    action: String,
+    wallet_address: String,
+    statement_hash: String,
+    acceptance_method: String,
+    accepted_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct LegalAcceptanceResponse {
+    schema_version: String,
+    acceptance_id: Uuid,
+    terms_version: String,
+    privacy_version: String,
+    action: String,
+    wallet_address: String,
+    statement_hash: String,
+    acceptance_method: String,
+    accepted_at: DateTime<Utc>,
+    recorded_at: DateTime<Utc>,
+    evidence_boundary: String,
+}
+
+fn legal_statement_hash() -> String {
+    format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(LEGAL_ACCEPTANCE_STATEMENT.as_bytes()))
+    )
+}
+
+fn build_legal_policy(public_base_url: &str) -> LegalPolicyResponse {
+    let base = public_base_url.trim_end_matches('/');
+    LegalPolicyResponse {
+        schema_version: "agent-bounties/legal-policy-v1".to_string(),
+        terms_version: LEGAL_TERMS_VERSION.to_string(),
+        privacy_version: LEGAL_PRIVACY_VERSION.to_string(),
+        statement: LEGAL_ACCEPTANCE_STATEMENT.to_string(),
+        statement_hash: legal_statement_hash(),
+        terms_url: format!("{base}/terms.html"),
+        privacy_url: format!("{base}/privacy.html"),
+        supported_actions: LEGAL_ACTIONS.iter().map(|action| (*action).to_string()).collect(),
+        evidence_boundary: "This policy and an acceptance receipt record explicit assent on the hosted interface. Neither is a wallet signature, funding event, verifier verdict, settlement, legal advice, identity proof, or proof that the wallet controller had authority.".to_string(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/legal/policy",
+    responses((status = 200, body = LegalPolicyResponse))
+)]
+async fn legal_policy(State(state): State<SharedState>) -> Json<LegalPolicyResponse> {
+    let website_base_url = env::var("WEBSITE_BASE_URL")
+        .ok()
+        .and_then(non_empty_secret)
+        .unwrap_or_else(|| state.public_base_url.clone());
+    Json(build_legal_policy(&website_base_url))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/legal/acceptances",
+    request_body = RecordLegalAcceptanceRequest,
+    responses(
+        (status = 201, body = LegalAcceptanceResponse),
+        (status = 400, description = "Unsupported, stale, or malformed acceptance"),
+        (status = 503, description = "Durable acceptance store unavailable")
+    )
+)]
+async fn record_legal_acceptance(
+    State(state): State<SharedState>,
+    Json(request): Json<RecordLegalAcceptanceRequest>,
+) -> Result<(StatusCode, Json<LegalAcceptanceResponse>), StatusCode> {
+    let wallet_address = validate_legal_acceptance_request(&request, Utc::now())?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let acceptance = store
+        .record_legal_acceptance(&NewLegalAcceptance {
+            id: Uuid::new_v4(),
+            terms_version: request.terms_version,
+            privacy_version: request.privacy_version,
+            action: request.action,
+            wallet_address,
+            statement_hash: request.statement_hash,
+            acceptance_method: request.acceptance_method,
+            accepted_at: request.accepted_at,
+        })
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(LegalAcceptanceResponse {
+            schema_version: "agent-bounties/legal-acceptance-v1".to_string(),
+            acceptance_id: acceptance.id,
+            terms_version: acceptance.terms_version,
+            privacy_version: acceptance.privacy_version,
+            action: acceptance.action,
+            wallet_address: acceptance.wallet_address,
+            statement_hash: acceptance.statement_hash,
+            acceptance_method: acceptance.acceptance_method,
+            accepted_at: acceptance.accepted_at,
+            recorded_at: acceptance.recorded_at,
+            evidence_boundary: "This receipt records explicit hosted-interface assent. It does not prove identity, authority, funding, task completion, verification, or payment.".to_string(),
+        }),
+    ))
+}
+
+fn validate_legal_acceptance_request(
+    request: &RecordLegalAcceptanceRequest,
+    now: DateTime<Utc>,
+) -> Result<String, StatusCode> {
+    if request.terms_version != LEGAL_TERMS_VERSION
+        || request.privacy_version != LEGAL_PRIVACY_VERSION
+        || request.statement_hash != legal_statement_hash()
+        || !LEGAL_ACTIONS.contains(&request.action.as_str())
+        || !matches!(
+            request.acceptance_method.as_str(),
+            "web_clickwrap" | "api_explicit"
+        )
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if request.accepted_at < now - ChronoDuration::minutes(15)
+        || request.accepted_at > now + ChronoDuration::minutes(5)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let wallet =
+        normalize_evm_address(&request.wallet_address).map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(wallet.to_ascii_lowercase())
 }
 
 #[utoipa::path(
@@ -10417,6 +10587,45 @@ mod tests {
         assert_eq!(
             response.headers()["x-agent-bounties-protocol"],
             "agent-bounties/autonomous-v1"
+        );
+    }
+
+    #[test]
+    fn legal_policy_is_hash_bound_and_acceptance_is_action_wallet_and_time_bound() {
+        let policy = build_legal_policy("https://bountyboard.global/");
+        assert_eq!(policy.terms_version, LEGAL_TERMS_VERSION);
+        assert_eq!(policy.statement_hash, legal_statement_hash());
+        assert_eq!(policy.terms_url, "https://bountyboard.global/terms.html");
+        assert!(policy
+            .supported_actions
+            .iter()
+            .any(|action| action == "post_bounty"));
+
+        let now = Utc.with_ymd_and_hms(2026, 7, 18, 18, 0, 0).unwrap();
+        let mut request = RecordLegalAcceptanceRequest {
+            terms_version: LEGAL_TERMS_VERSION.to_string(),
+            privacy_version: LEGAL_PRIVACY_VERSION.to_string(),
+            action: "post_bounty".to_string(),
+            wallet_address: "0x1111111111111111111111111111111111111111".to_string(),
+            statement_hash: legal_statement_hash(),
+            acceptance_method: "api_explicit".to_string(),
+            accepted_at: now,
+        };
+        assert_eq!(
+            validate_legal_acceptance_request(&request, now).unwrap(),
+            request.wallet_address
+        );
+
+        request.action = "settle_without_verification".to_string();
+        assert_eq!(
+            validate_legal_acceptance_request(&request, now),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        request.action = "post_bounty".to_string();
+        request.accepted_at = now - ChronoDuration::minutes(16);
+        assert_eq!(
+            validate_legal_acceptance_request(&request, now),
+            Err(StatusCode::BAD_REQUEST)
         );
     }
 
