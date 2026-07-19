@@ -1072,9 +1072,7 @@ fn social_mention_check_output(
         title: "Social mention drafting remains gated".to_string(),
         summary: error,
         text: format!(
-            "Keep social ingestion disabled until the operator flag is enabled and indexed canonical evidence shows at least {} funded and {} settled GitHub-originated bounties. Social posts, replies, likes, transaction hashes, and advisory AI output are not canonical conversion evidence.",
-            SOCIAL_MENTION_MIN_GITHUB_CANONICAL_FUNDED,
-            SOCIAL_MENTION_MIN_GITHUB_CANONICAL_SETTLED
+            "Keep social ingestion disabled until the operator flag is enabled and indexed canonical evidence shows at least {SOCIAL_MENTION_MIN_GITHUB_CANONICAL_FUNDED} funded and {SOCIAL_MENTION_MIN_GITHUB_CANONICAL_SETTLED} settled GitHub-originated bounties. Social posts, replies, likes, transaction hashes, and advisory AI output are not canonical conversion evidence."
         ),
         conclusion: GitHubCheckConclusion::ActionRequired,
     }
