@@ -1748,16 +1748,23 @@ fn build_legal_policy(public_base_url: &str) -> LegalPolicyResponse {
     }
 }
 
+fn legal_website_base_url(configured: Option<String>, public_base_url: &str) -> String {
+    configured.and_then(non_empty_secret).unwrap_or_else(|| {
+        match public_base_url.trim_end_matches('/') {
+            "https://api.bountyboard.global" => "https://bountyboard.global".to_string(),
+            value => value.to_string(),
+        }
+    })
+}
+
 #[utoipa::path(
     get,
     path = "/v1/legal/policy",
     responses((status = 200, body = LegalPolicyResponse))
 )]
 async fn legal_policy(State(state): State<SharedState>) -> Json<LegalPolicyResponse> {
-    let website_base_url = env::var("WEBSITE_BASE_URL")
-        .ok()
-        .and_then(non_empty_secret)
-        .unwrap_or_else(|| state.public_base_url.clone());
+    let website_base_url =
+        legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);
     Json(build_legal_policy(&website_base_url))
 }
 
@@ -10600,6 +10607,17 @@ mod tests {
             .supported_actions
             .iter()
             .any(|action| action == "post_bounty"));
+        assert_eq!(
+            legal_website_base_url(None, "https://api.bountyboard.global/"),
+            "https://bountyboard.global"
+        );
+        assert_eq!(
+            legal_website_base_url(
+                Some(" https://preview.example ".to_string()),
+                "https://api.bountyboard.global"
+            ),
+            "https://preview.example"
+        );
 
         let now = Utc.with_ymd_and_hms(2026, 7, 18, 18, 0, 0).unwrap();
         let mut request = RecordLegalAcceptanceRequest {

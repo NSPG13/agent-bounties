@@ -346,6 +346,20 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(recovery.RecoveryError):
                 recovery.normalize_public_base_url("PUBLIC_BASE_URL", value)
 
+    def test_public_environment_includes_website_origin(self) -> None:
+        self.assertEqual(
+            recovery.public_environment_values(
+                "https://api.bountyboard.global/",
+                "https://mcp.bountyboard.global/",
+                "https://bountyboard.global/",
+            ),
+            {
+                "PUBLIC_BASE_URL": "https://api.bountyboard.global",
+                "MCP_BASE_URL": "https://mcp.bountyboard.global",
+                "WEBSITE_BASE_URL": "https://bountyboard.global",
+            },
+        )
+
     def test_leaderboard_environment_requires_exact_addresses(self) -> None:
         values = recovery.leaderboard_environment_values(
             "0x" + "AA" * 20,

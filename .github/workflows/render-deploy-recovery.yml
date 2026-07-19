@@ -80,6 +80,7 @@ jobs:
       RUNTIME_REVISION: ${{ inputs.runtime_revision }}
       PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
       PRODUCTION_MCP_BASE_URL: ${{ vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.bountyboard.global' }}
+      PRODUCTION_WEBSITE_BASE_URL: ${{ vars.PRODUCTION_WEBSITE_BASE_URL || 'https://bountyboard.global' }}
       RENDER_DEPLOY_PAUSE_REASON: ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}
     steps:
       - uses: actions/checkout@v4
@@ -182,6 +183,7 @@ jobs:
             --mcp-url "${PRODUCTION_MCP_BASE_URL%/}/health" \
             --public-base-url "${PRODUCTION_API_BASE_URL%/}" \
             --mcp-base-url "${PRODUCTION_MCP_BASE_URL%/}" \
+            --website-base-url "${PRODUCTION_WEBSITE_BASE_URL%/}" \
             --base-mainnet-leaderboard-reward-contract "$BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT" \
             --base-sepolia-leaderboard-reward-contract "$BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT" \
             --output target/operations/render-deploy.json
