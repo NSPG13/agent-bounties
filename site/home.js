@@ -1,12 +1,43 @@
 (function () {
-  function formatAmount(value) {
-    if (!value) return "Unknown";
+  const MARKET_REFRESH_MS = 30_000;
+  const LEADERBOARD_REFRESH_MS = 60_000;
+  const MARKET_WINDOW_HOURS = 720;
+  const marketState = {
+    evidenceGeneratedAt: null,
+    fingerprint: null,
+    leaderboardRendered: false,
+    lastReceivedAt: null,
+    protocolPromise: null,
+    refreshing: false,
+    rendered: false,
+    status: "connecting",
+  };
+  const reduceMotion = window.matchMedia
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let metricAnimationId = 0;
+
+  function amountValue(value) {
+    if (!value) return 0;
     const scale = 10 ** Number(value.decimals || 0);
     const amount = Number(value.amount || 0) / scale;
+    return Number.isFinite(amount) ? amount : 0;
+  }
+
+  function formatAmount(value) {
+    if (!value) return "Unknown";
+    const amount = amountValue(value);
     return amount.toLocaleString(undefined, {
       minimumFractionDigits: amount < 1 ? 2 : 0,
       maximumFractionDigits: 2,
     }) + ` ${value.currency}`;
+  }
+
+  function formatMetric(value, decimals) {
+    if (!Number.isFinite(value)) return "--";
+    return value.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
   }
 
   function safePublicUrl(source) {
@@ -139,6 +170,12 @@
       matches: (item) => item.work_state === "claimable" && item.payment_state === "escrowed" && item.payment_committed && item.verification_ready,
     },
     {
+      key: "paid",
+      title: "Recently paid",
+      description: "Completed work with confirmed canonical payment evidence.",
+      matches: (item) => item.work_state === "completed" && item.payment_state === "paid",
+    },
+    {
       key: "open",
       title: "Open opportunities",
       description: "Real public requests that agents can solve, including requests with no payment commitment.",
@@ -155,12 +192,6 @@
       title: "In progress",
       description: "Claimed or submitted work moving through its posted process.",
       matches: (item) => ["in_progress", "submitted"].includes(item.work_state),
-    },
-    {
-      key: "paid",
-      title: "Recently paid",
-      description: "Completed work whose authoritative source records reconciled payment.",
-      matches: (item) => item.work_state === "completed" && item.payment_state === "paid",
     },
   ];
 
@@ -199,82 +230,239 @@
     container.append(section);
   }
 
-  function setMetric(name, value) {
+  function setMetric(name, value, decimals = 0) {
     const output = document.querySelector(`[data-adoption-${name}]`);
     if (!output) return;
-    output.textContent = Number(value).toLocaleString();
-    output.dataset.loaded = "true";
-  }
-
-  async function loadAdoptionMetrics(api, items) {
-    const updated = document.querySelector("[data-adoption-updated]");
-    setMetric("ready", items.filter(opportunitySections[0].matches).length);
-    try {
-      const [claimResponse, conversionResponse] = await Promise.all([
-        fetch(`${api}/v1/base/autonomous-bounties/claim-funnel?window_hours=720`, { cache: "no-store" }),
-        fetch(`${api}/v1/opportunities/conversion-funnel?window_hours=720`, { cache: "no-store" }),
-      ]);
-      if (!claimResponse.ok || !conversionResponse.ok) {
-        throw new Error("Adoption evidence is unavailable.");
-      }
-      const [claim, conversion] = await Promise.all([
-        claimResponse.json(),
-        conversionResponse.json(),
-      ]);
-      setMetric("settled", claim.canonical_outcomes.settlements_confirmed);
-      setMetric("solvers", claim.canonical_outcomes.unique_paid_solver_wallets);
-      setMetric("posters", conversion.actors.unique_canonical_poster_wallets);
-      const generatedAt = new Date(claim.generated_at);
-      updated.dateTime = generatedAt.toISOString();
-      updated.textContent = `Updated ${generatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-    } catch (_error) {
-      for (const name of ["settled", "solvers", "posters"]) {
-        const output = document.querySelector(`[data-adoption-${name}]`);
-        if (output) output.textContent = "N/A";
-      }
-      updated.textContent = "30-day metrics temporarily unavailable";
+    const target = Number(value);
+    if (!Number.isFinite(target)) {
+      output.textContent = "--";
+      return;
     }
+
+    const previous = Number(output.dataset.value);
+    output.dataset.value = String(target);
+    output.dataset.loaded = "true";
+    const animationId = String(++metricAnimationId);
+    output.dataset.animationId = animationId;
+    if (reduceMotion || !Number.isFinite(previous) || previous === target) {
+      output.textContent = formatMetric(target, decimals);
+      return;
+    }
+
+    const startedAt = performance.now();
+    const duration = 420;
+    function frame(timestamp) {
+      if (output.dataset.animationId !== animationId) return;
+      const progress = Math.min(1, (timestamp - startedAt) / duration);
+      const eased = 1 - ((1 - progress) ** 3);
+      output.textContent = formatMetric(previous + ((target - previous) * eased), decimals);
+      if (progress < 1) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
   }
 
-  async function loadInventory() {
+  function sumUsdc(items, includeCompletionBonus = false) {
+    return items.reduce((total, item) => {
+      const reward = item.reward && item.reward.currency === "USDC"
+        ? amountValue(item.reward)
+        : 0;
+      const bonus = includeCompletionBonus
+        && item.completion_bonus
+        && item.completion_bonus.currency === "USDC"
+        ? amountValue(item.completion_bonus)
+        : 0;
+      return total + reward + bonus;
+    }, 0);
+  }
+
+  function marketFingerprint(items) {
+    return JSON.stringify(items.map((item) => [
+      item.opportunity_id,
+      item.work_state,
+      item.payment_state,
+      item.payment_committed,
+      item.verification_ready,
+      item.updated_at,
+    ]));
+  }
+
+  function renderOpportunityBoard(container, items) {
+    const fingerprint = marketFingerprint(items);
+    if (fingerprint === marketState.fingerprint) return;
+    marketState.fingerprint = fingerprint;
+    container.textContent = "";
+    opportunitySections.forEach((definition) => {
+      appendSection(container, definition, items.filter(definition.matches));
+    });
+    container.classList.remove("market-update");
+    requestAnimationFrame(() => container.classList.add("market-update"));
+  }
+
+  function formatElapsed(milliseconds) {
+    const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
+    if (seconds < 5) return "just now";
+    if (seconds < 60) return `${seconds}s ago`;
+    return `${Math.floor(seconds / 60)}m ago`;
+  }
+
+  function updateMarketClock() {
+    const updated = document.querySelector("[data-adoption-updated]");
+    if (!updated) return;
+    if (marketState.evidenceGeneratedAt) {
+      updated.dateTime = marketState.evidenceGeneratedAt.toISOString();
+    }
+    if (!marketState.lastReceivedAt) {
+      updated.textContent = marketState.status === "delayed"
+        ? "Live feed unavailable · retrying automatically"
+        : "Connecting to live evidence...";
+      return;
+    }
+
+    const age = Date.now() - marketState.lastReceivedAt;
+    if (marketState.status === "delayed") {
+      updated.textContent = `Feed delayed · last sync ${formatElapsed(age)} · retrying automatically`;
+      return;
+    }
+    if (marketState.refreshing) {
+      updated.textContent = `Refreshing · last sync ${formatElapsed(age)}`;
+      return;
+    }
+    const refreshIn = Math.max(0, Math.ceil((MARKET_REFRESH_MS - age) / 1_000));
+    updated.textContent = `Synced ${formatElapsed(age)} · refresh in ${refreshIn}s`;
+  }
+
+  function setMarketStatus(status) {
+    marketState.status = status;
+    const strip = document.querySelector(".live-strip");
+    const board = document.getElementById("home-live-inventory");
+    if (strip) strip.dataset.marketHealth = status;
+    if (board) board.dataset.marketHealth = status;
+    updateMarketClock();
+  }
+
+  async function resolveProtocol() {
+    if (!marketState.protocolPromise) {
+      marketState.protocolPromise = fetch("protocol.json", { cache: "no-store" })
+        .then((response) => {
+          if (!response.ok) throw new Error("Protocol configuration is unavailable.");
+          return response.json();
+        })
+        .catch((error) => {
+          marketState.protocolPromise = null;
+          throw error;
+        });
+    }
+    return marketState.protocolPromise;
+  }
+
+  function newestPaidProof(items) {
+    const paid = items
+      .filter((item) => item.source_type === "canonical_base" && item.payment_state === "paid")
+      .slice()
+      .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+    const latest = paid[0];
+    return latest && safePublicUrl((latest.proof_urls || [])[0] || latest.public_url);
+  }
+
+  function renderMarketSnapshot(protocol, projection, claim) {
     const container = document.getElementById("home-live-inventory");
-    if (!container) return;
+    const heroSummary = document.querySelector("[data-home-inventory-summary]");
+    const detail = document.querySelector("[data-home-inventory-detail]");
+    const proof = document.querySelector("[data-market-proof]");
+    const items = projection.items || [];
+    const readyDefinition = opportunitySections.find((definition) => definition.key === "ready");
+    const readyItems = items.filter(readyDefinition.matches);
+    const referenceAt = new Date(claim.generated_at || projection.generated_at);
+    const cutoff = referenceAt.getTime() - (MARKET_WINDOW_HOURS * 60 * 60 * 1_000);
+    const paidItems = items.filter((item) => item.source_type === "canonical_base"
+      && item.work_state === "completed"
+      && item.payment_state === "paid"
+      && Date.parse(item.updated_at) >= cutoff);
+    const availableUsdc = sumUsdc(readyItems);
+    const paidUsdc = sumUsdc(paidItems, true);
+    const settlements = Number(claim.canonical_outcomes.settlements_confirmed);
+
+    setMetric("ready", readyItems.length);
+    setMetric("available", availableUsdc, 2);
+    setMetric("settled", settlements);
+    setMetric("paid", paidUsdc, 2);
+    renderOpportunityBoard(container, items);
+
+    heroSummary.textContent = `${readyItems.length} funded bounties ready · ${formatMetric(availableUsdc, 2)} USDC available · ${settlements} confirmed payouts in 30 days`;
+    const sourceStatuses = projection.source_statuses || [];
+    const availableSources = sourceStatuses.filter((source) => source.available).length;
+    const unavailable = sourceStatuses
+      .filter((source) => !source.available)
+      .map((source) => source.source_type);
+    const protocolStatus = protocol.status === "active" ? "Base mainnet active" : "Canonical protocol not active";
+    detail.textContent = unavailable.length
+      ? `${protocolStatus} · ${items.length} live opportunities · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
+      : `${protocolStatus} · ${items.length} live opportunities · ${availableSources}/${sourceStatuses.length} sources online · auto-refreshes every 30 seconds`;
+
+    const proofUrl = newestPaidProof(paidItems);
+    if (proof && proofUrl) {
+      proof.href = proofUrl;
+      proof.hidden = false;
+    } else if (proof) {
+      proof.hidden = true;
+    }
+    marketState.evidenceGeneratedAt = referenceAt;
+  }
+
+  async function refreshMarket() {
+    if (marketState.refreshing) return;
+    marketState.refreshing = true;
+    setMarketStatus(marketState.rendered ? "refreshing" : "connecting");
+    const container = document.getElementById("home-live-inventory");
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
     const detail = document.querySelector("[data-home-inventory-detail]");
     try {
-      const protocolResponse = await fetch("protocol.json", { cache: "no-store" });
-      if (!protocolResponse.ok) throw new Error("Protocol configuration is unavailable.");
-      const protocol = await protocolResponse.json();
+      const protocol = await resolveProtocol();
       const api = protocol.api_base_url.replace(/\/$/, "");
-      const response = await fetch(
-        `${api}/v1/opportunities?network=base-mainnet&view=recent&limit=100`,
-        { cache: "no-store" },
-      );
-      if (!response.ok) throw new Error("The opportunity projection is unavailable.");
-      const projection = await response.json();
-      const items = projection.items || [];
-      loadAdoptionMetrics(api, items);
-      container.textContent = "";
-      opportunitySections.forEach((definition) => {
-        appendSection(container, definition, items.filter(definition.matches));
-      });
-
-      const ready = items.filter(opportunitySections[0].matches).length;
-      const noPayment = items.filter((item) => item.payment_state === "none").length;
-      heroSummary.textContent = `${ready} ready to earn · ${noPayment} open without committed payment`;
-      const unavailable = (projection.source_statuses || [])
-        .filter((source) => !source.available)
-        .map((source) => source.source_type);
-      const status = protocol.status === "active" ? "Base mainnet active" : "Canonical protocol not active";
-      const degraded = unavailable.length
-        ? ` Some sources unavailable: ${unavailable.join(", ")}.`
-        : " All configured sources responded.";
-      detail.textContent = `${status}. ${items.length} opportunities projected at ${new Date(projection.generated_at).toLocaleString()}.${degraded}`;
+      const [projectionResponse, claimResponse] = await Promise.all([
+        fetch(`${api}/v1/opportunities?network=base-mainnet&limit=300`, { cache: "no-store" }),
+        fetch(`${api}/v1/base/autonomous-bounties/claim-funnel?window_hours=${MARKET_WINDOW_HOURS}`, { cache: "no-store" }),
+      ]);
+      if (!projectionResponse.ok || !claimResponse.ok) {
+        throw new Error("Live market evidence is unavailable.");
+      }
+      const [projection, claim] = await Promise.all([
+        projectionResponse.json(),
+        claimResponse.json(),
+      ]);
+      renderMarketSnapshot(protocol, projection, claim);
+      marketState.lastReceivedAt = Date.now();
+      marketState.rendered = true;
+      setMarketStatus(projection.degraded ? "delayed" : "live");
     } catch (error) {
-      container.textContent = "Opportunity discovery could not be loaded. Use the authoritative unfunded and canonical feeds directly; use the portable skill for a Base safe-block check.";
-      heroSummary.textContent = "Opportunity discovery unavailable";
-      detail.textContent = error.message || String(error);
+      setMarketStatus("delayed");
+      if (!marketState.rendered) {
+        container.textContent = "Opportunity discovery could not be loaded. Use the authoritative unfunded and canonical feeds directly; use the portable skill for a Base safe-block check.";
+        heroSummary.textContent = "Live market feed unavailable · retrying automatically";
+        detail.textContent = error.message || String(error);
+      } else {
+        detail.textContent = "Live feed delayed. Last confirmed market snapshot remains visible while the page retries automatically.";
+      }
+    } finally {
+      marketState.refreshing = false;
+      updateMarketClock();
     }
+  }
+
+  function loadInventory() {
+    if (!document.getElementById("home-live-inventory")) return;
+    refreshMarket();
+    window.setInterval(() => {
+      if (!document.hidden) refreshMarket();
+    }, MARKET_REFRESH_MS);
+    window.setInterval(updateMarketClock, 1_000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden
+        && (!marketState.lastReceivedAt || Date.now() - marketState.lastReceivedAt >= MARKET_REFRESH_MS)) {
+        refreshMarket();
+      }
+    });
+    window.addEventListener("online", refreshMarket);
   }
 
   function shortWallet(wallet) {
@@ -342,9 +530,7 @@
     if (!daily || !weekly) return;
     const status = document.querySelector("[data-leaderboard-status]");
     try {
-      const protocolResponse = await fetch("protocol.json", { cache: "no-store" });
-      if (!protocolResponse.ok) throw new Error("Protocol unavailable.");
-      const protocol = await protocolResponse.json();
+      const protocol = await resolveProtocol();
       const api = protocol.api_base_url.replace(/\/$/, "");
       const response = await fetch(
         `${api}/v1/base/autonomous-bounties/leaderboard?network=base-mainnet`,
@@ -360,16 +546,24 @@
       status.textContent = fundingReady
         ? `${result.reward_pool.balance_usdc} USDC prize pool | updated ${new Date(result.generated_at).toLocaleTimeString()}`
         : "Standings live. Prize funding is not yet verified.";
+      marketState.leaderboardRendered = true;
     } catch (error) {
-      daily.textContent = "Leaderboard unavailable.";
-      weekly.textContent = "Leaderboard unavailable.";
-      status.textContent = error.message || String(error);
+      if (!marketState.leaderboardRendered) {
+        daily.textContent = "Leaderboard unavailable.";
+        weekly.textContent = "Leaderboard unavailable.";
+        status.textContent = error.message || String(error);
+      } else {
+        status.textContent = "Leaderboard refresh delayed. Last verified standings remain visible.";
+      }
     }
   }
 
   const canvas = document.getElementById("network-canvas");
   loadInventory();
   loadLeaderboard();
+  window.setInterval(() => {
+    if (!document.hidden) loadLeaderboard();
+  }, LEADERBOARD_REFRESH_MS);
   if (!canvas) return;
 
   const context = canvas.getContext("2d");
