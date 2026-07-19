@@ -51,6 +51,8 @@ LEADERBOARD_DEPLOYMENT_OUTPUT
 
 The hourly `Leaderboard Reward Runner` creates a no-secret candidate after the one-hour delay. Two isolated jobs re-fetch and sign the exact ranking. The keeper revalidates, relays `pay`, and checks the paid-winner state.
 
+If the API reports the exact `not_configured` shape, the runner reads the pinned contract's bytecode, constants, calendar, signers, token, and balance from Base. Any partial or mismatched API state fails closed.
+
 Activate it after deployment:
 
 1. Confirm both repository contract variables.
