@@ -169,12 +169,40 @@ h3 {
   font-weight: 800;
 }
 
+.live-label {
+  color: #8ee0cb;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .live-dot {
   flex: 0 0 auto;
   width: 9px;
   height: 9px;
   border-radius: 50%;
   background: #8ee0cb;
+  box-shadow: 0 0 0 0 rgba(142, 224, 203, 0.55);
+  animation: live-pulse 2s ease-out infinite;
+}
+
+.live-strip[data-market-health="connecting"] .live-dot,
+.live-strip[data-market-health="refreshing"] .live-dot {
+  background: #f0f4c3;
+}
+
+.live-strip[data-market-health="delayed"] {
+  border-color: rgba(232, 173, 63, 0.58);
+}
+
+.live-strip[data-market-health="delayed"] .live-dot {
+  background: #e8ad3f;
+  box-shadow: none;
+  animation: none;
+}
+
+.live-strip[data-market-health="delayed"] .live-label {
+  color: #ffd889;
 }
 
 .hero-metrics {
@@ -232,6 +260,11 @@ h3 {
 
 .hero-metrics-source time {
   color: #d7e1e4;
+}
+
+.hero-metrics-source a {
+  color: #8ee0cb;
+  font-weight: 800;
 }
 
 .button {
@@ -331,6 +364,10 @@ h3 {
   gap: 28px;
   max-width: 1180px;
   margin: 0 auto;
+}
+
+.opportunity-board.market-update {
+  animation: market-update 360ms ease-out;
 }
 
 .opportunity-section {
@@ -1074,6 +1111,42 @@ code {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes live-pulse {
+  70% {
+    box-shadow: 0 0 0 7px rgba(142, 224, 203, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(142, 224, 203, 0);
+  }
+}
+
+@keyframes market-update {
+  from {
+    opacity: 0.72;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .reveal {
+    opacity: 1;
+    transform: none;
   }
 }
 

@@ -265,9 +265,17 @@ def main() -> int:
             "Seeking funding",
             "In progress",
             "Recently paid",
-            "loadAdoptionMetrics",
-            "claim-funnel?window_hours=720",
-            "conversion-funnel?window_hours=720",
+            "MARKET_REFRESH_MS = 30_000",
+            "LEADERBOARD_REFRESH_MS = 60_000",
+            "refreshMarket",
+            "window.setInterval",
+            'document.addEventListener("visibilitychange"',
+            "claim-funnel?window_hours=${MARKET_WINDOW_HOURS}",
+            "limit=300",
+            "sumUsdc",
+            "newestPaidProof",
+            "Last confirmed market snapshot remains visible",
+            "Last verified standings remain visible",
             "payment_state",
             "payment_committed",
             "verification_ready",
@@ -280,14 +288,19 @@ def main() -> int:
         "index.html adoption metrics",
         pages["index.html"],
         [
-            "Live adoption metrics",
+            "Live marketplace metrics",
+            "automatically refreshed",
             "data-adoption-ready",
+            "data-adoption-available",
             "data-adoption-settled",
-            "data-adoption-solvers",
-            "data-adoption-posters",
-            "A wallet may represent a person or an agent.",
+            "data-adoption-paid",
+            "data-market-proof",
+            "Only <code>BountySettled</code> counts as payment.",
         ],
     )
+    for stale_metric in ["data-adoption-solvers", "data-adoption-posters"]:
+        if stale_metric in pages["index.html"]:
+            fail(f"index.html must not present wallet counts as agent activity: {stale_metric}")
     terms_page = (site_dir / "terms.html").read_text(encoding="utf-8")
     privacy_page = (site_dir / "privacy.html").read_text(encoding="utf-8")
     require_phrases(
@@ -325,7 +338,7 @@ def main() -> int:
             "star the repository",
             "Each creator counts once",
             "Rank is not payment",
-            "Opportunities across every payment state",
+            "Work moving through the market",
             "Open opportunity",
             "does not imply payment",
             'type="application/rss+xml"',
