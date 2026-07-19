@@ -99,6 +99,7 @@ pub struct DiscoveryEndpoints {
     pub llms_txt: String,
     pub cloud_agent_readiness: String,
     pub cloud_bounty_drafts: String,
+    pub cloud_objective_plans: String,
     pub opportunities: String,
     pub opportunity_feed_rss: String,
     pub opportunity_feed_atom: String,
@@ -595,6 +596,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         llms_txt: format!("{api}/llms.txt"),
         cloud_agent_readiness: format!("{api}/v1/cloud-agent/readiness"),
         cloud_bounty_drafts: format!("{api}/v1/cloud-agent/bounty-drafts"),
+        cloud_objective_plans: format!("{api}/v1/cloud-agent/objective-plans"),
         opportunities: format!("{api}/v1/opportunities"),
         opportunity_feed_rss: format!("{api}/v1/opportunities/feed.rss"),
         opportunity_feed_atom: format!("{api}/v1/opportunities/feed.atom"),
@@ -745,6 +747,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "submit_unfunded_bounty_solution",
             "prepare_bounty_post",
             "route_blocked_goal",
+            "compile_objective_with_cloud_agent",
             "draft_bounty_with_cloud_agent",
             "get_autonomous_inventory_summary",
             "get_solver_leaderboard",
@@ -1372,6 +1375,7 @@ Use {opportunities} for combined discovery across open, claimable, in-progress, 
 - Live canonical inventory summary: {inventory_summary}
 - Live canonical inventory badge: {inventory_badge}
 - Hosted cloud drafting readiness: {cloud_agent_readiness}
+- GPT-5.6 objective graph compiler: {cloud_objective_plans}
 - Hosted cloud bounty draft: {cloud_bounty_drafts}
 - Unified opportunity projection: {opportunities}
 - Live opportunity feeds: RSS {opportunity_feed_rss}, Atom {opportunity_feed_atom}, JSON Feed {opportunity_feed_json}
@@ -1412,7 +1416,7 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 
 ## Post And Fund
 
-0. When starting from an unstructured objective, call `draft_bounty_with_cloud_agent` or POST to {cloud_bounty_drafts}. Review its measurable draft; cloud output has no wallet, funding, verification, or settlement authority and there is no local-model fallback.
+0. When the outcome needs several contributors, call `compile_objective_with_cloud_agent` or POST to {cloud_objective_plans}. It returns a deterministically validated task DAG with explicit execution, verification, and settlement policies. For one task, call `draft_bounty_with_cloud_agent` or POST to {cloud_bounty_drafts}. Review every result; cloud output has no wallet, funding, verification, or settlement authority and there is no local-model fallback.
 1. Publish exact terms with `publish_autonomous_bounty_terms`.
 2. Commit one verification mode: deterministic module, signed verifier quorum, or AI judge quorum.
 3. AI judge quorum requires at least two independent committed signers and immutable model, prompt, rubric, decoding, benchmark, and evidence commitments.
@@ -1490,6 +1494,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Live canonical inventory summary: {inventory_summary}
 - Live canonical inventory badge: {inventory_badge}
 - Hosted cloud drafting readiness: {cloud_agent_readiness}
+- GPT-5.6 objective graph compiler: {cloud_objective_plans}
 - Hosted cloud bounty draft: {cloud_bounty_drafts}
 - Live verification jobs: {verification_jobs}
 - Confirmed events: {events}
@@ -1554,6 +1559,7 @@ Default CTA: Post your own bounty at {post_page}
         inventory_summary = endpoints.autonomous_inventory_summary,
         inventory_badge = endpoints.autonomous_inventory_badge,
         cloud_agent_readiness = endpoints.cloud_agent_readiness,
+        cloud_objective_plans = endpoints.cloud_objective_plans,
         cloud_bounty_drafts = endpoints.cloud_bounty_drafts,
         opportunities = endpoints.opportunities,
         opportunity_feed_rss = endpoints.opportunity_feed_rss,

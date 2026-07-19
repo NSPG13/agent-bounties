@@ -51,13 +51,13 @@ API_RUNTIME_ENVIRONMENT = {
 CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
     "CLOUD_AGENT_ENABLED": "true",
     "CLOUD_AGENT_PUBLIC_DRAFTS": "true",
-    "CLOUD_AGENT_PROVIDER": "openai-compatible",
-    "CLOUD_AGENT_PROTOCOL": "openai_chat_completions",
-    "CLOUD_AGENT_ENDPOINT": "https://api.openai.com/v1/chat/completions",
-    "CLOUD_AGENT_MODEL": "gpt-4.1-mini",
+    "CLOUD_AGENT_PROVIDER": "openai",
+    "CLOUD_AGENT_PROTOCOL": "openai_responses",
+    "CLOUD_AGENT_ENDPOINT": "https://api.openai.com/v1/responses",
+    "CLOUD_AGENT_MODEL": "gpt-5.6",
     "CLOUD_AGENT_MAX_INPUT_CHARS": "12000",
     "CLOUD_AGENT_MAX_OUTPUT_TOKENS": "2500",
-    "CLOUD_AGENT_MAX_DAILY_DRAFTS": "25",
+    "CLOUD_AGENT_MAX_DAILY_DRAFTS": "100",
     "CLOUD_AGENT_TIMEOUT_SECONDS": "45",
 }
 
