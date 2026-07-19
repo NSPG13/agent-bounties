@@ -1,0 +1,18 @@
+schema_version: bountyboard/external-prize-entrant-team-v1
+id: future-vision-xprize-2026
+status: forming_and_registering_open_entrant_team
+platform:
+  public_name: BountyBoard.global
+  team_name: BountyBoard.global Open Future Vision Team
+  official_domain: https://bountyboard.global/
+  publication_type: github_coordination_bounty
+  canonical_contract: null
+  funding_status: funding_needed
+  claimable_usdc: false
+  platform_reward_usdc: 0
+external_competition:
+  organizer: Future Vision XPRIZE
+  presented_by: [Google, XPRIZE Foundation, Range]
+  official_url: https://futurevisionxprize.com/
+  official_rules_url: https://futurevisionxprize.com/rules
+  advertised_total_prize_pool: "$3.5M"
