@@ -71,6 +71,11 @@ The protocol validates and enforces.
 - Storage: disabled for these requests
 - Model role: bounded task decomposition only
 
+OpenAI documents `gpt-5.6` as the GPT-5.6 Sol alias with Responses API and
+Structured Outputs support. See the official
+[model reference](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+and [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
+
 GPT-5.6 is useful here because decomposition needs judgment across dependencies,
 acceptance criteria, evidence, and execution order. Deterministic code is useful
 for everything that must never vary: graph validity, verifier allowlists, money

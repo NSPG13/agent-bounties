@@ -15,6 +15,7 @@ const DEFAULT_MAX_INPUT_CHARS: usize = 12_000;
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 2_500;
 const DEFAULT_DAILY_LIMIT: u32 = 100;
 const DEFAULT_TIMEOUT_SECONDS: u64 = 45;
+const MINIMUM_TASK_REWARD_BASE_UNITS: u128 = 10_000;
 
 fn default_objective_task_limit() -> u8 {
     5
@@ -1404,6 +1405,14 @@ fn allocate_solver_budget(
         return Ok(BTreeMap::new());
     };
     let total = u128::from(parse_usdc_base_units(budget)?);
+    let minimum_total = MINIMUM_TASK_REWARD_BASE_UNITS * tasks.len() as u128;
+    if total < minimum_total {
+        return Err(CloudAgentError::InvalidRequest(format!(
+            "solver_budget_usdc must allow at least 0.01 USDC for each generated task ({:.2} USDC)",
+            tasks.len() as f64 / 100.0
+        )));
+    }
+    let weighted_total = total - minimum_total;
     let weight_sum: u128 = tasks
         .iter()
         .map(|task| u128::from(task.effort_weight))
@@ -1412,8 +1421,8 @@ fn allocate_solver_budget(
     let mut remainders = Vec::new();
     let mut allocated = 0_u128;
     for task in tasks {
-        let numerator = total * u128::from(task.effort_weight);
-        let base_units = numerator / weight_sum;
+        let numerator = weighted_total * u128::from(task.effort_weight);
+        let base_units = MINIMUM_TASK_REWARD_BASE_UNITS + numerator / weight_sum;
         allocated += base_units;
         allocations.insert(task.task_id.clone(), base_units);
         remainders.push((numerator % weight_sum, task.task_id.clone()));
@@ -2025,15 +2034,15 @@ mod tests {
         assert_eq!(plan.model, "fixture-v1");
         assert_eq!(
             plan.tasks[0].suggested_solver_reward_usdc.as_deref(),
-            Some("3.000000")
+            Some("3.002500")
         );
         assert_eq!(
             plan.tasks[1].suggested_solver_reward_usdc.as_deref(),
-            Some("6.000000")
+            Some("5.995000")
         );
         assert_eq!(
             plan.tasks[2].suggested_solver_reward_usdc.as_deref(),
-            Some("3.000000")
+            Some("3.002500")
         );
         assert_eq!(
             plan.settlement_policy.payout_evidence,
@@ -2057,6 +2066,15 @@ mod tests {
         assert_eq!(parse_usdc_base_units("12.345678").unwrap(), 12_345_678);
         assert!(parse_usdc_base_units("1.0000001").is_err());
         assert!(parse_usdc_base_units("-1").is_err());
+
+        let mut fields = parse_model_objective_plan(&objective_output(), 5).unwrap();
+        fields.tasks[0].effort_weight = 100;
+        fields.tasks[1].effort_weight = 1;
+        fields.tasks[2].effort_weight = 1;
+        let minimum_allocations = allocate_solver_budget(&fields.tasks, Some("0.03")).unwrap();
+        assert!(minimum_allocations
+            .values()
+            .all(|amount| amount == "0.010000"));
         let schema = objective_plan_output_schema(5);
         assert_eq!(schema["properties"]["tasks"]["maxItems"], 5);
     }
