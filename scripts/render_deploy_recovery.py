@@ -287,6 +287,22 @@ def normalize_public_base_url(name: str, value: str) -> str:
     return candidate
 
 
+def public_environment_values(
+    public_base_url: str,
+    mcp_base_url: str,
+    website_base_url: str,
+) -> dict[str, str]:
+    return {
+        "PUBLIC_BASE_URL": normalize_public_base_url(
+            "PUBLIC_BASE_URL", public_base_url
+        ),
+        "MCP_BASE_URL": normalize_public_base_url("MCP_BASE_URL", mcp_base_url),
+        "WEBSITE_BASE_URL": normalize_public_base_url(
+            "WEBSITE_BASE_URL", website_base_url
+        ),
+    }
+
+
 def normalize_evm_address(name: str, value: str) -> str:
     normalized = value.strip().lower()
     if not re.fullmatch(r"0x[0-9a-f]{40}", normalized):
@@ -950,6 +966,7 @@ def deploy(
     poll_seconds: float,
     public_base_url: str = "https://api.bountyboard.global",
     mcp_base_url: str = "https://mcp.bountyboard.global",
+    website_base_url: str = "https://bountyboard.global",
     cloud_agent_api_key: str | None = None,
     base_mainnet_leaderboard_reward_contract: str | None = None,
     base_sepolia_leaderboard_reward_contract: str | None = None,
@@ -980,26 +997,25 @@ def deploy(
     for spec, service in services:
         client.disable_native_auto_deploy(service)
 
-    public_environment_values = {
-        "PUBLIC_BASE_URL": normalize_public_base_url(
-            "PUBLIC_BASE_URL", public_base_url
-        ),
-        "MCP_BASE_URL": normalize_public_base_url("MCP_BASE_URL", mcp_base_url),
-    }
+    desired_public_environment = public_environment_values(
+        public_base_url,
+        mcp_base_url,
+        website_base_url,
+    )
     leaderboard_environment = leaderboard_environment_values(
         base_mainnet_leaderboard_reward_contract,
         base_sepolia_leaderboard_reward_contract,
     )
-    public_environment = []
+    reconciled_public_environment = []
     public_environment_changed: dict[str, bool] = {}
     for spec, service in services:
         if spec.name not in PUBLIC_ENV_SERVICE_NAMES:
             continue
         public_environment_changed[spec.name] = False
-        for key, value in public_environment_values.items():
+        for key, value in desired_public_environment.items():
             record = client.ensure_env_var(service, key, value)
             public_environment_changed[spec.name] |= record["changed"]
-            public_environment.append(
+            reconciled_public_environment.append(
                 {
                     "service": spec.name,
                     "key": key,
@@ -1011,7 +1027,7 @@ def deploy(
             for key, value in leaderboard_environment.items():
                 record = client.ensure_env_var(service, key, value)
                 public_environment_changed[spec.name] |= record["changed"]
-                public_environment.append(
+                reconciled_public_environment.append(
                     {
                         "service": spec.name,
                         "key": key,
@@ -1162,7 +1178,7 @@ def deploy(
         "services": service_evidence,
         "health": health,
         "custom_domains": custom_domains,
-        "public_environment": public_environment,
+        "public_environment": reconciled_public_environment,
         "cloud_environment": cloud_environment,
         "secret_environment": secret_environment,
         "cloud_readiness": cloud_readiness,
@@ -1195,6 +1211,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mcp-base-url",
         default="https://mcp.bountyboard.global",
+    )
+    parser.add_argument(
+        "--website-base-url",
+        default="https://bountyboard.global",
     )
     parser.add_argument("--base-mainnet-leaderboard-reward-contract")
     parser.add_argument("--base-sepolia-leaderboard-reward-contract")
@@ -1245,6 +1265,7 @@ def main() -> int:
             poll_seconds=args.poll_seconds,
             public_base_url=args.public_base_url,
             mcp_base_url=args.mcp_base_url,
+            website_base_url=args.website_base_url,
             cloud_agent_api_key=os.environ.get("CLOUD_AGENT_API_KEY"),
             base_mainnet_leaderboard_reward_contract=(
                 args.base_mainnet_leaderboard_reward_contract

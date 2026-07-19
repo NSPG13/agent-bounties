@@ -285,6 +285,7 @@ def main() -> int:
         "scripts/render_deploy_recovery.py",
         '--public-base-url "${PRODUCTION_API_BASE_URL%/}"',
         '--mcp-base-url "${PRODUCTION_MCP_BASE_URL%/}"',
+        '--website-base-url "${PRODUCTION_WEBSITE_BASE_URL%/}"',
     ]
     for required in workflow_contract:
         if required not in deploy_workflow:

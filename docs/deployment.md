@@ -54,7 +54,8 @@ succeeds on a push to `main`, the workflow:
 3. resolves all three Render services by exact name and verifies repository,
    branch, and service type;
 4. disables any drifted native auto-deploy setting;
-5. reconciles `PUBLIC_BASE_URL` and `MCP_BASE_URL` on both public services;
+5. reconciles `PUBLIC_BASE_URL`, `MCP_BASE_URL`, and `WEBSITE_BASE_URL` on
+   both public services;
 6. reconciles all nonsecret cloud-agent settings on API and copies the optional
    GitHub-held model key without including its value in evidence;
 7. calls Render's deploy API with the exact commit for API, MCP, and worker;
