@@ -41,8 +41,9 @@ use domain::{
 };
 use eval_harness::{EvalSuiteResult, LoopSuiteResult};
 use github_app::{
-    bounty_check_output, claim_comment_plan, funding_comment_plan, parse_issue_form_bounty,
-    proof_comment_plan, GitHubClaimCommentInput, GitHubFundingCommentInput, GitHubProofComment,
+    bounty_check_output, claim_comment_plan, create_comment_plan, funding_comment_plan,
+    parse_issue_form_bounty, proof_comment_plan, GitHubClaimCommentInput, GitHubCreateCommentInput,
+    GitHubFundingCommentInput, GitHubProofComment,
 };
 use ledger::Ledger;
 use payments_stripe::{
@@ -292,6 +293,28 @@ struct PlanGitHubFundingCommentArgs {
     funding_api_base_url: Option<String>,
     #[serde(default)]
     existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanGitHubCreateCommentArgs {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
+    #[serde(default)]
+    existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanSocialMentionDraftArgs {
+    source_network: String,
+    mention_url: String,
+    mention_id: String,
+    mention_text: String,
+    author_handle: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -711,12 +734,20 @@ async fn main() -> anyhow::Result<()> {
             post(plan_github_issue_bounty),
         )
         .route(
+            "/tools/plan_github_create_comment",
+            post(plan_github_create_comment),
+        )
+        .route(
             "/tools/plan_github_funding_comment",
             post(plan_github_funding_comment),
         )
         .route(
             "/tools/plan_github_claim_comment",
             post(plan_github_claim_comment),
+        )
+        .route(
+            "/tools/plan_social_mention_draft",
+            post(plan_social_mention_draft),
         )
         .route(
             "/tools/plan_github_proof_comment",
@@ -1431,6 +1462,23 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
         ),
         tool(
+            "plan_github_create_comment",
+            "Convert `/agent-bounty create <amount> USDC` on an existing GitHub issue into an idempotent, review-required draft and canonical wallet handoff. This never publishes terms or claims funding.",
+            object_tool_schema(
+                json!({
+                    "repository": string_property("GitHub repository, for example owner/repo."),
+                    "issue_url": string_property("Canonical HTTPS GitHub issue URL."),
+                    "title": string_property("Current issue title."),
+                    "body": string_property("Current issue body used as advisory draft context."),
+                    "comment_body": string_property("GitHub comment containing `/agent-bounty create <amount> USDC`."),
+                    "contributor_login": nullable_string_property("Optional GitHub login that authored the command."),
+                    "comment_id": nullable_string_property("Optional GitHub comment ID used for idempotency."),
+                    "existing_idempotency_keys": string_array_property("Previously processed create-comment keys for duplicate detection.")
+                }),
+                &["repository", "issue_url", "title", "body", "comment_body"],
+            ),
+        ),
+        tool(
             "plan_github_funding_comment",
             "Parse a GitHub public co-funding comment into an operator reconciliation signal without crediting funds.",
             object_tool_schema(
@@ -1446,6 +1494,20 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "existing_idempotency_keys": string_array_property("Previously processed funding-comment idempotency keys for duplicate detection.")
                 }),
                 &["repository", "issue_url", "title", "body", "comment_body"],
+            ),
+        ),
+        tool(
+            "plan_social_mention_draft",
+            "Plan a review-only bounty draft from a social mention. The hosted API keeps this disabled until an operator enables rollout and indexed canonical events prove at least three funded and two settled GitHub-originated bounties.",
+            object_tool_schema(
+                json!({
+                    "source_network": string_property("Social network or connector name, for example farcaster."),
+                    "mention_url": string_property("Canonical HTTPS URL for the source mention."),
+                    "mention_id": string_property("Stable provider mention ID used for idempotency."),
+                    "mention_text": string_property("Mention text containing `/agent-bounty create <amount> USDC` and the requested outcome."),
+                    "author_handle": nullable_string_property("Optional public author handle.")
+                }),
+                &["source_network", "mention_url", "mention_id", "mention_text"],
             ),
         ),
         tool(
@@ -3625,6 +3687,31 @@ async fn plan_github_funding_comment(
     }))
 }
 
+async fn plan_github_create_comment(
+    Json(args): Json<PlanGitHubCreateCommentArgs>,
+) -> Json<serde_json::Value> {
+    mcp_json(create_comment_plan(GitHubCreateCommentInput {
+        repository: args.repository,
+        issue_url: args.issue_url,
+        title: args.title,
+        body: args.body,
+        comment_body: args.comment_body,
+        contributor_login: args.contributor_login,
+        comment_id: args.comment_id,
+        existing_idempotency_keys: args.existing_idempotency_keys,
+    }))
+}
+
+async fn plan_social_mention_draft(
+    Json(args): Json<PlanSocialMentionDraftArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/social/mention-draft-plan",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().post(url).json(&args)).await
+}
+
 async fn plan_github_claim_comment(
     Json(args): Json<PlanGitHubClaimCommentArgs>,
 ) -> Json<serde_json::Value> {
@@ -5270,6 +5357,30 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "body"));
+
+        let plan_github_create = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_github_create_comment")
+            .expect("plan_github_create_comment descriptor exists");
+        assert!(plan_github_create.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "comment_body"));
+        assert_eq!(
+            plan_github_create.input_schema["properties"]["existing_idempotency_keys"]["type"],
+            "array"
+        );
+
+        let plan_social_mention = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_social_mention_draft")
+            .expect("plan_social_mention_draft descriptor exists");
+        assert!(plan_social_mention.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "mention_text"));
 
         let plan_github_funding = descriptors
             .iter()

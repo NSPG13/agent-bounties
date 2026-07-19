@@ -53,6 +53,14 @@ cargo run -p cli -- github-plan \
   --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 \
   --title "[bounty]: Fix CI" \
   --body-file examples/github-paid-bounty-issue.md
+cargo run -p cli -- github-create-comment-plan \
+  --repository agent-bounties/agent-bounties \
+  --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 \
+  --title "[bounty]: Fix CI" \
+  --body-file examples/github-paid-bounty-issue.md \
+  --comment-body "/agent-bounty create 25 USDC" \
+  --contributor-login check-script \
+  --comment-id 12344
 cargo run -p cli -- github-funding-comment-plan \
   --repository agent-bounties/agent-bounties \
   --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 \
@@ -71,6 +79,7 @@ cargo run -p cli -- github-claim-comment-plan \
   --comment-id 12346 \
   --claim-age-minutes 5
 "${python_cmd[@]}" scripts/github_issue_plan_comment.py --self-test
+"${python_cmd[@]}" scripts/github_create_comment.py --self-test
 "${python_cmd[@]}" scripts/github_funding_comment.py --self-test
 "${python_cmd[@]}" scripts/github_claim_comment.py --self-test
 "${python_cmd[@]}" scripts/github_proof_comment.py --self-test
