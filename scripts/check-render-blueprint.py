@@ -294,6 +294,7 @@ def main() -> int:
     controller_path = repo_root / "scripts" / "render_deploy_recovery.py"
     controller = controller_path.read_text(encoding="utf-8")
     for required in [
+        "API_RUNTIME_ENVIRONMENT",
         "CLOUD_AGENT_RUNTIME_ENVIRONMENT",
         "reconcile_cloud_agent_environment",
         "validate_cloud_agent_readiness",
@@ -308,6 +309,7 @@ def main() -> int:
         fail("API service must attach api.bountyboard.global")
     require_env_value(api, "APP_PACKAGE", "api")
     require_env_value(api, "APP_BINARY", "api")
+    require_env_value(api, "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED", '"true"')
     require_env_value(api, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')
     require_env_value(api, "ENABLE_STRIPE_PUBLIC_CHECKOUT", '"false"')
     require_env_value(api, "ENABLE_BASE_TX_BROADCAST", '"false"')

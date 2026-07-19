@@ -89,7 +89,7 @@ use github_app::{
     GitHubClaimCommentPlan, GitHubCreateCommentInput, GitHubCreateCommentPlan,
     GitHubFundingCommentInput, GitHubFundingCommentPlan, GitHubIssueApiSyncInput,
     GitHubIssueApiSyncPlan, GitHubIssueFormBounty, GitHubProofComment, GitHubProofCommentPlan,
-    SocialMentionDraftInput, SocialMentionDraftPlan, GITHUB_CREATE_DISCOVERY_SOURCE,
+    SocialMentionDraftInput, SocialMentionDraftPlan,
 };
 use ledger::Ledger;
 use opportunities::{
@@ -10051,7 +10051,7 @@ async fn plan_social_mention_draft(
     let operator_enabled = env_flag("AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED");
     let github_conversion = if operator_enabled {
         match load_autonomous_bounty_feed(&state, "base-mainnet", false).await {
-            Ok(feed) => github_create_conversion_evidence(&feed),
+            Ok(feed) => github_issue_conversion_evidence(&feed),
             Err(_) => unavailable_github_conversion_evidence(),
         }
     } else {
@@ -10078,15 +10078,14 @@ fn unavailable_github_conversion_evidence() -> GitHubCanonicalConversionEvidence
     }
 }
 
-fn github_create_conversion_evidence(
+fn github_issue_conversion_evidence(
     feed: &[AutonomousBountyFeedItem],
 ) -> GitHubCanonicalConversionEvidence {
     let github_items = feed.iter().filter(|item| {
         item.terms.as_ref().is_some_and(|terms| {
-            terms.document.discovery_source.as_deref() == Some(GITHUB_CREATE_DISCOVERY_SOURCE)
-                && terms.document.source_url.as_deref().is_some_and(|url| {
-                    url.starts_with("https://github.com/") && url.contains("/issues/")
-                })
+            terms.document.source_url.as_deref().is_some_and(|url| {
+                url.starts_with("https://github.com/") && url.contains("/issues/")
+            })
         })
     });
     let mut funded = 0_u32;
@@ -12792,13 +12791,13 @@ mod tests {
     }
 
     #[test]
-    fn social_rollout_counts_only_canonical_events_with_exact_github_attribution() {
+    fn social_rollout_counts_canonical_events_with_github_issue_provenance() {
         let now = Utc::now();
         let mut document: AutonomousBountyTermsDocument =
             serde_json::from_str(include_str!("../../../bounties/autonomous-v1/244.json")).unwrap();
         document.source_url =
             Some("https://github.com/agent-bounties/agent-bounties/issues/501".to_string());
-        document.discovery_source = Some(GITHUB_CREATE_DISCOVERY_SOURCE.to_string());
+        document.discovery_source = Some("GitHub /agent-bounty create".to_string());
         let terms = AutonomousBountyTermsRecord {
             terms_hash: format!("0x{}", "44".repeat(32)),
             policy_hash: format!("0x{}", "45".repeat(32)),
@@ -12846,13 +12845,27 @@ mod tests {
             ],
         };
 
-        let mut ignored = item.clone();
-        ignored.terms.as_mut().unwrap().document.discovery_source =
-            Some("manual GitHub link".to_string());
-        let evidence = github_create_conversion_evidence(&[item, ignored]);
+        let mut legacy_github_item = item.clone();
+        legacy_github_item
+            .terms
+            .as_mut()
+            .unwrap()
+            .document
+            .discovery_source = Some("manual GitHub link".to_string());
+
+        let mut ignored_non_github_item = item.clone();
+        ignored_non_github_item
+            .terms
+            .as_mut()
+            .unwrap()
+            .document
+            .source_url = Some("https://example.com/tasks/501".to_string());
+
+        let evidence =
+            github_issue_conversion_evidence(&[item, legacy_github_item, ignored_non_github_item]);
         assert!(evidence.evidence_available);
-        assert_eq!(evidence.github_originated_canonical_funded, 1);
-        assert_eq!(evidence.github_originated_canonical_settled, 1);
+        assert_eq!(evidence.github_originated_canonical_funded, 2);
+        assert_eq!(evidence.github_originated_canonical_settled, 2);
     }
 
     #[tokio::test]
