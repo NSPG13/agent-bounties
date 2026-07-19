@@ -199,6 +199,43 @@
     container.append(section);
   }
 
+  function setMetric(name, value) {
+    const output = document.querySelector(`[data-adoption-${name}]`);
+    if (!output) return;
+    output.textContent = Number(value).toLocaleString();
+    output.dataset.loaded = "true";
+  }
+
+  async function loadAdoptionMetrics(api, items) {
+    const updated = document.querySelector("[data-adoption-updated]");
+    setMetric("ready", items.filter(opportunitySections[0].matches).length);
+    try {
+      const [claimResponse, conversionResponse] = await Promise.all([
+        fetch(`${api}/v1/base/autonomous-bounties/claim-funnel?window_hours=720`, { cache: "no-store" }),
+        fetch(`${api}/v1/opportunities/conversion-funnel?window_hours=720`, { cache: "no-store" }),
+      ]);
+      if (!claimResponse.ok || !conversionResponse.ok) {
+        throw new Error("Adoption evidence is unavailable.");
+      }
+      const [claim, conversion] = await Promise.all([
+        claimResponse.json(),
+        conversionResponse.json(),
+      ]);
+      setMetric("settled", claim.canonical_outcomes.settlements_confirmed);
+      setMetric("solvers", claim.canonical_outcomes.unique_paid_solver_wallets);
+      setMetric("posters", conversion.actors.unique_canonical_poster_wallets);
+      const generatedAt = new Date(claim.generated_at);
+      updated.dateTime = generatedAt.toISOString();
+      updated.textContent = `Updated ${generatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    } catch (_error) {
+      for (const name of ["settled", "solvers", "posters"]) {
+        const output = document.querySelector(`[data-adoption-${name}]`);
+        if (output) output.textContent = "N/A";
+      }
+      updated.textContent = "30-day metrics temporarily unavailable";
+    }
+  }
+
   async function loadInventory() {
     const container = document.getElementById("home-live-inventory");
     if (!container) return;
@@ -216,6 +253,7 @@
       if (!response.ok) throw new Error("The opportunity projection is unavailable.");
       const projection = await response.json();
       const items = projection.items || [];
+      loadAdoptionMetrics(api, items);
       container.textContent = "";
       opportunitySections.forEach((definition) => {
         appendSection(container, definition, items.filter(definition.matches));

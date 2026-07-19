@@ -34,6 +34,8 @@ pub const DISCOVERY_SUBSCRIPTIONS_MIGRATION: &str =
     include_str!("../../../migrations/0007_discovery_subscriptions.sql");
 pub const OPPORTUNITY_CONVERSION_MIGRATION: &str =
     include_str!("../../../migrations/0008_opportunity_conversion.sql");
+pub const LEGAL_ACCEPTANCES_MIGRATION: &str =
+    include_str!("../../../migrations/0009_legal_acceptances.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -149,6 +151,31 @@ pub enum DbError {
 }
 
 pub type DbResult<T> = Result<T, DbError>;
+
+#[derive(Debug, Clone)]
+pub struct NewLegalAcceptance {
+    pub id: Uuid,
+    pub terms_version: String,
+    pub privacy_version: String,
+    pub action: String,
+    pub wallet_address: String,
+    pub statement_hash: String,
+    pub acceptance_method: String,
+    pub accepted_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LegalAcceptance {
+    pub id: Uuid,
+    pub terms_version: String,
+    pub privacy_version: String,
+    pub action: String,
+    pub wallet_address: String,
+    pub statement_hash: String,
+    pub acceptance_method: String,
+    pub accepted_at: DateTime<Utc>,
+    pub recorded_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Clone)]
 pub struct NewTrialBounty {
@@ -549,6 +576,7 @@ impl PostgresStore {
                 SOLVER_LEADERBOARD_MIGRATION,
                 DISCOVERY_SUBSCRIPTIONS_MIGRATION,
                 OPPORTUNITY_CONVERSION_MIGRATION,
+                LEGAL_ACCEPTANCES_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -572,6 +600,44 @@ impl PostgresStore {
             (Err(error), Ok(_)) => Err(error.into()),
             (Ok(()), Err(error)) | (Err(_), Err(error)) => Err(error.into()),
         }
+    }
+
+    pub async fn record_legal_acceptance(
+        &self,
+        acceptance: &NewLegalAcceptance,
+    ) -> DbResult<LegalAcceptance> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO legal_acceptances
+              (id, terms_version, privacy_version, action, wallet_address,
+               statement_hash, acceptance_method, accepted_at)
+            VALUES ($1, $2, $3, $4, lower($5), $6, $7, $8)
+            RETURNING id, terms_version, privacy_version, action, wallet_address,
+                      statement_hash, acceptance_method, accepted_at, recorded_at
+            "#,
+        )
+        .bind(acceptance.id)
+        .bind(&acceptance.terms_version)
+        .bind(&acceptance.privacy_version)
+        .bind(&acceptance.action)
+        .bind(&acceptance.wallet_address)
+        .bind(&acceptance.statement_hash)
+        .bind(&acceptance.acceptance_method)
+        .bind(acceptance.accepted_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(LegalAcceptance {
+            id: row.try_get("id")?,
+            terms_version: row.try_get("terms_version")?,
+            privacy_version: row.try_get("privacy_version")?,
+            action: row.try_get("action")?,
+            wallet_address: row.try_get("wallet_address")?,
+            statement_hash: row.try_get("statement_hash")?,
+            acceptance_method: row.try_get("acceptance_method")?,
+            accepted_at: row.try_get("accepted_at")?,
+            recorded_at: row.try_get("recorded_at")?,
+        })
     }
 
     pub async fn create_discovery_webhook_subscription(
@@ -5489,6 +5555,26 @@ mod tests {
             assert!(
                 OPPORTUNITY_CONVERSION_MIGRATION.contains(invariant),
                 "missing opportunity conversion invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn legal_acceptance_migration_preserves_versioned_action_evidence() {
+        for invariant in [
+            "legal_acceptances",
+            "terms_version TEXT NOT NULL",
+            "privacy_version TEXT NOT NULL",
+            "wallet_address TEXT NOT NULL",
+            "statement_hash TEXT NOT NULL",
+            "accepted_at TIMESTAMPTZ NOT NULL",
+            "acceptance_method IN ('web_clickwrap', 'api_explicit')",
+            "legal_acceptances_wallet_recorded_idx",
+            "legal_acceptances_action_recorded_idx",
+        ] {
+            assert!(
+                LEGAL_ACCEPTANCES_MIGRATION.contains(invariant),
+                "missing legal acceptance invariant {invariant}"
             );
         }
     }

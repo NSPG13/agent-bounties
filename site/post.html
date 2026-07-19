@@ -35,7 +35,7 @@
       <section class="band compact protocol-workspace">
         <form id="autonomous-post-form" class="funding-form protocol-form">
           <div class="form-section">
-            <p class="eyebrow">Task</p>
+            <p class="eyebrow">1. Describe the work</p>
             <label>
               Describe the outcome
               <textarea name="draftObjective" rows="3" placeholder="Describe the coding result you need. The hosted cloud agent will turn it into measurable draft terms."></textarea>
@@ -45,32 +45,32 @@
               <output class="fine" data-cloud-draft-status aria-live="polite">The cloud draft is advisory. Review every criterion.</output>
             </div>
             <label>
-              Title
+              Short title
               <input name="title" maxlength="200" placeholder="Fix the failing payment reconciliation test" required>
             </label>
             <label>
-              Goal
+              What should be delivered?
               <textarea name="goal" rows="4" placeholder="State the digital outcome the solver must deliver." required></textarea>
             </label>
             <label>
-              Acceptance criteria, one per line
+              How will you know it is done? Add one check per line.
               <textarea name="acceptance" rows="5" placeholder="The committed test exits zero&#10;A regression test covers the failure&#10;The pull request links the evidence" required></textarea>
             </label>
             <label>
-              Source URL
+              Link to the issue or task (optional)
               <input name="sourceUrl" type="url" placeholder="https://github.com/owner/repo/issues/123">
             </label>
           </div>
 
           <div class="form-section">
-            <p class="eyebrow">Rewards</p>
+            <p class="eyebrow">2. Set the reward</p>
             <div class="form-row">
               <label>
-                Solver reward, USDC
+                Solver receives, USDC
                 <input name="solverReward" type="number" min="0.01" step="0.01" value="2.00" required>
               </label>
               <label>
-                Verifier reward, USDC
+                Verifier receives, USDC
                 <input name="verifierReward" type="number" min="0.01" step="0.01" value="0.01" required>
               </label>
             </div>
@@ -80,63 +80,70 @@
               Post with 0 USDC now and open it to funding later
             </label>
             <p class="fine"><strong>Crowdfunding fallback:</strong> Check this only to deposit 0 USDC now. The creator still signs creation and pays gas. The bounty becomes claimable after full funding.</p>
-            <div class="form-row three">
-              <label>
-                Funding days
-                <input name="fundingDays" type="number" min="1" max="90" value="7" required>
-              </label>
-              <label>
-                Claim hours
-                <input name="claimHours" type="number" min="1" max="720" value="24" required>
-              </label>
-              <label>
-                Verify hours
-                <input name="verificationHours" type="number" min="1" max="168" value="2" required>
-              </label>
-            </div>
+            <details class="advanced">
+              <summary>Change the 7-day funding, 24-hour work, and 2-hour review deadlines</summary>
+              <div class="form-row three">
+                <label>
+                  Funding days
+                  <input name="fundingDays" type="number" min="1" max="90" value="7" required>
+                </label>
+                <label>
+                  Work hours after claim
+                  <input name="claimHours" type="number" min="1" max="720" value="24" required>
+                </label>
+                <label>
+                  Review hours
+                  <input name="verificationHours" type="number" min="1" max="168" value="2" required>
+                </label>
+              </div>
+            </details>
           </div>
 
           <div class="form-section">
-            <p class="eyebrow">Verification</p>
-            <div class="form-row">
+            <p class="eyebrow">3. Choose the payment rule</p>
+            <p class="fine"><strong>This choice controls payment.</strong> The bounty pays automatically only when this checker passes.</p>
+            <label>
+              Who decides the work passed?
+              <select name="verificationMode">
+                <option value="deterministic_module">Automatic demo proof checker</option>
+                <option value="signed_quorum">Trusted verifier wallets</option>
+                <option value="ai_judge_quorum">Two or more AI judges</option>
+              </select>
+            </label>
+            <output class="readiness-panel" data-verifier-scope aria-live="polite">The demo checker proves only that a small computation was completed. It does not check whether your requested work is good.</output>
+            <label class="check-line verifier-warning" data-demo-verifier-warning>
+              <input name="demoVerifierAccepted" type="checkbox">
+              <span>I understand this demo checker does not evaluate my task or acceptance criteria. I will use it only when the small work proof itself is the result I want.</span>
+            </label>
+            <details class="advanced">
+              <summary>Review advanced verification details</summary>
               <label>
-                Mechanism
-                <select name="verificationMode">
-                  <option value="deterministic_module">16-bit work-proof canary</option>
-                  <optgroup label="Advanced verifier services">
-                    <option value="signed_quorum">Verifier wallet quorum (advanced)</option>
-                    <option value="ai_judge_quorum">AI judge quorum (advanced)</option>
-                  </optgroup>
-                </select>
-              </label>
-              <label>
-                Signature threshold
+                Signatures required to decide
                 <input name="threshold" type="number" min="1" max="8" value="1" required>
               </label>
-            </div>
-            <output class="fine" data-verifier-scope aria-live="polite">The default verifier checks only the locked 16-bit work proof. Choose it only when that proof is the payout condition.</output>
-            <label>
-              Verifier wallets, comma or space separated
-              <textarea name="verifiers" rows="2" placeholder="0x... 0x..."></textarea>
-            </label>
-            <div class="form-row">
               <label>
-                On-chain verifier module
-                <input name="verifierModule" placeholder="Loaded from active protocol" readonly>
+                Verifier wallets, comma or space separated
+                <textarea name="verifiers" rows="2" placeholder="0x... 0x..."></textarea>
+              </label>
+              <div class="form-row">
+                <label>
+                  On-chain verifier module
+                  <input name="verifierModule" placeholder="Loaded from active protocol" readonly>
+                </label>
+                <label>
+                  Module reward wallet
+                  <input name="verifierRewardRecipient" placeholder="0x...">
+                </label>
+              </div>
+              <label>
+                Benchmark JSON (exact payout condition)
+                <textarea name="benchmark" rows="8" readonly required>{"engine":"leading_zero_work_v1","difficulty_bits":16,"hash_function":"keccak256","preimage_abi_types":["bytes32","uint64","address","bytes32","bytes32","bytes32","uint256"],"proof_encoding":"abi.encode(uint256 nonce)","verifier_module":"0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e","reference_command":"cargo run -p cli -- autonomous-mine-work-proof"}</textarea>
               </label>
               <label>
-                Module reward wallet
-                <input name="verifierRewardRecipient" placeholder="0x...">
+                Evidence record schema
+                <textarea name="evidenceSchema" rows="5" required>{"type":"object","description":"Hash-bound public context; not evaluated by leading_zero_work_v1.","additionalProperties":true}</textarea>
               </label>
-            </div>
-            <label>
-              Benchmark JSON (payout condition)
-              <textarea name="benchmark" rows="8" readonly required>{"engine":"leading_zero_work_v1","difficulty_bits":16,"hash_function":"keccak256","preimage_abi_types":["bytes32","uint64","address","bytes32","bytes32","bytes32","uint256"],"proof_encoding":"abi.encode(uint256 nonce)","verifier_module":"0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e","reference_command":"cargo run -p cli -- autonomous-mine-work-proof"}</textarea>
-            </label>
-            <label>
-              Evidence record schema (hash-bound context)
-              <textarea name="evidenceSchema" rows="5" required>{"type":"object","description":"Hash-bound public context; not evaluated by leading_zero_work_v1.","additionalProperties":true}</textarea>
-            </label>
+            </details>
           </div>
 
           <details class="form-section advanced">
@@ -177,6 +184,8 @@
             </label>
           </details>
 
+          <div data-legal-consent data-consent-actions="post_bounty"></div>
+
           <div class="actions sticky-actions">
             <label class="wallet-picker">
               Wallet
@@ -211,6 +220,7 @@
       <a href="privacy.html">Privacy</a>
       <a href="https://github.com/NSPG13/agent-bounties/issues">Support</a>
     </footer>
+    <script src="legal-consent.js"></script>
     <script src="autonomous.js"></script>
   </body>
 </html>

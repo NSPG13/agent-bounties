@@ -6,6 +6,8 @@
     account: null,
     provider: null,
     providers: [],
+    legalAction: null,
+    legalScope: null,
   };
 
   const announcedProviders = [];
@@ -110,8 +112,18 @@
     return item.provider;
   }
 
-  function walletRequest(method, params = []) {
+  async function walletRequest(method, params = []) {
     const provider = state.provider || selectProvider();
+    if (["eth_signTypedData_v4", "eth_sendTransaction", "wallet_sendCalls"].includes(method)) {
+      if (!state.legalAction || !window.AgentBountiesLegal) {
+        throw new Error("Review and accept the legal agreement before this wallet action.");
+      }
+      await window.AgentBountiesLegal.requireAcceptance({
+        action: state.legalAction,
+        walletAddress: state.account,
+        scope: state.legalScope || document,
+      });
+    }
     return provider.request({ method, params });
   }
 
@@ -140,10 +152,12 @@
   }
 
   async function requestJson(url, options = {}) {
+    const acceptance = window.AgentBountiesLegal && window.AgentBountiesLegal.latestReceipt();
     const response = await fetch(url, {
       ...options,
       headers: {
         "content-type": "application/json",
+        ...(acceptance ? { "x-agent-bounties-legal-acceptance": acceptance.acceptance_id } : {}),
         ...(options.headers || {}),
       },
     });
@@ -172,6 +186,19 @@
       throw error;
     }
     return body;
+  }
+
+  async function acceptLegalAction(scope, action, account) {
+    if (!window.AgentBountiesLegal) {
+      throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");
+    }
+    state.legalAction = action;
+    state.legalScope = scope || document;
+    return window.AgentBountiesLegal.requireAcceptance({
+      action,
+      walletAddress: account,
+      scope: state.legalScope,
+    });
   }
 
   function output(element, lines, tone = "") {
@@ -294,6 +321,7 @@
   }
 
   async function hostedClaim(item, api, account, protocol, result) {
+    await acceptLegalAction(document, "claim_bounty", account);
     const context = hostedClaimContext(item.bounty_contract, account);
     const requestBody = {
       idempotency_key: context.idempotencyKey,
@@ -418,6 +446,8 @@
     const threshold = form.elements.threshold;
     const benchmark = form.elements.benchmark;
     const scope = form.querySelector("[data-verifier-scope]");
+    const demoWarning = form.querySelector("[data-demo-verifier-warning]");
+    const demoAccepted = form.elements.demoVerifierAccepted;
 
     module.value = defaults.contract;
     module.readOnly = true;
@@ -426,6 +456,8 @@
     verifiers.disabled = deterministic;
     threshold.readOnly = deterministic;
     benchmark.readOnly = deterministic;
+    if (demoWarning) demoWarning.hidden = !deterministic;
+    if (demoAccepted) demoAccepted.disabled = !deterministic;
     if (deterministic) {
       threshold.value = String(defaults.threshold);
       benchmark.value = canonicalJsonString(defaults.benchmark);
@@ -706,6 +738,7 @@
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
+      await acceptLegalAction(form, "recover_funds", account);
       if (account.toLowerCase() !== LEGACY_RECOVERY.creator) {
         throw new Error(`Connect creator wallet ${LEGACY_RECOVERY.creator}.`);
       }
@@ -815,6 +848,9 @@
     if (mode === "deterministic_module" && !module) {
       throw new Error("Deterministic mode requires a verifier module address.");
     }
+    if (mode === "deterministic_module" && !form.elements.demoVerifierAccepted.checked) {
+      throw new Error("Confirm that the demo work-proof checker does not evaluate your task.");
+    }
     if (mode !== "deterministic_module" && verifiers.length === 0) {
       throw new Error("Quorum mode requires verifier wallet addresses.");
     }
@@ -911,6 +947,7 @@
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
+      await acceptLegalAction(form, "post_bounty", account);
       const api = apiBase(form);
       output(result, ["Publishing content-addressed terms...", `Creator: ${account}`]);
       const committed = contractTerms(form, account, protocol);
@@ -1050,6 +1087,7 @@
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
+      await acceptLegalAction(form, "fund_bounty", account);
       const api = apiBase(form);
       const contribution = {
         bounty_contract: requiredAddress(form.elements.bountyContract.value, "Bounty contract"),
@@ -1096,6 +1134,7 @@
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
+      await acceptLegalAction(form, "submit_result", account);
       const api = apiBase(form);
       const bountyContract = requiredAddress(form.elements.bountyContract.value, "Bounty contract");
       const artifact = form.elements.artifact.value.trim();

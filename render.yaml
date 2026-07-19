@@ -86,6 +86,8 @@ services:
         value: info
       - key: PUBLIC_BASE_URL
         value: https://api.bountyboard.global
+      - key: WEBSITE_BASE_URL
+        value: https://bountyboard.global
       - key: MCP_BASE_URL
         value: https://mcp.bountyboard.global
       - key: DATABASE_URL

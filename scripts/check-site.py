@@ -29,6 +29,7 @@ REQUIRED_FILES = [
     "favicon.svg",
     "home.js",
     "autonomous.js",
+    "legal-consent.js",
     "protocol.json",
     "llms.txt",
     ".well-known/agent-bounties.json",
@@ -151,6 +152,7 @@ def main() -> int:
     )
     bounded_page = (site_dir / "agent-budget.html").read_text(encoding="utf-8")
     bounded_javascript = (site_dir / "agent-budget.js").read_text(encoding="utf-8")
+    legal_javascript = (site_dir / "legal-consent.js").read_text(encoding="utf-8")
     pages_workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     check_protocol(protocol, deployment)
 
@@ -161,6 +163,41 @@ def main() -> int:
 
     for name in ["earn.html", "post.html", "funding.html"]:
         require_phrases(name, pages[name], ["data-protocol-action", "disabled"])
+
+    wallet_action_pages = {
+        "post.html": (pages["post.html"], "post_bounty"),
+        "funding.html": (pages["funding.html"], "fund_bounty"),
+        "earn.html claim": (pages["earn.html"], "claim_bounty"),
+        "earn.html submit": (pages["earn.html"], "submit_result"),
+        "recovery.html": (recovery_page, "recover_funds"),
+        "agent-budget.html": (bounded_page, "activate_agent_budget"),
+    }
+    for name, (page, action) in wallet_action_pages.items():
+        require_phrases(name, page, ["legal-consent.js", "data-legal-consent", action, "terms.html", "privacy.html"])
+
+    require_phrases(
+        "legal-consent.js",
+        legal_javascript,
+        [
+            "/v1/legal/policy",
+            "/v1/legal/acceptances",
+            "web_clickwrap",
+            "recovery phrase or private key",
+            "requireAcceptance",
+        ],
+    )
+    require_phrases(
+        "autonomous.js legal gate",
+        javascript,
+        [
+            "acceptLegalAction",
+            "x-agent-bounties-legal-acceptance",
+            "post_bounty",
+            "fund_bounty",
+            "claim_bounty",
+            "submit_result",
+        ],
+    )
 
     require_phrases(
         "autonomous.js",
@@ -228,12 +265,52 @@ def main() -> int:
             "Seeking funding",
             "In progress",
             "Recently paid",
+            "loadAdoptionMetrics",
+            "claim-funnel?window_hours=720",
+            "conversion-funnel?window_hours=720",
             "payment_state",
             "payment_committed",
             "verification_ready",
             "Meta-bounty:",
             'timeZone: "UTC"',
             "end.getTime() - 1",
+        ],
+    )
+    require_phrases(
+        "index.html adoption metrics",
+        pages["index.html"],
+        [
+            "Live adoption metrics",
+            "data-adoption-ready",
+            "data-adoption-settled",
+            "data-adoption-solvers",
+            "data-adoption-posters",
+            "A wallet may represent a person or an agent.",
+        ],
+    )
+    terms_page = (site_dir / "terms.html").read_text(encoding="utf-8")
+    privacy_page = (site_dir / "privacy.html").read_text(encoding="utf-8")
+    require_phrases(
+        "terms.html",
+        terms_page,
+        [
+            "Terms version 2026-07-18",
+            "How you agree",
+            "Eligibility and authority",
+            "Blockchain and wallet risk",
+            "Public content and intellectual property",
+            "Limits on liability",
+            "mandatory consumer protections",
+        ],
+    )
+    require_phrases(
+        "privacy.html",
+        privacy_page,
+        [
+            "Legal acceptance receipts",
+            "session-only receipt",
+            "does not record a private key",
+            "wallet count is not presented as a count of unique people",
         ],
     )
 
@@ -265,12 +342,12 @@ def main() -> int:
             "Sign and post bounty",
             "Post with 0 USDC now and open it to funding later",
             "Fund on creation",
-            "16-bit work-proof canary",
-            "Verifier wallet quorum (advanced)",
-            "AI judge quorum (advanced)",
-            "Benchmark JSON (payout condition)",
-            "Evidence record schema (hash-bound context)",
-            "Choose it only when that proof is the payout condition",
+            "Automatic demo proof checker",
+            "Trusted verifier wallets",
+            "Two or more AI judges",
+            "Benchmark JSON (exact payout condition)",
+            "Evidence record schema",
+            "does not evaluate my task or acceptance criteria",
             "How did you find Agent Bounties?",
             "Draft measurable terms",
             "cloud draft is advisory",

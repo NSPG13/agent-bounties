@@ -11,6 +11,7 @@
     plan: null,
     rotationPlan: null,
     busy: false,
+    legalAction: null,
   };
   const announcedProviders = [];
   const CHAIN_ID = "0x2105";
@@ -127,9 +128,31 @@
     return item.provider;
   }
 
-  function request(method, params = []) {
+  async function request(method, params = []) {
     const provider = state.provider || selectProvider();
+    if (["eth_signTypedData_v4", "eth_sendTransaction", "wallet_sendCalls"].includes(method)) {
+      if (!state.legalAction || !window.AgentBountiesLegal) {
+        throw new Error("Review and accept the legal agreement before this wallet action.");
+      }
+      await window.AgentBountiesLegal.requireAcceptance({
+        action: state.legalAction,
+        walletAddress: state.account,
+        scope: form(),
+      });
+    }
     return provider.request({ method, params });
+  }
+
+  async function acceptLegalAction(action) {
+    if (!window.AgentBountiesLegal) {
+      throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");
+    }
+    state.legalAction = action;
+    return window.AgentBountiesLegal.requireAcceptance({
+      action,
+      walletAddress: state.account,
+      scope: form(),
+    });
   }
 
   async function loadManifest() {
@@ -612,6 +635,7 @@
     updateButtons();
     try {
       await ensureConnectedOwner();
+      await acceptLegalAction("activate_agent_budget");
       if (!state.factoryReady) await deployFactory();
       const predicted = resultAddress(await call(
         state.manifest.wallet_factory.address,
@@ -824,6 +848,7 @@
     updateButtons();
     try {
       await ensureConnectedOwner();
+      await acceptLegalAction("update_agent_policy");
       const before = await inspectExistingWallet(state.rotationPlan.wallet);
       if (before.policyEncoded !== state.rotationPlan.currentPolicy
         || before.version !== state.rotationPlan.currentVersion
@@ -884,6 +909,7 @@
     state.busy = true;
     updateButtons();
     try {
+      await acceptLegalAction("revoke_agent_policy");
       const owner = resultAddress(await call(wallet, SELECTORS.owner));
       if (owner !== state.account) throw new Error("Connected account is not this bounded wallet's owner.");
       output("Confirm one owner transaction to revoke all new delegate actions.", "pending");

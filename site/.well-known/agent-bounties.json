@@ -38,6 +38,8 @@
   },
   "endpoints": {
     "api_base": "https://api.bountyboard.global",
+    "legal_policy": "https://api.bountyboard.global/v1/legal/policy",
+    "legal_acceptance": "https://api.bountyboard.global/v1/legal/acceptances",
     "mcp_tools": "https://mcp.bountyboard.global/tools",
     "mcp_streamable_http": "https://mcp.bountyboard.global/mcp",
     "llms_txt": "https://bountyboard.global/llms.txt",
