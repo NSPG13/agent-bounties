@@ -1,0 +1,48 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+        "version": {
+            "type": "string",
+            "const": "https://jsonfeed.org/version/1"
+        },
+        "title": {
+            "type": "string"
+        },
+        "home_page_url": {
+            "type": "string",
+            "format": "uri"
+        },
+        "feed_url": {
+            "type": "string",
+            "format": "uri"
+        },
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "url": {
+                        "type": "string",
+                        "format": "uri"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "content_html": {
+                        "type": "string"
+                    },
+                    "date_published": {
+                        "type": "string",
+                        "format": "date-time"
+                    }
+                },
+                "required": ["id", "url", "title", "content_html", "date_published"]
+            }
+        }
+    },
+    "required": ["version", "title", "home_page_url", "feed_url", "items"]
+}
