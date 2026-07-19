@@ -787,8 +787,14 @@ def validate_cloud_agent_readiness(
         raise RecoveryError("cloud-agent readiness does not attest hosted execution")
     if payload.get("local_fallback") is not False:
         raise RecoveryError("cloud-agent readiness must prohibit a local fallback")
-    if payload.get("authority") != "draft_only":
-        raise RecoveryError("cloud-agent readiness exceeds draft-only authority")
+    if payload.get("authority") != "advisory_only":
+        raise RecoveryError("cloud-agent readiness exceeds advisory-only authority")
+    capabilities = payload.get("capabilities")
+    if not isinstance(capabilities, list) or not {
+        "bounty_drafting",
+        "published_terms_analysis",
+    }.issubset(capabilities):
+        raise RecoveryError("cloud-agent readiness capabilities are incomplete")
     available = payload.get("available")
     missing = payload.get("missing_configuration")
     if not isinstance(available, bool) or not isinstance(missing, list):
@@ -802,7 +808,8 @@ def validate_cloud_agent_readiness(
         "model": payload.get("model"),
         "public_drafts": payload.get("public_drafts"),
         "local_fallback": False,
-        "authority": "draft_only",
+        "authority": "advisory_only",
+        "capabilities": capabilities,
         "missing_configuration": missing,
     }
 

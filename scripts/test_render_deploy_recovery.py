@@ -739,7 +739,8 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             "model": "gpt-4.1-mini",
             "public_drafts": True,
             "local_fallback": False,
-            "authority": "draft_only",
+            "authority": "advisory_only",
+            "capabilities": ["bounty_drafting", "published_terms_analysis"],
             "missing_configuration": ["CLOUD_AGENT_API_KEY"],
         }
         observed = recovery.validate_cloud_agent_readiness(
@@ -798,7 +799,8 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             "available": True,
             "execution": "hosted_cloud_api",
             "local_fallback": True,
-            "authority": "draft_only",
+            "authority": "advisory_only",
+            "capabilities": ["bounty_drafting", "published_terms_analysis"],
             "missing_configuration": [],
         }
         with self.assertRaisesRegex(recovery.RecoveryError, "local fallback"):

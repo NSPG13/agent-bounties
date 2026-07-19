@@ -35,8 +35,9 @@ use chain_base::{
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
 use domain::{
-    Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass, EvalRun, HelpRequest,
-    Money, PaymentRail, PayoutStatus, PrivacyLevel, RiskReviewRecord,
+    Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass,
+    DiscoverySubscriptionFilters, EvalRun, HelpRequest, Money, PaymentRail, PayoutStatus,
+    PrivacyLevel, RiskReviewRecord,
 };
 use eval_harness::{EvalSuiteResult, LoopSuiteResult};
 use github_app::{
@@ -506,6 +507,40 @@ struct AutonomousBountyFeedArgs {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct OpportunityListArgs {
+    network: Option<String>,
+    view: Option<String>,
+    source_type: Option<String>,
+    work_state: Option<String>,
+    payment_state: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AnalyzeBountyFitArgs {
+    bounty_contract: String,
+    network: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CreateDiscoverySubscriptionArgs {
+    endpoint_url: String,
+    #[serde(default)]
+    filters: DiscoverySubscriptionFilters,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ManageDiscoverySubscriptionArgs {
+    subscription_id: Uuid,
+    management_token: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct OpportunityConversionFunnelArgs {
+    window_hours: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AutonomousVerificationJobsArgs {
     network: Option<String>,
     verifier: Option<String>,
@@ -803,6 +838,24 @@ async fn main() -> anyhow::Result<()> {
             "/tools/list_autonomous_bounties",
             post(list_autonomous_bounties),
         )
+        .route("/tools/list_opportunities", post(list_opportunities))
+        .route(
+            "/tools/create_discovery_subscription",
+            post(create_discovery_subscription),
+        )
+        .route(
+            "/tools/get_discovery_subscription",
+            post(get_discovery_subscription),
+        )
+        .route(
+            "/tools/delete_discovery_subscription",
+            post(delete_discovery_subscription),
+        )
+        .route(
+            "/tools/get_opportunity_conversion_funnel",
+            post(get_opportunity_conversion_funnel),
+        )
+        .route("/tools/analyze_bounty_fit", post(analyze_bounty_fit))
         .route(
             "/tools/list_autonomous_verification_jobs",
             post(list_autonomous_verification_jobs),
@@ -1983,6 +2036,99 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
         ),
         tool(
+            "list_opportunities",
+            "Discover open, claimable, in-progress, submitted, and completed opportunities across the existing unfunded, funding-needed, legacy, and canonical sources. Work state and payment state are separate; follow each item's authoritative URL and exact next action.",
+            object_tool_schema(
+                json!({
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional canonical Base network; defaults to base-mainnet."),
+                    "view": nullable_enum_property(&["recent", "engineering", "creative", "urgent", "seeking_funding", "ready_to_earn"], "Optional deterministic discovery view. Inclusion factors are returned with each item."),
+                    "source_type": nullable_enum_property(&["unfunded_offchain", "legacy_bounty", "canonical_base"], "Optional authoritative-source filter."),
+                    "work_state": nullable_enum_property(&["open", "claimable", "in_progress", "submitted", "completed"], "Optional work-lifecycle filter."),
+                    "payment_state": nullable_enum_property(&["none", "seeking_funding", "escrowed", "paid"], "Optional payment-state filter."),
+                    "limit": nullable_integer_property("Optional combined result limit from 1 to 300.")
+                }),
+                &[],
+            ),
+        ),
+        tool(
+            "create_discovery_subscription",
+            "Create a filtered signed-webhook subscription for public opportunity publication and state changes. The endpoint must be public HTTPS. The management token and HMAC signing secret are returned once; store them securely. This subscribes to discovery only and never proves funding, payment, verification, or agent independence.",
+            object_tool_schema(
+                json!({
+                    "endpoint_url": string_property("Public HTTPS receiver URL. Private, loopback, link-local, credential-bearing, and redirect-based endpoints are rejected."),
+                    "filters": {
+                        "type": "object",
+                        "description": "All non-empty filter groups are ANDed; values within one group are ORed.",
+                        "properties": {
+                            "skills": string_array_property("Required skill labels; case-insensitive exact matches."),
+                            "categories": string_array_property("Required deterministic categories such as engineering, creative, or research."),
+                            "minimum_committed_reward": {
+                                "type": ["object", "null"],
+                                "properties": {
+                                    "amount": string_property("Unsigned integer amount in the stated unit."),
+                                    "currency": string_property("Currency code such as USDC."),
+                                    "unit": enum_property(&["base_units", "minor_units"], "Amount unit."),
+                                    "decimals": integer_property("Currency decimals, 0 through 18.")
+                                },
+                                "required": ["amount", "currency", "unit", "decimals"],
+                                "additionalProperties": false
+                            },
+                            "work_states": string_array_property("Any of open, claimable, in_progress, submitted, completed."),
+                            "payment_states": string_array_property("Any of none, seeking_funding, escrowed, paid."),
+                            "verification_methods": string_array_property("Case-insensitive exact verification method labels."),
+                            "source_types": string_array_property("Any of unfunded_offchain, legacy_bounty, canonical_base."),
+                            "deadline_within_hours": nullable_integer_property("Positive deadline window, up to 8760 hours.")
+                        },
+                        "additionalProperties": false
+                    }
+                }),
+                &["endpoint_url"],
+            ),
+        ),
+        tool(
+            "get_discovery_subscription",
+            "Inspect one discovery webhook subscription using the one-time management token returned at creation. The signing secret is never returned again.",
+            object_tool_schema(
+                json!({
+                    "subscription_id": string_property("Discovery subscription UUID."),
+                    "management_token": string_property("Secret bbm_ management token returned only when the subscription was created.")
+                }),
+                &["subscription_id", "management_token"],
+            ),
+        ),
+        tool(
+            "delete_discovery_subscription",
+            "Permanently unsubscribe a discovery webhook and delete its queued deliveries using its management token.",
+            object_tool_schema(
+                json!({
+                    "subscription_id": string_property("Discovery subscription UUID."),
+                    "management_token": string_property("Secret bbm_ management token returned only when the subscription was created.")
+                }),
+                &["subscription_id", "management_token"],
+            ),
+        ),
+        tool(
+            "get_opportunity_conversion_funnel",
+            "Measure the observable cross-lifecycle funnel from unfunded publication through canonical settlement. The response separates hosted plans, observed signatures, and confirmed events, and intentionally leaves independent_active_agents null because wallet identity does not prove independence.",
+            object_tool_schema(
+                json!({
+                    "window_hours": nullable_integer_property("Optional cohort lookback from 1 to 8760 hours; defaults to 720.")
+                }),
+                &[],
+            ),
+        ),
+        tool(
+            "analyze_bounty_fit",
+            "Analyze one indexed canonical bounty's immutable published terms for solver skills, hard requirements, deliverable/evidence checklists, ambiguity, and verification risks. The terms-hash cache is advisory only; live economics and payment state are refreshed from the authoritative record and no score can verify work or predict profit.",
+            object_tool_schema(
+                json!({
+                    "bounty_contract": string_property("Indexed canonical autonomous-v1 bounty contract."),
+                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet.")
+                }),
+                &["bounty_contract"],
+            ),
+        ),
+        tool(
             "list_autonomous_verification_jobs",
             "List ready submissions. Run each job's committed verifier exactly.",
             object_tool_schema(
@@ -2509,11 +2655,20 @@ async fn proxy_hosted_json(request: reqwest::RequestBuilder) -> Json<serde_json:
     match request.send().await {
         Ok(response) => {
             let status = response.status();
-            match response.json::<serde_json::Value>().await {
-                Ok(body) if status.is_success() => mcp_json(body),
-                Ok(body) => mcp_error(format!("hosted API returned {status}: {body}")),
+            match response.bytes().await {
+                Ok(body) if status.is_success() && body.is_empty() => mcp_json(json!({
+                    "http_status": status.as_u16(),
+                    "success": true
+                })),
+                Ok(body) => match serde_json::from_slice::<serde_json::Value>(&body) {
+                    Ok(body) if status.is_success() => mcp_json(body),
+                    Ok(body) => mcp_error(format!("hosted API returned {status}: {body}")),
+                    Err(error) => mcp_error(format!(
+                        "hosted API returned {status} with invalid JSON: {error}"
+                    )),
+                },
                 Err(error) => mcp_error(format!(
-                    "hosted API returned {status} with invalid JSON: {error}"
+                    "hosted API returned {status} with unreadable body: {error}"
                 )),
             }
         }
@@ -4592,6 +4747,85 @@ async fn list_autonomous_bounties(
     mcp_json(feed)
 }
 
+async fn list_opportunities(Json(args): Json<OpportunityListArgs>) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/opportunities",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
+}
+
+async fn create_discovery_subscription(
+    Json(args): Json<CreateDiscoverySubscriptionArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/discovery/subscriptions",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().post(url).json(&args)).await
+}
+
+async fn get_discovery_subscription(
+    Json(args): Json<ManageDiscoverySubscriptionArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/discovery/subscriptions/{}",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.subscription_id
+    );
+    proxy_hosted_json(
+        reqwest::Client::new()
+            .get(url)
+            .bearer_auth(args.management_token),
+    )
+    .await
+}
+
+async fn delete_discovery_subscription(
+    Json(args): Json<ManageDiscoverySubscriptionArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/discovery/subscriptions/{}",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.subscription_id
+    );
+    proxy_hosted_json(
+        reqwest::Client::new()
+            .delete(url)
+            .bearer_auth(args.management_token),
+    )
+    .await
+}
+
+async fn get_opportunity_conversion_funnel(
+    Json(args): Json<OpportunityConversionFunnelArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/opportunities/conversion-funnel",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
+}
+
+async fn analyze_bounty_fit(
+    State(state): State<SharedState>,
+    Json(args): Json<AnalyzeBountyFitArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/{}/analysis",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.bounty_contract
+    );
+    let mut request = reqwest::Client::new().get(url).query(&[(
+        "network",
+        args.network.unwrap_or_else(|| "base-mainnet".to_string()),
+    )]);
+    if let Some(token) = state.operator_api_token.as_deref() {
+        request = request.header(OPERATOR_TOKEN_HEADER, token);
+    }
+    proxy_hosted_json(request).await
+}
+
 async fn list_autonomous_verification_jobs(
     State(state): State<SharedState>,
     Json(args): Json<AutonomousVerificationJobsArgs>,
@@ -5242,6 +5476,12 @@ mod tests {
             "publish_autonomous_bounty_terms",
             "get_autonomous_bounty_terms",
             "list_autonomous_bounties",
+            "list_opportunities",
+            "create_discovery_subscription",
+            "get_discovery_subscription",
+            "delete_discovery_subscription",
+            "get_opportunity_conversion_funnel",
+            "analyze_bounty_fit",
         ] {
             assert!(
                 descriptors

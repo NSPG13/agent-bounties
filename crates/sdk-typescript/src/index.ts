@@ -191,6 +191,97 @@ export type StripeWebhookEvent = Record<string, unknown>;
 export type DiscoveryManifest = Record<string, unknown>;
 export type DiscoveryManifestSchema = Record<string, unknown>;
 
+export type OpportunityWorkState =
+  | "open"
+  | "claimable"
+  | "in_progress"
+  | "submitted"
+  | "completed";
+export type OpportunityPaymentState = "none" | "seeking_funding" | "escrowed" | "paid";
+export type OpportunitySourceType = "unfunded_offchain" | "legacy_bounty" | "canonical_base";
+export type OpportunityView =
+  | "recent"
+  | "engineering"
+  | "creative"
+  | "urgent"
+  | "seeking_funding"
+  | "ready_to_earn";
+
+export interface OpportunityQuery {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  view?: OpportunityView | null;
+  source_type?: OpportunitySourceType | null;
+  work_state?: OpportunityWorkState | null;
+  payment_state?: OpportunityPaymentState | null;
+  limit?: number | null;
+}
+
+export interface OpportunityProjection extends Record<string, unknown> {
+  schema_version: "agent-bounties/opportunity-projection-v1";
+  generated_at: string;
+  network: string;
+  applied_view: OpportunityView | null;
+  degraded: boolean;
+  source_statuses: Array<Record<string, unknown>>;
+  items: Array<Record<string, unknown>>;
+}
+
+export interface DiscoveryRewardFilter {
+  amount: string;
+  currency: string;
+  unit: "base_units" | "minor_units";
+  decimals: number;
+}
+
+export interface DiscoverySubscriptionFilters {
+  skills?: string[];
+  categories?: string[];
+  minimum_committed_reward?: DiscoveryRewardFilter | null;
+  work_states?: OpportunityWorkState[];
+  payment_states?: OpportunityPaymentState[];
+  verification_methods?: string[];
+  source_types?: OpportunitySourceType[];
+  deadline_within_hours?: number | null;
+}
+
+export interface DiscoverySubscription extends Record<string, unknown> {
+  schema_version: "agent-bounties/discovery-subscription-v1";
+  subscription_id: string;
+  endpoint_url: string;
+  event_types: Array<"opportunity_published" | "opportunity_state_changed">;
+  filters: DiscoverySubscriptionFilters;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface CreatedDiscoverySubscription extends DiscoverySubscription {
+  management_token: string;
+  signing_secret: string;
+}
+
+export interface OpportunityConversionFunnel extends Record<string, unknown> {
+  schema_version: "agent-bounties/opportunity-conversion-funnel-v1";
+  window_hours: number;
+  stages: Array<Record<string, unknown>>;
+  rates: Array<Record<string, unknown>>;
+  average_seconds_to_first_solution: number | null;
+  average_seconds_creation_to_settlement: number | null;
+  actors: Record<string, unknown>;
+}
+
+export interface CloudBountyAnalysis extends Record<string, unknown> {
+  schema_version: "agent-bounties/cloud-bounty-analysis-v1";
+  terms_hash: string;
+  required_skills: string[];
+  hard_requirements: string[];
+  deliverable_checklist: string[];
+  evidence_checklist: string[];
+  verification_risks: string[];
+  ambiguous_requirements: string[];
+  missing_information: string[];
+  confidence: number;
+}
+
 export interface X402BountyFundingRequest {
   bounty_contract: string;
   amount?: number | null;
@@ -878,6 +969,70 @@ export class AgentBountiesClient {
     return this.request(
       `/v1/base/autonomous-bounties/leaderboard${query ? `?${query}` : ""}`,
     );
+  }
+
+  async listOpportunities(query: OpportunityQuery = {}): Promise<OpportunityProjection> {
+    const params = new URLSearchParams();
+    if (query.network) params.set("network", query.network);
+    if (query.view) params.set("view", query.view);
+    if (query.source_type) params.set("source_type", query.source_type);
+    if (query.work_state) params.set("work_state", query.work_state);
+    if (query.payment_state) params.set("payment_state", query.payment_state);
+    if (query.limit != null) params.set("limit", String(query.limit));
+    const encoded = params.toString();
+    return this.request(`/v1/opportunities${encoded ? `?${encoded}` : ""}`) as Promise<OpportunityProjection>;
+  }
+
+  async createDiscoverySubscription(
+    endpointUrl: string,
+    filters: DiscoverySubscriptionFilters = {},
+  ): Promise<CreatedDiscoverySubscription> {
+    return this.request("/v1/discovery/subscriptions", {
+      method: "POST",
+      body: JSON.stringify({ endpoint_url: endpointUrl, filters }),
+    }) as Promise<CreatedDiscoverySubscription>;
+  }
+
+  async getDiscoverySubscription(
+    subscriptionId: string,
+    managementToken: string,
+  ): Promise<DiscoverySubscription> {
+    return this.request(`/v1/discovery/subscriptions/${subscriptionId}`, {
+      headers: { authorization: `Bearer ${managementToken}` },
+    }) as Promise<DiscoverySubscription>;
+  }
+
+  async deleteDiscoverySubscription(
+    subscriptionId: string,
+    managementToken: string,
+  ): Promise<void> {
+    await this.request(`/v1/discovery/subscriptions/${subscriptionId}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${managementToken}` },
+    });
+  }
+
+  async getOpportunityConversionFunnel(
+    windowHours?: number | null,
+  ): Promise<OpportunityConversionFunnel> {
+    const params = new URLSearchParams();
+    if (windowHours != null) params.set("window_hours", String(windowHours));
+    const query = params.toString();
+    return this.request(
+      `/v1/opportunities/conversion-funnel${query ? `?${query}` : ""}`,
+    ) as Promise<OpportunityConversionFunnel>;
+  }
+
+  async analyzeBountyFit(
+    bountyContract: string,
+    network?: "base-mainnet" | "base-sepolia" | null,
+  ): Promise<CloudBountyAnalysis> {
+    const params = new URLSearchParams();
+    if (network) params.set("network", network);
+    const query = params.toString();
+    return this.request(
+      `/v1/base/autonomous-bounties/${bountyContract}/analysis${query ? `?${query}` : ""}`,
+    ) as Promise<CloudBountyAnalysis>;
   }
 
   async listAutonomousVerificationJobs(

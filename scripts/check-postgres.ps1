@@ -52,13 +52,19 @@ try {
             cargo test -p db tests::claim_funnel_counts_direct_and_atomic_sponsored_confirmations -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db tests::opportunity_lifecycle_query_executes_against_migrated_postgres -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
+            cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
         }
         Invoke-Checked {
-            cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
+            cargo test -p api tests::github_issue_api_sync_postgres_rejects_stale_cross_process_activity -- --ignored --exact --nocapture
         }
         Invoke-Checked {
-            cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture
+            cargo test -p api tests::github_issue_api_sync_postgres_serializes_concurrent_initial_sync -- --ignored --exact --nocapture
         }
     }
     finally {

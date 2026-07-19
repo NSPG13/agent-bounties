@@ -30,6 +30,10 @@ pub const TRIAL_BOUNTIES_MIGRATION: &str =
     include_str!("../../../migrations/0005_trial_bounties.sql");
 pub const SOLVER_LEADERBOARD_MIGRATION: &str =
     include_str!("../../../migrations/0006_solver_leaderboard.sql");
+pub const DISCOVERY_SUBSCRIPTIONS_MIGRATION: &str =
+    include_str!("../../../migrations/0007_discovery_subscriptions.sql");
+pub const OPPORTUNITY_CONVERSION_MIGRATION: &str =
+    include_str!("../../../migrations/0008_opportunity_conversion.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -140,6 +144,8 @@ pub enum DbError {
     UnfundedBountyUnavailable,
     #[error("bond sponsorship quota exceeded: {0}")]
     BondSponsorshipQuotaExceeded(String),
+    #[error("opportunity conversion correlation conflict: {0}")]
+    OpportunityConversionConflict(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -246,6 +252,29 @@ pub struct ClaimFunnelStats {
     pub canonical_outcomes: CanonicalClaimOutcomeCounts,
     pub failure_codes: BTreeMap<String, u64>,
     pub evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OpportunityLifecycleStats {
+    pub published: u64,
+    pub solution_received: u64,
+    pub funding_prepared: u64,
+    pub wallet_signed_observed: u64,
+    pub canonical_created: u64,
+    pub funded: u64,
+    pub claimed: u64,
+    pub submitted: u64,
+    pub settled: u64,
+    pub average_seconds_to_first_solution: Option<f64>,
+    pub median_seconds_to_first_solution: Option<f64>,
+    pub average_seconds_creation_to_settlement: Option<f64>,
+    pub canonical_created_in_window: u64,
+    pub canonical_claimed_in_window: u64,
+    pub canonical_settled_in_window: u64,
+    pub unique_canonical_poster_wallets: u64,
+    pub repeat_canonical_poster_wallets: u64,
+    pub unique_paid_solver_wallets: u64,
+    pub repeat_paid_solver_wallets: u64,
 }
 
 const SELECT_GITHUB_ISSUE_SYNC_BOUNTY_FOR_UPDATE_SQL: &str = r#"
@@ -405,10 +434,21 @@ pub struct WebhookSubscription {
     pub owner_wallet: String,
     pub endpoint_url: String,
     pub event_types: Vec<AgentWebhookEventType>,
+    pub subscription_kind: String,
+    pub filters: domain::DiscoverySubscriptionFilters,
+    pub management_token_hash: Option<String>,
     pub secret_version: u32,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewDiscoveryWebhookSubscription {
+    pub id: Uuid,
+    pub endpoint_url: String,
+    pub filters: domain::DiscoverySubscriptionFilters,
+    pub management_token_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -507,6 +547,8 @@ impl PostgresStore {
                 AGENT_COORDINATION_MIGRATION,
                 TRIAL_BOUNTIES_MIGRATION,
                 SOLVER_LEADERBOARD_MIGRATION,
+                DISCOVERY_SUBSCRIPTIONS_MIGRATION,
+                OPPORTUNITY_CONVERSION_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -530,6 +572,434 @@ impl PostgresStore {
             (Err(error), Ok(_)) => Err(error.into()),
             (Ok(()), Err(error)) | (Err(_), Err(error)) => Err(error.into()),
         }
+    }
+
+    pub async fn create_discovery_webhook_subscription(
+        &self,
+        subscription: &NewDiscoveryWebhookSubscription,
+    ) -> DbResult<WebhookSubscription> {
+        let event_types = vec![
+            AgentWebhookEventType::OpportunityPublished,
+            AgentWebhookEventType::OpportunityStateChanged,
+        ];
+        let row = sqlx::query(
+            r#"
+            INSERT INTO webhook_subscriptions
+              (id, owner_wallet, endpoint_url, event_types, subscription_kind,
+               filters, management_token_hash)
+            VALUES ($1, $2, $3, $4, 'public_discovery', $5, $6)
+            RETURNING id, owner_wallet, endpoint_url, event_types, subscription_kind,
+                      filters, management_token_hash, secret_version, enabled,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(subscription.id)
+        .bind(format!("discovery:{}", subscription.id))
+        .bind(&subscription.endpoint_url)
+        .bind(serde_json::to_value(&event_types)?)
+        .bind(serde_json::to_value(&subscription.filters)?)
+        .bind(&subscription.management_token_hash)
+        .fetch_one(&self.pool)
+        .await?;
+        webhook_subscription_from_row(row)
+    }
+
+    pub async fn get_webhook_subscription(
+        &self,
+        id: Uuid,
+    ) -> DbResult<Option<WebhookSubscription>> {
+        sqlx::query(
+            r#"
+            SELECT id, owner_wallet, endpoint_url, event_types, subscription_kind,
+                   filters, management_token_hash, secret_version, enabled,
+                   created_at, updated_at
+            FROM webhook_subscriptions
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(webhook_subscription_from_row)
+        .transpose()
+    }
+
+    pub async fn list_enabled_discovery_webhook_subscriptions(
+        &self,
+    ) -> DbResult<Vec<WebhookSubscription>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, owner_wallet, endpoint_url, event_types, subscription_kind,
+                   filters, management_token_hash, secret_version, enabled,
+                   created_at, updated_at
+            FROM webhook_subscriptions
+            WHERE subscription_kind = 'public_discovery' AND enabled
+            ORDER BY created_at, id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(webhook_subscription_from_row)
+            .collect()
+    }
+
+    pub async fn delete_discovery_webhook_subscription(
+        &self,
+        id: Uuid,
+        management_token_hash: &str,
+    ) -> DbResult<bool> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM webhook_subscriptions
+            WHERE id = $1 AND subscription_kind = 'public_discovery'
+              AND management_token_hash = $2
+            "#,
+        )
+        .bind(id)
+        .bind(management_token_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn enqueue_webhook_delivery(
+        &self,
+        subscription_id: Uuid,
+        event_id: Uuid,
+        event_type: AgentWebhookEventType,
+        payload: &serde_json::Value,
+    ) -> DbResult<bool> {
+        let event_type = serde_json::to_value(event_type)?
+            .as_str()
+            .ok_or_else(|| DbError::InvalidEnum("agent webhook event type".to_string()))?
+            .to_string();
+        let result = sqlx::query(
+            r#"
+            INSERT INTO webhook_deliveries
+              (id, subscription_id, event_id, event_type, payload, status)
+            VALUES ($1, $2, $3, $4, $5, 'pending')
+            ON CONFLICT (subscription_id, event_id) DO NOTHING
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(subscription_id)
+        .bind(event_id)
+        .bind(event_type)
+        .bind(payload)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn lease_webhook_deliveries(
+        &self,
+        limit: u32,
+        lease_token: Uuid,
+        lease_seconds: u64,
+    ) -> DbResult<Vec<WebhookDelivery>> {
+        let rows = sqlx::query(
+            r#"
+            WITH ready AS (
+              SELECT id
+              FROM webhook_deliveries
+              WHERE next_attempt_at <= now()
+                AND (status = 'pending'
+                     OR (status = 'delivering' AND lease_expires_at <= now()))
+              ORDER BY next_attempt_at, created_at, id
+              FOR UPDATE SKIP LOCKED
+              LIMIT $1
+            )
+            UPDATE webhook_deliveries AS delivery
+            SET status = 'delivering', attempt_count = attempt_count + 1,
+                lease_token = $2,
+                lease_expires_at = now() + make_interval(secs => $3),
+                updated_at = now()
+            FROM ready
+            WHERE delivery.id = ready.id
+            RETURNING delivery.id, delivery.subscription_id, delivery.event_id,
+                      delivery.event_type, delivery.payload, delivery.status,
+                      delivery.attempt_count, delivery.next_attempt_at,
+                      delivery.lease_token, delivery.lease_expires_at,
+                      delivery.response_status, delivery.last_error,
+                      delivery.delivered_at, delivery.created_at, delivery.updated_at
+            "#,
+        )
+        .bind(i64::from(limit.clamp(1, 100)))
+        .bind(lease_token)
+        .bind(i64_from_u64(lease_seconds)?)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(webhook_delivery_from_row).collect()
+    }
+
+    pub async fn mark_webhook_delivery_delivered(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        response_status: u16,
+    ) -> DbResult<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE webhook_deliveries
+            SET status = 'delivered', response_status = $3, last_error = NULL,
+                delivered_at = now(), lease_token = NULL, lease_expires_at = NULL,
+                updated_at = now()
+            WHERE id = $1 AND lease_token = $2 AND status = 'delivering'
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(i32::from(response_status))
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn reschedule_webhook_delivery(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        dead: bool,
+        delay_seconds: u64,
+        response_status: Option<u16>,
+        error: &str,
+    ) -> DbResult<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE webhook_deliveries
+            SET status = CASE WHEN $3 THEN 'dead' ELSE 'pending' END,
+                next_attempt_at = CASE WHEN $3 THEN next_attempt_at
+                                       ELSE now() + make_interval(secs => $4) END,
+                response_status = $5, last_error = $6,
+                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+            WHERE id = $1 AND lease_token = $2 AND status = 'delivering'
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(dead)
+        .bind(i64_from_u64(delay_seconds)?)
+        .bind(response_status.map(i32::from))
+        .bind(error.chars().take(500).collect::<String>())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn record_opportunity_creation_progress(
+        &self,
+        terms_hash: &str,
+        unfunded_bounty_id: Option<Uuid>,
+        network: &str,
+        stage: &str,
+        observed_at: DateTime<Utc>,
+    ) -> DbResult<()> {
+        if !matches!(stage, "funding_prepared" | "wallet_signed") {
+            return Err(DbError::InvalidEnum(format!(
+                "opportunity creation stage {stage}"
+            )));
+        }
+        let funding_prepared_at = (stage == "funding_prepared").then_some(observed_at);
+        let wallet_signed_at = (stage == "wallet_signed").then_some(observed_at);
+        let row = sqlx::query(
+            r#"
+            INSERT INTO opportunity_creation_progress
+              (terms_hash, unfunded_bounty_id, network, funding_prepared_at,
+               wallet_signed_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
+            ON CONFLICT (terms_hash) DO UPDATE SET
+              unfunded_bounty_id = COALESCE(
+                opportunity_creation_progress.unfunded_bounty_id,
+                EXCLUDED.unfunded_bounty_id
+              ),
+              network = EXCLUDED.network,
+              funding_prepared_at = CASE
+                WHEN opportunity_creation_progress.funding_prepared_at IS NULL
+                  THEN EXCLUDED.funding_prepared_at
+                WHEN EXCLUDED.funding_prepared_at IS NULL
+                  THEN opportunity_creation_progress.funding_prepared_at
+                ELSE LEAST(
+                  opportunity_creation_progress.funding_prepared_at,
+                  EXCLUDED.funding_prepared_at
+                )
+              END,
+              wallet_signed_at = CASE
+                WHEN opportunity_creation_progress.wallet_signed_at IS NULL
+                  THEN EXCLUDED.wallet_signed_at
+                WHEN EXCLUDED.wallet_signed_at IS NULL
+                  THEN opportunity_creation_progress.wallet_signed_at
+                ELSE LEAST(
+                  opportunity_creation_progress.wallet_signed_at,
+                  EXCLUDED.wallet_signed_at
+                )
+              END,
+              updated_at = GREATEST(opportunity_creation_progress.updated_at, EXCLUDED.updated_at)
+            WHERE opportunity_creation_progress.unfunded_bounty_id IS NULL
+               OR EXCLUDED.unfunded_bounty_id IS NULL
+               OR opportunity_creation_progress.unfunded_bounty_id = EXCLUDED.unfunded_bounty_id
+            RETURNING terms_hash
+            "#,
+        )
+        .bind(terms_hash.to_ascii_lowercase())
+        .bind(unfunded_bounty_id)
+        .bind(network.to_ascii_lowercase())
+        .bind(funding_prepared_at)
+        .bind(wallet_signed_at)
+        .bind(observed_at)
+        .fetch_optional(&self.pool)
+        .await?;
+        if row.is_none() {
+            return Err(DbError::OpportunityConversionConflict(
+                "one terms hash cannot refer to different unfunded bounties".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn opportunity_lifecycle_stats(
+        &self,
+        window_started_at: DateTime<Utc>,
+    ) -> DbResult<OpportunityLifecycleStats> {
+        let cohort = sqlx::query(
+            r#"
+            WITH cohort AS (
+              SELECT id, created_at FROM trial_bounties WHERE created_at >= $1
+            ), first_solutions AS (
+              SELECT cohort.id,
+                     MIN(solution.created_at) AS first_solution_at,
+                     cohort.created_at AS published_at
+              FROM cohort
+              JOIN unfunded_bounty_solutions AS solution
+                ON solution.trial_bounty_id = cohort.id
+              GROUP BY cohort.id, cohort.created_at
+            ), progress AS (
+              SELECT progress.*
+              FROM opportunity_creation_progress AS progress
+              JOIN cohort ON cohort.id = progress.unfunded_bounty_id
+            ), roots AS (
+              SELECT DISTINCT progress.unfunded_bounty_id, progress.network,
+                     created.bounty_id
+              FROM progress
+              JOIN autonomous_bounty_events AS created
+                ON created.network = progress.network
+               AND created.kind = 'canonical_bounty_created'
+               AND lower(created.data->>'terms_hash') = lower(progress.terms_hash)
+            ), root_flags AS (
+              SELECT roots.unfunded_bounty_id,
+                     BOOL_OR(event.kind = 'bounty_became_claimable') AS funded,
+                     BOOL_OR(event.kind = 'bounty_claimed') AS claimed,
+                     BOOL_OR(event.kind = 'submission_added') AS submitted,
+                     BOOL_OR(event.kind = 'bounty_settled') AS settled
+              FROM roots
+              LEFT JOIN autonomous_bounty_events AS event
+                ON event.network = roots.network AND event.bounty_id = roots.bounty_id
+              GROUP BY roots.unfunded_bounty_id
+            )
+            SELECT
+              (SELECT COUNT(*) FROM cohort) AS published,
+              (SELECT COUNT(*) FROM first_solutions) AS solution_received,
+              (SELECT COUNT(DISTINCT unfunded_bounty_id) FROM progress
+                WHERE funding_prepared_at IS NOT NULL) AS funding_prepared,
+              (SELECT COUNT(DISTINCT unfunded_bounty_id) FROM progress
+                WHERE wallet_signed_at IS NOT NULL) AS wallet_signed_observed,
+              (SELECT COUNT(DISTINCT unfunded_bounty_id) FROM roots) AS canonical_created,
+              (SELECT COUNT(*) FROM root_flags WHERE funded) AS funded,
+              (SELECT COUNT(*) FROM root_flags WHERE claimed) AS claimed,
+              (SELECT COUNT(*) FROM root_flags WHERE submitted) AS submitted,
+              (SELECT COUNT(*) FROM root_flags WHERE settled) AS settled,
+              (SELECT AVG(EXTRACT(EPOCH FROM (first_solution_at - published_at)))::double precision
+                FROM first_solutions) AS average_seconds_to_first_solution,
+              (SELECT percentile_cont(0.5) WITHIN GROUP (
+                  ORDER BY EXTRACT(EPOCH FROM (first_solution_at - published_at))
+                )::double precision FROM first_solutions) AS median_seconds_to_first_solution
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let canonical = sqlx::query(
+            r#"
+            WITH created AS (
+              SELECT network, bounty_id, MIN(occurred_at) AS created_at
+              FROM autonomous_bounty_events
+              WHERE kind = 'canonical_bounty_created' AND occurred_at >= $1
+              GROUP BY network, bounty_id
+            ), settled AS (
+              SELECT network, bounty_id, MIN(occurred_at) AS settled_at
+              FROM autonomous_bounty_events
+              WHERE kind = 'bounty_settled'
+              GROUP BY network, bounty_id
+            ), posters AS (
+              SELECT lower(data->>'creator') AS wallet, COUNT(DISTINCT bounty_id) AS bounties
+              FROM autonomous_bounty_events
+              WHERE kind = 'canonical_bounty_created' AND occurred_at >= $1
+                AND data ? 'creator'
+              GROUP BY lower(data->>'creator')
+            ), paid_solvers AS (
+              SELECT lower(data->>'solver') AS wallet, COUNT(DISTINCT bounty_id) AS bounties
+              FROM autonomous_bounty_events
+              WHERE kind = 'bounty_settled' AND occurred_at >= $1
+                AND data ? 'solver'
+              GROUP BY lower(data->>'solver')
+            )
+            SELECT
+              (SELECT COUNT(*) FROM created) AS canonical_created_in_window,
+              (SELECT COUNT(DISTINCT (network, bounty_id)) FROM autonomous_bounty_events
+                WHERE kind = 'bounty_claimed' AND occurred_at >= $1) AS canonical_claimed_in_window,
+              (SELECT COUNT(DISTINCT (network, bounty_id)) FROM autonomous_bounty_events
+                WHERE kind = 'bounty_settled' AND occurred_at >= $1) AS canonical_settled_in_window,
+              (SELECT COUNT(*) FROM posters) AS unique_canonical_poster_wallets,
+              (SELECT COUNT(*) FROM posters WHERE bounties > 1) AS repeat_canonical_poster_wallets,
+              (SELECT COUNT(*) FROM paid_solvers) AS unique_paid_solver_wallets,
+              (SELECT COUNT(*) FROM paid_solvers WHERE bounties > 1) AS repeat_paid_solver_wallets,
+              (SELECT AVG(EXTRACT(EPOCH FROM (settled.settled_at - created.created_at)))::double precision
+                FROM created JOIN settled USING (network, bounty_id))
+                AS average_seconds_creation_to_settlement
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(OpportunityLifecycleStats {
+            published: u64_from_i64(cohort.try_get("published")?)?,
+            solution_received: u64_from_i64(cohort.try_get("solution_received")?)?,
+            funding_prepared: u64_from_i64(cohort.try_get("funding_prepared")?)?,
+            wallet_signed_observed: u64_from_i64(cohort.try_get("wallet_signed_observed")?)?,
+            canonical_created: u64_from_i64(cohort.try_get("canonical_created")?)?,
+            funded: u64_from_i64(cohort.try_get("funded")?)?,
+            claimed: u64_from_i64(cohort.try_get("claimed")?)?,
+            submitted: u64_from_i64(cohort.try_get("submitted")?)?,
+            settled: u64_from_i64(cohort.try_get("settled")?)?,
+            average_seconds_to_first_solution: cohort
+                .try_get("average_seconds_to_first_solution")?,
+            median_seconds_to_first_solution: cohort.try_get("median_seconds_to_first_solution")?,
+            average_seconds_creation_to_settlement: canonical
+                .try_get("average_seconds_creation_to_settlement")?,
+            canonical_created_in_window: u64_from_i64(
+                canonical.try_get("canonical_created_in_window")?,
+            )?,
+            canonical_claimed_in_window: u64_from_i64(
+                canonical.try_get("canonical_claimed_in_window")?,
+            )?,
+            canonical_settled_in_window: u64_from_i64(
+                canonical.try_get("canonical_settled_in_window")?,
+            )?,
+            unique_canonical_poster_wallets: u64_from_i64(
+                canonical.try_get("unique_canonical_poster_wallets")?,
+            )?,
+            repeat_canonical_poster_wallets: u64_from_i64(
+                canonical.try_get("repeat_canonical_poster_wallets")?,
+            )?,
+            unique_paid_solver_wallets: u64_from_i64(
+                canonical.try_get("unique_paid_solver_wallets")?,
+            )?,
+            repeat_paid_solver_wallets: u64_from_i64(
+                canonical.try_get("repeat_paid_solver_wallets")?,
+            )?,
+        })
     }
 
     pub async fn create_or_get_trial_bounty(
@@ -4622,6 +5092,48 @@ fn parse_funding_intent_status(value: String) -> DbResult<FundingIntentStatus> {
     }
 }
 
+fn webhook_subscription_from_row(row: PgRow) -> DbResult<WebhookSubscription> {
+    Ok(WebhookSubscription {
+        id: row.try_get("id")?,
+        owner_wallet: row.try_get("owner_wallet")?,
+        endpoint_url: row.try_get("endpoint_url")?,
+        event_types: serde_json::from_value(row.try_get("event_types")?)?,
+        subscription_kind: row.try_get("subscription_kind")?,
+        filters: serde_json::from_value(row.try_get("filters")?)?,
+        management_token_hash: row.try_get("management_token_hash")?,
+        secret_version: u32::try_from(row.try_get::<i32, _>("secret_version")?)
+            .map_err(|_| DbError::IntegerOverflow("secret_version".to_string()))?,
+        enabled: row.try_get("enabled")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn webhook_delivery_from_row(row: PgRow) -> DbResult<WebhookDelivery> {
+    Ok(WebhookDelivery {
+        id: row.try_get("id")?,
+        subscription_id: row.try_get("subscription_id")?,
+        event_id: row.try_get("event_id")?,
+        event_type: serde_json::from_value(serde_json::Value::String(row.try_get("event_type")?))?,
+        payload: row.try_get("payload")?,
+        status: row.try_get("status")?,
+        attempt_count: u32::try_from(row.try_get::<i32, _>("attempt_count")?)
+            .map_err(|_| DbError::IntegerOverflow("attempt_count".to_string()))?,
+        next_attempt_at: row.try_get("next_attempt_at")?,
+        lease_token: row.try_get("lease_token")?,
+        lease_expires_at: row.try_get("lease_expires_at")?,
+        response_status: row
+            .try_get::<Option<i32>, _>("response_status")?
+            .map(u16::try_from)
+            .transpose()
+            .map_err(|_| DbError::IntegerOverflow("response_status".to_string()))?,
+        last_error: row.try_get("last_error")?,
+        delivered_at: row.try_get("delivered_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
 fn autonomous_event_from_row(row: PgRow) -> DbResult<AutonomousBountyEvent> {
     let kind_value = serde_json::Value::String(row.try_get::<String, _>("kind")?);
     let kind: AutonomousBountyEventKind = serde_json::from_value(kind_value)?;
@@ -4946,6 +5458,142 @@ mod tests {
                 "missing leaderboard invariant {invariant}"
             );
         }
+    }
+
+    #[test]
+    fn discovery_subscription_migration_extends_existing_delivery_tables() {
+        for invariant in [
+            "subscription_kind TEXT NOT NULL DEFAULT 'agent_wallet'",
+            "filters JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "management_token_hash TEXT",
+            "idx_webhook_subscriptions_public_discovery",
+            "idx_webhook_deliveries_subscription_created",
+        ] {
+            assert!(
+                DISCOVERY_SUBSCRIPTIONS_MIGRATION.contains(invariant),
+                "missing discovery subscription invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn opportunity_conversion_migration_records_only_missing_observable_stages() {
+        for invariant in [
+            "opportunity_creation_progress",
+            "terms_hash TEXT PRIMARY KEY",
+            "unfunded_bounty_id UUID REFERENCES trial_bounties(id) ON DELETE SET NULL",
+            "funding_prepared_at TIMESTAMPTZ",
+            "wallet_signed_at TIMESTAMPTZ",
+            "idx_opportunity_creation_progress_unfunded",
+        ] {
+            assert!(
+                OPPORTUNITY_CONVERSION_MIGRATION.contains(invariant),
+                "missing opportunity conversion invariant {invariant}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn opportunity_lifecycle_query_executes_against_migrated_postgres() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let stats = store
+            .opportunity_lifecycle_stats(Utc::now() - chrono::Duration::hours(1))
+            .await
+            .unwrap();
+        assert!(stats.solution_received <= stats.published);
+        assert!(stats.wallet_signed_observed <= stats.funding_prepared);
+        assert!(stats.settled <= stats.canonical_created);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn discovery_webhook_round_trip_executes_against_migrated_postgres() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let subscription_id = Uuid::new_v4();
+        let management_token_hash = format!("token-{}", Uuid::new_v4());
+        let subscription = store
+            .create_discovery_webhook_subscription(&NewDiscoveryWebhookSubscription {
+                id: subscription_id,
+                endpoint_url: "https://agent.example/bountyboard".to_string(),
+                filters: domain::DiscoverySubscriptionFilters {
+                    work_states: vec!["open".to_string()],
+                    ..domain::DiscoverySubscriptionFilters::default()
+                },
+                management_token_hash: management_token_hash.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(subscription.subscription_kind, "public_discovery");
+        assert_eq!(
+            store
+                .get_webhook_subscription(subscription_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .filters
+                .work_states,
+            vec!["open"]
+        );
+        assert!(store
+            .list_enabled_discovery_webhook_subscriptions()
+            .await
+            .unwrap()
+            .iter()
+            .any(|item| item.id == subscription_id));
+
+        let event_id = Uuid::new_v4();
+        assert!(store
+            .enqueue_webhook_delivery(
+                subscription_id,
+                event_id,
+                AgentWebhookEventType::OpportunityPublished,
+                &serde_json::json!({"opportunity_id": "unfunded:test"}),
+            )
+            .await
+            .unwrap());
+        assert!(!store
+            .enqueue_webhook_delivery(
+                subscription_id,
+                event_id,
+                AgentWebhookEventType::OpportunityPublished,
+                &serde_json::json!({"opportunity_id": "unfunded:test"}),
+            )
+            .await
+            .unwrap());
+
+        let lease_token = Uuid::new_v4();
+        let delivery = store
+            .lease_webhook_deliveries(100, lease_token, 30)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|delivery| delivery.subscription_id == subscription_id)
+            .unwrap();
+        assert_eq!(delivery.attempt_count, 1);
+        assert!(store
+            .mark_webhook_delivery_delivered(delivery.id, lease_token, 204)
+            .await
+            .unwrap());
+        assert!(!store
+            .delete_discovery_webhook_subscription(subscription_id, "wrong-token")
+            .await
+            .unwrap());
+        assert!(store
+            .delete_discovery_webhook_subscription(subscription_id, &management_token_hash)
+            .await
+            .unwrap());
+        assert!(store
+            .get_webhook_subscription(subscription_id)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

@@ -52,20 +52,26 @@ class AgentBountiesClient:
         path: str,
         json: dict | None = None,
         params: dict | None = None,
+        headers: dict[str, str] | None = None,
     ):
         query = (
             {key: value for key, value in params.items() if value is not None}
             if params
             else None
         )
+        request_headers = self._headers() or {}
+        if headers:
+            request_headers.update(headers)
         response = httpx.request(
             method,
             f"{self.base_url}{path}",
             json=json,
             params=query,
-            headers=self._headers(),
+            headers=request_headers or None,
             timeout=30,
         )
+        if response.status_code == 204:
+            return {"http_status": 204, "success": True}
         try:
             body = response.json()
         except ValueError:
@@ -666,6 +672,75 @@ class AgentBountiesClient:
             "GET",
             "/v1/base/autonomous-bounties/leaderboard",
             params={"network": network, "at": at},
+        )
+
+    def list_opportunities(
+        self,
+        network: str | None = None,
+        view: str | None = None,
+        source_type: str | None = None,
+        work_state: str | None = None,
+        payment_state: str | None = None,
+        limit: int | None = None,
+    ):
+        """Read the combined projection without replacing source-of-truth feeds."""
+        return self._request(
+            "GET",
+            "/v1/opportunities",
+            params={
+                "network": network,
+                "view": view,
+                "source_type": source_type,
+                "work_state": work_state,
+                "payment_state": payment_state,
+                "limit": limit,
+            },
+        )
+
+    def analyze_bounty_fit(
+        self, bounty_contract: str, network: str | None = None
+    ):
+        """Return advisory analysis cached by immutable terms hash."""
+        return self._request(
+            "GET",
+            f"/v1/base/autonomous-bounties/{bounty_contract}/analysis",
+            params={"network": network},
+        )
+
+    def create_discovery_subscription(
+        self, endpoint_url: str, filters: dict | None = None
+    ):
+        """Create a filtered signed webhook; credentials are returned once."""
+        return self._request(
+            "POST",
+            "/v1/discovery/subscriptions",
+            json={"endpoint_url": endpoint_url, "filters": filters or {}},
+        )
+
+    def get_discovery_subscription(
+        self, subscription_id: str, management_token: str
+    ):
+        return self._request(
+            "GET",
+            f"/v1/discovery/subscriptions/{subscription_id}",
+            headers={"authorization": f"Bearer {management_token}"},
+        )
+
+    def delete_discovery_subscription(
+        self, subscription_id: str, management_token: str
+    ):
+        return self._request(
+            "DELETE",
+            f"/v1/discovery/subscriptions/{subscription_id}",
+            headers={"authorization": f"Bearer {management_token}"},
+        )
+
+    def get_opportunity_conversion_funnel(self, window_hours: int | None = None):
+        """Return observable conversions without inferring agent independence."""
+        return self._request(
+            "GET",
+            "/v1/opportunities/conversion-funnel",
+            params={"window_hours": window_hours},
         )
 
     def list_autonomous_verification_jobs(
