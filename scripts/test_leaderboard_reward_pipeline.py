@@ -68,6 +68,8 @@ def response_fixture() -> dict:
         "network": "base-mainnet",
         "reward_pool": {
             "contract": CONTRACT,
+            "settlement_token": pipeline.BASE_MAINNET_USDC,
+            "funding_status": "funded",
             "balance_usdc_base_units": "47000000",
         },
         "daily": period(
@@ -124,6 +126,38 @@ class LeaderboardRewardPipelineTests(unittest.TestCase):
             ):
                 pipeline.contract_call(args, "firstDailyStart()(uint64)")
 
+    def test_contract_validation_pins_bytecode_constants_calendar_and_signers(self) -> None:
+        args = Namespace(
+            cast=Path("cast"),
+            rpc_url="https://rpc.example.test",
+            contract=CONTRACT,
+            network="base-mainnet",
+            expected_token=pipeline.BASE_MAINNET_USDC,
+        )
+        values = {
+            "settlementToken()(address)": pipeline.BASE_MAINNET_USDC,
+            "DAILY_REWARD()(uint256)": "3000000",
+            "WEEKLY_REWARD()(uint256)": "26000000",
+            "FINALIZATION_DELAY()(uint64)": "3600",
+            "firstDailyStart()(uint64)": "1784332800",
+            "firstWeeklyStart()(uint64)": "1783900800",
+            "signerA()(address)": WINNER,
+            "signerB()(address)": SECOND,
+        }
+        with (
+            patch.object(pipeline, "run", return_value="0x60016000"),
+            patch.object(pipeline, "contract_call", side_effect=lambda _, signature: values[signature]),
+        ):
+            self.assertEqual(pipeline.validate_contract(args), {WINNER, SECOND})
+
+        values["DAILY_REWARD()(uint256)"] = "1"
+        with (
+            patch.object(pipeline, "run", return_value="0x60016000"),
+            patch.object(pipeline, "contract_call", side_effect=lambda _, signature: values[signature]),
+            self.assertRaisesRegex(pipeline.PipelineError, "daily reward drifted"),
+        ):
+            pipeline.validate_contract(args)
+
     def test_candidate_commits_to_exact_ranked_evidence(self) -> None:
         candidate = pipeline.build_candidate(
             response_fixture(), "daily", CONTRACT, self.reference, self.now
@@ -149,6 +183,70 @@ class LeaderboardRewardPipelineTests(unittest.TestCase):
         unfunded["reward_pool"]["balance_usdc_base_units"] = "2999999"
         with self.assertRaisesRegex(pipeline.NoCandidate, "insufficient"):
             pipeline.build_candidate(unfunded, "daily", CONTRACT, self.reference, self.now)
+
+    def test_unconfigured_api_uses_explicit_on_chain_balance(self) -> None:
+        response = response_fixture()
+        response["reward_pool"].update(
+            {
+                "contract": None,
+                "funding_status": "not_configured",
+                "balance_usdc_base_units": None,
+            }
+        )
+        response["daily"].update(
+            {
+                "reward_contract": None,
+                "reward_funding_status": "not_configured",
+                "reward_payout_status": "reward_not_configured",
+            }
+        )
+        candidate = pipeline.build_candidate(
+            response,
+            "daily",
+            CONTRACT,
+            self.reference,
+            self.now,
+            fallback_pool_balance=47_000_000,
+        )
+        self.assertEqual(candidate["winner"], WINNER)
+
+        with self.assertRaisesRegex(pipeline.NoCandidate, "insufficient"):
+            pipeline.build_candidate(
+                response,
+                "daily",
+                CONTRACT,
+                self.reference,
+                self.now,
+                fallback_pool_balance=2_999_999,
+            )
+
+    def test_unconfigured_api_fallback_rejects_partial_or_inconsistent_state(self) -> None:
+        partial = response_fixture()
+        partial["reward_pool"]["contract"] = None
+        with self.assertRaisesRegex(pipeline.PipelineError, "partial"):
+            pipeline.build_candidate(
+                partial,
+                "daily",
+                CONTRACT,
+                self.reference,
+                self.now,
+                fallback_pool_balance=47_000_000,
+            )
+
+        inconsistent = response_fixture()
+        inconsistent["reward_pool"].update(
+            {"contract": None, "balance_usdc_base_units": None}
+        )
+        inconsistent["daily"]["reward_contract"] = None
+        with self.assertRaisesRegex(pipeline.PipelineError, "inconsistent"):
+            pipeline.build_candidate(
+                inconsistent,
+                "daily",
+                CONTRACT,
+                self.reference,
+                self.now,
+                fallback_pool_balance=47_000_000,
+            )
 
     def test_paid_winner_mismatch_fails_closed(self) -> None:
         response = response_fixture()
@@ -185,6 +283,7 @@ class LeaderboardRewardPipelineTests(unittest.TestCase):
             with (
                 patch.object(pipeline, "fetch_leaderboard", return_value=response_fixture()) as fetch,
                 patch.object(pipeline, "validate_contract", return_value={WINNER, SECOND}),
+                patch.object(pipeline, "reward_pool_balance", return_value=47_000_000),
                 patch.object(
                     pipeline,
                     "contract_period_starts",
@@ -213,6 +312,7 @@ class LeaderboardRewardPipelineTests(unittest.TestCase):
             with (
                 patch.object(pipeline, "fetch_leaderboard", return_value=response_fixture()),
                 patch.object(pipeline, "validate_contract", return_value={WINNER, SECOND}),
+                patch.object(pipeline, "reward_pool_balance", return_value=47_000_000),
                 patch.object(
                     pipeline,
                     "contract_period_starts",

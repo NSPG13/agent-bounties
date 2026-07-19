@@ -26,6 +26,8 @@ SIGNATURE = re.compile(r"^0x[0-9a-f]{130}$")
 ZERO_ADDRESS = "0x" + "0" * 40
 BASE_MAINNET_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 FINALIZATION_DELAY = timedelta(hours=1)
+FINALIZATION_DELAY_SECONDS = 3_600
+MONDAY_EPOCH_OFFSET_SECONDS = 4 * 86_400
 PERIODS = {
     "daily": {"kind": 0, "reward": 3_000_000},
     "weekly": {"kind": 1, "reward": 26_000_000},
@@ -204,6 +206,8 @@ def build_candidate(
     contract: str,
     reference: datetime,
     now: datetime,
+    fallback_pool_balance: int | None = None,
+    expected_token: str = BASE_MAINNET_USDC,
 ) -> dict[str, Any]:
     settings = PERIODS[period_name]
     contract = normalize_address(contract, "configured reward contract")
@@ -211,10 +215,13 @@ def build_candidate(
     period_output = response.get(period_name)
     if not isinstance(pool, dict) or not isinstance(period_output, dict):
         raise PipelineError("reward pool or period output is missing")
-    if normalize_address(pool.get("contract"), "API reward contract") != contract:
-        raise PipelineError("API reward contract does not match the configured contract")
-    if normalize_address(period_output.get("reward_contract"), "period reward contract") != contract:
-        raise PipelineError("period reward contract does not match the configured contract")
+    balance = resolved_pool_balance(
+        pool,
+        period_output,
+        contract,
+        expected_token,
+        fallback_pool_balance,
+    )
     ranking = period_output.get("ranking")
     if not isinstance(ranking, dict):
         raise PipelineError("period ranking is missing")
@@ -240,7 +247,6 @@ def build_candidate(
     if payout_status == "payout_unverified":
         raise NoCandidate("paid-winner state is not verified")
 
-    balance = int(pool.get("balance_usdc_base_units") or 0)
     if balance < settings["reward"]:
         raise NoCandidate("reward pool balance is insufficient")
     leader = evidence["leader_wallet"]
@@ -279,12 +285,18 @@ def current_candidate(
 ) -> dict[str, Any]:
     reference = parse_utc(candidate.get("reference_at"), "candidate reference")
     response = fetch_leaderboard(args.api_base, args.network, reference)
+    fallback_balance = None
+    pool = response.get("reward_pool")
+    if isinstance(pool, dict) and pool.get("contract") is None:
+        fallback_balance = reward_pool_balance(args)
     return build_candidate(
         response,
         str(candidate.get("period_name", "")),
         args.contract,
         reference,
         datetime.now(timezone.utc),
+        fallback_balance,
+        args.expected_token,
     )
 
 
@@ -295,7 +307,9 @@ def assert_candidate_unchanged(
         raise PipelineError("closed-period ranking changed; regenerate the candidate")
 
 
-def contract_call(args: argparse.Namespace, signature: str, *values: str) -> str:
+def chain_call(
+    args: argparse.Namespace, target: str, signature: str, *values: str
+) -> str:
     output = run(
         [
             str(args.cast),
@@ -303,7 +317,7 @@ def contract_call(args: argparse.Namespace, signature: str, *values: str) -> str
             "--json",
             "--rpc-url",
             args.rpc_url,
-            args.contract,
+            target,
             signature,
             *values,
         ]
@@ -322,6 +336,10 @@ def contract_call(args: argparse.Namespace, signature: str, *values: str) -> str
     return str(value).strip().lower()
 
 
+def contract_call(args: argparse.Namespace, signature: str, *values: str) -> str:
+    return chain_call(args, args.contract, signature, *values)
+
+
 def chain_int(value: str, field: str) -> int:
     try:
         parsed = int(value.strip(), 0)
@@ -332,17 +350,90 @@ def chain_int(value: str, field: str) -> int:
     return parsed
 
 
+def resolved_pool_balance(
+    pool: dict[str, Any],
+    period_output: dict[str, Any],
+    contract: str,
+    expected_token: str,
+    fallback_pool_balance: int | None,
+) -> int:
+    pool_contract = pool.get("contract")
+    period_contract = period_output.get("reward_contract")
+    if pool_contract is None and period_contract is None:
+        if (
+            pool.get("funding_status") != "not_configured"
+            or period_output.get("reward_funding_status") != "not_configured"
+            or pool.get("balance_usdc_base_units") is not None
+            or period_output.get("reward_paid_wallet") is not None
+            or period_output.get("reward_payout_status")
+            not in {"no_winner", "not_due", "reward_not_configured"}
+        ):
+            raise PipelineError("unconfigured API reward state is inconsistent")
+        if (
+            normalize_address(pool.get("settlement_token"), "API settlement token")
+            != normalize_address(expected_token, "expected settlement token")
+        ):
+            raise PipelineError("API settlement token does not match Base mainnet USDC")
+        if fallback_pool_balance is None:
+            raise PipelineError("API reward contract is unconfigured and no chain balance was supplied")
+        return chain_int(str(fallback_pool_balance), "on-chain reward pool balance")
+
+    if pool_contract is None or period_contract is None:
+        raise PipelineError("API reward contract configuration is partial")
+    if normalize_address(pool_contract, "API reward contract") != contract:
+        raise PipelineError("API reward contract does not match the configured contract")
+    if normalize_address(period_contract, "period reward contract") != contract:
+        raise PipelineError("period reward contract does not match the configured contract")
+    return chain_int(str(pool.get("balance_usdc_base_units") or ""), "API reward pool balance")
+
+
+def reward_pool_balance(args: argparse.Namespace) -> int:
+    token = normalize_address(args.expected_token, "expected settlement token")
+    return chain_int(
+        chain_call(args, token, "balanceOf(address)(uint256)", args.contract),
+        "on-chain reward pool balance",
+    )
+
+
 def validate_contract(args: argparse.Namespace) -> set[str]:
+    code = run(
+        [
+            str(args.cast),
+            "code",
+            "--rpc-url",
+            args.rpc_url,
+            args.contract,
+        ]
+    ).strip().lower()
+    if code == "0x" or not re.fullmatch(r"0x[0-9a-f]+", code):
+        raise PipelineError("leaderboard reward contract has no valid bytecode")
     token = normalize_address(
         contract_call(args, "settlementToken()(address)"), "settlement token"
     )
     expected_token = normalize_address(args.expected_token, "expected settlement token")
     if args.network != "base-mainnet" or token != expected_token:
         raise PipelineError("leaderboard contract is not pinned to Base mainnet USDC")
-    return {
+    if chain_int(contract_call(args, "DAILY_REWARD()(uint256)"), "daily reward") != PERIODS["daily"]["reward"]:
+        raise PipelineError("leaderboard daily reward drifted")
+    if chain_int(contract_call(args, "WEEKLY_REWARD()(uint256)"), "weekly reward") != PERIODS["weekly"]["reward"]:
+        raise PipelineError("leaderboard weekly reward drifted")
+    if chain_int(contract_call(args, "FINALIZATION_DELAY()(uint64)"), "finalization delay") != FINALIZATION_DELAY_SECONDS:
+        raise PipelineError("leaderboard finalization delay drifted")
+    starts = contract_period_starts(args)
+    if starts["daily"] % 86_400 != 0:
+        raise PipelineError("leaderboard daily calendar is invalid")
+    if (
+        starts["weekly"] < MONDAY_EPOCH_OFFSET_SECONDS
+        or (starts["weekly"] - MONDAY_EPOCH_OFFSET_SECONDS) % (7 * 86_400) != 0
+    ):
+        raise PipelineError("leaderboard weekly calendar is invalid")
+    signers = {
         normalize_address(contract_call(args, "signerA()(address)"), "signer A"),
         normalize_address(contract_call(args, "signerB()(address)"), "signer B"),
     }
+    if ZERO_ADDRESS in signers or len(signers) != 2:
+        raise PipelineError("leaderboard signers must be two distinct nonzero addresses")
+    return signers
 
 
 def contract_period_starts(args: argparse.Namespace) -> dict[str, int]:
@@ -376,6 +467,7 @@ def command_run(args: argparse.Namespace) -> None:
     references = period_references(now)
     validate_contract(args)
     first_starts = contract_period_starts(args)
+    fallback_balance = reward_pool_balance(args)
     cache: dict[str, dict[str, Any]] = {}
     candidates = []
     skipped = []
@@ -387,7 +479,13 @@ def command_run(args: argparse.Namespace) -> None:
         response = cache[key]
         try:
             candidate = build_candidate(
-                response, period_name, args.contract, reference, now
+                response,
+                period_name,
+                args.contract,
+                reference,
+                now,
+                fallback_balance,
+                args.expected_token,
             )
         except NoCandidate as reason:
             skipped.append({"period": period_name, "reason": str(reason)})
