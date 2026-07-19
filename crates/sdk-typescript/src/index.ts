@@ -303,6 +303,47 @@ export interface CloudBountyAnalysis extends Record<string, unknown> {
   confidence: number;
 }
 
+export interface CloudObjectivePlanRequest {
+  objective: string;
+  context?: string | null;
+  constraints?: string[];
+  max_tasks?: number;
+  solver_budget_usdc?: string | null;
+  source_url?: string | null;
+  idempotency_key?: string | null;
+}
+
+export interface CloudObjectiveTask extends Record<string, unknown> {
+  task_id: string;
+  title: string;
+  goal: string;
+  depends_on: string[];
+  acceptance_criteria: string[];
+  verifier: Record<string, unknown>;
+  evidence_schema: Record<string, unknown>;
+  effort_weight: number;
+  suggested_solver_reward_usdc: string | null;
+}
+
+export interface CloudObjectivePlan extends Record<string, unknown> {
+  schema_version: "agent-bounties/cloud-objective-plan-v1";
+  provider: string;
+  model: string;
+  title: string;
+  objective: string;
+  success_definition: string;
+  tasks: CloudObjectiveTask[];
+  parallel_layers: string[][];
+  solver_budget_usdc: string | null;
+  execution_policy: Record<string, unknown>;
+  verification_policy: Record<string, unknown>;
+  settlement_policy: Record<string, unknown>;
+  questions: string[];
+  risk_flags: string[];
+  next_action: string;
+  evidence_boundary: string;
+}
+
 export interface X402BountyFundingRequest {
   bounty_contract: string;
   amount?: number | null;
@@ -595,6 +636,17 @@ export class AgentBountiesClient {
 
   async getX402Discovery(): Promise<Record<string, unknown>> {
     return this.request("/.well-known/x402.json") as Promise<Record<string, unknown>>;
+  }
+
+  async compileObjective(request: CloudObjectivePlanRequest): Promise<CloudObjectivePlan> {
+    return this.request("/v1/cloud-agent/objective-plans", {
+      method: "POST",
+      body: JSON.stringify({
+        constraints: [],
+        max_tasks: 5,
+        ...request,
+      }),
+    }) as Promise<CloudObjectivePlan>;
   }
 
   async requestX402BountyFunding(

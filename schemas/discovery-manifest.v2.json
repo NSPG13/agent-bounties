@@ -81,6 +81,7 @@
         "mcp_streamable_http",
         "llms_txt",
         "cloud_agent_readiness",
+        "cloud_objective_plans",
         "cloud_bounty_drafts",
         "opportunities",
         "opportunity_feed_rss",

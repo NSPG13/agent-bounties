@@ -57,7 +57,9 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use cloud_agent::{
     CloudAgentError, CloudAgentReadiness, CloudAgentService, CloudBountyAnalysis,
     CloudBountyAnalysisRequest, CloudBountyDraft, CloudBountyDraftRequest, CloudDemoSolution,
-    CloudUnfundedBountyRequest,
+    CloudObjectiveExecutionPolicy, CloudObjectivePlan, CloudObjectivePlanRequest,
+    CloudObjectiveSettlementPolicy, CloudObjectiveTask, CloudObjectiveVerificationPolicy,
+    CloudObjectiveVerifierDraft, CloudUnfundedBountyRequest,
 };
 use db::{
     BountyStatusScope, ClaimCandidateReservation, ClaimFunnelStats, DbError,
@@ -138,6 +140,7 @@ use worker::{
         risk_policy,
         live_money_readiness,
         cloud_agent_readiness,
+        compile_objective_with_cloud_agent,
         draft_bounty_with_cloud_agent,
         analyze_bounty_fit,
         list_opportunities,
@@ -290,6 +293,13 @@ use worker::{
         ,CloudBountyAnalysis
         ,CloudBountyAnalysisRequest
         ,cloud_agent::CloudBountyAnalysisReference
+        ,CloudObjectivePlanRequest
+        ,CloudObjectivePlan
+        ,CloudObjectiveTask
+        ,CloudObjectiveVerifierDraft
+        ,CloudObjectiveExecutionPolicy
+        ,CloudObjectiveVerificationPolicy
+        ,CloudObjectiveSettlementPolicy
         ,CloudUnfundedBountyRequest
         ,CloudDemoSolution
         ,OpportunityProjectionResponse
@@ -1424,6 +1434,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/readiness/live-money", get(live_money_readiness))
         .route("/v1/cloud-agent/readiness", get(cloud_agent_readiness))
         .route(
+            "/v1/cloud-agent/objective-plans",
+            post(compile_objective_with_cloud_agent),
+        )
+        .route(
             "/v1/cloud-agent/bounty-drafts",
             post(draft_bounty_with_cloud_agent),
         )
@@ -1995,6 +2009,34 @@ fn validate_legal_acceptance_request(
 )]
 async fn cloud_agent_readiness(State(state): State<SharedState>) -> Json<CloudAgentReadiness> {
     Json(state.cloud_agent.readiness())
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/cloud-agent/objective-plans",
+    request_body = CloudObjectivePlanRequest,
+    responses(
+        (status = 200, body = CloudObjectivePlan),
+        (status = 400, description = "Invalid objective, graph, verifier, evidence, or budget input"),
+        (status = 401, description = "Public cloud planning is disabled and operator authorization is absent"),
+        (status = 429, description = "Bounded daily cloud-model quota exhausted"),
+        (status = 503, description = "GPT-5.6 cloud planning is not configured or unavailable")
+    )
+)]
+async fn compile_objective_with_cloud_agent(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<CloudObjectivePlanRequest>,
+) -> Result<Json<CloudObjectivePlan>, StatusCode> {
+    if !state.cloud_agent.public_drafts() {
+        require_operator(&state, &headers)?;
+    }
+    state
+        .cloud_agent
+        .compile_objective(request)
+        .await
+        .map(Json)
+        .map_err(cloud_agent_status)
 }
 
 #[utoipa::path(
@@ -13383,6 +13425,7 @@ mod tests {
         assert!(paths.contains_key("/schemas/discovery-manifest.v2.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
+        assert!(paths.contains_key("/v1/cloud-agent/objective-plans"));
         assert!(paths.contains_key("/v1/opportunities"));
         assert!(paths.contains_key("/v1/opportunities/feed.rss"));
         assert!(paths.contains_key("/v1/opportunities/feed.atom"));

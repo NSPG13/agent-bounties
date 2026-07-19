@@ -16,6 +16,9 @@ REQUIRED_FILES = [
     "earn.html",
     "post.html",
     "funding.html",
+    "objective.html",
+    "objective.css",
+    "objective.js",
     "x402.html",
     "x402-test-vectors.json",
     "prepare-agent.html",
@@ -47,6 +50,7 @@ PUBLIC_INDEXABLE_PAGES = {
     "earn.html": "https://bountyboard.global/earn.html",
     "post.html": "https://bountyboard.global/post.html",
     "funding.html": "https://bountyboard.global/funding.html",
+    "objective.html": "https://bountyboard.global/objective.html",
     "prepare-agent.html": "https://bountyboard.global/prepare-agent.html",
     "agent-budget.html": "https://bountyboard.global/agent-budget.html",
     "x402.html": "https://bountyboard.global/x402.html",
@@ -206,6 +210,8 @@ def main() -> int:
     analytics_javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
+    objective_page = (site_dir / "objective.html").read_text(encoding="utf-8")
+    objective_javascript = (site_dir / "objective.js").read_text(encoding="utf-8")
     discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text(encoding="utf-8"))
     x402_discovery = json.loads((site_dir / ".well-known/x402.json").read_text(encoding="utf-8"))
     x402_vectors = json.loads((site_dir / "x402-test-vectors.json").read_text(encoding="utf-8"))
@@ -570,6 +576,8 @@ def main() -> int:
             "list_autonomous_verification_jobs",
             "BountySettled",
             "draft_bounty_with_cloud_agent",
+            "compile_objective_with_cloud_agent",
+            "/v1/cloud-agent/objective-plans",
             "inventory-summary",
             "Inventory unavailable:",
         ],
@@ -651,10 +659,32 @@ def main() -> int:
         "plan_autonomous_bounty_submission_authorization",
         "relay_autonomous_action_via_github_comment",
         "fund_bounty_with_x402",
+        "compile_objective_with_cloud_agent",
         "list_autonomous_bounty_events",
     ]:
         if tool not in tools:
             fail(f"static discovery manifest missing autonomous tool: {tool}")
+
+    require_phrases(
+        "objective.html",
+        objective_page,
+        [
+            "Turn one outcome into verifiable paid work",
+            "GPT-5.6",
+            "Agents have already completed paid loops",
+            "Post your own bounty",
+        ],
+    )
+    require_phrases(
+        "objective.js",
+        objective_javascript,
+        [
+            "/v1/cloud-agent/objective-plans",
+            "/v1/base/autonomous-bounties/claim-funnel",
+            "open_ai_responses",
+            "gpt-5.6",
+        ],
+    )
     if any(tool in tools for tool in ["plan_base_funding", "plan_base_release", "plan_base_refund"]):
         fail("static discovery manifest advertises retired escrow tools")
     modes = {mode.get("name"): mode for mode in discovery.get("verification_modes", [])}

@@ -201,6 +201,23 @@ struct DraftBountyWithCloudAgentArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompileObjectiveWithCloudAgentArgs {
+    objective: String,
+    context: Option<String>,
+    #[serde(default)]
+    constraints: Vec<String>,
+    #[serde(default = "default_objective_task_limit")]
+    max_tasks: u8,
+    solver_budget_usdc: Option<String>,
+    source_url: Option<String>,
+    idempotency_key: Option<String>,
+}
+
+fn default_objective_task_limit() -> u8 {
+    5
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PrepareBountyPostArgs {
     title: String,
     goal: String,
@@ -673,6 +690,10 @@ async fn main() -> anyhow::Result<()> {
             post(draft_bounty_with_cloud_agent),
         )
         .route(
+            "/tools/compile_objective_with_cloud_agent",
+            post(compile_objective_with_cloud_agent),
+        )
+        .route(
             "/tools/get_autonomous_inventory_summary",
             post(get_autonomous_inventory_summary),
         )
@@ -1056,6 +1077,22 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     "constraints": {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Optional bounded task constraints."},
                     "source_url": nullable_string_property("Optional public HTTPS source URL."),
                     "idempotency_key": nullable_string_property("Optional stable key for retry-safe drafting."),
+                }),
+                &["objective"],
+            ),
+        ),
+        tool(
+            "compile_objective_with_cloud_agent",
+            "Use GPT-5.6 to decompose one digital objective into a validated acyclic graph of verifier-ready bounty drafts. The model is advisory; deterministic validation and canonical contracts retain authority.",
+            object_tool_schema(
+                json!({
+                    "objective": string_property("The larger digital objective to coordinate."),
+                    "context": nullable_string_property("Optional repository, workflow, prior attempts, or other objective context."),
+                    "constraints": {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Optional bounded objective constraints."},
+                    "max_tasks": {"type": ["integer", "null"], "minimum": 2, "maximum": 8, "description": "Maximum graph size; defaults to 5."},
+                    "solver_budget_usdc": nullable_string_property("Optional advisory solver-only budget allocated deterministically after graph validation."),
+                    "source_url": nullable_string_property("Optional public HTTPS source URL."),
+                    "idempotency_key": nullable_string_property("Optional stable key for retry-safe compilation."),
                 }),
                 &["objective"],
             ),
@@ -2683,6 +2720,21 @@ async fn draft_bounty_with_cloud_agent(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/cloud-agent/bounty-drafts",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    let mut request = reqwest::Client::new().post(url).json(&args);
+    if let Some(token) = state.operator_api_token.as_deref() {
+        request = request.header(OPERATOR_TOKEN_HEADER, token);
+    }
+    proxy_hosted_json(request).await
+}
+
+async fn compile_objective_with_cloud_agent(
+    State(state): State<SharedState>,
+    Json(args): Json<CompileObjectiveWithCloudAgentArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/cloud-agent/objective-plans",
         public_base_url_from_env().trim_end_matches('/')
     );
     let mut request = reqwest::Client::new().post(url).json(&args);
@@ -5302,6 +5354,17 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "Private"));
+
+        let objective_compiler = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "compile_objective_with_cloud_agent")
+            .expect("objective compiler descriptor exists");
+        assert_eq!(
+            objective_compiler.input_schema["properties"]["max_tasks"]["maximum"],
+            8
+        );
+        assert!(objective_compiler.description.contains("GPT-5.6"));
+        assert!(objective_compiler.description.contains("advisory"));
 
         let operator_tools = [
             "execute_stripe_checkout_top_up",

@@ -102,6 +102,32 @@ class AgentBountiesClient:
     def get_x402_discovery(self):
         return self._request("GET", "/.well-known/x402.json")
 
+    def compile_objective(
+        self,
+        objective: str,
+        *,
+        context: str | None = None,
+        constraints: list[str] | None = None,
+        max_tasks: int = 5,
+        solver_budget_usdc: str | None = None,
+        source_url: str | None = None,
+        idempotency_key: str | None = None,
+    ):
+        """Compile one objective into an advisory, validated bounty graph."""
+        return self._request(
+            "POST",
+            "/v1/cloud-agent/objective-plans",
+            json={
+                "objective": objective,
+                "context": context,
+                "constraints": constraints or [],
+                "max_tasks": max_tasks,
+                "solver_budget_usdc": solver_budget_usdc,
+                "source_url": source_url,
+                "idempotency_key": idempotency_key,
+            },
+        )
+
     def request_x402_bounty_funding(
         self,
         bounty_contract: str,

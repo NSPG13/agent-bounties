@@ -57,6 +57,25 @@ class NativeSignatureTests(unittest.TestCase):
 
         self.assertEqual(client.requests[0]["child_acceptance_criteria"], criteria)
 
+    def test_compile_objective_sends_bounded_graph_request(self):
+        client = StubAgentBountiesClient(
+            [{"schema_version": "agent-bounties/cloud-objective-plan-v1"}]
+        )
+
+        response = client.compile_objective(
+            "Ship a replayable release",
+            constraints=["Keep settlement deterministic."],
+            max_tasks=4,
+            solver_budget_usdc="8.00",
+        )
+
+        self.assertEqual(
+            response["schema_version"],
+            "agent-bounties/cloud-objective-plan-v1",
+        )
+        self.assertEqual(client.requests[0]["max_tasks"], 4)
+        self.assertEqual(client.requests[0]["solver_budget_usdc"], "8.00")
+
 
 if __name__ == "__main__":
     unittest.main()

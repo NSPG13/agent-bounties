@@ -20,7 +20,9 @@ executable verifier, and publish and fund through the canonical protocol.
 
 ## Provider Configuration
 
-The adapter supports OpenAI-compatible chat completions and Anthropic Messages.
+The adapter supports OpenAI Responses, OpenAI-compatible chat completions, and
+Anthropic Messages. Production uses GPT-5.6 through the Responses API with a
+strict JSON Schema for objective graphs.
 Only `agent-bounties-api` receives `CLOUD_AGENT_API_KEY`. The Blueprint declares
 it directly on that service with `sync: false`; Render does not support
 `sync: false` inside environment groups. The exact-SHA deployment controller
@@ -33,10 +35,10 @@ Required production settings:
 ```text
 CLOUD_AGENT_ENABLED=true
 CLOUD_AGENT_PUBLIC_DRAFTS=true
-CLOUD_AGENT_PROVIDER=openai-compatible
-CLOUD_AGENT_PROTOCOL=openai_chat_completions
-CLOUD_AGENT_ENDPOINT=https://api.openai.com/v1/chat/completions
-CLOUD_AGENT_MODEL=gpt-4.1-mini
+CLOUD_AGENT_PROVIDER=openai
+CLOUD_AGENT_PROTOCOL=openai_responses
+CLOUD_AGENT_ENDPOINT=https://api.openai.com/v1/responses
+CLOUD_AGENT_MODEL=gpt-5.6
 CLOUD_AGENT_API_KEY=<Render secret>
 ```
 
@@ -48,7 +50,9 @@ and dispatching again rotates the API-service value and forces a redeploy. The
 controller then fails closed unless readiness reports hosted execution,
 draft-only authority, no local fallback, and `available: true`.
 
-The default public quota is 25 fresh drafts per UTC day per API process.
+The default public quota is 100 fresh drafts or objective plans per UTC day per
+API process. This bounds spend while leaving enough capacity for the six-case
+Build Week evaluation and multiple independent judges.
 Idempotent retries return the cached draft and do not consume another model
 call. Inputs, outputs, timeout, arrays, URLs, and idempotency keys are bounded.
 

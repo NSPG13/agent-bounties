@@ -74,3 +74,34 @@ test("canonical child planning sends task acceptance criteria", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("compileObjective sends a bounded objective graph request", async () => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({
+      schema_version: "agent-bounties/cloud-objective-plan-v1",
+      tasks: [],
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const client = new AgentBountiesClient("https://api.example");
+    await client.compileObjective({
+      objective: "Ship a replayable release",
+      constraints: ["Keep settlement deterministic."],
+      max_tasks: 4,
+      solver_budget_usdc: "8.00",
+    });
+
+    assert.equal(requests[0].url, "https://api.example/v1/cloud-agent/objective-plans");
+    assert.equal(requests[0].body.max_tasks, 4);
+    assert.equal(requests[0].body.solver_budget_usdc, "8.00");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
