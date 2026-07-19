@@ -743,6 +743,14 @@ class AgentBountiesClient:
             params={"window_hours": window_hours},
         )
 
+    def get_site_analytics(self, window_hours: int | None = None):
+        """Return privacy-minimized browser, channel, and site-action aggregates."""
+        return self._request(
+            "GET",
+            "/v1/analytics/site",
+            params={"window_hours": window_hours},
+        )
+
     def list_autonomous_verification_jobs(
         self, network: str | None = None, verifier: str | None = None
     ):

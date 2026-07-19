@@ -62,9 +62,10 @@ use cloud_agent::{
 use db::{
     BountyStatusScope, ClaimCandidateReservation, ClaimFunnelStats, DbError,
     GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate,
-    NewDiscoveryWebhookSubscription, NewLegalAcceptance, NewTrialBounty, NewUnfundedBountySolution,
-    NewX402RelayAttempt, OpportunityLifecycleStats, PostgresStore, TrialBounty,
-    UnfundedBountySolution, WebhookSubscription, X402RelayAttempt, X402RelayStatus,
+    NewDiscoveryWebhookSubscription, NewLegalAcceptance, NewSiteAnalyticsEvent, NewTrialBounty,
+    NewUnfundedBountySolution, NewX402RelayAttempt, OpportunityLifecycleStats, PostgresStore,
+    SiteAnalyticsStats, TrialBounty, UnfundedBountySolution, WebhookSubscription, X402RelayAttempt,
+    X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -147,6 +148,8 @@ use worker::{
         opportunity_embed_svg,
         opportunity_embed_markdown,
         opportunity_conversion_funnel,
+        record_site_analytics_event,
+        site_analytics,
         create_discovery_subscription,
         get_discovery_subscription,
         delete_discovery_subscription,
@@ -304,6 +307,14 @@ use worker::{
         ,OpportunityConversionStage
         ,OpportunityConversionRate
         ,OpportunityActorMetrics
+        ,SiteAnalyticsEventRequest
+        ,SiteAnalyticsReceipt
+        ,SiteAnalyticsOverviewResponse
+        ,SiteAnalyticsEventCountResponse
+        ,SiteAnalyticsDailyResponse
+        ,SiteAnalyticsChannelResponse
+        ,SiteAnalyticsRateResponse
+        ,SiteAnalyticsResponse
         ,UnfundedBountyResponse
         ,UnfundedBountyAgentSolution
         ,SubmitUnfundedBountySolutionRequest
@@ -916,6 +927,102 @@ struct OpportunityConversionFunnelResponse {
     evidence_boundary: String,
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct SiteAnalyticsEventRequest {
+    event_id: Uuid,
+    visitor_id: Uuid,
+    session_id: Uuid,
+    event_name: String,
+    page_path: String,
+    source: Option<String>,
+    campaign: Option<String>,
+    referrer_host: Option<String>,
+    opportunity_id: Option<String>,
+    bounty_contract: Option<String>,
+    occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsReceipt {
+    schema_version: String,
+    accepted: bool,
+    duplicate: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SiteAnalyticsQuery {
+    window_hours: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsOverviewResponse {
+    unique_visitors: u64,
+    returning_visitors: u64,
+    sessions: u64,
+    page_views: u64,
+    first_event_at: Option<String>,
+    last_event_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsEventCountResponse {
+    event_name: String,
+    events: u64,
+    sessions: u64,
+    visitors: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsDailyResponse {
+    day: String,
+    visitors: u64,
+    sessions: u64,
+    page_views: u64,
+    market_views: u64,
+    funded_bounty_clicks: u64,
+    canonical_posts_confirmed: u64,
+    funding_starts: u64,
+    claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsChannelResponse {
+    source: String,
+    campaign: Option<String>,
+    visitors: u64,
+    sessions: u64,
+    page_views: u64,
+    funded_bounty_clicks: u64,
+    canonical_posts_confirmed: u64,
+    funding_starts: u64,
+    claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsRateResponse {
+    metric: String,
+    numerator_sessions: u64,
+    denominator_sessions: u64,
+    value: Option<f64>,
+    cohort: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsResponse {
+    schema_version: String,
+    window_hours: u32,
+    window_started_at: String,
+    generated_at: String,
+    overview: SiteAnalyticsOverviewResponse,
+    event_counts: Vec<SiteAnalyticsEventCountResponse>,
+    daily: Vec<SiteAnalyticsDailyResponse>,
+    channels: Vec<SiteAnalyticsChannelResponse>,
+    rates: Vec<SiteAnalyticsRateResponse>,
+    definitions: Vec<String>,
+    evidence_boundary: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct AgentNativeClaimResponse {
     schema_version: String,
@@ -1332,6 +1439,8 @@ async fn main() -> anyhow::Result<()> {
             "/v1/opportunities/conversion-funnel",
             get(opportunity_conversion_funnel),
         )
+        .route("/v1/analytics/events", post(record_site_analytics_event))
+        .route("/v1/analytics/site", get(site_analytics))
         .route(
             "/public/opportunities/:opportunity_id/embed",
             get(opportunity_embed_page),
@@ -2379,6 +2488,314 @@ fn opportunity_conversion_response(
             stats.canonical_claimed_in_window,
             stats.canonical_settled_in_window,
         ),
+    }
+}
+
+fn site_analytics_origin_allowed(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    if matches!(
+        origin,
+        "https://bountyboard.global" | "https://www.bountyboard.global"
+    ) {
+        return true;
+    }
+    for prefix in ["http://localhost:", "http://127.0.0.1:"] {
+        if let Some(port) = origin.strip_prefix(prefix) {
+            return !port.is_empty() && port.chars().all(|character| character.is_ascii_digit());
+        }
+    }
+    false
+}
+
+fn normalize_site_analytics_token(value: Option<String>) -> Result<Option<String>, StatusCode> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty()
+        || value.len() > 64
+        || !value.chars().enumerate().all(|(index, character)| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || (index > 0 && matches!(character, '.' | '_' | '-'))
+        })
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(Some(value))
+}
+
+fn normalize_site_analytics_referrer(value: Option<String>) -> Result<Option<String>, StatusCode> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim().trim_end_matches('.').to_ascii_lowercase();
+    if value.is_empty()
+        || value.len() > 253
+        || !value.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-')
+        })
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(Some(value))
+}
+
+fn validated_site_analytics_event(
+    request: SiteAnalyticsEventRequest,
+    now: DateTime<Utc>,
+) -> Result<NewSiteAnalyticsEvent, StatusCode> {
+    if !matches!(
+        request.event_name.as_str(),
+        "page_view"
+            | "market_view"
+            | "funded_bounty_click"
+            | "unfunded_post_started"
+            | "unfunded_post_completed"
+            | "funding_started"
+            | "claim_started"
+            | "claim_confirmed"
+            | "canonical_post_started"
+            | "canonical_post_confirmed"
+    ) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if request.page_path.is_empty()
+        || request.page_path.len() > 160
+        || !request.page_path.starts_with('/')
+        || request.page_path.contains(['?', '#'])
+        || request.page_path.chars().any(char::is_control)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if request.occurred_at < now - ChronoDuration::days(7)
+        || request.occurred_at > now + ChronoDuration::minutes(5)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let opportunity_id = request
+        .opportunity_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if opportunity_id.as_ref().is_some_and(|value| {
+        value.len() > 200
+            || !value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+            })
+    }) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let bounty_contract = request
+        .bounty_contract
+        .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
+        .transpose()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(NewSiteAnalyticsEvent {
+        event_id: request.event_id,
+        visitor_id: request.visitor_id,
+        session_id: request.session_id,
+        event_name: request.event_name,
+        page_path: request.page_path,
+        source: normalize_site_analytics_token(request.source)?,
+        campaign: normalize_site_analytics_token(request.campaign)?,
+        referrer_host: normalize_site_analytics_referrer(request.referrer_host)?,
+        opportunity_id,
+        bounty_contract,
+        occurred_at: request.occurred_at,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/analytics/events",
+    request_body = SiteAnalyticsEventRequest,
+    responses(
+        (status = 200, body = SiteAnalyticsReceipt),
+        (status = 400, description = "Invalid privacy-minimized event"),
+        (status = 403, description = "Origin is not the first-party site"),
+        (status = 503, description = "Durable analytics store unavailable")
+    )
+)]
+async fn record_site_analytics_event(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<SiteAnalyticsEventRequest>,
+) -> Result<Json<SiteAnalyticsReceipt>, StatusCode> {
+    if !site_analytics_origin_allowed(&headers) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let event = validated_site_analytics_event(request, Utc::now())?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let inserted = store
+        .record_site_analytics_event(&event)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(SiteAnalyticsReceipt {
+        schema_version: "agent-bounties/site-analytics-receipt-v1".to_string(),
+        accepted: true,
+        duplicate: !inserted,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/analytics/site",
+    params(("window_hours" = Option<u32>, Query, description = "Lookback from 1 to 8760 hours; defaults to 720")),
+    responses(
+        (status = 200, body = SiteAnalyticsResponse),
+        (status = 400, description = "Invalid window"),
+        (status = 503, description = "Durable analytics store unavailable")
+    )
+)]
+async fn site_analytics(
+    State(state): State<SharedState>,
+    Query(query): Query<SiteAnalyticsQuery>,
+) -> Result<Json<SiteAnalyticsResponse>, StatusCode> {
+    let window_hours = query.window_hours.unwrap_or(720);
+    if !(1..=8_760).contains(&window_hours) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let generated_at = Utc::now();
+    let window_started_at = generated_at - ChronoDuration::hours(i64::from(window_hours));
+    let stats = store
+        .site_analytics_stats(window_started_at)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(site_analytics_response(
+        stats,
+        window_hours,
+        window_started_at,
+        generated_at,
+    )))
+}
+
+fn site_analytics_response(
+    stats: SiteAnalyticsStats,
+    window_hours: u32,
+    window_started_at: DateTime<Utc>,
+    generated_at: DateTime<Utc>,
+) -> SiteAnalyticsResponse {
+    let session_count = |event_name: &str| {
+        stats
+            .event_counts
+            .iter()
+            .find(|count| count.event_name == event_name)
+            .map(|count| count.sessions)
+            .unwrap_or(0)
+    };
+    let rate = |metric: &str, numerator: &str, denominator: &str, cohort: &str| {
+        let numerator_sessions = session_count(numerator);
+        let denominator_sessions = session_count(denominator);
+        SiteAnalyticsRateResponse {
+            metric: metric.to_string(),
+            numerator_sessions,
+            denominator_sessions,
+            value: (denominator_sessions > 0)
+                .then(|| numerator_sessions as f64 / denominator_sessions as f64),
+            cohort: cohort.to_string(),
+        }
+    };
+    let rates = vec![
+        rate(
+            "market_to_funded_bounty_click",
+            "funded_bounty_click",
+            "market_view",
+            "sessions that loaded live market inventory",
+        ),
+        rate(
+            "canonical_post_completion",
+            "canonical_post_confirmed",
+            "canonical_post_started",
+            "sessions that began the wallet-backed canonical post flow",
+        ),
+        rate(
+            "market_to_funding_start",
+            "funding_started",
+            "market_view",
+            "sessions that loaded live market inventory",
+        ),
+        rate(
+            "claim_confirmation",
+            "claim_confirmed",
+            "claim_started",
+            "sessions that began a claim flow",
+        ),
+    ];
+    SiteAnalyticsResponse {
+        schema_version: "agent-bounties/site-analytics-v1".to_string(),
+        window_hours,
+        window_started_at: window_started_at.to_rfc3339(),
+        generated_at: generated_at.to_rfc3339(),
+        overview: SiteAnalyticsOverviewResponse {
+            unique_visitors: stats.overview.unique_visitors,
+            returning_visitors: stats.overview.returning_visitors,
+            sessions: stats.overview.sessions,
+            page_views: stats.overview.page_views,
+            first_event_at: stats.overview.first_event_at.map(|value| value.to_rfc3339()),
+            last_event_at: stats.overview.last_event_at.map(|value| value.to_rfc3339()),
+        },
+        event_counts: stats
+            .event_counts
+            .into_iter()
+            .map(|count| SiteAnalyticsEventCountResponse {
+                event_name: count.event_name,
+                events: count.events,
+                sessions: count.sessions,
+                visitors: count.visitors,
+            })
+            .collect(),
+        daily: stats
+            .daily
+            .into_iter()
+            .map(|day| SiteAnalyticsDailyResponse {
+                day: day.day,
+                visitors: day.visitors,
+                sessions: day.sessions,
+                page_views: day.page_views,
+                market_views: day.market_views,
+                funded_bounty_clicks: day.funded_bounty_clicks,
+                canonical_posts_confirmed: day.canonical_posts_confirmed,
+                funding_starts: day.funding_starts,
+                claims_confirmed: day.claims_confirmed,
+            })
+            .collect(),
+        channels: stats
+            .channels
+            .into_iter()
+            .map(|channel| SiteAnalyticsChannelResponse {
+                source: channel.source,
+                campaign: channel.campaign,
+                visitors: channel.visitors,
+                sessions: channel.sessions,
+                page_views: channel.page_views,
+                funded_bounty_clicks: channel.funded_bounty_clicks,
+                canonical_posts_confirmed: channel.canonical_posts_confirmed,
+                funding_starts: channel.funding_starts,
+                claims_confirmed: channel.claims_confirmed,
+            })
+            .collect(),
+        rates,
+        definitions: vec![
+            "A visitor is one random browser-local UUID with a 90-day lifetime, not a person or wallet.".to_string(),
+            "A returning visitor is the same browser-local UUID observed on at least two UTC dates in the selected window.".to_string(),
+            "A session is one random sessionStorage UUID and ends with that browser tab session.".to_string(),
+            "Channel attribution uses the visitor's earliest recorded privacy-safe source and campaign; only the referrer hostname is retained.".to_string(),
+        ],
+        evidence_boundary: "Collection begins only after this feature is deployed and has no historical backfill. Cleared storage, private browsing, multiple devices, disabled analytics, Global Privacy Control, and Do Not Track affect coverage. No IP address, user agent, full referrer URL, wallet, or arbitrary metadata is stored. Client conversion events describe observed interface actions; canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
     }
 }
 
@@ -10733,6 +11150,70 @@ mod tests {
     }
 
     #[test]
+    fn site_analytics_accepts_only_first_party_origins_and_minimized_fields() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://bountyboard.global"),
+        );
+        assert!(site_analytics_origin_allowed(&headers));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://bountyboard.global.evil.example"),
+        );
+        assert!(!site_analytics_origin_allowed(&headers));
+
+        let now = Utc.with_ymd_and_hms(2026, 7, 19, 18, 0, 0).unwrap();
+        let event = validated_site_analytics_event(
+            SiteAnalyticsEventRequest {
+                event_id: Uuid::new_v4(),
+                visitor_id: Uuid::new_v4(),
+                session_id: Uuid::new_v4(),
+                event_name: "funded_bounty_click".to_string(),
+                page_path: "/earn.html".to_string(),
+                source: Some("GitHub".to_string()),
+                campaign: Some("launch-2026".to_string()),
+                referrer_host: Some("GitHub.com".to_string()),
+                opportunity_id: Some("canonical_base:base-mainnet:0xabc".to_string()),
+                bounty_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+                occurred_at: now,
+            },
+            now,
+        )
+        .unwrap();
+        assert_eq!(event.source.as_deref(), Some("github"));
+        assert_eq!(event.referrer_host.as_deref(), Some("github.com"));
+        assert_eq!(event.page_path, "/earn.html");
+    }
+
+    #[test]
+    fn site_analytics_rejects_query_strings_unknown_events_and_stale_timestamps() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 19, 18, 0, 0).unwrap();
+        let request = |event_name: &str, page_path: &str, occurred_at| SiteAnalyticsEventRequest {
+            event_id: Uuid::new_v4(),
+            visitor_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            event_name: event_name.to_string(),
+            page_path: page_path.to_string(),
+            source: None,
+            campaign: None,
+            referrer_host: None,
+            opportunity_id: None,
+            bounty_contract: None,
+            occurred_at,
+        };
+        assert!(
+            validated_site_analytics_event(request("page_view", "/?secret=1", now), now).is_err()
+        );
+        assert!(validated_site_analytics_event(request("arbitrary", "/", now), now).is_err());
+        assert!(validated_site_analytics_event(
+            request("page_view", "/", now - ChronoDuration::days(8)),
+            now,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn legal_policy_is_hash_bound_and_acceptance_is_action_wallet_and_time_bound() {
         let policy = build_legal_policy("https://bountyboard.global/");
         assert_eq!(policy.terms_version, LEGAL_TERMS_VERSION);
@@ -12894,6 +13375,8 @@ mod tests {
         assert!(paths.contains_key("/v1/opportunities/feed.atom"));
         assert!(paths.contains_key("/v1/opportunities/feed.json"));
         assert!(paths.contains_key("/v1/opportunities/conversion-funnel"));
+        assert!(paths.contains_key("/v1/analytics/events"));
+        assert!(paths.contains_key("/v1/analytics/site"));
         assert!(paths.contains_key("/v1/discovery/subscriptions"));
         assert!(paths.contains_key("/v1/discovery/subscriptions/{id}"));
         assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed"));

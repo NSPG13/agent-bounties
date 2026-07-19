@@ -31,6 +31,7 @@ REQUIRED_FILES = [
     "robots.txt",
     "sitemap.xml",
     "home.js",
+    "analytics.js",
     "autonomous.js",
     "legal-consent.js",
     "protocol.json",
@@ -156,9 +157,13 @@ def main() -> int:
                 fail(f"{html_file}: missing canonical URL {expected_canonical}")
             if re.search(r'<meta\s+name="robots"[^>]*noindex', text, re.IGNORECASE):
                 fail(f"{html_file}: public page must remain indexable")
+            if text.count('<script src="analytics.js"></script>') != 1:
+                fail(f"{html_file}: public page must load the first-party analytics collector exactly once")
         elif html_file.name in INTERNAL_NOINDEX_PAGES:
             if not re.search(r'<meta\s+name="robots"[^>]*noindex', text, re.IGNORECASE):
                 fail(f"{html_file}: internal page must be noindex")
+            if '<script src="analytics.js"></script>' in text:
+                fail(f"{html_file}: internal page must not load the public analytics collector")
         for link in parser.links:
             check_internal_link(site_dir, html_file, link, parser.ids)
 
@@ -198,6 +203,7 @@ def main() -> int:
         fail("index.html JSON-LD must use the canonical website URL")
     recovery_page = (site_dir / "recovery.html").read_text(encoding="utf-8")
     javascript = (site_dir / "autonomous.js").read_text(encoding="utf-8")
+    analytics_javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text(encoding="utf-8"))
@@ -214,6 +220,7 @@ def main() -> int:
     bounded_page = (site_dir / "agent-budget.html").read_text(encoding="utf-8")
     bounded_javascript = (site_dir / "agent-budget.js").read_text(encoding="utf-8")
     legal_javascript = (site_dir / "legal-consent.js").read_text(encoding="utf-8")
+    privacy_page = (site_dir / "privacy.html").read_text(encoding="utf-8")
     pages_workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     check_protocol(protocol, deployment)
 
@@ -236,6 +243,36 @@ def main() -> int:
     for name, (page, action) in wallet_action_pages.items():
         require_phrases(name, page, ["legal-consent.js", "data-legal-consent", action, "terms.html", "privacy.html"])
 
+    require_phrases(
+        "analytics.js",
+        analytics_javascript,
+        [
+            "https://api.bountyboard.global/v1/analytics/events",
+            "navigator.globalPrivacyControl",
+            "navigator.doNotTrack",
+            "credentials: \"omit\"",
+            "referrerPolicy: \"no-referrer\"",
+            "page_path: window.location.pathname",
+            "funded_bounty_click",
+            "canonical_post_confirmed",
+            "claim_confirmed",
+            "data-analytics-event",
+        ],
+    )
+    for forbidden in ["document.cookie", "location.search.slice", "wallet_address", "user_agent", "ip_address"]:
+        if forbidden in analytics_javascript:
+            fail(f"analytics.js must not collect or store {forbidden}")
+    require_phrases(
+        "privacy.html analytics disclosure",
+        privacy_page,
+        [
+            "First-party site analytics",
+            "Global Privacy Control",
+            "Do Not Track",
+            "does not store an IP address, user agent, full referrer URL, URL query string, wallet address",
+            "data-analytics-opt-out",
+        ],
+    )
     require_phrases(
         "legal-consent.js",
         legal_javascript,

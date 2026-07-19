@@ -55,6 +55,9 @@ try {
             cargo test -p db tests::opportunity_lifecycle_query_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db tests::site_analytics_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {

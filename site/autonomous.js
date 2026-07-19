@@ -1,6 +1,12 @@
 (() => {
   "use strict";
 
+  function track(eventName, details) {
+    if (window.bountyBoardAnalytics) {
+      window.bountyBoardAnalytics.track(eventName, details);
+    }
+  }
+
   const state = {
     protocol: null,
     account: null,
@@ -349,6 +355,7 @@
         "Canonical BountyClaimed is confirmed. Start the task.",
         `Event: ${handoff.canonical_event_id}`,
       ], "success");
+      track("claim_confirmed", { bounty_contract: item.bounty_contract });
       return;
     }
     const exactWalletRequest = validateHostedClaimHandoff(
@@ -379,6 +386,7 @@
           `Event: ${handoff.canonical_event_id}`,
           handoff.claim_transaction_hash ? `Transaction: ${protocol.explorer_url}/tx/${handoff.claim_transaction_hash}` : "",
         ].filter(Boolean), "success");
+        track("claim_confirmed", { bounty_contract: item.bounty_contract });
         return;
       }
       if (!["relaying", "authorization_ready", "exclusive", "sponsoring"].includes(handoff.candidate.status)) {
@@ -944,6 +952,7 @@
     event.preventDefault();
     const form = event.currentTarget;
     const result = byId("autonomous-post-output");
+    track("canonical_post_started");
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
@@ -1019,6 +1028,7 @@
         `Contract: ${plan.predicted_bounty_contract}`,
         "Default next step: Post your own bounty or share this one with solvers and funders.",
       ], "success");
+      track("canonical_post_confirmed", { bounty_contract: plan.predicted_bounty_contract });
       markChatgptReturn(true);
     } catch (error) {
       output(result, error.message || String(error), "error");
@@ -1084,6 +1094,7 @@
     event.preventDefault();
     const form = event.currentTarget;
     const result = byId("autonomous-fund-output");
+    track("funding_started", { bounty_contract: form.elements.bountyContract.value });
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
@@ -1217,6 +1228,8 @@
     claim.className = "button primary";
     claim.type = "button";
     claim.textContent = targeted ? "Sign once to claim" : "Claim bounty";
+    claim.dataset.analyticsEvent = "claim_started";
+    claim.dataset.analyticsBountyContract = item.bounty_contract;
     claim.disabled =
       state.protocol.status !== "active" || item.status !== "claimable" || !item.terms || !item.terms_valid;
     claim.addEventListener("click", async () => {

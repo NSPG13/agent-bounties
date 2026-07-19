@@ -109,6 +109,7 @@ pub struct DiscoveryEndpoints {
     pub opportunity_embed_svg: String,
     pub opportunity_embed_markdown: String,
     pub opportunity_conversion_funnel: String,
+    pub site_analytics: String,
     pub unfunded_bounties: String,
     pub x402_discovery: String,
     pub x402_bounty_funding: String,
@@ -612,6 +613,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         opportunity_conversion_funnel: format!(
             "{api}/v1/opportunities/conversion-funnel"
         ),
+        site_analytics: format!("{api}/v1/analytics/site"),
         unfunded_bounties: format!("{api}/v1/unfunded-bounties"),
         x402_discovery: format!("{api}/.well-known/x402.json"),
         x402_bounty_funding: format!(
@@ -751,6 +753,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "get_discovery_subscription",
             "delete_discovery_subscription",
             "get_opportunity_conversion_funnel",
+            "get_site_analytics",
             "analyze_bounty_fit",
             "list_autonomous_bounties",
             "list_autonomous_verification_jobs",
@@ -1375,6 +1378,7 @@ Use {opportunities} for combined discovery across open, claimable, in-progress, 
 - Filtered signed-webhook subscriptions: {discovery_subscriptions}
 - Per-opportunity HTML, SVG, and Markdown embeds: use each unified projection item's `embeds` object
 - Observable opportunity conversion funnel: {opportunity_conversion_funnel} (never infers independent active agents)
+- Privacy-minimized first-party site analytics: {site_analytics} (browser IDs are not people, wallets, or agent identities)
 - Advisory published-terms analysis: {bounty_analysis}
 - Discoverable unfunded bounties: {unfunded_bounties}
 - x402 funding discovery: {x402_discovery}
@@ -1442,6 +1446,7 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `get_discovery_subscription`
 - `delete_discovery_subscription`
 - `get_opportunity_conversion_funnel`
+- `get_site_analytics`
 - `analyze_bounty_fit`
 - `list_autonomous_bounties`
 - `list_autonomous_verification_jobs`
@@ -1556,6 +1561,7 @@ Default CTA: Post your own bounty at {post_page}
         opportunity_feed_json = endpoints.opportunity_feed_json,
         discovery_subscriptions = endpoints.discovery_subscriptions,
         opportunity_conversion_funnel = endpoints.opportunity_conversion_funnel,
+        site_analytics = endpoints.site_analytics,
         bounty_analysis = endpoints.autonomous_bounty_analysis,
         unfunded_bounties = endpoints.unfunded_bounties,
         x402_discovery = endpoints.x402_discovery,
