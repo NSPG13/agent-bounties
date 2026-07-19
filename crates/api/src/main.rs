@@ -82,11 +82,13 @@ use eval_harness::{
     BountyBench, EvalSuiteResult, JudgeBench, LoopSuiteResult,
 };
 use github_app::{
-    bounty_check_output, claim_comment_plan, funding_comment_plan, issue_api_sync_plan,
-    parse_issue_form_bounty, proof_comment_plan, GitHubCheckRunOutput, GitHubClaimCommentInput,
-    GitHubClaimCommentPlan, GitHubFundingCommentInput, GitHubFundingCommentPlan,
-    GitHubIssueApiSyncInput, GitHubIssueApiSyncPlan, GitHubIssueFormBounty, GitHubProofComment,
-    GitHubProofCommentPlan,
+    bounty_check_output, claim_comment_plan, create_comment_plan, funding_comment_plan,
+    issue_api_sync_plan, parse_issue_form_bounty, proof_comment_plan, social_mention_draft_plan,
+    GitHubCanonicalConversionEvidence, GitHubCheckRunOutput, GitHubClaimCommentInput,
+    GitHubClaimCommentPlan, GitHubCreateCommentInput, GitHubCreateCommentPlan,
+    GitHubFundingCommentInput, GitHubFundingCommentPlan, GitHubIssueApiSyncInput,
+    GitHubIssueApiSyncPlan, GitHubIssueFormBounty, GitHubProofComment, GitHubProofCommentPlan,
+    SocialMentionDraftInput, SocialMentionDraftPlan, GITHUB_CREATE_DISCOVERY_SOURCE,
 };
 use ledger::Ledger;
 use opportunities::{
@@ -235,8 +237,10 @@ use worker::{
         plan_github_issue_bounty,
         plan_github_issue_api_sync,
         sync_github_issue_api_bounty,
+        plan_github_create_comment,
         plan_github_funding_comment,
         plan_github_claim_comment,
+        plan_social_mention_draft,
         plan_github_proof_comment,
         plan_github_proof_comment_from_proof,
         post_bounty,
@@ -262,8 +266,10 @@ use worker::{
         PlanStripeConnectTransferRequest,
         PlanGitHubIssueBountyRequest,
         PlanGitHubIssueApiSyncRequest,
+        PlanGitHubCreateCommentRequest,
         PlanGitHubFundingCommentRequest,
         PlanGitHubClaimCommentRequest,
+        PlanSocialMentionDraftRequest,
         PlanGitHubProofCommentRequest,
         PlanGitHubProofCommentFromProofRequest,
         BroadcastBaseSignedTransactionRequest,
@@ -725,6 +731,28 @@ struct PlanGitHubFundingCommentRequest {
     funding_api_base_url: Option<String>,
     #[serde(default)]
     existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct PlanGitHubCreateCommentRequest {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
+    #[serde(default)]
+    existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct PlanSocialMentionDraftRequest {
+    source_network: String,
+    mention_url: String,
+    mention_id: String,
+    mention_text: String,
+    author_handle: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1588,12 +1616,20 @@ async fn main() -> anyhow::Result<()> {
             post(sync_github_issue_api_bounty),
         )
         .route(
+            "/v1/github/create-comment-plan",
+            post(plan_github_create_comment),
+        )
+        .route(
             "/v1/github/funding-comment-plan",
             post(plan_github_funding_comment),
         )
         .route(
             "/v1/github/claim-comment-plan",
             post(plan_github_claim_comment),
+        )
+        .route(
+            "/v1/social/mention-draft-plan",
+            post(plan_social_mention_draft),
         )
         .route(
             "/v1/github/proof-comment-plan",
@@ -9566,6 +9602,105 @@ async fn sync_github_issue_api_bounty(
 
 #[utoipa::path(
     post,
+    path = "/v1/github/create-comment-plan",
+    request_body = PlanGitHubCreateCommentRequest,
+    responses((status = 200, description = "GitHub issue comment to reviewable canonical bounty handoff"))
+)]
+async fn plan_github_create_comment(
+    Json(request): Json<PlanGitHubCreateCommentRequest>,
+) -> Json<GitHubCreateCommentPlan> {
+    Json(create_comment_plan(GitHubCreateCommentInput {
+        repository: request.repository,
+        issue_url: request.issue_url,
+        title: request.title,
+        body: request.body,
+        comment_body: request.comment_body,
+        contributor_login: request.contributor_login,
+        comment_id: request.comment_id,
+        existing_idempotency_keys: request.existing_idempotency_keys,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/social/mention-draft-plan",
+    request_body = PlanSocialMentionDraftRequest,
+    responses((status = 200, description = "Rollout-gated social mention review draft plan"))
+)]
+async fn plan_social_mention_draft(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanSocialMentionDraftRequest>,
+) -> Json<SocialMentionDraftPlan> {
+    let operator_enabled = env_flag("AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED");
+    let github_conversion = if operator_enabled {
+        match load_autonomous_bounty_feed(&state, "base-mainnet", false).await {
+            Ok(feed) => github_create_conversion_evidence(&feed),
+            Err(_) => unavailable_github_conversion_evidence(),
+        }
+    } else {
+        unavailable_github_conversion_evidence()
+    };
+    Json(social_mention_draft_plan(SocialMentionDraftInput {
+        source_network: request.source_network,
+        mention_url: request.mention_url,
+        mention_id: request.mention_id,
+        mention_text: request.mention_text,
+        author_handle: request.author_handle,
+        operator_enabled,
+        github_conversion,
+    }))
+}
+
+fn unavailable_github_conversion_evidence() -> GitHubCanonicalConversionEvidence {
+    GitHubCanonicalConversionEvidence {
+        evidence_available: false,
+        github_originated_canonical_funded: 0,
+        github_originated_canonical_settled: 0,
+        evidence_source: "indexed confirmed Base events joined to public GitHub-attributed terms"
+            .to_string(),
+    }
+}
+
+fn github_create_conversion_evidence(
+    feed: &[AutonomousBountyFeedItem],
+) -> GitHubCanonicalConversionEvidence {
+    let github_items = feed.iter().filter(|item| {
+        item.terms.as_ref().is_some_and(|terms| {
+            terms.document.discovery_source.as_deref() == Some(GITHUB_CREATE_DISCOVERY_SOURCE)
+                && terms.document.source_url.as_deref().is_some_and(|url| {
+                    url.starts_with("https://github.com/") && url.contains("/issues/")
+                })
+        })
+    });
+    let mut funded = 0_u32;
+    let mut settled = 0_u32;
+    for item in github_items {
+        if item
+            .events
+            .iter()
+            .any(|event| event.kind == AutonomousBountyEventKind::BountyBecameClaimable)
+        {
+            funded = funded.saturating_add(1);
+        }
+        if item
+            .events
+            .iter()
+            .any(|event| event.kind == AutonomousBountyEventKind::BountySettled)
+        {
+            settled = settled.saturating_add(1);
+        }
+    }
+    GitHubCanonicalConversionEvidence {
+        evidence_available: true,
+        github_originated_canonical_funded: funded,
+        github_originated_canonical_settled: settled,
+        evidence_source: "indexed confirmed Base events joined to public GitHub-attributed terms"
+            .to_string(),
+    }
+}
+
+#[utoipa::path(
+    post,
     path = "/v1/github/funding-comment-plan",
     request_body = PlanGitHubFundingCommentRequest,
     responses((status = 200, description = "GitHub public funding-comment signal plan"))
@@ -12151,6 +12286,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn github_create_comment_plan_returns_review_only_wallet_handoff() {
+        let plan = plan_github_create_comment(Json(PlanGitHubCreateCommentRequest {
+            repository: "agent-bounties/agent-bounties".to_string(),
+            issue_url: "https://github.com/agent-bounties/agent-bounties/issues/501".to_string(),
+            title: "Fix canonical receipt reconciliation".to_string(),
+            body: "The receipt worker drops a confirmed log after restart.".to_string(),
+            comment_body: "/agent-bounty create 25 USDC".to_string(),
+            contributor_login: Some("maintainer".to_string()),
+            comment_id: Some("9001".to_string()),
+            existing_idempotency_keys: vec![],
+        }))
+        .await
+        .0;
+
+        assert!(plan.ready);
+        let signal = plan.signal.expect("create signal");
+        assert_eq!(signal.draft.state, "review_required_not_published");
+        assert!(signal.draft.acceptance_criteria.is_empty());
+        assert!(signal.draft.draft_handoff_url.contains("from=github-issue"));
+        assert!(!signal.draft.bounty_created);
+        assert!(!signal.draft.canonical_funding_confirmed);
+        assert_eq!(plan.check.conclusion, GitHubCheckConclusion::Success);
+    }
+
+    #[test]
+    fn social_rollout_counts_only_canonical_events_with_exact_github_attribution() {
+        let now = Utc::now();
+        let mut document: AutonomousBountyTermsDocument =
+            serde_json::from_str(include_str!("../../../bounties/autonomous-v1/244.json")).unwrap();
+        document.source_url =
+            Some("https://github.com/agent-bounties/agent-bounties/issues/501".to_string());
+        document.discovery_source = Some(GITHUB_CREATE_DISCOVERY_SOURCE.to_string());
+        let terms = AutonomousBountyTermsRecord {
+            terms_hash: format!("0x{}", "44".repeat(32)),
+            policy_hash: format!("0x{}", "45".repeat(32)),
+            acceptance_criteria_hash: format!("0x{}", "46".repeat(32)),
+            benchmark_hash: format!("0x{}", "47".repeat(32)),
+            evidence_schema_hash: format!("0x{}", "48".repeat(32)),
+            creator_wallet: format!("0x{}", "33".repeat(20)),
+            document,
+            created_at: now,
+        };
+        let event = |kind, log_index| AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: format!("base-mainnet:501:{log_index}"),
+            tx_hash: format!("0x{}", "55".repeat(32)),
+            block_number: 501,
+            log_index,
+            contract_address: format!("0x{}", "22".repeat(20)),
+            bounty_id: format!("0x{}", "11".repeat(32)),
+            kind,
+            data: serde_json::json!({}),
+            occurred_at: now,
+        };
+        let item = AutonomousBountyFeedItem {
+            bounty_id: format!("0x{}", "11".repeat(32)),
+            bounty_contract: format!("0x{}", "22".repeat(20)),
+            creator: format!("0x{}", "33".repeat(20)),
+            status: "settled".to_string(),
+            solver_reward: "2000000".to_string(),
+            verifier_reward: "10000".to_string(),
+            claim_bond: "10000".to_string(),
+            timeout_bond_pool: "0".to_string(),
+            target_amount: "2010000".to_string(),
+            funded_amount: "2010000".to_string(),
+            terms_hash: terms.terms_hash.clone(),
+            terms: Some(terms),
+            terms_valid: true,
+            verification_mode: "signed_quorum".to_string(),
+            verifier_module: None,
+            verification_ready: true,
+            verification_readiness_reason: "ready".to_string(),
+            validation_errors: vec![],
+            events: vec![
+                event(AutonomousBountyEventKind::BountyBecameClaimable, 1),
+                event(AutonomousBountyEventKind::BountySettled, 2),
+            ],
+        };
+
+        let mut ignored = item.clone();
+        ignored.terms.as_mut().unwrap().document.discovery_source =
+            Some("manual GitHub link".to_string());
+        let evidence = github_create_conversion_evidence(&[item, ignored]);
+        assert!(evidence.evidence_available);
+        assert_eq!(evidence.github_originated_canonical_funded, 1);
+        assert_eq!(evidence.github_originated_canonical_settled, 1);
+    }
+
+    #[tokio::test]
     async fn github_funding_comment_plan_flags_operator_reconciliation() {
         let plan = plan_github_funding_comment(Json(PlanGitHubFundingCommentRequest {
             repository: "agent-bounties/agent-bounties".to_string(),
@@ -12747,8 +12971,10 @@ mod tests {
         assert!(paths.contains_key("/v1/github/issue-bounty-plan"));
         assert!(paths.contains_key("/v1/github/issue-api-sync-plan"));
         assert!(paths.contains_key("/v1/github/issue-api-sync"));
+        assert!(paths.contains_key("/v1/github/create-comment-plan"));
         assert!(paths.contains_key("/v1/github/funding-comment-plan"));
         assert!(paths.contains_key("/v1/github/claim-comment-plan"));
+        assert!(paths.contains_key("/v1/social/mention-draft-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan-from-proof"));
         assert!(paths.contains_key("/v1/evals/loops"));

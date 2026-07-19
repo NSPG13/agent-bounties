@@ -1372,11 +1372,13 @@
     const form = byId("autonomous-post-form");
     if (!form) return;
     const params = new URLSearchParams(location.search);
-    if (params.get("from") !== "chatgpt-app") {
+    const handoffSource = params.get("from");
+    if (!["chatgpt-app", "github-issue", "social-mention"].includes(handoffSource)) {
       markChatgptReturn(false);
       return;
     }
     const assignments = [
+      ["draftObjective", "draftObjective"],
       ["title", "title"],
       ["goal", "goal"],
       ["sourceUrl", "sourceUrl"],
@@ -1391,8 +1393,13 @@
     const criteria = params.getAll("criterion").map((value) => value.trim()).filter(Boolean);
     if (criteria.length) form.elements.acceptance.value = criteria.join("\n");
     form.elements.crowdfund.checked = params.get("crowdfund") === "true";
+    const sourceLabel = handoffSource === "github-issue"
+      ? "GitHub issue"
+      : handoffSource === "social-mention"
+        ? "social mention"
+        : "ChatGPT";
     output(byId("autonomous-post-output"), [
-      "Draft imported from ChatGPT. Review every public field before continuing.",
+      `Draft imported from ${sourceLabel}. Review every public field before continuing.`,
       "No bounty id or contract exists yet.",
       "Connect the creator wallet, then approve only the exact Base operation shown by that wallet.",
     ], "pending");

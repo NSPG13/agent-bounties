@@ -202,6 +202,19 @@ cargo run -p cli -- github-funding-comment-plan `
   --comment-id 12345
 ```
 
+Plan a review-only draft from any existing GitHub issue:
+
+```powershell
+cargo run -p cli -- github-create-comment-plan `
+  --repository agent-bounties/agent-bounties `
+  --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 `
+  --title "Fix a canonical reconciliation bug" `
+  --body-file issue.md `
+  --comment-body "/agent-bounty create 25 USDC" `
+  --contributor-login maintainer `
+  --comment-id 12344
+```
+
 Plan a claim comment locally:
 
 ```powershell
@@ -221,11 +234,13 @@ The same deterministic planner is exposed over HTTP and MCP:
 - `POST /v1/github/issue-bounty-plan`
 - `POST /v1/github/issue-api-sync-plan`
 - `POST /v1/github/issue-api-sync`
+- `POST /v1/github/create-comment-plan`
 - `POST /v1/github/funding-comment-plan`
 - `POST /v1/github/claim-comment-plan`
 - `POST /v1/github/proof-comment-plan`
 - `POST /v1/github/proof-comment-plan-from-proof`
 - MCP `plan_github_issue_bounty`
+- MCP `plan_github_create_comment`
 - MCP `plan_github_funding_comment`
 - MCP `plan_github_claim_comment`
 - MCP `plan_github_proof_comment`
@@ -243,7 +258,7 @@ The proof-record planner accepts a public `proof_id` and derives the proof URL,
 bounty id, and verifier summary from platform state; private proofs are not
 exposed.
 
-The repository includes two dogfooding bridges before a hosted GitHub App worker
+The repository includes these dogfooding bridges before a hosted GitHub App worker
 exists:
 
 - `.github/workflows/paid-bounty-issues.yml` validates opened, edited, reopened,
@@ -252,6 +267,13 @@ exists:
   `github-plan` command against the rendered issue body, writes the planner
   result to the workflow summary, and creates or updates a sticky issue comment
   marked with `<!-- agent-bounties-plan -->`.
+- `.github/workflows/agent-bounty-create-comments.yml` handles
+  `/agent-bounty create <amount> USDC` on any issue (not pull requests). It
+  creates or updates one review-required draft reply per source comment. The
+  handoff reuses the canonical post page, leaves acceptance criteria for human
+  review, and never treats the command or reply as funding evidence. See
+  [`docs/github-issue-create-comments.md`](github-issue-create-comments.md) for
+  the social rollout gate that follows measured GitHub conversion.
 - `.github/workflows/paid-bounty-funding-comments.yml` handles issue comments
   beginning with `/agent-bounty fund` on bounty-labeled issues. It runs
   `scripts/github-funding-comment.sh`, executes the deterministic
@@ -297,6 +319,7 @@ Dry-run the proof publisher without calling GitHub or the hosted API:
 
 ```powershell
 python scripts/github_funding_comment.py --self-test
+python scripts/github_create_comment.py --self-test
 python scripts/github_proof_comment.py --self-test
 ```
 

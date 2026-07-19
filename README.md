@@ -74,6 +74,11 @@ Do not describe an unfunded prize as payable.
 
 ## Post
 
+On any existing GitHub issue, comment `/agent-bounty create <amount> USDC` to
+open an idempotent, review-required draft and the existing canonical wallet
+handoff. No acceptance criteria are inferred from issue prose. See the
+[GitHub issue create flow](docs/github-issue-create-comments.md).
+
 1. Run `draft_bounty_with_cloud_agent`.
 2. Make every acceptance criterion measurable.
 3. Run `publish_autonomous_bounty_terms`.

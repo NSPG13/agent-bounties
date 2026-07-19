@@ -24,9 +24,10 @@ use eval_harness::{
     BountyBench, JudgeBench,
 };
 use github_app::{
-    bounty_check_output, claim_comment_plan, funding_comment_plan, issue_api_sync_plan,
-    parse_issue_form_bounty, proof_comment_plan, GitHubClaimCommentInput,
-    GitHubFundingCommentInput, GitHubIssueApiSyncInput, GitHubProofComment,
+    bounty_check_output, claim_comment_plan, create_comment_plan, funding_comment_plan,
+    issue_api_sync_plan, parse_issue_form_bounty, proof_comment_plan, GitHubClaimCommentInput,
+    GitHubCreateCommentInput, GitHubFundingCommentInput, GitHubIssueApiSyncInput,
+    GitHubProofComment,
 };
 use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, StripePlanner, StripeRequestIntent,
@@ -64,6 +65,18 @@ struct GithubFundingCommentPlanCli {
     contributor_login: Option<String>,
     comment_id: Option<String>,
     funding_api_base_url: Option<String>,
+    existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug)]
+struct GithubCreateCommentPlanCli {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body_file: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
     existing_idempotency_keys: Vec<String>,
 }
 
@@ -275,6 +288,24 @@ enum Command {
         comment_id: Option<String>,
         #[arg(long)]
         funding_api_base_url: Option<String>,
+        #[arg(long = "existing-idempotency-key")]
+        existing_idempotency_keys: Vec<String>,
+    },
+    GithubCreateCommentPlan {
+        #[arg(long)]
+        repository: String,
+        #[arg(long)]
+        issue_url: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body_file: String,
+        #[arg(long)]
+        comment_body: String,
+        #[arg(long)]
+        contributor_login: Option<String>,
+        #[arg(long)]
+        comment_id: Option<String>,
         #[arg(long = "existing-idempotency-key")]
         existing_idempotency_keys: Vec<String>,
     },
@@ -586,6 +617,25 @@ async fn async_main() -> Result<()> {
             contributor_login,
             comment_id,
             funding_api_base_url,
+            existing_idempotency_keys,
+        }),
+        Command::GithubCreateCommentPlan {
+            repository,
+            issue_url,
+            title,
+            body_file,
+            comment_body,
+            contributor_login,
+            comment_id,
+            existing_idempotency_keys,
+        } => github_create_comment_plan(GithubCreateCommentPlanCli {
+            repository,
+            issue_url,
+            title,
+            body_file,
+            comment_body,
+            contributor_login,
+            comment_id,
             existing_idempotency_keys,
         }),
         Command::GithubClaimCommentPlan {
@@ -2230,6 +2280,22 @@ fn github_funding_comment_plan(args: GithubFundingCommentPlanCli) -> Result<()> 
         contributor_login: args.contributor_login,
         comment_id: args.comment_id,
         funding_api_base_url: args.funding_api_base_url,
+        existing_idempotency_keys: args.existing_idempotency_keys,
+    });
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
+fn github_create_comment_plan(args: GithubCreateCommentPlanCli) -> Result<()> {
+    let body = fs::read_to_string(args.body_file)?;
+    let plan = create_comment_plan(GitHubCreateCommentInput {
+        repository: args.repository,
+        issue_url: args.issue_url,
+        title: args.title,
+        body,
+        comment_body: args.comment_body,
+        contributor_login: args.contributor_login,
+        comment_id: args.comment_id,
         existing_idempotency_keys: args.existing_idempotency_keys,
     });
     println!("{}", serde_json::to_string_pretty(&plan)?);

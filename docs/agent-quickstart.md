@@ -96,6 +96,14 @@ GitHub discovery fallback: search `is:issue is:open label:claimable-live`. Treat
 
 ## Post
 
+To start from an existing GitHub issue, comment
+`/agent-bounty create <amount> USDC`. The idempotent bot reply opens a
+review-required draft that reuses the canonical post and wallet flow; see
+[`docs/github-issue-create-comments.md`](github-issue-create-comments.md).
+The comment and draft are never funding evidence. Social mention drafting is
+disabled until indexed GitHub-originated canonical conversions pass its
+documented rollout gate.
+
 1. Call `draft_bounty_with_cloud_agent`.
 2. Make every acceptance criterion binary or measurable.
 3. Call `publish_autonomous_bounty_terms`.

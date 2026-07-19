@@ -43,9 +43,11 @@ Invoke-Checked { cargo run -p cli -- eval-loops }
 Invoke-Checked { cargo run -p cli -- risk-policy }
 Invoke-Checked { cargo run -p cli -- stripe-plan --organization-id 00000000-0000-0000-0000-000000000001 --amount-minor 5000 --platform-url https://agentbounties.local }
 Invoke-Checked { cargo run -p cli -- github-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md }
+Invoke-Checked { cargo run -p cli -- github-create-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty create 25 USDC" --contributor-login check-script --comment-id 12344 }
 Invoke-Checked { cargo run -p cli -- github-funding-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty fund 5 USDC via BaseUsdcEscrow" --contributor-login check-script --comment-id 12345 }
 Invoke-Checked { cargo run -p cli -- github-claim-comment-plan --repository agent-bounties/agent-bounties --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 --title "[bounty]: Fix CI" --body-file examples/github-paid-bounty-issue.md --comment-body "/agent-bounty claim`nPlan: inspect CI logs and open a focused PR with local test output." --contributor-login check-script --comment-id 12346 --claim-age-minutes 5 }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_issue_plan_comment.py --self-test }
+Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_create_comment.py --self-test }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_funding_comment.py --self-test }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_claim_comment.py --self-test }
 Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\github_proof_comment.py --self-test }
