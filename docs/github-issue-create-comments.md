@@ -49,14 +49,15 @@ Social drafting remains disabled unless both conditions hold:
 1. an operator explicitly sets
    `AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED=true`; and
 2. the hosted API's indexed Base feed contains at least three distinct
-   GitHub-command-attributed bounties with confirmed
+   GitHub-issue-attributed bounties with confirmed
    `BountyBecameClaimable` and at least two with confirmed `BountySettled`.
 
 Counts come from canonical events joined to public terms whose `source_url` is
-a GitHub issue and whose `discovery_source` is exactly
-`GitHub /agent-bounty create`. Caller-supplied counts, social replies, likes,
-AI classifications, wallet prompts, signatures, and transaction hashes cannot
-open the gate.
+a GitHub issue. This recognizes qualifying GitHub-originated bounty history
+that predates the create-comment command while preserving its original
+`discovery_source`. Caller-supplied counts, social replies, likes, AI
+classifications, wallet prompts, signatures, and transaction hashes cannot open
+the gate.
 
 After the gate passes, a social mention containing the same exact
 `/agent-bounty create <amount> USDC` command can produce only a reviewable

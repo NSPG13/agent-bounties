@@ -45,6 +45,9 @@ PUBLIC_ENV_SERVICE_NAMES = {
     "agent-bounties-mcp",
 }
 CLOUD_AGENT_API_SERVICE_NAME = "agent-bounties-api"
+API_RUNTIME_ENVIRONMENT = {
+    "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true",
+}
 CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
     "CLOUD_AGENT_ENABLED": "true",
     "CLOUD_AGENT_PUBLIC_DRAFTS": "true",
@@ -1024,6 +1027,17 @@ def deploy(
                 }
             )
         if spec.name == CLOUD_AGENT_API_SERVICE_NAME:
+            for key, value in API_RUNTIME_ENVIRONMENT.items():
+                record = client.ensure_env_var(service, key, value)
+                public_environment_changed[spec.name] |= record["changed"]
+                reconciled_public_environment.append(
+                    {
+                        "service": spec.name,
+                        "key": key,
+                        "value": value,
+                        "changed": record["changed"],
+                    }
+                )
             for key, value in leaderboard_environment.items():
                 record = client.ensure_env_var(service, key, value)
                 public_environment_changed[spec.name] |= record["changed"]

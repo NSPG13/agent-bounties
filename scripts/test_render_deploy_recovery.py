@@ -360,6 +360,12 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             },
         )
 
+    def test_api_runtime_environment_enables_social_mention_drafts(self) -> None:
+        self.assertEqual(
+            recovery.API_RUNTIME_ENVIRONMENT,
+            {"AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true"},
+        )
+
     def test_leaderboard_environment_requires_exact_addresses(self) -> None:
         values = recovery.leaderboard_environment_values(
             "0x" + "AA" * 20,
