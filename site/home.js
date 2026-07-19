@@ -16,6 +16,12 @@
     && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let metricAnimationId = 0;
 
+  function track(eventName, details) {
+    if (window.bountyBoardAnalytics) {
+      window.bountyBoardAnalytics.track(eventName, details);
+    }
+  }
+
   function amountValue(value) {
     if (!value) return 0;
     const scale = 10 ** Number(value.decimals || 0);
@@ -139,6 +145,11 @@
       action.className = "button primary";
       action.href = href;
       action.textContent = actionLabel(item);
+      if (item.source_type === "canonical_base" && item.work_state === "claimable" && item.payment_committed) {
+        action.dataset.analyticsEvent = "funded_bounty_click";
+        action.dataset.analyticsOpportunityId = item.opportunity_id;
+        action.dataset.analyticsBountyContract = item.source_id;
+      }
       actions.append(action);
     }
 
@@ -430,9 +441,11 @@
         projectionResponse.json(),
         claimResponse.json(),
       ]);
+      const firstLiveMarketView = !marketState.rendered;
       renderMarketSnapshot(protocol, projection, claim);
       marketState.lastReceivedAt = Date.now();
       marketState.rendered = true;
+      if (firstLiveMarketView) track("market_view");
       setMarketStatus(projection.degraded ? "delayed" : "live");
     } catch (error) {
       setMarketStatus("delayed");

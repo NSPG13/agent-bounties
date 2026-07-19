@@ -564,6 +564,11 @@ struct OpportunityConversionFunnelArgs {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct SiteAnalyticsArgs {
+    window_hours: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AutonomousVerificationJobsArgs {
     network: Option<String>,
     verifier: Option<String>,
@@ -886,6 +891,7 @@ async fn main() -> anyhow::Result<()> {
             "/tools/get_opportunity_conversion_funnel",
             post(get_opportunity_conversion_funnel),
         )
+        .route("/tools/get_site_analytics", post(get_site_analytics))
         .route("/tools/analyze_bounty_fit", post(analyze_bounty_fit))
         .route(
             "/tools/list_autonomous_verification_jobs",
@@ -2175,6 +2181,16 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             object_tool_schema(
                 json!({
                     "window_hours": nullable_integer_property("Optional cohort lookback from 1 to 8760 hours; defaults to 720.")
+                }),
+                &[],
+            ),
+        ),
+        tool(
+            "get_site_analytics",
+            "Measure privacy-minimized first-party visitors, sessions, acquisition channels, and observed site conversion actions. Browser-local IDs are not people or wallets; canonical lifecycle and settlement endpoints remain authoritative for payment claims.",
+            object_tool_schema(
+                json!({
+                    "window_hours": nullable_integer_property("Optional lookback from 1 to 8760 hours; defaults to 720.")
                 }),
                 &[],
             ),
@@ -4894,6 +4910,14 @@ async fn get_opportunity_conversion_funnel(
     proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
 }
 
+async fn get_site_analytics(Json(args): Json<SiteAnalyticsArgs>) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/analytics/site",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
+}
+
 async fn analyze_bounty_fit(
     State(state): State<SharedState>,
     Json(args): Json<AnalyzeBountyFitArgs>,
@@ -5592,6 +5616,7 @@ mod tests {
             "get_discovery_subscription",
             "delete_discovery_subscription",
             "get_opportunity_conversion_funnel",
+            "get_site_analytics",
             "analyze_bounty_fit",
         ] {
             assert!(

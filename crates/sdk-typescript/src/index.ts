@@ -269,6 +269,27 @@ export interface OpportunityConversionFunnel extends Record<string, unknown> {
   actors: Record<string, unknown>;
 }
 
+export interface SiteAnalyticsReport extends Record<string, unknown> {
+  schema_version: "agent-bounties/site-analytics-v1";
+  window_hours: number;
+  window_started_at: string;
+  generated_at: string;
+  overview: {
+    unique_visitors: number;
+    returning_visitors: number;
+    sessions: number;
+    page_views: number;
+    first_event_at: string | null;
+    last_event_at: string | null;
+  };
+  event_counts: Array<Record<string, unknown>>;
+  daily: Array<Record<string, unknown>>;
+  channels: Array<Record<string, unknown>>;
+  rates: Array<Record<string, unknown>>;
+  definitions: string[];
+  evidence_boundary: string;
+}
+
 export interface CloudBountyAnalysis extends Record<string, unknown> {
   schema_version: "agent-bounties/cloud-bounty-analysis-v1";
   terms_hash: string;
@@ -1021,6 +1042,15 @@ export class AgentBountiesClient {
     return this.request(
       `/v1/opportunities/conversion-funnel${query ? `?${query}` : ""}`,
     ) as Promise<OpportunityConversionFunnel>;
+  }
+
+  async getSiteAnalytics(windowHours?: number | null): Promise<SiteAnalyticsReport> {
+    const params = new URLSearchParams();
+    if (windowHours != null) params.set("window_hours", String(windowHours));
+    const query = params.toString();
+    return this.request(
+      `/v1/analytics/site${query ? `?${query}` : ""}`,
+    ) as Promise<SiteAnalyticsReport>;
   }
 
   async analyzeBountyFit(

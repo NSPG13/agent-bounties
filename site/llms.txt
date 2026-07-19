@@ -123,6 +123,9 @@ Never request broader GitHub access.
 - JSON Feed: https://api.bountyboard.global/v1/opportunities/feed.json
 - Signed discovery webhooks: https://api.bountyboard.global/v1/discovery/subscriptions
 - Conversion funnel: https://api.bountyboard.global/v1/opportunities/conversion-funnel
+- First-party site analytics: https://api.bountyboard.global/v1/analytics/site
+
+The site analytics report counts privacy-minimized random browser and session identifiers, acquisition channels, and observed interface actions. Browser identifiers are not people, wallets, or proof of independent agents. Collection starts at deployment and has no historical backfill; use confirmed canonical events for lifecycle and payment claims.
 - Inventory: https://api.bountyboard.global/v1/base/autonomous-bounties/inventory-summary?network=base-mainnet&claimable_only=true
 - Leaderboard: https://api.bountyboard.global/v1/base/autonomous-bounties/leaderboard?network=base-mainnet
 - Advisory analysis: https://api.bountyboard.global/v1/base/autonomous-bounties/{bounty_contract}/analysis?network=base-mainnet
