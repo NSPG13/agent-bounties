@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urldefrag, urlparse
@@ -27,6 +28,8 @@ REQUIRED_FILES = [
     "refunds.html",
     "styles.css",
     "favicon.svg",
+    "robots.txt",
+    "sitemap.xml",
     "home.js",
     "autonomous.js",
     "legal-consent.js",
@@ -38,6 +41,25 @@ REQUIRED_FILES = [
 ]
 
 CORE_PAGES = ["index.html", "earn.html", "post.html", "funding.html", "operator.html"]
+PUBLIC_INDEXABLE_PAGES = {
+    "index.html": "https://bountyboard.global/",
+    "earn.html": "https://bountyboard.global/earn.html",
+    "post.html": "https://bountyboard.global/post.html",
+    "funding.html": "https://bountyboard.global/funding.html",
+    "prepare-agent.html": "https://bountyboard.global/prepare-agent.html",
+    "agent-budget.html": "https://bountyboard.global/agent-budget.html",
+    "x402.html": "https://bountyboard.global/x402.html",
+    "terms.html": "https://bountyboard.global/terms.html",
+    "privacy.html": "https://bountyboard.global/privacy.html",
+    "refunds.html": "https://bountyboard.global/refunds.html",
+}
+INTERNAL_NOINDEX_PAGES = {
+    "cancel.html",
+    "chatgpt-post-widget.html",
+    "operator.html",
+    "recovery.html",
+    "success.html",
+}
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
@@ -128,13 +150,52 @@ def main() -> int:
             fail(f"{html_file}: missing title or description meta")
         if '<link rel="icon" href="favicon.svg" type="image/svg+xml">' not in text:
             fail(f"{html_file}: missing project favicon")
+        expected_canonical = PUBLIC_INDEXABLE_PAGES.get(html_file.name)
+        if expected_canonical:
+            if f'<link rel="canonical" href="{expected_canonical}">' not in text:
+                fail(f"{html_file}: missing canonical URL {expected_canonical}")
+            if re.search(r'<meta\s+name="robots"[^>]*noindex', text, re.IGNORECASE):
+                fail(f"{html_file}: public page must remain indexable")
+        elif html_file.name in INTERNAL_NOINDEX_PAGES:
+            if not re.search(r'<meta\s+name="robots"[^>]*noindex', text, re.IGNORECASE):
+                fail(f"{html_file}: internal page must be noindex")
         for link in parser.links:
             check_internal_link(site_dir, html_file, link, parser.ids)
+
+    sitemap_root = ET.parse(site_dir / "sitemap.xml").getroot()
+    sitemap_namespace = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    sitemap_urls = {
+        element.text.strip()
+        for element in sitemap_root.findall("sm:url/sm:loc", sitemap_namespace)
+        if element.text
+    }
+    expected_sitemap_urls = set(PUBLIC_INDEXABLE_PAGES.values())
+    if sitemap_urls != expected_sitemap_urls:
+        missing = sorted(expected_sitemap_urls - sitemap_urls)
+        extra = sorted(sitemap_urls - expected_sitemap_urls)
+        fail(f"sitemap coverage mismatch: missing={missing} extra={extra}")
+    robots = (site_dir / "robots.txt").read_text(encoding="utf-8")
+    if "Sitemap: https://bountyboard.global/sitemap.xml" not in robots:
+        fail("robots.txt must advertise the canonical sitemap")
 
     if (site_dir / "main.js").exists():
         fail("retired browser settlement bundle site/main.js must not exist")
 
     pages = {name: (site_dir / name).read_text(encoding="utf-8") for name in CORE_PAGES}
+    structured_data_match = re.search(
+        r'<script\s+type="application/ld\+json">\s*(\{.*?\})\s*</script>',
+        pages["index.html"],
+        re.DOTALL,
+    )
+    if not structured_data_match:
+        fail("index.html must expose JSON-LD website identity")
+    structured_data = json.loads(structured_data_match.group(1))
+    if structured_data.get("@type") != "WebSite":
+        fail("index.html JSON-LD must identify a WebSite")
+    if structured_data.get("name") != "BountyBoard.global":
+        fail("index.html JSON-LD must use the canonical product name")
+    if structured_data.get("url") != "https://bountyboard.global/":
+        fail("index.html JSON-LD must use the canonical website URL")
     recovery_page = (site_dir / "recovery.html").read_text(encoding="utf-8")
     javascript = (site_dir / "autonomous.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
@@ -331,7 +392,7 @@ def main() -> int:
         "index.html",
         pages["index.html"],
         [
-            "AI agents earn",
+            "Live AI agent bounties paid in Base USDC",
             "3 USDC daily. 26 USDC weekly.",
             "BountySettled",
             "Share proof",
@@ -346,6 +407,10 @@ def main() -> int:
             'type="application/feed+json"',
             "Subscribe via RSS",
             "Subscribe via Atom",
+            "BountyBoard.global | Live AI agent bounties paid in Base USDC",
+            'property="og:title"',
+            'name="twitter:card"',
+            'type="application/ld+json"',
         ],
     )
     require_phrases(
