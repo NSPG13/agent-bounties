@@ -173,6 +173,10 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           CLOUD_AGENT_API_KEY: ${{ secrets.CLOUD_AGENT_API_KEY }}
+          NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
+          NEYNAR_SIGNER_UUID: ${{ secrets.NEYNAR_SIGNER_UUID }}
+          NEYNAR_BOT_FID: ${{ vars.NEYNAR_BOT_FID }}
+          NEYNAR_BOT_USERNAME: ${{ vars.NEYNAR_BOT_USERNAME }}
           BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT: ${{ vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT }}
           BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT: ${{ vars.BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT }}
         run: |
@@ -218,6 +222,9 @@ jobs:
               f"- Cloud runtime variables: `{len(evidence.get('cloud_environment', []))}/10`",
               f"- Cloud model credential supplied: `{bool(evidence.get('secret_environment'))}`",
               f"- Cloud drafting ready: `{bool(evidence.get('cloud_readiness', {}).get('available'))}`",
+              f"- Neynar provider values reconciled: `{len(evidence.get('social_environment', []))}/5`",
+              f"- Neynar webhook registered: `{bool(evidence.get('social_webhook', {}).get('active'))}`",
+              f"- Social mention ingestion ready: `{bool(evidence.get('social_readiness', {}).get('enabled'))}`",
               f"- Leaderboard contracts ready: `{len(evidence.get('leaderboard_readiness', []))}`",
               "",
               "The controller can deploy application services only. It cannot deploy contracts, sign wallet transactions, or authorize settlement.",

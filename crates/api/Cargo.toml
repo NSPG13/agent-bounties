@@ -19,10 +19,12 @@ domain = { path = "../domain" }
 eval-harness = { path = "../eval-harness" }
 github-app = { path = "../github-app" }
 hex.workspace = true
+hmac.workspace = true
 ledger = { path = "../ledger" }
 payments-stripe = { path = "../payments-stripe" }
 payments-x402 = { path = "../payments-x402" }
 risk = { path = "../risk" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -35,5 +37,4 @@ worker = { path = "../worker" }
 
 [dev-dependencies]
 hex.workspace = true
-hmac.workspace = true
 sha2.workspace = true

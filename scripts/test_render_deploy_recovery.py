@@ -506,6 +506,181 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         self.assertEqual(secrets, [])
         self.assertNotIn("CLOUD_AGENT_API_KEY", [key for _, key, _ in client.calls])
 
+    def test_neynar_environment_is_all_or_none_and_evidence_is_redacted(self) -> None:
+        client = EnvironmentClient()
+        service = {"id": "srv-api", "name": "agent-bounties-api"}
+        evidence, changed = recovery.reconcile_neynar_social_environment(
+            client,
+            service,
+            api_key=" neynar-api-secret ",
+            webhook_secret=" webhook-secret ",
+            signer_uuid="123e4567-e89b-42d3-a456-426614174000",
+            bot_fid=" 12345 ",
+            bot_username=" @BountyBoard ",
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(len(evidence), 5)
+        self.assertTrue(all(item["configured"] for item in evidence))
+        serialized = recovery.json.dumps(evidence)
+        self.assertNotIn("neynar-api-secret", serialized)
+        self.assertNotIn("webhook-secret", serialized)
+        self.assertIn(
+            ("agent-bounties-api", "NEYNAR_BOT_USERNAME", "bountyboard"),
+            client.calls,
+        )
+
+        with self.assertRaisesRegex(recovery.RecoveryError, "all provider values"):
+            recovery.reconcile_neynar_social_environment(
+                client,
+                service,
+                api_key="only-one-value",
+                webhook_secret=None,
+                signer_uuid=None,
+                bot_fid=None,
+                bot_username=None,
+            )
+
+    def test_omitted_neynar_environment_is_not_invented(self) -> None:
+        client = EnvironmentClient(changed=False)
+        evidence, changed = recovery.reconcile_neynar_social_environment(
+            client,
+            {"id": "srv-api", "name": "agent-bounties-api"},
+            api_key=None,
+            webhook_secret=None,
+            signer_uuid=None,
+            bot_fid=None,
+            bot_username=None,
+        )
+        self.assertEqual(evidence, [])
+        self.assertFalse(changed)
+        self.assertEqual(client.calls, [])
+
+    def test_neynar_account_inputs_are_all_or_none(self) -> None:
+        self.assertEqual(
+            recovery.normalize_neynar_social_inputs(
+                api_key=None,
+                signer_uuid=None,
+                bot_fid=None,
+                bot_username=None,
+            ),
+            {},
+        )
+        normalized = recovery.normalize_neynar_social_inputs(
+            api_key=" provider-secret ",
+            signer_uuid="123e4567-e89b-42d3-a456-426614174000",
+            bot_fid="12345",
+            bot_username="@BountyBoard",
+        )
+        self.assertEqual(normalized["NEYNAR_BOT_USERNAME"], "bountyboard")
+        with self.assertRaisesRegex(recovery.RecoveryError, "all account values"):
+            recovery.normalize_neynar_social_inputs(
+                api_key="provider-secret",
+                signer_uuid=None,
+                bot_fid="12345",
+                bot_username="bountyboard",
+            )
+
+    def test_neynar_webhook_is_created_with_exact_fid_filter_and_secret_redacted(self) -> None:
+        class FakeNeynarClient:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def request_json(self, method, path, payload=None):
+                self.calls.append((method, path, payload))
+                if method == "GET":
+                    return {"webhooks": []}
+                return {
+                    "webhook": {
+                        "webhook_id": "wh-test",
+                        "title": "BountyBoard social mention drafts",
+                        "target_url": "https://api.bountyboard.global/v1/social/webhooks/neynar",
+                        "active": True,
+                        "subscription": {
+                            "filters": {"cast.created": {"mentioned_fids": [12345]}}
+                        },
+                        "secrets": [{"value": "provider-generated-secret"}],
+                    }
+                }
+
+        client = FakeNeynarClient()
+        evidence, secret = recovery.ensure_neynar_social_webhook(
+            client,
+            bot_fid="12345",
+            target_url="https://api.bountyboard.global/v1/social/webhooks/neynar",
+        )
+        self.assertEqual(secret, "provider-generated-secret")
+        self.assertTrue(evidence["active"])
+        self.assertTrue(evidence["changed"])
+        self.assertNotIn(secret, recovery.json.dumps(evidence))
+        self.assertEqual(
+            client.calls[1],
+            (
+                "POST",
+                "/v2/farcaster/webhook/",
+                {
+                    "name": "BountyBoard social mention drafts",
+                    "url": "https://api.bountyboard.global/v1/social/webhooks/neynar",
+                    "subscription": {
+                        "cast.created": {"mentioned_fids": [12345]}
+                    },
+                },
+            ),
+        )
+
+    def test_exact_neynar_webhook_is_reused_without_provider_mutation(self) -> None:
+        target = "https://api.bountyboard.global/v1/social/webhooks/neynar"
+        webhook = {
+            "webhook_id": "wh-existing",
+            "title": "BountyBoard social mention drafts",
+            "target_url": target,
+            "active": True,
+            "subscription": {
+                "filters": {"cast.created": {"mentioned_fids": [12345]}}
+            },
+            "secrets": [{"value": "existing-secret"}],
+        }
+
+        class FakeNeynarClient:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def request_json(self, method, path, payload=None):
+                self.calls.append((method, path, payload))
+                return {"webhooks": [webhook]}
+
+        client = FakeNeynarClient()
+        evidence, secret = recovery.ensure_neynar_social_webhook(
+            client, bot_fid="12345", target_url=target
+        )
+        self.assertEqual(secret, "existing-secret")
+        self.assertFalse(evidence["changed"])
+        self.assertEqual(
+            client.calls,
+            [("GET", "/v2/farcaster/webhook/list/", None)],
+        )
+
+    def test_social_readiness_requires_every_runtime_boundary(self) -> None:
+        payload = {
+            "schema_version": "agent-bounties/social-mention-ingestion-readiness-v1",
+            "provider": "neynar",
+            "source_network": "farcaster",
+            "enabled": True,
+            "operator_enabled": True,
+            "database_configured": True,
+            "webhook_configured": True,
+            "reply_configured": True,
+            "gate_passed": True,
+            "bot_fid": 12345,
+            "bot_username": "bountyboard",
+            "github_originated_canonical_funded": 21,
+            "github_originated_canonical_settled": 10,
+        }
+        self.assertTrue(recovery.validate_social_mention_readiness(payload)["enabled"])
+        payload["reply_configured"] = False
+        with self.assertRaisesRegex(recovery.RecoveryError, "reply_configured=false"):
+            recovery.validate_social_mention_readiness(payload)
+
     def test_public_env_var_update_fails_when_readback_drifts(self) -> None:
         client = RecordingClient(
             response={

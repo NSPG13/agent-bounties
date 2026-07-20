@@ -282,6 +282,10 @@ def main() -> int:
         "Select latest successful main revision",
         "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}",
         "CLOUD_AGENT_API_KEY: ${{ secrets.CLOUD_AGENT_API_KEY }}",
+        "NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}",
+        "NEYNAR_SIGNER_UUID: ${{ secrets.NEYNAR_SIGNER_UUID }}",
+        "NEYNAR_BOT_FID: ${{ vars.NEYNAR_BOT_FID }}",
+        "NEYNAR_BOT_USERNAME: ${{ vars.NEYNAR_BOT_USERNAME }}",
         "scripts/render_deploy_recovery.py",
         '--public-base-url "${PRODUCTION_API_BASE_URL%/}"',
         '--mcp-base-url "${PRODUCTION_MCP_BASE_URL%/}"',
@@ -297,8 +301,12 @@ def main() -> int:
         "API_RUNTIME_ENVIRONMENT",
         "CLOUD_AGENT_RUNTIME_ENVIRONMENT",
         "reconcile_cloud_agent_environment",
+        "reconcile_neynar_social_environment",
+        "ensure_neynar_social_webhook",
+        "validate_social_mention_readiness",
         "validate_cloud_agent_readiness",
         'cloud_agent_api_key=os.environ.get("CLOUD_AGENT_API_KEY")',
+        'neynar_api_key=os.environ.get("NEYNAR_API_KEY")',
         '"secret_environment": secret_environment',
     ]:
         if required not in controller:
@@ -310,6 +318,14 @@ def main() -> int:
     require_env_value(api, "APP_PACKAGE", "api")
     require_env_value(api, "APP_BINARY", "api")
     require_env_value(api, "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED", '"true"')
+    for neynar_key in [
+        "NEYNAR_API_KEY",
+        "NEYNAR_WEBHOOK_SECRET",
+        "NEYNAR_SIGNER_UUID",
+        "NEYNAR_BOT_FID",
+        "NEYNAR_BOT_USERNAME",
+    ]:
+        require_env_sync_false(api, neynar_key)
     require_env_value(api, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')
     require_env_value(api, "ENABLE_STRIPE_PUBLIC_CHECKOUT", '"false"')
     require_env_value(api, "ENABLE_BASE_TX_BROADCAST", '"false"')

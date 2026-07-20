@@ -672,6 +672,7 @@ dependencies = [
  "ledger",
  "payments-stripe",
  "payments-x402",
+ "reqwest",
  "risk",
  "serde",
  "serde_json",

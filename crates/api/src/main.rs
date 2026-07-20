@@ -64,10 +64,10 @@ use cloud_agent::{
 use db::{
     BountyStatusScope, ClaimCandidateReservation, ClaimFunnelStats, DbError,
     GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate,
-    NewDiscoveryWebhookSubscription, NewLegalAcceptance, NewSiteAnalyticsEvent, NewTrialBounty,
-    NewUnfundedBountySolution, NewX402RelayAttempt, OpportunityLifecycleStats, PostgresStore,
-    SiteAnalyticsStats, TrialBounty, UnfundedBountySolution, WebhookSubscription, X402RelayAttempt,
-    X402RelayStatus,
+    NewDiscoveryWebhookSubscription, NewLegalAcceptance, NewSiteAnalyticsEvent,
+    NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution, NewX402RelayAttempt,
+    OpportunityLifecycleStats, PostgresStore, SiteAnalyticsStats, SocialMentionIngestion,
+    TrialBounty, UnfundedBountySolution, WebhookSubscription, X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -93,6 +93,7 @@ use github_app::{
     GitHubIssueApiSyncPlan, GitHubIssueFormBounty, GitHubProofComment, GitHubProofCommentPlan,
     SocialMentionDraftInput, SocialMentionDraftPlan,
 };
+use hmac::{Hmac, Mac};
 use ledger::Ledger;
 use opportunities::{
     apply_query as apply_opportunity_query, canonical_opportunity, legacy_opportunity,
@@ -112,7 +113,7 @@ use payments_x402::{
 };
 use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use std::collections::BTreeMap;
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -247,6 +248,9 @@ use worker::{
         plan_github_funding_comment,
         plan_github_claim_comment,
         plan_social_mention_draft,
+        social_mention_ingestion_readiness,
+        ingest_neynar_social_mention,
+        get_social_mention_draft,
         plan_github_proof_comment,
         plan_github_proof_comment_from_proof,
         post_bounty,
@@ -276,6 +280,9 @@ use worker::{
         PlanGitHubFundingCommentRequest,
         PlanGitHubClaimCommentRequest,
         PlanSocialMentionDraftRequest,
+        SocialMentionIngestionReadiness,
+        SocialMentionWebhookResponse,
+        SocialMentionDraftResponse,
         PlanGitHubProofCommentRequest,
         PlanGitHubProofCommentFromProofRequest,
         BroadcastBaseSignedTransactionRequest,
@@ -383,6 +390,115 @@ struct AppState {
     recovery_reservations: AutonomousBountyRecoveryReservations,
     cloud_agent: Arc<CloudAgentService>,
     discovery_webhooks: Option<Arc<DiscoveryWebhookConfig>>,
+    neynar_social: Option<Arc<NeynarSocialIngestionConfig>>,
+}
+
+#[derive(Clone)]
+struct NeynarSocialIngestionConfig {
+    webhook_secret: Vec<u8>,
+    bot_fid: i64,
+    bot_username: String,
+    api_key: Option<String>,
+    signer_uuid: Option<String>,
+    api_base_url: String,
+    website_base_url: String,
+    client: reqwest::Client,
+}
+
+impl NeynarSocialIngestionConfig {
+    fn from_env() -> anyhow::Result<Option<Self>> {
+        let webhook_secret = env::var("NEYNAR_WEBHOOK_SECRET")
+            .ok()
+            .and_then(non_empty_secret);
+        let bot_fid = env::var("NEYNAR_BOT_FID").ok().and_then(non_empty_secret);
+        let bot_username = env::var("NEYNAR_BOT_USERNAME")
+            .ok()
+            .and_then(non_empty_secret);
+        let api_key = env::var("NEYNAR_API_KEY").ok().and_then(non_empty_secret);
+        let signer_uuid = env::var("NEYNAR_SIGNER_UUID")
+            .ok()
+            .and_then(non_empty_secret);
+        let configured_count = [
+            webhook_secret.is_some(),
+            bot_fid.is_some(),
+            bot_username.is_some(),
+            api_key.is_some(),
+            signer_uuid.is_some(),
+        ]
+        .into_iter()
+        .filter(|configured| *configured)
+        .count();
+        if configured_count == 0 {
+            return Ok(None);
+        }
+        if configured_count != 5 {
+            anyhow::bail!(
+                "Neynar ingestion requires NEYNAR_API_KEY, NEYNAR_WEBHOOK_SECRET, NEYNAR_SIGNER_UUID, NEYNAR_BOT_FID, and NEYNAR_BOT_USERNAME together"
+            );
+        }
+        let bot_fid = bot_fid
+            .expect("checked")
+            .parse::<i64>()
+            .map_err(|_| anyhow::anyhow!("NEYNAR_BOT_FID must be a positive integer"))?;
+        if bot_fid <= 0 {
+            anyhow::bail!("NEYNAR_BOT_FID must be a positive integer");
+        }
+        let bot_username = bot_username
+            .expect("checked")
+            .trim_start_matches('@')
+            .to_string();
+        if bot_username.is_empty()
+            || bot_username.len() > 64
+            || !bot_username.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+        {
+            anyhow::bail!("NEYNAR_BOT_USERNAME is invalid");
+        }
+        let api_base_url = env::var("NEYNAR_API_BASE_URL")
+            .ok()
+            .and_then(non_empty_secret)
+            .unwrap_or_else(|| "https://api.neynar.com".to_string())
+            .trim_end_matches('/')
+            .to_string();
+        if !api_base_url.starts_with("https://") && !api_base_url.starts_with("http://127.0.0.1:") {
+            anyhow::bail!("NEYNAR_API_BASE_URL must use HTTPS");
+        }
+        let website_base_url = env::var("WEBSITE_BASE_URL")
+            .ok()
+            .and_then(non_empty_secret)
+            .unwrap_or_else(|| "https://bountyboard.global".to_string())
+            .trim_end_matches('/')
+            .to_string();
+        if !website_base_url.starts_with("https://")
+            && !website_base_url.starts_with("http://127.0.0.1:")
+        {
+            anyhow::bail!("WEBSITE_BASE_URL must use HTTPS");
+        }
+        Ok(Some(Self {
+            webhook_secret: webhook_secret.expect("checked").into_bytes(),
+            bot_fid,
+            bot_username,
+            api_key,
+            signer_uuid,
+            api_base_url,
+            website_base_url,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .build()?,
+        }))
+    }
+
+    fn reply_configured(&self) -> bool {
+        self.api_key.is_some() && self.signer_uuid.is_some()
+    }
+
+    fn draft_handoff_url(&self, id: Uuid) -> String {
+        format!(
+            "{}/post.html?from=social-mention&socialDraft={id}",
+            self.website_base_url
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -774,6 +890,98 @@ struct PlanSocialMentionDraftRequest {
     mention_id: String,
     mention_text: String,
     author_handle: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SocialMentionIngestionReadiness {
+    schema_version: String,
+    provider: String,
+    source_network: String,
+    enabled: bool,
+    operator_enabled: bool,
+    database_configured: bool,
+    webhook_configured: bool,
+    reply_configured: bool,
+    bot_fid: Option<i64>,
+    bot_username: Option<String>,
+    webhook_path: String,
+    gate_passed: bool,
+    github_originated_canonical_funded: u32,
+    github_originated_canonical_settled: u32,
+    reason: String,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SocialMentionWebhookResponse {
+    schema_version: String,
+    accepted: bool,
+    duplicate: bool,
+    status: String,
+    ingestion_id: Option<Uuid>,
+    draft_handoff_url: Option<String>,
+    reply_cast_hash: Option<String>,
+    message: String,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SocialMentionDraftResponse {
+    schema_version: String,
+    ingestion_id: Uuid,
+    status: String,
+    source_network: String,
+    mention_url: String,
+    author_handle: Option<String>,
+    draft: serde_json::Value,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NeynarWebhookEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    data: NeynarCast,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NeynarCast {
+    object: String,
+    hash: String,
+    author: NeynarAuthor,
+    text: String,
+    #[serde(default)]
+    mentioned_profiles: Vec<NeynarMentionProfile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NeynarAuthor {
+    fid: i64,
+    username: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NeynarMentionProfile {
+    fid: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct NeynarPublishCastRequest<'a> {
+    signer_uuid: &'a str,
+    text: &'a str,
+    parent: &'a str,
+    parent_author_fid: i64,
+    idem: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct NeynarPublishCastResponse {
+    cast: NeynarPublishedCast,
+}
+
+#[derive(Debug, Deserialize)]
+struct NeynarPublishedCast {
+    hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1376,6 +1584,7 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|error| anyhow::anyhow!("cloud-agent configuration is invalid: {error}"))?,
     );
     let discovery_webhooks = DiscoveryWebhookConfig::from_env()?.map(Arc::new);
+    let neynar_social = NeynarSocialIngestionConfig::from_env()?.map(Arc::new);
     let state: SharedState = Arc::new(AppState {
         network: Arc::new(Mutex::new(network)),
         eval_runs: Arc::new(Mutex::new(eval_runs)),
@@ -1414,6 +1623,7 @@ async fn main() -> anyhow::Result<()> {
         recovery_reservations,
         cloud_agent,
         discovery_webhooks,
+        neynar_social,
     });
     let app = Router::new()
         .route("/health", get(health))
@@ -1753,6 +1963,18 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/social/mention-draft-plan",
             post(plan_social_mention_draft),
+        )
+        .route(
+            "/v1/social/mention-ingestion/readiness",
+            get(social_mention_ingestion_readiness),
+        )
+        .route(
+            "/v1/social/webhooks/neynar",
+            post(ingest_neynar_social_mention),
+        )
+        .route(
+            "/v1/social/mention-drafts/:id",
+            get(get_social_mention_draft),
         )
         .route(
             "/v1/github/proof-comment-plan",
@@ -10090,16 +10312,23 @@ async fn plan_social_mention_draft(
     State(state): State<SharedState>,
     Json(request): Json<PlanSocialMentionDraftRequest>,
 ) -> Json<SocialMentionDraftPlan> {
+    Json(current_social_mention_plan(&state, request).await)
+}
+
+async fn current_social_mention_plan(
+    state: &SharedState,
+    request: PlanSocialMentionDraftRequest,
+) -> SocialMentionDraftPlan {
     let operator_enabled = env_flag("AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED");
     let github_conversion = if operator_enabled {
-        match load_autonomous_bounty_feed(&state, "base-mainnet", false).await {
+        match load_autonomous_bounty_feed(state, "base-mainnet", false).await {
             Ok(feed) => github_issue_conversion_evidence(&feed),
             Err(_) => unavailable_github_conversion_evidence(),
         }
     } else {
         unavailable_github_conversion_evidence()
     };
-    Json(social_mention_draft_plan(SocialMentionDraftInput {
+    social_mention_draft_plan(SocialMentionDraftInput {
         source_network: request.source_network,
         mention_url: request.mention_url,
         mention_id: request.mention_id,
@@ -10107,6 +10336,527 @@ async fn plan_social_mention_draft(
         author_handle: request.author_handle,
         operator_enabled,
         github_conversion,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/social/mention-ingestion/readiness",
+    responses((status = 200, body = SocialMentionIngestionReadiness))
+)]
+async fn social_mention_ingestion_readiness(
+    State(state): State<SharedState>,
+) -> Json<SocialMentionIngestionReadiness> {
+    let plan = current_social_mention_plan(
+        &state,
+        PlanSocialMentionDraftRequest {
+            source_network: "farcaster".to_string(),
+            mention_url:
+                "https://farcaster.xyz/readiness/0x0000000000000000000000000000000000000000"
+                    .to_string(),
+            mention_id: "readiness".to_string(),
+            mention_text: "/agent-bounty create 1 USDC readiness probe".to_string(),
+            author_handle: Some("readiness".to_string()),
+        },
+    )
+    .await;
+    let webhook_configured = state.neynar_social.is_some();
+    let reply_configured = state
+        .neynar_social
+        .as_ref()
+        .is_some_and(|config| config.reply_configured());
+    let enabled =
+        plan.gate.passed && state.store.is_some() && webhook_configured && reply_configured;
+    Json(SocialMentionIngestionReadiness {
+        schema_version: "agent-bounties/social-mention-ingestion-readiness-v1".to_string(),
+        provider: "neynar".to_string(),
+        source_network: "farcaster".to_string(),
+        enabled,
+        operator_enabled: plan.gate.operator_enabled,
+        database_configured: state.store.is_some(),
+        webhook_configured,
+        reply_configured,
+        bot_fid: state.neynar_social.as_ref().map(|config| config.bot_fid),
+        bot_username: state
+            .neynar_social
+            .as_ref()
+            .map(|config| config.bot_username.clone()),
+        webhook_path: "/v1/social/webhooks/neynar".to_string(),
+        gate_passed: plan.gate.passed,
+        github_originated_canonical_funded: plan.gate.github_originated_canonical_funded,
+        github_originated_canonical_settled: plan.gate.github_originated_canonical_settled,
+        reason: if enabled {
+            "signed mention ingestion, durable drafts, and bot replies are ready".to_string()
+        } else if !plan.gate.passed {
+            plan.gate.reason
+        } else if state.store.is_none() {
+            "DATABASE_URL is required for durable replay protection".to_string()
+        } else if !webhook_configured {
+            "Neynar webhook and bot identity are not configured".to_string()
+        } else {
+            "Neynar API key and approved signer are required for bot replies".to_string()
+        },
+        evidence_boundary: "This readiness report does not prove that a provider webhook is registered. A draft is never a published, funded, verified, or settled bounty."
+            .to_string(),
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/social/webhooks/neynar",
+    request_body = String,
+    responses(
+        (status = 200, body = SocialMentionWebhookResponse, description = "Signed mention ingested and reply completed or replayed"),
+        (status = 202, body = SocialMentionWebhookResponse, description = "Signed event ignored, blocked, stored for review, or already being processed"),
+        (status = 401, body = SocialMentionWebhookResponse, description = "Missing or invalid Neynar signature"),
+        (status = 503, body = SocialMentionWebhookResponse, description = "Durable ingestion is not configured")
+    )
+)]
+async fn ingest_neynar_social_mention(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> (StatusCode, Json<SocialMentionWebhookResponse>) {
+    let Some(config) = state.neynar_social.as_ref() else {
+        return social_webhook_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            false,
+            "unconfigured",
+            None,
+            None,
+            None,
+            "Neynar webhook identity is not configured",
+        );
+    };
+    let Some(store) = state.store.as_ref() else {
+        return social_webhook_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            false,
+            "unconfigured",
+            None,
+            None,
+            None,
+            "DATABASE_URL is required for durable ingestion",
+        );
+    };
+    let Some(signature) = headers
+        .get("x-neynar-signature")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return social_webhook_response(
+            StatusCode::UNAUTHORIZED,
+            false,
+            false,
+            "rejected",
+            None,
+            None,
+            None,
+            "missing Neynar signature",
+        );
+    };
+    if !verify_neynar_signature(&body, signature, &config.webhook_secret) {
+        return social_webhook_response(
+            StatusCode::UNAUTHORIZED,
+            false,
+            false,
+            "rejected",
+            None,
+            None,
+            None,
+            "invalid Neynar signature",
+        );
+    }
+    let event: NeynarWebhookEvent = match serde_json::from_slice(&body) {
+        Ok(event) => event,
+        Err(_) => {
+            return social_webhook_response(
+                StatusCode::BAD_REQUEST,
+                false,
+                false,
+                "rejected",
+                None,
+                None,
+                None,
+                "invalid Neynar event JSON",
+            )
+        }
+    };
+    if event.event_type != "cast.created" || event.data.object != "cast" {
+        return social_webhook_response(
+            StatusCode::ACCEPTED,
+            false,
+            false,
+            "ignored",
+            None,
+            None,
+            None,
+            "signed event is not a created cast",
+        );
+    }
+    let cast = event.data;
+    if !valid_farcaster_hash(&cast.hash)
+        || cast.author.fid <= 0
+        || cast.author.username.is_empty()
+        || cast.author.username.len() > 64
+        || !cast.author.username.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        })
+        || cast.text.is_empty()
+        || cast.text.len() > 8_000
+    {
+        return social_webhook_response(
+            StatusCode::BAD_REQUEST,
+            false,
+            false,
+            "rejected",
+            None,
+            None,
+            None,
+            "created cast fields are invalid",
+        );
+    }
+    let directly_mentions_bot = cast
+        .mentioned_profiles
+        .iter()
+        .any(|profile| profile.fid == config.bot_fid)
+        || text_mentions_bot(&cast.text, &config.bot_username);
+    let mention_id = cast.hash.to_ascii_lowercase();
+    let mention_url = format!(
+        "https://farcaster.xyz/{}/{}",
+        cast.author.username, mention_id
+    );
+    let mut plan = current_social_mention_plan(
+        &state,
+        PlanSocialMentionDraftRequest {
+            source_network: "farcaster".to_string(),
+            mention_url: mention_url.clone(),
+            mention_id: mention_id.clone(),
+            mention_text: cast.text.clone(),
+            author_handle: Some(cast.author.username.clone()),
+        },
+    )
+    .await;
+    let id = Uuid::new_v4();
+    let draft_handoff_url = plan
+        .ready
+        .then(|| config.draft_handoff_url(id))
+        .filter(|_| directly_mentions_bot);
+    if let (Some(draft), Some(handoff_url)) = (&mut plan.draft, &draft_handoff_url) {
+        draft.draft_handoff_url = handoff_url.clone();
+    }
+    let status = if !directly_mentions_bot || (plan.gate.passed && !plan.ready) {
+        "ignored"
+    } else if !plan.gate.passed {
+        "blocked"
+    } else if config.reply_configured() {
+        "reply_pending"
+    } else {
+        "draft_ready"
+    };
+    let draft = if directly_mentions_bot && plan.ready {
+        plan.draft
+            .as_ref()
+            .and_then(|draft| serde_json::to_value(draft).ok())
+    } else {
+        None
+    };
+    let reservation = match store
+        .reserve_social_mention_ingestion(&NewSocialMentionIngestion {
+            id,
+            provider: "neynar".to_string(),
+            provider_event_id: format!("cast.created:{mention_id}"),
+            source_network: "farcaster".to_string(),
+            mention_id,
+            mention_url,
+            author_fid: cast.author.fid,
+            author_handle: Some(cast.author.username),
+            mention_text: cast.text,
+            status: status.to_string(),
+            draft,
+            idempotency_key: plan.idempotency_key.clone(),
+            received_at: Utc::now(),
+        })
+        .await
+    {
+        Ok(reservation) => reservation,
+        Err(_) => {
+            return social_webhook_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                false,
+                false,
+                "failed",
+                None,
+                None,
+                None,
+                "could not durably reserve the mention",
+            )
+        }
+    };
+    let record = reservation.record;
+    let persisted_handoff_url = record
+        .draft
+        .as_ref()
+        .and_then(|draft| draft.get("draft_handoff_url"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    if matches!(
+        record.status.as_str(),
+        "ignored" | "blocked" | "draft_ready"
+    ) {
+        let message = match record.status.as_str() {
+            "ignored" => "signed cast did not contain a valid direct bot command",
+            "blocked" => "canonical GitHub conversion gate is not currently satisfied",
+            _ => "review draft stored; bot reply credentials are not configured",
+        };
+        return social_webhook_response(
+            StatusCode::ACCEPTED,
+            record.status == "draft_ready",
+            !reservation.inserted,
+            &record.status,
+            Some(record.id),
+            persisted_handoff_url,
+            record.reply_cast_hash,
+            message,
+        );
+    }
+    if record.status == "replied" {
+        return social_webhook_response(
+            StatusCode::OK,
+            true,
+            true,
+            "replied",
+            Some(record.id),
+            persisted_handoff_url,
+            record.reply_cast_hash,
+            "mention was already converted and replied to",
+        );
+    }
+    let lease_token = Uuid::new_v4();
+    let claimed = match store
+        .claim_social_mention_reply(record.id, lease_token, 45)
+        .await
+    {
+        Ok(claimed) => claimed,
+        Err(_) => {
+            return social_webhook_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                false,
+                !reservation.inserted,
+                "failed",
+                Some(record.id),
+                persisted_handoff_url,
+                None,
+                "could not acquire the reply lease",
+            )
+        }
+    };
+    let Some(claimed) = claimed else {
+        return social_webhook_response(
+            StatusCode::ACCEPTED,
+            true,
+            !reservation.inserted,
+            &record.status,
+            Some(record.id),
+            persisted_handoff_url,
+            record.reply_cast_hash,
+            "another worker owns the active reply lease",
+        );
+    };
+    let handoff_url = persisted_handoff_url
+        .as_deref()
+        .unwrap_or("https://bountyboard.global/post.html");
+    match publish_neynar_draft_reply(config, &claimed, handoff_url).await {
+        Ok(reply_cast_hash) => {
+            let completed = store
+                .complete_social_mention_reply(
+                    claimed.id,
+                    lease_token,
+                    Some(&reply_cast_hash),
+                    None,
+                )
+                .await
+                .ok()
+                .flatten();
+            if completed.is_none() {
+                return social_webhook_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    false,
+                    !reservation.inserted,
+                    "failed",
+                    Some(claimed.id),
+                    persisted_handoff_url,
+                    Some(reply_cast_hash),
+                    "reply was published but durable completion could not be recorded",
+                );
+            }
+            social_webhook_response(
+                StatusCode::OK,
+                true,
+                !reservation.inserted,
+                "replied",
+                Some(claimed.id),
+                persisted_handoff_url,
+                Some(reply_cast_hash),
+                "review draft stored and bot reply published",
+            )
+        }
+        Err(error) => {
+            let _ = store
+                .complete_social_mention_reply(claimed.id, lease_token, None, Some(&error))
+                .await;
+            social_webhook_response(
+                StatusCode::BAD_GATEWAY,
+                false,
+                !reservation.inserted,
+                "reply_failed",
+                Some(claimed.id),
+                persisted_handoff_url,
+                None,
+                "draft was stored but the provider reply failed; retry is safe",
+            )
+        }
+    }
+}
+
+// Keeping the evidence-bearing response fields explicit makes security-sensitive
+// early returns reviewable at each call site.
+#[allow(clippy::too_many_arguments)]
+fn social_webhook_response(
+    status_code: StatusCode,
+    accepted: bool,
+    duplicate: bool,
+    status: &str,
+    ingestion_id: Option<Uuid>,
+    draft_handoff_url: Option<String>,
+    reply_cast_hash: Option<String>,
+    message: &str,
+) -> (StatusCode, Json<SocialMentionWebhookResponse>) {
+    (
+        status_code,
+        Json(SocialMentionWebhookResponse {
+            schema_version: "agent-bounties/social-mention-webhook-v1".to_string(),
+            accepted,
+            duplicate,
+            status: status.to_string(),
+            ingestion_id,
+            draft_handoff_url,
+            reply_cast_hash,
+            message: message.to_string(),
+            evidence_boundary: "This records a review draft and optional social reply only. It does not publish, fund, verify, settle, or prove payment for a bounty."
+                .to_string(),
+        }),
+    )
+}
+
+fn verify_neynar_signature(body: &[u8], signature: &str, secret: &[u8]) -> bool {
+    let Ok(signature) = hex::decode(signature.trim()) else {
+        return false;
+    };
+    let Ok(mut mac) = Hmac::<Sha512>::new_from_slice(secret) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&signature).is_ok()
+}
+
+fn valid_farcaster_hash(hash: &str) -> bool {
+    hash.len() == 42
+        && hash.starts_with("0x")
+        && hash[2..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+}
+
+fn text_mentions_bot(text: &str, bot_username: &str) -> bool {
+    let target = format!("@{}", bot_username.to_ascii_lowercase());
+    text.split_whitespace().any(|token| {
+        token
+            .trim_matches(|character: char| {
+                !character.is_ascii_alphanumeric() && !matches!(character, '@' | '_' | '-')
+            })
+            .eq_ignore_ascii_case(&target)
+    })
+}
+
+async fn publish_neynar_draft_reply(
+    config: &NeynarSocialIngestionConfig,
+    ingestion: &SocialMentionIngestion,
+    handoff_url: &str,
+) -> Result<String, String> {
+    let api_key = config
+        .api_key
+        .as_deref()
+        .ok_or_else(|| "NEYNAR_API_KEY is not configured".to_string())?;
+    let signer_uuid = config
+        .signer_uuid
+        .as_deref()
+        .ok_or_else(|| "NEYNAR_SIGNER_UUID is not configured".to_string())?;
+    let reply_text = format!("Draft ready for review (not published or funded): {handoff_url}");
+    let idem_hash = hex::encode(Sha256::digest(
+        format!("neynar-reply:{}", ingestion.id).as_bytes(),
+    ));
+    let idem = &idem_hash[..16];
+    let response = config
+        .client
+        .post(format!("{}/v2/farcaster/cast/", config.api_base_url))
+        .header("x-api-key", api_key)
+        .json(&NeynarPublishCastRequest {
+            signer_uuid,
+            text: &reply_text,
+            parent: &ingestion.mention_id,
+            parent_author_fid: ingestion.author_fid,
+            idem,
+        })
+        .send()
+        .await
+        .map_err(|error| format!("Neynar request failed: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Neynar returned HTTP {status}"));
+    }
+    let published = response
+        .json::<NeynarPublishCastResponse>()
+        .await
+        .map_err(|error| format!("Neynar response was invalid: {error}"))?;
+    if !valid_farcaster_hash(&published.cast.hash) {
+        return Err("Neynar response contained an invalid cast hash".to_string());
+    }
+    Ok(published.cast.hash)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/social/mention-drafts/{id}",
+    params(("id" = Uuid, Path, description = "Persisted social mention ingestion ID")),
+    responses(
+        (status = 200, body = SocialMentionDraftResponse),
+        (status = 404, description = "Draft not found")
+    )
+)]
+async fn get_social_mention_draft(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<SocialMentionDraftResponse>, StatusCode> {
+    let store = state.store.as_ref().ok_or(StatusCode::NOT_FOUND)?;
+    let record = store
+        .get_social_mention_ingestion(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let draft = record.draft.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(SocialMentionDraftResponse {
+        schema_version: "agent-bounties/social-mention-draft-v1".to_string(),
+        ingestion_id: record.id,
+        status: record.status,
+        source_network: record.source_network,
+        mention_url: record.mention_url,
+        author_handle: record.author_handle,
+        draft,
+        evidence_boundary:
+            "Review required: this draft has not been published, funded, verified, or settled."
+                .to_string(),
     }))
 }
 
@@ -12910,6 +13660,237 @@ mod tests {
         assert_eq!(evidence.github_originated_canonical_settled, 2);
     }
 
+    #[test]
+    fn neynar_signature_uses_raw_body_hmac_sha512_and_rejects_tampering() {
+        let secret = b"neynar-webhook-secret";
+        let body = br#"{"type":"cast.created","data":{"hash":"0x4242"}}"#;
+        let mut mac = Hmac::<sha2::Sha512>::new_from_slice(secret).unwrap();
+        mac.update(body);
+        let signature = hex::encode(mac.finalize().into_bytes());
+
+        assert!(verify_neynar_signature(body, &signature, secret));
+        assert!(!verify_neynar_signature(
+            br#"{"type":"cast.created","data":{"hash":"0x2424"}}"#,
+            &signature,
+            secret
+        ));
+        assert!(!verify_neynar_signature(body, "not-hex", secret));
+    }
+
+    #[test]
+    fn farcaster_bot_mention_matching_respects_token_boundaries() {
+        assert!(text_mentions_bot(
+            "@BountyBoard /agent-bounty create 25 USDC ship it",
+            "bountyboard"
+        ));
+        assert!(text_mentions_bot(
+            "Please ask (@bountyboard), then create the draft",
+            "bountyboard"
+        ));
+        assert!(!text_mentions_bot(
+            "@bountyboard-scam /agent-bounty create 25 USDC",
+            "bountyboard"
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn neynar_webhook_persists_one_short_draft_and_one_reply_across_retries() {
+        let database_url = postgres_test_database_url();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        seed_social_rollout_evidence(&store).await;
+
+        let reply_hash = format!("0x{}", "24".repeat(20));
+        let neynar_api_base = spawn_rpc_response(serde_json::json!({
+            "cast": {"hash": reply_hash}
+        }));
+        let webhook_secret = b"neynar-webhook-secret";
+        let mut state = test_state_with_operator_token_and_store(
+            BountyNetwork::default(),
+            "unused-operator-token",
+            store,
+        );
+        Arc::get_mut(&mut state).unwrap().neynar_social =
+            Some(Arc::new(NeynarSocialIngestionConfig {
+                webhook_secret: webhook_secret.to_vec(),
+                bot_fid: 12_345,
+                bot_username: "bountyboard".to_string(),
+                api_key: Some("test-neynar-key".to_string()),
+                signer_uuid: Some("123e4567-e89b-42d3-a456-426614174000".to_string()),
+                api_base_url: neynar_api_base,
+                website_base_url: "https://bountyboard.global".to_string(),
+                client: reqwest::Client::new(),
+            }));
+
+        let cast_hash = format!("0x{:040x}", Uuid::new_v4().as_u128());
+        let body = serde_json::json!({
+            "created_at": Utc::now().timestamp(),
+            "type": "cast.created",
+            "data": {
+                "object": "cast",
+                "hash": cast_hash,
+                "author": {"fid": 42, "username": "requester"},
+                "text": "@bountyboard\n/agent-bounty create 25 USDC\nimplement deterministic retries",
+                "mentioned_profiles": [{"fid": 12345}]
+            }
+        })
+        .to_string();
+        let mut mac = Hmac::<sha2::Sha512>::new_from_slice(webhook_secret).unwrap();
+        mac.update(body.as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-neynar-signature", signature.parse().unwrap());
+        let previous_gate = std::env::var("AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED").ok();
+        std::env::set_var("AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED", "true");
+
+        let (first_status, Json(first)) = ingest_neynar_social_mention(
+            State(state.clone()),
+            headers.clone(),
+            Bytes::from(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            first_status,
+            StatusCode::OK,
+            "unexpected webhook result: {}",
+            serde_json::to_string(&first).unwrap()
+        );
+        assert!(first.accepted);
+        assert!(!first.duplicate);
+        assert_eq!(first.status, "replied");
+        assert_eq!(first.reply_cast_hash.as_deref(), Some(reply_hash.as_str()));
+        let ingestion_id = first.ingestion_id.unwrap();
+        let handoff = first.draft_handoff_url.unwrap();
+        assert_eq!(
+            handoff,
+            format!(
+                "https://bountyboard.global/post.html?from=social-mention&socialDraft={ingestion_id}"
+            )
+        );
+
+        let (replay_status, Json(replay)) =
+            ingest_neynar_social_mention(State(state.clone()), headers, Bytes::from(body)).await;
+        assert_eq!(replay_status, StatusCode::OK);
+        assert!(replay.accepted);
+        assert!(replay.duplicate);
+        assert_eq!(replay.ingestion_id, Some(ingestion_id));
+        assert_eq!(replay.reply_cast_hash.as_deref(), Some(reply_hash.as_str()));
+
+        let draft = get_social_mention_draft(State(state), Path(ingestion_id))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(draft.status, "replied");
+        assert_eq!(draft.draft["state"], "review_required_not_published");
+        assert_eq!(draft.draft["draft_handoff_url"], handoff);
+        assert_eq!(draft.draft["bounty_created"], false);
+        assert_eq!(draft.draft["canonical_funding_confirmed"], false);
+
+        if let Some(value) = previous_gate {
+            std::env::set_var("AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED", value);
+        } else {
+            std::env::remove_var("AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED");
+        }
+    }
+
+    async fn seed_social_rollout_evidence(store: &PostgresStore) {
+        let now = Utc::now();
+        for index in 0_u64..3 {
+            let mut document: AutonomousBountyTermsDocument =
+                serde_json::from_str(include_str!("../../../bounties/autonomous-v1/244.json"))
+                    .unwrap();
+            document.source_url = Some(format!(
+                "https://github.com/agent-bounties/agent-bounties/issues/{}",
+                Uuid::new_v4().as_u128()
+            ));
+            let record = build_autonomous_bounty_terms_record(
+                "0x884834E884d6E93462655A2820140aD03E6747bC",
+                document,
+                now,
+            )
+            .unwrap();
+            store.upsert_autonomous_bounty_terms(&record).await.unwrap();
+            let bounty_id = format!("0x{:064x}", Uuid::new_v4().as_u128());
+            let bounty_contract = format!("0x{:040x}", Uuid::new_v4().as_u128());
+            let contract_terms = &record.document.contract_terms;
+            let events = [
+                (
+                    AutonomousBountyEventKind::CanonicalBountyCreated,
+                    serde_json::json!({
+                        "bounty_contract": bounty_contract,
+                        "creator": record.creator_wallet,
+                        "terms_hash": record.terms_hash,
+                        "policy_hash": record.policy_hash,
+                        "creation_nonce": contract_terms["creation_nonce"]
+                    }),
+                ),
+                (
+                    AutonomousBountyEventKind::CanonicalBountyTermsCommitted,
+                    serde_json::json!({
+                        "acceptance_criteria_hash": record.acceptance_criteria_hash,
+                        "benchmark_hash": record.benchmark_hash,
+                        "evidence_schema_hash": record.evidence_schema_hash
+                    }),
+                ),
+                (
+                    AutonomousBountyEventKind::CanonicalBountyEconomicsConfigured,
+                    serde_json::json!({
+                        "solver_reward": contract_terms["solver_reward"]["amount"],
+                        "verifier_reward": contract_terms["verifier_reward"]["amount"],
+                        "claim_bond": contract_terms["claim_bond"]["amount"],
+                        "target_amount": contract_terms["initial_funding"]["amount"],
+                        "initial_funding": contract_terms["initial_funding"]["amount"],
+                        "funding_deadline": contract_terms["funding_deadline"],
+                        "claim_window_seconds": contract_terms["claim_window_seconds"],
+                        "verification_window_seconds": contract_terms["verification_window_seconds"]
+                    }),
+                ),
+                (
+                    AutonomousBountyEventKind::CanonicalBountyVerificationConfigured,
+                    serde_json::json!({
+                        "verification_mode": 0,
+                        "verifier_module": record.document.verification_policy["verifier_module"],
+                        "verifier_reward_recipient": record.document.verification_policy["verifier_reward_recipient"],
+                        "threshold": 1,
+                        "verifier_set_hash": format!("0x{}", "00".repeat(32))
+                    }),
+                ),
+                (
+                    AutonomousBountyEventKind::BountyBecameClaimable,
+                    serde_json::json!({"funded_amount": contract_terms["initial_funding"]["amount"]}),
+                ),
+                (
+                    AutonomousBountyEventKind::BountySettled,
+                    serde_json::json!({}),
+                ),
+            ];
+            for (event_index, (kind, data)) in events.into_iter().enumerate() {
+                if index == 2 && kind == AutonomousBountyEventKind::BountySettled {
+                    continue;
+                }
+                store
+                    .upsert_autonomous_bounty_event(
+                        "base-mainnet",
+                        &AutonomousBountyEvent {
+                            id: Uuid::new_v4(),
+                            log_key: format!("social-test:{}:{event_index}", Uuid::new_v4()),
+                            tx_hash: format!("0x{:064x}", Uuid::new_v4().as_u128()),
+                            block_number: 1_000_000 + index,
+                            log_index: u64::try_from(event_index).unwrap(),
+                            contract_address: bounty_contract.clone(),
+                            bounty_id: bounty_id.clone(),
+                            kind,
+                            data,
+                            occurred_at: now,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
     #[tokio::test]
     async fn github_funding_comment_plan_flags_operator_reconciliation() {
         let plan = plan_github_funding_comment(Json(PlanGitHubFundingCommentRequest {
@@ -13514,6 +14495,9 @@ mod tests {
         assert!(paths.contains_key("/v1/github/funding-comment-plan"));
         assert!(paths.contains_key("/v1/github/claim-comment-plan"));
         assert!(paths.contains_key("/v1/social/mention-draft-plan"));
+        assert!(paths.contains_key("/v1/social/mention-ingestion/readiness"));
+        assert!(paths.contains_key("/v1/social/webhooks/neynar"));
+        assert!(paths.contains_key("/v1/social/mention-drafts/{id}"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan"));
         assert!(paths.contains_key("/v1/github/proof-comment-plan-from-proof"));
         assert!(paths.contains_key("/v1/evals/loops"));
@@ -14812,6 +15796,7 @@ mod tests {
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
             discovery_webhooks: None,
+            neynar_social: None,
         })
     }
 
@@ -14846,6 +15831,7 @@ mod tests {
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
             discovery_webhooks: None,
+            neynar_social: None,
         })
     }
 
@@ -14871,6 +15857,7 @@ mod tests {
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
             discovery_webhooks: None,
+            neynar_social: None,
         })
     }
 
@@ -14896,6 +15883,7 @@ mod tests {
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
             discovery_webhooks: None,
+            neynar_social: None,
         })
     }
 
@@ -14925,6 +15913,7 @@ mod tests {
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
             discovery_webhooks: None,
+            neynar_social: None,
         })
     }
 
@@ -14956,6 +15945,7 @@ mod tests {
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
             discovery_webhooks: None,
+            neynar_social: None,
         })
     }
 
@@ -14984,6 +15974,7 @@ mod tests {
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
             discovery_webhooks: None,
+            neynar_social: None,
         })
     }
 
@@ -15012,6 +16003,7 @@ mod tests {
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
             discovery_webhooks: None,
+            neynar_social: None,
         })
     }
 
@@ -15041,6 +16033,7 @@ mod tests {
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
             discovery_webhooks: None,
+            neynar_social: None,
         })
     }
 
