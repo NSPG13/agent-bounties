@@ -27,3 +27,17 @@ the cloud model remains advisory-only.
 The benchmark uses the repository `CLOUD_AGENT_API_KEY` secret. It never prints
 the key or stores prompts outside the normal API request. Raw responses and the
 scored report remain workflow artifacts for 30 days.
+
+## Current Decision
+
+Runs [29765084174](https://github.com/NSPG13/agent-bounties/actions/runs/29765084174)
+and [29766060671](https://github.com/NSPG13/agent-bounties/actions/runs/29766060671)
+produced three observations for each of six cases. GPT-5.6 Luna at low effort
+passed all 18 hard validations, retained 96.3% expected-term coverage, cost
+$0.176 total including three repair calls, and had 9.9-second median latency.
+GPT-5.6 Sol at low effort passed all 18 with 100% coverage, cost $1.049, and had
+42.2-second median latency. GPT-5.5 timed out twice.
+
+Production therefore uses `gpt-5.6-luna` with `low` effort. Roll back to the
+`gpt-5.6` Sol alias if future corpus runs show any hard-validation regression or
+more than a five-percentage-point quality deficit.

@@ -54,7 +54,7 @@ CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
     "CLOUD_AGENT_PROVIDER": "openai",
     "CLOUD_AGENT_PROTOCOL": "openai_responses",
     "CLOUD_AGENT_ENDPOINT": "https://api.openai.com/v1/responses",
-    "CLOUD_AGENT_MODEL": "gpt-5.6",
+    "CLOUD_AGENT_MODEL": "gpt-5.6-luna",
     "CLOUD_AGENT_REASONING_EFFORT": "low",
     "CLOUD_AGENT_MAX_INPUT_CHARS": "12000",
     "CLOUD_AGENT_MAX_OUTPUT_TOKENS": "12000",

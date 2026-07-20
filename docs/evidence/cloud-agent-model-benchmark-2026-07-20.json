@@ -1,0 +1,73 @@
+{
+  "schema_version": "agent-bounties/cloud-model-benchmark-decision-v1",
+  "observed_at": "2026-07-20",
+  "workflow_runs": [
+    "https://github.com/NSPG13/agent-bounties/actions/runs/29765084174",
+    "https://github.com/NSPG13/agent-bounties/actions/runs/29766060671"
+  ],
+  "corpus": "benchmarks/openai-build-week/objective-compiler-corpus.json",
+  "observations_per_case": 3,
+  "selected": {
+    "model": "gpt-5.6-luna",
+    "reasoning_effort": "low"
+  },
+  "candidates": [
+    {
+      "model": "gpt-5.5",
+      "reasoning_effort": "low",
+      "attempted": 18,
+      "passed": 16,
+      "keyword_coverage": 0.9792,
+      "estimated_cost_usd": 0.66428,
+      "p50_latency_ms": 22246,
+      "p95_latency_ms": 180001,
+      "provider_calls_with_usage": 16
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "low",
+      "attempted": 18,
+      "passed": 18,
+      "keyword_coverage": 0.963,
+      "estimated_cost_usd": 0.176064,
+      "p50_latency_ms": 9922,
+      "p95_latency_ms": 66828,
+      "provider_calls_with_usage": 21
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "low",
+      "attempted": 18,
+      "passed": 18,
+      "keyword_coverage": 1.0,
+      "estimated_cost_usd": 1.04926,
+      "p50_latency_ms": 42158,
+      "p95_latency_ms": 85280,
+      "provider_calls_with_usage": 19
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "low",
+      "attempted": 18,
+      "passed": 18,
+      "keyword_coverage": 0.9074,
+      "estimated_cost_usd": 0.38922,
+      "p50_latency_ms": 12183,
+      "p95_latency_ms": 133737,
+      "provider_calls_with_usage": 18
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "medium",
+      "attempted": 18,
+      "passed": 18,
+      "keyword_coverage": 0.9444,
+      "estimated_cost_usd": 0.44772,
+      "p50_latency_ms": 13831,
+      "p95_latency_ms": 61458,
+      "provider_calls_with_usage": 18
+    }
+  ],
+  "authority": "advisory_only",
+  "payment_authority_changed": false
+}
