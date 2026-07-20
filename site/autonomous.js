@@ -1381,12 +1381,56 @@
     link.textContent = posted ? "Return to ChatGPT" : "Return to ChatGPT without posting";
   }
 
-  function prefillPost() {
+  async function prefillPost() {
     const form = byId("autonomous-post-form");
     if (!form) return;
     const params = new URLSearchParams(location.search);
     const handoffSource = params.get("from");
     if (!["chatgpt-app", "github-issue", "social-mention"].includes(handoffSource)) {
+      markChatgptReturn(false);
+      return;
+    }
+    if (handoffSource === "social-mention" && params.has("socialDraft")) {
+      const draftId = params.get("socialDraft");
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(draftId || "")) {
+        output(byId("autonomous-post-output"), "The social draft link is invalid.", "error");
+        return;
+      }
+      try {
+        await loadProtocol();
+        const response = await requestJson(`${apiBase()}/v1/social/mention-drafts/${draftId}`);
+        const draft = response && response.draft;
+        if (!draft || draft.state !== "review_required_not_published") {
+          throw new Error("The persisted social draft is unavailable or not review-only.");
+        }
+        if (draft.solver_reward?.currency !== "usdc" || draft.verifier_reward?.currency !== "usdc") {
+          throw new Error("The persisted social draft does not use USDC rewards.");
+        }
+        const solverReward = Number(draft.solver_reward.amount);
+        const verifierReward = Number(draft.verifier_reward.amount);
+        if (!Number.isSafeInteger(solverReward) || solverReward <= 0
+          || !Number.isSafeInteger(verifierReward) || verifierReward <= 0) {
+          throw new Error("The persisted social draft has invalid rewards.");
+        }
+        form.elements.draftObjective.value = draft.draft_objective || "";
+        form.elements.title.value = draft.title || "";
+        form.elements.goal.value = draft.goal || "";
+        form.elements.sourceUrl.value = draft.source_url || response.mention_url || "";
+        form.elements.solverReward.value = String(solverReward / 1_000_000);
+        form.elements.verifierReward.value = String(verifierReward / 1_000_000);
+        form.elements.discoverySource.value = draft.discovery_source || "Social mention: farcaster";
+        form.elements.acceptance.value = Array.isArray(draft.acceptance_criteria)
+          ? draft.acceptance_criteria.join("\n")
+          : "";
+        form.elements.crowdfund.checked = false;
+        output(byId("autonomous-post-output"), [
+          "Draft imported from a signed Farcaster mention. Review every public field before continuing.",
+          "No bounty id or contract exists yet; this social reply did not publish or fund anything.",
+          "Add measurable acceptance criteria, then connect the creator wallet and approve only the exact Base operation shown by that wallet.",
+        ], "pending");
+      } catch (error) {
+        output(byId("autonomous-post-output"), error.message || String(error), "error");
+      }
       markChatgptReturn(false);
       return;
     }
@@ -1470,7 +1514,7 @@
       selector.addEventListener("change", () => selectProvider(selector.closest("form") || document));
     });
     discoverProviders().catch(() => populateProviderSelectors());
-    prefillPost();
+    await prefillPost();
     prefillFunding();
     loadClaimableFeed();
     loadUnfundedFeed();

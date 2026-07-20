@@ -58,6 +58,9 @@ try {
             cargo test -p db tests::site_analytics_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db tests::social_mention_ingestion_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {
@@ -68,6 +71,9 @@ try {
         }
         Invoke-Checked {
             cargo test -p api tests::github_issue_api_sync_postgres_serializes_concurrent_initial_sync -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
+            cargo test -p api tests::neynar_webhook_persists_one_short_draft_and_one_reply_across_retries -- --ignored --exact --nocapture
         }
     }
     finally {

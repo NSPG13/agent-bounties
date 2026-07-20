@@ -104,6 +104,12 @@ open an idempotent, review-required draft and the existing canonical wallet
 handoff. No acceptance criteria are inferred from issue prose. See the
 [GitHub issue create flow](docs/github-issue-create-comments.md).
 
+On Farcaster, mention the configured BountyBoard bot and place the same exact
+command on its own line. The signed Neynar webhook stores one replay-safe
+review draft and replies with a short browser handoff. The mention and reply do
+not publish or fund a bounty. Runtime status:
+`GET /v1/social/mention-ingestion/readiness`.
+
 1. Run `draft_bounty_with_cloud_agent`.
 2. Make every acceptance criterion measurable.
 3. Run `publish_autonomous_bounty_terms`.

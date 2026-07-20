@@ -38,6 +38,16 @@ secret `CLOUD_AGENT_API_KEY` into the API service without logging it. Verify
 `GET /v1/cloud-agent/readiness`; see
 [`cloud-agent-operations.md`](cloud-agent-operations.md).
 
+Farcaster mention ingestion uses five direct `sync: false` API-service values:
+`NEYNAR_API_KEY`, `NEYNAR_WEBHOOK_SECRET`, `NEYNAR_SIGNER_UUID`,
+`NEYNAR_BOT_FID`, and `NEYNAR_BOT_USERNAME`. They are all-or-none at runtime.
+The exact-SHA controller receives two repository secrets and two repository
+variables, creates or updates the FID-filtered Neynar webhook, reads back its
+generated signing secret, installs all five API values, redacts every value
+from evidence, and then requires `GET /v1/social/mention-ingestion/readiness`
+to report the database, canonical gate, webhook verification, and reply signer
+as ready.
+
 Validate before synchronizing:
 
 ```powershell
@@ -58,12 +68,16 @@ succeeds on a push to `main`, the workflow:
    both public services;
 6. reconciles all nonsecret cloud-agent settings on API and copies the optional
    GitHub-held model key without including its value in evidence;
-7. calls Render's deploy API with the exact commit for API, MCP, and worker;
-8. waits for all three deploys to reach `live` and fails on terminal errors;
-9. verifies exact revision and protocol headers from API and MCP `/health`;
-10. attests cloud readiness and fails if a supplied model credential did not
+7. creates or updates the optional FID-filtered Neynar provider webhook and
+   reconciles its bot identity, reply signer, and generated signing secret on
+   API without including their values in evidence;
+8. calls Render's deploy API with the exact commit for API, MCP, and worker;
+9. waits for all three deploys to reach `live` and fails on terminal errors;
+10. verifies exact revision and protocol headers from API and MCP `/health`;
+11. attests cloud readiness and fails if a supplied model credential did not
     become usable;
-11. stores a redacted 30-day deployment evidence artifact.
+12. attests social mention readiness when provider values were supplied;
+13. stores a redacted 30-day deployment evidence artifact.
 
 Configure the GitHub Actions secret `RENDER_API_KEY`. Create it in the
 Render Dashboard for the workspace that owns these three services, then store
@@ -80,6 +94,16 @@ To enable hosted bounty drafting, also configure the repository Actions secret
 only to `agent-bounties-api`, and redacted from evidence. If it is absent, the
 deployment still succeeds but `/v1/cloud-agent/readiness` remains unavailable
 and reports the missing credential explicitly; no local-model fallback runs.
+
+To activate Farcaster ingestion, provision one approved Neynar signer owned by
+the BountyBoard bot account. Store `NEYNAR_API_KEY` and `NEYNAR_SIGNER_UUID`
+as repository Actions secrets. Store
+`NEYNAR_BOT_FID` and `NEYNAR_BOT_USERNAME` as repository Actions variables.
+The controller registers the `cast.created` webhook filtered by that FID at
+`https://api.bountyboard.global/v1/social/webhooks/neynar` and installs the
+provider-generated webhook secret directly on Render. A partial provider
+configuration fails deployment instead of launching an unsigned or reply-less
+production listener.
 
 The controller can be rehearsed without credentials:
 

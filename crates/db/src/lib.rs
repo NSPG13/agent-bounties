@@ -38,6 +38,8 @@ pub const LEGAL_ACCEPTANCES_MIGRATION: &str =
     include_str!("../../../migrations/0009_legal_acceptances.sql");
 pub const SITE_ANALYTICS_MIGRATION: &str =
     include_str!("../../../migrations/0010_site_analytics.sql");
+pub const SOCIAL_MENTION_INGESTION_MIGRATION: &str =
+    include_str!("../../../migrations/0011_social_mention_ingestion.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -373,6 +375,52 @@ pub struct SiteAnalyticsStats {
     pub channels: Vec<SiteAnalyticsChannelStats>,
 }
 
+#[derive(Debug, Clone)]
+pub struct NewSocialMentionIngestion {
+    pub id: Uuid,
+    pub provider: String,
+    pub provider_event_id: String,
+    pub source_network: String,
+    pub mention_id: String,
+    pub mention_url: String,
+    pub author_fid: i64,
+    pub author_handle: Option<String>,
+    pub mention_text: String,
+    pub status: String,
+    pub draft: Option<serde_json::Value>,
+    pub idempotency_key: Option<String>,
+    pub received_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SocialMentionIngestion {
+    pub id: Uuid,
+    pub provider: String,
+    pub provider_event_id: String,
+    pub source_network: String,
+    pub mention_id: String,
+    pub mention_url: String,
+    pub author_fid: i64,
+    pub author_handle: Option<String>,
+    pub mention_text: String,
+    pub status: String,
+    pub draft: Option<serde_json::Value>,
+    pub idempotency_key: Option<String>,
+    pub reply_cast_hash: Option<String>,
+    pub last_error: Option<String>,
+    pub reply_attempt_count: u32,
+    pub reply_lease_token: Option<Uuid>,
+    pub reply_lease_expires_at: Option<DateTime<Utc>>,
+    pub received_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SocialMentionIngestionReservation {
+    pub record: SocialMentionIngestion,
+    pub inserted: bool,
+}
+
 const SELECT_GITHUB_ISSUE_SYNC_BOUNTY_FOR_UPDATE_SQL: &str = r#"
             SELECT id, help_request_id, title, template_slug, amount, currency, funding_targets, funding_mode, privacy, status, terms_hash, created_at
             FROM bounties
@@ -647,6 +695,7 @@ impl PostgresStore {
                 OPPORTUNITY_CONVERSION_MIGRATION,
                 LEGAL_ACCEPTANCES_MIGRATION,
                 SITE_ANALYTICS_MIGRATION,
+                SOCIAL_MENTION_INGESTION_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1021,6 +1070,165 @@ impl PostgresStore {
         .fetch_optional(&self.pool)
         .await?;
         Ok(inserted.is_some())
+    }
+
+    pub async fn reserve_social_mention_ingestion(
+        &self,
+        ingestion: &NewSocialMentionIngestion,
+    ) -> DbResult<SocialMentionIngestionReservation> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO social_mention_ingestions
+              (id, provider, provider_event_id, source_network, mention_id,
+               mention_url, author_fid, author_handle, mention_text, status,
+               draft, idempotency_key, received_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+            ON CONFLICT DO NOTHING
+            RETURNING id, provider, provider_event_id, source_network, mention_id,
+                      mention_url, author_fid, author_handle, mention_text, status,
+                      draft, idempotency_key, reply_cast_hash, last_error,
+                      reply_attempt_count, reply_lease_token, reply_lease_expires_at,
+                      received_at, updated_at
+            "#,
+        )
+        .bind(ingestion.id)
+        .bind(&ingestion.provider)
+        .bind(&ingestion.provider_event_id)
+        .bind(&ingestion.source_network)
+        .bind(&ingestion.mention_id)
+        .bind(&ingestion.mention_url)
+        .bind(ingestion.author_fid)
+        .bind(&ingestion.author_handle)
+        .bind(&ingestion.mention_text)
+        .bind(&ingestion.status)
+        .bind(&ingestion.draft)
+        .bind(&ingestion.idempotency_key)
+        .bind(ingestion.received_at)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            return Ok(SocialMentionIngestionReservation {
+                record: social_mention_ingestion_from_row(row)?,
+                inserted: true,
+            });
+        }
+
+        let row = sqlx::query(
+            r#"
+            SELECT id, provider, provider_event_id, source_network, mention_id,
+                   mention_url, author_fid, author_handle, mention_text, status,
+                   draft, idempotency_key, reply_cast_hash, last_error,
+                   reply_attempt_count, reply_lease_token, reply_lease_expires_at,
+                   received_at, updated_at
+            FROM social_mention_ingestions
+            WHERE (provider = $1 AND provider_event_id = $2)
+               OR (source_network = $3 AND mention_id = $4)
+            ORDER BY received_at ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(&ingestion.provider)
+        .bind(&ingestion.provider_event_id)
+        .bind(&ingestion.source_network)
+        .bind(&ingestion.mention_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::InvalidEnum("social mention replay disappeared after conflict".to_string())
+        })?;
+        Ok(SocialMentionIngestionReservation {
+            record: social_mention_ingestion_from_row(row)?,
+            inserted: false,
+        })
+    }
+
+    pub async fn get_social_mention_ingestion(
+        &self,
+        id: Uuid,
+    ) -> DbResult<Option<SocialMentionIngestion>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, provider, provider_event_id, source_network, mention_id,
+                   mention_url, author_fid, author_handle, mention_text, status,
+                   draft, idempotency_key, reply_cast_hash, last_error,
+                   reply_attempt_count, reply_lease_token, reply_lease_expires_at,
+                   received_at, updated_at
+            FROM social_mention_ingestions
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(social_mention_ingestion_from_row).transpose()
+    }
+
+    pub async fn claim_social_mention_reply(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        lease_seconds: u64,
+    ) -> DbResult<Option<SocialMentionIngestion>> {
+        let row = sqlx::query(
+            r#"
+            UPDATE social_mention_ingestions
+            SET status = 'replying', reply_attempt_count = reply_attempt_count + 1,
+                reply_lease_token = $2,
+                reply_lease_expires_at = now() + make_interval(secs => $3),
+                last_error = NULL, updated_at = now()
+            WHERE id = $1
+              AND (
+                status IN ('reply_pending', 'reply_failed')
+                OR (status = 'replying' AND reply_lease_expires_at < now())
+              )
+            RETURNING id, provider, provider_event_id, source_network, mention_id,
+                      mention_url, author_fid, author_handle, mention_text, status,
+                      draft, idempotency_key, reply_cast_hash, last_error,
+                      reply_attempt_count, reply_lease_token, reply_lease_expires_at,
+                      received_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(i64_from_u64(lease_seconds)?)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(social_mention_ingestion_from_row).transpose()
+    }
+
+    pub async fn complete_social_mention_reply(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        reply_cast_hash: Option<&str>,
+        error: Option<&str>,
+    ) -> DbResult<Option<SocialMentionIngestion>> {
+        let succeeded = reply_cast_hash.is_some();
+        let row = sqlx::query(
+            r#"
+            UPDATE social_mention_ingestions
+            SET status = CASE WHEN $3 THEN 'replied' ELSE 'reply_failed' END,
+                reply_cast_hash = CASE WHEN $3 THEN $4 ELSE reply_cast_hash END,
+                last_error = CASE WHEN $3 THEN NULL ELSE $5 END,
+                reply_lease_token = NULL, reply_lease_expires_at = NULL,
+                updated_at = now()
+            WHERE id = $1 AND status = 'replying' AND reply_lease_token = $2
+            RETURNING id, provider, provider_event_id, source_network, mention_id,
+                      mention_url, author_fid, author_handle, mention_text, status,
+                      draft, idempotency_key, reply_cast_hash, last_error,
+                      reply_attempt_count, reply_lease_token, reply_lease_expires_at,
+                      received_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(succeeded)
+        .bind(reply_cast_hash)
+        .bind(error.map(|value| value.chars().take(500).collect::<String>()))
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(social_mention_ingestion_from_row).transpose()
     }
 
     pub async fn site_analytics_stats(
@@ -5456,6 +5664,31 @@ fn webhook_delivery_from_row(row: PgRow) -> DbResult<WebhookDelivery> {
     })
 }
 
+fn social_mention_ingestion_from_row(row: PgRow) -> DbResult<SocialMentionIngestion> {
+    Ok(SocialMentionIngestion {
+        id: row.try_get("id")?,
+        provider: row.try_get("provider")?,
+        provider_event_id: row.try_get("provider_event_id")?,
+        source_network: row.try_get("source_network")?,
+        mention_id: row.try_get("mention_id")?,
+        mention_url: row.try_get("mention_url")?,
+        author_fid: row.try_get("author_fid")?,
+        author_handle: row.try_get("author_handle")?,
+        mention_text: row.try_get("mention_text")?,
+        status: row.try_get("status")?,
+        draft: row.try_get("draft")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        reply_cast_hash: row.try_get("reply_cast_hash")?,
+        last_error: row.try_get("last_error")?,
+        reply_attempt_count: u32::try_from(row.try_get::<i32, _>("reply_attempt_count")?)
+            .map_err(|_| DbError::IntegerOverflow("reply_attempt_count".to_string()))?,
+        reply_lease_token: row.try_get("reply_lease_token")?,
+        reply_lease_expires_at: row.try_get("reply_lease_expires_at")?,
+        received_at: row.try_get("received_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
 fn autonomous_event_from_row(row: PgRow) -> DbResult<AutonomousBountyEvent> {
     let kind_value = serde_json::Value::String(row.try_get::<String, _>("kind")?);
     let kind: AutonomousBountyEventKind = serde_json::from_value(kind_value)?;
@@ -5860,6 +6093,110 @@ mod tests {
                 "site analytics must not persist {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn social_mention_migration_is_durable_idempotent_and_lease_bounded() {
+        for invariant in [
+            "social_mention_ingestions",
+            "UNIQUE (provider, provider_event_id)",
+            "UNIQUE (source_network, mention_id)",
+            "reply_lease_token UUID",
+            "reply_lease_expires_at TIMESTAMPTZ",
+            "reply_attempt_count INTEGER NOT NULL DEFAULT 0",
+            "'reply_failed'",
+            "'replied'",
+        ] {
+            assert!(
+                SOCIAL_MENTION_INGESTION_MIGRATION.contains(invariant),
+                "missing social mention invariant {invariant}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn social_mention_ingestion_round_trip_executes_against_migrated_postgres() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let id = Uuid::new_v4();
+        let mention_id = format!("0x{}", "42".repeat(20));
+        let new_ingestion = NewSocialMentionIngestion {
+            id,
+            provider: "neynar".to_string(),
+            provider_event_id: format!("cast.created:{mention_id}"),
+            source_network: "farcaster".to_string(),
+            mention_id: mention_id.clone(),
+            mention_url: format!("https://farcaster.xyz/tester/{mention_id}"),
+            author_fid: 42,
+            author_handle: Some("tester".to_string()),
+            mention_text: "@bountyboard /agent-bounty create 10 USDC fix it".to_string(),
+            status: "reply_pending".to_string(),
+            draft: Some(serde_json::json!({"draft_objective": "fix it"})),
+            idempotency_key: Some(format!("social-{id}")),
+            received_at: Utc::now(),
+        };
+        let first = store
+            .reserve_social_mention_ingestion(&new_ingestion)
+            .await
+            .unwrap();
+        assert!(first.inserted);
+        let replay = store
+            .reserve_social_mention_ingestion(&new_ingestion)
+            .await
+            .unwrap();
+        assert!(!replay.inserted);
+        assert_eq!(first.record.id, replay.record.id);
+
+        let lease = Uuid::new_v4();
+        let claimed = store
+            .claim_social_mention_reply(id, lease, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.status, "replying");
+        assert_eq!(claimed.reply_attempt_count, 1);
+        assert!(store
+            .claim_social_mention_reply(id, Uuid::new_v4(), 30)
+            .await
+            .unwrap()
+            .is_none());
+        let failed = store
+            .complete_social_mention_reply(id, lease, None, Some("provider unavailable"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.status, "reply_failed");
+
+        let retry_lease = Uuid::new_v4();
+        let retried = store
+            .claim_social_mention_reply(id, retry_lease, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.reply_attempt_count, 2);
+        let reply_hash = format!("0x{}", "24".repeat(20));
+        let replied = store
+            .complete_social_mention_reply(id, retry_lease, Some(&reply_hash), None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(replied.status, "replied");
+        assert_eq!(
+            replied.reply_cast_hash.as_deref(),
+            Some(reply_hash.as_str())
+        );
+        assert_eq!(
+            store
+                .get_social_mention_ingestion(id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "replied"
+        );
     }
 
     #[tokio::test]

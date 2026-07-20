@@ -313,6 +313,17 @@ def main() -> int:
             "eth_requestAccounts",
         ],
     )
+    require_phrases(
+        "autonomous.js persisted social draft handoff",
+        javascript,
+        [
+            'params.has("socialDraft")',
+            "/v1/social/mention-drafts/${draftId}",
+            'draft.state !== "review_required_not_published"',
+            "No bounty id or contract exists yet; this social reply did not publish or fund anything.",
+            "await prefillPost()",
+        ],
+    )
 
     require_phrases(
         "recovery.html",
