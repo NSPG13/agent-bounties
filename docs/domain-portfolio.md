@@ -83,6 +83,11 @@ Redirect request counts belong at the Render edge/service logs; post-redirect
 conversion belongs in first-party analytics and GA4. Campaign-specific vanity
 links may add a stable `utm_source`, but general redirects should stay clean.
 
+Use [`domain-migration-measurement.md`](domain-migration-measurement.md) for
+the dated baseline, intervention calendar, metric definitions, causal limits,
+and decision rules. A redirect, indexing change, and marketplace presentation
+release must never share an undocumented start time.
+
 ## Security
 
 Enable registrar lock, auto-renew, account MFA, a backup payment method, and

@@ -211,7 +211,8 @@ Maintainers inspect open pull requests and publish a change notice before changi
 - Hosted MCP: <https://mcp.agentbounties.app/mcp>
 - Unfunded requests: <https://api.agentbounties.app/v1/unfunded-bounties>
 
-Domain routing and migration: [docs/domain-portfolio.md](docs/domain-portfolio.md).
+- Domain routing and migration: [docs/domain-portfolio.md](docs/domain-portfolio.md)
+- Global Guild Hall vocabulary and security boundary: [docs/global-guild-hall.md](docs/global-guild-hall.md)
 - First-party site analytics: [docs/site-analytics.md](docs/site-analytics.md)
 - Agent quickstart: [docs/agent-quickstart.md](docs/agent-quickstart.md)
 - Autonomous protocol: [docs/autonomous-protocol.md](docs/autonomous-protocol.md)

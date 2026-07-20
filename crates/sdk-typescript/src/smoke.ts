@@ -57,6 +57,8 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "get_discovery_subscription",
     "delete_discovery_subscription",
     "get_opportunity_conversion_funnel",
+    "get_guild_charter",
+    "get_guild_adventurer_profile",
     "analyze_bounty_fit",
     "list_autonomous_bounties",
     "get_solver_leaderboard",
@@ -88,6 +90,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "discovery_subscriptions",
     "discovery_subscription",
     "opportunity_conversion_funnel",
+    "guild_charter",
     "autonomous_bounty_analysis",
     "autonomous_creation_plan",
     "autonomous_bounty_feed",
@@ -139,6 +142,8 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "getDiscoverySubscription",
     "deleteDiscoverySubscription",
     "getOpportunityConversionFunnel",
+    "getGuildCharter",
+    "getGuildAdventurerProfile",
     "analyzeBountyFit",
     "publishAutonomousBountyTerms",
     "getSolverLeaderboard",
@@ -169,6 +174,20 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
       "0x2222222222222222222222222222222222222222",
     ),
     "solver",
+  );
+  const charter = asObject(await client.getGuildCharter(), "guild charter");
+  requireCondition(
+    charter.trust_review_mutations_available === false &&
+      charter.affiliation_verification_available === false,
+    "guild charter must preserve unavailable trust and affiliation boundaries",
+  );
+  const guildProfile = asObject(
+    await client.getGuildAdventurerProfile(stringField(solver, "id")),
+    "guild adventurer profile",
+  );
+  requireCondition(
+    guildProfile.trust_score === null && guildProfile.affiliation_status === "unavailable",
+    "guild profile must not infer unavailable trust or affiliation evidence",
   );
   const bounty = asObject(
     await client.openPooledBounty({

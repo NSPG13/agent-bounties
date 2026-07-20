@@ -34,6 +34,15 @@ for (const required of [
   "BountyClaimed",
   "submission_added",
   "BountySettled",
+  "isLiveClaimableItem",
+  "claim.dataset.liveRevalidated",
+  'analyticsExposure = "opportunity_exposed"',
+  "liveClaimAnalyticsContext",
+  "earn-claimable-feed",
+  "live-revalidated-v1",
+  "funded-claimable",
+  "container.contains(snapshot)",
+  "every static claim control remains disabled",
   "default_verification",
   "configurePostVerification",
   "legacy-recovery-form",
@@ -188,7 +197,7 @@ async function testDeterministicPostingDefaults() {
   });
   const instrumentedSource = source.replace(
     /\}\)\(\);\s*$/,
-    "globalThis.__agentBountiesTest = { termsDocument, validateHostedClaimHandoff }; })();",
+    "globalThis.__agentBountiesTest = { termsDocument, validateHostedClaimHandoff, isLiveClaimableItem, liveClaimAnalyticsContext }; })();",
   );
   new vm.Script(evmSource, { filename: "site/evm.js" }).runInContext(context);
   new vm.Script(instrumentedSource, { filename: "site/autonomous.js" }).runInContext(context);
@@ -320,6 +329,40 @@ async function testDeterministicPostingDefaults() {
     "https://api.agentbounties.app",
   );
   assert.strictEqual(walletRequest.method, "eth_signTypedData_v4");
+
+  const liveClaimable = {
+    bounty_contract: bountyContract,
+    status: "claimable",
+    solver_reward: "900000",
+    claim_bond: "100000",
+    target_amount: "1000000",
+    funded_amount: "1000000",
+    terms_valid: true,
+    verification_ready: true,
+    terms: { document: { title: "Verified work" } },
+  };
+  assert.strictEqual(context.__agentBountiesTest.isLiveClaimableItem(liveClaimable), true);
+  const exposure = context.__agentBountiesTest.liveClaimAnalyticsContext(liveClaimable, false);
+  assert.strictEqual(exposure.opportunityId, `canonical:base-mainnet:${bountyContract}`);
+  assert.strictEqual(exposure.bountyContract, bountyContract);
+  assert.strictEqual(exposure.placement, "earn-claimable-feed");
+  assert.strictEqual(exposure.variant, "live-revalidated-v1");
+  assert.strictEqual(exposure.opportunityClass, "funded-claimable");
+  assert.strictEqual(
+    context.__agentBountiesTest.isLiveClaimableItem({ ...liveClaimable, verification_ready: false }),
+    false,
+  );
+  assert.strictEqual(
+    context.__agentBountiesTest.liveClaimAnalyticsContext(
+      { ...liveClaimable, verification_ready: false },
+      false,
+    ),
+    null,
+  );
+  assert.strictEqual(
+    context.__agentBountiesTest.isLiveClaimableItem({ ...liveClaimable, funded_amount: "999999" }),
+    false,
+  );
 
   const tampered = JSON.parse(JSON.stringify(handoff));
   const tamperedTypedData = JSON.parse(tampered.wallet_request.params[1]);

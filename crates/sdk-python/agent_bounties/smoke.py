@@ -36,6 +36,8 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "get_discovery_subscription",
         "delete_discovery_subscription",
         "get_opportunity_conversion_funnel",
+        "get_guild_charter",
+        "get_guild_adventurer_profile",
         "analyze_bounty_fit",
         "list_autonomous_bounties",
         "get_solver_leaderboard",
@@ -61,6 +63,7 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "discovery_subscriptions",
         "discovery_subscription",
         "opportunity_conversion_funnel",
+        "guild_charter",
         "autonomous_bounty_analysis",
         "autonomous_creation_plan",
         "autonomous_agent_native_claim",
@@ -108,6 +111,8 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "get_discovery_subscription",
         "delete_discovery_subscription",
         "get_opportunity_conversion_funnel",
+        "get_guild_charter",
+        "get_guild_adventurer_profile",
         "analyze_bounty_fit",
         "publish_autonomous_bounty_terms",
         "get_solver_leaderboard",
@@ -134,6 +139,18 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     solver = client.register_agent(
         f"python-autonomous-smoke-solver-{suffix}",
         "0x2222222222222222222222222222222222222222",
+    )
+    charter = client.get_guild_charter()
+    _require(
+        charter.get("trust_review_mutations_available") is False
+        and charter.get("affiliation_verification_available") is False,
+        "guild charter must preserve unavailable trust and affiliation boundaries",
+    )
+    guild_profile = client.get_guild_adventurer_profile(solver["id"])
+    _require(
+        guild_profile.get("trust_score") is None
+        and guild_profile.get("affiliation_status") == "unavailable",
+        "guild profile must not infer unavailable trust or affiliation evidence",
     )
     bounty = client.open_pooled_bounty(
         title=f"Python SDK deterministic local loop {suffix}",

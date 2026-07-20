@@ -117,6 +117,34 @@ class NativeSignatureTests(unittest.TestCase):
             {"x-operator-token": "operator", "x-extra": "value"},
         )
 
+    def test_guild_reads_use_read_only_routes(self):
+        client = AgentBountiesClient("https://example.test")
+        response = httpx.Response(
+            200,
+            json={"trust_review_mutations_available": False},
+            request=httpx.Request("GET", "https://example.test"),
+        )
+        with patch("agent_bounties.client.httpx.request", return_value=response) as request:
+            self.assertFalse(client.get_guild_charter()["trust_review_mutations_available"])
+            self.assertFalse(
+                client.get_guild_adventurer_profile(
+                    "00000000-0000-0000-0000-000000000001"
+                )["trust_review_mutations_available"]
+            )
+
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(
+            request.call_args_list[0].args,
+            ("GET", "https://example.test/v1/guild/charter"),
+        )
+        self.assertEqual(
+            request.call_args_list[1].args,
+            (
+                "GET",
+                "https://example.test/v1/guild/adventurers/00000000-0000-0000-0000-000000000001",
+            ),
+        )
+
     def test_stripe_event_methods_share_identical_transport_contract(self):
         client = AgentBountiesClient("https://example.test", "operator")
         response = httpx.Response(200, json={"ok": True}, request=httpx.Request("POST", "https://example.test"))

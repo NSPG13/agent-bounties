@@ -269,8 +269,65 @@ export interface OpportunityConversionFunnel extends Record<string, unknown> {
   actors: Record<string, unknown>;
 }
 
+export interface SiteAnalyticsCurrentChannel extends Record<string, unknown> {
+  source: string;
+  campaign: string | null;
+  referrer_host: string | null;
+  visitors: number;
+  sessions: number;
+  page_views: number;
+  opportunity_exposures: number;
+  funded_bounty_clicks: number;
+  canonical_posts_confirmed: number;
+  funding_starts: number;
+  claims_confirmed: number;
+}
+
+export interface SiteAnalyticsContext extends Record<string, unknown> {
+  placement: string | null;
+  variant: string | null;
+  opportunity_class: string | null;
+  events: number;
+  sessions: number;
+  visitors: number;
+  opportunity_exposures: number;
+  funded_bounty_clicks: number;
+  claims_confirmed: number;
+}
+
+export interface SiteAnalyticsHost extends Record<string, unknown> {
+  site_host: "unknown" | "bountyboard.global" | "agentbounties.app" | "localhost";
+  events: number;
+  visitors: number;
+  sessions: number;
+  page_views: number;
+  market_views: number;
+  opportunity_exposures: number;
+  funded_bounty_clicks: number;
+  canonical_posts_confirmed: number;
+  funding_starts: number;
+  claims_confirmed: number;
+}
+
+export interface SiteAnalyticsOrderedConversion extends Record<string, unknown> {
+  metric: string;
+  start_event: string;
+  outcome_event: string;
+  matching_scope: string;
+  window_seconds: number | null;
+  denominator_events: number;
+  denominator_sessions: number;
+  denominator_visitors: number;
+  numerator_events: number;
+  numerator_sessions: number;
+  numerator_visitors: number;
+  value: number | null;
+}
+
 export interface SiteAnalyticsReport extends Record<string, unknown> {
-  schema_version: "agent-bounties/site-analytics-v1";
+  schema_version:
+    | "agent-bounties/site-analytics-v1"
+    | "agent-bounties/site-analytics-v2";
   window_hours: number;
   window_started_at: string;
   generated_at: string;
@@ -285,8 +342,54 @@ export interface SiteAnalyticsReport extends Record<string, unknown> {
   event_counts: Array<Record<string, unknown>>;
   daily: Array<Record<string, unknown>>;
   channels: Array<Record<string, unknown>>;
+  current_channels?: SiteAnalyticsCurrentChannel[];
+  contexts?: SiteAnalyticsContext[];
+  hosts?: SiteAnalyticsHost[];
+  ordered_conversions?: SiteAnalyticsOrderedConversion[];
   rates: Array<Record<string, unknown>>;
   definitions: string[];
+  evidence_boundary: string;
+}
+
+export type AdventurerRank = "F" | "E" | "D" | "C" | "B" | "A" | "S";
+
+export interface GuildRankBand {
+  rank: AdventurerRank;
+  minimum_reputation_points: number;
+}
+
+export interface GuildCharter extends Record<string, unknown> {
+  schema_version: "agent-bounties/guild-domain-v1";
+  product_name: string;
+  setting: "Global Guild Hall";
+  participant_term: "adventurer";
+  mission_term: "mission";
+  ranks: GuildRankBand[];
+  mission_difficulties: AdventurerRank[];
+  default_access: string;
+  poster_optional_eligibility: string[];
+  mission_eligibility_publishing_available: boolean;
+  party_mutations_available: boolean;
+  trust_review_scale: string;
+  trust_review_mutations_available: boolean;
+  affiliation_requirements: string[];
+  affiliation_verification_available: boolean;
+  supported_bounty_promises: Array<"money" | "other_asset_promise">;
+  other_asset_delivery_verification_available: boolean;
+  enforcement_boundary: string;
+  payment_evidence_boundary: string;
+}
+
+export interface GuildAdventurerProfile extends Record<string, unknown> {
+  schema_version: "agent-bounties/guild-adventurer-profile-v1";
+  agent_id: string;
+  handle: string;
+  reputation_points: number;
+  adventurer_rank: AdventurerRank;
+  accepted_bounties: number;
+  trust_score: number | null;
+  trust_review_count: number;
+  affiliation_status: string;
   evidence_boundary: string;
 }
 
@@ -1040,6 +1143,14 @@ export class AgentBountiesClient {
     return this.query("/v1/analytics/site", {
       window_hours: windowHours,
     }) as Promise<SiteAnalyticsReport>;
+  }
+
+  async getGuildCharter(): Promise<GuildCharter> {
+    return this.request("/v1/guild/charter") as Promise<GuildCharter>;
+  }
+
+  async getGuildAdventurerProfile(agentId: string): Promise<GuildAdventurerProfile> {
+    return this.request(`/v1/guild/adventurers/${encodeURIComponent(agentId)}`) as Promise<GuildAdventurerProfile>;
   }
 
   async analyzeBountyFit(

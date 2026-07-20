@@ -1,7 +1,8 @@
 use super::{
-    list_autonomous_bounties, list_unfunded_bounties, publish_unfunded_bounty,
-    submit_unfunded_bounty_solution, tools, AutonomousBountyFeedArgs, ListUnfundedBountiesArgs,
-    PrepareBountyPostArgs, PublishUnfundedBountyArgs, SharedState,
+    get_guild_adventurer_profile, get_guild_charter, list_autonomous_bounties,
+    list_unfunded_bounties, publish_unfunded_bounty, submit_unfunded_bounty_solution, tools,
+    AutonomousBountyFeedArgs, GetGuildAdventurerProfileArgs, GetGuildCharterArgs,
+    ListUnfundedBountiesArgs, PrepareBountyPostArgs, PublishUnfundedBountyArgs, SharedState,
     SubmitUnfundedBountySolutionArgs, ToolDescriptor,
 };
 use axum::{
@@ -23,6 +24,8 @@ const CHATGPT_TOOL_NAMES: &[&str] = &[
     "submit_unfunded_bounty_solution",
     "prepare_bounty_post",
     "list_autonomous_bounties",
+    "get_guild_charter",
+    "get_guild_adventurer_profile",
 ];
 
 pub(super) fn build_bounty_post_handoff(args: &PrepareBountyPostArgs) -> Result<Value, String> {
@@ -291,6 +294,24 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
                 "Returned canonical, event-derived bounty inventory.",
             )
         }
+        "get_guild_charter" => {
+            let args: GetGuildCharterArgs = serde_json::from_value(arguments)
+                .map_err(|error| format!("invalid get_guild_charter arguments: {error}"))?;
+            (
+                get_guild_charter(Json(args)).await.0,
+                "Returned the read-only Global Guild Hall charter and its explicit unavailable feature boundaries.",
+            )
+        }
+        "get_guild_adventurer_profile" => {
+            let args: GetGuildAdventurerProfileArgs =
+                serde_json::from_value(arguments).map_err(|error| {
+                    format!("invalid get_guild_adventurer_profile arguments: {error}")
+                })?;
+            (
+                get_guild_adventurer_profile(Json(args)).await.0,
+                "Returned the registered adventurer's reputation-derived rank without inferring trust or affiliation.",
+            )
+        }
         _ => return Err(format!("unknown or unavailable ChatGPT app tool: {name}")),
     };
     match legacy_result(legacy) {
@@ -411,6 +432,8 @@ fn tool_title(name: &str) -> &'static str {
         "submit_unfunded_bounty_solution" => "Submit unfunded bounty solution",
         "prepare_bounty_post" => "Prepare bounty for wallet review",
         "list_autonomous_bounties" => "List canonical bounties",
+        "get_guild_charter" => "Read Guild Hall charter",
+        "get_guild_adventurer_profile" => "Read adventurer profile",
         _ => "Agent Bounties tool",
     }
 }

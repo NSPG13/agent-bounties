@@ -1,19 +1,27 @@
 name: Pages
 
 on:
+  schedule:
+    - cron: "17 * * * *"
   pull_request:
     paths:
       - ".github/workflows/pages.yml"
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
+      - "scripts/build-indexable-site.py"
       - "scripts/check-site.py"
+      - "scripts/test_build_indexable_site.py"
+      - "scripts/fixtures/indexable-*.json"
   push:
     branches: [main]
     paths:
       - ".github/workflows/pages.yml"
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
+      - "scripts/build-indexable-site.py"
       - "scripts/check-site.py"
+      - "scripts/test_build_indexable_site.py"
+      - "scripts/fixtures/indexable-*.json"
   workflow_dispatch:
 
 permissions:
@@ -34,6 +42,19 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/check-site.py
+      - run: python scripts/test_build_indexable_site.py -v
+      - name: Validate indexable staging with committed fixtures
+        run: |
+          python scripts/build-indexable-site.py \
+            --source site \
+            --output "$RUNNER_TEMP/indexable-site" \
+            --opportunities scripts/fixtures/indexable-opportunities.json \
+            --claim-feed scripts/fixtures/indexable-claimable-feed.json \
+            --claim-funnel scripts/fixtures/indexable-claim-funnel.json \
+            --fixture-mode
+          python scripts/check-site.py \
+            --site-dir "$RUNNER_TEMP/indexable-site" \
+            --require-indexable-snapshot
 
   deploy:
     if: github.event_name != 'pull_request'
@@ -45,23 +66,60 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Fetch authoritative marketplace evidence
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/indexable-evidence
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          curl --fail --show-error --silent --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 15 --max-time 60 \
+            'https://api.agentbounties.app/v1/opportunities?network=base-mainnet&limit=300' \
+            --output "$EVIDENCE_DIR/opportunities.json"
+          curl --fail --show-error --silent --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 15 --max-time 60 \
+            'https://api.agentbounties.app/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true' \
+            --output "$EVIDENCE_DIR/claimable-feed.json"
+          curl --fail --show-error --silent --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 15 --max-time 60 \
+            'https://api.agentbounties.app/v1/base/autonomous-bounties/claim-funnel?window_hours=720' \
+            --output "$EVIDENCE_DIR/claim-funnel.json"
+      - name: Build fail-closed indexable staging copy
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/indexable-evidence
+          STAGED_SITE: ${{ runner.temp }}/indexable-site
+        run: |
+          set -euo pipefail
+          python scripts/build-indexable-site.py \
+            --source site \
+            --output "$STAGED_SITE" \
+            --opportunities "$EVIDENCE_DIR/opportunities.json" \
+            --claim-feed "$EVIDENCE_DIR/claimable-feed.json" \
+            --claim-funnel "$EVIDENCE_DIR/claim-funnel.json"
       - name: Configure optional Google Analytics
         env:
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
+          STAGED_SITE: ${{ runner.temp }}/indexable-site
         run: |
           if [[ -n "${GA_MEASUREMENT_ID}" && ! "${GA_MEASUREMENT_ID}" =~ ^G-[A-Z0-9]+$ ]]; then
             echo "GA_MEASUREMENT_ID must match G-[A-Z0-9]+" >&2
             exit 1
           fi
           printf 'window.agentBountiesAnalyticsConfig = Object.freeze({\n  googleMeasurementId: "%s",\n});\n' \
-            "${GA_MEASUREMENT_ID}" > site/analytics-config.js
+            "${GA_MEASUREMENT_ID}" > "${STAGED_SITE}/analytics-config.js"
       - name: Stage bounded-wallet deployment manifest
+        env:
+          STAGED_SITE: ${{ runner.temp }}/indexable-site
         run: |
-          cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json
-          mkdir -p site/schemas
-          cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json
+          cp deployments/bounded-agent-wallet-base-mainnet.json "${STAGED_SITE}/bounded-agent-wallet-base-mainnet.json"
+          mkdir -p "${STAGED_SITE}/schemas"
+          cp schemas/discovery-manifest.v2.json "${STAGED_SITE}/schemas/discovery-manifest.v2.json"
+      - name: Validate production staging before upload
+        env:
+          STAGED_SITE: ${{ runner.temp }}/indexable-site
+        run: |
+          python scripts/check-site.py \
+            --site-dir "$STAGED_SITE" \
+            --require-indexable-snapshot
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: ${{ runner.temp }}/indexable-site
       - id: deployment
         uses: actions/deploy-pages@v4

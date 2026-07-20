@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import re
+import struct
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urldefrag, urlparse
@@ -31,6 +34,8 @@ REQUIRED_FILES = [
     "refunds.html",
     "styles.css",
     "favicon.svg",
+    "social-card.png",
+    "social-card.svg",
     "robots.txt",
     "sitemap.xml",
     "home.js",
@@ -79,6 +84,8 @@ ROUTE_ALIASES = {
     "es/index.html": "/",
 }
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+SOCIAL_IMAGE_URL = "https://agentbounties.app/social-card.png"
+SOCIAL_IMAGE_ALT = "Agent Bounties — Global Guild Hall for verified digital work"
 
 
 class LinkParser(HTMLParser):
@@ -106,6 +113,55 @@ def require_phrases(label: str, text: str, phrases: list[str]) -> None:
             fail(f"{label} missing required phrase: {phrase}")
 
 
+def marked_region(text: str, marker: str) -> str:
+    start = f"<!-- {marker}:start -->"
+    end = f"<!-- {marker}:end -->"
+    if text.count(start) != 1 or text.count(end) != 1 or text.index(start) >= text.index(end):
+        fail(f"missing one ordered {marker} marker pair")
+    return text.split(start, 1)[1].split(end, 1)[0]
+
+
+def check_generated_snapshot(index_page: str, earn_page: str) -> None:
+    home_board = marked_region(index_page, "indexable-home-board")
+    earn_board = marked_region(earn_page, "indexable-earn-board")
+    home_timestamps = re.findall(r'data-snapshot-generated-at="([^"]+)"', home_board)
+    earn_timestamps = re.findall(r'data-snapshot-generated-at="([^"]+)"', earn_board)
+    if len(home_timestamps) != 1 or home_timestamps != earn_timestamps:
+        fail("generated homepage and Earn snapshots must share one as-of timestamp")
+    try:
+        parsed = datetime.fromisoformat(home_timestamps[0].replace("Z", "+00:00"))
+    except ValueError:
+        fail("generated snapshot as-of time must be ISO-8601")
+    if parsed.tzinfo is None:
+        fail("generated snapshot as-of time must include a timezone")
+    if "Snapshot as of" not in index_page or "Snapshot as of" not in earn_page:
+        fail("generated snapshots must show a visible as-of time")
+    if home_board.count('data-indexable-kind="claimable"') > 5:
+        fail("homepage snapshot must expose no more than five claimable records")
+    if home_board.count('data-indexable-kind="settled"') > 5:
+        fail("homepage snapshot must expose no more than five settled records")
+    if earn_board.count('data-indexable-kind="claimable"') > 20:
+        fail("Earn snapshot must expose no more than twenty claimable records")
+    if "data-live-revalidated" in home_board or "data-live-revalidated" in earn_board:
+        fail("static snapshot controls must never claim live revalidation")
+    if "data-analytics-event" in home_board or "data-analytics-event" in earn_board:
+        fail("static snapshot controls must not emit live funnel events")
+    if "data-analytics-exposure" in home_board or "data-analytics-exposure" in earn_board:
+        fail("static snapshot cards must not emit live opportunity exposure events")
+    for button in re.findall(r"<button\b[^>]*data-static-claim-action[^>]*>", earn_board):
+        if not re.search(r"\sdisabled(?:\s|>)", button):
+            fail("every static Earn claim control must remain disabled")
+    for unproven_field in [
+        "data-adventurer-rank",
+        "data-mission-difficulty",
+        "data-trust-review",
+        "data-guild-affiliation",
+        "data-poster-eligibility",
+    ]:
+        if unproven_field in home_board or unproven_field in earn_board:
+            fail(f"static cards must not fabricate unsupported guild evidence: {unproven_field}")
+
+
 def check_internal_link(site_dir: Path, source: Path, link: str, ids: set[str]) -> None:
     target, fragment = urldefrag(link)
     parsed = urlparse(target)
@@ -115,9 +171,9 @@ def check_internal_link(site_dir: Path, source: Path, link: str, ids: set[str]) 
         if fragment and fragment not in ids:
             fail(f"{source}: missing local anchor {fragment}")
         return
-    if target.startswith("/"):
+    if parsed.path.startswith("/"):
         fail(f"{source}: root-relative link is not portable on GitHub Pages: {link}")
-    target_path = (source.parent / (target or source.name)).resolve()
+    target_path = (source.parent / (parsed.path or source.name)).resolve()
     try:
         target_path.relative_to(site_dir.resolve())
     except ValueError:
@@ -153,9 +209,21 @@ def check_protocol(protocol: dict, deployment: dict) -> None:
         fail("autonomous deployment must not configure a settlement operator")
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Validate the static Agent Bounties website.")
+    parser.add_argument("--site-dir", type=Path, help="Validate a staged site directory instead of repository site/")
+    parser.add_argument(
+        "--require-indexable-snapshot",
+        action="store_true",
+        help="Require a generated, bounded snapshot in the staged homepage and Earn page",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     repo_root = Path(__file__).resolve().parents[1]
-    site_dir = repo_root / "site"
+    site_dir = args.site_dir.resolve() if args.site_dir else repo_root / "site"
     for relative in REQUIRED_FILES:
         if not (site_dir / relative).exists():
             fail(f"missing site file: {relative}")
@@ -195,6 +263,31 @@ def main() -> int:
                 fail(f"{html_file}: public page must load the analytics configuration exactly once")
             if text.index('src="analytics-config.js"') > text.index('src="analytics.js"'):
                 fail(f"{html_file}: analytics configuration must load before the collector")
+            require_phrases(
+                str(html_file),
+                text,
+                [
+                    '<meta property="og:type" content="website">',
+                    '<meta property="og:site_name" content="Agent Bounties">',
+                    f'<meta property="og:url" content="{expected_canonical}">',
+                    f'<meta property="og:image" content="{SOCIAL_IMAGE_URL}">',
+                    '<meta property="og:image:type" content="image/png">',
+                    '<meta property="og:image:width" content="1200">',
+                    '<meta property="og:image:height" content="630">',
+                    f'<meta property="og:image:alt" content="{SOCIAL_IMAGE_ALT}">',
+                    '<meta name="twitter:card" content="summary_large_image">',
+                    f'<meta name="twitter:image" content="{SOCIAL_IMAGE_URL}">',
+                    f'<meta name="twitter:image:alt" content="{SOCIAL_IMAGE_ALT}">',
+                ],
+            )
+            for meta_pattern in [
+                r'<meta property="og:title" content="[^"]+">',
+                r'<meta property="og:description" content="[^"]+">',
+                r'<meta name="twitter:title" content="[^"]+">',
+                r'<meta name="twitter:description" content="[^"]+">',
+            ]:
+                if not re.search(meta_pattern, text):
+                    fail(f"{html_file}: missing complete social metadata matching {meta_pattern}")
         elif html_file.name in INTERNAL_NOINDEX_PAGES:
             if not re.search(r'<meta\s+name="robots"[^>]*noindex', text, re.IGNORECASE):
                 fail(f"{html_file}: internal page must be noindex")
@@ -204,6 +297,30 @@ def main() -> int:
                 fail(f"{html_file}: internal page must not load the public analytics configuration")
         for link in parser.links:
             check_internal_link(site_dir, html_file, link, parser.ids)
+
+    social_card = (site_dir / "social-card.png").read_bytes()
+    if len(social_card) < 24 or social_card[:8] != b"\x89PNG\r\n\x1a\n":
+        fail("social-card.png must be a valid PNG")
+    social_width, social_height = struct.unpack(">II", social_card[16:24])
+    if (social_width, social_height) != (1200, 630):
+        fail("social-card.png must be exactly 1200x630")
+    social_source = (site_dir / "social-card.svg").read_text(encoding="utf-8")
+    require_phrases(
+        "social-card.svg",
+        social_source,
+        [
+            'width="1200"',
+            'height="630"',
+            "Agent Bounties",
+            "GLOBAL GUILD HALL",
+            "ADVENTURER RANK",
+            "MISSION DIFFICULTY",
+            "Mutable trust reviews: 1 to 5 stars",
+            "Affiliation: evidence-gated / pending unless attested",
+            "FundingAdded proves funding",
+            "BountySettled proves payment",
+        ],
+    )
 
     sitemap_root = ET.parse(site_dir / "sitemap.xml").getroot()
     sitemap_namespace = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
@@ -225,6 +342,18 @@ def main() -> int:
         fail("retired browser settlement bundle site/main.js must not exist")
 
     pages = {name: (site_dir / name).read_text(encoding="utf-8") for name in CORE_PAGES}
+    for marker in [
+        "indexable-home-summary",
+        "indexable-home-metrics",
+        "indexable-home-source",
+        "indexable-home-detail",
+        "indexable-home-board",
+    ]:
+        marked_region(pages["index.html"], marker)
+    for marker in ["indexable-earn-board", "indexable-earn-status"]:
+        marked_region(pages["earn.html"], marker)
+    if args.require_indexable_snapshot:
+        check_generated_snapshot(pages["index.html"], pages["earn.html"])
     structured_data_match = re.search(
         r'<script\s+type="application/ld\+json">\s*(\{.*?\})\s*</script>',
         pages["index.html"],
@@ -314,6 +443,8 @@ def main() -> int:
         privacy_page,
         [
             "First-party site analytics",
+            "server-derived site host",
+            "domain change creates a new browser identifier",
             "Global Privacy Control",
             "Do Not Track",
             "does not store an IP address, user agent, full referrer URL, URL query string, wallet address",
@@ -441,6 +572,20 @@ def main() -> int:
             "sumUsdc",
             "newestPaidProof",
             "Last confirmed market snapshot remains visible",
+            "staticSnapshotVisible",
+            "data-indexable-snapshot",
+            "timestamped canonical snapshot remains visible",
+            "cannot authorize a wallet action",
+            'analyticsExposure = "opportunity_exposed"',
+            "liveCanonicalAnalyticsContext",
+            "requireLiveMarketEvidence",
+            'projection.schema_version !== "agent-bounties/opportunity-projection-v1"',
+            'claim.schema_version !== "agent-bounties/claim-funnel-v2"',
+            "applyAnalyticsContext(article, analyticsContext, true)",
+            "applyAnalyticsContext(action, analyticsContext)",
+            'placement: `homepage-${placementKey}`',
+            'variant: "live-evidence-v1"',
+            '? "funded-claimable"',
             "Last verified standings remain visible",
             "payment_state",
             "payment_committed",
@@ -497,14 +642,14 @@ def main() -> int:
         "index.html",
         pages["index.html"],
         [
-            "Live AI agent bounties paid in Base USDC",
+            "Global Guild Hall for verified AI agent bounties",
             "3 USDC daily. 26 USDC weekly.",
             "BountySettled",
             "Share proof",
             "star the repository",
             "Each creator counts once",
             "Rank is not payment",
-            "Work moving through the market",
+            "Missions moving through the guild",
             "Open opportunity",
             "does not imply payment",
             'type="application/rss+xml"',
@@ -512,10 +657,28 @@ def main() -> int:
             'type="application/feed+json"',
             "Subscribe via RSS",
             "Subscribe via Atom",
-            "Agent Bounties | Live AI agent bounties paid in Base USDC",
+            "Agent Bounties | Global Guild Hall for verified AI agent bounties",
             'property="og:title"',
             'name="twitter:card"',
             'type="application/ld+json"',
+            "Global Guild Hall charter",
+            "Adventurer rank",
+            "rank never blocks participation",
+            "Mission difficulty",
+            "Difficulty never imposes a reward or price range",
+            "Mutable trust reviews",
+            "mission poster or verifier may give 1 to 5 stars",
+            "Bounty reward",
+            "money or another named asset",
+            "authenticated publishing and enforcement path is not live yet",
+            "unaffiliated solo adventurers and informal parties",
+            "Guild affiliation: unavailable / pending.",
+            "stringent harness and model analysis",
+            "applicable human KYC",
+            "platform sandbox receipt",
+            "at least five successful platform tasks",
+            "at least three reviews averaging above four stars",
+            "No invented badges.",
         ],
     )
     require_phrases(
@@ -562,7 +725,10 @@ def main() -> int:
         pages["earn.html"],
         [
             "Make money with your AI",
-            "Claimable bounties",
+            "Claimable mission bounties",
+            "Open by default:",
+            "unaffiliated solo adventurers and informal parties",
+            "Authenticated poster eligibility enforcement is not live yet",
             "Submit evidence",
             "Artifact reference",
             "Evidence package JSON",
@@ -604,6 +770,18 @@ def main() -> int:
             "SHA-256",
             "A transaction hash alone is not funding evidence",
             'params.get("amount")',
+            "isLiveClaimableItem",
+            "claim.dataset.liveRevalidated",
+            "container.contains(snapshot)",
+            "Only revalidated controls can request a claim signature",
+            "every static claim control remains disabled",
+            "funded >= target",
+            "liveClaimAnalyticsContext",
+            "applyClaimAnalyticsContext(article, analyticsContext, true)",
+            "applyClaimAnalyticsContext(claim, analyticsContext)",
+            'placement: targeted ? "earn-targeted-feed" : "earn-claimable-feed"',
+            'variant: "live-revalidated-v1"',
+            'opportunityClass: "funded-claimable"',
         ],
     )
 
@@ -640,6 +818,7 @@ def main() -> int:
             "draft_bounty_with_cloud_agent",
             "compile_objective_with_cloud_agent",
             "/v1/cloud-agent/objective-plans",
+            "/v1/guild/charter",
             "inventory-summary",
             "Inventory unavailable:",
         ],
@@ -707,6 +886,8 @@ def main() -> int:
     tools = discovery.get("agent_tools", [])
     for tool in [
         "list_autonomous_bounties",
+        "get_guild_charter",
+        "get_guild_adventurer_profile",
         "publish_autonomous_bounty_terms",
         "plan_autonomous_canonical_child_terms",
         "prepare_standing_meta_v2_child",
@@ -775,6 +956,8 @@ def main() -> int:
         fail("x402 funding policy must bind evidence to FundingAdded")
     if discovery.get("endpoints", {}).get("x402_discovery") != "https://api.agentbounties.app/.well-known/x402.json":
         fail("static discovery manifest has the wrong x402 discovery endpoint")
+    if discovery.get("endpoints", {}).get("guild_charter") != "https://api.agentbounties.app/v1/guild/charter":
+        fail("static discovery manifest has the wrong Global Guild Hall charter endpoint")
     expected_opportunity_feeds = {
         "opportunity_feed_rss": "https://api.agentbounties.app/v1/opportunities/feed.rss",
         "opportunity_feed_atom": "https://api.agentbounties.app/v1/opportunities/feed.atom",
@@ -976,10 +1159,28 @@ def main() -> int:
         pages_workflow,
         [
             '"deployments/bounded-agent-wallet-base-mainnet.json"',
-            "cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json",
-            "cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json",
+            'cp deployments/bounded-agent-wallet-base-mainnet.json "${STAGED_SITE}/bounded-agent-wallet-base-mainnet.json"',
+            'cp schemas/discovery-manifest.v2.json "${STAGED_SITE}/schemas/discovery-manifest.v2.json"',
         ],
     )
+    require_phrases(
+        "pages.yml indexable staging",
+        pages_workflow,
+        [
+            'cron: "17 * * * *"',
+            "python scripts/test_build_indexable_site.py -v",
+            "--fixture-mode",
+            "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&limit=300",
+            "https://api.agentbounties.app/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true",
+            "https://api.agentbounties.app/v1/base/autonomous-bounties/claim-funnel?window_hours=720",
+            "python scripts/build-indexable-site.py",
+            '--output "$STAGED_SITE"',
+            "--require-indexable-snapshot",
+            "path: ${{ runner.temp }}/indexable-site",
+        ],
+    )
+    if pages_workflow.index("Fetch authoritative marketplace evidence") > pages_workflow.index("actions/upload-pages-artifact"):
+        fail("Pages must fetch and validate authoritative evidence before artifact upload")
     discovery_endpoints = discovery.get("endpoints", {})
     if discovery_endpoints.get("agent_wallet_readiness") != "https://api.agentbounties.app/v1/base/agent-wallet/readiness":
         fail("static discovery has the wrong agent wallet readiness endpoint")

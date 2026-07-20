@@ -781,6 +781,14 @@ class AgentBountiesClient:
             params={"window_hours": window_hours},
         )
 
+    def get_guild_charter(self):
+        """Read the open-by-default guild rules and unavailable feature boundaries."""
+        return self._request("GET", "/v1/guild/charter")
+
+    def get_guild_adventurer_profile(self, agent_id: str):
+        """Read a reputation-derived rank without inferring trust or affiliation."""
+        return self._request("GET", f"/v1/guild/adventurers/{agent_id}")
+
     def list_autonomous_verification_jobs(
         self, network: str | None = None, verifier: str | None = None
     ):

@@ -41,6 +41,8 @@ pub const SITE_ANALYTICS_MIGRATION: &str =
     include_str!("../../../migrations/0010_site_analytics.sql");
 pub const SOCIAL_MENTION_INGESTION_MIGRATION: &str =
     include_str!("../../../migrations/0011_social_mention_ingestion.sql");
+pub const SITE_ANALYTICS_CONTEXT_MIGRATION: &str =
+    include_str!("../../../migrations/0012_site_analytics_context.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -321,6 +323,13 @@ pub struct NewSiteAnalyticsEvent {
     pub referrer_host: Option<String>,
     pub opportunity_id: Option<String>,
     pub bounty_contract: Option<String>,
+    pub placement: Option<String>,
+    pub variant: Option<String>,
+    pub opportunity_class: Option<String>,
+    pub current_source: Option<String>,
+    pub current_campaign: Option<String>,
+    pub current_referrer_host: Option<String>,
+    pub site_host: String,
     pub occurred_at: DateTime<Utc>,
 }
 
@@ -349,6 +358,7 @@ pub struct SiteAnalyticsDailyStats {
     pub sessions: u64,
     pub page_views: u64,
     pub market_views: u64,
+    pub opportunity_exposures: u64,
     pub funded_bounty_clicks: u64,
     pub canonical_posts_confirmed: u64,
     pub funding_starts: u64,
@@ -362,10 +372,69 @@ pub struct SiteAnalyticsChannelStats {
     pub visitors: u64,
     pub sessions: u64,
     pub page_views: u64,
+    pub opportunity_exposures: u64,
     pub funded_bounty_clicks: u64,
     pub canonical_posts_confirmed: u64,
     pub funding_starts: u64,
     pub claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SiteAnalyticsCurrentChannelStats {
+    pub source: String,
+    pub campaign: Option<String>,
+    pub referrer_host: Option<String>,
+    pub visitors: u64,
+    pub sessions: u64,
+    pub page_views: u64,
+    pub opportunity_exposures: u64,
+    pub funded_bounty_clicks: u64,
+    pub canonical_posts_confirmed: u64,
+    pub funding_starts: u64,
+    pub claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SiteAnalyticsContextStats {
+    pub placement: Option<String>,
+    pub variant: Option<String>,
+    pub opportunity_class: Option<String>,
+    pub events: u64,
+    pub sessions: u64,
+    pub visitors: u64,
+    pub opportunity_exposures: u64,
+    pub funded_bounty_clicks: u64,
+    pub claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SiteAnalyticsHostStats {
+    pub site_host: String,
+    pub events: u64,
+    pub visitors: u64,
+    pub sessions: u64,
+    pub page_views: u64,
+    pub market_views: u64,
+    pub opportunity_exposures: u64,
+    pub funded_bounty_clicks: u64,
+    pub canonical_posts_confirmed: u64,
+    pub funding_starts: u64,
+    pub claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SiteAnalyticsOrderedConversionStats {
+    pub metric: String,
+    pub start_event: String,
+    pub outcome_event: String,
+    pub matching_scope: String,
+    pub window_seconds: Option<u64>,
+    pub denominator_events: u64,
+    pub denominator_sessions: u64,
+    pub denominator_visitors: u64,
+    pub numerator_events: u64,
+    pub numerator_sessions: u64,
+    pub numerator_visitors: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -374,6 +443,10 @@ pub struct SiteAnalyticsStats {
     pub event_counts: Vec<SiteAnalyticsEventCount>,
     pub daily: Vec<SiteAnalyticsDailyStats>,
     pub channels: Vec<SiteAnalyticsChannelStats>,
+    pub current_channels: Vec<SiteAnalyticsCurrentChannelStats>,
+    pub contexts: Vec<SiteAnalyticsContextStats>,
+    pub hosts: Vec<SiteAnalyticsHostStats>,
+    pub ordered_conversions: Vec<SiteAnalyticsOrderedConversionStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -709,6 +782,7 @@ impl PostgresStore {
                 LEGAL_ACCEPTANCES_MIGRATION,
                 SITE_ANALYTICS_MIGRATION,
                 SOCIAL_MENTION_INGESTION_MIGRATION,
+                SITE_ANALYTICS_CONTEXT_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1097,8 +1171,11 @@ impl PostgresStore {
             r#"
             INSERT INTO site_analytics_events
               (event_id, visitor_id, session_id, event_name, page_path, source,
-               campaign, referrer_host, opportunity_id, bounty_contract, occurred_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               campaign, referrer_host, opportunity_id, bounty_contract, placement,
+               variant, opportunity_class, current_source, current_campaign,
+               current_referrer_host, site_host, occurred_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                    $14, $15, $16, $17, $18)
             ON CONFLICT (event_id) DO NOTHING
             RETURNING event_id
             "#,
@@ -1113,6 +1190,13 @@ impl PostgresStore {
         .bind(&event.referrer_host)
         .bind(&event.opportunity_id)
         .bind(&event.bounty_contract)
+        .bind(&event.placement)
+        .bind(&event.variant)
+        .bind(&event.opportunity_class)
+        .bind(&event.current_source)
+        .bind(&event.current_campaign)
+        .bind(&event.current_referrer_host)
+        .bind(&event.site_host)
         .bind(event.occurred_at)
         .fetch_optional(&self.pool)
         .await?;
@@ -1328,6 +1412,7 @@ impl PostgresStore {
                    COUNT(DISTINCT session_id) AS sessions,
                    COUNT(*) FILTER (WHERE event_name = 'page_view') AS page_views,
                    COUNT(*) FILTER (WHERE event_name = 'market_view') AS market_views,
+                   COUNT(*) FILTER (WHERE event_name = 'opportunity_exposed') AS opportunity_exposures,
                    COUNT(*) FILTER (WHERE event_name = 'funded_bounty_click') AS funded_bounty_clicks,
                    COUNT(*) FILTER (WHERE event_name = 'canonical_post_confirmed') AS canonical_posts_confirmed,
                    COUNT(*) FILTER (WHERE event_name = 'funding_started') AS funding_starts,
@@ -1361,6 +1446,7 @@ impl PostgresStore {
                    COUNT(DISTINCT window_events.visitor_id) AS visitors,
                    COUNT(DISTINCT window_events.session_id) AS sessions,
                    COUNT(*) FILTER (WHERE window_events.event_name = 'page_view') AS page_views,
+                   COUNT(*) FILTER (WHERE window_events.event_name = 'opportunity_exposed') AS opportunity_exposures,
                    COUNT(*) FILTER (WHERE window_events.event_name = 'funded_bounty_click') AS funded_bounty_clicks,
                    COUNT(*) FILTER (WHERE window_events.event_name = 'canonical_post_confirmed') AS canonical_posts_confirmed,
                    COUNT(*) FILTER (WHERE window_events.event_name = 'funding_started') AS funding_starts,
@@ -1369,6 +1455,206 @@ impl PostgresStore {
             JOIN first_touch USING (visitor_id)
             GROUP BY first_touch.source, first_touch.campaign
             ORDER BY visitors DESC, first_touch.source, first_touch.campaign
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let current_channel_rows = sqlx::query(
+            r#"
+            WITH window_events AS (
+              SELECT * FROM site_analytics_events
+              WHERE occurred_at >= $1 AND occurred_at <= NOW()
+            ), attributed_events AS (
+              SELECT window_events.*,
+                     COALESCE(current_source, source, 'direct') AS channel_source,
+                     CASE
+                       WHEN current_source IS NULL
+                        AND current_campaign IS NULL
+                        AND current_referrer_host IS NULL
+                       THEN campaign
+                       ELSE current_campaign
+                     END AS channel_campaign,
+                     CASE
+                       WHEN current_source IS NULL
+                        AND current_campaign IS NULL
+                        AND current_referrer_host IS NULL
+                       THEN referrer_host
+                       ELSE current_referrer_host
+                     END AS channel_referrer_host
+              FROM window_events
+            )
+            SELECT channel_source AS source, channel_campaign AS campaign,
+                   channel_referrer_host AS referrer_host,
+                   COUNT(DISTINCT visitor_id) AS visitors,
+                   COUNT(DISTINCT session_id) AS sessions,
+                   COUNT(*) FILTER (WHERE event_name = 'page_view') AS page_views,
+                   COUNT(*) FILTER (WHERE event_name = 'opportunity_exposed') AS opportunity_exposures,
+                   COUNT(*) FILTER (WHERE event_name = 'funded_bounty_click') AS funded_bounty_clicks,
+                   COUNT(*) FILTER (WHERE event_name = 'canonical_post_confirmed') AS canonical_posts_confirmed,
+                   COUNT(*) FILTER (WHERE event_name = 'funding_started') AS funding_starts,
+                   COUNT(*) FILTER (WHERE event_name = 'claim_confirmed') AS claims_confirmed
+            FROM attributed_events
+            GROUP BY channel_source, channel_campaign, channel_referrer_host
+            ORDER BY visitors DESC, channel_source, channel_campaign, channel_referrer_host
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let context_rows = sqlx::query(
+            r#"
+            SELECT placement, variant, opportunity_class,
+                   COUNT(*) AS events,
+                   COUNT(DISTINCT session_id) AS sessions,
+                   COUNT(DISTINCT visitor_id) AS visitors,
+                   COUNT(*) FILTER (WHERE event_name = 'opportunity_exposed') AS opportunity_exposures,
+                   COUNT(*) FILTER (WHERE event_name = 'funded_bounty_click') AS funded_bounty_clicks,
+                   COUNT(*) FILTER (WHERE event_name = 'claim_confirmed') AS claims_confirmed
+            FROM site_analytics_events
+            WHERE occurred_at >= $1 AND occurred_at <= NOW()
+              AND (placement IS NOT NULL OR variant IS NOT NULL OR opportunity_class IS NOT NULL)
+            GROUP BY placement, variant, opportunity_class
+            ORDER BY events DESC, placement, variant, opportunity_class
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let host_rows = sqlx::query(
+            r#"
+            SELECT site_host,
+                   COUNT(*) AS events,
+                   COUNT(DISTINCT visitor_id) AS visitors,
+                   COUNT(DISTINCT session_id) AS sessions,
+                   COUNT(*) FILTER (WHERE event_name = 'page_view') AS page_views,
+                   COUNT(*) FILTER (WHERE event_name = 'market_view') AS market_views,
+                   COUNT(*) FILTER (WHERE event_name = 'opportunity_exposed') AS opportunity_exposures,
+                   COUNT(*) FILTER (WHERE event_name = 'funded_bounty_click') AS funded_bounty_clicks,
+                   COUNT(*) FILTER (WHERE event_name = 'canonical_post_confirmed') AS canonical_posts_confirmed,
+                   COUNT(*) FILTER (WHERE event_name = 'funding_started') AS funding_starts,
+                   COUNT(*) FILTER (WHERE event_name = 'claim_confirmed') AS claims_confirmed
+            FROM site_analytics_events
+            WHERE occurred_at >= $1 AND occurred_at <= NOW()
+            GROUP BY site_host
+            ORDER BY site_host
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let ordered_conversion_rows = sqlx::query(
+            r#"
+            WITH exposure_click_starts AS (
+              SELECT start.event_id, start.session_id, start.visitor_id,
+                     EXISTS (
+                       SELECT 1
+                       FROM site_analytics_events AS outcome
+                       WHERE outcome.event_name = 'funded_bounty_click'
+                         AND outcome.session_id = start.session_id
+                         AND outcome.occurred_at >= start.occurred_at
+                         AND outcome.occurred_at <= NOW()
+                         AND (
+                           (start.bounty_contract IS NOT NULL
+                            AND outcome.bounty_contract = start.bounty_contract)
+                           OR (start.opportunity_id IS NOT NULL
+                               AND outcome.opportunity_id = start.opportunity_id)
+                         )
+                     ) AS converted
+              FROM site_analytics_events AS start
+              WHERE start.event_name = 'opportunity_exposed'
+                AND start.occurred_at >= $1 AND start.occurred_at <= NOW()
+            ), exposure_claim_starts AS (
+              SELECT start.event_id, start.session_id, start.visitor_id,
+                     EXISTS (
+                       SELECT 1
+                       FROM site_analytics_events AS outcome
+                       WHERE outcome.event_name = 'claim_confirmed'
+                         AND outcome.visitor_id = start.visitor_id
+                         AND outcome.occurred_at >= start.occurred_at
+                         AND outcome.occurred_at <= start.occurred_at + INTERVAL '24 hours'
+                         AND outcome.occurred_at <= NOW()
+                         AND (
+                           (start.bounty_contract IS NOT NULL
+                            AND outcome.bounty_contract = start.bounty_contract)
+                           OR (start.opportunity_id IS NOT NULL
+                               AND outcome.opportunity_id = start.opportunity_id)
+                         )
+                     ) AS converted
+              FROM site_analytics_events AS start
+              WHERE start.event_name = 'opportunity_exposed'
+                AND start.occurred_at >= $1 AND start.occurred_at <= NOW()
+            ), canonical_post_starts AS (
+              SELECT start.event_id, start.session_id, start.visitor_id,
+                     EXISTS (
+                       SELECT 1
+                       FROM site_analytics_events AS outcome
+                       WHERE outcome.event_name = 'canonical_post_confirmed'
+                         AND outcome.visitor_id = start.visitor_id
+                         AND outcome.occurred_at >= start.occurred_at
+                         AND outcome.occurred_at <= start.occurred_at + INTERVAL '7 days'
+                         AND outcome.occurred_at <= NOW()
+                         AND (
+                           start.bounty_contract IS NULL
+                           OR outcome.bounty_contract IS NULL
+                           OR outcome.bounty_contract = start.bounty_contract
+                         )
+                     ) AS converted
+              FROM site_analytics_events AS start
+              WHERE start.event_name = 'canonical_post_started'
+                AND start.occurred_at >= $1 AND start.occurred_at <= NOW()
+            )
+            SELECT metric, start_event, outcome_event, matching_scope, window_seconds,
+                   denominator_events, denominator_sessions, denominator_visitors,
+                   numerator_events, numerator_sessions, numerator_visitors
+            FROM (
+              SELECT 1 AS ordinal,
+                     'opportunity_exposure_to_funded_bounty_click'::TEXT AS metric,
+                     'opportunity_exposed'::TEXT AS start_event,
+                     'funded_bounty_click'::TEXT AS outcome_event,
+                     'same_session_and_matching_contract_or_opportunity'::TEXT AS matching_scope,
+                     NULL::BIGINT AS window_seconds,
+                     COUNT(*) AS denominator_events,
+                     COUNT(DISTINCT session_id) AS denominator_sessions,
+                     COUNT(DISTINCT visitor_id) AS denominator_visitors,
+                     COUNT(*) FILTER (WHERE converted) AS numerator_events,
+                     COUNT(DISTINCT session_id) FILTER (WHERE converted) AS numerator_sessions,
+                     COUNT(DISTINCT visitor_id) FILTER (WHERE converted) AS numerator_visitors
+              FROM exposure_click_starts
+              UNION ALL
+              SELECT 2 AS ordinal,
+                     'opportunity_exposure_to_claim_confirmation_24h'::TEXT AS metric,
+                     'opportunity_exposed'::TEXT AS start_event,
+                     'claim_confirmed'::TEXT AS outcome_event,
+                     'same_visitor_and_matching_contract_or_opportunity'::TEXT AS matching_scope,
+                     86400::BIGINT AS window_seconds,
+                     COUNT(*) AS denominator_events,
+                     COUNT(DISTINCT session_id) AS denominator_sessions,
+                     COUNT(DISTINCT visitor_id) AS denominator_visitors,
+                     COUNT(*) FILTER (WHERE converted) AS numerator_events,
+                     COUNT(DISTINCT session_id) FILTER (WHERE converted) AS numerator_sessions,
+                     COUNT(DISTINCT visitor_id) FILTER (WHERE converted) AS numerator_visitors
+              FROM exposure_claim_starts
+              UNION ALL
+              SELECT 3 AS ordinal,
+                     'canonical_post_start_to_confirmation_7d'::TEXT AS metric,
+                     'canonical_post_started'::TEXT AS start_event,
+                     'canonical_post_confirmed'::TEXT AS outcome_event,
+                     'same_visitor_and_matching_contract_when_both_present'::TEXT AS matching_scope,
+                     604800::BIGINT AS window_seconds,
+                     COUNT(*) AS denominator_events,
+                     COUNT(DISTINCT session_id) AS denominator_sessions,
+                     COUNT(DISTINCT visitor_id) AS denominator_visitors,
+                     COUNT(*) FILTER (WHERE converted) AS numerator_events,
+                     COUNT(DISTINCT session_id) FILTER (WHERE converted) AS numerator_sessions,
+                     COUNT(DISTINCT visitor_id) FILTER (WHERE converted) AS numerator_visitors
+              FROM canonical_post_starts
+            ) AS conversions
+            ORDER BY ordinal
             "#,
         )
         .bind(window_started_at)
@@ -1404,6 +1690,7 @@ impl PostgresStore {
                         sessions: u64_from_i64(row.try_get("sessions")?)?,
                         page_views: u64_from_i64(row.try_get("page_views")?)?,
                         market_views: u64_from_i64(row.try_get("market_views")?)?,
+                        opportunity_exposures: u64_from_i64(row.try_get("opportunity_exposures")?)?,
                         funded_bounty_clicks: u64_from_i64(row.try_get("funded_bounty_clicks")?)?,
                         canonical_posts_confirmed: u64_from_i64(
                             row.try_get("canonical_posts_confirmed")?,
@@ -1422,12 +1709,91 @@ impl PostgresStore {
                         visitors: u64_from_i64(row.try_get("visitors")?)?,
                         sessions: u64_from_i64(row.try_get("sessions")?)?,
                         page_views: u64_from_i64(row.try_get("page_views")?)?,
+                        opportunity_exposures: u64_from_i64(row.try_get("opportunity_exposures")?)?,
                         funded_bounty_clicks: u64_from_i64(row.try_get("funded_bounty_clicks")?)?,
                         canonical_posts_confirmed: u64_from_i64(
                             row.try_get("canonical_posts_confirmed")?,
                         )?,
                         funding_starts: u64_from_i64(row.try_get("funding_starts")?)?,
                         claims_confirmed: u64_from_i64(row.try_get("claims_confirmed")?)?,
+                    })
+                })
+                .collect::<DbResult<Vec<_>>>()?,
+            current_channels: current_channel_rows
+                .into_iter()
+                .map(|row| {
+                    Ok(SiteAnalyticsCurrentChannelStats {
+                        source: row.try_get("source")?,
+                        campaign: row.try_get("campaign")?,
+                        referrer_host: row.try_get("referrer_host")?,
+                        visitors: u64_from_i64(row.try_get("visitors")?)?,
+                        sessions: u64_from_i64(row.try_get("sessions")?)?,
+                        page_views: u64_from_i64(row.try_get("page_views")?)?,
+                        opportunity_exposures: u64_from_i64(row.try_get("opportunity_exposures")?)?,
+                        funded_bounty_clicks: u64_from_i64(row.try_get("funded_bounty_clicks")?)?,
+                        canonical_posts_confirmed: u64_from_i64(
+                            row.try_get("canonical_posts_confirmed")?,
+                        )?,
+                        funding_starts: u64_from_i64(row.try_get("funding_starts")?)?,
+                        claims_confirmed: u64_from_i64(row.try_get("claims_confirmed")?)?,
+                    })
+                })
+                .collect::<DbResult<Vec<_>>>()?,
+            contexts: context_rows
+                .into_iter()
+                .map(|row| {
+                    Ok(SiteAnalyticsContextStats {
+                        placement: row.try_get("placement")?,
+                        variant: row.try_get("variant")?,
+                        opportunity_class: row.try_get("opportunity_class")?,
+                        events: u64_from_i64(row.try_get("events")?)?,
+                        sessions: u64_from_i64(row.try_get("sessions")?)?,
+                        visitors: u64_from_i64(row.try_get("visitors")?)?,
+                        opportunity_exposures: u64_from_i64(row.try_get("opportunity_exposures")?)?,
+                        funded_bounty_clicks: u64_from_i64(row.try_get("funded_bounty_clicks")?)?,
+                        claims_confirmed: u64_from_i64(row.try_get("claims_confirmed")?)?,
+                    })
+                })
+                .collect::<DbResult<Vec<_>>>()?,
+            hosts: host_rows
+                .into_iter()
+                .map(|row| {
+                    Ok(SiteAnalyticsHostStats {
+                        site_host: row.try_get("site_host")?,
+                        events: u64_from_i64(row.try_get("events")?)?,
+                        visitors: u64_from_i64(row.try_get("visitors")?)?,
+                        sessions: u64_from_i64(row.try_get("sessions")?)?,
+                        page_views: u64_from_i64(row.try_get("page_views")?)?,
+                        market_views: u64_from_i64(row.try_get("market_views")?)?,
+                        opportunity_exposures: u64_from_i64(row.try_get("opportunity_exposures")?)?,
+                        funded_bounty_clicks: u64_from_i64(row.try_get("funded_bounty_clicks")?)?,
+                        canonical_posts_confirmed: u64_from_i64(
+                            row.try_get("canonical_posts_confirmed")?,
+                        )?,
+                        funding_starts: u64_from_i64(row.try_get("funding_starts")?)?,
+                        claims_confirmed: u64_from_i64(row.try_get("claims_confirmed")?)?,
+                    })
+                })
+                .collect::<DbResult<Vec<_>>>()?,
+            ordered_conversions: ordered_conversion_rows
+                .into_iter()
+                .map(|row| {
+                    let window_seconds = row
+                        .try_get::<Option<i64>, _>("window_seconds")?
+                        .map(u64_from_i64)
+                        .transpose()?;
+                    Ok(SiteAnalyticsOrderedConversionStats {
+                        metric: row.try_get("metric")?,
+                        start_event: row.try_get("start_event")?,
+                        outcome_event: row.try_get("outcome_event")?,
+                        matching_scope: row.try_get("matching_scope")?,
+                        window_seconds,
+                        denominator_events: u64_from_i64(row.try_get("denominator_events")?)?,
+                        denominator_sessions: u64_from_i64(row.try_get("denominator_sessions")?)?,
+                        denominator_visitors: u64_from_i64(row.try_get("denominator_visitors")?)?,
+                        numerator_events: u64_from_i64(row.try_get("numerator_events")?)?,
+                        numerator_sessions: u64_from_i64(row.try_get("numerator_sessions")?)?,
+                        numerator_visitors: u64_from_i64(row.try_get("numerator_visitors")?)?,
                     })
                 })
                 .collect::<DbResult<Vec<_>>>()?,
@@ -6116,7 +6482,7 @@ mod tests {
     }
 
     #[test]
-    fn site_analytics_migration_is_privacy_minimized_and_idempotent() {
+    fn site_analytics_migrations_are_privacy_minimized_and_idempotent() {
         for invariant in [
             "site_analytics_events",
             "event_id UUID PRIMARY KEY",
@@ -6134,9 +6500,32 @@ mod tests {
                 "missing site analytics invariant {invariant}"
             );
         }
+        for invariant in [
+            "ADD COLUMN IF NOT EXISTS placement TEXT",
+            "ADD COLUMN IF NOT EXISTS variant TEXT",
+            "ADD COLUMN IF NOT EXISTS opportunity_class TEXT",
+            "ADD COLUMN IF NOT EXISTS current_source TEXT",
+            "ADD COLUMN IF NOT EXISTS current_campaign TEXT",
+            "ADD COLUMN IF NOT EXISTS current_referrer_host TEXT",
+            "ADD COLUMN IF NOT EXISTS site_host TEXT NOT NULL DEFAULT 'unknown'",
+            "'opportunity_exposed'",
+            "site_analytics_context_token_check",
+            "site_analytics_current_referrer_host_check",
+            "site_analytics_site_host_check",
+            "site_analytics_opportunity_exposure_check",
+            "site_analytics_events_opportunity_funnel_idx",
+            "site_analytics_events_current_source_idx",
+            "site_analytics_events_site_host_idx",
+        ] {
+            assert!(
+                SITE_ANALYTICS_CONTEXT_MIGRATION.contains(invariant),
+                "missing site analytics context invariant {invariant}"
+            );
+        }
         for forbidden in ["ip_address", "user_agent", "referrer_url", "wallet_address"] {
             assert!(
-                !SITE_ANALYTICS_MIGRATION.contains(forbidden),
+                !SITE_ANALYTICS_MIGRATION.contains(forbidden)
+                    && !SITE_ANALYTICS_CONTEXT_MIGRATION.contains(forbidden),
                 "site analytics must not persist {forbidden}"
             );
         }
@@ -6254,10 +6643,15 @@ mod tests {
         store.migrate().await.unwrap();
 
         let now = Utc::now();
+        let visitor_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let placement = format!("postgres-test-{}", &Uuid::new_v4().to_string()[..8]);
+        let opportunity_id = format!("postgres-test:opportunity:{}", Uuid::new_v4());
+        let bounty_contract = format!("0x{}", "17".repeat(20));
         let event = NewSiteAnalyticsEvent {
             event_id: Uuid::new_v4(),
-            visitor_id: Uuid::new_v4(),
-            session_id: Uuid::new_v4(),
+            visitor_id,
+            session_id,
             event_name: "page_view".to_string(),
             page_path: "/".to_string(),
             source: Some("postgres-test".to_string()),
@@ -6265,20 +6659,111 @@ mod tests {
             referrer_host: None,
             opportunity_id: None,
             bounty_contract: None,
-            occurred_at: now,
+            placement: None,
+            variant: None,
+            opportunity_class: None,
+            current_source: Some("postgres-current".to_string()),
+            current_campaign: Some("analytics-v2".to_string()),
+            current_referrer_host: Some("example.test".to_string()),
+            site_host: "agentbounties.app".to_string(),
+            occurred_at: now - chrono::Duration::minutes(5),
         };
         assert!(store.record_site_analytics_event(&event).await.unwrap());
         assert!(!store.record_site_analytics_event(&event).await.unwrap());
+
+        let exposure = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            event_name: "opportunity_exposed".to_string(),
+            opportunity_id: Some(opportunity_id.clone()),
+            bounty_contract: Some(bounty_contract.clone()),
+            placement: Some(placement.clone()),
+            variant: Some("control".to_string()),
+            opportunity_class: Some("funded-claimable".to_string()),
+            occurred_at: now - chrono::Duration::minutes(4),
+            ..event.clone()
+        };
+        let funded_click = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            event_name: "funded_bounty_click".to_string(),
+            occurred_at: now - chrono::Duration::minutes(3),
+            ..exposure.clone()
+        };
+        let claim_confirmed = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            event_name: "claim_confirmed".to_string(),
+            occurred_at: now - chrono::Duration::minutes(2),
+            ..exposure.clone()
+        };
+        let canonical_post_started = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            event_name: "canonical_post_started".to_string(),
+            opportunity_id: None,
+            bounty_contract: Some(bounty_contract.clone()),
+            placement: Some("canonical-post".to_string()),
+            opportunity_class: None,
+            occurred_at: now - chrono::Duration::minutes(4),
+            ..event.clone()
+        };
+        let canonical_post_confirmed = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            event_name: "canonical_post_confirmed".to_string(),
+            bounty_contract: Some(bounty_contract),
+            occurred_at: now - chrono::Duration::minutes(1),
+            ..canonical_post_started.clone()
+        };
+        for followup in [
+            exposure,
+            funded_click,
+            claim_confirmed,
+            canonical_post_started,
+            canonical_post_confirmed,
+        ] {
+            assert!(store.record_site_analytics_event(&followup).await.unwrap());
+        }
+
         let stats = store
-            .site_analytics_stats(now - chrono::Duration::minutes(1))
+            .site_analytics_stats(now - chrono::Duration::minutes(10))
             .await
             .unwrap();
         assert!(stats.overview.unique_visitors >= 1);
         assert!(stats.overview.page_views >= 1);
+        assert!(stats.daily.iter().any(|day| day.opportunity_exposures >= 1));
         assert!(stats
             .channels
             .iter()
             .any(|channel| channel.source == "postgres-test"));
+        assert!(stats
+            .current_channels
+            .iter()
+            .any(|channel| channel.source == "postgres-current"
+                && channel.opportunity_exposures >= 1));
+        assert!(stats.contexts.iter().any(|context| {
+            context.placement.as_deref() == Some(placement.as_str())
+                && context.opportunity_exposures >= 1
+                && context.funded_bounty_clicks >= 1
+        }));
+        assert!(stats.hosts.iter().any(|host| {
+            host.site_host == "agentbounties.app"
+                && host.page_views >= 1
+                && host.opportunity_exposures >= 1
+                && host.funded_bounty_clicks >= 1
+        }));
+        for metric in [
+            "opportunity_exposure_to_funded_bounty_click",
+            "opportunity_exposure_to_claim_confirmation_24h",
+            "canonical_post_start_to_confirmation_7d",
+        ] {
+            let conversion = stats
+                .ordered_conversions
+                .iter()
+                .find(|conversion| conversion.metric == metric)
+                .unwrap();
+            assert!(conversion.denominator_events >= 1);
+            assert!(conversion.numerator_events >= 1);
+        }
     }
 
     #[tokio::test]

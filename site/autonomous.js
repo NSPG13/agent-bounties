@@ -1191,10 +1191,55 @@
     }
   }
 
+  function isLiveClaimableItem(item) {
+    if (!item || typeof item !== "object") return false;
+    try {
+      const target = BigInt(item.target_amount);
+      const funded = BigInt(item.funded_amount);
+      const reward = BigInt(item.solver_reward);
+      const bond = BigInt(item.claim_bond);
+      return /^0x[0-9a-fA-F]{40}$/.test(item.bounty_contract || "")
+        && item.status === "claimable"
+        && item.terms_valid === true
+        && item.verification_ready === true
+        && Boolean(item.terms && item.terms.document)
+        && target > 0n
+        && funded >= target
+        && reward > 0n
+        && bond > 0n;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function liveClaimAnalyticsContext(item, targeted) {
+    if (!isLiveClaimableItem(item)) return null;
+    const contract = item.bounty_contract.toLowerCase();
+    return {
+      opportunityId: `canonical:base-mainnet:${contract}`,
+      bountyContract: contract,
+      placement: targeted ? "earn-targeted-feed" : "earn-claimable-feed",
+      variant: "live-revalidated-v1",
+      opportunityClass: "funded-claimable",
+    };
+  }
+
+  function applyClaimAnalyticsContext(element, context, includeExposure = false) {
+    if (!context) return;
+    if (includeExposure) element.dataset.analyticsExposure = "opportunity_exposed";
+    element.dataset.analyticsOpportunityId = context.opportunityId;
+    element.dataset.analyticsBountyContract = context.bountyContract;
+    element.dataset.analyticsPlacement = context.placement;
+    element.dataset.analyticsVariant = context.variant;
+    element.dataset.analyticsOpportunityClass = context.opportunityClass;
+  }
+
   function bountyRow(item, api, targeted = false) {
     const article = document.createElement("article");
     article.className = "bounty-row";
     if (targeted) article.dataset.targetedClaim = "true";
+    const analyticsContext = liveClaimAnalyticsContext(item, targeted);
+    applyClaimAnalyticsContext(article, analyticsContext, true);
     const heading = document.createElement("h3");
     heading.textContent = item.terms ? item.terms.document.title : item.bounty_id;
     const detail = document.createElement("p");
@@ -1213,10 +1258,12 @@
     claim.className = "button primary";
     claim.type = "button";
     claim.textContent = targeted ? "Sign once to claim" : "Claim bounty";
-    claim.dataset.analyticsEvent = "claim_started";
-    claim.dataset.analyticsBountyContract = item.bounty_contract;
-    claim.disabled =
-      state.protocol.status !== "active" || item.status !== "claimable" || !item.terms || !item.terms_valid;
+    if (analyticsContext) {
+      claim.dataset.liveRevalidated = "true";
+      claim.dataset.analyticsEvent = "claim_started";
+      applyClaimAnalyticsContext(claim, analyticsContext);
+    }
+    claim.disabled = state.protocol.status !== "active" || !analyticsContext;
     claim.addEventListener("click", async () => {
       const result = byId("claim-feed-output");
       try {
@@ -1248,6 +1295,9 @@
   async function loadClaimableFeed() {
     const container = byId("claimable-feed");
     if (!container) return;
+    const snapshot = container.querySelector("[data-indexable-snapshot][data-snapshot-generated-at]");
+    const snapshotStatus = document.querySelector("[data-claimable-snapshot-status]");
+    container.dataset.feedHealth = "checking";
     try {
       await loadProtocol();
       const api = state.protocol.api_base_url.replace(/\/$/, "");
@@ -1259,31 +1309,55 @@
       const items = await requestJson(
         `${api}/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=${target ? "false" : "true"}`,
       );
-      container.textContent = "";
+      if (!Array.isArray(items)) throw new Error("The canonical bounty feed returned an invalid response.");
+      if (!target && items.some((item) => !isLiveClaimableItem(item))) {
+        throw new Error("The canonical bounty feed included work that was not fully funded, claimable, and verifier-ready.");
+      }
       const visible = target
-        ? items.filter((item) => item.bounty_contract.toLowerCase() === target.toLowerCase())
+        ? items.filter((item) => typeof item.bounty_contract === "string"
+          && item.bounty_contract.toLowerCase() === target.toLowerCase())
         : items;
+      const fragment = document.createDocumentFragment();
       if (!visible.length) {
         const empty = document.createElement("p");
         empty.textContent = target
           ? "The requested contract is not indexed as a canonical bounty. No wallet request was made."
           : "No funded bounty is currently claimable.";
-        container.append(empty);
-        return;
+        fragment.append(empty);
+      } else {
+        for (const item of visible) fragment.append(bountyRow(item, api, Boolean(target)));
       }
-      for (const item of visible) container.append(bountyRow(item, api, Boolean(target)));
+      container.replaceChildren(fragment);
+      container.dataset.feedHealth = "live";
+      if (snapshotStatus) {
+        snapshotStatus.textContent = `Live canonical state checked ${new Date().toLocaleTimeString()}. Only revalidated controls can request a claim signature.`;
+      }
       if (target) {
+        if (!visible.length) return;
         const item = visible[0];
+        const claimableNow = isLiveClaimableItem(item);
         output(byId("claim-feed-output"), [
-          item.status === "claimable"
+          claimableNow
             ? "Canonical bounty selected. Connect the payout wallet and sign the bounded claim request."
             : `This canonical bounty is ${item.status}; it cannot be claimed now.`,
           `Exact refundable solver bond: ${Number(item.claim_bond) / 1_000_000} USDC`,
           `Current solver payout: ${(Number(item.solver_reward) + Number(item.timeout_bond_pool)) / 1_000_000} USDC`,
-        ], item.status === "claimable" ? "pending" : "error");
+        ], claimableNow ? "pending" : "error");
       }
     } catch (error) {
+      container.dataset.feedHealth = "delayed";
+      if (snapshot && container.contains(snapshot)) {
+        if (snapshotStatus) {
+          const generatedAt = new Date(snapshot.dataset.snapshotGeneratedAt);
+          const asOf = Number.isFinite(generatedAt.getTime())
+            ? generatedAt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })
+            : "the deployment snapshot";
+          snapshotStatus.textContent = `Live check delayed. The canonical snapshot from ${asOf} UTC remains visible; every static claim control remains disabled.`;
+        }
+        return;
+      }
       container.textContent = error.message || String(error);
+      if (snapshotStatus) snapshotStatus.textContent = "Live canonical state could not be checked. No claim action was enabled.";
     }
   }
 
