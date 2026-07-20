@@ -1,0 +1,109 @@
+name: Cloud Agent Model Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Independent runs per corpus case"
+        required: true
+        type: choice
+        default: "1"
+        options:
+          - "1"
+          - "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-agent-model-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CLOUD_AGENT_API_KEY: ${{ secrets.CLOUD_AGENT_API_KEY }}
+      CLOUD_AGENT_ENABLED: "true"
+      CLOUD_AGENT_PUBLIC_DRAFTS: "false"
+      CLOUD_AGENT_PROVIDER: openai
+      CLOUD_AGENT_PROTOCOL: openai_responses
+      CLOUD_AGENT_ENDPOINT: https://api.openai.com/v1/responses
+      CLOUD_AGENT_CAPTURE_USAGE: "true"
+      CLOUD_AGENT_MAX_INPUT_CHARS: "12000"
+      CLOUD_AGENT_MAX_OUTPUT_TOKENS: "12000"
+      CLOUD_AGENT_MAX_DAILY_DRAFTS: "100"
+      CLOUD_AGENT_TIMEOUT_SECONDS: "180"
+      CLOUD_AGENT_BENCHMARK_RUNS: ${{ inputs.runs }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Require benchmark credential
+        shell: bash
+        run: test -n "$CLOUD_AGENT_API_KEY"
+
+      - name: Run exact Objective Compiler matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw
+          candidates=(
+            "gpt-5.5-low|gpt-5.5|low"
+            "gpt-5.6-sol-low|gpt-5.6-sol|low"
+            "gpt-5.6-terra-low|gpt-5.6-terra|low"
+            "gpt-5.6-terra-medium|gpt-5.6-terra|medium"
+            "gpt-5.6-luna-low|gpt-5.6-luna|low"
+          )
+          for candidate in "${candidates[@]}"; do
+            IFS='|' read -r slug model effort <<< "$candidate"
+            echo "Benchmarking ${model} at ${effort} effort"
+            CLOUD_AGENT_MODEL="$model" \
+            CLOUD_AGENT_REASONING_EFFORT="$effort" \
+              cargo run --quiet -p cloud-agent --example benchmark_objective_compiler -- \
+                benchmarks/openai-build-week/objective-compiler-corpus.json \
+                > "artifacts/raw/${slug}.json"
+          done
+
+      - name: Score quality, latency, and billed tokens
+        shell: bash
+        run: |
+          python scripts/score_cloud_agent_model_benchmark.py \
+            --input-dir artifacts/raw \
+            --output artifacts/cloud-agent-model-benchmark.json \
+            | tee artifacts/cloud-agent-model-benchmark.txt
+
+      - name: Publish summary
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("artifacts/cloud-agent-model-benchmark.json").read_text())
+          selected = report["selected"] or {"model": "none", "reasoning_effort": "none"}
+          print("## Cloud Agent Model Benchmark")
+          print()
+          print(f"Selected: **{selected['model']} / {selected['reasoning_effort']}**")
+          print()
+          print("| Model | Effort | Pass | Coverage | Cost | Cost/case | p95 |")
+          print("|---|---:|---:|---:|---:|---:|---:|")
+          for item in report["candidates"]:
+              print(
+                  f"| {item['model']} | {item['reasoning_effort']} | "
+                  f"{item['passed']}/{item['attempted']} | {item['keyword_coverage']:.2%} | "
+                  f"${item['estimated_cost_usd']:.4f} | ${item['average_cost_per_case_usd']:.4f} | "
+                  f"{item['p95_latency_ms']} ms |"
+              )
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloud-agent-model-benchmark
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 30

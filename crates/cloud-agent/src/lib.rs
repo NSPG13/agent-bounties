@@ -16,7 +16,8 @@ const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 12_000;
 const DEFAULT_DAILY_LIMIT: u32 = 50;
 const DEFAULT_TIMEOUT_SECONDS: u64 = 90;
 const MINIMUM_TASK_REWARD_BASE_UNITS: u128 = 10_000;
-const OPENAI_REASONING_EFFORT: &str = "low";
+const DEFAULT_OPENAI_REASONING_EFFORT: &str = "low";
+const OPENAI_REASONING_EFFORTS: [&str; 6] = ["none", "low", "medium", "high", "xhigh", "max"];
 
 fn default_objective_task_limit() -> u8 {
     5
@@ -52,6 +53,8 @@ pub struct CloudAgentConfig {
     pub endpoint: Option<String>,
     pub api_key: Option<String>,
     pub model: Option<String>,
+    pub reasoning_effort: String,
+    pub capture_usage: bool,
     pub max_input_chars: usize,
     pub max_output_tokens: u32,
     pub max_daily_drafts: u32,
@@ -75,6 +78,16 @@ impl CloudAgentConfig {
                 "CLOUD_AGENT_ENDPOINT must use HTTPS".to_string(),
             ));
         }
+        let reasoning_effort = env::var("CLOUD_AGENT_REASONING_EFFORT")
+            .unwrap_or_else(|_| DEFAULT_OPENAI_REASONING_EFFORT.to_string())
+            .trim()
+            .to_ascii_lowercase();
+        if !OPENAI_REASONING_EFFORTS.contains(&reasoning_effort.as_str()) {
+            return Err(CloudAgentError::InvalidConfiguration(format!(
+                "CLOUD_AGENT_REASONING_EFFORT must be one of {}",
+                OPENAI_REASONING_EFFORTS.join(", ")
+            )));
+        }
         Ok(Self {
             enabled: env_flag("CLOUD_AGENT_ENABLED"),
             public_drafts: env_flag("CLOUD_AGENT_PUBLIC_DRAFTS"),
@@ -83,6 +96,8 @@ impl CloudAgentConfig {
             endpoint,
             api_key: non_empty_env("CLOUD_AGENT_API_KEY"),
             model: non_empty_env("CLOUD_AGENT_MODEL"),
+            reasoning_effort,
+            capture_usage: env_flag("CLOUD_AGENT_CAPTURE_USAGE"),
             max_input_chars: env_usize("CLOUD_AGENT_MAX_INPUT_CHARS", DEFAULT_MAX_INPUT_CHARS)?,
             max_output_tokens: env_u32("CLOUD_AGENT_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS)?,
             max_daily_drafts: env_u32("CLOUD_AGENT_MAX_DAILY_DRAFTS", DEFAULT_DAILY_LIMIT)?,
@@ -111,6 +126,7 @@ impl CloudAgentConfig {
             provider: self.provider.clone(),
             protocol: self.protocol,
             model: self.model.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
             public_drafts: self.public_drafts,
             local_fallback: false,
             max_input_chars: self.max_input_chars,
@@ -154,6 +170,7 @@ pub struct CloudAgentReadiness {
     pub provider: String,
     pub protocol: CloudModelProtocol,
     pub model: Option<String>,
+    pub reasoning_effort: String,
     pub public_drafts: bool,
     pub local_fallback: bool,
     pub max_input_chars: usize,
@@ -459,7 +476,18 @@ struct HttpCloudTextModel {
     endpoint: String,
     api_key: String,
     model: String,
+    reasoning_effort: String,
     max_output_tokens: u32,
+    usage: Option<Arc<Mutex<Vec<CloudModelUsage>>>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct CloudModelUsage {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub total_tokens: u64,
 }
 
 impl HttpCloudTextModel {
@@ -482,7 +510,7 @@ impl HttpCloudTextModel {
                     "instructions": system,
                     "input": user,
                     "text": {"format": format},
-                    "reasoning": {"effort": OPENAI_REASONING_EFFORT},
+                    "reasoning": {"effort": self.reasoning_effort},
                     "max_output_tokens": self.max_output_tokens,
                     "store": false
                 })
@@ -539,6 +567,12 @@ impl HttpCloudTextModel {
                 "Responses API returned an incomplete result ({reason})"
             )));
         }
+        if let Some(usage) = &self.usage {
+            usage
+                .lock()
+                .expect("cloud usage capture poisoned")
+                .push(extract_openai_usage(&value));
+        }
         match self.protocol {
             CloudModelProtocol::OpenAiResponses => {
                 extract_openai_response_text(&value).ok_or_else(|| {
@@ -571,6 +605,20 @@ impl HttpCloudTextModel {
                     CloudAgentError::InvalidResponse("missing Anthropic text content".to_string())
                 }),
         }
+    }
+}
+
+fn json_u64(value: &Value, pointer: &str) -> u64 {
+    value.pointer(pointer).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn extract_openai_usage(value: &Value) -> CloudModelUsage {
+    CloudModelUsage {
+        input_tokens: json_u64(value, "/usage/input_tokens"),
+        cached_input_tokens: json_u64(value, "/usage/input_tokens_details/cached_tokens"),
+        output_tokens: json_u64(value, "/usage/output_tokens"),
+        reasoning_tokens: json_u64(value, "/usage/output_tokens_details/reasoning_tokens"),
+        total_tokens: json_u64(value, "/usage/total_tokens"),
     }
 }
 
@@ -676,12 +724,16 @@ pub struct CloudAgentService {
     objective_plan_cache: Arc<Mutex<BTreeMap<String, CachedObjectivePlan>>>,
     demo_solution_cache: Arc<Mutex<BTreeMap<String, CachedDemoSolution>>>,
     analysis_cache: Arc<Mutex<BTreeMap<String, CachedBountyAnalysis>>>,
+    usage: Option<Arc<Mutex<Vec<CloudModelUsage>>>>,
 }
 
 impl CloudAgentService {
     pub fn from_env() -> Result<Self, CloudAgentError> {
         let config = CloudAgentConfig::from_env()?;
         let readiness = config.readiness();
+        let usage = config
+            .capture_usage
+            .then(|| Arc::new(Mutex::new(Vec::new())));
         let model = if readiness.available {
             let client = Client::builder()
                 .timeout(Duration::from_secs(config.timeout_seconds))
@@ -693,15 +745,25 @@ impl CloudAgentService {
                 endpoint: config.endpoint.clone().expect("readiness checked endpoint"),
                 api_key: config.api_key.clone().expect("readiness checked API key"),
                 model: config.model.clone().expect("readiness checked model"),
+                reasoning_effort: config.reasoning_effort.clone(),
                 max_output_tokens: config.max_output_tokens,
+                usage: usage.clone(),
             }) as Arc<dyn CloudTextModel>)
         } else {
             None
         };
-        Ok(Self::with_model(config, model))
+        Ok(Self::with_model_and_usage(config, model, usage))
     }
 
     pub fn with_model(config: CloudAgentConfig, model: Option<Arc<dyn CloudTextModel>>) -> Self {
+        Self::with_model_and_usage(config, model, None)
+    }
+
+    fn with_model_and_usage(
+        config: CloudAgentConfig,
+        model: Option<Arc<dyn CloudTextModel>>,
+        usage: Option<Arc<Mutex<Vec<CloudModelUsage>>>>,
+    ) -> Self {
         Self {
             config,
             model,
@@ -710,7 +772,15 @@ impl CloudAgentService {
             objective_plan_cache: Arc::new(Mutex::new(BTreeMap::new())),
             demo_solution_cache: Arc::new(Mutex::new(BTreeMap::new())),
             analysis_cache: Arc::new(Mutex::new(BTreeMap::new())),
+            usage,
         }
+    }
+
+    pub fn take_usage(&self) -> Vec<CloudModelUsage> {
+        self.usage
+            .as_ref()
+            .map(|usage| std::mem::take(&mut *usage.lock().expect("cloud usage capture poisoned")))
+            .unwrap_or_default()
     }
 
     pub fn readiness(&self) -> CloudAgentReadiness {
@@ -2117,6 +2187,8 @@ mod tests {
             endpoint: Some("https://models.example.test/v1/chat/completions".to_string()),
             api_key: Some("secret".to_string()),
             model: Some("fixture-v1".to_string()),
+            reasoning_effort: "low".to_string(),
+            capture_usage: false,
             max_input_chars: 1_000,
             max_output_tokens: 1_000,
             max_daily_drafts: 2,
@@ -2369,16 +2441,33 @@ mod tests {
 
     #[test]
     fn responses_api_text_and_budget_arithmetic_are_strict() {
-        assert_eq!(OPENAI_REASONING_EFFORT, "low");
+        assert_eq!(DEFAULT_OPENAI_REASONING_EFFORT, "low");
         let response = json!({
             "output": [{
                 "type": "message",
                 "content": [{"type": "output_text", "text": objective_output()}]
-            }]
+            }],
+            "usage": {
+                "input_tokens": 120,
+                "input_tokens_details": {"cached_tokens": 20},
+                "output_tokens": 80,
+                "output_tokens_details": {"reasoning_tokens": 30},
+                "total_tokens": 200
+            }
         });
         assert_eq!(
             extract_openai_response_text(&response),
             Some(objective_output())
+        );
+        assert_eq!(
+            extract_openai_usage(&response),
+            CloudModelUsage {
+                input_tokens: 120,
+                cached_input_tokens: 20,
+                output_tokens: 80,
+                reasoning_tokens: 30,
+                total_tokens: 200,
+            }
         );
         assert_eq!(parse_usdc_base_units("12.345678").unwrap(), 12_345_678);
         assert!(parse_usdc_base_units("1.0000001").is_err());
