@@ -9,11 +9,21 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import urllib.parse
 from typing import Dict, List, Mapping, Optional, TextIO, Tuple
+
+from _shared.github_actions import (
+    append_step_summary as append_github_summary,
+    cargo_body_path,
+    find_executable,
+    json_field,
+    load_issue_comments,
+    publish_issue_comment,
+    read_event as read_github_event,
+    repo_root,
+)
 
 from reconcile_github_bounty_labels import (
     LabelReconciliationError,
@@ -40,68 +50,15 @@ class UserError(RuntimeError):
 
 
 def script_repo_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parents[1]
-
-
-def find_executable(names: List[str]) -> Optional[str]:
-    for name in names:
-        path = shutil.which(name)
-        if path:
-            return path
-    return None
-
-
-def is_windows_executable(path: str) -> bool:
-    return path.lower().endswith(".exe")
-
-
-def convert_posix_path_for_windows_tool(path: pathlib.Path) -> str:
-    path_text = str(path)
-    if not path_text.startswith("/"):
-        return path_text
-
-    for converter, args in (("cygpath", ["-w"]), ("wslpath", ["-w"])):
-        converter_path = shutil.which(converter)
-        if not converter_path:
-            continue
-        try:
-            return subprocess.check_output(
-                [converter_path, *args, path_text],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        except (OSError, subprocess.CalledProcessError):
-            continue
-
-    match = re.match(r"^/mnt/([a-zA-Z])/(.*)$", path_text)
-    if match:
-        drive, rest = match.groups()
-        rest_windows = rest.replace("/", "\\")
-        return f"{drive.upper()}:\\{rest_windows}"
-
-    return path_text
-
-
-def cargo_body_path(path: pathlib.Path, cargo_path: str) -> str:
-    if is_windows_executable(cargo_path):
-        return convert_posix_path_for_windows_tool(path)
-    return str(path)
+    return repo_root(__file__)
 
 
 def read_json_field(value: object, field: str) -> object:
-    current = value
-    for part in field.split("."):
-        if not isinstance(current, dict) or part not in current:
-            raise UserError(f"claim planner output missing field: {field}")
-        current = current[part]
-    return current
+    return json_field(value, field, UserError, "claim planner output missing field: {field}")
 
 
 def read_event(env: Mapping[str, str]) -> Dict[str, object]:
-    event_path = env.get("GITHUB_EVENT_PATH")
-    if not event_path:
-        raise UserError("GITHUB_EVENT_PATH is required")
-    return json.loads(pathlib.Path(event_path).read_text(encoding="utf-8"))
+    return read_github_event(env, UserError)
 
 
 def write_issue_files(
@@ -583,25 +540,14 @@ def apply_canonical_claim_state(
 
 
 def load_existing_comments(env: Mapping[str, str], meta: Mapping[str, object]) -> List[Mapping[str, object]]:
-    fixture = env.get("AGENT_BOUNTIES_CLAIM_COMMENTS_FILE")
-    if fixture:
-        value = json.loads(pathlib.Path(fixture).read_text(encoding="utf-8"))
-        return value if isinstance(value, list) else []
-
-    if env.get("DRY_RUN") == "1":
-        return []
-
-    gh_path = find_executable(["gh", "gh.exe"])
-    if not gh_path:
-        raise UserError("gh is required to inspect existing claim planner comments")
-
-    comments = subprocess.check_output(
-        [gh_path, "api", f"repos/{meta['repo']}/issues/{meta['number']}/comments"],
-        env=dict(env),
-        text=True,
+    return load_issue_comments(
+        env,
+        meta["repo"],
+        meta["number"],
+        "AGENT_BOUNTIES_CLAIM_COMMENTS_FILE",
+        "gh is required to inspect existing claim planner comments",
+        UserError,
     )
-    value = json.loads(comments)
-    return value if isinstance(value, list) else []
 
 
 def marker_field(pattern: re.Pattern[str], body: str) -> Optional[str]:
@@ -843,13 +789,7 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
 
 
 def append_step_summary(env: Mapping[str, str], comment: str) -> None:
-    summary_path = env.get("GITHUB_STEP_SUMMARY")
-    if not summary_path:
-        return
-    with pathlib.Path(summary_path).open("a", encoding="utf-8") as handle:
-        handle.write("## Agent bounty claim signal\n\n")
-        handle.write(comment)
-        handle.write("\n")
+    append_github_summary(env, "Agent bounty claim signal", comment)
 
 
 def publish_comment(
@@ -858,50 +798,19 @@ def publish_comment(
     existing_comments: List[Mapping[str, object]],
     comment: str,
 ) -> None:
-    gh_path = find_executable(["gh", "gh.exe"])
-    if not gh_path:
-        raise UserError("gh is required to publish the claim planner comment")
-
-    existing_id = None
-    for existing in existing_comments:
-        body = str(existing.get("body") or "")
-        if MARKER in body and claim_comment_id(body) == str(meta["comment_id"]):
-            existing_id = existing.get("id")
-            break
-
-    if existing_id:
-        subprocess.run(
-            [
-                gh_path,
-                "api",
-                "--method",
-                "PATCH",
-                f"repos/{meta['repo']}/issues/comments/{existing_id}",
-                "--field",
-                f"body={comment}",
-            ],
-            env=dict(env),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-    else:
-        comment_file = pathlib.Path(env.get("RUNNER_TEMP") or ".") / "paid-bounty-claim-comment.md"
-        comment_file.write_text(comment, encoding="utf-8")
-        subprocess.run(
-            [
-                gh_path,
-                "issue",
-                "comment",
-                str(meta["number"]),
-                "--repo",
-                str(meta["repo"]),
-                "--body-file",
-                str(comment_file),
-            ],
-            env=dict(env),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+    publish_issue_comment(
+        env,
+        meta["repo"],
+        meta["number"],
+        MARKER,
+        comment,
+        "paid-bounty-claim-comment.md",
+        "gh is required to publish the claim planner comment",
+        UserError,
+        existing_comments,
+        lambda body: MARKER in body
+        and claim_comment_id(body) == str(meta["comment_id"]),
+    )
 
 
 def run_from_env(env: Mapping[str, str], stdout: TextIO) -> int:

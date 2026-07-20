@@ -12,7 +12,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from Crypto.Hash import keccak
+from _shared.evm import address_bytes, address_word, artifact_hex, create_address, keccak256, uint_word
 
 
 CHAIN_ID = 84_532
@@ -24,68 +24,6 @@ MAX_NETWORK_PER_DAY = 1_000_000
 MAX_LIFETIME_PER_SOLVER = 100_000
 SPONSOR_SEED = 100_000
 DEFAULT_RPC = "https://sepolia.base.org"
-
-
-def keccak_bytes(data: bytes) -> bytes:
-    digest = keccak.new(digest_bits=256)
-    digest.update(data)
-    return digest.digest()
-
-
-def keccak256(data: bytes) -> str:
-    return f"0x{keccak_bytes(data).hex()}"
-
-
-def address_bytes(value: str) -> bytes:
-    raw = value.removeprefix("0x")
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", raw):
-        raise ValueError(f"invalid EVM address: {value}")
-    return bytes.fromhex(raw)
-
-
-def address_word(value: str) -> bytes:
-    return address_bytes(value).rjust(32, b"\0")
-
-
-def uint_word(value: int) -> bytes:
-    if value < 0 or value >= 1 << 256:
-        raise ValueError("uint256 is out of range")
-    return value.to_bytes(32, "big")
-
-
-def rlp_bytes(value: bytes) -> bytes:
-    if len(value) == 1 and value[0] < 0x80:
-        return value
-    if len(value) <= 55:
-        return bytes([0x80 + len(value)]) + value
-    length = len(value).to_bytes((len(value).bit_length() + 7) // 8, "big")
-    return bytes([0xB7 + len(length)]) + length + value
-
-
-def rlp_list(values: list[bytes]) -> bytes:
-    payload = b"".join(values)
-    if len(payload) <= 55:
-        return bytes([0xC0 + len(payload)]) + payload
-    length = len(payload).to_bytes((len(payload).bit_length() + 7) // 8, "big")
-    return bytes([0xF7 + len(length)]) + length + payload
-
-
-def create_address(deployer: str, nonce: int) -> str:
-    if nonce < 0:
-        raise ValueError("deployer nonce must be nonnegative")
-    encoded_nonce = b"" if nonce == 0 else nonce.to_bytes((nonce.bit_length() + 7) // 8, "big")
-    payload = rlp_list([rlp_bytes(address_bytes(deployer)), rlp_bytes(encoded_nonce)])
-    return f"0x{keccak_bytes(payload).hex()[-40:]}"
-
-
-def artifact_hex(field: Any, name: str) -> bytes:
-    value = field.get("object") if isinstance(field, dict) else None
-    if not isinstance(value, str):
-        raise ValueError(f"artifact {name} is missing concrete bytecode")
-    raw = value.removeprefix("0x")
-    if not raw or not re.fullmatch(r"[0-9a-fA-F]+", raw) or len(raw) % 2:
-        raise ValueError(f"artifact {name} is missing concrete bytecode")
-    return bytes.fromhex(raw)
 
 
 def patched_runtime(artifact: dict[str, Any], values: list[bytes], name: str) -> bytes:

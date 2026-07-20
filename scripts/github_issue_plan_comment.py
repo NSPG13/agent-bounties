@@ -8,11 +8,18 @@ import io
 import json
 import os
 import pathlib
-import re
-import shutil
 import subprocess
 import sys
 from typing import Dict, List, Mapping, Optional, TextIO, Tuple
+
+from _shared.github_actions import (
+    append_step_summary as append_github_summary,
+    cargo_body_path,
+    find_executable,
+    json_field,
+    publish_issue_comment,
+    repo_root,
+)
 
 
 MARKER = "<!-- agent-bounties-plan -->"
@@ -23,61 +30,11 @@ class UserError(RuntimeError):
 
 
 def script_repo_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parents[1]
-
-
-def find_executable(names: List[str]) -> Optional[str]:
-    for name in names:
-        path = shutil.which(name)
-        if path:
-            return path
-    return None
-
-
-def is_windows_executable(path: str) -> bool:
-    return path.lower().endswith(".exe")
-
-
-def convert_posix_path_for_windows_tool(path: pathlib.Path) -> str:
-    path_text = str(path)
-    if not path_text.startswith("/"):
-        return path_text
-
-    for converter, args in (("cygpath", ["-w"]), ("wslpath", ["-w"])):
-        converter_path = shutil.which(converter)
-        if not converter_path:
-            continue
-        try:
-            return subprocess.check_output(
-                [converter_path, *args, path_text],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        except (OSError, subprocess.CalledProcessError):
-            continue
-
-    match = re.match(r"^/mnt/([a-zA-Z])/(.*)$", path_text)
-    if match:
-        drive, rest = match.groups()
-        rest_windows = rest.replace("/", "\\")
-        return f"{drive.upper()}:\\{rest_windows}"
-
-    return path_text
-
-
-def cargo_body_path(path: pathlib.Path, cargo_path: str) -> str:
-    if is_windows_executable(cargo_path):
-        return convert_posix_path_for_windows_tool(path)
-    return str(path)
+    return repo_root(__file__)
 
 
 def read_json_field(value: object, field: str) -> object:
-    current = value
-    for part in field.split("."):
-        if not isinstance(current, dict) or part not in current:
-            raise UserError(f"planner output missing field: {field}")
-        current = current[part]
-    return current
+    return json_field(value, field, UserError, "planner output missing field: {field}")
 
 
 def write_issue_files(env: Mapping[str, str], tmp_dir: pathlib.Path) -> Tuple[Dict[str, object], pathlib.Path]:
@@ -181,67 +138,20 @@ def render_comment(plan: Mapping[str, object]) -> str:
 
 
 def append_step_summary(env: Mapping[str, str], comment: str) -> None:
-    summary_path = env.get("GITHUB_STEP_SUMMARY")
-    if not summary_path:
-        return
-    with pathlib.Path(summary_path).open("a", encoding="utf-8") as handle:
-        handle.write("## Agent bounty validation\n\n")
-        handle.write(comment)
-        handle.write("\n")
+    append_github_summary(env, "Agent bounty validation", comment)
 
 
 def publish_comment(env: Mapping[str, str], meta: Mapping[str, object], comment: str) -> None:
-    gh_path = find_executable(["gh", "gh.exe"])
-    if not gh_path:
-        raise UserError("gh is required to publish the paid-bounty validation comment")
-
-    repo = str(meta["repo"])
-    issue_number = str(meta["number"])
-    comments = subprocess.check_output(
-        [gh_path, "api", f"repos/{repo}/issues/{issue_number}/comments"],
-        env=dict(env),
-        text=True,
+    publish_issue_comment(
+        env,
+        meta["repo"],
+        meta["number"],
+        MARKER,
+        comment,
+        "paid-bounty-comment.md",
+        "gh is required to publish the paid-bounty validation comment",
+        UserError,
     )
-    existing_id = None
-    for existing in json.loads(comments):
-        body = existing.get("body") or ""
-        if MARKER in body:
-            existing_id = existing.get("id")
-            break
-
-    if existing_id:
-        subprocess.run(
-            [
-                gh_path,
-                "api",
-                "--method",
-                "PATCH",
-                f"repos/{repo}/issues/comments/{existing_id}",
-                "--field",
-                f"body={comment}",
-            ],
-            env=dict(env),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-    else:
-        comment_file = pathlib.Path(env.get("RUNNER_TEMP") or ".") / "paid-bounty-comment.md"
-        comment_file.write_text(comment, encoding="utf-8")
-        subprocess.run(
-            [
-                gh_path,
-                "issue",
-                "comment",
-                issue_number,
-                "--repo",
-                repo,
-                "--body-file",
-                str(comment_file),
-            ],
-            env=dict(env),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
 
 
 def run_from_env(env: Mapping[str, str], stdout: TextIO) -> int:
