@@ -5,11 +5,13 @@ const vm = require("vm");
 const { webcrypto } = require("crypto");
 
 const repoRoot = path.resolve(__dirname, "..");
+const evmSource = fs.readFileSync(path.join(repoRoot, "site", "evm.js"), "utf8");
 const source = fs.readFileSync(path.join(repoRoot, "site", "autonomous.js"), "utf8");
 const protocol = JSON.parse(
   fs.readFileSync(path.join(repoRoot, "site", "protocol.json"), "utf8"),
 );
 
+new vm.Script(evmSource, { filename: "site/evm.js" });
 new vm.Script(source, { filename: "site/autonomous.js" });
 
 for (const required of [
@@ -188,6 +190,7 @@ async function testDeterministicPostingDefaults() {
     /\}\)\(\);\s*$/,
     "globalThis.__agentBountiesTest = { termsDocument, validateHostedClaimHandoff }; })();",
   );
+  new vm.Script(evmSource, { filename: "site/evm.js" }).runInContext(context);
   new vm.Script(instrumentedSource, { filename: "site/autonomous.js" }).runInContext(context);
   await documentListeners.DOMContentLoaded();
 

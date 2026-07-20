@@ -2451,53 +2451,54 @@ pub fn public_funding_state_label(item: &PublicBountyPage) -> String {
 }
 
 pub fn public_cofunding_command(item: &PublicBountyPage) -> Option<String> {
-    if is_terminal_public_status(&item.status)
-        || matches!(item.funding_mode.as_str(), "BaseUsdcEscrow" | "MixedRails")
-    {
-        return None;
-    }
-    let partition = first_remaining_partition(&item.funding_partitions);
-    let rail = partition
-        .map(|partition| partition.rail.as_str())
-        .unwrap_or(item.funding_mode.as_str());
-    let currency = partition
-        .map(|partition| partition.currency.as_str())
-        .unwrap_or(item.currency.as_str());
-    let amount_minor = partition
-        .map(|partition| partition.remaining_minor)
-        .unwrap_or(item.funding_remaining_minor);
-    if amount_minor <= 0 || rail == "BaseUsdc" {
-        return None;
-    }
-    Some(cofunding_command_for(
+    cofunding_command(
+        &item.status,
+        &item.funding_mode,
+        &item.funding_partitions,
         &item.bounty_id,
-        amount_minor,
-        currency,
-        rail,
-    ))
+        item.funding_remaining_minor,
+        &item.currency,
+    )
 }
 
 pub fn public_funding_feed_cofunding_command(item: &PublicFundingFeedItem) -> Option<String> {
-    if is_terminal_public_status(&item.status)
-        || matches!(item.funding_mode.as_str(), "BaseUsdcEscrow" | "MixedRails")
+    cofunding_command(
+        &item.status,
+        &item.funding_mode,
+        &item.funding_partitions,
+        &item.bounty_id,
+        item.funding_remaining_minor,
+        &item.currency,
+    )
+}
+
+fn cofunding_command(
+    status: &str,
+    funding_mode: &str,
+    funding_partitions: &[PublicFundingPartition],
+    bounty_id: &str,
+    funding_remaining_minor: i64,
+    default_currency: &str,
+) -> Option<String> {
+    if is_terminal_public_status(status) || matches!(funding_mode, "BaseUsdcEscrow" | "MixedRails")
     {
         return None;
     }
-    let partition = first_remaining_partition(&item.funding_partitions);
+    let partition = first_remaining_partition(funding_partitions);
     let rail = partition
         .map(|partition| partition.rail.as_str())
-        .unwrap_or(item.funding_mode.as_str());
+        .unwrap_or(funding_mode);
     let currency = partition
         .map(|partition| partition.currency.as_str())
-        .unwrap_or(item.currency.as_str());
+        .unwrap_or(default_currency);
     let amount_minor = partition
         .map(|partition| partition.remaining_minor)
-        .unwrap_or(item.funding_remaining_minor);
+        .unwrap_or(funding_remaining_minor);
     if amount_minor <= 0 || rail == "BaseUsdc" {
         return None;
     }
     Some(cofunding_command_for(
-        &item.bounty_id,
+        bounty_id,
         amount_minor,
         currency,
         rail,
