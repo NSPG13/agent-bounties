@@ -81,6 +81,7 @@ def compile_python(platform: str) -> None:
         "scripts/test_local_delegate_wallet.py", "scripts/self_heal.py", "scripts/test_self_heal.py",
         "scripts/leaderboard_reward_pipeline.py", "scripts/test_leaderboard_reward_pipeline.py",
         "scripts/check-site.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
+        "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
         "scripts/stage_review_contract_root.py", "scripts/test_stage_review_contract_root.py",
         "scripts/validate_real_funding_rehearsal.py", "scripts/rehearse_autonomous_activation.py",
         "scripts/build_canonical_child_verifier_bundle.py",
@@ -209,6 +210,8 @@ def main() -> int:
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")
     py("scripts/test_shared_evm.py", "-v")
     py("scripts/check-render-blueprint.py")
+    py("scripts/test_mcp_tool_registry.py", "-v")
+    py("scripts/test_review_external_pr.py", "-v")
     py("scripts/test_stage_review_contract_root.py", "-v")
     for name in ("docs-contract-check", "demo", "pooled-funding-demo"):
         run(cargo, "run", "-p", "cli", "--", name)
