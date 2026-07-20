@@ -163,7 +163,7 @@ services:
       - key: CLOUD_AGENT_ENDPOINT
         value: https://api.openai.com/v1/responses
       - key: CLOUD_AGENT_MODEL
-        value: gpt-5.6
+        value: gpt-5.6-luna
       - key: CLOUD_AGENT_REASONING_EFFORT
         value: low
       - key: CLOUD_AGENT_MAX_INPUT_CHARS

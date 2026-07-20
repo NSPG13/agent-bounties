@@ -64,17 +64,23 @@ The protocol validates and enforces.
 
 ## OpenAI Use
 
-- Model: `gpt-5.6`
+- Model: `gpt-5.6-luna`
 - API: `POST https://api.openai.com/v1/responses`
 - Output mode: strict JSON Schema Structured Outputs
 - Reasoning effort: `low` for bounded interactive planning latency
 - Storage: disabled for these requests
 - Model role: bounded task decomposition only
 
-OpenAI documents `gpt-5.6` as the GPT-5.6 Sol alias with Responses API and
-Structured Outputs support. See the official
-[model reference](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+OpenAI documents GPT-5.6 Luna as its efficient, high-volume GPT-5.6 tier with
+Responses API and Structured Outputs support. See the official
+[model reference](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
 and [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
+
+The repository's exact-prompt benchmark selected Luna-low after 18/18 hard
+passes, 96.3% expected-term coverage, and an observed $0.0098 average cost per
+case. Sol-low also passed 18/18 with 100% coverage, but cost about six times as
+much and had about four times the median latency. Deterministic validation and
+one bounded repair pass remain unchanged.
 
 GPT-5.6 is useful here because decomposition needs judgment across dependencies,
 acceptance criteria, evidence, and execution order. Deterministic code is useful

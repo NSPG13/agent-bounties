@@ -41,7 +41,8 @@ CLOUD_AGENT_PUBLIC_DRAFTS=true
 CLOUD_AGENT_PROVIDER=openai
 CLOUD_AGENT_PROTOCOL=openai_responses
 CLOUD_AGENT_ENDPOINT=https://api.openai.com/v1/responses
-CLOUD_AGENT_MODEL=gpt-5.6
+CLOUD_AGENT_MODEL=gpt-5.6-luna
+CLOUD_AGENT_REASONING_EFFORT=low
 CLOUD_AGENT_API_KEY=<Render secret>
 CLOUD_AGENT_MAX_OUTPUT_TOKENS=12000
 CLOUD_AGENT_MAX_DAILY_DRAFTS=50
@@ -57,7 +58,7 @@ controller then fails closed unless readiness reports hosted execution,
 draft-only authority, no local fallback, and `available: true`.
 
 The default public quota is 50 fresh drafts or objective plans per UTC day per
-API process. GPT-5.6 runs at low reasoning effort with a 12,000-token combined
+API process. GPT-5.6 Luna runs at low reasoning effort with a 12,000-token combined
 reasoning/output ceiling and a 90-second provider timeout. This leaves enough
 headroom for strict multi-task JSON while bounding spend and interactive wait.
 Idempotent retries return the cached draft and do not consume another model
