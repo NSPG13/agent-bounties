@@ -676,6 +676,7 @@ dependencies = [
  "risk",
  "serde",
  "serde_json",
+ "service-runtime",
  "sha2",
  "tokio",
  "tower-http 0.5.2",
@@ -1348,6 +1349,7 @@ dependencies = [
  "chain-base",
  "chrono",
  "clap",
+ "db",
  "domain",
  "eval-harness",
  "github-app",
@@ -1623,9 +1625,11 @@ dependencies = [
  "chain-base",
  "chrono",
  "domain",
+ "hex",
  "ledger",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
@@ -2831,6 +2835,7 @@ dependencies = [
  "risk",
  "serde",
  "serde_json",
+ "service-runtime",
  "tokio",
  "tower-http 0.5.2",
  "url",
@@ -4003,6 +4008,21 @@ checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
 dependencies = [
  "base16ct",
  "serde",
+]
+
+[[package]]
+name = "service-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "app",
+ "chain-base",
+ "chrono",
+ "db",
+ "domain",
+ "eval-harness",
+ "ledger",
+ "uuid",
 ]
 
 [[package]]
@@ -5317,10 +5337,10 @@ dependencies = [
  "domain",
  "hex",
  "hmac",
- "ledger",
  "reqwest",
  "serde",
  "serde_json",
+ "service-runtime",
  "sha2",
  "tokio",
  "uuid",

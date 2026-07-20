@@ -2,10 +2,10 @@ mod opportunities;
 
 use app::{
     build_audience_report, build_live_money_readiness_report, hash_artifact,
-    stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
-    ApproveRiskPayoutRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
-    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport,
-    LiveMoneyReadinessConfig, LiveMoneyReadinessReport, OpenPooledBountyRequest,
+    AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
+    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
+    LiveMoneyReadinessReport, OpenPooledBountyRequest,
     PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
     PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest, RecordDiscoveryResponseRequest,
     RecordOutreachAttemptRequest, RegisterAgentRequest, RegisterCapabilityRequest,
@@ -62,12 +62,12 @@ use cloud_agent::{
     CloudObjectiveVerifierDraft, CloudUnfundedBountyRequest,
 };
 use db::{
-    BountyStatusScope, ClaimCandidateReservation, ClaimFunnelStats, DbError,
-    GitHubIssueSyncBountyUpsert, NewBondSponsorship, NewClaimCandidate,
-    NewDiscoveryWebhookSubscription, NewLegalAcceptance, NewSiteAnalyticsEvent,
-    NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution, NewX402RelayAttempt,
-    OpportunityLifecycleStats, PostgresStore, SiteAnalyticsStats, SocialMentionIngestion,
-    TrialBounty, UnfundedBountySolution, WebhookSubscription, X402RelayAttempt, X402RelayStatus,
+    ClaimCandidateReservation, ClaimFunnelStats, DbError, GitHubIssueSyncBountyUpsert,
+    NewBondSponsorship, NewClaimCandidate, NewDiscoveryWebhookSubscription, NewLegalAcceptance,
+    NewSiteAnalyticsEvent, NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution,
+    NewX402RelayAttempt, OpportunityLifecycleStats, PostgresStore, SiteAnalyticsStats,
+    SocialMentionIngestion, TrialBounty, UnfundedBountySolution, WebhookSubscription,
+    X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -94,7 +94,6 @@ use github_app::{
     SocialMentionDraftInput, SocialMentionDraftPlan,
 };
 use hmac::{Hmac, Mac};
-use ledger::Ledger;
 use opportunities::{
     apply_query as apply_opportunity_query, canonical_opportunity, legacy_opportunity,
     render_opportunity_feeds, unfunded_opportunity, OpportunityItem, OpportunityProjectionResponse,
@@ -113,6 +112,15 @@ use payments_x402::{
 };
 use risk::{RiskPolicy, RiskPolicyDescriptor};
 use serde::{Deserialize, Serialize};
+use service_runtime::{
+    autonomous_factory_for_chain, eval_run_from_loop_suite, eval_run_from_suite,
+    LiveMoneyRuntimeSettings, PlannerAddressError,
+};
+#[cfg(test)]
+use service_runtime::{
+    canonical_mainnet_factory, CANONICAL_BASE_MAINNET_BOUNTY_FACTORY,
+    CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION,
+};
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::BTreeMap;
 use std::env;
@@ -755,51 +763,19 @@ fn env_u128(key: &str, default: u128) -> anyhow::Result<u128> {
 }
 
 fn require_operator(state: &SharedState, headers: &HeaderMap) -> Result<(), StatusCode> {
-    let Some(expected) = state.operator_api_token.as_deref() else {
-        return Ok(());
-    };
-    let Some(provided) = operator_token_from_headers(headers) else {
-        return Err(StatusCode::UNAUTHORIZED);
-    };
-    if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+    if service_runtime::operator_token_is_authorized(
+        state.operator_api_token.as_deref(),
+        headers
+            .get(OPERATOR_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+    ) {
         Ok(())
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
-}
-
-fn operator_token_from_headers(headers: &HeaderMap) -> Option<String> {
-    if let Some(value) = headers
-        .get(OPERATOR_TOKEN_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(non_empty_borrowed)
-    {
-        return Some(value.to_string());
-    }
-
-    let authorization = headers.get("authorization")?.to_str().ok()?.trim();
-    let token = authorization.strip_prefix("Bearer ")?;
-    non_empty_borrowed(token).map(ToOwned::to_owned)
-}
-
-fn non_empty_borrowed(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (left, right) in left.iter().zip(right.iter()) {
-        diff |= left ^ right;
-    }
-    diff == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -4286,71 +4262,22 @@ fn map_agent_wallet_readiness_error(error: ChainBaseError) -> AgentWalletReadine
 }
 
 fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
-    let descriptor = base_network_descriptor(network).ok();
-    LiveMoneyReadinessConfig {
-        network: network.to_string(),
-        escrow_contract: descriptor
-            .as_ref()
-            .and_then(|descriptor| autonomous_factory_for_chain(descriptor.chain_id)),
-        usdc_token: descriptor
-            .as_ref()
-            .and_then(base_usdc_token_for_chain)
-            .or_else(|| descriptor.map(|descriptor| descriptor.native_usdc_token_address)),
-        stripe_secret_key_mode: stripe_secret_key_mode_from_secret(
-            state.stripe_secret_key.as_deref(),
-        ),
-        stripe_live_execution_enabled: state.stripe_live_execution_enabled,
-        stripe_payment_method_configuration_configured: state
-            .stripe_payment_method_configuration
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty()),
-        stripe_webhook_secret_configured: state.stripe_webhook_secret.is_some(),
-        allow_unsigned_stripe_webhooks: state.allow_unsigned_stripe_webhooks,
-        operator_auth_configured: state.operator_api_token.is_some(),
-        base_rpc_url_configured: state.base_rpc_urls.resolve(network).is_ok(),
-        base_broadcast_enabled: state.base_broadcast_enabled,
-    }
-}
-
-fn autonomous_factory_for_chain(chain_id: u64) -> Option<String> {
-    match chain_id {
-        84_532 => env_nonempty_value("BASE_SEPOLIA_BOUNTY_FACTORY"),
-        8_453 => canonical_mainnet_factory(
-            env_nonempty_value("BASE_MAINNET_BOUNTY_FACTORY"),
-            env_nonempty_value("BASE_MAINNET_BOUNTY_IMPLEMENTATION"),
-        ),
-        _ => None,
-    }
-}
-
-fn canonical_mainnet_factory(
-    configured_factory: Option<String>,
-    configured_implementation: Option<String>,
-) -> Option<String> {
-    if configured_factory
-        .as_deref()
-        .is_some_and(|address| !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY))
-        || configured_implementation.as_deref().is_some_and(|address| {
-            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION)
-        })
-    {
-        None
-    } else {
-        Some(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_string())
-    }
-}
-
-fn base_usdc_token_for_chain(descriptor: &BaseNetworkDescriptor) -> Option<String> {
-    let configured = match descriptor.chain_id {
-        84_532 => env_nonempty_value("BASE_SEPOLIA_USDC_TOKEN"),
-        8_453 => env_nonempty_value("BASE_MAINNET_USDC_TOKEN"),
-        _ => None,
-    };
-    configured.or_else(|| Some(descriptor.native_usdc_token_address.clone()))
-}
-
-fn env_nonempty_value(name: &str) -> Option<String> {
-    env::var(name).ok().and_then(non_empty_secret)
+    service_runtime::live_money_readiness_config(
+        network,
+        LiveMoneyRuntimeSettings {
+            stripe_secret_key: state.stripe_secret_key.as_deref(),
+            stripe_live_execution_enabled: state.stripe_live_execution_enabled,
+            stripe_payment_method_configuration_configured: state
+                .stripe_payment_method_configuration
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            stripe_webhook_secret_configured: state.stripe_webhook_secret.is_some(),
+            allow_unsigned_stripe_webhooks: state.allow_unsigned_stripe_webhooks,
+            operator_auth_configured: state.operator_api_token.is_some(),
+            base_rpc_url_configured: state.base_rpc_urls.resolve(network).is_ok(),
+            base_broadcast_enabled: state.base_broadcast_enabled,
+        },
+    )
 }
 
 #[utoipa::path(get, path = "/v1/risk/events", responses((status = 200, body = Vec<RiskEvent>)))]
@@ -4383,15 +4310,10 @@ async fn approve_risk_bounty(
     Json(request): Json<ApproveRiskBountyRequest>,
 ) -> Result<Json<ReviewedBountyApproval>, StatusCode> {
     require_operator(&state, &headers)?;
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .approve_risk_bounty(request)
-            .map(|approval| (approval, network.ledger.entries().to_vec()))
-            .map_err(|_| StatusCode::BAD_REQUEST)
-    };
-    let (approval, ledger_entries) = result?;
-    persist_reviewed_bounty_approval(&state, &approval, &ledger_entries).await?;
+    let approval =
+        service_runtime::approve_risk_bounty(state.store.as_ref(), &state.network, request)
+            .await
+            .map_err(mutation_status)?;
     Ok(Json(approval))
 }
 
@@ -4410,13 +4332,10 @@ async fn approve_risk_payout(
     Json(request): Json<ApproveRiskPayoutRequest>,
 ) -> Result<Json<RiskReviewRecord>, StatusCode> {
     require_operator(&state, &headers)?;
-    let review = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .approve_risk_payout(request)
-            .map_err(|_| StatusCode::BAD_REQUEST)?
-    };
-    persist_risk_review(&state, &review).await?;
+    let review =
+        service_runtime::approve_risk_payout(state.store.as_ref(), &state.network, request)
+            .await
+            .map_err(mutation_status)?;
     Ok(Json(review))
 }
 
@@ -4437,13 +4356,9 @@ async fn reject_risk_event(
 ) -> Result<Json<RiskReviewRecord>, StatusCode> {
     require_operator(&state, &headers)?;
     request.risk_event_id = id;
-    let review = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .reject_risk_event(request)
-            .map_err(|_| StatusCode::BAD_REQUEST)?
-    };
-    persist_risk_review(&state, &review).await?;
+    let review = service_runtime::reject_risk_event(state.store.as_ref(), &state.network, request)
+        .await
+        .map_err(mutation_status)?;
     Ok(Json(review))
 }
 
@@ -4528,16 +4443,9 @@ async fn register_agent(
     State(state): State<SharedState>,
     Json(request): Json<RegisterAgentRequest>,
 ) -> Result<Json<domain::Agent>, StatusCode> {
-    let agent = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.register_agent(request)
-    };
-    if let Some(store) = &state.store {
-        store
-            .upsert_agent(&agent)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    let agent = service_runtime::register_agent(state.store.as_ref(), &state.network, request)
+        .await
+        .map_err(mutation_status)?;
     Ok(Json(agent))
 }
 
@@ -4927,18 +4835,10 @@ async fn register_capability(
     State(state): State<SharedState>,
     Json(request): Json<RegisterCapabilityRequest>,
 ) -> Result<Json<domain::Capability>, StatusCode> {
-    let capability = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .register_capability(request)
-            .map_err(|_| StatusCode::BAD_REQUEST)?
-    };
-    if let Some(store) = &state.store {
-        store
-            .upsert_capability(&capability)
+    let capability =
+        service_runtime::register_capability(state.store.as_ref(), &state.network, request)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+            .map_err(mutation_status)?;
     Ok(Json(capability))
 }
 
@@ -4947,25 +4847,10 @@ async fn create_help_request(
     State(state): State<SharedState>,
     Json(request): Json<CreateHelpRequestRequest>,
 ) -> Result<Json<domain::HelpRequest>, StatusCode> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .create_help_request(request)
-            .map_err(|_| StatusCode::BAD_REQUEST)
-    };
-    let help_request = match result {
-        Ok(help_request) => help_request,
-        Err(status) => {
-            persist_all_risk_events(&state).await?;
-            return Err(status);
-        }
-    };
-    if let Some(store) = &state.store {
-        store
-            .upsert_help_request(&help_request)
+    let help_request =
+        service_runtime::create_help_request(state.store.as_ref(), &state.network, request)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+            .map_err(mutation_status)?;
     Ok(Json(help_request))
 }
 
@@ -4974,22 +4859,15 @@ async fn request_quotes(
     State(state): State<SharedState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<QuoteSet>, StatusCode> {
-    let quote_set = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .request_quotes(RequestQuotesRequest {
-                help_request_id: id,
-            })
-            .map_err(|_| StatusCode::BAD_REQUEST)?
-    };
-    if let Some(store) = &state.store {
-        for quote in &quote_set.quotes {
-            store
-                .upsert_quote(quote)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-    }
+    let quote_set = service_runtime::request_quotes(
+        state.store.as_ref(),
+        &state.network,
+        RequestQuotesRequest {
+            help_request_id: id,
+        },
+    )
+    .await
+    .map_err(mutation_status)?;
     Ok(Json(quote_set))
 }
 
@@ -5000,21 +4878,10 @@ async fn fund_quote(
     Json(mut request): Json<FundQuoteRequest>,
 ) -> Result<Json<domain::Bounty>, StatusCode> {
     request.quote_id = id;
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .fund_quote_as_bounty(request)
-            .map(|bounty| (bounty, network.ledger.entries().to_vec()))
-            .map_err(|_| StatusCode::BAD_REQUEST)
-    };
-    let (bounty, ledger_entries) = match result {
-        Ok(result) => result,
-        Err(status) => {
-            persist_all_risk_events(&state).await?;
-            return Err(status);
-        }
-    };
-    persist_bounty_and_ledger(&state, &bounty, &ledger_entries).await?;
+    let bounty =
+        service_runtime::fund_quote_as_bounty(state.store.as_ref(), &state.network, request)
+            .await
+            .map_err(mutation_status)?;
     Ok(Json(bounty))
 }
 
@@ -5839,21 +5706,9 @@ async fn post_bounty(
     State(state): State<SharedState>,
     Json(request): Json<PostBountyRequest>,
 ) -> Result<Json<domain::Bounty>, StatusCode> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .post_funded_bounty(request)
-            .map(|bounty| (bounty, network.ledger.entries().to_vec()))
-            .map_err(|_| StatusCode::BAD_REQUEST)
-    };
-    let (bounty, ledger_entries) = match result {
-        Ok(result) => result,
-        Err(status) => {
-            persist_all_risk_events(&state).await?;
-            return Err(status);
-        }
-    };
-    persist_bounty_and_ledger(&state, &bounty, &ledger_entries).await?;
+    let bounty = service_runtime::post_bounty(state.store.as_ref(), &state.network, request)
+        .await
+        .map_err(mutation_status)?;
     Ok(Json(bounty))
 }
 
@@ -5862,18 +5717,9 @@ async fn open_pooled_bounty(
     State(state): State<SharedState>,
     Json(request): Json<OpenPooledBountyRequest>,
 ) -> Result<Json<domain::Bounty>, StatusCode> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.open_pooled_bounty(request)
-    };
-    let bounty = match result {
-        Ok(bounty) => bounty,
-        Err(_) => {
-            persist_all_risk_events(&state).await?;
-            return Err(StatusCode::BAD_REQUEST);
-        }
-    };
-    persist_bounty_and_ledger(&state, &bounty, &[]).await?;
+    let bounty = service_runtime::open_pooled_bounty(state.store.as_ref(), &state.network, request)
+        .await
+        .map_err(mutation_status)?;
     Ok(Json(bounty))
 }
 
@@ -5884,12 +5730,14 @@ async fn create_funding_intent(
     Json(mut request): Json<CreateFundingIntentRequest>,
 ) -> Result<Json<FundingIntentReport>, StatusCode> {
     request.bounty_id = id;
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.create_funding_intent(request, state.public_base_url.clone())
-    };
-    let report = result.map_err(|_| StatusCode::BAD_REQUEST)?;
-    persist_funding_intent_report(&state, &report).await?;
+    let report = service_runtime::create_funding_intent(
+        state.store.as_ref(),
+        &state.network,
+        request,
+        state.public_base_url.clone(),
+    )
+    .await
+    .map_err(mutation_status)?;
     Ok(Json(report))
 }
 
@@ -5900,12 +5748,10 @@ async fn add_funding_contribution(
     Json(mut request): Json<AddFundingContributionRequest>,
 ) -> Result<Json<PooledFundingReport>, StatusCode> {
     request.bounty_id = id;
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.add_funding_contribution(request)
-    };
-    let report = result.map_err(|_| StatusCode::BAD_REQUEST)?;
-    persist_pooled_funding_report(&state, &report).await?;
+    let report =
+        service_runtime::add_funding_contribution(state.store.as_ref(), &state.network, request)
+            .await
+            .map_err(mutation_status)?;
     Ok(Json(report))
 }
 
@@ -5916,29 +5762,9 @@ async fn claim_bounty(
     Json(mut request): Json<ClaimBountyRequest>,
 ) -> Result<Json<domain::Bounty>, StatusCode> {
     request.bounty_id = id;
-    let (bounty, claim) = {
-        let mut network = state.network.lock().expect("state poisoned");
-        let bounty = network
-            .claim_bounty(request)
-            .map_err(|_| StatusCode::BAD_REQUEST)?;
-        let claim = network
-            .claims
-            .values()
-            .find(|claim| claim.bounty_id == bounty.id)
-            .expect("claim exists after successful claim")
-            .clone();
-        (bounty, claim)
-    };
-    if let Some(store) = &state.store {
-        store
-            .upsert_bounty(&bounty)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .upsert_claim(&claim)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    let bounty = service_runtime::claim_bounty(state.store.as_ref(), &state.network, request)
+        .await
+        .map_err(mutation_status)?;
     Ok(Json(bounty))
 }
 
@@ -5949,37 +5775,9 @@ async fn submit_result(
     Json(mut request): Json<SubmitResultRequest>,
 ) -> Result<Json<domain::Submission>, StatusCode> {
     request.bounty_id = id;
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .submit_result(request)
-            .map(|submission| {
-                let bounty = network
-                    .bounties
-                    .get(&submission.bounty_id)
-                    .expect("submission bounty exists")
-                    .clone();
-                (submission, bounty)
-            })
-            .map_err(|_| StatusCode::BAD_REQUEST)
-    };
-    let (submission, bounty) = match result {
-        Ok(result) => result,
-        Err(status) => {
-            persist_all_risk_events(&state).await?;
-            return Err(status);
-        }
-    };
-    if let Some(store) = &state.store {
-        store
-            .upsert_bounty(&bounty)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .upsert_submission(&submission)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    let submission = service_runtime::submit_result(state.store.as_ref(), &state.network, request)
+        .await
+        .map_err(mutation_status)?;
     Ok(Json(submission))
 }
 
@@ -6004,122 +5802,23 @@ async fn verify_submission(
     }
     require_operator(&state, &headers)?;
     request.bounty_id = id;
-    let mut network = {
+    let network = {
         let mut guard = state.network.lock().expect("state poisoned");
         std::mem::take(&mut *guard)
     };
-    let result = network.verify_submission(request).await;
-    let (
-        proof,
-        bounty,
-        verifier_result,
-        settlements,
-        funding_contributions,
-        reputation_events,
-        template_signals,
-        ledger_entries,
-    ) = match result {
-        Ok(proof) => {
-            let bounty = network
-                .bounties
-                .get(&proof.bounty_id)
-                .expect("proof bounty exists")
-                .clone();
-            let verifier_result = network
-                .verifier_results
-                .get(&proof.verifier_result_id)
-                .expect("proof verifier result exists")
-                .clone();
-            let settlements = network
-                .settlements
-                .values()
-                .filter(|settlement| settlement.bounty_id == proof.bounty_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let funding_contributions = network
-                .funding_contributions
-                .values()
-                .filter(|contribution| contribution.bounty_id == proof.bounty_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let reputation_events = network
-                .reputation_events
-                .values()
-                .filter(|event| event.bounty_id == proof.bounty_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let template_signals = network
-                .template_signals
-                .values()
-                .filter(|signal| signal.bounty_id == proof.bounty_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let ledger_entries = network.ledger.entries().to_vec();
-            (
-                proof,
-                bounty,
-                verifier_result,
-                settlements,
-                funding_contributions,
-                reputation_events,
-                template_signals,
-                ledger_entries,
-            )
-        }
+    let (network, result) = service_runtime::execute_verification(network, request).await;
+    *state.network.lock().expect("state poisoned") = network;
+    let outcome = match result {
+        Ok(outcome) => outcome,
         Err(_) => {
-            {
-                let mut guard = state.network.lock().expect("state poisoned");
-                *guard = network;
-            }
             persist_all_risk_events(&state).await?;
             return Err(StatusCode::BAD_REQUEST);
         }
     };
-    {
-        let mut guard = state.network.lock().expect("state poisoned");
-        *guard = network;
-    }
-
-    if let Some(store) = &state.store {
-        store
-            .upsert_bounty(&bounty)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .upsert_verifier_result(&verifier_result)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .upsert_proof_record(&proof)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        for settlement in &settlements {
-            store
-                .upsert_settlement(settlement)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for contribution in &funding_contributions {
-            store
-                .upsert_funding_contribution(contribution)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for event in &reputation_events {
-            store
-                .upsert_reputation_event(event)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        for signal in &template_signals {
-            store
-                .upsert_template_signal(signal)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        persist_ledger_entries(store, &ledger_entries).await?;
-    }
-    Ok(Json(proof))
+    service_runtime::persist_verification(state.store.as_ref(), &outcome)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(outcome.proof))
 }
 
 #[utoipa::path(
@@ -6236,42 +5935,20 @@ fn base_rpc_fetch_status(error: &ChainBaseError) -> StatusCode {
     }
 }
 
-const CANONICAL_BASE_MAINNET_BOUNTY_FACTORY: &str = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
-const CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION: &str =
-    "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9";
-
 fn autonomous_planner_addresses(
     chain_id: u64,
     configured_factory: Option<String>,
     configured_implementation: Option<String>,
 ) -> Result<(String, String), StatusCode> {
-    let configured = |value: Option<String>| {
-        value
-            .map(|item| item.trim().to_string())
-            .filter(|item| !item.is_empty())
-    };
-    let factory = configured(configured_factory);
-    let implementation = configured(configured_implementation);
-    if chain_id == 8_453 {
-        if factory.as_deref().is_some_and(|address| {
-            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY)
-        }) || implementation.as_deref().is_some_and(|address| {
-            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION)
-        }) {
-            return Err(StatusCode::SERVICE_UNAVAILABLE);
-        }
-        return Ok((
-            CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_string(),
-            CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION.to_string(),
-        ));
-    }
-    if chain_id == 84_532 {
-        return Ok((
-            factory.ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
-            implementation.ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
-        ));
-    }
-    Err(StatusCode::BAD_REQUEST)
+    service_runtime::autonomous_planner_addresses(
+        chain_id,
+        configured_factory,
+        configured_implementation,
+    )
+    .map_err(|error| match error {
+        PlannerAddressError::UnsupportedNetwork => StatusCode::BAD_REQUEST,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    })
 }
 
 fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlanner, StatusCode> {
@@ -11097,87 +10774,15 @@ async fn bounty_status_snapshot(
     state: &SharedState,
     id: Uuid,
 ) -> Result<BountyStatusResponse, StatusCode> {
-    if let Some(store) = &state.store {
-        let scope = store
-            .load_bounty_status_scope(id)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or(StatusCode::NOT_FOUND)?;
-        return bounty_status_from_scope(scope);
-    }
-
-    let status = {
-        let network = state.network.lock().expect("state poisoned");
-        network.status(id).map_err(|_| StatusCode::NOT_FOUND)?
-    };
-    Ok(status)
-}
-
-fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResponse, StatusCode> {
-    let bounty_id = scope.bounty.id;
-    let network = BountyNetwork {
-        bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
-        funding_intents: scope
-            .funding_intents
-            .into_iter()
-            .map(|intent| (intent.id, intent))
-            .collect(),
-        funding_contributions: scope
-            .funding_contributions
-            .into_iter()
-            .map(|contribution| (contribution.id, contribution))
-            .collect(),
-        escrows: scope
-            .escrows
-            .into_iter()
-            .map(|escrow| (escrow.id, escrow))
-            .collect(),
-        claims: scope
-            .claims
-            .into_iter()
-            .map(|claim| (claim.id, claim))
-            .collect(),
-        submissions: scope
-            .submissions
-            .into_iter()
-            .map(|submission| (submission.id, submission))
-            .collect(),
-        verifier_results: scope
-            .verifier_results
-            .into_iter()
-            .map(|result| (result.id, result))
-            .collect(),
-        proofs: scope
-            .proofs
-            .into_iter()
-            .map(|proof| (proof.id, proof))
-            .collect(),
-        settlements: scope
-            .settlements
-            .into_iter()
-            .map(|settlement| (settlement.id, settlement))
-            .collect(),
-        reputation_events: scope
-            .reputation_events
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        template_signals: scope
-            .template_signals
-            .into_iter()
-            .map(|signal| (signal.id, signal))
-            .collect(),
-        risk_events: scope
-            .risk_events
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        ..BountyNetwork::default()
-    };
-    let status = network
-        .status(bounty_id)
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok(status)
+    service_runtime::bounty_status(state.store.as_ref(), &state.network, id)
+        .await
+        .map_err(|error| {
+            if error.retryable() {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::NOT_FOUND
+            }
+        })
 }
 
 async fn public_proof_page(
@@ -11631,203 +11236,22 @@ fn parse_verifier_kind(kind: &str) -> Option<VerifierKind> {
     }
 }
 
-fn eval_run_from_suite(result: &EvalSuiteResult) -> EvalRun {
-    EvalRun {
-        id: Uuid::new_v4(),
-        suite: result.suite.clone(),
-        score: result.score,
-        passed: result.passed,
-        created_at: Utc::now(),
-    }
-}
-
-fn eval_run_from_loop_suite(result: &LoopSuiteResult) -> EvalRun {
-    EvalRun {
-        id: Uuid::new_v4(),
-        suite: result.suite.clone(),
-        score: loop_suite_average_score(result),
-        passed: result.passed,
-        created_at: Utc::now(),
-    }
-}
-
-fn loop_suite_average_score(result: &LoopSuiteResult) -> f32 {
-    if result.loops.is_empty() {
-        return 0.0;
-    }
-
-    let total = result
-        .loops
-        .iter()
-        .map(|loop_result| {
-            loop_result
-                .candidates
-                .iter()
-                .map(|candidate| candidate.score)
-                .fold(0.0_f32, f32::max)
-        })
-        .sum::<f32>();
-    total / result.loops.len() as f32
-}
-
 async fn record_eval_run(state: &SharedState, run: EvalRun) -> Result<(), StatusCode> {
-    if let Some(store) = &state.store {
-        store
-            .upsert_eval_run(&run)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service_runtime::record_eval_run(state.store.as_ref(), &state.eval_runs, run)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn mutation_status(error: service_runtime::MutationError) -> StatusCode {
+    if error.is_invalid() {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
     }
-    state
-        .eval_runs
-        .lock()
-        .expect("state poisoned")
-        .insert(0, run);
-    Ok(())
 }
 
 async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork> {
-    Ok(BountyNetwork {
-        agents: store
-            .list_agents()
-            .await?
-            .into_iter()
-            .map(|agent| (agent.id, agent))
-            .collect(),
-        contributor_contacts: store
-            .list_contributor_contacts()
-            .await?
-            .into_iter()
-            .map(|contact| (contact.id, contact))
-            .collect(),
-        audience_members: store
-            .list_audience_members()
-            .await?
-            .into_iter()
-            .map(|member| (member.id, member))
-            .collect(),
-        audience_interactions: store
-            .list_audience_interactions()
-            .await?
-            .into_iter()
-            .map(|interaction| (interaction.id, interaction))
-            .collect(),
-        discovery_responses: store
-            .list_discovery_responses()
-            .await?
-            .into_iter()
-            .map(|response| (response.id, response))
-            .collect(),
-        outreach_attempts: store
-            .list_outreach_attempts()
-            .await?
-            .into_iter()
-            .map(|attempt| (attempt.id, attempt))
-            .collect(),
-        capabilities: store
-            .list_capabilities()
-            .await?
-            .into_iter()
-            .map(|capability| (capability.id, capability))
-            .collect(),
-        help_requests: store
-            .list_help_requests()
-            .await?
-            .into_iter()
-            .map(|help_request| (help_request.id, help_request))
-            .collect(),
-        quotes: store
-            .list_quotes()
-            .await?
-            .into_iter()
-            .map(|quote| (quote.id, quote))
-            .collect(),
-        bounties: store
-            .list_bounties()
-            .await?
-            .into_iter()
-            .map(|bounty| (bounty.id, bounty))
-            .collect(),
-        funding_intents: store
-            .list_funding_intents()
-            .await?
-            .into_iter()
-            .map(|intent| (intent.id, intent))
-            .collect(),
-        funding_contributions: store
-            .list_funding_contributions()
-            .await?
-            .into_iter()
-            .map(|contribution| (contribution.id, contribution))
-            .collect(),
-        escrows: store
-            .list_escrows()
-            .await?
-            .into_iter()
-            .map(|escrow| (escrow.id, escrow))
-            .collect(),
-        claims: store
-            .list_claims()
-            .await?
-            .into_iter()
-            .map(|claim| (claim.id, claim))
-            .collect(),
-        submissions: store
-            .list_submissions()
-            .await?
-            .into_iter()
-            .map(|submission| (submission.id, submission))
-            .collect(),
-        verifier_results: store
-            .list_verifier_results()
-            .await?
-            .into_iter()
-            .map(|result| (result.id, result))
-            .collect(),
-        proofs: store
-            .list_proof_records()
-            .await?
-            .into_iter()
-            .map(|proof| (proof.id, proof))
-            .collect(),
-        settlements: store
-            .list_settlements()
-            .await?
-            .into_iter()
-            .map(|settlement| (settlement.id, settlement))
-            .collect(),
-        reputation_events: store
-            .list_reputation_events()
-            .await?
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        template_signals: store
-            .list_template_signals()
-            .await?
-            .into_iter()
-            .map(|signal| (signal.id, signal))
-            .collect(),
-        risk_events: store
-            .list_risk_events()
-            .await?
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        risk_reviews: store
-            .list_risk_reviews()
-            .await?
-            .into_iter()
-            .map(|review| (review.id, review))
-            .collect(),
-        payment_events: store
-            .list_payment_events()
-            .await?
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        ledger: Ledger::from_entries(store.list_ledger_entries().await?)?,
-        ..BountyNetwork::default()
-    })
+    service_runtime::hydrate_bounty_network(store).await
 }
 
 async fn persist_bounty_and_ledger(
@@ -11835,126 +11259,29 @@ async fn persist_bounty_and_ledger(
     bounty: &domain::Bounty,
     ledger_entries: &[ledger::LedgerEntry],
 ) -> Result<(), StatusCode> {
-    if let Some(store) = &state.store {
-        store
-            .upsert_bounty(bounty)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let contributions = {
-            let network = state.network.lock().expect("state poisoned");
-            network
-                .funding_contributions
-                .values()
-                .filter(|contribution| contribution.bounty_id == bounty.id)
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        for contribution in &contributions {
-            store
-                .upsert_funding_contribution(contribution)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        persist_ledger_entries(store, ledger_entries).await?;
-    }
-    Ok(())
-}
-
-async fn persist_reviewed_bounty_approval(
-    state: &SharedState,
-    approval: &ReviewedBountyApproval,
-    ledger_entries: &[ledger::LedgerEntry],
-) -> Result<(), StatusCode> {
-    if let Some(store) = &state.store {
-        store
-            .upsert_bounty(&approval.bounty)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .upsert_risk_review(&approval.review)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        persist_ledger_entries(store, ledger_entries).await?;
-    }
-    Ok(())
-}
-
-async fn persist_pooled_funding_report(
-    state: &SharedState,
-    report: &PooledFundingReport,
-) -> Result<(), StatusCode> {
-    if let Some(store) = &state.store {
-        store
-            .upsert_bounty(&report.bounty)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .upsert_funding_contribution(&report.contribution)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        persist_ledger_entries(store, &report.ledger_entries).await?;
-    }
-    Ok(())
-}
-
-async fn persist_funding_intent_report(
-    state: &SharedState,
-    report: &FundingIntentReport,
-) -> Result<(), StatusCode> {
-    if let Some(store) = &state.store {
-        store
-            .upsert_bounty(&report.bounty)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .upsert_funding_intent(&report.intent)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-    Ok(())
-}
-
-async fn persist_risk_review(
-    state: &SharedState,
-    review: &RiskReviewRecord,
-) -> Result<(), StatusCode> {
-    if let Some(store) = &state.store {
-        store
-            .upsert_risk_review(review)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-    Ok(())
+    service_runtime::persist_bounty_and_ledger(
+        state.store.as_ref(),
+        &state.network,
+        bounty,
+        ledger_entries,
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn persist_ledger_entries(
     store: &PostgresStore,
-    ledger_entries: &[ledger::LedgerEntry],
+    entries: &[ledger::LedgerEntry],
 ) -> Result<(), StatusCode> {
-    for entry in ledger_entries {
-        store
-            .insert_ledger_entry(entry)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-    Ok(())
+    service_runtime::persist_ledger_entries(store, entries)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn persist_all_risk_events(state: &SharedState) -> Result<(), StatusCode> {
-    let Some(store) = &state.store else {
-        return Ok(());
-    };
-    let events = {
-        let network = state.network.lock().expect("state poisoned");
-        network.risk_events.values().cloned().collect::<Vec<_>>()
-    };
-    for event in &events {
-        store
-            .upsert_risk_event(event)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-    Ok(())
+    service_runtime::persist_all_risk_events(state.store.as_ref(), &state.network)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 #[allow(dead_code)]
@@ -14478,6 +13805,12 @@ mod tests {
     async fn openapi_json_endpoint_contains_agent_router_path() {
         let document = openapi_json().await.0;
         let value = serde_json::to_value(document).unwrap();
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/openapi-contract.json")).unwrap();
+        assert_eq!(
+            hash_artifact(&serde_json::to_string(&value).unwrap()),
+            fixture["normalized_sha256"]
+        );
         let paths = value["paths"].as_object().unwrap();
 
         assert!(paths.contains_key("/v1/route-blocked-goal"));

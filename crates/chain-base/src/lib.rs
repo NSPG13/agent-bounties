@@ -307,13 +307,13 @@ fn parse_alloy_bytes(value: &str) -> Result<Bytes, ChainBaseError> {
 }
 
 fn sanitize_relayer_provider_error(error: impl std::fmt::Display) -> ChainBaseError {
-    let message = redact_relayer_provider_urls(&error.to_string());
+    let message = redact_provider_urls(&error.to_string());
     let first_line = message.lines().next().unwrap_or("provider request failed");
     let bounded = first_line.chars().take(300).collect::<String>();
     ChainBaseError::RelayerProvider(bounded)
 }
 
-fn redact_relayer_provider_urls(message: &str) -> String {
+pub fn redact_provider_urls(message: &str) -> String {
     let mut redacted = String::with_capacity(message.len());
     let mut index = 0;
     while index < message.len() {

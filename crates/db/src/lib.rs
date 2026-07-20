@@ -15,6 +15,7 @@ use domain::{
 };
 use ledger::{LedgerEntry, Posting};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
@@ -645,6 +646,18 @@ pub struct BountyStatusScope {
     pub risk_events: Vec<RiskEvent>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DurableTableSnapshot {
+    pub rows: u64,
+    pub canonical_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DurableDataSnapshot {
+    pub schema_version: String,
+    pub tables: BTreeMap<String, DurableTableSnapshot>,
+}
+
 #[derive(Debug, Default)]
 pub struct InMemoryStore {
     pub agents: HashMap<Id, Agent>,
@@ -719,6 +732,40 @@ impl PostgresStore {
             (Err(error), Ok(_)) => Err(error.into()),
             (Ok(()), Err(error)) | (Err(_), Err(error)) => Err(error.into()),
         }
+    }
+
+    pub async fn durable_data_snapshot(&self) -> DbResult<DurableDataSnapshot> {
+        let table_names: Vec<String> = sqlx::query_scalar(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut tables = BTreeMap::new();
+        for table_name in table_names {
+            let identifier = format!("\"{}\"", table_name.replace('"', "\"\""));
+            let rows: Vec<String> = sqlx::query_scalar(&format!(
+                "SELECT to_jsonb(snapshot_row)::text FROM public.{identifier} AS snapshot_row \
+                 ORDER BY to_jsonb(snapshot_row)::text"
+            ))
+            .fetch_all(&self.pool)
+            .await?;
+            let mut hasher = Sha256::new();
+            for row in &rows {
+                hasher.update((row.len() as u64).to_be_bytes());
+                hasher.update(row.as_bytes());
+            }
+            tables.insert(
+                table_name,
+                DurableTableSnapshot {
+                    rows: rows.len() as u64,
+                    canonical_sha256: hex::encode(hasher.finalize()),
+                },
+            );
+        }
+        Ok(DurableDataSnapshot {
+            schema_version: "agent-bounties/durable-data-snapshot-v1".to_string(),
+            tables,
+        })
     }
 
     pub async fn record_legal_acceptance(

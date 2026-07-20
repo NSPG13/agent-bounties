@@ -73,7 +73,7 @@ def compile_python(platform: str) -> None:
         "scripts/github_audience_audit.py", "scripts/test_github_audience_audit.py",
         "scripts/ruleset_drift_check.py", "scripts/test_ruleset_drift_check.py",
         "scripts/code_size_report.py", "scripts/test_code_size_report.py",
-        "scripts/test_shared_evm.py", "scripts/test_shared_rpc.py",
+        "scripts/test_mcp_tool_registry.py", "scripts/test_shared_evm.py", "scripts/test_shared_rpc.py",
         "scripts/relay_autonomous_action.py", "scripts/test_relay_autonomous_action.py",
         "scripts/relay_bounded_wallet_action.py", "scripts/test_relay_bounded_wallet_action.py",
         "scripts/bounded_agent_create.py", "scripts/plan_bounded_agent_budget.py",
@@ -88,7 +88,7 @@ def compile_python(platform: str) -> None:
     ]
     if platform == "powershell":
         first = """
-scripts/code_size_report.py scripts/test_code_size_report.py
+scripts/code_size_report.py scripts/test_code_size_report.py scripts/test_mcp_tool_registry.py
 scripts/_shared/github_actions.py scripts/_shared/evm.py scripts/_shared/rpc.py
 scripts/test_shared_evm.py scripts/test_shared_rpc.py
 scripts/diagnose_hosted_api.py scripts/test_diagnose_hosted_api.py
