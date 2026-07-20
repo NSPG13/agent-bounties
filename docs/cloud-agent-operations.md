@@ -22,7 +22,10 @@ executable verifier, and publish and fund through the canonical protocol.
 
 The adapter supports OpenAI Responses, OpenAI-compatible chat completions, and
 Anthropic Messages. Production uses GPT-5.6 through the Responses API with a
-strict JSON Schema for objective graphs.
+strict JSON Schema for every generation path: objective graphs, bounty drafts,
+demo solutions, and published-terms analysis. Flexible nested benchmark and
+evidence objects cross the model boundary as bounded JSON strings and are
+decoded and validated before they enter a public response.
 Only `agent-bounties-api` receives `CLOUD_AGENT_API_KEY`. The Blueprint declares
 it directly on that service with `sync: false`; Render does not support
 `sync: false` inside environment groups. The exact-SHA deployment controller
@@ -65,8 +68,8 @@ call. Inputs, outputs, timeout, arrays, URLs, and idempotency keys are bounded.
 - Missing credentials or model configuration: readiness is unavailable and
   drafting returns `503`; manual exact-term entry remains available.
 - Invalid objective: structured `400`; no terms are published.
-- Model output that still fails deterministic validation after one repair:
-  structured `502`; no terms are published.
+- Model output that fails deterministic validation: structured `502`; objective
+  plans receive one bounded repair attempt first; no terms are published.
 - Daily quota exhausted: `429`; no local process or local model is invoked.
 - Provider outage: `503`; no wallet or protocol transition occurs.
 
