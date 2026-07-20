@@ -44,16 +44,16 @@ if (protocol.chain_id !== 8453) errors.push("protocol_chain_id_mismatch");
 if (protocol.asset !== "USDC") errors.push("protocol_asset_mismatch");
 if (String(protocol.token ?? "").toLowerCase() !== "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913") errors.push("protocol_token_mismatch");
 if (protocol.deployment_status !== "active") errors.push("protocol_inactive");
-if (endpoints.api_base !== "https://api.bountyboard.global") errors.push("api_endpoint_mismatch");
-if (endpoints.mcp_tools !== "https://mcp.bountyboard.global/tools") errors.push("mcp_endpoint_mismatch");
-if (endpoints.autonomous_standing_meta_v2_child_preparation !== "https://api.bountyboard.global/v1/base/autonomous-bounties/standing-meta-v2-child-preparation") errors.push("standing_meta_endpoint_mismatch");
+if (endpoints.api_base !== "https://api.agentbounties.app") errors.push("api_endpoint_mismatch");
+if (endpoints.mcp_tools !== "https://mcp.agentbounties.app/tools") errors.push("mcp_endpoint_mismatch");
+if (endpoints.autonomous_standing_meta_v2_child_preparation !== "https://api.agentbounties.app/v1/base/autonomous-bounties/standing-meta-v2-child-preparation") errors.push("standing_meta_endpoint_mismatch");
 for (const tool of requiredTools) if (!tools.includes(tool)) errors.push("required_tool_missing:" + tool);
 if (errors.length > 0) { console.log(JSON.stringify({ready:false,errors})); process.exit(1); }
-console.log(JSON.stringify({ready:true,network:"base-mainnet",asset:"USDC",api_base:"https://api.bountyboard.global",mcp_tools:"https://mcp.bountyboard.global/tools",required_tools:requiredTools}));
+console.log(JSON.stringify({ready:true,network:"base-mainnet",asset:"USDC",api_base:"https://api.agentbounties.app",mcp_tools:"https://mcp.agentbounties.app/tools",required_tools:requiredTools}));
 `;
 
 const alwaysReady = `
-console.log(JSON.stringify({ready:true,network:"base-mainnet",asset:"USDC",api_base:"https://api.bountyboard.global",mcp_tools:"https://mcp.bountyboard.global/tools",required_tools:["route_blocked_goal","prepare_agent_to_earn","agent_native_claim","prepare_standing_meta_v2_child"]}));
+console.log(JSON.stringify({ready:true,network:"base-mainnet",asset:"USDC",api_base:"https://api.agentbounties.app",mcp_tools:"https://mcp.agentbounties.app/tools",required_tools:["route_blocked_goal","prepare_agent_to_earn","agent_native_claim","prepare_standing_meta_v2_child"]}));
 `;
 
 try {

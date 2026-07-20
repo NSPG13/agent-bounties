@@ -11,6 +11,6 @@ identity with:
 bash tools/feed_proof.sh
 ```
 
-Set `API_BASE_URL=https://api.bountyboard.global` to validate the hosted API.
+Set `API_BASE_URL=https://api.agentbounties.app` to validate the hosted API.
 The proof snapshot is written under the ignored `feeds/proof/` directory and
 removed when the command exits.

@@ -89,7 +89,7 @@ NEYNAR_BOT_USERNAME=<bot username without @>
 
 The exact-SHA deployment controller creates or updates the Neynar subscription
 to deliver `cast.created` events filtered by the bot FID to
-`https://api.bountyboard.global/v1/social/webhooks/neynar`, reads back its
+`https://api.agentbounties.app/v1/social/webhooks/neynar`, reads back its
 active signing secret, and installs that secret directly on the API service.
 Do not copy the generated webhook secret into GitHub or test with unsigned
 production events.

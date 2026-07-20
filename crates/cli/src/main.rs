@@ -354,7 +354,7 @@ enum Command {
     },
     /// Show the 3 USDC daily and 26 USDC Monday-Sunday rankings.
     Leaderboard {
-        #[arg(long, default_value = "https://api.bountyboard.global")]
+        #[arg(long, default_value = "https://api.agentbounties.app")]
         api_base_url: String,
         #[arg(long, default_value = "base-mainnet")]
         network: String,

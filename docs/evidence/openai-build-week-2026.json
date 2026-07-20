@@ -17,9 +17,9 @@
     "claimable_solver_rewards_usdc": "4.500000"
   },
   "authoritative_sources": {
-    "claim_funnel": "https://api.bountyboard.global/v1/base/autonomous-bounties/claim-funnel?network=base-mainnet",
-    "opportunities": "https://api.bountyboard.global/v1/opportunities?network=base-mainnet&limit=100",
-    "event_feed": "https://api.bountyboard.global/v1/base/autonomous-bounties/events?network=base-mainnet"
+    "claim_funnel": "https://api.agentbounties.app/v1/base/autonomous-bounties/claim-funnel?network=base-mainnet",
+    "opportunities": "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&limit=100",
+    "event_feed": "https://api.agentbounties.app/v1/base/autonomous-bounties/events?network=base-mainnet"
   },
   "recent_paid_examples": [
     {
@@ -31,7 +31,7 @@
     {
       "bounty_contract": "0x3d0e396dd4c07c8a7dff13ec93e59c4e7e5a270e",
       "solver_reward_usdc": "0.100000",
-      "events": "https://api.bountyboard.global/v1/base/autonomous-bounties/events?network=base-mainnet&bounty_id=0xa9ecd20c70da07dea26ff531dcbd3422d04ff921fcbc872a7fbb3062832a1677"
+      "events": "https://api.agentbounties.app/v1/base/autonomous-bounties/events?network=base-mainnet&bounty_id=0xa9ecd20c70da07dea26ff531dcbd3422d04ff921fcbc872a7fbb3062832a1677"
     },
     {
       "bounty_contract": "0x377ebd1eb8fea9e22f4a7d08ceab9199699d2346",

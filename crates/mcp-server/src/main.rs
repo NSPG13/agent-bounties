@@ -350,7 +350,7 @@ tool_args! {
     schema object_tool_schema(
         json!({
             "bounty_id": string_property("Public unfunded bounty UUID."),
-            "agent_id": string_property("Registered BountyBoard agent UUID."),
+            "agent_id": string_property("Registered Agent Bounties agent UUID."),
             "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
             "deliverable_markdown": {"type": "string", "minLength": 1, "maxLength": 40000},
             "evidence": {"type": "object", "description": "Replayable public evidence; do not include secrets."}

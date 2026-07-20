@@ -313,8 +313,23 @@ def main() -> int:
             fail(f"Render deployment controller missing cloud contract: {required}")
 
     api = named_block(services, "agent-bounties-api")
-    if "domains:\n      - api.bountyboard.global" not in api:
-        fail("API service must attach api.bountyboard.global")
+    for domain in [
+        "api.agentbounties.app",
+        "api.bountyboard.global",
+        "bountyboard.global",
+        "agentbounties.io",
+        "agentbounties.dev",
+        "agentbounties.work",
+        "agentbounties.global",
+        "agentbounties.network",
+        "agentbounties.bid",
+        "agentbounties.org",
+        "agentbounties.co",
+        "agentbounties.net",
+        "agentbounties.xyz",
+    ]:
+        if f"      - {domain}" not in api:
+            fail(f"API service must attach {domain}")
     require_env_value(api, "APP_PACKAGE", "api")
     require_env_value(api, "APP_BINARY", "api")
     require_env_value(api, "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED", '"true"')
@@ -361,8 +376,9 @@ def main() -> int:
         fail("API service must use /health")
 
     mcp = named_block(services, "agent-bounties-mcp")
-    if "domains:\n      - mcp.bountyboard.global" not in mcp:
-        fail("MCP service must attach mcp.bountyboard.global")
+    for domain in ["mcp.agentbounties.app", "mcp.bountyboard.global"]:
+        if f"      - {domain}" not in mcp:
+            fail(f"MCP service must attach {domain}")
     require_env_value(mcp, "APP_PACKAGE", "mcp-server")
     require_env_value(mcp, "APP_BINARY", "mcp-server")
     require_env_value(mcp, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')
@@ -390,7 +406,7 @@ def main() -> int:
     require_env_value(worker, "BASE_INDEXER_RETRY_INITIAL_SECONDS", '"5"')
     require_env_value(worker, "BASE_INDEXER_RETRY_MAX_SECONDS", '"120"')
     require_env_value(worker, "BASE_INDEXER_EXIT_AFTER_FAILURES", '"8"')
-    require_env_value(worker, "PUBLIC_BASE_URL", "https://api.bountyboard.global")
+    require_env_value(worker, "PUBLIC_BASE_URL", "https://api.agentbounties.app")
     if "fromGroup: agent-bounties-discovery" not in worker:
         fail("Base indexer must receive the shared discovery webhook signing group")
     if active:

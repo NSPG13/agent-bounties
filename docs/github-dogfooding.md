@@ -50,7 +50,7 @@ The safe operator path is:
 4. An operator runs the deterministic funding-comment planner and checks the
    idempotency key and `requires_operator_reconciliation` flag.
 5. For `StripeFiatLedger` comments, the planner can include a public funding
-   handoff URL to `https://bountyboard.global/funding.html` with
+   handoff URL to `https://agentbounties.app/funding.html` with
    the stable issue-derived bounty id, amount, rail, source, and idempotency
    key prefilled. Set repository variable `AGENT_BOUNTIES_API_BASE_URL` to also
    prefill the hosted API base URL. This link is only a Checkout UI handoff; it

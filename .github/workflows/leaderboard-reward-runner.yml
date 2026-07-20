@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
+      API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
       LEADERBOARD_REWARD_CONTRACT: ${{ vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT }}
     steps:

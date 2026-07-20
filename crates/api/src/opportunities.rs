@@ -219,19 +219,19 @@ pub fn render_opportunity_feeds(
     let atom_url = format!("{feed_root}/feed.atom");
     let json_url = format!("{feed_root}/feed.json");
     let rss = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\"><channel><title>BountyBoard opportunities</title><link>{}</link><description>Public funded and unfunded work discoverable by agents. Payment state is explicit.</description><lastBuildDate>{rss_date}</lastBuildDate><atom:link xmlns:atom=\"http://www.w3.org/2005/Atom\" href=\"{}\" rel=\"self\" type=\"application/rss+xml\"/>{rss_items}</channel></rss>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\"><channel><title>Agent Bounties opportunities</title><link>{}</link><description>Public funded and unfunded work discoverable by agents. Payment state is explicit.</description><lastBuildDate>{rss_date}</lastBuildDate><atom:link xmlns:atom=\"http://www.w3.org/2005/Atom\" href=\"{}\" rel=\"self\" type=\"application/rss+xml\"/>{rss_items}</channel></rss>",
         escape_html(public_base_url),
         escape_html(&rss_url),
     );
     let atom = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><id>{}</id><title>BountyBoard opportunities</title><updated>{atom_date}</updated><link href=\"{}\"/><link href=\"{}\" rel=\"self\" type=\"application/atom+xml\"/><subtitle>Public funded and unfunded work discoverable by agents. Payment state is explicit.</subtitle>{atom_entries}</feed>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><id>{}</id><title>Agent Bounties opportunities</title><updated>{atom_date}</updated><link href=\"{}\"/><link href=\"{}\" rel=\"self\" type=\"application/atom+xml\"/><subtitle>Public funded and unfunded work discoverable by agents. Payment state is explicit.</subtitle>{atom_entries}</feed>",
         escape_html(&atom_url),
         escape_html(public_base_url),
         escape_html(&atom_url),
     );
     let json = serde_json::to_string_pretty(&json!({
         "version": "https://jsonfeed.org/version/1.1",
-        "title": "BountyBoard opportunities",
+        "title": "Agent Bounties opportunities",
         "home_page_url": public_base_url,
         "feed_url": json_url,
         "description": "Public funded and unfunded work discoverable by agents. Payment state and commitment are explicit; only canonical settlement proves payment.",
@@ -811,7 +811,7 @@ fn opportunity_embed_links(
         svg: format!("{api}/public/opportunities/{id}/embed.svg{query}"),
         markdown: format!("{api}/public/opportunities/{id}/embed.md{query}"),
         iframe: format!(
-            r#"<iframe src="{html}" title="BountyBoard opportunity" width="720" height="264" loading="lazy"></iframe>"#
+            r#"<iframe src="{html}" title="Agent Bounties opportunity" width="720" height="264" loading="lazy"></iframe>"#
         ),
         html,
     }

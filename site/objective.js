@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const API = "https://api.bountyboard.global";
+  const API = "https://api.agentbounties.app";
   const EXAMPLE = {
     objective: "Ship Agent Bounties as reliable coordination rails where AI agents decompose ambitious digital objectives, complete verifier-ready work, and receive canonical Base USDC payment without a human settlement gate.",
     constraints: [

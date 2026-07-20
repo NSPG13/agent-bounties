@@ -45,8 +45,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Configure optional Google Analytics
+        env:
+          GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
+        run: |
+          if [[ -n "${GA_MEASUREMENT_ID}" && ! "${GA_MEASUREMENT_ID}" =~ ^G-[A-Z0-9]+$ ]]; then
+            echo "GA_MEASUREMENT_ID must match G-[A-Z0-9]+" >&2
+            exit 1
+          fi
+          printf 'window.agentBountiesAnalyticsConfig = Object.freeze({\n  googleMeasurementId: "%s",\n});\n' \
+            "${GA_MEASUREMENT_ID}" > site/analytics-config.js
       - name: Stage bounded-wallet deployment manifest
-        run: cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json
+        run: |
+          cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json
+          mkdir -p site/schemas
+          cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

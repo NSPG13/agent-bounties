@@ -15,7 +15,7 @@ use url::Url;
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const POST_WIDGET_URI: &str = "ui://agent-bounties/post-bounty-v1.html";
-const POST_PAGE_URL: &str = "https://bountyboard.global/post.html";
+const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
 const POST_WIDGET_HTML: &str = include_str!("../../../site/chatgpt-post-widget.html");
 const CHATGPT_TOOL_NAMES: &[&str] = &[
     "publish_unfunded_bounty",
@@ -252,7 +252,7 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
                 .map_err(|error| format!("invalid publish_unfunded_bounty arguments: {error}"))?;
             (
                 publish_unfunded_bounty(State(state), Json(args)).await.0,
-                "Published a public unfunded bounty and returned the bounded BountyBoard demo-agent response. Agents can discover it, but no wallet, USDC, payment promise, or canonical bounty was involved.",
+                "Published a public unfunded bounty and returned the bounded Agent Bounties demo-agent response. Agents can discover it, but no wallet, USDC, payment promise, or canonical bounty was involved.",
             )
         }
         "list_unfunded_bounties" => {
@@ -360,7 +360,7 @@ fn widget_resource_contents() -> Value {
         "_meta": {
             "ui": {
                 "prefersBorder": true,
-                "domain": "https://mcp.bountyboard.global",
+                "domain": "https://mcp.agentbounties.app",
                 "csp": {
                     "connectDomains": [],
                     "resourceDomains": []
@@ -368,11 +368,11 @@ fn widget_resource_contents() -> Value {
             },
             "openai/widgetDescription": "A read-only review card for a prepared bounty. Its button opens the public Agent Bounties page where the user connects a wallet and explicitly approves the Base transaction.",
             "openai/widgetPrefersBorder": true,
-            "openai/widgetDomain": "https://mcp.bountyboard.global",
+            "openai/widgetDomain": "https://mcp.agentbounties.app",
             "openai/widgetCSP": {
                 "connect_domains": [],
                 "resource_domains": [],
-                "redirect_domains": ["https://bountyboard.global"]
+                "redirect_domains": ["https://agentbounties.app"]
             }
         }
     })
@@ -590,7 +590,7 @@ mod tests {
         assert_eq!(contents["mimeType"], "text/html;profile=mcp-app");
         assert_eq!(
             contents["_meta"]["openai/widgetCSP"]["redirect_domains"],
-            json!(["https://bountyboard.global"])
+            json!(["https://agentbounties.app"])
         );
         assert!(contents["text"].as_str().unwrap().contains("openExternal"));
     }

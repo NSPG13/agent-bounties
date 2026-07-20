@@ -34,7 +34,9 @@ REQUIRED_FILES = [
     "robots.txt",
     "sitemap.xml",
     "home.js",
+    "analytics-config.js",
     "analytics.js",
+    "route-alias.js",
     "autonomous.js",
     "legal-consent.js",
     "protocol.json",
@@ -46,17 +48,17 @@ REQUIRED_FILES = [
 
 CORE_PAGES = ["index.html", "earn.html", "post.html", "funding.html", "operator.html"]
 PUBLIC_INDEXABLE_PAGES = {
-    "index.html": "https://bountyboard.global/",
-    "earn.html": "https://bountyboard.global/earn.html",
-    "post.html": "https://bountyboard.global/post.html",
-    "funding.html": "https://bountyboard.global/funding.html",
-    "objective.html": "https://bountyboard.global/objective.html",
-    "prepare-agent.html": "https://bountyboard.global/prepare-agent.html",
-    "agent-budget.html": "https://bountyboard.global/agent-budget.html",
-    "x402.html": "https://bountyboard.global/x402.html",
-    "terms.html": "https://bountyboard.global/terms.html",
-    "privacy.html": "https://bountyboard.global/privacy.html",
-    "refunds.html": "https://bountyboard.global/refunds.html",
+    "index.html": "https://agentbounties.app/",
+    "earn.html": "https://agentbounties.app/earn.html",
+    "post.html": "https://agentbounties.app/post.html",
+    "funding.html": "https://agentbounties.app/funding.html",
+    "objective.html": "https://agentbounties.app/objective.html",
+    "prepare-agent.html": "https://agentbounties.app/prepare-agent.html",
+    "agent-budget.html": "https://agentbounties.app/agent-budget.html",
+    "x402.html": "https://agentbounties.app/x402.html",
+    "terms.html": "https://agentbounties.app/terms.html",
+    "privacy.html": "https://agentbounties.app/privacy.html",
+    "refunds.html": "https://agentbounties.app/refunds.html",
 }
 INTERNAL_NOINDEX_PAGES = {
     "cancel.html",
@@ -64,6 +66,17 @@ INTERNAL_NOINDEX_PAGES = {
     "operator.html",
     "recovery.html",
     "success.html",
+}
+ROUTE_ALIASES = {
+    "tasks/index.html": "/earn.html",
+    "post-a-task/index.html": "/post.html",
+    "agents/index.html": "/#leaderboard",
+    "developers/index.html": "https://api.agentbounties.app/docs",
+    "docs/index.html": "https://github.com/NSPG13/agent-bounties/blob/main/docs/agent-quickstart.md",
+    "community/index.html": "https://github.com/NSPG13/agent-bounties",
+    "global/index.html": "/",
+    "en/index.html": "/",
+    "es/index.html": "/",
 }
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
@@ -147,6 +160,21 @@ def main() -> int:
         if not (site_dir / relative).exists():
             fail(f"missing site file: {relative}")
 
+    for relative, destination in ROUTE_ALIASES.items():
+        alias = site_dir / relative
+        if not alias.exists():
+            fail(f"missing route alias: {relative}")
+        text = alias.read_text(encoding="utf-8")
+        require_phrases(
+            relative,
+            text,
+            [
+                f'data-destination="{destination}"',
+                '<meta name="robots" content="noindex">',
+                '<script src="../route-alias.js"></script>',
+            ],
+        )
+
     for html_file in sorted(site_dir.glob("*.html")):
         parser = LinkParser()
         text = html_file.read_text(encoding="utf-8")
@@ -163,11 +191,17 @@ def main() -> int:
                 fail(f"{html_file}: public page must remain indexable")
             if text.count('<script src="analytics.js"></script>') != 1:
                 fail(f"{html_file}: public page must load the first-party analytics collector exactly once")
+            if text.count('<script src="analytics-config.js"></script>') != 1:
+                fail(f"{html_file}: public page must load the analytics configuration exactly once")
+            if text.index('src="analytics-config.js"') > text.index('src="analytics.js"'):
+                fail(f"{html_file}: analytics configuration must load before the collector")
         elif html_file.name in INTERNAL_NOINDEX_PAGES:
             if not re.search(r'<meta\s+name="robots"[^>]*noindex', text, re.IGNORECASE):
                 fail(f"{html_file}: internal page must be noindex")
             if '<script src="analytics.js"></script>' in text:
                 fail(f"{html_file}: internal page must not load the public analytics collector")
+            if '<script src="analytics-config.js"></script>' in text:
+                fail(f"{html_file}: internal page must not load the public analytics configuration")
         for link in parser.links:
             check_internal_link(site_dir, html_file, link, parser.ids)
 
@@ -184,7 +218,7 @@ def main() -> int:
         extra = sorted(sitemap_urls - expected_sitemap_urls)
         fail(f"sitemap coverage mismatch: missing={missing} extra={extra}")
     robots = (site_dir / "robots.txt").read_text(encoding="utf-8")
-    if "Sitemap: https://bountyboard.global/sitemap.xml" not in robots:
+    if "Sitemap: https://agentbounties.app/sitemap.xml" not in robots:
         fail("robots.txt must advertise the canonical sitemap")
 
     if (site_dir / "main.js").exists():
@@ -201,13 +235,14 @@ def main() -> int:
     structured_data = json.loads(structured_data_match.group(1))
     if structured_data.get("@type") != "WebSite":
         fail("index.html JSON-LD must identify a WebSite")
-    if structured_data.get("name") != "BountyBoard.global":
+    if structured_data.get("name") != "Agent Bounties":
         fail("index.html JSON-LD must use the canonical product name")
-    if structured_data.get("url") != "https://bountyboard.global/":
+    if structured_data.get("url") != "https://agentbounties.app/":
         fail("index.html JSON-LD must use the canonical website URL")
     recovery_page = (site_dir / "recovery.html").read_text(encoding="utf-8")
     javascript = (site_dir / "autonomous.js").read_text(encoding="utf-8")
     analytics_javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
+    analytics_config = (site_dir / "analytics-config.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     objective_page = (site_dir / "objective.html").read_text(encoding="utf-8")
@@ -253,7 +288,7 @@ def main() -> int:
         "analytics.js",
         analytics_javascript,
         [
-            "https://api.bountyboard.global/v1/analytics/events",
+            "https://api.agentbounties.app/v1/analytics/events",
             "navigator.globalPrivacyControl",
             "navigator.doNotTrack",
             "credentials: \"omit\"",
@@ -263,6 +298,12 @@ def main() -> int:
             "canonical_post_confirmed",
             "claim_confirmed",
             "data-analytics-event",
+            "agentBountiesAnalytics",
+            "data-google-analytics-consent",
+            "allow_google_signals: false",
+            "allow_ad_personalization_signals: false",
+            "https://www.googletagmanager.com/gtag/js",
+            "bountyboard.global",
         ],
     )
     for forbidden in ["document.cookie", "location.search.slice", "wallet_address", "user_agent", "ip_address"]:
@@ -277,7 +318,17 @@ def main() -> int:
             "Do Not Track",
             "does not store an IP address, user agent, full referrer URL, URL query string, wallet address",
             "data-analytics-opt-out",
+            "Optional Google Analytics",
+            "loads only after you select <strong>Allow</strong>",
+            "Advertising signals and ad personalization are disabled",
         ],
+    )
+    if not re.search(r'googleMeasurementId:\s*"(?:|G-[A-Z0-9]+)"', analytics_config):
+        fail("analytics-config.js must contain an empty or valid GA4 measurement ID")
+    require_phrases(
+        "Pages GA4 configuration",
+        pages_workflow,
+        ["GA_MEASUREMENT_ID", "Configure optional Google Analytics", "^G-[A-Z0-9]+$"],
     )
     require_phrases(
         "legal-consent.js",
@@ -461,7 +512,7 @@ def main() -> int:
             'type="application/feed+json"',
             "Subscribe via RSS",
             "Subscribe via Atom",
-            "BountyBoard.global | Live AI agent bounties paid in Base USDC",
+            "Agent Bounties | Live AI agent bounties paid in Base USDC",
             'property="og:title"',
             'name="twitter:card"',
             'type="application/ld+json"',
@@ -722,12 +773,12 @@ def main() -> int:
         fail("discovery funding policy must advertise x402 v2 agent-bounty-fund")
     if "FundingAdded" not in x402_funding.get("settlement_boundary", ""):
         fail("x402 funding policy must bind evidence to FundingAdded")
-    if discovery.get("endpoints", {}).get("x402_discovery") != "https://api.bountyboard.global/.well-known/x402.json":
+    if discovery.get("endpoints", {}).get("x402_discovery") != "https://api.agentbounties.app/.well-known/x402.json":
         fail("static discovery manifest has the wrong x402 discovery endpoint")
     expected_opportunity_feeds = {
-        "opportunity_feed_rss": "https://api.bountyboard.global/v1/opportunities/feed.rss",
-        "opportunity_feed_atom": "https://api.bountyboard.global/v1/opportunities/feed.atom",
-        "opportunity_feed_json": "https://api.bountyboard.global/v1/opportunities/feed.json",
+        "opportunity_feed_rss": "https://api.agentbounties.app/v1/opportunities/feed.rss",
+        "opportunity_feed_atom": "https://api.agentbounties.app/v1/opportunities/feed.atom",
+        "opportunity_feed_json": "https://api.agentbounties.app/v1/opportunities/feed.json",
     }
     for endpoint_name, endpoint_url in expected_opportunity_feeds.items():
         if discovery.get("endpoints", {}).get(endpoint_name) != endpoint_url:
@@ -745,9 +796,9 @@ def main() -> int:
     if x402_discovery.get("mpp", {}).get("status") != "planned":
         fail("static x402 discovery must keep MPP behind the planned adapter boundary")
     x402_docs = x402_discovery.get("documentation", {})
-    if x402_docs.get("compatibility") != "https://bountyboard.global/x402.html":
+    if x402_docs.get("compatibility") != "https://agentbounties.app/x402.html":
         fail("static x402 discovery must publish the compatibility page")
-    if x402_docs.get("testVectors") != "https://bountyboard.global/x402-test-vectors.json":
+    if x402_docs.get("testVectors") != "https://agentbounties.app/x402-test-vectors.json":
         fail("static x402 discovery must publish deterministic test vectors")
     if x402_vectors.get("schema_version") != "agent-bounties/x402-test-vectors-v1":
         fail("x402 test vectors have the wrong schema")
@@ -926,13 +977,14 @@ def main() -> int:
         [
             '"deployments/bounded-agent-wallet-base-mainnet.json"',
             "cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json",
+            "cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json",
         ],
     )
     discovery_endpoints = discovery.get("endpoints", {})
-    if discovery_endpoints.get("agent_wallet_readiness") != "https://api.bountyboard.global/v1/base/agent-wallet/readiness":
+    if discovery_endpoints.get("agent_wallet_readiness") != "https://api.agentbounties.app/v1/base/agent-wallet/readiness":
         fail("static discovery has the wrong agent wallet readiness endpoint")
     if discovery_endpoints.get("autonomous_standing_meta_v2_child_preparation") != (
-        "https://api.bountyboard.global/v1/base/autonomous-bounties/standing-meta-v2-child-preparation"
+        "https://api.agentbounties.app/v1/base/autonomous-bounties/standing-meta-v2-child-preparation"
     ):
         fail("static discovery has the wrong standing-meta-v2 preparation endpoint")
     if "prepare_agent_to_earn" not in discovery.get("agent_tools", []):

@@ -1,13 +1,19 @@
 (function () {
   "use strict";
 
-  const API_URL = "https://api.bountyboard.global/v1/analytics/events";
+  const API_URL = "https://api.agentbounties.app/v1/analytics/events";
   const VISITOR_KEY = "bountyboard.analytics.visitor.v1";
   const SESSION_KEY = "bountyboard.analytics.session.v1";
   const ATTRIBUTION_KEY = "bountyboard.analytics.attribution.v1";
   const OPT_OUT_KEY = "bountyboard.analytics.disabled.v1";
+  const GOOGLE_CONSENT_KEY = "agent-bounties.analytics.google-consent.v1";
   const VISITOR_TTL_MS = 90 * 24 * 60 * 60 * 1000;
-  const HOSTS = new Set(["bountyboard.global", "www.bountyboard.global"]);
+  const HOSTS = new Set([
+    "agentbounties.app",
+    "www.agentbounties.app",
+    "bountyboard.global",
+    "www.bountyboard.global",
+  ]);
   const EVENTS = new Set([
     "page_view",
     "market_view",
@@ -69,6 +75,71 @@
 
   function enabled() {
     return HOSTS.has(window.location.hostname) && !privacySignalEnabled() && !explicitOptOut();
+  }
+
+  function googleMeasurementId() {
+    const value = window.agentBountiesAnalyticsConfig?.googleMeasurementId;
+    return /^G-[A-Z0-9]+$/.test(value || "") ? value : null;
+  }
+
+  function googleConsent() {
+    const local = storage("local");
+    return local ? local.getItem(GOOGLE_CONSENT_KEY) : null;
+  }
+
+  function setGoogleConsent(value) {
+    const local = storage("local");
+    if (local) local.setItem(GOOGLE_CONSENT_KEY, value ? "granted" : "denied");
+  }
+
+  function loadGoogleAnalytics() {
+    const measurementId = googleMeasurementId();
+    if (!measurementId || privacySignalEnabled() || explicitOptOut()) return false;
+    if (document.querySelector(`script[data-google-tag="${measurementId}"]`)) return true;
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function () {
+      window.dataLayer.push(arguments);
+    };
+    window.gtag("js", new Date());
+    window.gtag("config", measurementId, {
+      allow_google_signals: false,
+      allow_ad_personalization_signals: false,
+    });
+    const script = document.createElement("script");
+    script.async = true;
+    script.dataset.googleTag = measurementId;
+    script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(
+      measurementId
+    )}`;
+    document.head.appendChild(script);
+    return true;
+  }
+
+  function offerGoogleAnalytics() {
+    if (!googleMeasurementId() || privacySignalEnabled() || explicitOptOut()) return;
+    const consent = googleConsent();
+    if (consent === "granted") {
+      loadGoogleAnalytics();
+      return;
+    }
+    if (consent === "denied" || document.querySelector("[data-google-analytics-consent]")) return;
+    const notice = document.createElement("aside");
+    notice.className = "analytics-consent";
+    notice.dataset.googleAnalyticsConsent = "";
+    notice.setAttribute("aria-label", "Optional analytics choice");
+    notice.innerHTML =
+      '<p><strong>Help improve Agent Bounties?</strong> Allow Google Analytics for anonymous traffic and page-use measurement. Wallets, bounty evidence, and payment data are not sent.</p>' +
+      '<div class="actions"><button class="button primary" type="button" data-google-analytics-allow>Allow</button><button class="button secondary" type="button" data-google-analytics-deny>No thanks</button><a href="privacy.html">Privacy</a></div>';
+    document.body.appendChild(notice);
+    notice.querySelector("[data-google-analytics-allow]").addEventListener("click", function () {
+      setGoogleConsent(true);
+      notice.remove();
+      loadGoogleAnalytics();
+    });
+    notice.querySelector("[data-google-analytics-deny]").addEventListener("click", function () {
+      setGoogleConsent(false);
+      notice.remove();
+    });
   }
 
   function browserId() {
@@ -170,6 +241,9 @@
     }).catch(function () {
       // Analytics must never block or alter a bounty action.
     });
+    if (window.gtag && googleConsent() === "granted" && eventName !== "page_view") {
+      window.gtag("event", eventName, { page_path: event.page_path });
+    }
     return true;
   }
 
@@ -178,9 +252,12 @@
     const session = storage("session");
     if (local) {
       local.setItem(OPT_OUT_KEY, "true");
+      local.setItem(GOOGLE_CONSENT_KEY, "denied");
       local.removeItem(VISITOR_KEY);
       local.removeItem(ATTRIBUTION_KEY);
     }
+    const measurementId = googleMeasurementId();
+    if (measurementId) window[`ga-disable-${measurementId}`] = true;
     if (session) session.removeItem(SESSION_KEY);
     return status();
   }
@@ -196,10 +273,13 @@
       enabled: enabled(),
       explicit_opt_out: explicitOptOut(),
       privacy_signal: privacySignalEnabled(),
+      google_analytics: googleConsent(),
     };
   }
 
-  window.bountyBoardAnalytics = { track, optOut, optIn, status };
+  const analytics = { track, optOut, optIn, status };
+  window.agentBountiesAnalytics = analytics;
+  window.bountyBoardAnalytics = analytics;
 
   document.addEventListener("click", function (event) {
     const target = event.target.closest("[data-analytics-event]");
@@ -214,9 +294,11 @@
     const optOutControl = event.target.closest("[data-analytics-opt-out]");
     if (!optOutControl) return;
     optOut();
+    document.querySelector("[data-google-analytics-consent]")?.remove();
     optOutControl.textContent = "Analytics disabled on this browser";
     optOutControl.setAttribute("aria-pressed", "true");
   });
 
+  offerGoogleAnalytics();
   track("page_view");
 })();

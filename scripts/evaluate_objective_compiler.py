@@ -132,7 +132,7 @@ def main() -> int:
         "--corpus",
         default="benchmarks/openai-build-week/objective-compiler-corpus.json",
     )
-    parser.add_argument("--api-base-url", default="https://api.bountyboard.global")
+    parser.add_argument("--api-base-url", default="https://api.agentbounties.app")
     parser.add_argument("--minimum-keyword-coverage", type=float, default=0.75)
     args = parser.parse_args()
 

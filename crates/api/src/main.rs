@@ -15,9 +15,10 @@ use app::{
 };
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State},
-    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
-    response::{Html, IntoResponse, Response},
+    extract::{Path, Query, Request, State},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode, Uri},
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -475,7 +476,7 @@ impl NeynarSocialIngestionConfig {
         let website_base_url = env::var("WEBSITE_BASE_URL")
             .ok()
             .and_then(non_empty_secret)
-            .unwrap_or_else(|| "https://bountyboard.global".to_string())
+            .unwrap_or_else(|| "https://agentbounties.app".to_string())
             .trim_end_matches('/')
             .to_string();
         if !website_base_url.starts_with("https://")
@@ -1972,6 +1973,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/docs", get(api_docs))
         .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn(redirect_marketing_domain))
         .with_state(state);
 
     let bind_addr = service_bind_addr(
@@ -2108,7 +2110,7 @@ fn build_legal_policy(public_base_url: &str) -> LegalPolicyResponse {
 fn legal_website_base_url(configured: Option<String>, public_base_url: &str) -> String {
     configured.and_then(non_empty_secret).unwrap_or_else(|| {
         match public_base_url.trim_end_matches('/') {
-            "https://api.bountyboard.global" => "https://bountyboard.global".to_string(),
+            "https://api.agentbounties.app" => "https://agentbounties.app".to_string(),
             value => value.to_string(),
         }
     })
@@ -2742,7 +2744,10 @@ fn site_analytics_origin_allowed(headers: &HeaderMap) -> bool {
     };
     if matches!(
         origin,
-        "https://bountyboard.global" | "https://www.bountyboard.global"
+        "https://agentbounties.app"
+            | "https://www.agentbounties.app"
+            | "https://bountyboard.global"
+            | "https://www.bountyboard.global"
     ) {
         return true;
     }
@@ -2752,6 +2757,44 @@ fn site_analytics_origin_allowed(headers: &HeaderMap) -> bool {
         }
     }
     false
+}
+
+fn marketing_domain_destination(host: &str, uri: &Uri) -> Option<String> {
+    let normalized = host
+        .split_once(':')
+        .map_or(host, |(hostname, _)| hostname)
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let domain = normalized.strip_prefix("www.").unwrap_or(&normalized);
+    let home = match domain {
+        "bountyboard.global" => "/",
+        "agentbounties.io" => "/developers/",
+        "agentbounties.dev" => "/docs/",
+        "agentbounties.work" => "/tasks/",
+        "agentbounties.global" => "/global/",
+        "agentbounties.network" => "/agents/",
+        "agentbounties.bid" => "/post-a-task/",
+        "agentbounties.org" => "/community/",
+        "agentbounties.co" | "agentbounties.net" | "agentbounties.xyz" => "/",
+        _ => return None,
+    };
+    let target_path = if uri.path() == "/" { home } else { uri.path() };
+    let query = uri
+        .query()
+        .map_or(String::new(), |value| format!("?{value}"));
+    Some(format!("https://agentbounties.app{target_path}{query}"))
+}
+
+async fn redirect_marketing_domain(request: Request, next: Next) -> Response {
+    let destination = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|host| marketing_domain_destination(host, request.uri()));
+    match destination {
+        Some(destination) => Redirect::permanent(&destination).into_response(),
+        None => next.run(request).await,
+    }
 }
 
 fn normalize_site_analytics_token(value: Option<String>) -> Result<Option<String>, StatusCode> {
@@ -3092,7 +3135,7 @@ async fn opportunity_embed_page(
                 .to_string()
         });
     let html = format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · BountyBoard</title><style>:root{{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}}*{{box-sizing:border-box}}body{{margin:0;padding:12px;background:transparent}}article{{max-width:720px;border:1px solid #6b728066;border-radius:16px;padding:20px;background:#111827;color:#f9fafb;box-shadow:0 12px 36px #0003}}header{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.brand{{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd}}h1{{font-size:21px;line-height:1.25;margin:7px 0 16px}}.states{{display:flex;flex-wrap:wrap;gap:8px}}.pill{{padding:5px 9px;border-radius:999px;background:#1f2937;font-size:12px}}dl{{display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin:18px 0}}dt{{color:#9ca3af}}dd{{margin:0;overflow-wrap:anywhere}}footer{{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}}a{{color:#bfdbfe}}a.cta{{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:9px;font-weight:700}}.proof{{font-size:12px}}.muted{{color:#9ca3af}}</style></head><body><article data-opportunity-id="{}"><header><div><div class="brand">BountyBoard opportunity</div><h1>{title}</h1></div><div class="states"><span class="pill">Work: {work_state}</span><span class="pill">Payment: {payment_state}</span></div></header><dl><dt>Committed reward</dt><dd>{reward}</dd><dt>Deadline</dt><dd>{deadline}</dd><dt>Verification</dt><dd>{verification}</dd></dl><footer>{latest}<a class="cta" href="{link}" target="_blank" rel="noopener noreferrer">{cta}</a></footer></article></body></html>"#,
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · Agent Bounties</title><style>:root{{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}}*{{box-sizing:border-box}}body{{margin:0;padding:12px;background:transparent}}article{{max-width:720px;border:1px solid #6b728066;border-radius:16px;padding:20px;background:#111827;color:#f9fafb;box-shadow:0 12px 36px #0003}}header{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.brand{{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd}}h1{{font-size:21px;line-height:1.25;margin:7px 0 16px}}.states{{display:flex;flex-wrap:wrap;gap:8px}}.pill{{padding:5px 9px;border-radius:999px;background:#1f2937;font-size:12px}}dl{{display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin:18px 0}}dt{{color:#9ca3af}}dd{{margin:0;overflow-wrap:anywhere}}footer{{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}}a{{color:#bfdbfe}}a.cta{{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:9px;font-weight:700}}.proof{{font-size:12px}}.muted{{color:#9ca3af}}</style></head><body><article data-opportunity-id="{}"><header><div><div class="brand">Agent Bounties opportunity</div><h1>{title}</h1></div><div class="states"><span class="pill">Work: {work_state}</span><span class="pill">Payment: {payment_state}</span></div></header><dl><dt>Committed reward</dt><dd>{reward}</dd><dt>Deadline</dt><dd>{deadline}</dd><dt>Verification</dt><dd>{verification}</dd></dl><footer>{latest}<a class="cta" href="{link}" target="_blank" rel="noopener noreferrer">{cta}</a></footer></article></body></html>"#,
         web_public::escape_html(&item.opportunity_id),
     );
     Ok((
@@ -3132,7 +3175,7 @@ async fn opportunity_embed_svg(
     let deadline = item.deadline.as_deref().unwrap_or("No deadline published");
     let link = safe_opportunity_link(&item);
     let svg = format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="720" height="240" role="img" aria-label="BountyBoard opportunity: {title}"><title>BountyBoard opportunity: {title}</title><rect width="720" height="240" rx="18" fill="#111827"/><rect x="1" y="1" width="718" height="238" rx="17" fill="none" stroke="#4b5563"/><text x="28" y="34" fill="#93c5fd" font-family="Arial,sans-serif" font-size="12" letter-spacing="1.2">BOUNTYBOARD OPPORTUNITY</text><text x="28" y="72" fill="#f9fafb" font-family="Arial,sans-serif" font-size="22" font-weight="700">{title}</text><text x="28" y="112" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Work: {work}  ·  Payment: {payment}</text><text x="28" y="142" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Committed reward: {reward}</text><text x="28" y="172" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Deadline: {deadline}</text><text x="28" y="202" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Verification: {verification}</text><a href="{link}" target="_blank"><rect x="550" y="184" width="142" height="36" rx="8" fill="#2563eb"/><text x="621" y="207" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="13" font-weight="700">View opportunity</text></a></svg>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="720" height="240" role="img" aria-label="Agent Bounties opportunity: {title}"><title>Agent Bounties opportunity: {title}</title><rect width="720" height="240" rx="18" fill="#111827"/><rect x="1" y="1" width="718" height="238" rx="17" fill="none" stroke="#4b5563"/><text x="28" y="34" fill="#93c5fd" font-family="Arial,sans-serif" font-size="12" letter-spacing="1.2">BOUNTYBOARD OPPORTUNITY</text><text x="28" y="72" fill="#f9fafb" font-family="Arial,sans-serif" font-size="22" font-weight="700">{title}</text><text x="28" y="112" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Work: {work}  ·  Payment: {payment}</text><text x="28" y="142" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Committed reward: {reward}</text><text x="28" y="172" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Deadline: {deadline}</text><text x="28" y="202" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Verification: {verification}</text><a href="{link}" target="_blank"><rect x="550" y="184" width="142" height="36" rx="8" fill="#2563eb"/><text x="621" y="207" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="13" font-weight="700">View opportunity</text></a></svg>"##,
         title = web_public::escape_html(&title),
         work = web_public::escape_html(&item.work_state),
         payment = web_public::escape_html(&item.payment_state),
@@ -3185,7 +3228,7 @@ async fn opportunity_embed_markdown(
         .map(|url| format!("[Latest result or settlement proof]({url})"))
         .unwrap_or_else(|| "No result or settlement proof published".to_string());
     let markdown = format!(
-        "[![BountyBoard opportunity]({svg_url})]({embed_url})\n\n### {}\n\n| Field | Current value |\n|---|---|\n| Work state | `{}` |\n| Payment state | `{}` |\n| Committed reward | {} |\n| Deadline | {} |\n| Verification | `{}` |\n| Evidence | {} |\n\n[View opportunity]({})\n",
+        "[![Agent Bounties opportunity]({svg_url})]({embed_url})\n\n### {}\n\n| Field | Current value |\n|---|---|\n| Work state | `{}` |\n| Payment state | `{}` |\n| Committed reward | {} |\n| Deadline | {} |\n| Verification | `{}` |\n| Evidence | {} |\n\n[View opportunity]({})\n",
         markdown_cell(&item.title),
         markdown_cell(&item.work_state),
         markdown_cell(&item.payment_state),
@@ -3256,7 +3299,7 @@ fn decimal_amount(amount: &str, decimals: u8) -> String {
 }
 
 fn safe_opportunity_link(item: &OpportunityItem) -> String {
-    safe_external_url(&item.public_url).unwrap_or_else(|| "https://bountyboard.global".to_string())
+    safe_external_url(&item.public_url).unwrap_or_else(|| "https://agentbounties.app".to_string())
 }
 
 fn safe_external_url(value: &str) -> Option<String> {
@@ -3843,7 +3886,7 @@ fn pending_demo_solution(readiness: &CloudAgentReadiness) -> CloudDemoSolution {
             .model
             .clone()
             .unwrap_or_else(|| "not-configured".to_string()),
-        agent_name: "BountyBoard Demo Agent".to_string(),
+        agent_name: "Agent Bounties Demo Agent".to_string(),
         completion_status: "pending".to_string(),
         summary: "The bounty is published and discoverable, but the hosted demo agent has not produced a solution yet.".to_string(),
         deliverable_markdown: "Other agents can discover this open opportunity through `list_unfunded_bounties` and submit work with `submit_unfunded_bounty_solution`.".to_string(),
@@ -3894,7 +3937,7 @@ async fn unfunded_bounty_response(
             state.public_base_url.trim_end_matches('/'),
             trial.id
         ),
-        upgrade_url: "https://bountyboard.global/post.html".to_string(),
+        upgrade_url: "https://agentbounties.app/post.html".to_string(),
         created_at: trial.created_at.to_rfc3339(),
         expires_at: trial.expires_at.to_rfc3339(),
         evidence_boundary: "This public bounty is open and discoverable but currently unfunded and off-chain: no payment is promised. The hosted demo-agent response and any self-reported registered-agent solutions are distinct. CanonicalBountyCreated is required before calling it on-chain; FundingAdded and BountyBecameClaimable are required before calling it funded or claimable.".to_string(),
@@ -4072,8 +4115,8 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
             "relayerCustody": "the hosted relayer holds gas only; the funder signs an exact amount, bounty, network, nonce, and expiration and the contract pulls USDC directly from that funder"
         },
         "documentation": {
-            "compatibility": "https://bountyboard.global/x402.html",
-            "testVectors": "https://bountyboard.global/x402-test-vectors.json",
+            "compatibility": "https://agentbounties.app/x402.html",
+            "testVectors": "https://agentbounties.app/x402-test-vectors.json",
             "fundingEvidence": "FundingAdded",
             "payoutEvidence": "BountySettled"
         },
@@ -7286,7 +7329,7 @@ fn agent_claim_response(
     next_request: Option<serde_json::Value>,
 ) -> Response {
     let browser_fallback_url = format!(
-        "https://bountyboard.global/earn.html?bountyContract={}&solver={}",
+        "https://agentbounties.app/earn.html?bountyContract={}&solver={}",
         reservation.candidate.bounty_contract, reservation.candidate.solver_wallet
     );
     let sponsor_contract = sponsorship
@@ -10403,7 +10446,7 @@ async fn ingest_neynar_social_mention(
     };
     let handoff_url = persisted_handoff_url
         .as_deref()
-        .unwrap_or("https://bountyboard.global/post.html");
+        .unwrap_or("https://agentbounties.app/post.html");
     match publish_neynar_draft_reply(config, &claimed, handoff_url).await {
         Ok(reply_cast_hash) => {
             let completed = store
@@ -11351,12 +11394,17 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::ORIGIN,
+            HeaderValue::from_static("https://agentbounties.app"),
+        );
+        assert!(site_analytics_origin_allowed(&headers));
+        headers.insert(
+            header::ORIGIN,
             HeaderValue::from_static("https://bountyboard.global"),
         );
         assert!(site_analytics_origin_allowed(&headers));
         headers.insert(
             header::ORIGIN,
-            HeaderValue::from_static("https://bountyboard.global.evil.example"),
+            HeaderValue::from_static("https://agentbounties.app.evil.example"),
         );
         assert!(!site_analytics_origin_allowed(&headers));
 
@@ -11381,6 +11429,32 @@ mod tests {
         assert_eq!(event.source.as_deref(), Some("github"));
         assert_eq!(event.referrer_host.as_deref(), Some("github.com"));
         assert_eq!(event.page_path, "/earn.html");
+    }
+
+    #[test]
+    fn marketing_domains_redirect_once_and_preserve_deep_paths_and_queries() {
+        assert_eq!(
+            marketing_domain_destination("agentbounties.work", &"/".parse().unwrap()),
+            Some("https://agentbounties.app/tasks/".to_string())
+        );
+        assert_eq!(
+            marketing_domain_destination(
+                "WWW.AGENTBOUNTIES.DEV:443",
+                &"/sdk/rust?version=1".parse().unwrap()
+            ),
+            Some("https://agentbounties.app/sdk/rust?version=1".to_string())
+        );
+        assert_eq!(
+            marketing_domain_destination(
+                "bountyboard.global",
+                &"/earn.html?from=legacy".parse().unwrap()
+            ),
+            Some("https://agentbounties.app/earn.html?from=legacy".to_string())
+        );
+        assert_eq!(
+            marketing_domain_destination("api.agentbounties.app", &"/health".parse().unwrap()),
+            None
+        );
     }
 
     #[test]
@@ -11412,22 +11486,22 @@ mod tests {
 
     #[test]
     fn legal_policy_is_hash_bound_and_acceptance_is_action_wallet_and_time_bound() {
-        let policy = build_legal_policy("https://bountyboard.global/");
+        let policy = build_legal_policy("https://agentbounties.app/");
         assert_eq!(policy.terms_version, LEGAL_TERMS_VERSION);
         assert_eq!(policy.statement_hash, legal_statement_hash());
-        assert_eq!(policy.terms_url, "https://bountyboard.global/terms.html");
+        assert_eq!(policy.terms_url, "https://agentbounties.app/terms.html");
         assert!(policy
             .supported_actions
             .iter()
             .any(|action| action == "post_bounty"));
         assert_eq!(
-            legal_website_base_url(None, "https://api.bountyboard.global/"),
-            "https://bountyboard.global"
+            legal_website_base_url(None, "https://api.agentbounties.app/"),
+            "https://agentbounties.app"
         );
         assert_eq!(
             legal_website_base_url(
                 Some(" https://preview.example ".to_string()),
-                "https://api.bountyboard.global"
+                "https://api.agentbounties.app"
             ),
             "https://preview.example"
         );
@@ -12399,8 +12473,8 @@ mod tests {
                     currency: "usd".to_string(),
                     rail: domain::PaymentRail::StripeFiat,
                     external_reference: Some("card-funding-test".to_string()),
-                    stripe_success_url: Some("https://bountyboard.global/success.html".to_string()),
-                    stripe_cancel_url: Some("https://bountyboard.global/cancel.html".to_string()),
+                    stripe_success_url: Some("https://agentbounties.app/success.html".to_string()),
+                    stripe_cancel_url: Some("https://agentbounties.app/cancel.html".to_string()),
                 },
                 "http://127.0.0.1:8080",
             )
@@ -12431,11 +12505,11 @@ mod tests {
         );
         assert_eq!(
             report.request.body["success_url"],
-            "https://bountyboard.global/success.html"
+            "https://agentbounties.app/success.html"
         );
         assert_eq!(
             report.request.body["cancel_url"],
-            "https://bountyboard.global/cancel.html"
+            "https://agentbounties.app/cancel.html"
         );
         assert_eq!(
             report.request.body["metadata"]["bounty_id"],
@@ -13086,7 +13160,7 @@ mod tests {
     #[test]
     fn farcaster_bot_mention_matching_respects_token_boundaries() {
         assert!(text_mentions_bot(
-            "@BountyBoard /agent-bounty create 25 USDC ship it",
+            "@bountyboard /agent-bounty create 25 USDC ship it",
             "bountyboard"
         ));
         assert!(text_mentions_bot(
@@ -13125,7 +13199,7 @@ mod tests {
                 api_key: Some("test-neynar-key".to_string()),
                 signer_uuid: Some("123e4567-e89b-42d3-a456-426614174000".to_string()),
                 api_base_url: neynar_api_base,
-                website_base_url: "https://bountyboard.global".to_string(),
+                website_base_url: "https://agentbounties.app".to_string(),
                 client: reqwest::Client::new(),
             }));
 
@@ -13171,7 +13245,7 @@ mod tests {
         assert_eq!(
             handoff,
             format!(
-                "https://bountyboard.global/post.html?from=social-mention&socialDraft={ingestion_id}"
+                "https://agentbounties.app/post.html?from=social-mention&socialDraft={ingestion_id}"
             )
         );
 
@@ -13341,7 +13415,7 @@ mod tests {
         assert!(plan.ready);
         let signal = plan.signal.expect("funding signal");
         let handoff = signal.funding_handoff_url.expect("handoff url");
-        assert!(handoff.contains("https://bountyboard.global/funding.html"));
+        assert!(handoff.contains("https://agentbounties.app/funding.html"));
         assert!(handoff.contains("apiBaseUrl=https%3A%2F%2Fapi.agentbounties.example"));
         assert!(handoff.contains("rail=StripeFiat"));
         assert!(handoff.contains("externalReference=github-funding-comment%3A"));
@@ -14563,7 +14637,7 @@ mod tests {
     #[test]
     fn conversion_correlation_accepts_only_exact_hosted_unfunded_urls() {
         let id = Uuid::new_v4();
-        let base = "https://api.bountyboard.global";
+        let base = "https://api.agentbounties.app";
         assert_eq!(
             unfunded_bounty_id_from_source(&format!("{base}/v1/unfunded-bounties/{id}"), base),
             Some(id)

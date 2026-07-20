@@ -294,54 +294,66 @@ class RenderDeployRecoveryTests(unittest.TestCase):
     def test_custom_domain_is_reused_or_attached_exactly_once(self) -> None:
         existing = RecordingClient()
         existing._read_with_retry = lambda _path: [
-            {"customDomain": {"name": "api.bountyboard.global", "verificationStatus": "verified"}}
+            {"customDomain": {"name": "api.agentbounties.app", "verificationStatus": "verified"}}
         ]
         reused = existing.ensure_custom_domain(
             {"id": "srv-api", "name": "agent-bounties-api"},
-            "api.bountyboard.global",
+            "api.agentbounties.app",
         )
         self.assertEqual(reused["verificationStatus"], "verified")
         self.assertEqual(existing.requests, [])
 
         created = RecordingClient(
-            response={"customDomain": {"name": "api.bountyboard.global", "verificationStatus": "pending"}}
+            response={"customDomain": {"name": "api.agentbounties.app", "verificationStatus": "pending"}}
         )
         created._read_with_retry = lambda _path: []
         attached = created.ensure_custom_domain(
             {"id": "srv-api", "name": "agent-bounties-api"},
-            "api.bountyboard.global",
+            "api.agentbounties.app",
         )
         self.assertEqual(attached["verificationStatus"], "pending")
         self.assertEqual(
             created.requests,
-            [("POST", "/services/srv-api/custom-domains", {"name": "api.bountyboard.global"})],
+            [("POST", "/services/srv-api/custom-domains", {"name": "api.agentbounties.app"})],
         )
 
     def test_duplicate_custom_domains_fail_closed(self) -> None:
         client = RecordingClient()
         client._read_with_retry = lambda _path: [
-            {"name": "api.bountyboard.global"},
-            {"customDomain": {"name": "API.BOUNTYBOARD.GLOBAL"}},
+            {"name": "api.agentbounties.app"},
+            {"customDomain": {"name": "API.AGENTBOUNTIES.APP"}},
         ]
         with self.assertRaisesRegex(recovery.RecoveryError, "duplicate"):
             client.ensure_custom_domain(
                 {"id": "srv-api", "name": "agent-bounties-api"},
-                "api.bountyboard.global",
+                "api.agentbounties.app",
             )
+
+    def test_custom_domain_inventory_preserves_clients_and_routes_vanity_domains(self) -> None:
+        self.assertEqual(
+            recovery.CUSTOM_DOMAINS["agent-bounties-mcp"],
+            ("mcp.agentbounties.app", "mcp.bountyboard.global"),
+        )
+        api_domains = recovery.CUSTOM_DOMAINS["agent-bounties-api"]
+        self.assertEqual(api_domains[0], "api.agentbounties.app")
+        self.assertIn("api.bountyboard.global", api_domains)
+        self.assertIn("bountyboard.global", api_domains)
+        self.assertIn("agentbounties.work", api_domains)
+        self.assertEqual(len(api_domains), len(set(api_domains)))
 
     def test_public_base_urls_require_bare_https_origins(self) -> None:
         self.assertEqual(
             recovery.normalize_public_base_url(
-                "PUBLIC_BASE_URL", " https://api.bountyboard.global/ "
+                "PUBLIC_BASE_URL", " https://api.agentbounties.app/ "
             ),
-            "https://api.bountyboard.global",
+            "https://api.agentbounties.app",
         )
         for value in (
-            "http://api.bountyboard.global",
-            "https://user@api.bountyboard.global",
-            "https://api.bountyboard.global:8443",
-            "https://api.bountyboard.global/path",
-            "https://api.bountyboard.global?query=1",
+            "http://api.agentbounties.app",
+            "https://user@api.agentbounties.app",
+            "https://api.agentbounties.app:8443",
+            "https://api.agentbounties.app/path",
+            "https://api.agentbounties.app?query=1",
         ):
             with self.subTest(value=value), self.assertRaises(recovery.RecoveryError):
                 recovery.normalize_public_base_url("PUBLIC_BASE_URL", value)
@@ -349,14 +361,14 @@ class RenderDeployRecoveryTests(unittest.TestCase):
     def test_public_environment_includes_website_origin(self) -> None:
         self.assertEqual(
             recovery.public_environment_values(
-                "https://api.bountyboard.global/",
-                "https://mcp.bountyboard.global/",
-                "https://bountyboard.global/",
+                "https://api.agentbounties.app/",
+                "https://mcp.agentbounties.app/",
+                "https://agentbounties.app/",
             ),
             {
-                "PUBLIC_BASE_URL": "https://api.bountyboard.global",
-                "MCP_BASE_URL": "https://mcp.bountyboard.global",
-                "WEBSITE_BASE_URL": "https://bountyboard.global",
+                "PUBLIC_BASE_URL": "https://api.agentbounties.app",
+                "MCP_BASE_URL": "https://mcp.agentbounties.app",
+                "WEBSITE_BASE_URL": "https://agentbounties.app",
             },
         )
 
@@ -388,7 +400,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
     def test_matching_public_env_var_is_verified_without_mutation(self) -> None:
         expected = {
             "key": "PUBLIC_BASE_URL",
-            "value": "https://api.bountyboard.global",
+            "value": "https://api.agentbounties.app",
         }
         client = RecordingClient()
         client._read_with_retry = lambda _path: expected
@@ -403,7 +415,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
     def test_stale_public_env_var_is_updated_and_read_back(self) -> None:
         expected = {
             "key": "MCP_BASE_URL",
-            "value": "https://mcp.bountyboard.global",
+            "value": "https://mcp.agentbounties.app",
         }
         reads = iter(
             [
@@ -516,7 +528,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             webhook_secret=" webhook-secret ",
             signer_uuid="123e4567-e89b-42d3-a456-426614174000",
             bot_fid=" 12345 ",
-            bot_username=" @BountyBoard ",
+            bot_username=" @bountyboard ",
         )
 
         self.assertTrue(changed)
@@ -570,7 +582,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             api_key=" provider-secret ",
             signer_uuid="123e4567-e89b-42d3-a456-426614174000",
             bot_fid="12345",
-            bot_username="@BountyBoard",
+            bot_username="@bountyboard",
         )
         self.assertEqual(normalized["NEYNAR_BOT_USERNAME"], "bountyboard")
         with self.assertRaisesRegex(recovery.RecoveryError, "all account values"):
@@ -593,8 +605,8 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 return {
                     "webhook": {
                         "webhook_id": "wh-test",
-                        "title": "BountyBoard social mention drafts",
-                        "target_url": "https://api.bountyboard.global/v1/social/webhooks/neynar",
+                        "title": "Agent Bounties social mention drafts",
+                        "target_url": "https://api.agentbounties.app/v1/social/webhooks/neynar",
                         "active": True,
                         "subscription": {
                             "filters": {"cast.created": {"mentioned_fids": [12345]}}
@@ -607,7 +619,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         evidence, secret = recovery.ensure_neynar_social_webhook(
             client,
             bot_fid="12345",
-            target_url="https://api.bountyboard.global/v1/social/webhooks/neynar",
+            target_url="https://api.agentbounties.app/v1/social/webhooks/neynar",
         )
         self.assertEqual(secret, "provider-generated-secret")
         self.assertTrue(evidence["active"])
@@ -619,8 +631,8 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 "POST",
                 "/v2/farcaster/webhook/",
                 {
-                    "name": "BountyBoard social mention drafts",
-                    "url": "https://api.bountyboard.global/v1/social/webhooks/neynar",
+                    "name": "Agent Bounties social mention drafts",
+                    "url": "https://api.agentbounties.app/v1/social/webhooks/neynar",
                     "subscription": {
                         "cast.created": {"mentioned_fids": [12345]}
                     },
@@ -629,10 +641,10 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         )
 
     def test_exact_neynar_webhook_is_reused_without_provider_mutation(self) -> None:
-        target = "https://api.bountyboard.global/v1/social/webhooks/neynar"
+        target = "https://api.agentbounties.app/v1/social/webhooks/neynar"
         webhook = {
             "webhook_id": "wh-existing",
-            "title": "BountyBoard social mention drafts",
+            "title": "Agent Bounties social mention drafts",
             "target_url": target,
             "active": True,
             "subscription": {
@@ -685,7 +697,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         client = RecordingClient(
             response={
                 "key": "PUBLIC_BASE_URL",
-                "value": "https://api.bountyboard.global",
+                "value": "https://api.agentbounties.app",
             }
         )
         client._read_with_retry = lambda _path: {
@@ -696,7 +708,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             client.ensure_env_var(
                 {"id": "srv-api", "name": "agent-bounties-api"},
                 "PUBLIC_BASE_URL",
-                "https://api.bountyboard.global",
+                "https://api.agentbounties.app",
             )
 
     def test_rejected_trigger_fails_without_unbounded_retry(self) -> None:

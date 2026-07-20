@@ -306,7 +306,7 @@ async function testDeterministicPostingDefaults() {
     },
     next_request: {
       method: "POST",
-      url: "https://api.bountyboard.global/v1/base/autonomous-bounties/claims",
+      url: "https://api.agentbounties.app/v1/base/autonomous-bounties/claims",
       body: requestBody,
     },
   };
@@ -317,7 +317,7 @@ async function testDeterministicPostingDefaults() {
     selected,
     account,
     protocol,
-    "https://api.bountyboard.global",
+    "https://api.agentbounties.app",
   );
   assert.strictEqual(walletRequest.method, "eth_signTypedData_v4");
 
@@ -332,7 +332,7 @@ async function testDeterministicPostingDefaults() {
       selected,
       account,
       protocol,
-      "https://api.bountyboard.global",
+      "https://api.agentbounties.app",
     ),
     /differs from the selected Base USDC bond/,
   );
