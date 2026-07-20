@@ -46,6 +46,26 @@ class AgentBountiesClient:
             return {"x-operator-token": self.operator_api_token}
         return None
 
+    def _http(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict | None = None,
+        params: dict | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        request_headers = self._headers() or {}
+        request_headers.update(headers or {})
+        return httpx.request(
+            method,
+            f"{self.base_url}{path}",
+            json=json,
+            params={key: value for key, value in params.items() if value is not None} if params else None,
+            headers=request_headers or None,
+            timeout=30,
+        )
+
     def _request(
         self,
         method: str,
@@ -54,22 +74,7 @@ class AgentBountiesClient:
         params: dict | None = None,
         headers: dict[str, str] | None = None,
     ):
-        query = (
-            {key: value for key, value in params.items() if value is not None}
-            if params
-            else None
-        )
-        request_headers = self._headers() or {}
-        if headers:
-            request_headers.update(headers)
-        response = httpx.request(
-            method,
-            f"{self.base_url}{path}",
-            json=json,
-            params=query,
-            headers=request_headers or None,
-            timeout=30,
-        )
+        response = self._http(method, path, json=json, params=params, headers=headers)
         if response.status_code == 204:
             return {"http_status": 204, "success": True}
         try:
@@ -79,6 +84,30 @@ class AgentBountiesClient:
         if response.is_error:
             raise AgentBountiesHttpError(response, body)
         return body
+
+    def _x402_request(
+        self,
+        path: str,
+        accepted_statuses: tuple[int, ...],
+        *,
+        params: dict | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict:
+        response = self._http("GET", path, params=params, headers=headers)
+        if response.status_code not in accepted_statuses:
+            response.raise_for_status()
+        return {
+            "status": response.status_code,
+            "payment_required": response.headers.get("PAYMENT-REQUIRED"),
+            "payment_response": response.headers.get("PAYMENT-RESPONSE"),
+            "body": _x402_response_body(response),
+        }
+
+    def _stripe_event(self, path: str, event: dict, signature: str | None) -> dict:
+        headers = {"stripe-signature": signature} if signature else None
+        response = self._http("POST", path, json=event, headers=headers)
+        response.raise_for_status()
+        return response.json()
 
     def route_blocked_goal(self, goal: str, context: str, budget_minor: int, currency: str = "usdc", privacy: str = "Public"):
         return self._request(
@@ -136,46 +165,21 @@ class AgentBountiesClient:
         relayer: str | None = None,
         payment_signature: str | None = None,
     ):
-        headers = self._headers() or {}
-        if payment_signature:
-            headers["PAYMENT-SIGNATURE"] = payment_signature
-        response = httpx.get(
-            f"{self.base_url}/v1/x402/base/bounties/{bounty_contract}/funding",
+        return self._x402_request(
+            f"/v1/x402/base/bounties/{bounty_contract}/funding",
+            (200, 202, 400, 402, 404, 409, 413, 422, 429, 503),
             params={
-                key: value
-                for key, value in {
-                    "network": network,
-                    "amount": amount,
-                    "relayer": relayer,
-                }.items()
-                if value is not None
+                "network": network,
+                "amount": amount,
+                "relayer": relayer,
             },
-            headers=headers or None,
-            timeout=30,
+            headers={"PAYMENT-SIGNATURE": payment_signature} if payment_signature else None,
         )
-        if response.status_code not in (200, 202, 400, 402, 404, 409, 413, 422, 429, 503):
-            response.raise_for_status()
-        return {
-            "status": response.status_code,
-            "payment_required": response.headers.get("PAYMENT-REQUIRED"),
-            "payment_response": response.headers.get("PAYMENT-RESPONSE"),
-            "body": _x402_response_body(response),
-        }
 
     def get_x402_relay_status(self, relay_id: str):
-        response = httpx.get(
-            f"{self.base_url}/v1/x402/base/relays/{relay_id}",
-            headers=self._headers() or None,
-            timeout=30,
+        return self._x402_request(
+            f"/v1/x402/base/relays/{relay_id}", (200, 202, 404, 422, 503)
         )
-        if response.status_code not in (200, 202, 404, 422, 503):
-            response.raise_for_status()
-        return {
-            "status": response.status_code,
-            "payment_required": response.headers.get("PAYMENT-REQUIRED"),
-            "payment_response": response.headers.get("PAYMENT-RESPONSE"),
-            "body": _x402_response_body(response),
-        }
 
     def fund_x402_bounty(
         self,
@@ -1362,36 +1366,16 @@ class AgentBountiesClient:
         event: dict,
         stripe_signature: str | None = None,
     ):
-        headers = self._headers() or {}
-        if stripe_signature:
-            headers["stripe-signature"] = stripe_signature
-        response = httpx.request(
-            "POST",
-            f"{self.base_url}/v1/stripe/checkout-webhooks",
-            json=event,
-            headers=headers or None,
-            timeout=30,
+        return self._stripe_event(
+            "/v1/stripe/checkout-webhooks", event, stripe_signature
         )
-        response.raise_for_status()
-        return response.json()
 
     def reconcile_stripe_transfer_event(
         self,
         event: dict,
         stripe_signature: str | None = None,
     ):
-        headers = self._headers() or {}
-        if stripe_signature:
-            headers["stripe-signature"] = stripe_signature
-        response = httpx.request(
-            "POST",
-            f"{self.base_url}/v1/stripe/transfer-events",
-            json=event,
-            headers=headers or None,
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json()
+        return self._stripe_event("/v1/stripe/transfer-events", event, stripe_signature)
 
     def run_bountybench(self):
         return self._request("GET", "/v1/evals/bountybench")

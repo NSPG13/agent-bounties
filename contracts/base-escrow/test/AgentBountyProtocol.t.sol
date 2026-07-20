@@ -547,25 +547,25 @@ contract AgentBountyProtocolTest {
 
     function testCanonicalDeadlinesAndWorkWindowsAreBounded() public {
         ProofHashVerifier module = new ProofHashVerifier(keccak256("proof"));
-        AgentBountyFactory.CreateBountyParams memory params = _deterministicParams(module);
         address[] memory noVerifiers = new address[](0);
-
-        params.fundingDeadline = uint64(block.timestamp + 366 days + 1);
-        (bool fundingSuccess,) = address(factory)
-            .call(abi.encodeCall(AgentBountyFactory.createBounty, (params, noVerifiers, 0, _nextNonce())));
-        require(!fundingSuccess, "unbounded funding deadline accepted");
-
-        params = _deterministicParams(module);
-        params.claimWindowSeconds = 30 days + 1;
-        (bool claimSuccess,) = address(factory)
-            .call(abi.encodeCall(AgentBountyFactory.createBounty, (params, noVerifiers, 0, _nextNonce())));
-        require(!claimSuccess, "unbounded claim window accepted");
-
-        params = _deterministicParams(module);
-        params.verificationWindowSeconds = 30 days + 1;
-        (bool verificationSuccess,) = address(factory)
-            .call(abi.encodeCall(AgentBountyFactory.createBounty, (params, noVerifiers, 0, _nextNonce())));
-        require(!verificationSuccess, "unbounded verification window accepted");
+        for (uint256 scenario; scenario < 3; ++scenario) {
+            AgentBountyFactory.CreateBountyParams memory params = _deterministicParams(module);
+            if (scenario == 0) {
+                params.fundingDeadline = uint64(block.timestamp + 366 days + 1);
+            } else if (scenario == 1) {
+                params.claimWindowSeconds = 30 days + 1;
+            } else {
+                params.verificationWindowSeconds = 30 days + 1;
+            }
+            (bool success,) = address(factory)
+                .call(abi.encodeCall(AgentBountyFactory.createBounty, (params, noVerifiers, 0, _nextNonce())));
+            require(
+                !success,
+                scenario == 0
+                    ? "unbounded funding deadline accepted"
+                    : scenario == 1 ? "unbounded claim window accepted" : "unbounded verification window accepted"
+            );
+        }
     }
 
     function testCanonicalTargetMustFitIndexerAmountRange() public {
