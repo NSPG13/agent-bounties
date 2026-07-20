@@ -39,6 +39,7 @@ TRANSIENT_HTTP_STATUSES = {429, 500, 503}
 CUSTOM_DOMAINS = {
     "agent-bounties-api": (
         "api.agentbounties.app",
+        "status.agentbounties.app",
         "api.bountyboard.global",
         "bountyboard.global",
         "agentbounties.io",

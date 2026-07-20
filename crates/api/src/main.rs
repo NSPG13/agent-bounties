@@ -2766,23 +2766,26 @@ fn marketing_domain_destination(host: &str, uri: &Uri) -> Option<String> {
         .trim_end_matches('.')
         .to_ascii_lowercase();
     let domain = normalized.strip_prefix("www.").unwrap_or(&normalized);
-    let home = match domain {
-        "bountyboard.global" => "/",
-        "agentbounties.io" => "/developers/",
-        "agentbounties.dev" => "/docs/",
-        "agentbounties.work" => "/tasks/",
-        "agentbounties.global" => "/global/",
-        "agentbounties.network" => "/agents/",
-        "agentbounties.bid" => "/post-a-task/",
-        "agentbounties.org" => "/community/",
-        "agentbounties.co" | "agentbounties.net" | "agentbounties.xyz" => "/",
+    let (base, home) = match domain {
+        "status.agentbounties.app" => ("https://api.agentbounties.app", "/health"),
+        "bountyboard.global" => ("https://agentbounties.app", "/"),
+        "agentbounties.io" => ("https://agentbounties.app", "/developers/"),
+        "agentbounties.dev" => ("https://agentbounties.app", "/docs/"),
+        "agentbounties.work" => ("https://agentbounties.app", "/tasks/"),
+        "agentbounties.global" => ("https://agentbounties.app", "/global/"),
+        "agentbounties.network" => ("https://agentbounties.app", "/agents/"),
+        "agentbounties.bid" => ("https://agentbounties.app", "/post-a-task/"),
+        "agentbounties.org" => ("https://agentbounties.app", "/community/"),
+        "agentbounties.co" | "agentbounties.net" | "agentbounties.xyz" => {
+            ("https://agentbounties.app", "/")
+        }
         _ => return None,
     };
     let target_path = if uri.path() == "/" { home } else { uri.path() };
     let query = uri
         .query()
         .map_or(String::new(), |value| format!("?{value}"));
-    Some(format!("https://agentbounties.app{target_path}{query}"))
+    Some(format!("{base}{target_path}{query}"))
 }
 
 async fn redirect_marketing_domain(request: Request, next: Next) -> Response {
@@ -11454,6 +11457,10 @@ mod tests {
         assert_eq!(
             marketing_domain_destination("api.agentbounties.app", &"/health".parse().unwrap()),
             None
+        );
+        assert_eq!(
+            marketing_domain_destination("status.agentbounties.app", &"/".parse().unwrap()),
+            Some("https://api.agentbounties.app/health".to_string())
         );
     }
 

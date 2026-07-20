@@ -67,6 +67,7 @@ services:
     name: agent-bounties-api
     domains:
       - api.agentbounties.app
+      - status.agentbounties.app
       - api.bountyboard.global
       - bountyboard.global
       - agentbounties.io

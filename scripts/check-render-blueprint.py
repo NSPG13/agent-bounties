@@ -315,6 +315,7 @@ def main() -> int:
     api = named_block(services, "agent-bounties-api")
     for domain in [
         "api.agentbounties.app",
+        "status.agentbounties.app",
         "api.bountyboard.global",
         "bountyboard.global",
         "agentbounties.io",

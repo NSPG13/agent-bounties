@@ -3,6 +3,7 @@
 `agentbounties.app` is the only canonical website. Official links, canonical
 tags, sitemaps, social profiles, and partner backlinks must use it. The API and
 MCP services remain at `api.agentbounties.app` and `mcp.agentbounties.app`.
+`status.agentbounties.app` redirects to the canonical API health endpoint.
 
 ## Routing contract
 
@@ -40,6 +41,7 @@ Create these records on `agentbounties.app`:
 | `CNAME` | `www` | `nspg13.github.io` |
 | `CNAME` | `api` | `agent-bounties-api.onrender.com` |
 | `CNAME` | `mcp` | `agent-bounties-mcp.onrender.com` |
+| `CNAME` | `status` | `agent-bounties-api.onrender.com` |
 
 For every alternate apex domain, point `@` to
 `agent-bounties-api.onrender.com` with the provider's `ALIAS`/flattened CNAME

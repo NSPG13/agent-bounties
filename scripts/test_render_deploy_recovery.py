@@ -337,6 +337,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         api_domains = recovery.CUSTOM_DOMAINS["agent-bounties-api"]
         self.assertEqual(api_domains[0], "api.agentbounties.app")
         self.assertIn("api.bountyboard.global", api_domains)
+        self.assertIn("status.agentbounties.app", api_domains)
         self.assertIn("bountyboard.global", api_domains)
         self.assertIn("agentbounties.work", api_domains)
         self.assertEqual(len(api_domains), len(set(api_domains)))
