@@ -67,7 +67,7 @@ The protocol validates and enforces.
 - Model: `gpt-5.6`
 - API: `POST https://api.openai.com/v1/responses`
 - Output mode: strict JSON Schema Structured Outputs
-- Reasoning effort: `medium`
+- Reasoning effort: `low` for bounded interactive planning latency
 - Storage: disabled for these requests
 - Model role: bounded task decomposition only
 
