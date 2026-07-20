@@ -37,7 +37,7 @@ def request_plan(api_base_url: str, case: dict[str, Any]) -> dict[str, Any]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=90) as response:
+        with urllib.request.urlopen(request, timeout=120) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")

@@ -212,7 +212,9 @@
         body: JSON.stringify(body),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || `Compiler returned HTTP ${response.status}`);
+      if (!response.ok) {
+        throw new Error(result.message || result.error_code || `Compiler returned HTTP ${response.status}`);
+      }
       renderGraph(result, "compiled");
       status.textContent = `${result.tasks.length} tasks passed graph, verifier, evidence, and budget validation. Review before publishing.`;
       if (typeof window.agentBountiesTrack === "function") {

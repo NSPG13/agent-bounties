@@ -167,11 +167,11 @@ services:
       - key: CLOUD_AGENT_MAX_INPUT_CHARS
         value: "12000"
       - key: CLOUD_AGENT_MAX_OUTPUT_TOKENS
-        value: "2500"
+        value: "12000"
       - key: CLOUD_AGENT_MAX_DAILY_DRAFTS
-        value: "100"
+        value: "50"
       - key: CLOUD_AGENT_TIMEOUT_SECONDS
-        value: "45"
+        value: "90"
       - fromGroup: agent-bounties-operator
       - fromGroup: agent-bounties-stripe
       - fromGroup: agent-bounties-base

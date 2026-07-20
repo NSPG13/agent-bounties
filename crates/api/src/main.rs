@@ -1369,7 +1369,7 @@ struct PublishAutonomousBountyTermsRequest {
     document: AutonomousBountyTermsDocument,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 struct AgentActionError {
     schema_version: String,
     error_code: String,
@@ -2239,26 +2239,27 @@ async fn cloud_agent_readiness(State(state): State<SharedState>) -> Json<CloudAg
     request_body = CloudObjectivePlanRequest,
     responses(
         (status = 200, body = CloudObjectivePlan),
-        (status = 400, description = "Invalid objective, graph, verifier, evidence, or budget input"),
+        (status = 400, body = AgentActionError, description = "Invalid objective or budget input"),
         (status = 401, description = "Public cloud planning is disabled and operator authorization is absent"),
-        (status = 429, description = "Bounded daily cloud-model quota exhausted"),
-        (status = 503, description = "GPT-5.6 cloud planning is not configured or unavailable")
+        (status = 429, body = AgentActionError, description = "Bounded daily cloud-model quota exhausted"),
+        (status = 502, body = AgentActionError, description = "GPT-5.6 returned a plan that still failed deterministic validation after one repair attempt"),
+        (status = 503, body = AgentActionError, description = "GPT-5.6 cloud planning is not configured or unavailable")
     )
 )]
 async fn compile_objective_with_cloud_agent(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Json(request): Json<CloudObjectivePlanRequest>,
-) -> Result<Json<CloudObjectivePlan>, StatusCode> {
+) -> Result<Json<CloudObjectivePlan>, AgentActionApiError> {
     if !state.cloud_agent.public_drafts() {
-        require_operator(&state, &headers)?;
+        require_operator(&state, &headers).map_err(cloud_agent_access_error)?;
     }
     state
         .cloud_agent
         .compile_objective(request)
         .await
         .map(Json)
-        .map_err(cloud_agent_status)
+        .map_err(cloud_agent_api_error)
 }
 
 #[utoipa::path(
@@ -2267,26 +2268,27 @@ async fn compile_objective_with_cloud_agent(
     request_body = CloudBountyDraftRequest,
     responses(
         (status = 200, body = CloudBountyDraft),
-        (status = 400, description = "Invalid or unverifiable drafting input"),
+        (status = 400, body = AgentActionError, description = "Invalid or unverifiable drafting input"),
         (status = 401, description = "Public drafts are disabled and operator authorization is absent"),
-        (status = 429, description = "Bounded daily cloud-model quota exhausted"),
-        (status = 503, description = "Cloud model is not configured or unavailable")
+        (status = 429, body = AgentActionError, description = "Bounded daily cloud-model quota exhausted"),
+        (status = 502, body = AgentActionError, description = "Cloud model returned invalid structured output"),
+        (status = 503, body = AgentActionError, description = "Cloud model is not configured or unavailable")
     )
 )]
 async fn draft_bounty_with_cloud_agent(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Json(request): Json<CloudBountyDraftRequest>,
-) -> Result<Json<CloudBountyDraft>, StatusCode> {
+) -> Result<Json<CloudBountyDraft>, AgentActionApiError> {
     if !state.cloud_agent.public_drafts() {
-        require_operator(&state, &headers)?;
+        require_operator(&state, &headers).map_err(cloud_agent_access_error)?;
     }
     state
         .cloud_agent
         .draft(request)
         .await
         .map(Json)
-        .map_err(cloud_agent_status)
+        .map_err(cloud_agent_api_error)
 }
 
 #[utoipa::path(
@@ -3945,6 +3947,64 @@ fn cloud_agent_status(error: CloudAgentError) -> StatusCode {
         CloudAgentError::Unavailable
         | CloudAgentError::InvalidConfiguration(_)
         | CloudAgentError::Provider(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+fn cloud_agent_access_error(status: StatusCode) -> AgentActionApiError {
+    agent_action_error(
+        status,
+        "cloud_agent_authorization_required",
+        "This cloud-agent endpoint requires operator authorization.",
+        false,
+        "Use the public compiler when enabled, or provide the configured operator credential.",
+    )
+}
+
+fn cloud_agent_api_error(error: CloudAgentError) -> AgentActionApiError {
+    match error {
+        CloudAgentError::InvalidRequest(message) => agent_action_error(
+            StatusCode::BAD_REQUEST,
+            "cloud_agent_invalid_request",
+            message,
+            false,
+            "Correct the bounded request fields and submit again with a new idempotency key.",
+        ),
+        CloudAgentError::InvalidResponse(message) => {
+            eprintln!("cloud model output failed deterministic validation: {message}");
+            agent_action_error(
+                StatusCode::BAD_GATEWAY,
+                "cloud_agent_invalid_model_output",
+                message,
+                true,
+                "Retry the same objective. No bounty, wallet action, verification, or payment was created.",
+            )
+        }
+        CloudAgentError::QuotaExhausted => agent_action_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "cloud_agent_daily_quota_exhausted",
+            "The bounded daily cloud-model quota is exhausted.",
+            true,
+            "Retry after the UTC quota window resets.",
+        ),
+        CloudAgentError::Provider(message) => {
+            eprintln!("cloud model provider request failed: {message}");
+            agent_action_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "cloud_agent_provider_unavailable",
+                "The configured cloud model did not complete the request.",
+                true,
+                "Retry the same request and idempotency key. No protocol or payment state changed.",
+            )
+        }
+        CloudAgentError::Unavailable | CloudAgentError::InvalidConfiguration(_) => {
+            agent_action_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "cloud_agent_unavailable",
+                "The hosted cloud agent is not ready.",
+                false,
+                "Check /v1/cloud-agent/readiness before retrying.",
+            )
+        }
     }
 }
 
@@ -11941,6 +12001,25 @@ mod tests {
     }
 
     #[test]
+    fn cloud_agent_errors_are_machine_readable_and_provider_safe() {
+        let (status, Json(error)) = cloud_agent_api_error(CloudAgentError::InvalidResponse(
+            "objective task dependencies contain a cycle".to_string(),
+        ));
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(error.error_code, "cloud_agent_invalid_model_output");
+        assert!(error.retryable);
+        assert!(error.message.contains("cycle"));
+
+        let (status, Json(error)) = cloud_agent_api_error(CloudAgentError::Provider(
+            "provider returned HTTP 401 with private diagnostics".to_string(),
+        ));
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.error_code, "cloud_agent_provider_unavailable");
+        assert!(error.retryable);
+        assert!(!error.message.contains("private diagnostics"));
+    }
+
+    #[test]
     fn site_analytics_accepts_only_first_party_origins_and_minimized_fields() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -14407,6 +14486,11 @@ mod tests {
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
         assert!(paths.contains_key("/v1/cloud-agent/objective-plans"));
+        assert!(
+            value["paths"]["/v1/cloud-agent/objective-plans"]["post"]["responses"]
+                .get("502")
+                .is_some()
+        );
         assert!(paths.contains_key("/v1/opportunities"));
         assert!(paths.contains_key("/v1/opportunities/feed.rss"));
         assert!(paths.contains_key("/v1/opportunities/feed.atom"));

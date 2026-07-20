@@ -12,10 +12,11 @@ use thiserror::Error;
 use utoipa::ToSchema;
 
 const DEFAULT_MAX_INPUT_CHARS: usize = 12_000;
-const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 2_500;
-const DEFAULT_DAILY_LIMIT: u32 = 100;
-const DEFAULT_TIMEOUT_SECONDS: u64 = 45;
+const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 12_000;
+const DEFAULT_DAILY_LIMIT: u32 = 50;
+const DEFAULT_TIMEOUT_SECONDS: u64 = 90;
 const MINIMUM_TASK_REWARD_BASE_UNITS: u128 = 10_000;
+const OPENAI_REASONING_EFFORT: &str = "low";
 
 fn default_objective_task_limit() -> u8 {
     5
@@ -481,7 +482,7 @@ impl HttpCloudTextModel {
                     "instructions": system,
                     "input": user,
                     "text": {"format": format},
-                    "reasoning": {"effort": "medium"},
+                    "reasoning": {"effort": OPENAI_REASONING_EFFORT},
                     "max_output_tokens": self.max_output_tokens,
                     "store": false
                 })
@@ -527,6 +528,15 @@ impl HttpCloudTextModel {
             return Err(CloudAgentError::Provider(format!(
                 "provider returned HTTP {status}: {}",
                 truncate(&value.to_string(), 500)
+            )));
+        }
+        if value.get("status").and_then(Value::as_str) == Some("incomplete") {
+            let reason = value
+                .pointer("/incomplete_details/reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            return Err(CloudAgentError::InvalidResponse(format!(
+                "Responses API returned an incomplete result ({reason})"
             )));
         }
         match self.protocol {
@@ -792,23 +802,48 @@ impl CloudAgentService {
         }
         let model = self.model.as_ref().ok_or(CloudAgentError::Unavailable)?;
         self.reserve_quota()?;
-        let user = serde_json::to_string(&json!({
+        let request_payload = json!({
             "objective": request.objective,
             "context": request.context,
             "constraints": request.constraints,
             "max_tasks": request.max_tasks,
             "source_url": request.source_url,
-        }))
-        .map_err(|error| CloudAgentError::InvalidRequest(error.to_string()))?;
-        let raw = model
+        });
+        let user = serde_json::to_string(&request_payload)
+            .map_err(|error| CloudAgentError::InvalidRequest(error.to_string()))?;
+        let schema = objective_plan_output_schema(request.max_tasks);
+        let first_result = model
             .generate_structured_json(
                 objective_compiler_system_prompt(),
                 &user,
                 "agent_bounties_objective_plan",
-                &objective_plan_output_schema(request.max_tasks),
+                &schema,
             )
-            .await?;
-        let fields = parse_model_objective_plan(&raw, request.max_tasks)?;
+            .await
+            .and_then(|raw| parse_model_objective_plan(&raw, request.max_tasks));
+        let fields = match first_result {
+            Ok(fields) => fields,
+            Err(CloudAgentError::InvalidResponse(reason)) => {
+                let repair_user = serde_json::to_string(&json!({
+                    "request": request_payload,
+                    "deterministic_repair": {
+                        "validation_error": truncate(&reason, 500),
+                        "instruction": "Regenerate the complete plan from scratch. Correct the reported validation error without weakening any acceptance, verifier, evidence, dependency, or authority rule."
+                    }
+                }))
+                .map_err(|error| CloudAgentError::InvalidRequest(error.to_string()))?;
+                let repaired = model
+                    .generate_structured_json(
+                        objective_compiler_system_prompt(),
+                        &repair_user,
+                        "agent_bounties_objective_plan",
+                        &schema,
+                    )
+                    .await?;
+                parse_model_objective_plan(&repaired, request.max_tasks)?
+            }
+            Err(error) => return Err(error),
+        };
         let parallel_layers = objective_parallel_layers(&fields.tasks)?;
         let allocations =
             allocate_solver_budget(&fields.tasks, request.solver_budget_usdc.as_deref())?;
@@ -1568,10 +1603,11 @@ fn objective_compiler_system_prompt() -> &'static str {
 
 Planning rules:
 - Use two to max_tasks tasks. Each task must produce one inspectable digital artifact.
-- Use dependencies only when a task cannot begin from the original input. Keep independent work parallel.
+- Emit tasks in topological order. Use dependencies only when a task cannot begin from the original input, and reference only earlier task IDs. Keep independent work parallel.
+- Keep task IDs and evidence field names unique lower_snake_case values matching the supplied schema.
 - Make every acceptance criterion binary, explicit, and replayable.
 - Choose only command, http, schema, or github_ci verification. Prefer command or github_ci for coding work.
-- A command verifier must contain the exact bounded command. An HTTP verifier must contain an endpoint and expected status. A schema verifier relies on the generated evidence schema.
+- A command or github_ci verifier must set command and leave endpoint and expected_status null. An HTTP verifier must leave command null and set an HTTPS endpoint and expected status. A schema verifier must leave command, endpoint, and expected_status null.
 - List the minimum string-valued evidence fields needed to replay verification. Never request secrets.
 - effort_weight is a relative integer from 1 to 100. Do not choose, promise, or move money.
 - State unresolved ambiguity in questions and unverifiable, unsafe, permission, or external-dependency problems in risk_flags.
@@ -1806,6 +1842,7 @@ fn truncate(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct FakeModel {
         output: String,
@@ -1819,6 +1856,28 @@ mod tests {
             _user: &str,
         ) -> Result<String, CloudAgentError> {
             Ok(self.output.clone())
+        }
+    }
+
+    struct RepairModel {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CloudTextModel for RepairModel {
+        async fn generate_json(
+            &self,
+            _system: &str,
+            _user: &str,
+        ) -> Result<String, CloudAgentError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                let mut cyclic: Value = serde_json::from_str(&objective_output()).unwrap();
+                cyclic["tasks"][0]["depends_on"] = json!(["hosted_demo"]);
+                Ok(cyclic.to_string())
+            } else {
+                Ok(objective_output())
+            }
         }
     }
 
@@ -2051,8 +2110,33 @@ mod tests {
         assert_eq!(plan.verification_policy.model_authority, "advisory_only");
     }
 
+    #[tokio::test]
+    async fn objective_compiler_repairs_one_semantically_invalid_plan() {
+        let model = Arc::new(RepairModel {
+            calls: AtomicUsize::new(0),
+        });
+        let service = CloudAgentService::with_model(config(), Some(model.clone()));
+        let plan = service
+            .compile_objective(CloudObjectivePlanRequest {
+                objective: "Coordinate a paid agent release from one objective".to_string(),
+                context: None,
+                constraints: vec!["Keep the task graph acyclic.".to_string()],
+                max_tasks: 5,
+                solver_budget_usdc: Some("12.00".to_string()),
+                source_url: None,
+                idempotency_key: Some("repair-once".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(plan.parallel_layers.len(), 3);
+        assert_eq!(plan.verification_policy.model_authority, "advisory_only");
+    }
+
     #[test]
     fn responses_api_text_and_budget_arithmetic_are_strict() {
+        assert_eq!(OPENAI_REASONING_EFFORT, "low");
         let response = json!({
             "output": [{
                 "type": "message",
