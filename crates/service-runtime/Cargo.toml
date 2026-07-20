@@ -1,0 +1,18 @@
+[package]
+name = "service-runtime"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+app = { path = "../app" }
+chain-base = { path = "../chain-base" }
+chrono.workspace = true
+db = { path = "../db" }
+domain = { path = "../domain" }
+eval-harness = { path = "../eval-harness" }
+ledger = { path = "../ledger" }
+uuid.workspace = true

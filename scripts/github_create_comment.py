@@ -9,10 +9,17 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 from typing import List, Mapping, Optional, TextIO
+
+from _shared.github_actions import (
+    cargo_body_path,
+    find_executable,
+    load_issue_comments,
+    publish_issue_comment,
+    repo_root as shared_repo_root,
+)
 
 
 MARKER = "<!-- agent-bounties-create-comment -->"
@@ -28,31 +35,11 @@ class UserError(RuntimeError):
 
 
 def repo_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parents[1]
-
-
-def find_executable(names: List[str]) -> Optional[str]:
-    return next((path for name in names if (path := shutil.which(name))), None)
+    return shared_repo_root(__file__)
 
 
 def cargo_path(path: pathlib.Path, cargo: str) -> str:
-    text = str(path)
-    if not cargo.lower().endswith(".exe") or not text.startswith("/"):
-        return text
-    for converter, args in (("cygpath", ["-w"]), ("wslpath", ["-w"])):
-        executable = shutil.which(converter)
-        if executable:
-            try:
-                return subprocess.check_output(
-                    [executable, *args, text], text=True, stderr=subprocess.DEVNULL
-                ).strip()
-            except (OSError, subprocess.CalledProcessError):
-                pass
-    match = re.match(r"^/mnt/([a-zA-Z])/(.*)$", text)
-    if match:
-        drive, rest = match.groups()
-        return f"{drive.upper()}:\\{rest.replace('/', chr(92))}"
-    return text
+    return cargo_body_path(path, cargo)
 
 
 def read_event(env: Mapping[str, str]) -> Mapping[str, object]:
@@ -103,23 +90,14 @@ def issue_context(
 def load_comments(
     env: Mapping[str, str], meta: Mapping[str, object]
 ) -> List[Mapping[str, object]]:
-    fixture = env.get("AGENT_BOUNTIES_CREATE_COMMENTS_FILE")
-    if fixture:
-        value = json.loads(pathlib.Path(fixture).read_text(encoding="utf-8"))
-        return value if isinstance(value, list) else []
-    if env.get("DRY_RUN") == "1":
-        return []
-    gh = find_executable(["gh", "gh.exe"])
-    if not gh:
-        raise UserError("gh is required to inspect existing create planner comments")
-    value = json.loads(
-        subprocess.check_output(
-            [gh, "api", f"repos/{meta['repo']}/issues/{meta['number']}/comments"],
-            env=dict(env),
-            text=True,
-        )
+    return load_issue_comments(
+        env,
+        meta["repo"],
+        meta["number"],
+        "AGENT_BOUNTIES_CREATE_COMMENTS_FILE",
+        "gh is required to inspect existing create planner comments",
+        UserError,
     )
-    return value if isinstance(value, list) else []
 
 
 def tagged_value(pattern: re.Pattern[str], body: str) -> Optional[str]:
@@ -258,34 +236,19 @@ def publish(
     comments: List[Mapping[str, object]],
     body: str,
 ) -> None:
-    gh = find_executable(["gh", "gh.exe"])
-    if not gh:
-        raise UserError("gh is required to publish the create planner comment")
-    existing_id = existing_reply_id(comments, str(meta["comment_id"]))
-    if existing_id:
-        command = [
-            gh,
-            "api",
-            "--method",
-            "PATCH",
-            f"repos/{meta['repo']}/issues/comments/{existing_id}",
-            "--field",
-            f"body={body}",
-        ]
-    else:
-        output_file = pathlib.Path(env.get("RUNNER_TEMP") or ".") / "agent-bounty-create-comment.md"
-        output_file.write_text(body, encoding="utf-8")
-        command = [
-            gh,
-            "issue",
-            "comment",
-            str(meta["number"]),
-            "--repo",
-            str(meta["repo"]),
-            "--body-file",
-            str(output_file),
-        ]
-    subprocess.run(command, env=dict(env), check=True, stdout=subprocess.DEVNULL)
+    publish_issue_comment(
+        env,
+        meta["repo"],
+        meta["number"],
+        MARKER,
+        body,
+        "agent-bounty-create-comment.md",
+        "gh is required to publish the create planner comment",
+        UserError,
+        comments,
+        lambda text: MARKER in text
+        and tagged_value(COMMENT_ID_RE, text) == str(meta["comment_id"]),
+    )
 
 
 def run_from_env(env: Mapping[str, str], stdout: TextIO) -> int:

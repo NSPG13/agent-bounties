@@ -6,22 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
-
-function Invoke-Checked {
-    param(
-        [Parameter(Mandatory = $true)]
-        [scriptblock] $Command
-    )
-
-    $global:LASTEXITCODE = 0
-    & $Command
-    $commandSucceeded = $?
-    $exitCode = $global:LASTEXITCODE
-    if (-not $commandSucceeded -or $exitCode -ne 0) {
-        throw "Command failed with exit code $exitCode`: $Command"
-    }
-    $global:LASTEXITCODE = 0
-}
+. (Join-Path $PSScriptRoot "_shared\powershell.ps1")
 
 Push-Location $repoRoot
 try {

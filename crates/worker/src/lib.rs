@@ -3,9 +3,9 @@ use app::BountyNetwork;
 use chain_base::{
     autonomous_bounty_event_topics, base_network_descriptor, build_autonomous_bounty_feed,
     decode_autonomous_bounty_logs, fetch_base_contract_logs, fetch_base_multi_contract_logs,
-    fetch_block_number, fetch_block_timestamp, rpc_logs_to_evm_logs, AutonomousBountyEvent,
-    AutonomousBountyEventKind, BaseContractLogQuery, BaseMultiContractLogQuery,
-    BaseNetworkDescriptor, ChainBaseError,
+    fetch_block_number, fetch_block_timestamp, redact_provider_urls, rpc_logs_to_evm_logs,
+    AutonomousBountyEvent, AutonomousBountyEventKind, BaseContractLogQuery,
+    BaseMultiContractLogQuery, BaseNetworkDescriptor, ChainBaseError,
 };
 use chrono::{DateTime, Utc};
 use db::{BaseIndexerHeartbeat, DbError, PostgresStore};
@@ -14,7 +14,6 @@ use domain::{
     VerifierResult,
 };
 use hmac::{Hmac, Mac};
-use ledger::Ledger;
 use reqwest::{redirect::Policy, Url};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -36,46 +35,7 @@ const INDEXER_HEARTBEAT_SKIPPED: &str = "skipped";
 const INDEXER_HEARTBEAT_FAILED: &str = "failed";
 
 pub fn redact_operational_error(message: &str) -> String {
-    let mut redacted = String::with_capacity(message.len());
-    let mut index = 0;
-    while index < message.len() {
-        let remaining = &message[index..];
-        let scheme_len = if remaining.starts_with("https://") {
-            Some(8)
-        } else if remaining.starts_with("http://") {
-            Some(7)
-        } else if remaining.starts_with("wss://") {
-            Some(6)
-        } else if remaining.starts_with("ws://") {
-            Some(5)
-        } else {
-            None
-        };
-        if let Some(scheme_len) = scheme_len {
-            redacted.push_str("[redacted-url]");
-            index += scheme_len;
-            while index < message.len() {
-                let character = message[index..]
-                    .chars()
-                    .next()
-                    .expect("index remains on a character boundary");
-                if character.is_whitespace()
-                    || matches!(character, '"' | '\'' | ')' | ']' | '}' | ',' | ';')
-                {
-                    break;
-                }
-                index += character.len_utf8();
-            }
-            continue;
-        }
-        let character = remaining
-            .chars()
-            .next()
-            .expect("index remains below message length");
-        redacted.push(character);
-        index += character.len_utf8();
-    }
-    redacted
+    redact_provider_urls(message)
 }
 
 #[derive(Debug)]
@@ -632,149 +592,11 @@ async fn backfill_autonomous_event_block_times(
 }
 
 pub async fn hydrate_bounty_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork> {
-    Ok(BountyNetwork {
-        agents: store
-            .list_agents()
-            .await?
-            .into_iter()
-            .map(|agent| (agent.id, agent))
-            .collect(),
-        contributor_contacts: store
-            .list_contributor_contacts()
-            .await?
-            .into_iter()
-            .map(|contact| (contact.id, contact))
-            .collect(),
-        audience_members: store
-            .list_audience_members()
-            .await?
-            .into_iter()
-            .map(|member| (member.id, member))
-            .collect(),
-        audience_interactions: store
-            .list_audience_interactions()
-            .await?
-            .into_iter()
-            .map(|interaction| (interaction.id, interaction))
-            .collect(),
-        discovery_responses: store
-            .list_discovery_responses()
-            .await?
-            .into_iter()
-            .map(|response| (response.id, response))
-            .collect(),
-        outreach_attempts: store
-            .list_outreach_attempts()
-            .await?
-            .into_iter()
-            .map(|attempt| (attempt.id, attempt))
-            .collect(),
-        capabilities: store
-            .list_capabilities()
-            .await?
-            .into_iter()
-            .map(|capability| (capability.id, capability))
-            .collect(),
-        help_requests: store
-            .list_help_requests()
-            .await?
-            .into_iter()
-            .map(|request| (request.id, request))
-            .collect(),
-        quotes: store
-            .list_quotes()
-            .await?
-            .into_iter()
-            .map(|quote| (quote.id, quote))
-            .collect(),
-        bounties: store
-            .list_bounties()
-            .await?
-            .into_iter()
-            .map(|bounty| (bounty.id, bounty))
-            .collect(),
-        funding_intents: store
-            .list_funding_intents()
-            .await?
-            .into_iter()
-            .map(|intent| (intent.id, intent))
-            .collect(),
-        funding_contributions: store
-            .list_funding_contributions()
-            .await?
-            .into_iter()
-            .map(|contribution| (contribution.id, contribution))
-            .collect(),
-        escrows: store
-            .list_escrows()
-            .await?
-            .into_iter()
-            .map(|escrow| (escrow.id, escrow))
-            .collect(),
-        claims: store
-            .list_claims()
-            .await?
-            .into_iter()
-            .map(|claim| (claim.id, claim))
-            .collect(),
-        submissions: store
-            .list_submissions()
-            .await?
-            .into_iter()
-            .map(|submission| (submission.id, submission))
-            .collect(),
-        verifier_results: store
-            .list_verifier_results()
-            .await?
-            .into_iter()
-            .map(|result| (result.id, result))
-            .collect(),
-        proofs: store
-            .list_proof_records()
-            .await?
-            .into_iter()
-            .map(|proof| (proof.id, proof))
-            .collect(),
-        settlements: store
-            .list_settlements()
-            .await?
-            .into_iter()
-            .map(|settlement| (settlement.id, settlement))
-            .collect(),
-        reputation_events: store
-            .list_reputation_events()
-            .await?
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        template_signals: store
-            .list_template_signals()
-            .await?
-            .into_iter()
-            .map(|signal| (signal.id, signal))
-            .collect(),
-        risk_events: store
-            .list_risk_events()
-            .await?
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        risk_reviews: store
-            .list_risk_reviews()
-            .await?
-            .into_iter()
-            .map(|review| (review.id, review))
-            .collect(),
-        payment_events: store
-            .list_payment_events()
-            .await?
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        ledger: Ledger::from_entries(store.list_ledger_entries().await?)
-            .context("hydrate ledger from Postgres")?,
-        ..BountyNetwork::default()
-    })
+    service_runtime::hydrate_bounty_network_with_ledger_context(
+        store,
+        "hydrate ledger from Postgres",
+    )
+    .await
 }
 
 pub fn next_indexer_from_block(

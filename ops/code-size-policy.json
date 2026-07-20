@@ -1,0 +1,107 @@
+{
+  "schema_version": "agent-bounties/code-size-policy-v1",
+  "metric": "nonblank_physical_lines",
+  "minimum_duplicate_lines": 8,
+  "groups": [
+    {
+      "name": "crates",
+      "prefixes": ["crates/"],
+      "extensions": [".rs", ".py", ".ts", ".js", ".mjs"]
+    },
+    {
+      "name": "scripts",
+      "prefixes": ["scripts/"],
+      "extensions": [".py", ".ps1", ".sh", ".js", ".mjs"]
+    },
+    {
+      "name": "site",
+      "prefixes": ["site/"],
+      "extensions": [".html", ".css", ".js"]
+    },
+    {
+      "name": "tools",
+      "prefixes": ["tools/"],
+      "extensions": [".py", ".js", ".mjs", ".sh", ".ps1"]
+    },
+    {
+      "name": "skills",
+      "prefixes": ["skills/"],
+      "path_contains": "/scripts/",
+      "extensions": [".py", ".js", ".mjs", ".sh", ".ps1"]
+    },
+    {
+      "name": "benchmarks",
+      "prefixes": ["benchmarks/"],
+      "extensions": [".py", ".js", ".mjs", ".sh", ".ps1"]
+    },
+    {
+      "name": "workflows",
+      "prefixes": [".github/workflows/"],
+      "extensions": [".yml", ".yaml"]
+    },
+    {
+      "name": "contract-tests",
+      "prefixes": ["contracts/base-escrow/test/"],
+      "extensions": [".sol"]
+    }
+  ],
+  "pattern_groups": [
+    {
+      "name": "manifests",
+      "patterns": [
+        "Cargo.toml",
+        ".cargo/config.toml",
+        "crates/*/Cargo.toml",
+        "crates/*/package.json",
+        "crates/*/pyproject.toml",
+        "scripts/requirements*.txt",
+        "contracts/base-escrow/foundry.toml"
+      ]
+    },
+    {
+      "name": "github-config",
+      "patterns": [".github/dependabot.yml", ".github/ISSUE_TEMPLATE/*.yml"]
+    },
+    {
+      "name": "deploy-config",
+      "patterns": [
+        "Dockerfile",
+        "docker-compose.yml",
+        "docker-compose.production.yml",
+        "render.yaml"
+      ]
+    },
+    {
+      "name": "ops-policy",
+      "patterns": ["ops/*.json"]
+    }
+  ],
+  "protected_prefixes": [
+    "contracts/base-escrow/src/",
+    "contracts/base-escrow/script/",
+    "migrations/",
+    "deployments/",
+    "schemas/",
+    "bounties/",
+    "feeds/",
+    "docs/",
+    "evidence/",
+    "artifacts/",
+    "target/",
+    "node_modules/"
+  ],
+  "protected_patterns": [
+    "**/migrations/**",
+    "**/deployments/**",
+    "**/schemas/**",
+    "**/fixtures/**",
+    "**/evidence/**",
+    "**/generated/**",
+    "*.lock",
+    "**/*.lock",
+    "package-lock.json",
+    "**/package-lock.json",
+    "*.md",
+    "**/*.md"
+  ]
+}

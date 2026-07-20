@@ -13,6 +13,7 @@ members = [
   "crates/cloud-agent",
   "crates/chain-base",
   "crates/db",
+  "crates/service-runtime",
   "crates/github-app",
   "crates/web-public",
   "crates/api",

@@ -13,6 +13,7 @@ bounty-router = { path = "../bounty-router" }
 chain-base = { path = "../chain-base" }
 chrono.workspace = true
 clap.workspace = true
+db = { path = "../db" }
 domain = { path = "../domain" }
 eval-harness = { path = "../eval-harness" }
 github-app = { path = "../github-app" }

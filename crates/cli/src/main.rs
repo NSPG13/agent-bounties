@@ -14,7 +14,12 @@ use chain_base::{
     AutonomousFactorySafeObservation, BaseRpcUrlConfig, EvmTransactionIntent,
     AUTONOMOUS_BOUNTY_PROTOCOL_HASH, BASE_MAINNET_USDC_TOKEN_ADDRESS,
 };
+#[cfg(test)]
+use clap::CommandFactory;
 use clap::{Args as ClapArgs, Parser, Subcommand};
+#[cfg(test)]
+use db::DurableTableSnapshot;
+use db::{DurableDataSnapshot, PostgresStore};
 use domain::{
     AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, CapabilityClass, FundingMode,
     Money, PaymentRail, PrivacyLevel, VerifierKind,
@@ -3624,7 +3629,7 @@ async fn service_smoke(api_base_url: String, mcp_base_url: String) -> Result<()>
     let api = normalize_base_url(&api_base_url);
     let mcp = normalize_base_url(&mcp_base_url);
     let operator_token = env::var("OPERATOR_API_TOKEN").ok();
-    let report = service_smoke_check(&api, &mcp, operator_token.as_deref()).await?;
+    let report = service_smoke_check(&api, &mcp, operator_token.as_deref(), true).await?;
     print_service_smoke_report(&report)
 }
 
@@ -3643,6 +3648,7 @@ async fn service_smoke_check(
     api: &str,
     mcp: &str,
     operator_token: Option<&str>,
+    expect_shared_persistence: bool,
 ) -> Result<ServiceSmokeReport> {
     wait_for_health(&format!("{api}/health"))?;
     wait_for_health(&format!("{mcp}/health"))?;
@@ -3788,6 +3794,28 @@ async fn service_smoke_check(
         "simulated local bounty loop must finish Paid",
     )?;
 
+    let retried_status = get_json(&format!("{api}/v1/bounties/{bounty_id}"))?;
+    require(
+        status == retried_status,
+        "API bounty status retries must be idempotent",
+    )?;
+    if expect_shared_persistence {
+        let mcp_status = mcp_tool_post(
+            mcp,
+            "get_bounty_status",
+            serde_json::json!({ "bounty_id": bounty_id.as_str() }),
+        )?;
+        let retried_mcp_status = mcp_tool_post(
+            mcp,
+            "get_bounty_status",
+            serde_json::json!({ "bounty_id": bounty_id.as_str() }),
+        )?;
+        require(
+            status == mcp_status && mcp_status == retried_mcp_status,
+            "API and MCP bounty status retries must be idempotent and remain in parity",
+        )?;
+    }
+
     let tools = get_json(&format!("{mcp}/tools"))?;
     let tool_list = tools.as_array().context("MCP tools must be an array")?;
     let mcp_route = mcp_tool_post(
@@ -3904,30 +3932,46 @@ async fn service_smoke_spawn(
         }
     };
 
-    let result = service_smoke_check(&api, &mcp, Some(SMOKE_OPERATOR_TOKEN)).await;
+    let result = service_smoke_check(
+        &api,
+        &mcp,
+        Some(SMOKE_OPERATOR_TOKEN),
+        database_url.is_some(),
+    )
+    .await;
     stop_child(&mut api_child);
     stop_child(&mut mcp_child);
     let report = result?;
 
     if verify_restart_persistence {
+        let store = PostgresStore::connect(database_url.as_deref().unwrap())
+            .await
+            .context("failed to connect for the pre-restart durable-data snapshot")?;
+        let before = store
+            .durable_data_snapshot()
+            .await
+            .context("failed to capture the pre-restart durable-data snapshot")?;
         verify_service_smoke_restart_persistence(
             &api,
             &mcp,
             database_url.as_deref().unwrap(),
             &report,
             SMOKE_OPERATOR_TOKEN,
-        )?;
+            &before,
+        )
+        .await?;
     }
 
     print_service_smoke_report(&report)
 }
 
-fn verify_service_smoke_restart_persistence(
+async fn verify_service_smoke_restart_persistence(
     api: &str,
     mcp: &str,
     database_url: &str,
     report: &ServiceSmokeReport,
     operator_token: &str,
+    before: &DurableDataSnapshot,
 ) -> Result<()> {
     let api_bind = bind_addr_from_base_url(api)?;
     let mcp_bind = bind_addr_from_base_url(mcp)?;
@@ -3998,6 +4042,16 @@ fn verify_service_smoke_restart_persistence(
             "restarted API must hydrate the contribution ledger linkage",
         )?;
 
+        let mcp_bounty_status = mcp_tool_post(
+            mcp,
+            "get_bounty_status",
+            serde_json::json!({ "bounty_id": report.paid_bounty_id.as_str() }),
+        )?;
+        require(
+            api_bounty_status == mcp_bounty_status,
+            "restarted API and MCP adapters must hydrate identical shared-runtime bounty status",
+        )?;
+
         let mcp_paid_status = mcp_tool_post(
             mcp,
             "get_paid_status",
@@ -4032,7 +4086,47 @@ fn verify_service_smoke_restart_persistence(
 
     stop_child(&mut api_child);
     stop_child(&mut mcp_child);
-    result
+    result?;
+
+    let after = PostgresStore::connect(database_url)
+        .await
+        .context("failed to connect for the post-restart durable-data snapshot")?
+        .durable_data_snapshot()
+        .await
+        .context("failed to capture the post-restart durable-data snapshot")?;
+    require(
+        before == &after,
+        &format!(
+            "restart hydration changed durable rows: {}",
+            durable_snapshot_changes(before, &after).join(", ")
+        ),
+    )
+}
+
+fn durable_snapshot_changes(
+    before: &DurableDataSnapshot,
+    after: &DurableDataSnapshot,
+) -> Vec<String> {
+    before
+        .tables
+        .keys()
+        .chain(after.tables.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|table| {
+            let old = before.tables.get(table);
+            let new = after.tables.get(table);
+            (old != new).then(|| match (old, new) {
+                (Some(old), Some(new)) => format!(
+                    "{table} rows {}->{} sha256 {}->{}",
+                    old.rows, new.rows, old.canonical_sha256, new.canonical_sha256
+                ),
+                (Some(old), None) => format!("{table} removed after {} rows", old.rows),
+                (None, Some(new)) => format!("{table} added with {} rows", new.rows),
+                (None, None) => unreachable!(),
+            })
+        })
+        .collect()
 }
 
 fn wait_for_health(url: &str) -> Result<()> {
@@ -4812,23 +4906,27 @@ fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
 }
 
 fn load_mcp_tools(contract_root: &Path) -> Result<BTreeSet<String>> {
-    let source_path = contract_root.join("crates/mcp-server/src/main.rs");
-    let source = fs::read_to_string(&source_path)
-        .with_context(|| format!("failed to read {}", source_path.display()))?;
-    let mut tools = BTreeSet::new();
-    let mut expecting_name = false;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed == "tool(" || trimmed == "operator_tool(" {
-            expecting_name = true;
-            continue;
-        }
-        if expecting_name {
-            if let Some(name) = first_string_literal(trimmed) {
-                tools.insert(name.to_string());
-                expecting_name = false;
-            }
-        }
+    let path = contract_root.join("crates/mcp-server/fixtures/tool-registry.json");
+    let registry: serde_json::Value = serde_json::from_slice(
+        &fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", path.display()))?;
+    if registry["schema_version"] != "agent-bounties/mcp-tool-registry-v1" {
+        bail!("unsupported MCP tool registry schema in {}", path.display());
+    }
+    let names = registry["tools"]
+        .as_array()
+        .context("MCP tool registry tools must be an array")?;
+    let tools = names
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .map(str::to_string)
+                .context("MCP tool registry names must be strings")
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if tools.len() != names.len() {
+        bail!("MCP tool registry contains duplicate names");
     }
     Ok(tools)
 }
@@ -5644,6 +5742,25 @@ fn stop_child(child: &mut Child) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cli_help_matches_compatibility_fixture() {
+        let mut root = Args::command();
+        let mut sections = vec![root.render_long_help().to_string()];
+        for subcommand in Args::command().get_subcommands() {
+            let mut subcommand = subcommand.clone();
+            let name = subcommand.get_name().to_string();
+            sections.push(format!(
+                "$ agent-bounties {name} --help\n{}",
+                subcommand.render_long_help()
+            ));
+        }
+        let help = sections.join("\n---\n").replace("\r\n", "\n");
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/public-help-contract.json")).unwrap();
+        assert_eq!(help.lines().count(), fixture["normalized_lines"]);
+        assert_eq!(hash_artifact(&help), fixture["normalized_sha256"]);
+    }
+
     fn production_health(revision: &str) -> ProductionHealth {
         ProductionHealth {
             body: "ok".to_string(),
@@ -5681,6 +5798,27 @@ mod tests {
         assert!(error
             .to_string()
             .contains("API and MCP must serve the same deployed revision"));
+    }
+
+    #[test]
+    fn durable_snapshot_diff_reports_counts_and_hashes_without_row_contents() {
+        let snapshot = |rows, hash: &str| DurableDataSnapshot {
+            schema_version: "agent-bounties/durable-data-snapshot-v1".to_string(),
+            tables: [(
+                "bounties".to_string(),
+                DurableTableSnapshot {
+                    rows,
+                    canonical_sha256: hash.to_string(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let before = snapshot(2, "aaaa");
+        assert!(durable_snapshot_changes(&before, &before).is_empty());
+
+        let changes = durable_snapshot_changes(&before, &snapshot(3, "bbbb"));
+        assert_eq!(changes, ["bounties rows 2->3 sha256 aaaa->bbbb"]);
     }
 
     #[test]

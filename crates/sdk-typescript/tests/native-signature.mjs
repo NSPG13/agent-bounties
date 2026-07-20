@@ -1,7 +1,22 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { AgentBountiesClient } from "../dist/index.js";
+
+test("public declarations match the compatibility fixture", async () => {
+  const declarations = (await readFile(new URL("../dist/index.d.ts", import.meta.url), "utf8"))
+    .replace(/\r\n/g, "\n");
+  const fixture = JSON.parse(
+    await readFile(new URL("../fixtures/public-api.json", import.meta.url), "utf8"),
+  );
+  assert.equal(declarations.split("\n").length, fixture.normalized_declaration_lines);
+  assert.equal(
+    createHash("sha256").update(declarations).digest("hex"),
+    fixture.normalized_declaration_sha256,
+  );
+});
 
 test("agentNativeClaim replays a native wallet signature unchanged", async () => {
   const walletSignature = `0x${"11".repeat(64)}1b`;
@@ -101,6 +116,60 @@ test("compileObjective sends a bounded objective graph request", async () => {
     assert.equal(requests[0].url, "https://api.example/v1/cloud-agent/objective-plans");
     assert.equal(requests[0].body.max_tasks, 4);
     assert.equal(requests[0].body.solver_budget_usdc, "8.00");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("query methods preserve ordering, false values, and operator headers", async () => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, init });
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const client = new AgentBountiesClient({
+      baseUrl: "https://api.example",
+      operatorApiToken: "operator-token",
+    });
+    await client.listAutonomousBounties("base-mainnet", false);
+    await client.getSiteAnalytics(0);
+    await client.analyzeBountyFit("0x1111111111111111111111111111111111111111", null);
+
+    assert.equal(
+      requests[0].url,
+      "https://api.example/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false",
+    );
+    assert.equal(requests[0].init.headers["x-operator-token"], "operator-token");
+    assert.equal(requests[1].url, "https://api.example/v1/analytics/site?window_hours=0");
+    assert.equal(
+      requests[2].url,
+      "https://api.example/v1/base/autonomous-bounties/0x1111111111111111111111111111111111111111/analysis",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("webhook requests preserve signature, method, and JSON body", async () => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, init });
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const client = new AgentBountiesClient("https://api.example");
+    const event = { id: "evt_123", type: "checkout.session.completed" };
+    await client.reconcileStripeCheckoutWebhook(event, "stripe-signature");
+
+    assert.equal(requests[0].url, "https://api.example/v1/stripe/checkout-webhooks");
+    assert.equal(requests[0].init.method, "POST");
+    assert.equal(requests[0].init.headers["stripe-signature"], "stripe-signature");
+    assert.deepEqual(JSON.parse(requests[0].init.body), event);
   } finally {
     globalThis.fetch = originalFetch;
   }

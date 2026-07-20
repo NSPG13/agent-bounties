@@ -9,12 +9,18 @@ import json
 import os
 import pathlib
 import re
-import shutil
-import subprocess
 import sys
 import urllib.error
 import urllib.request
 from typing import Dict, Mapping, Optional, TextIO, Tuple
+
+from _shared.github_actions import (
+    append_step_summary as append_github_summary,
+    json_field,
+    publish_issue_comment,
+    read_event as read_github_event,
+    repo_root,
+)
 
 
 MARKER = "<!-- agent-bounties-proof -->"
@@ -30,11 +36,7 @@ class UserError(RuntimeError):
 
 
 def script_repo_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parents[1]
-
-
-def find_executable(name: str) -> Optional[str]:
-    return shutil.which(name) or shutil.which(f"{name}.exe")
+    return repo_root(__file__)
 
 
 def normalize_base_url(value: str) -> str:
@@ -45,12 +47,7 @@ def normalize_base_url(value: str) -> str:
 
 
 def read_json_field(value: object, field: str) -> object:
-    current = value
-    for part in field.split("."):
-        if not isinstance(current, dict) or part not in current:
-            raise UserError(f"proof planner output missing field: {field}")
-        current = current[part]
-    return current
+    return json_field(value, field, UserError, "proof planner output missing field: {field}")
 
 
 def parse_proof_command(body: str) -> Tuple[Optional[str], Optional[str]]:
@@ -61,10 +58,7 @@ def parse_proof_command(body: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 def read_event(env: Mapping[str, str]) -> Dict[str, object]:
-    event_path = env.get("GITHUB_EVENT_PATH")
-    if not event_path:
-        return {}
-    return json.loads(pathlib.Path(event_path).read_text(encoding="utf-8"))
+    return read_github_event(env)
 
 
 def workflow_input(event: Mapping[str, object], name: str) -> str:
@@ -176,67 +170,20 @@ def render_comment(plan: Mapping[str, object]) -> str:
 
 
 def append_step_summary(env: Mapping[str, str], comment: str) -> None:
-    summary_path = env.get("GITHUB_STEP_SUMMARY")
-    if not summary_path:
-        return
-    with pathlib.Path(summary_path).open("a", encoding="utf-8") as handle:
-        handle.write("## Agent bounty proof\n\n")
-        handle.write(comment)
-        handle.write("\n")
+    append_github_summary(env, "Agent bounty proof", comment)
 
 
 def publish_comment(env: Mapping[str, str], request: Mapping[str, str], comment: str) -> None:
-    gh_path = find_executable("gh")
-    if not gh_path:
-        raise UserError("gh is required to publish the accepted-proof comment")
-
-    repo = request["repo"]
-    issue_number = request["issue_number"]
-    comments = subprocess.check_output(
-        [gh_path, "api", f"repos/{repo}/issues/{issue_number}/comments"],
-        env=dict(env),
-        text=True,
+    publish_issue_comment(
+        env,
+        request["repo"],
+        request["issue_number"],
+        MARKER,
+        comment,
+        "paid-bounty-proof-comment.md",
+        "gh is required to publish the accepted-proof comment",
+        UserError,
     )
-    existing_id = None
-    for existing in json.loads(comments):
-        body = existing.get("body") or ""
-        if MARKER in body:
-            existing_id = existing.get("id")
-            break
-
-    if existing_id:
-        subprocess.run(
-            [
-                gh_path,
-                "api",
-                "--method",
-                "PATCH",
-                f"repos/{repo}/issues/comments/{existing_id}",
-                "--field",
-                f"body={comment}",
-            ],
-            env=dict(env),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-    else:
-        comment_file = pathlib.Path(env.get("RUNNER_TEMP") or ".") / "paid-bounty-proof-comment.md"
-        comment_file.write_text(comment, encoding="utf-8")
-        subprocess.run(
-            [
-                gh_path,
-                "issue",
-                "comment",
-                issue_number,
-                "--repo",
-                repo,
-                "--body-file",
-                str(comment_file),
-            ],
-            env=dict(env),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
 
 
 def run_from_env(env: Mapping[str, str], stdout: TextIO) -> int:

@@ -612,18 +612,36 @@ export class AgentBountiesClient {
     return body;
   }
 
-  private async autonomousPost(action: string, body: Record<string, unknown>): Promise<unknown> {
-    return this.request(`/v1/base/autonomous-bounties/${action}`, {
+  private post(path: string, body?: unknown, headers?: HeadersInit): Promise<unknown> {
+    return this.request(path, {
       method: "POST",
-      body: JSON.stringify(body),
+      ...(headers ? { headers } : {}),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   }
 
+  private queryPath(
+    path: string,
+    values: object,
+  ): string {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(values)) {
+      if (value != null && value !== "") params.set(key, String(value));
+    }
+    const encoded = params.toString();
+    return `${path}${encoded ? `?${encoded}` : ""}`;
+  }
+
+  private query(path: string, values: object): Promise<unknown> {
+    return this.request(this.queryPath(path, values));
+  }
+
+  private async autonomousPost(action: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.post(`/v1/base/autonomous-bounties/${action}`, body);
+  }
+
   async routeBlockedGoal(request: RouteBlockedGoalRequest): Promise<unknown> {
-    return this.request("/v1/route-blocked-goal", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/route-blocked-goal", request);
   }
 
   async getDiscoveryManifest(): Promise<DiscoveryManifest> {
@@ -639,24 +657,21 @@ export class AgentBountiesClient {
   }
 
   async compileObjective(request: CloudObjectivePlanRequest): Promise<CloudObjectivePlan> {
-    return this.request("/v1/cloud-agent/objective-plans", {
-      method: "POST",
-      body: JSON.stringify({
-        constraints: [],
-        max_tasks: 5,
-        ...request,
-      }),
+    return this.post("/v1/cloud-agent/objective-plans", {
+      constraints: [],
+      max_tasks: 5,
+      ...request,
     }) as Promise<CloudObjectivePlan>;
   }
 
   async requestX402BountyFunding(
     request: X402BountyFundingRequest,
   ): Promise<X402BountyFundingResponse> {
-    const params = new URLSearchParams();
-    params.set("network", request.network ?? "base-mainnet");
-    if (request.amount != null) params.set("amount", String(request.amount));
-    if (request.relayer) params.set("relayer", request.relayer);
-    const path = `/v1/x402/base/bounties/${request.bounty_contract}/funding?${params.toString()}`;
+    const path = this.queryPath(`/v1/x402/base/bounties/${request.bounty_contract}/funding`, {
+      network: request.network ?? "base-mainnet",
+      amount: request.amount,
+      relayer: request.relayer,
+    });
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "GET",
       headers: {
@@ -757,30 +772,20 @@ export class AgentBountiesClient {
   }
 
   async getLiveMoneyReadiness(network?: string | null): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    const query = params.toString();
-    return this.request(`/v1/readiness/live-money${query ? `?${query}` : ""}`);
+    return this.query("/v1/readiness/live-money", { network });
   }
 
   async prepareAgentToEarn(
     request: PrepareAgentToEarnRequest,
   ): Promise<AgentWalletReadinessReport> {
-    return this.request("/v1/base/agent-wallet/readiness", {
-      method: "POST",
-      body: JSON.stringify(request),
-    }) as Promise<AgentWalletReadinessReport>;
+    return this.post(
+      "/v1/base/agent-wallet/readiness",
+      request,
+    ) as Promise<AgentWalletReadinessReport>;
   }
 
   async getRiskEvents(request: RiskEventsRequest = {}): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (request.action) params.set("action", request.action);
-    if (request.surface) params.set("surface", request.surface);
-    if (request.bounty_id) params.set("bounty_id", request.bounty_id);
-    if (request.agent_id) params.set("agent_id", request.agent_id);
-    if (request.limit != null) params.set("limit", String(request.limit));
-    const query = params.toString();
-    return this.request(`/v1/risk/events${query ? `?${query}` : ""}`);
+    return this.query("/v1/risk/events", request);
   }
 
   async listRiskReviews(): Promise<unknown> {
@@ -788,94 +793,64 @@ export class AgentBountiesClient {
   }
 
   async approveRiskBounty(request: ApproveRiskBountyRequest): Promise<unknown> {
-    return this.request("/v1/risk/bounty-approvals", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/risk/bounty-approvals", request);
   }
 
   async approveRiskPayout(request: ApproveRiskPayoutRequest): Promise<unknown> {
-    return this.request("/v1/risk/payout-approvals", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/risk/payout-approvals", request);
   }
 
   async rejectRiskEvent(request: RejectRiskEventRequest): Promise<unknown> {
-    return this.request(`/v1/risk/events/${request.risk_event_id}/reject`, {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post(`/v1/risk/events/${request.risk_event_id}/reject`, request);
   }
 
   async registerAgent(handle: string, payoutWallet?: string): Promise<unknown> {
-    return this.request("/v1/agents", {
-      method: "POST",
-      body: JSON.stringify({ handle, payout_wallet: payoutWallet ?? null }),
-    });
+    return this.post("/v1/agents", { handle, payout_wallet: payoutWallet ?? null });
   }
 
   async registerCapability(request: RegisterCapabilityRequest): Promise<unknown> {
-    return this.request("/v1/capabilities", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/capabilities", request);
   }
 
   async createHelpRequest(request: CreateHelpRequestRequest): Promise<unknown> {
-    return this.request("/v1/help-requests", {
-      method: "POST",
-      body: JSON.stringify({ ...request, required_confidence: request.required_confidence ?? null }),
+    return this.post("/v1/help-requests", {
+      ...request,
+      required_confidence: request.required_confidence ?? null,
     });
   }
 
   async requestQuotes(helpRequestId: string): Promise<unknown> {
-    return this.request(`/v1/help-requests/${helpRequestId}/quotes`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
+    return this.post(`/v1/help-requests/${helpRequestId}/quotes`, {});
   }
 
   async fundQuoteAsBounty(quoteId: string, request: FundQuoteRequest = {}): Promise<unknown> {
-    return this.request(`/v1/quotes/${quoteId}/fund-bounty`, {
-      method: "POST",
-      body: JSON.stringify({
-        quote_id: quoteId,
-        title: request.title ?? null,
-        funding_mode: request.funding_mode ?? null,
-      }),
+    return this.post(`/v1/quotes/${quoteId}/fund-bounty`, {
+      quote_id: quoteId,
+      title: request.title ?? null,
+      funding_mode: request.funding_mode ?? null,
     });
   }
 
   async postBounty(request: PostBountyRequest): Promise<unknown> {
-    return this.request("/v1/bounties", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/bounties", request);
   }
 
   async openPooledBounty(request: OpenPooledBountyRequest): Promise<unknown> {
-    return this.request("/v1/bounties/pooled", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/bounties/pooled", request);
   }
 
   async addFundingContribution(
     bountyId: string,
     request: AddFundingContributionRequest,
   ): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/funding-contributions`, {
-      method: "POST",
-      body: JSON.stringify({
-        bounty_id: bountyId,
-        contributor_agent_id: request.contributor_agent_id ?? null,
-        source_organization_id: request.source_organization_id ?? null,
-        amount_minor: request.amount_minor,
-        currency: request.currency,
-        rail: request.rail,
-        external_reference: request.external_reference ?? null,
-      }),
+    return this.post(`/v1/bounties/${bountyId}/funding-contributions`, {
+      bounty_id: bountyId,
+      contributor_agent_id: request.contributor_agent_id ?? null,
+      source_organization_id: request.source_organization_id ?? null,
+      amount_minor: request.amount_minor,
+      currency: request.currency,
+      rail: request.rail,
+      external_reference: request.external_reference ?? null,
     });
   }
 
@@ -883,23 +858,20 @@ export class AgentBountiesClient {
     bountyId: string,
     request: CreateFundingIntentRequest,
   ): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/funding-intents`, {
-      method: "POST",
-      body: JSON.stringify({
-        bounty_id: bountyId,
-        contributor_agent_id: request.contributor_agent_id ?? null,
-        source_organization_id: request.source_organization_id ?? null,
-        amount_minor: request.amount_minor,
-        currency: request.currency,
-        rail: request.rail,
-        external_reference: request.external_reference ?? null,
-        stripe_success_url: request.stripe_success_url ?? null,
-        stripe_cancel_url: request.stripe_cancel_url ?? null,
-        base_escrow_contract: request.base_escrow_contract ?? null,
-        base_payer: request.base_payer ?? null,
-        base_token: request.base_token ?? null,
-        base_network: request.base_network ?? null,
-      }),
+    return this.post(`/v1/bounties/${bountyId}/funding-intents`, {
+      bounty_id: bountyId,
+      contributor_agent_id: request.contributor_agent_id ?? null,
+      source_organization_id: request.source_organization_id ?? null,
+      amount_minor: request.amount_minor,
+      currency: request.currency,
+      rail: request.rail,
+      external_reference: request.external_reference ?? null,
+      stripe_success_url: request.stripe_success_url ?? null,
+      stripe_cancel_url: request.stripe_cancel_url ?? null,
+      base_escrow_contract: request.base_escrow_contract ?? null,
+      base_payer: request.base_payer ?? null,
+      base_token: request.base_token ?? null,
+      base_network: request.base_network ?? null,
     });
   }
 
@@ -920,42 +892,30 @@ export class AgentBountiesClient {
   }
 
   async searchCapabilities(request: SearchCapabilitiesRequest = {}): Promise<unknown> {
-    return this.request("/v1/capabilities/search", {
-      method: "POST",
-      body: JSON.stringify({
-        class: request.class ?? null,
-        template_slug: request.template_slug ?? null,
-        currency: request.currency ?? null,
-        max_price_minor: request.max_price_minor ?? null,
-      }),
+    return this.post("/v1/capabilities/search", {
+      class: request.class ?? null,
+      template_slug: request.template_slug ?? null,
+      currency: request.currency ?? null,
+      max_price_minor: request.max_price_minor ?? null,
     });
   }
 
   async claimBounty(bountyId: string, request: ClaimBountyRequest): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/claim`, {
-      method: "POST",
-      body: JSON.stringify({ bounty_id: bountyId, ...request }),
-    });
+    return this.post(`/v1/bounties/${bountyId}/claim`, { bounty_id: bountyId, ...request });
   }
 
   async submitResult(bountyId: string, request: SubmitResultRequest): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/submit`, {
-      method: "POST",
-      body: JSON.stringify({ bounty_id: bountyId, ...request }),
-    });
+    return this.post(`/v1/bounties/${bountyId}/submit`, { bounty_id: bountyId, ...request });
   }
 
   async requestVerification(bountyId: string, request: VerifySubmissionRequest): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/verify`, {
-      method: "POST",
-      body: JSON.stringify({
-        bounty_id: bountyId,
-        ...request,
-        verifier_kind: request.verifier_kind ?? null,
-        rubric: request.rubric ?? null,
-        evidence: request.evidence ?? null,
-        approved_risk_event_id: request.approved_risk_event_id ?? null,
-      }),
+    return this.post(`/v1/bounties/${bountyId}/verify`, {
+      bounty_id: bountyId,
+      ...request,
+      verifier_kind: request.verifier_kind ?? null,
+      rubric: request.rubric ?? null,
+      evidence: request.evidence ?? null,
+      approved_risk_event_id: request.approved_risk_event_id ?? null,
     });
   }
 
@@ -1012,11 +972,9 @@ export class AgentBountiesClient {
     round: number,
     network?: string | null,
   ): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    const query = params.toString();
-    return this.request(
-      `/v1/base/autonomous-bounties/submission-evidence/${bountyContract}/${round}${query ? `?${query}` : ""}`,
+    return this.query(
+      `/v1/base/autonomous-bounties/submission-evidence/${bountyContract}/${round}`,
+      { network },
     );
   }
 
@@ -1024,45 +982,30 @@ export class AgentBountiesClient {
     network?: string | null,
     claimableOnly?: boolean | null,
   ): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    if (claimableOnly != null) params.set("claimable_only", String(claimableOnly));
-    const query = params.toString();
-    return this.request(`/v1/base/autonomous-bounties/feed${query ? `?${query}` : ""}`);
+    return this.query("/v1/base/autonomous-bounties/feed", {
+      network,
+      claimable_only: claimableOnly,
+    });
   }
 
   async getSolverLeaderboard(
     network?: string | null,
     at?: string | null,
   ): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    if (at) params.set("at", at);
-    const query = params.toString();
-    return this.request(
-      `/v1/base/autonomous-bounties/leaderboard${query ? `?${query}` : ""}`,
-    );
+    return this.query("/v1/base/autonomous-bounties/leaderboard", { network, at });
   }
 
   async listOpportunities(query: OpportunityQuery = {}): Promise<OpportunityProjection> {
-    const params = new URLSearchParams();
-    if (query.network) params.set("network", query.network);
-    if (query.view) params.set("view", query.view);
-    if (query.source_type) params.set("source_type", query.source_type);
-    if (query.work_state) params.set("work_state", query.work_state);
-    if (query.payment_state) params.set("payment_state", query.payment_state);
-    if (query.limit != null) params.set("limit", String(query.limit));
-    const encoded = params.toString();
-    return this.request(`/v1/opportunities${encoded ? `?${encoded}` : ""}`) as Promise<OpportunityProjection>;
+    return this.query("/v1/opportunities", query) as Promise<OpportunityProjection>;
   }
 
   async createDiscoverySubscription(
     endpointUrl: string,
     filters: DiscoverySubscriptionFilters = {},
   ): Promise<CreatedDiscoverySubscription> {
-    return this.request("/v1/discovery/subscriptions", {
-      method: "POST",
-      body: JSON.stringify({ endpoint_url: endpointUrl, filters }),
+    return this.post("/v1/discovery/subscriptions", {
+      endpoint_url: endpointUrl,
+      filters,
     }) as Promise<CreatedDiscoverySubscription>;
   }
 
@@ -1088,57 +1031,44 @@ export class AgentBountiesClient {
   async getOpportunityConversionFunnel(
     windowHours?: number | null,
   ): Promise<OpportunityConversionFunnel> {
-    const params = new URLSearchParams();
-    if (windowHours != null) params.set("window_hours", String(windowHours));
-    const query = params.toString();
-    return this.request(
-      `/v1/opportunities/conversion-funnel${query ? `?${query}` : ""}`,
-    ) as Promise<OpportunityConversionFunnel>;
+    return this.query("/v1/opportunities/conversion-funnel", {
+      window_hours: windowHours,
+    }) as Promise<OpportunityConversionFunnel>;
   }
 
   async getSiteAnalytics(windowHours?: number | null): Promise<SiteAnalyticsReport> {
-    const params = new URLSearchParams();
-    if (windowHours != null) params.set("window_hours", String(windowHours));
-    const query = params.toString();
-    return this.request(
-      `/v1/analytics/site${query ? `?${query}` : ""}`,
-    ) as Promise<SiteAnalyticsReport>;
+    return this.query("/v1/analytics/site", {
+      window_hours: windowHours,
+    }) as Promise<SiteAnalyticsReport>;
   }
 
   async analyzeBountyFit(
     bountyContract: string,
     network?: "base-mainnet" | "base-sepolia" | null,
   ): Promise<CloudBountyAnalysis> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    const query = params.toString();
-    return this.request(
-      `/v1/base/autonomous-bounties/${bountyContract}/analysis${query ? `?${query}` : ""}`,
-    ) as Promise<CloudBountyAnalysis>;
+    return this.query(`/v1/base/autonomous-bounties/${bountyContract}/analysis`, {
+      network,
+    }) as Promise<CloudBountyAnalysis>;
   }
 
   async listAutonomousVerificationJobs(
     network?: string | null,
     verifier?: string | null,
   ): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    if (verifier) params.set("verifier", verifier);
-    const query = params.toString();
-    return this.request(
-      `/v1/base/autonomous-bounties/verification-jobs${query ? `?${query}` : ""}`,
-    );
+    return this.query("/v1/base/autonomous-bounties/verification-jobs", {
+      network,
+      verifier,
+    });
   }
 
   async listAutonomousBountyEvents(
     network?: string | null,
     bountyId?: string | null,
   ): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    if (bountyId) params.set("bounty_id", bountyId);
-    const query = params.toString();
-    return this.request(`/v1/base/autonomous-bounties/events${query ? `?${query}` : ""}`);
+    return this.query("/v1/base/autonomous-bounties/events", {
+      network,
+      bounty_id: bountyId,
+    });
   }
 
   async decodeAutonomousBountyEvents(logs: AutonomousEvmLog[]): Promise<unknown> {
@@ -1223,10 +1153,10 @@ export class AgentBountiesClient {
       request_bond_sponsorship: request.request_bond_sponsorship ?? false,
       source: request.source ?? "sdk-typescript",
     };
-    let response = (await this.request("/v1/base/autonomous-bounties/claims", {
-      method: "POST",
-      body: JSON.stringify(body),
-    })) as AgentNativeClaimResponse;
+    let response = (await this.post(
+      "/v1/base/autonomous-bounties/claims",
+      body,
+    )) as AgentNativeClaimResponse;
     if (!signer || !response.signing_payload) return response;
 
     const signature = await signer(response.signing_payload, response.wallet_request ?? undefined);
@@ -1243,10 +1173,10 @@ export class AgentBountiesClient {
     }
     const deadline = Date.now() + (options.timeoutMs ?? 60_000);
     while (true) {
-      response = (await this.request("/v1/base/autonomous-bounties/claims", {
-        method: "POST",
-        body: JSON.stringify(body),
-      })) as AgentNativeClaimResponse;
+      response = (await this.post(
+        "/v1/base/autonomous-bounties/claims",
+        body,
+      )) as AgentNativeClaimResponse;
       const status = response.candidate?.status;
       if (status === "claimed") {
         if (!response.canonical_event_id) {
@@ -1392,182 +1322,135 @@ export class AgentBountiesClient {
   async broadcastBaseSignedTransaction(
     request: BroadcastBaseSignedTransactionRequest,
   ): Promise<unknown> {
-    return this.request("/v1/base/broadcast-signed-transaction", {
-      method: "POST",
-      body: JSON.stringify({
-        signed_transaction: request.signed_transaction,
-        request_id: request.request_id ?? null,
-        network: request.network ?? null,
-      }),
+    return this.post("/v1/base/broadcast-signed-transaction", {
+      signed_transaction: request.signed_transaction,
+      request_id: request.request_id ?? null,
+      network: request.network ?? null,
     });
   }
 
   async getBaseTransactionReceipt(request: GetBaseTransactionReceiptRequest): Promise<unknown> {
-    return this.request("/v1/base/transaction-receipt", {
-      method: "POST",
-      body: JSON.stringify({
-        tx_hash: request.tx_hash,
-        request_id: request.request_id ?? null,
-        network: request.network ?? null,
-      }),
+    return this.post("/v1/base/transaction-receipt", {
+      tx_hash: request.tx_hash,
+      request_id: request.request_id ?? null,
+      network: request.network ?? null,
     });
   }
 
   async planStripeCheckoutTopUp(request: PlanStripeCheckoutTopUpRequest): Promise<unknown> {
-    return this.request("/v1/stripe/checkout-top-ups", {
-      method: "POST",
-      body: JSON.stringify({
-        organization_id: request.organization_id,
-        amount_minor: request.amount_minor,
-        currency: request.currency ?? "usd",
-        success_url: request.success_url ?? null,
-        cancel_url: request.cancel_url ?? null,
-      }),
+    return this.post("/v1/stripe/checkout-top-ups", {
+      organization_id: request.organization_id,
+      amount_minor: request.amount_minor,
+      currency: request.currency ?? "usd",
+      success_url: request.success_url ?? null,
+      cancel_url: request.cancel_url ?? null,
     });
   }
 
   async planStripeConnectAccount(request: PlanStripeConnectAccountRequest): Promise<unknown> {
-    return this.request("/v1/stripe/connect-accounts", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/stripe/connect-accounts", request);
   }
 
   async planStripeConnectTransfer(request: PlanStripeConnectTransferRequest): Promise<unknown> {
-    return this.request("/v1/stripe/connect-transfers", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/stripe/connect-transfers", request);
   }
 
   async executeStripeCheckoutTopUp(request: PlanStripeCheckoutTopUpRequest): Promise<unknown> {
-    return this.request("/v1/stripe/live/checkout-top-ups", {
-      method: "POST",
-      body: JSON.stringify({
-        organization_id: request.organization_id,
-        amount_minor: request.amount_minor,
-        currency: request.currency ?? "usd",
-        success_url: request.success_url ?? null,
-        cancel_url: request.cancel_url ?? null,
-      }),
+    return this.post("/v1/stripe/live/checkout-top-ups", {
+      organization_id: request.organization_id,
+      amount_minor: request.amount_minor,
+      currency: request.currency ?? "usd",
+      success_url: request.success_url ?? null,
+      cancel_url: request.cancel_url ?? null,
     });
   }
 
   async executeStripeFundingIntentCheckout(fundingIntentId: string): Promise<unknown> {
-    return this.request(
-      `/v1/stripe/live/funding-intents/${fundingIntentId}/checkout-session`,
-      {
-        method: "POST",
-      },
-    );
+    return this.post(`/v1/stripe/live/funding-intents/${fundingIntentId}/checkout-session`);
   }
 
   async executeStripeConnectAccount(request: PlanStripeConnectAccountRequest): Promise<unknown> {
-    return this.request("/v1/stripe/live/connect-accounts", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/stripe/live/connect-accounts", request);
   }
 
   async executeStripeConnectTransfer(request: PlanStripeConnectTransferRequest): Promise<unknown> {
-    return this.request("/v1/stripe/live/connect-transfers", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/stripe/live/connect-transfers", request);
   }
 
   async planGitHubIssueBounty(request: PlanGitHubIssueBountyRequest): Promise<unknown> {
-    return this.request("/v1/github/issue-bounty-plan", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/github/issue-bounty-plan", request);
   }
 
   async planGitHubFundingComment(request: PlanGitHubFundingCommentRequest): Promise<unknown> {
-    return this.request("/v1/github/funding-comment-plan", {
-      method: "POST",
-      body: JSON.stringify({
-        repository: request.repository,
-        issue_url: request.issue_url,
-        title: request.title,
-        body: request.body,
-        comment_body: request.comment_body,
-        contributor_login: request.contributor_login ?? null,
-        comment_id: request.comment_id ?? null,
-        existing_idempotency_keys: request.existing_idempotency_keys ?? [],
-      }),
+    return this.post("/v1/github/funding-comment-plan", {
+      repository: request.repository,
+      issue_url: request.issue_url,
+      title: request.title,
+      body: request.body,
+      comment_body: request.comment_body,
+      contributor_login: request.contributor_login ?? null,
+      comment_id: request.comment_id ?? null,
+      existing_idempotency_keys: request.existing_idempotency_keys ?? [],
     });
   }
 
   async planGitHubClaimComment(request: PlanGitHubClaimCommentRequest): Promise<unknown> {
-    return this.request("/v1/github/claim-comment-plan", {
-      method: "POST",
-      body: JSON.stringify({
-        repository: request.repository,
-        issue_url: request.issue_url,
-        title: request.title,
-        body: request.body,
-        comment_body: request.comment_body,
-        contributor_login: request.contributor_login ?? null,
-        comment_id: request.comment_id ?? null,
-        claim_age_minutes: request.claim_age_minutes ?? null,
-        progress_signal_count: request.progress_signal_count ?? 0,
-        active_claim_login: request.active_claim_login ?? null,
-      }),
+    return this.post("/v1/github/claim-comment-plan", {
+      repository: request.repository,
+      issue_url: request.issue_url,
+      title: request.title,
+      body: request.body,
+      comment_body: request.comment_body,
+      contributor_login: request.contributor_login ?? null,
+      comment_id: request.comment_id ?? null,
+      claim_age_minutes: request.claim_age_minutes ?? null,
+      progress_signal_count: request.progress_signal_count ?? 0,
+      active_claim_login: request.active_claim_login ?? null,
     });
   }
 
   async planGitHubProofComment(request: PlanGitHubProofCommentRequest): Promise<unknown> {
-    return this.request("/v1/github/proof-comment-plan", {
-      method: "POST",
-      body: JSON.stringify({
-        bounty_id: request.bounty_id,
-        proof_url: request.proof_url,
-        verifier_summary: request.verifier_summary,
-        settlement_url: request.settlement_url ?? null,
-      }),
+    return this.post("/v1/github/proof-comment-plan", {
+      bounty_id: request.bounty_id,
+      proof_url: request.proof_url,
+      verifier_summary: request.verifier_summary,
+      settlement_url: request.settlement_url ?? null,
     });
   }
 
   async planGitHubProofCommentFromProof(
     request: PlanGitHubProofCommentFromProofRequest,
   ): Promise<unknown> {
-    return this.request("/v1/github/proof-comment-plan-from-proof", {
-      method: "POST",
-      body: JSON.stringify({
-        proof_id: request.proof_id,
-        settlement_url: request.settlement_url ?? null,
-      }),
+    return this.post("/v1/github/proof-comment-plan-from-proof", {
+      proof_id: request.proof_id,
+      settlement_url: request.settlement_url ?? null,
     });
   }
 
   async reconcileStripeConnectSnapshot(snapshot: StripeConnectSnapshot): Promise<unknown> {
-    return this.request("/v1/stripe/connect-snapshots", {
-      method: "POST",
-      body: JSON.stringify(snapshot),
-    });
+    return this.post("/v1/stripe/connect-snapshots", snapshot);
   }
 
   async reconcileStripeCheckoutWebhook(
     event: StripeWebhookEvent,
     stripeSignature?: string,
   ): Promise<unknown> {
-    return this.request("/v1/stripe/checkout-webhooks", {
-      method: "POST",
-      headers: stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
-      body: JSON.stringify(event),
-    });
+    return this.post(
+      "/v1/stripe/checkout-webhooks",
+      event,
+      stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
+    );
   }
 
   async reconcileStripeTransferEvent(
     event: StripeWebhookEvent,
     stripeSignature?: string,
   ): Promise<unknown> {
-    return this.request("/v1/stripe/transfer-events", {
-      method: "POST",
-      headers: stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
-      body: JSON.stringify(event),
-    });
+    return this.post(
+      "/v1/stripe/transfer-events",
+      event,
+      stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
+    );
   }
 
   async runBountyBench(): Promise<unknown> {
