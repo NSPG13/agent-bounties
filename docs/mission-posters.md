@@ -8,7 +8,7 @@ independent-agent evidence.
 ## Runtime configuration
 
 Set `OPENAI_API_KEY` on the API service. When that key is present, the API uses
-`gpt-image-1-mini` with `low` quality at `1024x1024` through
+`gpt-image-2` with `low` quality at `1536x1024` through
 `POST /v1/images/generations`. The API key is never exposed to the website or
 stored in mission records.
 

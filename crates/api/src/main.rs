@@ -434,9 +434,9 @@ impl MissionPosterGenerator {
             .post("https://api.openai.com/v1/images/generations")
             .bearer_auth(api_key)
             .json(&serde_json::json!({
-                "model": "gpt-image-1-mini",
+                "model": "gpt-image-2",
                 "prompt": mission_poster_prompt(title, goal),
-                "size": "1024x1024",
+                "size": "1536x1024",
                 "quality": "low",
                 "output_format": "png",
                 "moderation": "auto"

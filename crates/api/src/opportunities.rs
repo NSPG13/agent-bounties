@@ -1001,6 +1001,9 @@ mod tests {
             discovery_source: "chatgpt_app".to_string(),
             status: "open".to_string(),
             demo_agent_solution: json!({}),
+            poster_status: "disabled".to_string(),
+            poster_error: None,
+            poster_generated_at: None,
             created_at,
             expires_at: created_at + chrono::Duration::days(7),
         }
