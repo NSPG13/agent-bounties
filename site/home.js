@@ -272,6 +272,12 @@
     requestAnimationFrame(frame);
   }
 
+  function setMetricText(selector, value) {
+    const output = document.querySelector(selector);
+    if (!output) return;
+    output.textContent = value;
+  }
+
   function sumUsdc(items, includeCompletionBonus = false) {
     return items.reduce((total, item) => {
       const reward = item.reward && item.reward.currency === "USDC"
@@ -384,22 +390,34 @@
     const readyDefinition = opportunitySections.find((definition) => definition.key === "ready");
     const readyItems = items.filter(readyDefinition.matches);
     const referenceAt = new Date(claim.generated_at || projection.generated_at);
+    const oneWeekAgo = referenceAt.getTime() - (7 * 24 * 60 * 60 * 1_000);
     const cutoff = referenceAt.getTime() - (MARKET_WINDOW_HOURS * 60 * 60 * 1_000);
     const paidItems = items.filter((item) => item.source_type === "canonical_base"
       && item.work_state === "completed"
       && item.payment_state === "paid"
       && Date.parse(item.updated_at) >= cutoff);
-    const availableUsdc = sumUsdc(readyItems);
-    const paidUsdc = sumUsdc(paidItems, true);
+    const activeBounties = readyItems;
+    const addedThisWeek = readyItems.filter((item) => {
+      const created = Date.parse(item.created_at);
+      return Number.isFinite(created) && created >= oneWeekAgo;
+    }).length;
+    const transactionVolumeUsdc = sumUsdc(paidItems, true);
+    const solvedThisWeek = paidItems.filter((item) => {
+      const updated = Date.parse(item.updated_at);
+      return Number.isFinite(updated) && updated >= oneWeekAgo;
+    }).length;
+    const activeContributors = Number(claim?.canonical_outcomes?.unique_paid_solver_wallets) || 0;
     const settlements = Number(claim.canonical_outcomes.settlements_confirmed);
 
-    setMetric("ready", readyItems.length);
-    setMetric("available", availableUsdc, 2);
+    setMetric("ready", activeBounties.length);
+    setMetricText("[data-adoption-ready-weekly]", `${formatMetric(addedThisWeek, 0)} added this week`);
+    setMetric("available", transactionVolumeUsdc, 2);
     setMetric("settled", settlements);
-    setMetric("paid", paidUsdc, 2);
+    setMetricText("[data-adoption-settled-weekly]", `+${formatMetric(solvedThisWeek, 0)} this week`);
+    setMetric("paid", activeContributors);
     renderOpportunityBoard(container, items);
 
-    heroSummary.textContent = `${readyItems.length} funded bounties ready · ${formatMetric(availableUsdc, 2)} USDC available · ${settlements} confirmed payouts in 30 days`;
+    heroSummary.textContent = `${activeBounties.length} active bounties · ${formatMetric(transactionVolumeUsdc, 2)} USDC on Base · ${settlements} problems solved`;
     const sourceStatuses = projection.source_statuses || [];
     const availableSources = sourceStatuses.filter((source) => source.available).length;
     const unavailable = sourceStatuses
