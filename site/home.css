@@ -1328,6 +1328,348 @@
 }
 
 /* Responsive */
+@media (min-width: 1180px) {
+  :root {
+    --page-max: 1480px;
+    --desktop-inset: clamp(112px, 12vw, 240px);
+  }
+
+  .guild-actions-shell,
+  .bounty-board-shell,
+  .community-shell,
+  .newsletter-shell,
+  .guild-footer {
+    width: min(var(--page-max), calc(100% - var(--desktop-inset)));
+  }
+
+  .guild-nav {
+    grid-template-columns: 190px minmax(0, 1fr) auto;
+    gap: clamp(24px, 2.5vw, 52px);
+    height: 74px;
+    padding-inline: clamp(32px, 3.75vw, 72px);
+  }
+
+  .guild-crest {
+    width: 37px;
+    height: 42px;
+  }
+
+  .guild-brand-copy strong {
+    font-size: 17px;
+  }
+
+  .guild-brand-copy small {
+    font-size: 9px;
+  }
+
+  .guild-navigation {
+    gap: clamp(20px, 2vw, 38px);
+    font-size: 13px;
+  }
+
+  .network-chip,
+  .wallet-button,
+  .round-menu {
+    min-height: 44px;
+    font-size: 11px;
+  }
+
+  .round-menu {
+    width: 44px;
+  }
+
+  .guild-hero {
+    height: clamp(650px, 42vw, 720px);
+  }
+
+  .hero-image {
+    background-position: 72% 36%;
+    background-size: max(112%, 1700px) auto;
+  }
+
+  .hero-inner {
+    grid-template-columns: minmax(0, 1fr) clamp(330px, 23vw, 390px);
+    gap: clamp(58px, 5vw, 90px);
+    width: min(var(--page-max), calc(100% - var(--desktop-inset)));
+    margin-inline: auto;
+    padding-top: clamp(138px, 9vw, 158px);
+  }
+
+  .guild-kicker {
+    margin-bottom: 19px !important;
+    padding: 8px 14px;
+    font-size: 11px;
+  }
+
+  .guild-hero h1 {
+    max-width: 1000px;
+    margin-bottom: 21px;
+    font-size: clamp(58px, 4.2vw, 68px);
+  }
+
+  .hero-lede {
+    max-width: 720px;
+    margin-bottom: clamp(46px, 3.5vw, 60px) !important;
+    font-size: 16px;
+  }
+
+  .bounty-search {
+    grid-template-columns: 1fr 49px;
+    width: min(620px, 100%);
+    height: 61px;
+    min-height: 61px;
+    padding-left: 23px;
+  }
+
+  .bounty-search input {
+    font-size: 15px;
+  }
+
+  .bounty-search button {
+    width: 49px;
+    height: 49px;
+  }
+
+  .popular-runes {
+    margin-top: 17px;
+    font-size: 11px;
+  }
+
+  .popular-runes button {
+    padding: 7px 14px;
+  }
+
+  .world-ledger {
+    width: 100%;
+    min-height: 490px;
+    padding: 29px 31px 24px;
+  }
+
+  .ledger-title {
+    min-height: 40px;
+    padding-bottom: 18px;
+  }
+
+  .ledger-title h2 {
+    font-size: 21px;
+  }
+
+  .world-ledger dl > div {
+    min-height: 97px;
+    padding-block: 18px 13px;
+  }
+
+  .world-ledger dt {
+    font-size: 12px;
+  }
+
+  .world-ledger dd output {
+    font-size: 32px;
+  }
+
+  .world-ledger dd span {
+    font-size: 10px;
+  }
+
+  .guild-actions-shell {
+    height: 216px;
+  }
+
+  .guild-action-grid {
+    gap: clamp(14px, 1.25vw, 24px);
+  }
+
+  .guild-action {
+    grid-template-columns: 62px 1fr;
+    column-gap: 16px;
+    padding: 28px 24px 24px;
+  }
+
+  .action-sigil {
+    width: 60px;
+    height: 60px;
+  }
+
+  .guild-action strong {
+    margin-top: 4px;
+    font-size: 24px;
+  }
+
+  .guild-action small {
+    max-width: 250px;
+    font-size: 12px;
+  }
+
+  .guild-action em {
+    min-height: 43px;
+    padding-inline: 18px;
+    font-size: 11px;
+  }
+
+  .bounty-board-shell {
+    height: 520px;
+    margin-top: 28px;
+    padding: 22px 20px 19px;
+  }
+
+  .board-heading {
+    height: 58px;
+    padding-inline: 10px;
+  }
+
+  .board-heading h2 {
+    font-size: 27px;
+  }
+
+  .board-heading > a {
+    font-size: 12px;
+  }
+
+  .board-status {
+    min-height: 30px;
+    font-size: 10px;
+  }
+
+  .guild-opportunity-board {
+    gap: clamp(14px, 1.25vw, 24px);
+    height: 416px;
+  }
+
+  .market-bounty-card {
+    grid-template-rows: 145px 1fr;
+    height: 410px;
+  }
+
+  .bounty-category {
+    bottom: 11px;
+    left: 13px;
+    font-size: 9px;
+  }
+
+  .bounty-card-copy {
+    padding: 17px 17px 14px;
+  }
+
+  .bounty-card-copy h3 {
+    min-height: 56px;
+    font-size: 23px;
+  }
+
+  .bounty-card-copy .bounty-goal {
+    min-height: 58px;
+    font-size: 12px;
+  }
+
+  .bounty-reward {
+    font-size: 24px;
+  }
+
+  .bounty-reward small,
+  .bounty-assurance small {
+    font-size: 9px;
+  }
+
+  .bounty-assurance {
+    font-size: 10px;
+  }
+
+  .community-shell {
+    height: 320px;
+    margin-top: 26px;
+  }
+
+  .community-shell::after {
+    right: 22px;
+    width: 186px;
+    height: 296px;
+  }
+
+  .community-grid {
+    grid-template-columns: 30% 30% 40%;
+  }
+
+  .community-grid > div {
+    padding: 34px 36px 28px;
+  }
+
+  .community-grid h2 {
+    font-size: 23px;
+  }
+
+  .community-grid p {
+    max-width: 340px;
+    font-size: 12px;
+  }
+
+  .adventurer-crests {
+    width: 320px;
+    height: 73px;
+    background-size: auto 73px;
+  }
+
+  .rune-link {
+    padding: 11px 17px;
+    font-size: 10px;
+  }
+
+  .impact-ledger li {
+    grid-template-columns: 36px 94px 1fr;
+    min-height: 52px;
+  }
+
+  .impact-ledger li strong {
+    font-size: 21px;
+  }
+
+  .impact-ledger li small {
+    font-size: 10px;
+  }
+
+  .charter-copy {
+    padding-right: 170px !important;
+  }
+
+  .charter-copy p {
+    max-width: 300px;
+  }
+
+  .newsletter-shell {
+    grid-template-columns: 300px minmax(320px, 1fr) 360px;
+    gap: 28px;
+    height: 132px;
+    margin-top: 26px;
+    padding: 25px 32px;
+  }
+
+  .newsletter-intro h2 {
+    font-size: 19px;
+  }
+
+  .newsletter-intro p,
+  .built-with a {
+    font-size: 10px;
+  }
+
+  .newsletter-form {
+    height: 55px;
+  }
+
+  .newsletter-form input {
+    font-size: 13px;
+  }
+
+  .newsletter-form button,
+  .built-with strong {
+    font-size: 11px;
+  }
+
+  .guild-footer {
+    grid-template-columns: 220px 1fr 220px;
+    min-height: 112px;
+    font-size: 11px;
+  }
+}
+
 @media (max-width: 940px) {
   .guild-nav {
     grid-template-columns: 1fr auto auto;
