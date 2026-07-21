@@ -60,7 +60,7 @@ jobs:
           cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json
           mkdir -p site/schemas
           cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
       - id: deployment
