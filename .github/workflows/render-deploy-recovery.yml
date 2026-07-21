@@ -78,9 +78,9 @@ jobs:
       TARGET_REVISION: ${{ github.event.workflow_run.head_sha || inputs.revision || github.sha }}
       REQUESTED_DEPLOY_MODE: ${{ inputs.deploy_mode || 'build_and_deploy' }}
       RUNTIME_REVISION: ${{ inputs.runtime_revision }}
-      PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
-      PRODUCTION_MCP_BASE_URL: ${{ vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.bountyboard.global' }}
-      PRODUCTION_WEBSITE_BASE_URL: ${{ vars.PRODUCTION_WEBSITE_BASE_URL || 'https://bountyboard.global' }}
+      PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
+      PRODUCTION_MCP_BASE_URL: ${{ vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.agentbounties.app' }}
+      PRODUCTION_WEBSITE_BASE_URL: ${{ vars.PRODUCTION_WEBSITE_BASE_URL || 'https://agentbounties.app' }}
       RENDER_DEPLOY_PAUSE_REASON: ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}
     steps:
       - uses: actions/checkout@v4

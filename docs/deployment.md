@@ -1,5 +1,8 @@
 # Deployment
 
+Canonical domain, DNS, redirect, analytics, and search migration procedures are
+defined in [`domain-portfolio.md`](domain-portfolio.md).
+
 The API and Base indexer worker must share the generated
 `DISCOVERY_WEBHOOK_SIGNING_KEY` through the `agent-bounties-discovery` Render
 environment group. The MCP service must not receive it. The API uses it only to
@@ -96,11 +99,11 @@ deployment still succeeds but `/v1/cloud-agent/readiness` remains unavailable
 and reports the missing credential explicitly; no local-model fallback runs.
 
 To activate Farcaster ingestion, provision one approved Neynar signer owned by
-the BountyBoard bot account. Store `NEYNAR_API_KEY` and `NEYNAR_SIGNER_UUID`
+the Agent Bounties bot account. Store `NEYNAR_API_KEY` and `NEYNAR_SIGNER_UUID`
 as repository Actions secrets. Store
 `NEYNAR_BOT_FID` and `NEYNAR_BOT_USERNAME` as repository Actions variables.
 The controller registers the `cast.created` webhook filtered by that FID at
-`https://api.bountyboard.global/v1/social/webhooks/neynar` and installs the
+`https://api.agentbounties.app/v1/social/webhooks/neynar` and installs the
 provider-generated webhook secret directly on Render. A partial provider
 configuration fails deployment instead of launching an unsigned or reply-less
 production listener.
@@ -316,8 +319,8 @@ persistence.
 python scripts\check-site.py
 python scripts\check-render-blueprint.py
 cargo run -p cli -- production-smoke `
-  --api-base-url https://api.bountyboard.global `
-  --mcp-base-url https://mcp.bountyboard.global
+  --api-base-url https://api.agentbounties.app `
+  --mcp-base-url https://mcp.agentbounties.app
 ```
 
 Check:
@@ -335,8 +338,8 @@ Run the bounded operational controller after production smoke:
 ```powershell
 python scripts\self_heal.py observe `
   --policy ops\self-healing-policy.json `
-  --api-url https://api.bountyboard.global `
-  --mcp-url https://mcp.bountyboard.global `
+  --api-url https://api.agentbounties.app `
+  --mcp-url https://mcp.agentbounties.app `
   --expected-revision <deployed-git-sha> `
   --snapshot-out target\operations\snapshot.json `
   --plan-out target\operations\recovery-plan.json

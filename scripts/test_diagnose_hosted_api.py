@@ -35,8 +35,8 @@ class DiagnoseHostedApiTests(unittest.TestCase):
 
     def test_normalize_schemeless_base_url(self) -> None:
         self.assertEqual(
-            normalize_base_url("api.bountyboard.global"),
-            "https://api.bountyboard.global",
+            normalize_base_url("api.agentbounties.app"),
+            "https://api.agentbounties.app",
         )
         self.assertEqual(
             normalize_base_url("https://example.com/path/"),
@@ -57,7 +57,7 @@ class DiagnoseHostedApiTests(unittest.TestCase):
             return_value=[(None, None, None, None, None)],
         ):
             with patch("diagnose_hosted_api.fetch", side_effect=fake_fetch):
-                d = diagnose("https://api.bountyboard.global")
+                d = diagnose("https://api.agentbounties.app")
         self.assertEqual(d.overall, "not_found")
         self.assertTrue(all(p.status == 404 for p in d.paths))
         self.assertTrue(len(d.paths) >= 1)
@@ -78,7 +78,7 @@ class DiagnoseHostedApiTests(unittest.TestCase):
             return_value=[(None, None, None, None, None)],
         ):
             with patch("diagnose_hosted_api.fetch", side_effect=fake_fetch):
-                d = diagnose("https://api.bountyboard.global")
+                d = diagnose("https://api.agentbounties.app")
         self.assertEqual(d.overall, "connection_failure")
         self.assertTrue(all(p.status is None for p in d.paths))
         self.assertNotEqual(d.overall, "not_found")

@@ -148,7 +148,7 @@ For the low-value Base mainnet path, funders can use the public funding page's
 wallet-native flow instead of copying calldata into a developer tool:
 
 ```text
-https://bountyboard.global/funding.html?apiBaseUrl=<api>&bountyId=<bounty-id>&rail=BaseUsdc
+https://agentbounties.app/funding.html?apiBaseUrl=<api>&bountyId=<bounty-id>&rail=BaseUsdc
 ```
 
 The page uses an injected EIP-1193 wallet and requires an explicit `Connect
@@ -244,7 +244,7 @@ outside the hosted app.
 Browser operator path:
 
 ```text
-https://bountyboard.global/operator.html
+https://agentbounties.app/operator.html
 ```
 
 1. Open the page from an operator workstation with an injected EIP-1193 wallet.

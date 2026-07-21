@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.bountyboard.global' }}
+      API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
       VERIFIER_ONE: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       VERIFIER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:

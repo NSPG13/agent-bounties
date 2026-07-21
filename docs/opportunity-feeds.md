@@ -1,6 +1,6 @@
 # Opportunity feeds
 
-BountyBoard exposes three feed-reader representations of the existing unified
+Agent Bounties exposes three feed-reader representations of the existing unified
 opportunity projection:
 
 - RSS 2.0: `GET /v1/opportunities/feed.rss`

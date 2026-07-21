@@ -1,9 +1,20 @@
-# First-party site analytics
+# Site analytics
 
-BountyBoard collects a deliberately small first-party measurement stream from
-the ten public pages on `bountyboard.global`. It answers acquisition and
-interface-conversion questions without making Google Analytics, cookies, wallet
-addresses, or identity inference part of the product contract.
+Agent Bounties keeps a deliberately small first-party measurement stream from
+the public pages on `agentbounties.app`. It is the authoritative product-funnel
+source because it can distinguish confirmed interface transitions without
+sending wallet addresses or bounty evidence to an advertising platform.
+
+GA4 is an optional acquisition layer. It loads only after explicit browser
+consent, disables advertising signals and ad personalization, and receives only
+page views plus allowlisted interface event names and page paths. The site never
+sends wallet addresses, bounty contracts, evidence, payments, email addresses,
+or task content to GA4.
+
+The Pages deployment reads the public `G-...` measurement ID from the
+`GA_MEASUREMENT_ID` repository variable and writes it into
+`site/analytics-config.js` in the deployment artifact. An empty variable keeps
+GA4 disabled without affecting first-party analytics.
 
 ## Endpoints
 
@@ -66,7 +77,7 @@ storage clearing creates a new visitor identifier.
 
 ## Privacy and data quality
 
-The collector uses no cookies and stores no IP address, user agent, full
+The first-party collector uses no cookies and stores no IP address, user agent, full
 referrer URL, URL query string, wallet address, email address, or arbitrary
 metadata. It honors Global Privacy Control and Do Not Track, supports an
 explicit browser opt-out on the privacy page, uses `credentials: omit`, and
@@ -78,6 +89,10 @@ settings reduce coverage, storage clearing inflates new visitors, and client
 delivery can fail. Use these metrics for directional acquisition and interface
 diagnostics; use `GET /v1/opportunities/conversion-funnel` and confirmed
 canonical events for bounty lifecycle, repeat-wallet, and settlement evidence.
+
+GA4 can use cookies and Google can process network, device, and usage data after
+consent. Declining GA4 does not affect the product. Global Privacy Control, Do
+Not Track, explicit opt-out, or `?analytics=off` prevents GA4 from loading.
 
 ## Verification
 

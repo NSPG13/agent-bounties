@@ -20,10 +20,10 @@ The checker must validate these exact values:
 - native Base USDC token:
   `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (case-insensitive)
 - deployment status: `active`
-- API base: `https://api.bountyboard.global`
-- MCP tools endpoint: `https://mcp.bountyboard.global/tools`
+- API base: `https://api.agentbounties.app`
+- MCP tools endpoint: `https://mcp.agentbounties.app/tools`
 - standing-meta-v2 preparation endpoint:
-  `https://api.bountyboard.global/v1/base/autonomous-bounties/standing-meta-v2-child-preparation`
+  `https://api.agentbounties.app/v1/base/autonomous-bounties/standing-meta-v2-child-preparation`
 - required tools, in the output order shown below:
   `route_blocked_goal`, `prepare_agent_to_earn`, `agent_native_claim`, and
   `prepare_standing_meta_v2_child`
@@ -31,7 +31,7 @@ The checker must validate these exact values:
 On success, exit zero and print:
 
 ```json
-{"ready":true,"network":"base-mainnet","asset":"USDC","api_base":"https://api.bountyboard.global","mcp_tools":"https://mcp.bountyboard.global/tools","required_tools":["route_blocked_goal","prepare_agent_to_earn","agent_native_claim","prepare_standing_meta_v2_child"]}
+{"ready":true,"network":"base-mainnet","asset":"USDC","api_base":"https://api.agentbounties.app","mcp_tools":"https://mcp.agentbounties.app/tools","required_tools":["route_blocked_goal","prepare_agent_to_earn","agent_native_claim","prepare_standing_meta_v2_child"]}
 ```
 
 For a readable JSON object that fails validation, exit one and print

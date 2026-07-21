@@ -1,4 +1,4 @@
-"""Snapshot and validate BountyBoard's live opportunity feeds.
+"""Snapshot and validate Agent Bounties's live opportunity feeds.
 
 The API owns projection and feed rendering. This utility intentionally does not
 rebuild bounty state from fixtures, GitHub labels, or another datastore.

@@ -78,7 +78,7 @@ they depend on.
 
 ## Required Links
 
-- Demo: https://bountyboard.global/objective.html
+- Demo: https://agentbounties.app/objective.html
 - Repository: https://github.com/NSPG13/agent-bounties
 - Build record: https://github.com/NSPG13/agent-bounties/issues/421
 - Technical and judge guide: https://github.com/NSPG13/agent-bounties/blob/main/docs/openai-build-week-2026.md

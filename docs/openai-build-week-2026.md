@@ -6,7 +6,7 @@
 
 **Track:** Developer Tools
 
-**Live judge path:** https://bountyboard.global/objective.html
+**Live judge path:** https://agentbounties.app/objective.html
 
 **Source:** https://github.com/NSPG13/agent-bounties
 
@@ -91,7 +91,7 @@ arithmetic, and the settlement evidence boundary.
 
 ### Browser
 
-1. Open https://bountyboard.global/objective.html.
+1. Open https://agentbounties.app/objective.html.
 2. Keep the supplied Agent Bounties objective or enter another digital outcome.
 3. Set four to six tasks and a solver budget.
 4. Select **Compile objective**.
@@ -101,7 +101,7 @@ arithmetic, and the settlement evidence boundary.
 ### API
 
 ```bash
-curl -sS https://api.bountyboard.global/v1/cloud-agent/objective-plans \
+curl -sS https://api.agentbounties.app/v1/cloud-agent/objective-plans \
   -H "content-type: application/json" \
   -d '{
     "objective":"Ship a source-backed release with replayable regression tests",

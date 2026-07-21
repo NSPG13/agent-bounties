@@ -91,7 +91,7 @@ function claimCases() {
   };
   authorization.next_request = {
     method: "POST",
-    url: "https://api.bountyboard.global/v1/base/autonomous-bounties/claims",
+    url: "https://api.agentbounties.app/v1/base/autonomous-bounties/claims",
     body: { idempotency_key: "benchmark-claim-1" },
   };
   expectRun("authorization ready", [fixture("claim-authorization.json", authorization)], 0, {

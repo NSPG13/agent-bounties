@@ -44,7 +44,7 @@
       "runtime_code_hash": "0xbaa3a8305c4b65d0dc20131d0ef207fdaf4763f345393a831370cd04077df9b3"
     }
   },
-  "api_base_url": "https://api.bountyboard.global",
-  "mcp_base_url": "https://mcp.bountyboard.global",
+  "api_base_url": "https://api.agentbounties.app",
+  "mcp_base_url": "https://mcp.agentbounties.app",
   "explorer_url": "https://base.blockscout.com"
 }

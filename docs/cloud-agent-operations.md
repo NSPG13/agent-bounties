@@ -83,14 +83,14 @@ payment.
 
 Render runs the API, MCP service, Postgres, and Base indexer. GitHub Actions
 runs the scheduled inventory, verifier, relay, and deployment-control loops.
-GitHub Pages serves `bountyboard.global`. Turning off a maintainer workstation
+GitHub Pages serves `agentbounties.app`. Turning off a maintainer workstation
 must not affect any of those paths.
 
 Verify after each production deployment:
 
 ```bash
-curl https://api.bountyboard.global/health
-curl https://api.bountyboard.global/v1/cloud-agent/readiness
-curl "https://api.bountyboard.global/v1/base/autonomous-bounties/inventory-summary?network=base-mainnet&claimable_only=true"
-curl https://mcp.bountyboard.global/tools
+curl https://api.agentbounties.app/health
+curl https://api.agentbounties.app/v1/cloud-agent/readiness
+curl "https://api.agentbounties.app/v1/base/autonomous-bounties/inventory-summary?network=base-mainnet&claimable_only=true"
+curl https://mcp.agentbounties.app/tools
 ```

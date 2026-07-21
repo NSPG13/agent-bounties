@@ -16,8 +16,8 @@ const ready = {
   ready: true,
   network: "base-mainnet",
   asset: "USDC",
-  api_base: "https://api.bountyboard.global",
-  mcp_tools: "https://mcp.bountyboard.global/tools",
+  api_base: "https://api.agentbounties.app",
+  mcp_tools: "https://mcp.agentbounties.app/tools",
   required_tools: [
     "route_blocked_goal",
     "prepare_agent_to_earn",

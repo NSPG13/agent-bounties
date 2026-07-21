@@ -66,7 +66,20 @@ services:
   - type: web
     name: agent-bounties-api
     domains:
+      - api.agentbounties.app
+      - status.agentbounties.app
       - api.bountyboard.global
+      - bountyboard.global
+      - agentbounties.io
+      - agentbounties.dev
+      - agentbounties.work
+      - agentbounties.global
+      - agentbounties.network
+      - agentbounties.bid
+      - agentbounties.org
+      - agentbounties.co
+      - agentbounties.net
+      - agentbounties.xyz
     runtime: docker
     plan: starter
     region: oregon
@@ -85,11 +98,11 @@ services:
       - key: RUST_LOG
         value: info
       - key: PUBLIC_BASE_URL
-        value: https://api.bountyboard.global
+        value: https://api.agentbounties.app
       - key: WEBSITE_BASE_URL
-        value: https://bountyboard.global
+        value: https://agentbounties.app
       - key: MCP_BASE_URL
-        value: https://mcp.bountyboard.global
+        value: https://mcp.agentbounties.app
       - key: AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED
         value: "true"
       - key: NEYNAR_API_KEY
@@ -184,6 +197,7 @@ services:
   - type: web
     name: agent-bounties-mcp
     domains:
+      - mcp.agentbounties.app
       - mcp.bountyboard.global
     runtime: docker
     plan: starter
@@ -203,9 +217,9 @@ services:
       - key: RUST_LOG
         value: info
       - key: PUBLIC_BASE_URL
-        value: https://api.bountyboard.global
+        value: https://api.agentbounties.app
       - key: MCP_BASE_URL
-        value: https://mcp.bountyboard.global
+        value: https://mcp.agentbounties.app
       - key: DATABASE_URL
         fromDatabase:
           name: agent-bounties-postgres
@@ -241,7 +255,7 @@ services:
       - key: RUST_LOG
         value: info
       - key: PUBLIC_BASE_URL
-        value: https://api.bountyboard.global
+        value: https://api.agentbounties.app
       - key: DATABASE_URL
         fromDatabase:
           name: agent-bounties-postgres

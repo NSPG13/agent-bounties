@@ -37,8 +37,26 @@ FAILED_STATUSES = {
 }
 TRANSIENT_HTTP_STATUSES = {429, 500, 503}
 CUSTOM_DOMAINS = {
-    "agent-bounties-api": "api.bountyboard.global",
-    "agent-bounties-mcp": "mcp.bountyboard.global",
+    "agent-bounties-api": (
+        "api.agentbounties.app",
+        "status.agentbounties.app",
+        "api.bountyboard.global",
+        "bountyboard.global",
+        "agentbounties.io",
+        "agentbounties.dev",
+        "agentbounties.work",
+        "agentbounties.global",
+        "agentbounties.network",
+        "agentbounties.bid",
+        "agentbounties.org",
+        "agentbounties.co",
+        "agentbounties.net",
+        "agentbounties.xyz",
+    ),
+    "agent-bounties-mcp": (
+        "mcp.agentbounties.app",
+        "mcp.bountyboard.global",
+    ),
 }
 PUBLIC_ENV_SERVICE_NAMES = {
     "agent-bounties-api",
@@ -1143,7 +1161,7 @@ def ensure_neynar_social_webhook(
     bot_fid: str,
     target_url: str,
 ) -> tuple[dict[str, Any], str]:
-    name = "BountyBoard social mention drafts"
+    name = "Agent Bounties social mention drafts"
     fid = int(bot_fid)
     desired_subscription = {"cast.created": {"mentioned_fids": [fid]}}
     listed = client.request_json("GET", "/v2/farcaster/webhook/list/")
@@ -1157,7 +1175,7 @@ def ensure_neynar_social_webhook(
         or item.get("target_url") == target_url
     ]
     if len(matches) > 1:
-        raise RecoveryError("Neynar has duplicate BountyBoard webhook registrations")
+        raise RecoveryError("Neynar has duplicate Agent Bounties webhook registrations")
 
     changed = False
     webhook = matches[0] if matches else None
@@ -1252,9 +1270,9 @@ def deploy(
     deploy_timeout_seconds: float,
     health_timeout_seconds: float,
     poll_seconds: float,
-    public_base_url: str = "https://api.bountyboard.global",
-    mcp_base_url: str = "https://mcp.bountyboard.global",
-    website_base_url: str = "https://bountyboard.global",
+    public_base_url: str = "https://api.agentbounties.app",
+    mcp_base_url: str = "https://mcp.agentbounties.app",
+    website_base_url: str = "https://agentbounties.app",
     cloud_agent_api_key: str | None = None,
     neynar_api_key: str | None = None,
     neynar_signer_uuid: str | None = None,
@@ -1374,17 +1392,17 @@ def deploy(
 
     custom_domains = []
     for spec, service in services:
-        domain = CUSTOM_DOMAINS.get(spec.name)
-        if domain is None:
-            continue
-        record = client.ensure_custom_domain(service, domain)
-        custom_domains.append(
-            {
-                "service": spec.name,
-                "name": domain,
-                "status": record.get("verificationStatus", record.get("status", "attached")),
-            }
-        )
+        for domain in CUSTOM_DOMAINS.get(spec.name, ()):
+            record = client.ensure_custom_domain(service, domain)
+            custom_domains.append(
+                {
+                    "service": spec.name,
+                    "name": domain,
+                    "status": record.get(
+                        "verificationStatus", record.get("status", "attached")
+                    ),
+                }
+            )
 
     metadata_revision_exempt = (
         frozenset(spec.name for spec in specs if spec.health_url is not None)
@@ -1545,15 +1563,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--public-base-url",
-        default="https://api.bountyboard.global",
+        default="https://api.agentbounties.app",
     )
     parser.add_argument(
         "--mcp-base-url",
-        default="https://mcp.bountyboard.global",
+        default="https://mcp.agentbounties.app",
     )
     parser.add_argument(
         "--website-base-url",
-        default="https://bountyboard.global",
+        default="https://agentbounties.app",
     )
     parser.add_argument("--base-mainnet-leaderboard-reward-contract")
     parser.add_argument("--base-sepolia-leaderboard-reward-contract")
