@@ -1330,8 +1330,8 @@
 /* Responsive */
 @media (min-width: 1180px) {
   :root {
-    --page-max: 1480px;
-    --desktop-inset: clamp(112px, 12vw, 240px);
+    --page-max: 2400px;
+    --desktop-inset: clamp(32px, 3vw, 56px);
   }
 
   .guild-actions-shell,
