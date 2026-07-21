@@ -304,9 +304,23 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         self.assertEqual(existing.requests, [])
 
         created = RecordingClient(
-            response={"customDomain": {"name": "api.agentbounties.app", "verificationStatus": "pending"}}
+            response={"id": "cd-opaque-provider-response"}
         )
-        created._read_with_retry = lambda _path: []
+        reads = iter(
+            [
+                [],
+                [],
+                [
+                    {
+                        "customDomain": {
+                            "name": "api.agentbounties.app",
+                            "verificationStatus": "pending",
+                        }
+                    }
+                ],
+            ]
+        )
+        created._read_with_retry = lambda _path: next(reads)
         attached = created.ensure_custom_domain(
             {"id": "srv-api", "name": "agent-bounties-api"},
             "api.agentbounties.app",
@@ -342,6 +356,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             [
                 [{"name": "api.bountyboard.global"}],
                 [],
+                [{"name": "api.agentbounties.app", "verificationStatus": "pending"}],
             ]
         )
         client._read_with_retry = lambda _path: next(reads)
