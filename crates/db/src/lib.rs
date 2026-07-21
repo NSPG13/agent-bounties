@@ -209,8 +209,18 @@ pub struct TrialBounty {
     pub discovery_source: String,
     pub status: String,
     pub demo_agent_solution: serde_json::Value,
+    pub poster_status: String,
+    pub poster_error: Option<String>,
+    pub poster_generated_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrialBountyPoster {
+    pub status: String,
+    pub content_type: Option<String>,
+    pub image: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1588,12 +1598,12 @@ impl PostgresStore {
             INSERT INTO trial_bounties
               (id, idempotency_key, request_fingerprint, title, goal,
                acceptance_criteria, source_url, discovery_source, status,
-               demo_agent_solution, expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               demo_agent_solution, expires_at, poster_status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending')
             ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING id, idempotency_key, request_fingerprint, title, goal,
                       acceptance_criteria, source_url, discovery_source, status,
-                      demo_agent_solution, created_at, expires_at
+                      demo_agent_solution, poster_status, poster_error, poster_generated_at, created_at, expires_at
             "#,
         )
         .bind(trial.id)
@@ -1617,7 +1627,7 @@ impl PostgresStore {
                     r#"
                 SELECT id, idempotency_key, request_fingerprint, title, goal,
                        acceptance_criteria, source_url, discovery_source, status,
-                       demo_agent_solution, created_at, expires_at
+                       demo_agent_solution, poster_status, poster_error, poster_generated_at, created_at, expires_at
                 FROM trial_bounties
                 WHERE idempotency_key = $1
                 "#,
@@ -1639,7 +1649,7 @@ impl PostgresStore {
             r#"
             SELECT id, idempotency_key, request_fingerprint, title, goal,
                    acceptance_criteria, source_url, discovery_source, status,
-                   demo_agent_solution, created_at, expires_at
+                   demo_agent_solution, poster_status, poster_error, poster_generated_at, created_at, expires_at
             FROM trial_bounties
             WHERE id = $1
             "#,
@@ -1659,7 +1669,7 @@ impl PostgresStore {
             r#"
             SELECT id, idempotency_key, request_fingerprint, title, goal,
                    acceptance_criteria, source_url, discovery_source, status,
-                   demo_agent_solution, created_at, expires_at
+                   demo_agent_solution, poster_status, poster_error, poster_generated_at, created_at, expires_at
             FROM trial_bounties
             WHERE idempotency_key = $1
             "#,
@@ -1677,7 +1687,7 @@ impl PostgresStore {
             r#"
             SELECT id, idempotency_key, request_fingerprint, title, goal,
                    acceptance_criteria, source_url, discovery_source, status,
-                   demo_agent_solution, created_at, expires_at
+                   demo_agent_solution, poster_status, poster_error, poster_generated_at, created_at, expires_at
             FROM trial_bounties
             WHERE status = 'open' AND expires_at > now()
             ORDER BY created_at DESC, id
@@ -1690,6 +1700,48 @@ impl PostgresStore {
         .into_iter()
         .map(trial_bounty_from_row)
         .collect()
+    }
+
+    pub async fn update_trial_bounty_poster(
+        &self,
+        id: Uuid,
+        poster: &TrialBountyPoster,
+        error: Option<&str>,
+    ) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            UPDATE trial_bounties
+            SET poster_status = $2,
+                poster_image = $3,
+                poster_content_type = $4,
+                poster_error = $5,
+                poster_generated_at = CASE WHEN $2 = 'ready' THEN now() ELSE NULL END
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(&poster.status)
+        .bind(&poster.image)
+        .bind(&poster.content_type)
+        .bind(error)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_trial_bounty_poster(&self, id: Uuid) -> DbResult<Option<TrialBountyPoster>> {
+        sqlx::query(
+            "SELECT poster_status, poster_content_type, poster_image FROM trial_bounties WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| Ok(TrialBountyPoster {
+            status: row.try_get("poster_status")?,
+            content_type: row.try_get("poster_content_type")?,
+            image: row.try_get("poster_image")?,
+        }))
+        .transpose()
     }
 
     pub async fn upsert_unfunded_bounty_solution(
@@ -5222,6 +5274,9 @@ fn trial_bounty_from_row(row: PgRow) -> DbResult<TrialBounty> {
         discovery_source: row.try_get("discovery_source")?,
         status: row.try_get("status")?,
         demo_agent_solution: row.try_get("demo_agent_solution")?,
+        poster_status: row.try_get("poster_status")?,
+        poster_error: row.try_get("poster_error")?,
+        poster_generated_at: row.try_get("poster_generated_at")?,
         created_at: row.try_get("created_at")?,
         expires_at: row.try_get("expires_at")?,
     })
@@ -6044,6 +6099,20 @@ mod tests {
                 TRIAL_BOUNTIES_MIGRATION.contains(invariant),
                 "missing unfunded bounty invariant {invariant}"
             );
+        }
+    }
+
+    #[test]
+    fn unfunded_bounty_poster_migration_keeps_generated_assets_explicitly_stateful() {
+        let migration = include_str!("../../../migrations/0012_unfunded_bounty_posters.sql");
+        for required in [
+            "poster_status",
+            "poster_image BYTEA",
+            "poster_content_type",
+            "poster_generated_at",
+            "'disabled', 'pending', 'ready', 'failed'",
+        ] {
+            assert!(migration.contains(required), "missing {required}");
         }
     }
 

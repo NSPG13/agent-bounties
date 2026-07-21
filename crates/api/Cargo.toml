@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 app = { path = "../app" }
 axum.workspace = true
 bounty-router = { path = "../bounty-router" }

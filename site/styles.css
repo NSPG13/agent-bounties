@@ -1295,6 +1295,17 @@ code {
   flex: 0 0 auto;
 }
 
+.mission-poster-image {
+  display: block;
+  width: 100%;
+  max-width: 360px;
+  aspect-ratio: 1;
+  margin: 16px 0;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
 @media (max-width: 700px) {
   .analytics-consent {
     display: grid;

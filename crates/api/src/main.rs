@@ -22,6 +22,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bounty_router::{BountyRouter, RouteDecision};
 use chain_base::{
     autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
@@ -67,8 +68,8 @@ use db::{
     NewBondSponsorship, NewClaimCandidate, NewDiscoveryWebhookSubscription, NewLegalAcceptance,
     NewSiteAnalyticsEvent, NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution,
     NewX402RelayAttempt, OpportunityLifecycleStats, PostgresStore, SiteAnalyticsStats,
-    SocialMentionIngestion, TrialBounty, UnfundedBountySolution, WebhookSubscription,
-    X402RelayAttempt, X402RelayStatus,
+    SocialMentionIngestion, TrialBounty, TrialBountyPoster, UnfundedBountySolution,
+    WebhookSubscription, X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -398,8 +399,83 @@ struct AppState {
     bond_sponsor: BondSponsorConfig,
     recovery_reservations: AutonomousBountyRecoveryReservations,
     cloud_agent: Arc<CloudAgentService>,
+    mission_poster_generator: Arc<MissionPosterGenerator>,
     discovery_webhooks: Option<Arc<DiscoveryWebhookConfig>>,
     neynar_social: Option<Arc<NeynarSocialIngestionConfig>>,
+}
+
+#[derive(Clone)]
+struct MissionPosterGenerator {
+    api_key: Option<String>,
+    client: reqwest::Client,
+}
+
+impl MissionPosterGenerator {
+    fn from_env() -> anyhow::Result<Self> {
+        Ok(Self {
+            api_key: env::var("OPENAI_API_KEY").ok().and_then(non_empty_secret),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(45))
+                .build()?,
+        })
+    }
+
+    fn enabled(&self) -> bool {
+        self.api_key.is_some()
+    }
+
+    async fn generate(&self, title: &str, goal: &str) -> Result<TrialBountyPoster, String> {
+        let api_key = self
+            .api_key
+            .as_deref()
+            .ok_or_else(|| "image_generation_not_configured".to_string())?;
+        let response = self
+            .client
+            .post("https://api.openai.com/v1/images/generations")
+            .bearer_auth(api_key)
+            .json(&serde_json::json!({
+                "model": "gpt-image-1-mini",
+                "prompt": mission_poster_prompt(title, goal),
+                "size": "1024x1024",
+                "quality": "low",
+                "output_format": "png",
+                "moderation": "auto"
+            }))
+            .send()
+            .await
+            .map_err(|_| "image_generation_unavailable".to_string())?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "image_generation_http_{}",
+                response.status().as_u16()
+            ));
+        }
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| "image_generation_invalid_response".to_string())?;
+        let encoded = body
+            .pointer("/data/0/b64_json")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "image_generation_missing_image".to_string())?;
+        let image = BASE64
+            .decode(encoded)
+            .map_err(|_| "image_generation_invalid_image".to_string())?;
+        if image.is_empty() || image.len() > 8 * 1024 * 1024 {
+            return Err("image_generation_image_size_invalid".to_string());
+        }
+        Ok(TrialBountyPoster {
+            status: "ready".to_string(),
+            content_type: Some("image/png".to_string()),
+            image: Some(image),
+        })
+    }
+}
+
+fn mission_poster_prompt(title: &str, goal: &str) -> String {
+    format!(
+        "Create a clean, optimistic square editorial illustration for a public AI-agent work mission. Convey the mission concept abstractly, using a modern editorial palette of deep forest green, warm cream, and a small gold accent. Do not include any words, letters, logos, UI, watermarks, currency symbols, people, or recognizable brands. The website will add the title and details itself. Mission title: {title}. Mission description: {goal}"
+    )
 }
 
 #[derive(Clone)]
@@ -1560,6 +1636,7 @@ async fn main() -> anyhow::Result<()> {
         CloudAgentService::from_env()
             .map_err(|error| anyhow::anyhow!("cloud-agent configuration is invalid: {error}"))?,
     );
+    let mission_poster_generator = Arc::new(MissionPosterGenerator::from_env()?);
     let discovery_webhooks = DiscoveryWebhookConfig::from_env()?.map(Arc::new);
     let neynar_social = NeynarSocialIngestionConfig::from_env()?.map(Arc::new);
     let state: SharedState = Arc::new(AppState {
@@ -1599,6 +1676,7 @@ async fn main() -> anyhow::Result<()> {
         bond_sponsor,
         recovery_reservations,
         cloud_agent,
+        mission_poster_generator,
         discovery_webhooks,
         neynar_social,
     });
@@ -1667,6 +1745,10 @@ async fn main() -> anyhow::Result<()> {
             get(list_unfunded_bounties).post(publish_unfunded_bounty),
         )
         .route("/v1/unfunded-bounties/:id", get(get_unfunded_bounty))
+        .route(
+            "/v1/unfunded-bounties/:id/poster.png",
+            get(get_unfunded_bounty_poster),
+        )
         .route(
             "/v1/unfunded-bounties/:id/solutions",
             post(submit_unfunded_bounty_solution),
@@ -3637,6 +3719,8 @@ struct UnfundedBountyResponse {
     payment_promised: bool,
     canonical_bounty_created: bool,
     public_url: String,
+    poster_status: String,
+    poster_image_url: Option<String>,
     upgrade_url: String,
     created_at: String,
     expires_at: String,
@@ -3703,6 +3787,7 @@ async fn publish_unfunded_bounty(
         if existing.request_fingerprint != request_fingerprint {
             return Err(StatusCode::CONFLICT);
         }
+        generate_unfunded_bounty_poster(&state, &existing).await;
         enqueue_unfunded_publication(&state, &existing).await?;
         return unfunded_bounty_response(&state, existing).await.map(Json);
     }
@@ -3740,6 +3825,7 @@ async fn publish_unfunded_bounty(
             DbError::TrialBountyConflict => StatusCode::CONFLICT,
             _ => StatusCode::SERVICE_UNAVAILABLE,
         })?;
+    generate_unfunded_bounty_poster(&state, &trial).await;
     enqueue_unfunded_publication(&state, &trial).await?;
     unfunded_bounty_response(&state, trial).await.map(Json)
 }
@@ -3820,6 +3906,80 @@ async fn get_unfunded_bounty(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
         .ok_or(StatusCode::NOT_FOUND)?;
     unfunded_bounty_response(&state, trial).await.map(Json)
+}
+
+async fn get_unfunded_bounty_poster(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Response, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let poster = store
+        .get_trial_bounty_poster(id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let image = poster.image.ok_or(StatusCode::NOT_FOUND)?;
+    let content_type = poster
+        .content_type
+        .unwrap_or_else(|| "image/png".to_string());
+    let content_type =
+        HeaderValue::from_str(&content_type).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=604800, immutable"),
+            ),
+        ],
+        image,
+    )
+        .into_response())
+}
+
+async fn generate_unfunded_bounty_poster(state: &SharedState, trial: &TrialBounty) {
+    let store = match state.store.as_ref() {
+        Some(store) => store,
+        None => return,
+    };
+    if trial.poster_status == "ready" {
+        return;
+    }
+    if !state.mission_poster_generator.enabled() {
+        let disabled = TrialBountyPoster {
+            status: "disabled".to_string(),
+            content_type: None,
+            image: None,
+        };
+        let _ = store
+            .update_trial_bounty_poster(trial.id, &disabled, None)
+            .await;
+        return;
+    }
+    match state
+        .mission_poster_generator
+        .generate(&trial.title, &trial.goal)
+        .await
+    {
+        Ok(poster) => {
+            let _ = store
+                .update_trial_bounty_poster(trial.id, &poster, None)
+                .await;
+        }
+        Err(error) => {
+            let failed = TrialBountyPoster {
+                status: "failed".to_string(),
+                content_type: None,
+                image: None,
+            };
+            let _ = store
+                .update_trial_bounty_poster(trial.id, &failed, Some(&error))
+                .await;
+        }
+    }
 }
 
 #[utoipa::path(
@@ -3919,6 +4079,12 @@ async fn unfunded_bounty_response(
         .into_iter()
         .map(unfunded_agent_solution)
         .collect();
+    let poster_status = store
+        .get_trial_bounty_poster(trial.id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .map(|poster| poster.status)
+        .unwrap_or(trial.poster_status.clone());
     Ok(UnfundedBountyResponse {
         schema_version: "agent-bounties/unfunded-bounty-v1".to_string(),
         bounty_id: trial.id.to_string(),
@@ -3940,6 +4106,12 @@ async fn unfunded_bounty_response(
             state.public_base_url.trim_end_matches('/'),
             trial.id
         ),
+        poster_image_url: (poster_status == "ready").then(|| format!(
+            "{}/v1/unfunded-bounties/{}/poster.png",
+            state.public_base_url.trim_end_matches('/'),
+            trial.id
+        )),
+        poster_status,
         upgrade_url: "https://agentbounties.app/post.html".to_string(),
         created_at: trial.created_at.to_rfc3339(),
         expires_at: trial.expires_at.to_rfc3339(),
@@ -15293,6 +15465,9 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            mission_poster_generator: Arc::new(
+                MissionPosterGenerator::from_env().expect("test poster generator is valid"),
+            ),
             discovery_webhooks: None,
             neynar_social: None,
         })
@@ -15300,6 +15475,16 @@ mod tests {
 
     fn test_cloud_agent() -> Arc<CloudAgentService> {
         Arc::new(CloudAgentService::from_env().expect("disabled test cloud agent is valid"))
+    }
+
+    #[test]
+    fn mission_poster_prompt_preserves_mission_context_and_excludes_text_from_art() {
+        let prompt =
+            mission_poster_prompt("Repair webhook retries", "Make duplicate deliveries safe");
+        assert!(prompt.contains("Repair webhook retries"));
+        assert!(prompt.contains("Make duplicate deliveries safe"));
+        assert!(prompt.contains("Do not include any words"));
+        assert!(prompt.contains("watermarks"));
     }
 
     fn postgres_test_database_url() -> String {
@@ -15328,6 +15513,9 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            mission_poster_generator: Arc::new(
+                MissionPosterGenerator::from_env().expect("test poster generator is valid"),
+            ),
             discovery_webhooks: None,
             neynar_social: None,
         })
@@ -15354,6 +15542,9 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            mission_poster_generator: Arc::new(
+                MissionPosterGenerator::from_env().expect("test poster generator is valid"),
+            ),
             discovery_webhooks: None,
             neynar_social: None,
         })
@@ -15380,6 +15571,9 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            mission_poster_generator: Arc::new(
+                MissionPosterGenerator::from_env().expect("test poster generator is valid"),
+            ),
             discovery_webhooks: None,
             neynar_social: None,
         })
@@ -15410,6 +15604,9 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            mission_poster_generator: Arc::new(
+                MissionPosterGenerator::from_env().expect("test poster generator is valid"),
+            ),
             discovery_webhooks: None,
             neynar_social: None,
         })
@@ -15442,6 +15639,9 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            mission_poster_generator: Arc::new(
+                MissionPosterGenerator::from_env().expect("test poster generator is valid"),
+            ),
             discovery_webhooks: None,
             neynar_social: None,
         })
@@ -15471,6 +15671,9 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            mission_poster_generator: Arc::new(
+                MissionPosterGenerator::from_env().expect("test poster generator is valid"),
+            ),
             discovery_webhooks: None,
             neynar_social: None,
         })
@@ -15500,6 +15703,9 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            mission_poster_generator: Arc::new(
+                MissionPosterGenerator::from_env().expect("test poster generator is valid"),
+            ),
             discovery_webhooks: None,
             neynar_social: None,
         })
@@ -15530,6 +15736,9 @@ mod tests {
             bond_sponsor: BondSponsorConfig::default(),
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
             cloud_agent: test_cloud_agent(),
+            mission_poster_generator: Arc::new(
+                MissionPosterGenerator::from_env().expect("test poster generator is valid"),
+            ),
             discovery_webhooks: None,
             neynar_social: None,
         })

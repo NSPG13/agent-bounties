@@ -1320,6 +1320,14 @@
     const goal = document.createElement("p");
     goal.className = "fine";
     goal.textContent = item.goal;
+    if (item.poster_image_url) {
+      const image = document.createElement("img");
+      image.className = "mission-poster-image";
+      image.src = item.poster_image_url;
+      image.alt = `AI-generated visual for ${item.title || "this mission"}`;
+      image.loading = "lazy";
+      article.append(image);
+    }
     const demo = document.createElement("p");
     demo.className = "fine";
     demo.textContent = item.demo_agent_solution?.summary
@@ -1333,8 +1341,100 @@
     details.textContent = "Open public bounty data";
     details.rel = "noopener noreferrer";
     actions.append(details);
+    if (item.poster_image_url) {
+      const share = document.createElement("button");
+      share.className = "button primary";
+      share.type = "button";
+      share.textContent = "Share mission poster";
+      share.addEventListener("click", async () => {
+        share.disabled = true;
+        try {
+          const file = await missionPosterFile(item);
+          const shareData = {
+            title: item.title || "Agent Bounties mission",
+            text: `${item.title || "Mission"} — unfunded, open to agent solutions. ${item.goal || ""}`,
+            url: item.public_url,
+          };
+          if (navigator.canShare?.({ files: [file] })) {
+            await navigator.share({ ...shareData, files: [file] });
+          } else {
+            downloadMissionPoster(file);
+            await navigator.clipboard?.writeText(item.public_url);
+            share.textContent = "Poster downloaded; mission link copied";
+          }
+        } catch (error) {
+          if (error?.name !== "AbortError") share.textContent = "Could not prepare poster";
+        } finally {
+          share.disabled = false;
+        }
+      });
+      actions.append(share);
+    }
     article.append(heading, status, goal, demo, actions);
     return article;
+  }
+
+  function wrapPosterText(context, text, maxWidth, maxLines) {
+    const words = String(text || "").split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = "";
+    for (const word of words) {
+      const next = line ? `${line} ${word}` : word;
+      if (context.measureText(next).width > maxWidth && line) {
+        lines.push(line);
+        line = word;
+        if (lines.length === maxLines) break;
+      } else line = next;
+    }
+    if (line && lines.length < maxLines) lines.push(line);
+    return lines;
+  }
+
+  async function missionPosterFile(item) {
+    const response = await fetch(item.poster_image_url, { mode: "cors" });
+    if (!response.ok) throw new Error("poster image unavailable");
+    const imageBlob = await response.blob();
+    const image = await createImageBitmap(imageBlob);
+    const canvas = document.createElement("canvas");
+    canvas.width = 1200;
+    canvas.height = 1500;
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#f7f3e8";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, image.width, image.height, 0, 0, 1200, 860);
+    const gradient = context.createLinearGradient(0, 780, 0, 1500);
+    gradient.addColorStop(0, "rgba(10, 58, 48, .94)");
+    gradient.addColorStop(1, "#073c32");
+    context.fillStyle = gradient;
+    context.fillRect(0, 760, canvas.width, 740);
+    context.fillStyle = "#d8bd70";
+    context.font = "700 31px system-ui, sans-serif";
+    context.fillText("AGENT BOUNTIES  /  OPEN MISSION", 70, 860);
+    context.fillStyle = "#ffffff";
+    context.font = "800 72px system-ui, sans-serif";
+    let y = 950;
+    for (const line of wrapPosterText(context, item.title, 1060, 3)) {
+      context.fillText(line, 70, y); y += 86;
+    }
+    context.fillStyle = "#dbeae1";
+    context.font = "400 36px system-ui, sans-serif";
+    y += 18;
+    for (const line of wrapPosterText(context, item.goal, 1060, 4)) {
+      context.fillText(line, 70, y); y += 50;
+    }
+    context.fillStyle = "#d8bd70";
+    context.font = "700 31px system-ui, sans-serif";
+    context.fillText("UNFUNDED · NO PAYMENT PROMISED · OPEN TO AGENT SOLUTIONS", 70, 1430);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("poster rendering failed");
+    return new File([blob], "agent-bounties-mission.png", { type: "image/png" });
+  }
+
+  function downloadMissionPoster(file) {
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url; link.download = file.name; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function loadUnfundedFeed() {

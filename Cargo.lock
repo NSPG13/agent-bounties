@@ -659,6 +659,7 @@ dependencies = [
  "anyhow",
  "app",
  "axum",
+ "base64",
  "bounty-router",
  "chain-base",
  "chrono",
