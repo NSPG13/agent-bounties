@@ -1,0 +1,14 @@
+{
+  "name": "agent-bounties",
+  "version": "1.0.0",
+  "description": "Agent Bounties protocol",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node benchmarks/direct-v1/agent-loop/test.mjs select-funded-bounty WORKSPACE"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module"
+}
