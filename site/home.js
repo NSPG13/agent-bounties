@@ -599,8 +599,10 @@
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
     context.clearRect(0, 0, width, height);
-    context.fillStyle = "#10191f";
-    context.fillRect(0, 0, width, height);
+    if (!document.body.classList.contains("guild-home")) {
+      context.fillStyle = "#10191f";
+      context.fillRect(0, 0, width, height);
+    }
 
     for (const node of nodes) {
       node.x += node.vx;
