@@ -14092,6 +14092,7 @@ mod tests {
         assert!(paths.contains_key("/v1/base/autonomous-bounties/{bounty_contract}/analysis"));
         assert!(paths.contains_key("/v1/unfunded-bounties"));
         assert!(paths.contains_key("/v1/unfunded-bounties/{id}"));
+        assert!(paths.contains_key("/v1/unfunded-bounties/{id}/poster.png"));
         assert!(paths.contains_key("/v1/unfunded-bounties/{id}/solutions"));
         assert!(paths.contains_key("/v1/base/agent-wallet/readiness"));
         assert!(paths.contains_key("/v1/risk/events"));
