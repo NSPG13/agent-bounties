@@ -1095,6 +1095,20 @@ tool_args! {
 
 tool_args! {
     #[derive(Default)]
+    struct GetGuildCharterArgs {}
+    schema empty_tool_schema();
+}
+
+tool_args! {
+    struct GetGuildAdventurerProfileArgs { agent_id: Uuid }
+    schema object_tool_schema(
+        json!({ "agent_id": uuid_property("Registered adventurer agent UUID.") }),
+        &["agent_id"],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
     struct AutonomousVerificationJobsArgs { network: Option<String>, verifier: Option<String> }
     schema object_tool_schema(
         json!({
@@ -1445,6 +1459,11 @@ async fn main() -> anyhow::Result<()> {
             post(get_opportunity_conversion_funnel),
         )
         .route("/tools/get_site_analytics", post(get_site_analytics))
+        .route("/tools/get_guild_charter", post(get_guild_charter))
+        .route(
+            "/tools/get_guild_adventurer_profile",
+            post(get_guild_adventurer_profile),
+        )
         .route("/tools/analyze_bounty_fit", post(analyze_bounty_fit))
         .route(
             "/tools/list_autonomous_verification_jobs",
@@ -2202,6 +2221,16 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "get_site_analytics",
             "Measure privacy-minimized first-party visitors, sessions, acquisition channels, and observed site conversion actions. Browser-local IDs are not people or wallets; canonical lifecycle and settlement endpoints remain authoritative for payment claims.",
             SiteAnalyticsArgs::input_schema(),
+        ),
+        tool(
+            "get_guild_charter",
+            "Read the Global Guild Hall charter: open participation defaults, independent adventurer rank and mission difficulty, optional poster eligibility vocabulary, and the explicit unavailable trust, party, affiliation, and other-asset verification boundaries.",
+            GetGuildCharterArgs::input_schema(),
+        ),
+        tool(
+            "get_guild_adventurer_profile",
+            "Read one registered adventurer's reputation-derived rank. Trust and affiliation stay unavailable until authenticated evidence systems exist; missing values are never inferred.",
+            GetGuildAdventurerProfileArgs::input_schema(),
         ),
         tool(
             "analyze_bounty_fit",
@@ -4622,6 +4651,25 @@ async fn get_site_analytics(Json(args): Json<SiteAnalyticsArgs>) -> Json<serde_j
     proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
 }
 
+async fn get_guild_charter(Json(_args): Json<GetGuildCharterArgs>) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/guild/charter",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url)).await
+}
+
+async fn get_guild_adventurer_profile(
+    Json(args): Json<GetGuildAdventurerProfileArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/guild/adventurers/{}",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.agent_id
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url)).await
+}
+
 async fn analyze_bounty_fit(
     State(state): State<SharedState>,
     Json(args): Json<AnalyzeBountyFitArgs>,
@@ -4873,7 +4921,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 91);
+        assert_eq!(descriptors.len(), 93);
         assert_eq!(
             descriptors
                 .iter()
@@ -5248,6 +5296,8 @@ mod tests {
             "delete_discovery_subscription",
             "get_opportunity_conversion_funnel",
             "get_site_analytics",
+            "get_guild_charter",
+            "get_guild_adventurer_profile",
             "analyze_bounty_fit",
         ] {
             assert!(

@@ -1,0 +1,46 @@
+[
+  {
+    "bounty_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+    "bounty_contract": "0x1111111111111111111111111111111111111111",
+    "status": "claimable",
+    "solver_reward": "900000",
+    "claim_bond": "100000",
+    "timeout_bond_pool": "0",
+    "target_amount": "1000000",
+    "funded_amount": "1000000",
+    "terms_valid": true,
+    "verification_ready": true,
+    "terms": {
+      "document": {
+        "title": "Publish a verified integration fixture",
+        "goal": "Add a deterministic integration fixture and publish its exact passing check evidence.",
+        "source_url": "https://github.com/NSPG13/agent-bounties/issues/501",
+        "benchmark": {
+          "engine": "sandboxed_regression_v1"
+        }
+      }
+    }
+  },
+  {
+    "bounty_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
+    "bounty_contract": "0x2222222222222222222222222222222222222222",
+    "status": "claimable",
+    "solver_reward": "1800000",
+    "claim_bond": "200000",
+    "timeout_bond_pool": "100000",
+    "target_amount": "2000000",
+    "funded_amount": "2000000",
+    "terms_valid": true,
+    "verification_ready": true,
+    "terms": {
+      "document": {
+        "title": "Seed a paid distribution child bounty",
+        "goal": "Create and fund qualifying work that another registered participant completes and settles.",
+        "source_url": "https://github.com/NSPG13/agent-bounties/issues/502",
+        "benchmark": {
+          "engine": "standing_meta_v2_parent"
+        }
+      }
+    }
+  }
+]

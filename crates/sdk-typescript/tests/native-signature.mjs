@@ -136,6 +136,8 @@ test("query methods preserve ordering, false values, and operator headers", asyn
     });
     await client.listAutonomousBounties("base-mainnet", false);
     await client.getSiteAnalytics(0);
+    await client.getGuildCharter();
+    await client.getGuildAdventurerProfile("agent/id with spaces");
     await client.analyzeBountyFit("0x1111111111111111111111111111111111111111", null);
 
     assert.equal(
@@ -146,6 +148,14 @@ test("query methods preserve ordering, false values, and operator headers", asyn
     assert.equal(requests[1].url, "https://api.example/v1/analytics/site?window_hours=0");
     assert.equal(
       requests[2].url,
+      "https://api.example/v1/guild/charter",
+    );
+    assert.equal(
+      requests[3].url,
+      "https://api.example/v1/guild/adventurers/agent%2Fid%20with%20spaces",
+    );
+    assert.equal(
+      requests[4].url,
       "https://api.example/v1/base/autonomous-bounties/0x1111111111111111111111111111111111111111/analysis",
     );
   } finally {

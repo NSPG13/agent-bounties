@@ -1,5 +1,7 @@
 use app::BountyStatusResponse;
-use chain_base::{standing_meta_v2_parent_context, AutonomousBountyFeedItem};
+use chain_base::{
+    standing_meta_v2_parent_context, AutonomousBountyEventKind, AutonomousBountyFeedItem,
+};
 use chrono::{DateTime, Utc};
 use db::{TrialBounty, UnfundedBountySolution};
 use domain::{BountyStatus, DiscoveryOpportunitySnapshot, DiscoveryRewardFilter, PrivacyLevel};
@@ -591,14 +593,8 @@ pub fn canonical_opportunity(
         goal.as_deref(),
         &evidence_requirements,
     );
-    let public_url = terms
-        .and_then(|record| record.document.source_url.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "{api}/v1/base/autonomous-bounties/events?network={network}&bounty_id={}",
-                item.bounty_id
-            )
-        });
+    let canonical_contract = item.bounty_contract.to_ascii_lowercase();
+    let public_url = format!("{api}/public/base/bounties/{canonical_contract}");
     let next_action = canonical_next_action(
         item,
         network,
@@ -614,14 +610,27 @@ pub fn canonical_opportunity(
         .map(|event| event.occurred_at)
         .or_else(|| terms.map(|record| record.created_at))
         .unwrap_or_else(Utc::now);
-    let proof_urls = (item.status == "paid")
-        .then(|| {
-            format!(
-                "{api}/v1/base/autonomous-bounties/events?network={network}&bounty_id={}",
-                item.bounty_id
-            )
+    let proof_urls = item
+        .events
+        .iter()
+        .filter(|event| {
+            event.kind == AutonomousBountyEventKind::BountySettled
+                && event
+                    .contract_address
+                    .eq_ignore_ascii_case(&item.bounty_contract)
         })
-        .into_iter()
+        .filter_map(|event| {
+            event
+                .data
+                .get("round")
+                .and_then(|round| {
+                    round
+                        .as_u64()
+                        .or_else(|| round.as_str().and_then(|round| round.parse().ok()))
+                })
+                .filter(|round| *round > 0)
+        })
+        .map(|round| format!("{api}/public/base/bounties/{canonical_contract}/settlements/{round}"))
         .collect();
     let opportunity_id = format!("canonical:{network}:{}", item.bounty_contract);
     Some(OpportunityItem {
@@ -1114,6 +1123,46 @@ mod tests {
         assert_eq!(item.payment_state, "seeking_funding");
         assert!(!item.payment_committed);
         assert!(item.next_action.url.ends_with("amount=750000"));
+    }
+
+    #[test]
+    fn canonical_projection_uses_first_party_pages_and_exact_settlement_rounds() {
+        let mut source = canonical("paid", "1000000", true);
+        source.terms.as_mut().unwrap().document.source_url =
+            Some("https://github.com/example/project/issues/42".to_string());
+        let settled_at = source.events[0].occurred_at + chrono::Duration::hours(2);
+        source.events.push(AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: "2:3".to_string(),
+            tx_hash: format!("0x{}", "a".repeat(64)),
+            block_number: 2,
+            log_index: 3,
+            contract_address: source.bounty_contract.to_ascii_uppercase(),
+            bounty_id: source.bounty_id.clone(),
+            kind: AutonomousBountyEventKind::BountySettled,
+            data: json!({"round": "2"}),
+            occurred_at: settled_at,
+        });
+
+        let item = canonical_opportunity(&source, "base-mainnet", "https://api.example").unwrap();
+        assert_eq!(
+            item.public_url,
+            format!(
+                "https://api.example/public/base/bounties/{}",
+                source.bounty_contract.to_ascii_lowercase()
+            )
+        );
+        assert_eq!(
+            item.source_url.as_deref(),
+            Some("https://github.com/example/project/issues/42")
+        );
+        assert_eq!(
+            item.proof_urls,
+            vec![format!(
+                "https://api.example/public/base/bounties/{}/settlements/2",
+                source.bounty_contract.to_ascii_lowercase()
+            )]
+        );
     }
 
     #[test]

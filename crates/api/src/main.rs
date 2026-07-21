@@ -71,7 +71,7 @@ use db::{
     X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
-    leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
+    leaderboard_period, rank_solver_completions, AdventurerRank, Agent, AgentEligibilityDecision,
     AgentEligibilityEvidence, AgentEligibilityPolicy, AgentStatus, AgentWebhookEventType,
     AudienceInteraction, AudienceMember, AudienceReport, AutonomousBountyTermsDocument,
     AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord, BondSponsorship,
@@ -160,9 +160,15 @@ use worker::{
         opportunity_embed_page,
         opportunity_embed_svg,
         opportunity_embed_markdown,
+        canonical_base_bounty_list_page,
+        canonical_base_bounty_detail_page,
+        canonical_base_settlement_page,
+        canonical_base_sitemap,
         opportunity_conversion_funnel,
         record_site_analytics_event,
         site_analytics,
+        guild_charter,
+        guild_adventurer_profile,
         create_discovery_subscription,
         get_discovery_subscription,
         delete_discovery_subscription,
@@ -339,8 +345,16 @@ use worker::{
         ,SiteAnalyticsEventCountResponse
         ,SiteAnalyticsDailyResponse
         ,SiteAnalyticsChannelResponse
+        ,SiteAnalyticsCurrentChannelResponse
+        ,SiteAnalyticsContextResponse
+        ,SiteAnalyticsHostResponse
+        ,SiteAnalyticsOrderedConversionResponse
         ,SiteAnalyticsRateResponse
         ,SiteAnalyticsResponse
+        ,GuildRankBandResponse
+        ,GuildCharterResponse
+        ,GuildAdventurerProfileResponse
+        ,AdventurerRank
         ,UnfundedBountyResponse
         ,UnfundedBountyAgentSolution
         ,SubmitUnfundedBountySolutionRequest
@@ -1135,6 +1149,12 @@ struct SiteAnalyticsEventRequest {
     referrer_host: Option<String>,
     opportunity_id: Option<String>,
     bounty_contract: Option<String>,
+    placement: Option<String>,
+    variant: Option<String>,
+    opportunity_class: Option<String>,
+    current_source: Option<String>,
+    current_campaign: Option<String>,
+    current_referrer_host: Option<String>,
     occurred_at: DateTime<Utc>,
 }
 
@@ -1175,6 +1195,7 @@ struct SiteAnalyticsDailyResponse {
     sessions: u64,
     page_views: u64,
     market_views: u64,
+    opportunity_exposures: u64,
     funded_bounty_clicks: u64,
     canonical_posts_confirmed: u64,
     funding_starts: u64,
@@ -1188,10 +1209,70 @@ struct SiteAnalyticsChannelResponse {
     visitors: u64,
     sessions: u64,
     page_views: u64,
+    opportunity_exposures: u64,
     funded_bounty_clicks: u64,
     canonical_posts_confirmed: u64,
     funding_starts: u64,
     claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsCurrentChannelResponse {
+    source: String,
+    campaign: Option<String>,
+    referrer_host: Option<String>,
+    visitors: u64,
+    sessions: u64,
+    page_views: u64,
+    opportunity_exposures: u64,
+    funded_bounty_clicks: u64,
+    canonical_posts_confirmed: u64,
+    funding_starts: u64,
+    claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsContextResponse {
+    placement: Option<String>,
+    variant: Option<String>,
+    opportunity_class: Option<String>,
+    events: u64,
+    sessions: u64,
+    visitors: u64,
+    opportunity_exposures: u64,
+    funded_bounty_clicks: u64,
+    claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsHostResponse {
+    site_host: String,
+    events: u64,
+    visitors: u64,
+    sessions: u64,
+    page_views: u64,
+    market_views: u64,
+    opportunity_exposures: u64,
+    funded_bounty_clicks: u64,
+    canonical_posts_confirmed: u64,
+    funding_starts: u64,
+    claims_confirmed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SiteAnalyticsOrderedConversionResponse {
+    metric: String,
+    start_event: String,
+    outcome_event: String,
+    matching_scope: String,
+    window_seconds: Option<u64>,
+    denominator_events: u64,
+    denominator_sessions: u64,
+    denominator_visitors: u64,
+    numerator_events: u64,
+    numerator_sessions: u64,
+    numerator_visitors: u64,
+    value: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -1213,6 +1294,10 @@ struct SiteAnalyticsResponse {
     event_counts: Vec<SiteAnalyticsEventCountResponse>,
     daily: Vec<SiteAnalyticsDailyResponse>,
     channels: Vec<SiteAnalyticsChannelResponse>,
+    current_channels: Vec<SiteAnalyticsCurrentChannelResponse>,
+    contexts: Vec<SiteAnalyticsContextResponse>,
+    hosts: Vec<SiteAnalyticsHostResponse>,
+    ordered_conversions: Vec<SiteAnalyticsOrderedConversionResponse>,
     rates: Vec<SiteAnalyticsRateResponse>,
     definitions: Vec<String>,
     evidence_boundary: String,
@@ -1331,6 +1416,8 @@ struct DecodeAutonomousBountyEventsRequest {
 struct AutonomousBountyEventsQuery {
     network: Option<String>,
     bounty_id: Option<String>,
+    kind: Option<AutonomousBountyEventKind>,
+    round: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1642,6 +1729,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/v1/analytics/events", post(record_site_analytics_event))
         .route("/v1/analytics/site", get(site_analytics))
+        .route("/v1/guild/charter", get(guild_charter))
+        .route(
+            "/v1/guild/adventurers/:agent_id",
+            get(guild_adventurer_profile),
+        )
         .route(
             "/public/opportunities/:opportunity_id/embed",
             get(opportunity_embed_page),
@@ -1654,6 +1746,19 @@ async fn main() -> anyhow::Result<()> {
             "/public/opportunities/:opportunity_id/embed.md",
             get(opportunity_embed_markdown),
         )
+        .route(
+            "/public/base/bounties",
+            get(canonical_base_bounty_list_page),
+        )
+        .route(
+            "/public/base/bounties/:bounty_contract",
+            get(canonical_base_bounty_detail_page),
+        )
+        .route(
+            "/public/base/bounties/:bounty_contract/settlements/:round",
+            get(canonical_base_settlement_page),
+        )
+        .route("/public/base/sitemap.xml", get(canonical_base_sitemap))
         .route(
             "/v1/discovery/subscriptions",
             post(create_discovery_subscription),
@@ -2735,28 +2840,26 @@ fn opportunity_conversion_response(
     }
 }
 
-fn site_analytics_origin_allowed(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers
+fn site_analytics_site_host(headers: &HeaderMap) -> Option<&'static str> {
+    let origin = headers
         .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return false;
-    };
-    if matches!(
-        origin,
-        "https://agentbounties.app"
-            | "https://www.agentbounties.app"
-            | "https://bountyboard.global"
-            | "https://www.bountyboard.global"
-    ) {
-        return true;
+        .and_then(|value| value.to_str().ok())?;
+    match origin {
+        "https://agentbounties.app" | "https://www.agentbounties.app" => {
+            return Some("agentbounties.app");
+        }
+        "https://bountyboard.global" | "https://www.bountyboard.global" => {
+            return Some("bountyboard.global");
+        }
+        _ => {}
     }
     for prefix in ["http://localhost:", "http://127.0.0.1:"] {
         if let Some(port) = origin.strip_prefix(prefix) {
-            return !port.is_empty() && port.chars().all(|character| character.is_ascii_digit());
+            return (!port.is_empty() && port.chars().all(|character| character.is_ascii_digit()))
+                .then_some("localhost");
         }
     }
-    false
+    None
 }
 
 fn marketing_domain_destination(host: &str, uri: &Uri) -> Option<String> {
@@ -2838,12 +2941,20 @@ fn normalize_site_analytics_referrer(value: Option<String>) -> Result<Option<Str
 
 fn validated_site_analytics_event(
     request: SiteAnalyticsEventRequest,
+    site_host: &str,
     now: DateTime<Utc>,
 ) -> Result<NewSiteAnalyticsEvent, StatusCode> {
+    if !matches!(
+        site_host,
+        "agentbounties.app" | "bountyboard.global" | "localhost"
+    ) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     if !matches!(
         request.event_name.as_str(),
         "page_view"
             | "market_view"
+            | "opportunity_exposed"
             | "funded_bounty_click"
             | "unfunded_post_started"
             | "unfunded_post_completed"
@@ -2885,6 +2996,12 @@ fn validated_site_analytics_event(
         .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
         .transpose()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if request.event_name == "opportunity_exposed"
+        && opportunity_id.is_none()
+        && bounty_contract.is_none()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     Ok(NewSiteAnalyticsEvent {
         event_id: request.event_id,
         visitor_id: request.visitor_id,
@@ -2896,6 +3013,13 @@ fn validated_site_analytics_event(
         referrer_host: normalize_site_analytics_referrer(request.referrer_host)?,
         opportunity_id,
         bounty_contract,
+        placement: normalize_site_analytics_token(request.placement)?,
+        variant: normalize_site_analytics_token(request.variant)?,
+        opportunity_class: normalize_site_analytics_token(request.opportunity_class)?,
+        current_source: normalize_site_analytics_token(request.current_source)?,
+        current_campaign: normalize_site_analytics_token(request.current_campaign)?,
+        current_referrer_host: normalize_site_analytics_referrer(request.current_referrer_host)?,
+        site_host: site_host.to_string(),
         occurred_at: request.occurred_at,
     })
 }
@@ -2916,10 +3040,8 @@ async fn record_site_analytics_event(
     headers: HeaderMap,
     Json(request): Json<SiteAnalyticsEventRequest>,
 ) -> Result<Json<SiteAnalyticsReceipt>, StatusCode> {
-    if !site_analytics_origin_allowed(&headers) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    let event = validated_site_analytics_event(request, Utc::now())?;
+    let site_host = site_analytics_site_host(&headers).ok_or(StatusCode::FORBIDDEN)?;
+    let event = validated_site_analytics_event(request, site_host, Utc::now())?;
     let store = state
         .store
         .as_ref()
@@ -3024,7 +3146,7 @@ fn site_analytics_response(
         ),
     ];
     SiteAnalyticsResponse {
-        schema_version: "agent-bounties/site-analytics-v1".to_string(),
+        schema_version: "agent-bounties/site-analytics-v2".to_string(),
         window_hours,
         window_started_at: window_started_at.to_rfc3339(),
         generated_at: generated_at.to_rfc3339(),
@@ -3055,6 +3177,7 @@ fn site_analytics_response(
                 sessions: day.sessions,
                 page_views: day.page_views,
                 market_views: day.market_views,
+                opportunity_exposures: day.opportunity_exposures,
                 funded_bounty_clicks: day.funded_bounty_clicks,
                 canonical_posts_confirmed: day.canonical_posts_confirmed,
                 funding_starts: day.funding_starts,
@@ -3070,10 +3193,80 @@ fn site_analytics_response(
                 visitors: channel.visitors,
                 sessions: channel.sessions,
                 page_views: channel.page_views,
+                opportunity_exposures: channel.opportunity_exposures,
                 funded_bounty_clicks: channel.funded_bounty_clicks,
                 canonical_posts_confirmed: channel.canonical_posts_confirmed,
                 funding_starts: channel.funding_starts,
                 claims_confirmed: channel.claims_confirmed,
+            })
+            .collect(),
+        current_channels: stats
+            .current_channels
+            .into_iter()
+            .map(|channel| SiteAnalyticsCurrentChannelResponse {
+                source: channel.source,
+                campaign: channel.campaign,
+                referrer_host: channel.referrer_host,
+                visitors: channel.visitors,
+                sessions: channel.sessions,
+                page_views: channel.page_views,
+                opportunity_exposures: channel.opportunity_exposures,
+                funded_bounty_clicks: channel.funded_bounty_clicks,
+                canonical_posts_confirmed: channel.canonical_posts_confirmed,
+                funding_starts: channel.funding_starts,
+                claims_confirmed: channel.claims_confirmed,
+            })
+            .collect(),
+        contexts: stats
+            .contexts
+            .into_iter()
+            .map(|context| SiteAnalyticsContextResponse {
+                placement: context.placement,
+                variant: context.variant,
+                opportunity_class: context.opportunity_class,
+                events: context.events,
+                sessions: context.sessions,
+                visitors: context.visitors,
+                opportunity_exposures: context.opportunity_exposures,
+                funded_bounty_clicks: context.funded_bounty_clicks,
+                claims_confirmed: context.claims_confirmed,
+            })
+            .collect(),
+        hosts: stats
+            .hosts
+            .into_iter()
+            .map(|host| SiteAnalyticsHostResponse {
+                site_host: host.site_host,
+                events: host.events,
+                visitors: host.visitors,
+                sessions: host.sessions,
+                page_views: host.page_views,
+                market_views: host.market_views,
+                opportunity_exposures: host.opportunity_exposures,
+                funded_bounty_clicks: host.funded_bounty_clicks,
+                canonical_posts_confirmed: host.canonical_posts_confirmed,
+                funding_starts: host.funding_starts,
+                claims_confirmed: host.claims_confirmed,
+            })
+            .collect(),
+        ordered_conversions: stats
+            .ordered_conversions
+            .into_iter()
+            .map(|conversion| SiteAnalyticsOrderedConversionResponse {
+                metric: conversion.metric,
+                start_event: conversion.start_event,
+                outcome_event: conversion.outcome_event,
+                matching_scope: conversion.matching_scope,
+                window_seconds: conversion.window_seconds,
+                denominator_events: conversion.denominator_events,
+                denominator_sessions: conversion.denominator_sessions,
+                denominator_visitors: conversion.denominator_visitors,
+                numerator_events: conversion.numerator_events,
+                numerator_sessions: conversion.numerator_sessions,
+                numerator_visitors: conversion.numerator_visitors,
+                value: (conversion.denominator_events > 0).then(|| {
+                    conversion.numerator_events as f64 / conversion.denominator_events as f64
+                }),
             })
             .collect(),
         rates,
@@ -3082,9 +3275,162 @@ fn site_analytics_response(
             "A returning visitor is the same browser-local UUID observed on at least two UTC dates in the selected window.".to_string(),
             "A session is one random sessionStorage UUID and ends with that browser tab session.".to_string(),
             "Channel attribution uses the visitor's earliest recorded privacy-safe source and campaign; only the referrer hostname is retained.".to_string(),
+            "Current-channel attribution records the privacy-safe source, campaign, and referrer hostname observed for each event; it does not replace first-touch attribution.".to_string(),
+            "Site-host breakdowns use a server-selected allowlisted host derived from the exact Origin header; legacy rows recorded before this dimension are grouped as unknown.".to_string(),
+            "Browser-local visitor and session identifiers are origin-scoped, so the domain migration starts a new identity series and cross-host visitor counts cannot be deduplicated.".to_string(),
+            "An ordered conversion counts an outcome only after its start event and within the published matching scope and time window.".to_string(),
         ],
-        evidence_boundary: "Collection begins only after this feature is deployed and has no historical backfill. Cleared storage, private browsing, multiple devices, disabled analytics, Global Privacy Control, and Do Not Track affect coverage. No IP address, user agent, full referrer URL, wallet, or arbitrary metadata is stored. Client conversion events describe observed interface actions; canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
+        evidence_boundary: "Collection begins only after this feature is deployed and has no historical backfill. Cleared storage, private browsing, multiple devices, a domain change, disabled analytics, Global Privacy Control, and Do Not Track affect coverage. No IP address, user agent, full referrer URL, wallet, or arbitrary metadata is stored. Origin and random client identifiers are not authentication: public aggregate events can be blocked, replayed, or spoofed despite exact-origin allowlisting and event-id idempotency. Use these aggregates for directional interface diagnostics only. Canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
     }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct GuildRankBandResponse {
+    rank: AdventurerRank,
+    minimum_reputation_points: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct GuildCharterResponse {
+    schema_version: String,
+    product_name: String,
+    setting: String,
+    participant_term: String,
+    mission_term: String,
+    ranks: Vec<GuildRankBandResponse>,
+    mission_difficulties: Vec<String>,
+    default_access: String,
+    poster_optional_eligibility: Vec<String>,
+    mission_eligibility_publishing_available: bool,
+    party_mutations_available: bool,
+    trust_review_scale: String,
+    trust_review_mutations_available: bool,
+    affiliation_requirements: Vec<String>,
+    affiliation_verification_available: bool,
+    supported_bounty_promises: Vec<String>,
+    other_asset_delivery_verification_available: bool,
+    enforcement_boundary: String,
+    payment_evidence_boundary: String,
+}
+
+fn guild_charter_response() -> GuildCharterResponse {
+    GuildCharterResponse {
+        schema_version: domain::GUILD_DOMAIN_SCHEMA_VERSION.to_string(),
+        product_name: "Agent Bounties".to_string(),
+        setting: "Global Guild Hall".to_string(),
+        participant_term: "adventurer".to_string(),
+        mission_term: "mission".to_string(),
+        ranks: domain::DEFAULT_ADVENTURER_RANK_THRESHOLDS
+            .iter()
+            .map(|threshold| GuildRankBandResponse {
+                rank: threshold.rank,
+                minimum_reputation_points: threshold.minimum_reputation_points,
+            })
+            .collect(),
+        mission_difficulties: ["F", "E", "D", "C", "B", "A", "S"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        default_access: "Open to unaffiliated solo adventurers and informal parties. Rank and mission difficulty never create a platform gate or price range by default.".to_string(),
+        poster_optional_eligibility: vec![
+            "minimum_adventurer_rank".to_string(),
+            "minimum_trust_score_with_review_count".to_string(),
+            "affiliated_only".to_string(),
+        ],
+        mission_eligibility_publishing_available: false,
+        party_mutations_available: false,
+        trust_review_scale: "1 through 5 stars with one short quality-and-integrity sentence; reviewer-authored revisions retain append-only history.".to_string(),
+        trust_review_mutations_available: false,
+        affiliation_requirements: vec![
+            "content-addressed harness analysis".to_string(),
+            "content-addressed model analysis".to_string(),
+            "applicable human KYC status attestation without raw identity documents".to_string(),
+            "platform sandbox run receipt".to_string(),
+            format!(
+                "at least {} completed tasks",
+                domain::DEFAULT_AFFILIATION_COMPLETED_TASK_THRESHOLD
+            ),
+            format!(
+                "at least {} trust reviews averaging strictly above 4 stars",
+                domain::DEFAULT_AFFILIATION_MINIMUM_TRUST_REVIEW_COUNT
+            ),
+        ],
+        affiliation_verification_available: false,
+        supported_bounty_promises: vec![
+            "money".to_string(),
+            "other_asset_promise".to_string(),
+        ],
+        other_asset_delivery_verification_available: false,
+        enforcement_boundary: "Guild eligibility is a hosted-coordination policy only. The current autonomous Base contract does not enforce rank, trust, party membership, or general affiliation on a direct wallet claim. No eligibility field is accepted from an untrusted caller.".to_string(),
+        payment_evidence_boundary: "An other-asset bounty remains a disclosed promise until a future verified rail exists. Confirmed canonical Base USDC funding proves funding; only an exact confirmed BountySettled event proves solver payment.".to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct GuildAdventurerProfileResponse {
+    schema_version: String,
+    agent_id: Uuid,
+    handle: String,
+    reputation_points: u64,
+    adventurer_rank: AdventurerRank,
+    accepted_bounties: u64,
+    trust_score: Option<f64>,
+    trust_review_count: u64,
+    affiliation_status: String,
+    evidence_boundary: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/guild/charter",
+    responses((status = 200, body = GuildCharterResponse))
+)]
+async fn guild_charter() -> Json<GuildCharterResponse> {
+    Json(guild_charter_response())
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/guild/adventurers/{agent_id}",
+    params(("agent_id" = Uuid, Path, description = "Registered adventurer agent ID")),
+    responses(
+        (status = 200, body = GuildAdventurerProfileResponse),
+        (status = 404, description = "Registered adventurer not found")
+    )
+)]
+async fn guild_adventurer_profile(
+    State(state): State<SharedState>,
+    Path(agent_id): Path<Uuid>,
+) -> Result<Json<GuildAdventurerProfileResponse>, StatusCode> {
+    let network = state
+        .network
+        .lock()
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let agent = network.agents.get(&agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let raw_points = network
+        .reputation_events
+        .values()
+        .filter(|event| event.agent_id == agent_id)
+        .map(|event| i64::from(event.delta))
+        .sum::<i64>();
+    let reputation_points = u64::try_from(raw_points.max(0)).unwrap_or_default();
+    let accepted_bounties = network
+        .reputation_events
+        .values()
+        .filter(|event| event.agent_id == agent_id && event.delta > 0)
+        .count() as u64;
+    Ok(Json(GuildAdventurerProfileResponse {
+        schema_version: "agent-bounties/guild-adventurer-profile-v1".to_string(),
+        agent_id,
+        handle: agent.handle.clone(),
+        reputation_points,
+        adventurer_rank: AdventurerRank::from_reputation_points(reputation_points),
+        accepted_bounties,
+        trust_score: None,
+        trust_review_count: 0,
+        affiliation_status: "unavailable".to_string(),
+        evidence_boundary: "Rank is derived from recorded reputation events for this registered agent. Trust and affiliation remain unavailable until wallet-authenticated, role-proven review storage and content-addressed affiliation attestations are deployed; no missing value is inferred.".to_string(),
+    }))
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -8921,6 +9267,15 @@ async fn list_autonomous_bounty_events(
     if let Some(bounty_id) = query.bounty_id {
         events.retain(|event| event.bounty_id.eq_ignore_ascii_case(&bounty_id));
     }
+    if let Some(kind) = query.kind {
+        events.retain(|event| event.kind == kind);
+    }
+    if let Some(round) = query.round {
+        if round == 0 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        events.retain(|event| canonical_base_event_round(event) == Some(round));
+    }
     Ok(Json(events))
 }
 
@@ -9074,6 +9429,21 @@ async fn load_autonomous_bounty_feed(
     network: &str,
     claimable_only: bool,
 ) -> Result<Vec<AutonomousBountyFeedItem>, StatusCode> {
+    load_autonomous_bounty_feed_with_store_error(
+        state,
+        network,
+        claimable_only,
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await
+}
+
+async fn load_autonomous_bounty_feed_with_store_error(
+    state: &SharedState,
+    network: &str,
+    claimable_only: bool,
+    store_error: StatusCode,
+) -> Result<Vec<AutonomousBountyFeedItem>, StatusCode> {
     let store = state
         .store
         .as_ref()
@@ -9081,15 +9451,418 @@ async fn load_autonomous_bounty_feed(
     let events = store
         .list_autonomous_bounty_events(network)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| store_error)?;
     let terms = store
         .list_autonomous_bounty_terms()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| store_error)?;
     let mut feed = build_autonomous_bounty_feed(events, terms, false)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     state.recovery_reservations.apply(&mut feed, claimable_only);
     Ok(feed)
+}
+
+const CANONICAL_BASE_NETWORK: &str = "base-mainnet";
+const CANONICAL_BASE_CHAIN_ID: u64 = 8_453;
+const CANONICAL_BASE_EXPLORER_URL: &str = "https://base.blockscout.com";
+
+fn canonical_base_public_item(item: &AutonomousBountyFeedItem) -> bool {
+    item.status != "cancelled"
+        && item.terms.is_some()
+        && item.terms_valid
+        && item.validation_errors.is_empty()
+}
+
+async fn load_canonical_base_public_feed(
+    state: &SharedState,
+) -> Result<Vec<AutonomousBountyFeedItem>, StatusCode> {
+    let mut feed = load_canonical_base_feed(state).await?;
+    feed.retain(canonical_base_public_item);
+    Ok(feed)
+}
+
+async fn load_canonical_base_feed(
+    state: &SharedState,
+) -> Result<Vec<AutonomousBountyFeedItem>, StatusCode> {
+    load_autonomous_bounty_feed_with_store_error(
+        state,
+        CANONICAL_BASE_NETWORK,
+        false,
+        StatusCode::SERVICE_UNAVAILABLE,
+    )
+    .await
+}
+
+fn canonical_base_contract(raw: &str) -> Result<String, StatusCode> {
+    normalize_evm_address(raw)
+        .map(|address| address.to_ascii_lowercase())
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn canonical_base_page_context(
+    state: &SharedState,
+    canonical_url: String,
+    machine_url: String,
+) -> web_public::CanonicalBasePublicPageContext {
+    let website = legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);
+    web_public::CanonicalBasePublicPageContext {
+        canonical_url,
+        machine_url,
+        shared_og_image_url: format!("{}/social-card.png", website.trim_end_matches('/')),
+        explorer_base_url: CANONICAL_BASE_EXPLORER_URL.to_string(),
+        network: CANONICAL_BASE_NETWORK.to_string(),
+        chain_id: CANONICAL_BASE_CHAIN_ID,
+    }
+}
+
+fn canonical_base_event_round(event: &AutonomousBountyEvent) -> Option<u64> {
+    event.data.get("round").and_then(|value| {
+        value
+            .as_u64()
+            .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+    })
+}
+
+fn canonical_public_document_response(
+    body: String,
+    content_type: &'static str,
+    cache_control: &'static str,
+    html_security_headers: bool,
+    request_headers: &HeaderMap,
+) -> Result<Response, StatusCode> {
+    let etag = format!("\"{}\"", hex::encode(Sha256::digest(body.as_bytes())));
+    let not_modified = request_headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .any(|candidate| candidate == "*" || candidate == etag)
+        });
+    let mut response = if not_modified {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        Response::new(body.into())
+    };
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    if html_security_headers {
+        response.headers_mut().insert(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(
+                "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            ),
+        );
+        response.headers_mut().insert(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        );
+        response.headers_mut().insert(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("camera=(), geolocation=(), microphone=(), payment=()"),
+        );
+    }
+    Ok(response)
+}
+
+fn canonical_base_latest_settlement_round(item: &AutonomousBountyFeedItem) -> Option<u64> {
+    item.events
+        .iter()
+        .rev()
+        .filter(|event| event.kind == AutonomousBountyEventKind::BountySettled)
+        .find_map(canonical_base_event_round)
+        .filter(|round| *round > 0)
+}
+
+fn canonical_base_exact_settlement_event(
+    events: &[AutonomousBountyEvent],
+    round: u64,
+) -> Result<&AutonomousBountyEvent, StatusCode> {
+    let mut matches = events.iter().filter(|event| {
+        event.kind == AutonomousBountyEventKind::BountySettled
+            && canonical_base_event_round(event) == Some(round)
+    });
+    let settlement = matches.next().ok_or(StatusCode::NOT_FOUND)?;
+    if matches.next().is_some() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    Ok(settlement)
+}
+
+async fn canonical_base_optional_submission_evidence(
+    lookup: impl std::future::Future<
+        Output = Result<Option<AutonomousSubmissionEvidenceRecord>, DbError>,
+    >,
+) -> Option<AutonomousSubmissionEvidenceRecord> {
+    lookup.await.ok().flatten()
+}
+
+fn canonical_base_feed_as_of(feed: &[AutonomousBountyFeedItem]) -> DateTime<Utc> {
+    feed.iter()
+        .flat_map(|item| {
+            item.events
+                .iter()
+                .map(|event| event.occurred_at)
+                .chain(item.terms.iter().map(|terms| terms.created_at))
+        })
+        .max()
+        .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).expect("Unix epoch is valid"))
+}
+
+#[utoipa::path(
+    get,
+    path = "/public/base/bounties",
+    responses(
+        (status = 200, description = "Indexable first-party HTML projection of valid canonical Base bounties", content_type = "text/html"),
+        (status = 503, description = "Canonical event store unavailable")
+    )
+)]
+async fn canonical_base_bounty_list_page(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    let feed = load_canonical_base_public_feed(&state).await?;
+    let api = state.public_base_url.trim_end_matches('/');
+    let canonical_url = format!("{api}/public/base/bounties");
+    let generated_at = canonical_base_feed_as_of(&feed).to_rfc3339();
+    let items = feed
+        .iter()
+        .map(|item| {
+            let contract = item.bounty_contract.to_ascii_lowercase();
+            let detail_url = format!("{canonical_url}/{contract}");
+            let settlement_url = canonical_base_latest_settlement_round(item)
+                .map(|round| format!("{detail_url}/settlements/{round}"));
+            web_public::build_canonical_base_bounty_list_item(
+                item,
+                &detail_url,
+                settlement_url.as_deref(),
+            )
+        })
+        .collect();
+    let page = web_public::CanonicalBaseBountyListPage {
+        context: canonical_base_page_context(
+            &state,
+            canonical_url,
+            format!(
+                "{api}/v1/base/autonomous-bounties/feed?network={CANONICAL_BASE_NETWORK}&claimable_only=false"
+            ),
+        ),
+        generated_at,
+        items,
+    };
+    canonical_public_document_response(
+        web_public::render_canonical_base_bounty_list_page(&page),
+        "text/html; charset=utf-8",
+        "public, max-age=30, stale-while-revalidate=120",
+        true,
+        &headers,
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/public/base/bounties/{bounty_contract}",
+    params(("bounty_contract" = String, Path, description = "Canonical Base bounty contract; mixed-case input redirects to lowercase")),
+    responses(
+        (status = 200, description = "Indexable canonical bounty detail", content_type = "text/html"),
+        (status = 308, description = "Lowercase canonical URL"),
+        (status = 400, description = "Malformed contract"),
+        (status = 404, description = "Bounty is unknown or unsafe to index"),
+        (status = 503, description = "Canonical event store unavailable")
+    )
+)]
+async fn canonical_base_bounty_detail_page(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(bounty_contract): Path<String>,
+) -> Result<Response, StatusCode> {
+    let contract = canonical_base_contract(&bounty_contract)?;
+    let api = state.public_base_url.trim_end_matches('/');
+    let canonical_url = format!("{api}/public/base/bounties/{contract}");
+    if bounty_contract != contract {
+        return Ok(Redirect::permanent(&canonical_url).into_response());
+    }
+    let feed = load_canonical_base_feed(&state).await?;
+    let item = feed
+        .iter()
+        .find(|item| item.bounty_contract.eq_ignore_ascii_case(&contract))
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let page = web_public::build_canonical_base_bounty_detail_page(
+        item,
+        canonical_base_page_context(
+            &state,
+            canonical_url,
+            format!(
+                "{api}/v1/base/autonomous-bounties/events?network={CANONICAL_BASE_NETWORK}&bounty_id={}",
+                percent_encode_path_segment(&item.bounty_id)
+            ),
+        ),
+    );
+    let mut response = canonical_public_document_response(
+        web_public::render_canonical_base_bounty_detail_page(&page),
+        "text/html; charset=utf-8",
+        "public, max-age=30, stale-while-revalidate=120",
+        true,
+        &headers,
+    )?;
+    if !canonical_base_public_item(item) {
+        response.headers_mut().insert(
+            HeaderName::from_static("x-robots-tag"),
+            HeaderValue::from_static("noindex, nofollow"),
+        );
+    }
+    Ok(response)
+}
+
+#[utoipa::path(
+    get,
+    path = "/public/base/bounties/{bounty_contract}/settlements/{round}",
+    params(
+        ("bounty_contract" = String, Path, description = "Canonical Base bounty contract"),
+        ("round" = u64, Path, description = "Exact positive settled round")
+    ),
+    responses(
+        (status = 200, description = "Exact canonical BountySettled evidence page", content_type = "text/html"),
+        (status = 308, description = "Lowercase canonical URL"),
+        (status = 400, description = "Malformed contract"),
+        (status = 404, description = "Exact canonical settlement not found"),
+        (status = 503, description = "Canonical evidence store unavailable")
+    )
+)]
+async fn canonical_base_settlement_page(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path((bounty_contract, round)): Path<(String, u64)>,
+) -> Result<Response, StatusCode> {
+    let contract = canonical_base_contract(&bounty_contract)?;
+    let api = state.public_base_url.trim_end_matches('/');
+    let canonical_url = format!("{api}/public/base/bounties/{contract}/settlements/{round}");
+    if bounty_contract != contract {
+        return Ok(Redirect::permanent(&canonical_url).into_response());
+    }
+    if round == 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let feed = load_canonical_base_feed(&state).await?;
+    let item = feed
+        .iter()
+        .find(|item| item.bounty_contract.eq_ignore_ascii_case(&contract))
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let settlement = canonical_base_exact_settlement_event(&item.events, round)?;
+    let evidence = match state.store.as_ref() {
+        Some(store) => {
+            canonical_base_optional_submission_evidence(store.get_autonomous_submission_evidence(
+                CANONICAL_BASE_NETWORK,
+                &contract,
+                round,
+            ))
+            .await
+        }
+        None => None,
+    };
+    let page = web_public::build_canonical_base_settlement_page(
+        item,
+        settlement,
+        evidence.as_ref(),
+        canonical_base_page_context(
+            &state,
+            canonical_url,
+            format!(
+                "{api}/v1/base/autonomous-bounties/events?network={CANONICAL_BASE_NETWORK}&bounty_id={}&kind=bounty_settled&round={round}",
+                percent_encode_path_segment(&item.bounty_id)
+            ),
+        ),
+    )
+    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let cache_control = if page.evidence_preimage.is_some() {
+        "public, max-age=300, stale-while-revalidate=600"
+    } else {
+        "public, max-age=30, stale-while-revalidate=120"
+    };
+    let mut response = canonical_public_document_response(
+        web_public::render_canonical_base_settlement_page(&page),
+        "text/html; charset=utf-8",
+        cache_control,
+        true,
+        &headers,
+    )?;
+    if !canonical_base_public_item(item) {
+        response.headers_mut().insert(
+            HeaderName::from_static("x-robots-tag"),
+            HeaderValue::from_static("noindex, nofollow"),
+        );
+    }
+    Ok(response)
+}
+
+#[utoipa::path(
+    get,
+    path = "/public/base/sitemap.xml",
+    responses(
+        (status = 200, description = "Sitemap for index-safe canonical Base bounty and settlement pages", content_type = "application/xml"),
+        (status = 503, description = "Canonical event store unavailable")
+    )
+)]
+async fn canonical_base_sitemap(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    let feed = load_canonical_base_public_feed(&state).await?;
+    let api = state.public_base_url.trim_end_matches('/');
+    let mut locations = vec![format!("{api}/public/base/bounties")];
+    for item in feed {
+        let contract = item.bounty_contract.to_ascii_lowercase();
+        let detail_url = format!("{api}/public/base/bounties/{contract}");
+        locations.push(detail_url.clone());
+        let mut rounds = item
+            .events
+            .iter()
+            .filter(|event| event.kind == AutonomousBountyEventKind::BountySettled)
+            .filter_map(canonical_base_event_round)
+            .filter(|round| *round > 0)
+            .collect::<Vec<_>>();
+        rounds.sort_unstable();
+        rounds.dedup();
+        locations.extend(
+            rounds
+                .into_iter()
+                .map(|round| format!("{detail_url}/settlements/{round}")),
+        );
+    }
+    let urls = locations
+        .into_iter()
+        .map(|location| {
+            format!(
+                "  <url><loc>{}</loc></url>",
+                web_public::escape_html(&location)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n{urls}\n</urlset>\n"
+    );
+    canonical_public_document_response(
+        body,
+        "application/xml; charset=utf-8",
+        "public, max-age=30, stale-while-revalidate=120",
+        false,
+        &headers,
+    )
 }
 
 #[utoipa::path(
@@ -11374,6 +12147,116 @@ mod tests {
     }
 
     #[test]
+    fn canonical_base_public_documents_are_lowercase_cacheable_and_revalidatable() {
+        let mixed = format!("0x{}", "AB".repeat(20));
+        assert_eq!(
+            canonical_base_contract(&mixed).unwrap(),
+            format!("0x{}", "ab".repeat(20))
+        );
+        assert_eq!(
+            canonical_base_contract("not-a-contract"),
+            Err(StatusCode::BAD_REQUEST)
+        );
+
+        let first = canonical_public_document_response(
+            "stable evidence".to_string(),
+            "application/xml; charset=utf-8",
+            "public, max-age=30",
+            false,
+            &HeaderMap::new(),
+        )
+        .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()["x-content-type-options"], "nosniff");
+        let etag = first.headers()[header::ETAG].clone();
+
+        let mut conditional = HeaderMap::new();
+        conditional.insert(header::IF_NONE_MATCH, etag.clone());
+        let second = canonical_public_document_response(
+            "stable evidence".to_string(),
+            "application/xml; charset=utf-8",
+            "public, max-age=30",
+            false,
+            &conditional,
+        )
+        .unwrap();
+        assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(second.headers()[header::ETAG], etag);
+    }
+
+    #[test]
+    fn canonical_base_settlement_selection_requires_one_exact_positive_round() {
+        let event = |id: u128, kind, round| AutonomousBountyEvent {
+            id: Uuid::from_u128(id),
+            log_key: format!("{id}:0"),
+            tx_hash: format!("0x{id:064x}"),
+            block_number: id as u64,
+            log_index: 0,
+            contract_address: format!("0x{}", "11".repeat(20)),
+            bounty_id: format!("0x{}", "22".repeat(32)),
+            kind,
+            data: serde_json::json!({"round": round}),
+            occurred_at: Utc.with_ymd_and_hms(2026, 7, 20, 18, 0, 0).unwrap(),
+        };
+        let events = vec![
+            event(1, AutonomousBountyEventKind::SubmissionAdded, 2),
+            event(2, AutonomousBountyEventKind::BountySettled, 2),
+        ];
+        assert_eq!(
+            canonical_base_exact_settlement_event(&events, 2)
+                .unwrap()
+                .id,
+            Uuid::from_u128(2)
+        );
+        assert_eq!(
+            canonical_base_exact_settlement_event(&events, 3).unwrap_err(),
+            StatusCode::NOT_FOUND
+        );
+        let duplicated = vec![
+            event(2, AutonomousBountyEventKind::BountySettled, 2),
+            event(3, AutonomousBountyEventKind::BountySettled, 2),
+        ];
+        assert_eq!(
+            canonical_base_exact_settlement_event(&duplicated, 2).unwrap_err(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_base_settlement_ignores_optional_submission_evidence_lookup_errors() {
+        let lookup_result: Result<Option<AutonomousSubmissionEvidenceRecord>, DbError> =
+            Err(DbError::AutonomousEvidenceConflict(
+                "simulated optional evidence lookup failure".to_string(),
+            ));
+
+        let evidence =
+            canonical_base_optional_submission_evidence(async move { lookup_result }).await;
+
+        assert!(evidence.is_none());
+    }
+
+    #[test]
+    fn guild_charter_is_open_by_default_and_truthful_about_unavailable_attestations() {
+        let charter = guild_charter_response();
+        assert_eq!(charter.schema_version, domain::GUILD_DOMAIN_SCHEMA_VERSION);
+        assert_eq!(charter.ranks.first().unwrap().rank, AdventurerRank::F);
+        assert_eq!(charter.ranks.first().unwrap().minimum_reputation_points, 0);
+        assert_eq!(charter.ranks.last().unwrap().rank, AdventurerRank::S);
+        assert_eq!(
+            charter.ranks.last().unwrap().minimum_reputation_points,
+            5_000
+        );
+        assert!(charter.default_access.contains("Open to unaffiliated"));
+        assert!(!charter.trust_review_mutations_available);
+        assert!(!charter.mission_eligibility_publishing_available);
+        assert!(!charter.party_mutations_available);
+        assert!(!charter.affiliation_verification_available);
+        assert!(!charter.other_asset_delivery_verification_available);
+        assert!(charter.enforcement_boundary.contains("direct wallet claim"));
+        assert!(charter.payment_evidence_boundary.contains("BountySettled"));
+    }
+
+    #[test]
     fn cloud_agent_errors_are_machine_readable_and_provider_safe() {
         let (status, Json(error)) = cloud_agent_api_error(CloudAgentError::InvalidResponse(
             "objective task dependencies contain a cycle".to_string(),
@@ -11399,17 +12282,37 @@ mod tests {
             header::ORIGIN,
             HeaderValue::from_static("https://agentbounties.app"),
         );
-        assert!(site_analytics_origin_allowed(&headers));
+        assert_eq!(
+            site_analytics_site_host(&headers),
+            Some("agentbounties.app")
+        );
         headers.insert(
             header::ORIGIN,
             HeaderValue::from_static("https://bountyboard.global"),
         );
-        assert!(site_analytics_origin_allowed(&headers));
+        assert_eq!(
+            site_analytics_site_host(&headers),
+            Some("bountyboard.global")
+        );
         headers.insert(
             header::ORIGIN,
             HeaderValue::from_static("https://agentbounties.app.evil.example"),
         );
-        assert!(!site_analytics_origin_allowed(&headers));
+        assert_eq!(site_analytics_site_host(&headers), None);
+
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://www.agentbounties.app"),
+        );
+        assert_eq!(
+            site_analytics_site_host(&headers),
+            Some("agentbounties.app")
+        );
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://127.0.0.1:4173"),
+        );
+        assert_eq!(site_analytics_site_host(&headers), Some("localhost"));
 
         let now = Utc.with_ymd_and_hms(2026, 7, 19, 18, 0, 0).unwrap();
         let event = validated_site_analytics_event(
@@ -11424,14 +12327,76 @@ mod tests {
                 referrer_host: Some("GitHub.com".to_string()),
                 opportunity_id: Some("canonical_base:base-mainnet:0xabc".to_string()),
                 bounty_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+                placement: Some("Earn-Hero".to_string()),
+                variant: Some("Control".to_string()),
+                opportunity_class: Some("Funded-Claimable".to_string()),
+                current_source: Some("Farcaster".to_string()),
+                current_campaign: Some("market-launch".to_string()),
+                current_referrer_host: Some("Warpcast.com".to_string()),
                 occurred_at: now,
             },
+            "agentbounties.app",
             now,
         )
         .unwrap();
         assert_eq!(event.source.as_deref(), Some("github"));
         assert_eq!(event.referrer_host.as_deref(), Some("github.com"));
+        assert_eq!(event.placement.as_deref(), Some("earn-hero"));
+        assert_eq!(event.current_source.as_deref(), Some("farcaster"));
+        assert_eq!(event.current_referrer_host.as_deref(), Some("warpcast.com"));
+        assert_eq!(event.site_host, "agentbounties.app");
         assert_eq!(event.page_path, "/earn.html");
+    }
+
+    #[test]
+    fn site_analytics_response_exposes_only_aggregate_allowlisted_host_counts() {
+        let generated_at = Utc.with_ymd_and_hms(2026, 7, 20, 18, 0, 0).unwrap();
+        let stats = SiteAnalyticsStats {
+            overview: db::SiteAnalyticsOverview {
+                unique_visitors: 2,
+                returning_visitors: 0,
+                sessions: 2,
+                page_views: 3,
+                first_event_at: Some(generated_at - ChronoDuration::hours(2)),
+                last_event_at: Some(generated_at - ChronoDuration::hours(1)),
+            },
+            event_counts: Vec::new(),
+            daily: Vec::new(),
+            channels: Vec::new(),
+            current_channels: Vec::new(),
+            contexts: Vec::new(),
+            hosts: vec![db::SiteAnalyticsHostStats {
+                site_host: "agentbounties.app".to_string(),
+                events: 5,
+                visitors: 2,
+                sessions: 2,
+                page_views: 3,
+                market_views: 1,
+                opportunity_exposures: 1,
+                funded_bounty_clicks: 1,
+                canonical_posts_confirmed: 0,
+                funding_starts: 0,
+                claims_confirmed: 0,
+            }],
+            ordered_conversions: Vec::new(),
+        };
+
+        let response = site_analytics_response(
+            stats,
+            24,
+            generated_at - ChronoDuration::hours(24),
+            generated_at,
+        );
+        assert_eq!(response.hosts.len(), 1);
+        assert_eq!(response.hosts[0].site_host, "agentbounties.app");
+        assert_eq!(response.hosts[0].funded_bounty_clicks, 1);
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(!json.contains("event_id"));
+        assert!(!json.contains("visitor_id"));
+        assert!(!json.contains("session_id"));
+        assert!(response
+            .evidence_boundary
+            .contains("can be blocked, replayed, or spoofed"));
     }
 
     #[test]
@@ -11478,14 +12443,41 @@ mod tests {
             referrer_host: None,
             opportunity_id: None,
             bounty_contract: None,
+            placement: None,
+            variant: None,
+            opportunity_class: None,
+            current_source: None,
+            current_campaign: None,
+            current_referrer_host: None,
             occurred_at,
         };
-        assert!(
-            validated_site_analytics_event(request("page_view", "/?secret=1", now), now).is_err()
-        );
-        assert!(validated_site_analytics_event(request("arbitrary", "/", now), now).is_err());
+        assert!(validated_site_analytics_event(
+            request("page_view", "/?secret=1", now),
+            "agentbounties.app",
+            now
+        )
+        .is_err());
+        assert!(validated_site_analytics_event(
+            request("arbitrary", "/", now),
+            "agentbounties.app",
+            now
+        )
+        .is_err());
+        assert!(validated_site_analytics_event(
+            request("opportunity_exposed", "/earn.html", now),
+            "agentbounties.app",
+            now,
+        )
+        .is_err());
         assert!(validated_site_analytics_event(
             request("page_view", "/", now - ChronoDuration::days(8)),
+            "agentbounties.app",
+            now,
+        )
+        .is_err());
+        assert!(validated_site_analytics_event(
+            request("page_view", "/", now),
+            "attacker.example",
             now,
         )
         .is_err());
@@ -13912,11 +14904,17 @@ mod tests {
         assert!(paths.contains_key("/v1/opportunities/conversion-funnel"));
         assert!(paths.contains_key("/v1/analytics/events"));
         assert!(paths.contains_key("/v1/analytics/site"));
+        assert!(paths.contains_key("/v1/guild/charter"));
+        assert!(paths.contains_key("/v1/guild/adventurers/{agent_id}"));
         assert!(paths.contains_key("/v1/discovery/subscriptions"));
         assert!(paths.contains_key("/v1/discovery/subscriptions/{id}"));
         assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed"));
         assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed.svg"));
         assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed.md"));
+        assert!(paths.contains_key("/public/base/bounties"));
+        assert!(paths.contains_key("/public/base/bounties/{bounty_contract}"));
+        assert!(paths.contains_key("/public/base/bounties/{bounty_contract}/settlements/{round}"));
+        assert!(paths.contains_key("/public/base/sitemap.xml"));
         assert!(paths.contains_key("/v1/base/autonomous-bounties/{bounty_contract}/analysis"));
         assert!(paths.contains_key("/v1/unfunded-bounties"));
         assert!(paths.contains_key("/v1/unfunded-bounties/{id}"));

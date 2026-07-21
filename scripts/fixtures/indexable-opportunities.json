@@ -1,0 +1,167 @@
+{
+  "schema_version": "agent-bounties/opportunity-projection-v1",
+  "generated_at": "2026-07-20T20:00:00Z",
+  "network": "base-mainnet",
+  "applied_view": "all",
+  "degraded": false,
+  "source_statuses": [
+    {
+      "source_type": "canonical_base",
+      "available": true,
+      "authoritative_urls": [
+        "https://api.agentbounties.app/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false"
+      ],
+      "item_count": 3,
+      "error": null
+    }
+  ],
+  "items": [
+    {
+      "opportunity_id": "canonical:base-mainnet:0x1111111111111111111111111111111111111111",
+      "source_type": "canonical_base",
+      "source_id": "0x1111111111111111111111111111111111111111",
+      "source_status": "claimable",
+      "title": "Publish a verified integration fixture",
+      "goal": "Add a deterministic integration fixture and publish its exact passing check evidence.",
+      "public_url": "https://github.com/NSPG13/agent-bounties/issues/501",
+      "source_url": "https://github.com/NSPG13/agent-bounties/issues/501",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "standing_meta_bounty": false,
+      "reward": {
+        "amount": "900000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "completion_bonus": {
+        "amount": "0",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funded_amount": {
+        "amount": "1000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funding_target": {
+        "amount": "1000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "bond": {
+        "amount": "100000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "verification_ready": true,
+      "proof_urls": [],
+      "updated_at": "2026-07-20T19:59:00Z",
+      "evidence_boundary": "Only a confirmed canonical BountySettled event proves solver payment."
+    },
+    {
+      "opportunity_id": "canonical:base-mainnet:0x2222222222222222222222222222222222222222",
+      "source_type": "canonical_base",
+      "source_id": "0x2222222222222222222222222222222222222222",
+      "source_status": "claimable",
+      "title": "Seed a paid distribution child bounty",
+      "goal": "Create and fund qualifying work that another registered participant completes and settles.",
+      "public_url": "https://github.com/NSPG13/agent-bounties/issues/502",
+      "source_url": "https://github.com/NSPG13/agent-bounties/issues/502",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "standing_meta_bounty": true,
+      "reward": {
+        "amount": "1800000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "completion_bonus": {
+        "amount": "100000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funded_amount": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funding_target": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "bond": {
+        "amount": "200000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "verification_ready": true,
+      "proof_urls": [],
+      "updated_at": "2026-07-20T19:58:00Z",
+      "evidence_boundary": "Only a confirmed canonical BountySettled event proves solver payment."
+    },
+    {
+      "opportunity_id": "canonical:base-mainnet:0x3333333333333333333333333333333333333333",
+      "source_type": "canonical_base",
+      "source_id": "0x3333333333333333333333333333333333333333",
+      "source_status": "paid",
+      "title": "Repair the canonical feed smoke test",
+      "goal": "Repair the deterministic feed smoke test and publish the confirmed settlement evidence.",
+      "public_url": "https://github.com/NSPG13/agent-bounties/issues/503",
+      "source_url": "https://github.com/NSPG13/agent-bounties/issues/503",
+      "work_state": "completed",
+      "payment_state": "paid",
+      "payment_committed": true,
+      "standing_meta_bounty": false,
+      "reward": {
+        "amount": "2500000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "completion_bonus": {
+        "amount": "0",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funded_amount": {
+        "amount": "2750000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funding_target": {
+        "amount": "2750000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "bond": {
+        "amount": "250000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "verification_ready": true,
+      "proof_urls": [
+        "https://api.agentbounties.app/v1/base/autonomous-bounties/events?network=base-mainnet&bounty_id=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "updated_at": "2026-07-20T18:00:00Z",
+      "evidence_boundary": "Only a confirmed canonical BountySettled event proves solver payment."
+    }
+  ],
+  "evidence_boundary": "This projection is read-only. Only confirmed canonical BountySettled events prove autonomous-v1 solver payment."
+}

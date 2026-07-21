@@ -10,6 +10,10 @@
   --accent-strong: #064f44;
   --dark: #171b1c;
   --dark-muted: #9fb3b8;
+  --parchment: #f1e7cf;
+  --parchment-deep: #e2d2ae;
+  --brass: #a77a35;
+  --brass-dark: #6f4b18;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -364,6 +368,169 @@ h3 {
   gap: 28px;
   max-width: 1180px;
   margin: 0 auto;
+}
+
+.indexable-snapshot {
+  display: contents;
+}
+
+.snapshot-status {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.bounty-feed[data-feed-health="delayed"] {
+  border-color: #d6b36b;
+}
+
+.guild-hall {
+  border-top: 1px solid #c8aa73;
+  border-bottom: 1px solid #c8aa73;
+  background:
+    linear-gradient(90deg, rgba(167, 122, 53, 0.08) 1px, transparent 1px) 0 0 / 72px 72px,
+    linear-gradient(var(--parchment), #f6efdf);
+}
+
+.guild-hall .eyebrow {
+  color: var(--brass-dark);
+}
+
+.guild-intro {
+  max-width: 520px;
+  color: #534936;
+  font-size: 18px;
+  line-height: 1.7;
+}
+
+.guild-intro a {
+  color: var(--brass-dark);
+  font-weight: 800;
+}
+
+.guild-ledger {
+  border-top: 3px double var(--brass);
+  border-bottom: 3px double var(--brass);
+}
+
+.guild-rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: center;
+  padding: 20px 0;
+  border-bottom: 1px solid rgba(111, 75, 24, 0.28);
+}
+
+.guild-rule h3,
+.guild-rule p {
+  margin: 0;
+}
+
+.guild-rule p,
+.guild-affiliation p,
+.guild-data-boundary,
+.guild-route {
+  color: #554a36;
+  line-height: 1.6;
+}
+
+.guild-scale {
+  display: flex;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guild-scale li {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--brass);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.46);
+  color: var(--brass-dark);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.guild-scale li:last-child {
+  background: var(--dark);
+  color: #f0f4c3;
+}
+
+.difficulty-scale li:last-child {
+  border-color: #7c402d;
+  background: #7c402d;
+}
+
+.trust-scale {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--brass-dark) !important;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.guild-assets {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.guild-assets li {
+  padding: 7px 10px;
+  border: 1px solid var(--brass);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.46);
+  color: var(--brass-dark);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.guild-eligibility {
+  grid-template-columns: 1fr;
+}
+
+.guild-affiliation {
+  margin: 20px 0 0;
+  padding: 18px 20px;
+  border-left: 4px solid var(--brass);
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.guild-affiliation p:last-child,
+.guild-data-boundary {
+  margin-bottom: 0;
+}
+
+.guild-status strong {
+  color: var(--brass-dark);
+}
+
+.guild-data-boundary {
+  margin-top: 18px;
+  font-size: 14px;
+}
+
+.guild-route {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-left: 3px solid var(--brass);
+  background: var(--parchment);
+  font-size: 14px;
+}
+
+.guild-route a {
+  color: var(--accent-strong);
+  font-weight: 800;
 }
 
 .opportunity-board.market-update {
@@ -1202,6 +1369,10 @@ code {
   .feed-layout,
   .inventory-head,
   .home-bounty-feed {
+    grid-template-columns: 1fr;
+  }
+
+  .guild-rule {
     grid-template-columns: 1fr;
   }
 

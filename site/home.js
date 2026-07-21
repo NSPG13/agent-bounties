@@ -10,6 +10,7 @@
     protocolPromise: null,
     refreshing: false,
     rendered: false,
+    staticSnapshotVisible: false,
     status: "connecting",
   };
   const reduceMotion = window.matchMedia
@@ -96,9 +97,52 @@
     return "View opportunity";
   }
 
-  function appendOpportunity(container, item) {
+  function liveCanonicalAnalyticsContext(item, placementKey) {
+    const contract = typeof item.source_id === "string" ? item.source_id.toLowerCase() : "";
+    const opportunityId = typeof item.opportunity_id === "string" ? item.opportunity_id : "";
+    if (
+      item.source_type !== "canonical_base"
+      || !/^0x[0-9a-f]{40}$/.test(contract)
+      || !/^[A-Za-z0-9:._-]{1,200}$/.test(opportunityId)
+    ) {
+      return null;
+    }
+    const opportunityClass = item.work_state === "claimable"
+      && item.payment_state === "escrowed"
+      && item.payment_committed
+      && item.verification_ready
+      ? "funded-claimable"
+      : item.work_state === "completed" && item.payment_state === "paid"
+        ? "canonically-settled"
+        : item.payment_state === "seeking_funding"
+          ? "seeking-funding"
+          : ["in_progress", "submitted"].includes(item.work_state)
+            ? "work-in-progress"
+            : "canonical-open";
+    return {
+      opportunityId,
+      bountyContract: contract,
+      placement: `homepage-${placementKey}`,
+      variant: "live-evidence-v1",
+      opportunityClass,
+    };
+  }
+
+  function applyAnalyticsContext(element, context, includeExposure = false) {
+    if (!context) return;
+    if (includeExposure) element.dataset.analyticsExposure = "opportunity_exposed";
+    element.dataset.analyticsOpportunityId = context.opportunityId;
+    element.dataset.analyticsBountyContract = context.bountyContract;
+    element.dataset.analyticsPlacement = context.placement;
+    element.dataset.analyticsVariant = context.variant;
+    element.dataset.analyticsOpportunityClass = context.opportunityClass;
+  }
+
+  function appendOpportunity(container, item, placementKey) {
     const article = document.createElement("article");
     article.className = "bounty-row home-bounty-row";
+    const analyticsContext = liveCanonicalAnalyticsContext(item, placementKey);
+    applyAnalyticsContext(article, analyticsContext, true);
 
     const state = document.createElement("p");
     state.className = `opportunity-state opportunity-state-${item.payment_state}`;
@@ -145,10 +189,9 @@
       action.className = "button primary";
       action.href = href;
       action.textContent = actionLabel(item);
-      if (item.source_type === "canonical_base" && item.work_state === "claimable" && item.payment_committed) {
+      if (analyticsContext && analyticsContext.opportunityClass === "funded-claimable") {
         action.dataset.analyticsEvent = "funded_bounty_click";
-        action.dataset.analyticsOpportunityId = item.opportunity_id;
-        action.dataset.analyticsBountyContract = item.source_id;
+        applyAnalyticsContext(action, analyticsContext);
       }
       actions.append(action);
     }
@@ -235,7 +278,7 @@
       empty.textContent = "No matching opportunity is currently visible.";
       feed.append(empty);
     } else {
-      items.forEach((item) => appendOpportunity(feed, item));
+      items.forEach((item) => appendOpportunity(feed, item, definition.key));
     }
     section.append(feed);
     container.append(section);
@@ -302,6 +345,7 @@
     if (fingerprint === marketState.fingerprint) return;
     marketState.fingerprint = fingerprint;
     container.textContent = "";
+    marketState.staticSnapshotVisible = false;
     opportunitySections.forEach((definition) => {
       appendSection(container, definition, items.filter(definition.matches));
     });
@@ -323,6 +367,17 @@
       updated.dateTime = marketState.evidenceGeneratedAt.toISOString();
     }
     if (!marketState.lastReceivedAt) {
+      if (marketState.staticSnapshotVisible && marketState.evidenceGeneratedAt) {
+        const snapshotTime = marketState.evidenceGeneratedAt.toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+          timeZone: "UTC",
+        });
+        updated.textContent = marketState.refreshing
+          ? `Snapshot as of ${snapshotTime} UTC · checking live canonical state`
+          : `Live check delayed · snapshot as of ${snapshotTime} UTC remains visible`;
+        return;
+      }
       updated.textContent = marketState.status === "delayed"
         ? "Live feed unavailable · retrying automatically"
         : "Connecting to live evidence...";
@@ -375,12 +430,37 @@
     return latest && safePublicUrl((latest.proof_urls || [])[0] || latest.public_url);
   }
 
+  function requireLiveMarketEvidence(projection, claim) {
+    const canonicalSource = Array.isArray(projection && projection.source_statuses)
+      ? projection.source_statuses.find((source) => source.source_type === "canonical_base")
+      : null;
+    const settlements = claim && claim.canonical_outcomes
+      ? Number(claim.canonical_outcomes.settlements_confirmed)
+      : NaN;
+    if (
+      !projection
+      || projection.schema_version !== "agent-bounties/opportunity-projection-v1"
+      || projection.network !== "base-mainnet"
+      || !Array.isArray(projection.items)
+      || !canonicalSource
+      || canonicalSource.available !== true
+      || !claim
+      || claim.schema_version !== "agent-bounties/claim-funnel-v2"
+      || claim.window_hours !== MARKET_WINDOW_HOURS
+      || !Number.isSafeInteger(settlements)
+      || settlements < 0
+    ) {
+      throw new Error("Live canonical market evidence failed validation.");
+    }
+    return projection.items;
+  }
+
   function renderMarketSnapshot(protocol, projection, claim) {
     const container = document.getElementById("home-live-inventory");
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
     const detail = document.querySelector("[data-home-inventory-detail]");
     const proof = document.querySelector("[data-market-proof]");
-    const items = projection.items || [];
+    const items = requireLiveMarketEvidence(projection, claim);
     const readyDefinition = opportunitySections.find((definition) => definition.key === "ready");
     const readyItems = items.filter(readyDefinition.matches);
     const referenceAt = new Date(claim.generated_at || projection.generated_at);
@@ -423,7 +503,7 @@
   async function refreshMarket() {
     if (marketState.refreshing) return;
     marketState.refreshing = true;
-    setMarketStatus(marketState.rendered ? "refreshing" : "connecting");
+    setMarketStatus(marketState.rendered || marketState.staticSnapshotVisible ? "refreshing" : "connecting");
     const container = document.getElementById("home-live-inventory");
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
     const detail = document.querySelector("[data-home-inventory-detail]");
@@ -449,10 +529,12 @@
       setMarketStatus(projection.degraded ? "delayed" : "live");
     } catch (error) {
       setMarketStatus("delayed");
-      if (!marketState.rendered) {
+      if (!marketState.rendered && !marketState.staticSnapshotVisible) {
         container.textContent = "Opportunity discovery could not be loaded. Use the authoritative unfunded and canonical feeds directly; use the portable skill for a Base safe-block check.";
         heroSummary.textContent = "Live market feed unavailable · retrying automatically";
         detail.textContent = error.message || String(error);
+      } else if (!marketState.rendered) {
+        detail.textContent = "Live check delayed. The timestamped canonical snapshot remains visible; its links only open inspection surfaces and cannot authorize a wallet action.";
       } else {
         detail.textContent = "Live feed delayed. Last confirmed market snapshot remains visible while the page retries automatically.";
       }
@@ -463,7 +545,17 @@
   }
 
   function loadInventory() {
-    if (!document.getElementById("home-live-inventory")) return;
+    const board = document.getElementById("home-live-inventory");
+    if (!board) return;
+    const snapshot = board.querySelector("[data-indexable-snapshot][data-snapshot-generated-at]");
+    if (snapshot && snapshot.dataset.snapshotGeneratedAt) {
+      const generatedAt = new Date(snapshot.dataset.snapshotGeneratedAt);
+      if (Number.isFinite(generatedAt.getTime())) {
+        marketState.staticSnapshotVisible = true;
+        marketState.evidenceGeneratedAt = generatedAt;
+        setMarketStatus("delayed");
+      }
+    }
     refreshMarket();
     window.setInterval(() => {
       if (!document.hidden) refreshMarket();

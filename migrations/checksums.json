@@ -12,6 +12,7 @@
     "0008_opportunity_conversion.sql": "9dafe45f931943067b906d3e551f4f72536d78d0cda6591b6595414ee6ce365e",
     "0009_legal_acceptances.sql": "6848f259d1f37ad9e2869e5df1446141a273a6c031f120e71040a42a269fd6a9",
     "0010_site_analytics.sql": "b44d10b224408a799cb79a5f3ea36f800b4e292793096b702e745bc4365546ed",
-    "0011_social_mention_ingestion.sql": "c6491c713224911dfffcf3d00cac6db5dea8573ce93afdce1734667bcff040fa"
+    "0011_social_mention_ingestion.sql": "c6491c713224911dfffcf3d00cac6db5dea8573ce93afdce1734667bcff040fa",
+    "0012_site_analytics_context.sql": "5cff05529972e669fd33b7f659623be6eb30e10df1b3bc5be67bc21019bb6210"
   }
 }

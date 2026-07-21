@@ -5,8 +5,10 @@ use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+mod guild;
 mod leaderboard;
 
+pub use guild::*;
 pub use leaderboard::*;
 
 pub type Id = Uuid;

@@ -1,0 +1,15 @@
+{
+  "schema_version": "agent-bounties/claim-funnel-v2",
+  "window_hours": 720,
+  "window_started_at": "2026-06-20T20:00:00Z",
+  "generated_at": "2026-07-20T20:00:00Z",
+  "stages": {},
+  "sponsorship": {},
+  "canonical_outcomes": {
+    "claims_confirmed": 9,
+    "submissions_confirmed": 8,
+    "settlements_confirmed": 7
+  },
+  "failure_codes": {},
+  "evidence_boundary": "Hosted coordination is advisory; only canonical BountySettled events prove payout."
+}

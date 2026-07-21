@@ -1,6 +1,6 @@
 {
   "schema_version": "agent-bounties/mcp-tool-registry-v1",
-  "normalized_descriptors_sha256": "715e703da780a5d867fa4b6310ba78e0f1eee87c465e7a14e6f81c3a41f7a0dd",
+  "normalized_descriptors_sha256": "376d503261a021562658202f915eb17a8ea31badf7898806dedc02bc452a265a",
   "tools": [
     "route_blocked_goal",
     "prepare_bounty_post",
@@ -80,6 +80,8 @@
     "delete_discovery_subscription",
     "get_opportunity_conversion_funnel",
     "get_site_analytics",
+    "get_guild_charter",
+    "get_guild_adventurer_profile",
     "analyze_bounty_fit",
     "list_autonomous_verification_jobs",
     "run_bountybench",
