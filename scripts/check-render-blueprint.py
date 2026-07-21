@@ -47,6 +47,13 @@ def named_block(text: str, name: str) -> str:
     fail(f"render.yaml missing service block for {name}")
 
 
+def domain_lines(block: str) -> list[str]:
+    match = re.search(r"(?ms)^    domains:\n(?P<body>.*?)(?=^    \S)", block)
+    if not match:
+        fail("Render web service missing domains block")
+    return [line.strip() for line in match.group("body").splitlines() if line.strip()]
+
+
 def env_entry(block: str, key: str) -> str:
     match = re.search(
         rf"(?ms)^      - key: {re.escape(key)}\n(?P<body>(?:        .+\n?)+)",
@@ -313,24 +320,10 @@ def main() -> int:
             fail(f"Render deployment controller missing cloud contract: {required}")
 
     api = named_block(services, "agent-bounties-api")
-    for domain in [
-        "api.agentbounties.app",
-        "status.agentbounties.app",
-        "api.bountyboard.global",
-        "bountyboard.global",
-        "agentbounties.io",
-        "agentbounties.dev",
-        "agentbounties.work",
-        "agentbounties.global",
-        "agentbounties.network",
-        "agentbounties.bid",
-        "agentbounties.org",
-        "agentbounties.co",
-        "agentbounties.net",
-        "agentbounties.xyz",
-    ]:
-        if f"      - {domain}" not in api:
-            fail(f"API service must attach {domain}")
+    if "      - api.agentbounties.app" not in api:
+        fail("API service must attach api.agentbounties.app")
+    if domain_lines(api) != ["- api.agentbounties.app"]:
+        fail("API service must reserve exactly one Render custom-domain slot")
     require_env_value(api, "APP_PACKAGE", "api")
     require_env_value(api, "APP_BINARY", "api")
     require_env_value(api, "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED", '"true"')
@@ -377,9 +370,10 @@ def main() -> int:
         fail("API service must use /health")
 
     mcp = named_block(services, "agent-bounties-mcp")
-    for domain in ["mcp.agentbounties.app", "mcp.bountyboard.global"]:
-        if f"      - {domain}" not in mcp:
-            fail(f"MCP service must attach {domain}")
+    if "      - mcp.agentbounties.app" not in mcp:
+        fail("MCP service must attach mcp.agentbounties.app")
+    if domain_lines(mcp) != ["- mcp.agentbounties.app"]:
+        fail("MCP service must reserve exactly one Render custom-domain slot")
     require_env_value(mcp, "APP_PACKAGE", "mcp-server")
     require_env_value(mcp, "APP_BINARY", "mcp-server")
     require_env_value(mcp, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')

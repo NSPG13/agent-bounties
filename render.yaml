@@ -67,19 +67,6 @@ services:
     name: agent-bounties-api
     domains:
       - api.agentbounties.app
-      - status.agentbounties.app
-      - api.bountyboard.global
-      - bountyboard.global
-      - agentbounties.io
-      - agentbounties.dev
-      - agentbounties.work
-      - agentbounties.global
-      - agentbounties.network
-      - agentbounties.bid
-      - agentbounties.org
-      - agentbounties.co
-      - agentbounties.net
-      - agentbounties.xyz
     runtime: docker
     plan: starter
     region: oregon
@@ -198,7 +185,6 @@ services:
     name: agent-bounties-mcp
     domains:
       - mcp.agentbounties.app
-      - mcp.bountyboard.global
     runtime: docker
     plan: starter
     region: oregon

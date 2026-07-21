@@ -37,26 +37,10 @@ FAILED_STATUSES = {
 }
 TRANSIENT_HTTP_STATUSES = {429, 500, 503}
 CUSTOM_DOMAINS = {
-    "agent-bounties-api": (
-        "api.agentbounties.app",
-        "status.agentbounties.app",
-        "api.bountyboard.global",
-        "bountyboard.global",
-        "agentbounties.io",
-        "agentbounties.dev",
-        "agentbounties.work",
-        "agentbounties.global",
-        "agentbounties.network",
-        "agentbounties.bid",
-        "agentbounties.org",
-        "agentbounties.co",
-        "agentbounties.net",
-        "agentbounties.xyz",
-    ),
-    "agent-bounties-mcp": (
-        "mcp.agentbounties.app",
-        "mcp.bountyboard.global",
-    ),
+    # Render Hobby permits two custom domains per workspace. Keep runtime
+    # domains here; marketing and legacy hosts redirect at the DNS edge.
+    "agent-bounties-api": ("api.agentbounties.app",),
+    "agent-bounties-mcp": ("mcp.agentbounties.app",),
 }
 PUBLIC_ENV_SERVICE_NAMES = {
     "agent-bounties-api",
@@ -586,6 +570,31 @@ class RenderClient:
         if not isinstance(custom_domain, dict) or str(custom_domain.get("name", "")).lower() != domain.lower():
             raise RecoveryError(f"Render did not attach {domain} to {service['name']}")
         return custom_domain
+
+    def reconcile_custom_domains(
+        self, service: dict[str, Any], domains: tuple[str, ...]
+    ) -> list[dict[str, Any]]:
+        service_id = service["id"]
+        desired = {domain.lower() for domain in domains}
+        existing = unwrap_custom_domains(
+            self._read_with_retry(f"/services/{service_id}/custom-domains?limit=100")
+        )
+        names = [str(item.get("name", "")) for item in existing]
+        if len({name.lower() for name in names}) != len(names):
+            raise RecoveryError(f"{service['name']} has duplicate Render custom domains")
+
+        # Delete obsolete aliases first so a plan-level domain cap cannot block
+        # attaching the canonical replacement. The onrender.com origin remains
+        # available throughout this control-plane migration.
+        for name in names:
+            if name.lower() not in desired:
+                encoded_name = urllib.parse.quote(name, safe="")
+                self._request_json(
+                    "DELETE",
+                    f"/services/{service_id}/custom-domains/{encoded_name}",
+                )
+
+        return [self.ensure_custom_domain(service, domain) for domain in domains]
 
     def ensure_env_var(
         self,
@@ -1392,8 +1401,10 @@ def deploy(
 
     custom_domains = []
     for spec, service in services:
-        for domain in CUSTOM_DOMAINS.get(spec.name, ()):
-            record = client.ensure_custom_domain(service, domain)
+        domains = CUSTOM_DOMAINS.get(spec.name, ())
+        for domain, record in zip(
+            domains, client.reconcile_custom_domains(service, domains), strict=True
+        ):
             custom_domains.append(
                 {
                     "service": spec.name,
