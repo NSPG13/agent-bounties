@@ -396,6 +396,10 @@
   text-shadow: 0 4px 26px rgba(0, 0, 0, 0.38);
 }
 
+.guild-hero h1 .title-nowrap {
+  white-space: nowrap;
+}
+
 .guild-hero h1 em {
   color: var(--guild-lime);
   font-weight: 500;
