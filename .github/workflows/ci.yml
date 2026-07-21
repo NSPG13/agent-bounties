@@ -109,3 +109,4 @@ jobs:
           cargo test -p api github_issue_api_sync_postgres -- --ignored --nocapture
           cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
           cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture
+          cargo test -p db tests::competitor_intelligence_migration_executes_against_migrated_postgres -- --ignored --exact --nocapture
