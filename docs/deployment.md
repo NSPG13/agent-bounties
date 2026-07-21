@@ -148,6 +148,63 @@ The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
 implementation, and Base RPC configuration. Canonical planners fail closed
 without Postgres and the active protocol addresses.
 
+### Recover a hosted API that returns 404
+
+Run the deterministic public probe against the URL shown in Render, not a URL
+copied from an old issue or deployment record:
+
+```powershell
+python scripts\diagnose_hosted_api.py `
+  --base-url https://agent-bounties-api.onrender.com `
+  --json-out target\operations\hosted-api-diagnosis.json `
+  --md-out target\operations\hosted-api-diagnosis.md
+```
+
+The command checks DNS and the three public contracts required by the funding
+page: `/health` must return the exact body `ok`, while
+`/v1/readiness/live-money` and `/v1/bounties/funding-feed` must return JSON. A
+nonzero exit is expected until all three contracts pass. A 200 response with a
+static HTML body is classified as a route mismatch rather than healthy.
+
+For an all-404 result, repair in this order:
+
+1. In Render, open **Blueprints** and apply the repository-root `render.yaml`
+   from `NSPG13/agent-bounties` on branch `main`. If the Blueprint does not
+   exist, use **New > Blueprint**, connect the repository, and apply it.
+2. Confirm the Blueprint created the Docker web service
+   `agent-bounties-api`. Its settings must point at `./Dockerfile`, use the
+   repository root as Docker context, and use `/health` as the health check.
+3. Confirm the service variables are `APP_PACKAGE=api` and `APP_BINARY=api`.
+   A worker or MCP binary on this hostname does not expose the funding routes.
+4. Copy the service's current `onrender.com` URL from **Settings** and rerun the
+   diagnostic against it. Do not infer the hostname from the service name.
+5. If the Render URL passes, attach and verify `api.bountyboard.global`, set
+   `PUBLIC_BASE_URL=https://api.bountyboard.global` and
+   `MCP_BASE_URL=https://mcp.bountyboard.global`, then set the repository
+   Actions variable `PRODUCTION_API_BASE_URL` to the verified API URL.
+6. Run `python scripts\check-render-blueprint.py`, dispatch **Render Deploy
+   Recovery** for the latest successful `main` revision, and rerun the
+   diagnostic plus the production smoke check.
+
+The API starts with public Stripe Checkout disabled. After reachability is
+repaired, configure these API-service values in Render:
+
+```text
+STRIPE_SECRET_KEY=sk_test_...                 # secret; use test mode first
+STRIPE_WEBHOOK_SECRET=whsec_...               # secret; signed endpoint
+STRIPE_API_BASE_URL=                           # empty means Stripe default
+STRIPE_PAYMENT_METHOD_CONFIGURATION=          # optional PayPal-capable Dashboard configuration
+OPERATOR_API_TOKEN=<generated secret>
+ENABLE_STRIPE_LIVE_EXECUTION=true
+ENABLE_STRIPE_PUBLIC_CHECKOUT=true
+ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false
+```
+
+Keep both enable flags false until the signed webhook, limits, and test-mode
+rehearsal in [`live-money-activation.md`](live-money-activation.md) pass. Health
+or readiness success is reachability evidence only: it does not create funding,
+credit a balance, authorize payout, or prove a bounty is payable.
+
 ## Environment
 
 Non-secret protocol settings:

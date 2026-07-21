@@ -29,6 +29,7 @@ CHECK_PATHS = [
     "/v1/readiness/live-money",
     "/v1/bounties/funding-feed",
 ]
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 @dataclass
@@ -65,14 +66,31 @@ def fetch(url: str, timeout: float = 20.0) -> PathResult:
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read(500)
-            preview = raw.decode("utf-8", errors="replace")
+            raw = resp.read(MAX_RESPONSE_BYTES + 1)
+            body = raw.decode("utf-8", errors="replace")
+            preview = body[:200]
+            status_ok = 200 <= resp.status < 300
+            body_ok = len(raw) <= MAX_RESPONSE_BYTES
+            body_error = None if body_ok else "response exceeds 4 MiB diagnostic limit"
+            if body_ok and path == "/health":
+                body_ok = body.strip() == "ok"
+                if not body_ok:
+                    body_error = "expected body 'ok'"
+            elif body_ok and path in {
+                "/v1/readiness/live-money",
+                "/v1/bounties/funding-feed",
+            }:
+                try:
+                    json.loads(body)
+                except json.JSONDecodeError:
+                    body_ok = False
+                    body_error = "expected JSON body"
             return PathResult(
                 path=path,
-                ok=200 <= resp.status < 300,
+                ok=status_ok and body_ok,
                 status=resp.status,
-                error=None,
-                body_preview=preview[:200],
+                error=body_error,
+                body_preview=preview,
             )
     except urllib.error.HTTPError as exc:
         try:
@@ -237,9 +255,22 @@ def diagnose(base_url: str) -> Diagnosis:
         )
 
     if not d.likely_causes:
-        d.overall = "degraded"
-        d.likely_causes.append("Mixed or unexpected HTTP errors; inspect path results.")
-        d.repair_steps.append("Compare path statuses below with API route table in crates/api.")
+        if non_null_statuses and all(200 <= s < 300 for s in non_null_statuses):
+            d.overall = "route_mismatch"
+            d.likely_causes.append(
+                "Routes return 2xx but not the API contract (health must be 'ok'; readiness and funding feed must be JSON)."
+            )
+            d.repair_steps.extend(
+                [
+                    "Confirm the Render service runs APP_PACKAGE=api and APP_BINARY=api.",
+                    "Check whether a proxy, static site, or stale service is bound to this hostname.",
+                    "Confirm the deployed revision matches the expected main commit, then redeploy the API service.",
+                ]
+            )
+        else:
+            d.overall = "degraded"
+            d.likely_causes.append("Mixed or unexpected HTTP errors; inspect path results.")
+            d.repair_steps.append("Compare path statuses below with API route table in crates/api.")
 
     # Deduplicate while preserving order
     def uniq(items: list[str]) -> list[str]:
