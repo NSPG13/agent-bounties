@@ -563,13 +563,28 @@ class RenderClient:
             raise RecoveryError(f"{service['name']} has duplicate Render custom domains for {domain}")
         if existing:
             return existing[0]
-        created = self._request_json(
+        self._request_json(
             "POST", f"/services/{service_id}/custom-domains", {"name": domain}
         )
-        custom_domain = created.get("customDomain", created) if isinstance(created, dict) else None
-        if not isinstance(custom_domain, dict) or str(custom_domain.get("name", "")).lower() != domain.lower():
-            raise RecoveryError(f"Render did not attach {domain} to {service['name']}")
-        return custom_domain
+        for attempt in range(1, 6):
+            attached = [
+                item
+                for item in unwrap_custom_domains(
+                    self._read_with_retry(
+                        f"/services/{service_id}/custom-domains?limit=100"
+                    )
+                )
+                if str(item.get("name", "")).lower() == domain.lower()
+            ]
+            if len(attached) > 1:
+                raise RecoveryError(
+                    f"{service['name']} has duplicate Render custom domains for {domain}"
+                )
+            if attached:
+                return attached[0]
+            if attempt < 5:
+                self._sleep(float(attempt * 2))
+        raise RecoveryError(f"Render did not attach {domain} to {service['name']}")
 
     def reconcile_custom_domains(
         self, service: dict[str, Any], domains: tuple[str, ...]
