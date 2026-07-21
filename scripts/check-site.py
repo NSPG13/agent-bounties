@@ -117,7 +117,7 @@ def check_internal_link(site_dir: Path, source: Path, link: str, ids: set[str]) 
         return
     if target.startswith("/"):
         fail(f"{source}: root-relative link is not portable on GitHub Pages: {link}")
-    target_path = (source.parent / (target or source.name)).resolve()
+    target_path = (source.parent / (parsed.path or source.name)).resolve()
     try:
         target_path.relative_to(site_dir.resolve())
     except ValueError:
