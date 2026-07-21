@@ -3,7 +3,9 @@
 `agentbounties.app` is the only canonical website. Official links, canonical
 tags, sitemaps, social profiles, and partner backlinks must use it. The API and
 MCP services remain at `api.agentbounties.app` and `mcp.agentbounties.app`.
-`status.agentbounties.app` redirects to the canonical API health endpoint.
+The public status link is `https://agentbounties.app/status/` and redirects to
+the canonical API health endpoint. A dedicated status subdomain is deferred
+until it can be hosted independently from the two production runtime domains.
 
 ## Routing contract
 
@@ -22,11 +24,9 @@ MCP services remain at `api.agentbounties.app` and `mcp.agentbounties.app`.
 | `agentbounties.xyz` | `/` | Defensive alias until Labs exists |
 | `bountyboard.global` | `/` | Legacy compatibility redirect |
 
-The API service owns the alternate hosts and returns `308 Permanent Redirect`.
-For `/`, it uses the role-specific destination above. For any deeper path, it
-preserves the path and query string exactly. `api.bountyboard.global` and
-`mcp.bountyboard.global` remain direct service aliases during migration so
-existing state-changing agent calls never depend on redirects.
+The registrar redirect edge owns alternate hosts and returns a permanent,
+unmasked redirect. Runtime traffic uses only the canonical API and MCP hosts;
+agents must not send state-changing requests through a vanity-domain redirect.
 
 ## DNS records
 
@@ -41,16 +41,11 @@ Create these records on `agentbounties.app`:
 | `CNAME` | `www` | `nspg13.github.io` |
 | `CNAME` | `api` | `agent-bounties-api.onrender.com` |
 | `CNAME` | `mcp` | `agent-bounties-mcp.onrender.com` |
-| `CNAME` | `status` | `agent-bounties-api.onrender.com` |
 
-For every alternate apex domain, point `@` to
-`agent-bounties-api.onrender.com` with the provider's `ALIAS`/flattened CNAME
-feature, and point `www` there with `CNAME`. Do not use masked forwarding.
-Render provisions TLS after each domain is attached and DNS resolves.
-
-Keep the old API and MCP DNS records on their current Render services. Move the
-legacy `bountyboard.global` website apex and `www` to the API service only after
-`agentbounties.app` serves the complete site over HTTPS.
+Configure each alternate apex and `www` host as a permanent, unmasked redirect
+to its routing-contract destination. Keep API and MCP clients on the canonical
+`.app` hosts. Render's two custom-domain slots are reserved for those runtime
+origins, and GitHub Pages owns the canonical website certificate.
 
 ## Migration order
 

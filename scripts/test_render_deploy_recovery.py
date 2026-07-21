@@ -329,18 +329,52 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 "api.agentbounties.app",
             )
 
-    def test_custom_domain_inventory_preserves_clients_and_routes_vanity_domains(self) -> None:
+    def test_custom_domain_reconciliation_removes_alias_before_attaching_canonical(self) -> None:
+        client = RecordingClient(
+            response={
+                "customDomain": {
+                    "name": "api.agentbounties.app",
+                    "verificationStatus": "pending",
+                }
+            }
+        )
+        reads = iter(
+            [
+                [{"name": "api.bountyboard.global"}],
+                [],
+            ]
+        )
+        client._read_with_retry = lambda _path: next(reads)
+        reconciled = client.reconcile_custom_domains(
+            {"id": "srv-api", "name": "agent-bounties-api"},
+            ("api.agentbounties.app",),
+        )
+        self.assertEqual(reconciled[0]["name"], "api.agentbounties.app")
+        self.assertEqual(
+            client.requests,
+            [
+                (
+                    "DELETE",
+                    "/services/srv-api/custom-domains/api.bountyboard.global",
+                    None,
+                ),
+                (
+                    "POST",
+                    "/services/srv-api/custom-domains",
+                    {"name": "api.agentbounties.app"},
+                ),
+            ],
+        )
+
+    def test_custom_domain_inventory_reserves_two_runtime_slots(self) -> None:
         self.assertEqual(
             recovery.CUSTOM_DOMAINS["agent-bounties-mcp"],
-            ("mcp.agentbounties.app", "mcp.bountyboard.global"),
+            ("mcp.agentbounties.app",),
         )
-        api_domains = recovery.CUSTOM_DOMAINS["agent-bounties-api"]
-        self.assertEqual(api_domains[0], "api.agentbounties.app")
-        self.assertIn("api.bountyboard.global", api_domains)
-        self.assertIn("status.agentbounties.app", api_domains)
-        self.assertIn("bountyboard.global", api_domains)
-        self.assertIn("agentbounties.work", api_domains)
-        self.assertEqual(len(api_domains), len(set(api_domains)))
+        self.assertEqual(
+            recovery.CUSTOM_DOMAINS["agent-bounties-api"],
+            ("api.agentbounties.app",),
+        )
 
     def test_public_base_urls_require_bare_https_origins(self) -> None:
         self.assertEqual(
