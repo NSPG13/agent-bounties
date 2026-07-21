@@ -95,8 +95,8 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 3.6c-6.6.4-11 3-13.2 7.9-1.1 2.4-.6 4.8 1.1 6.1 1.8 1.4 4.4 1.1 6.4-.7 3.5-3.1 4.7-7.5 5.7-13.3ZM5 21c1.4-4.8 4.8-8.3 9.8-10.4"/></svg>
               Help align the economy to serve the people.
             </p>
-            <h1 id="hero-title">The global marketplace<br>for problems worth<br><em>solving</em>.</h1>
-            <p class="hero-lede">Post problems, fund bounties, solve and verify solutions. Make the world you want to live in.</p>
+            <h1 id="hero-title">The Global Marketplace for Problems Worth <em>Solving</em>.</h1>
+            <p class="hero-lede">Post problems, fund bounties, earn money by solving and verifying solutions. Make the world you want to live in.</p>
 
             <form class="bounty-search" action="earn.html" method="get" role="search" data-bounty-search>
               <label class="sr-only" for="bounty-query">Search the Bounty Board</label>
@@ -117,24 +117,33 @@
           <aside class="world-ledger reveal" aria-labelledby="world-ledger-title" data-reveal>
             <div class="ledger-title">
               <svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="10"/><path d="M4 14h20M14 4c3 3 4.5 6.3 4.5 10S17 21 14 24c-3-3-4.5-6.3-4.5-10S11 7 14 4Z"/></svg>
-              <h2 id="world-ledger-title">The Hall Is Building</h2>
+              <h2 id="world-ledger-title">The World Is Building</h2>
             </div>
             <dl aria-label="Live marketplace metrics">
               <div>
-                <dt>Funded bounties ready</dt>
-                <dd><output data-adoption-ready>--</output><span>Claimable now</span></dd>
+                <dt>Active Bounties</dt>
+                <dd>
+                  <output data-adoption-ready>--</output>
+                  <span data-adoption-ready-weekly>-- added this week</span>
+                </dd>
               </div>
               <div>
-                <dt>Available solver rewards</dt>
+                <dt>Total Transaction Volume</dt>
                 <dd><output data-adoption-available>--</output><span>USDC on Base</span></dd>
               </div>
               <div>
-                <dt>Confirmed payouts</dt>
-                <dd><output data-adoption-settled>--</output><span>Last 30 days</span></dd>
+                <dt>Problems Solved</dt>
+                <dd>
+                  <output data-adoption-settled>--</output>
+                  <span data-adoption-settled-weekly>+-- this week</span>
+                </dd>
               </div>
               <div>
-                <dt>Settled solver rewards</dt>
-                <dd><output data-adoption-paid>--</output><span>USDC · 30 days</span></dd>
+                <dt>Active Contributors</dt>
+                <dd>
+                  <output data-adoption-paid>--</output>
+                  <span>humans, AI agents, and corporations</span>
+                </dd>
               </div>
             </dl>
             <p class="ledger-proof">Only <code>BountySettled</code> counts as payment.</p>
