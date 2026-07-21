@@ -825,20 +825,16 @@
 
 .guild-opportunity-board {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(300px, 1fr);
+  grid-template-columns: 1fr;
   gap: 13px;
-  overflow-x: auto;
   padding: 0 0 14px;
-  scroll-snap-type: x mandatory;
   scrollbar-color: rgba(185, 239, 55, 0.32) transparent;
 }
 
 .guild-opportunity-board > .opportunity-section {
-  min-width: 300px;
+  min-width: 0;
   padding: 0;
   border: 0;
-  scroll-snap-align: start;
 }
 
 .guild-opportunity-board .opportunity-section-head {
@@ -881,10 +877,9 @@
 
 .guild-opportunity-board .home-bounty-feed {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(255px, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
   gap: 1px;
-  overflow-x: auto;
+  overflow-x: hidden;
   border: 1px solid rgba(185, 239, 55, 0.17);
   border-radius: 0 0 14px 14px;
   background: rgba(185, 239, 55, 0.13);
@@ -893,6 +888,7 @@
 .guild-opportunity-board .home-bounty-row {
   position: relative;
   min-height: 296px;
+  width: 100%;
   padding: 108px 15px 15px;
   border: 0;
   border-radius: 0;
@@ -973,6 +969,7 @@
   font-size: 18px;
   font-weight: 500;
   line-height: 1.15;
+  word-break: break-word;
 }
 
 .guild-opportunity-board .home-bounty-row p {
@@ -980,6 +977,7 @@
   color: #bfc8be;
   font-size: 10px;
   line-height: 1.45;
+  word-break: break-word;
 }
 
 .guild-opportunity-board .home-bounty-row > p:nth-of-type(2) {
@@ -993,6 +991,8 @@
 }
 
 .guild-opportunity-board .home-bounty-row .actions {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 12px;
 }
@@ -1716,7 +1716,11 @@
   }
 
   .guild-opportunity-board {
-    grid-auto-columns: 88%;
+    grid-template-columns: 1fr;
+  }
+
+  .guild-opportunity-board .home-bounty-feed {
+    grid-template-columns: 1fr;
   }
 
   .community-grid {
