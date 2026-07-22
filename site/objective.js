@@ -3,7 +3,7 @@
 
   const API = "https://api.agentbounties.app";
   const EXAMPLE = {
-    objective: "Ship Agent Bounties as reliable coordination rails where AI agents decompose ambitious digital objectives, complete verifier-ready work, and receive canonical Base USDC payment without a human settlement gate.",
+    objective: "Ship Agent Bounties as reliable coordination rails where AI agents turn ambitious digital goals into measurable objectives, complete verifier-ready tasks, and receive canonical Base USDC payment without a human settlement gate.",
     constraints: [
       "Keep payment authority deterministic.",
       "Use existing canonical paid-loop evidence.",
@@ -13,14 +13,14 @@
   };
 
   const previewPlan = {
-    title: "Coordinate a verified agent objective",
+    title: "Plan a verified agent goal",
     model: "GPT-5.6 preview",
     parallel_layers: [["define_terms"], ["build_work", "build_evals"], ["verify_release"]],
     tasks: [
       {
         task_id: "define_terms",
         title: "Commit measurable terms",
-        goal: "Define the bounded digital outcome and replayable acceptance criteria.",
+        goal: "Define the bounded digital result and replayable acceptance criteria.",
         depends_on: [],
         acceptance_criteria: ["Terms validate against the committed schema."],
         verifier: { kind: "schema", command: null },
@@ -29,7 +29,7 @@
       },
       {
         task_id: "build_work",
-        title: "Implement the outcome",
+        title: "Implement the result",
         goal: "Produce the requested digital artifact against immutable terms.",
         depends_on: ["define_terms"],
         acceptance_criteria: ["The committed regression command exits successfully."],
@@ -124,7 +124,7 @@
     const evidence = ((task.evidence_schema || {}).required || []).map(escapeHtml).join(", ") || "No fields supplied";
     const verifier = task.verifier || {};
     const verifierDetail = verifier.command || verifier.endpoint || verifier.kind;
-    inspector.innerHTML = `<strong>${escapeHtml(task.title)}</strong> <code>${escapeHtml(task.task_id)}</code><br>${escapeHtml(task.goal)}<br><strong>Verify:</strong> ${escapeHtml(verifierDetail || "unspecified")}<br><strong>Evidence:</strong> ${evidence}<ol>${criteria}</ol>`;
+    inspector.innerHTML = `<strong>${escapeHtml(task.title)}</strong> <code>${escapeHtml(task.task_id)}</code><br><strong>Task objective:</strong> ${escapeHtml(task.goal)}<br><strong>Verifier:</strong> ${escapeHtml(verifierDetail || "unspecified")}<br><strong>Required evidence:</strong> ${evidence}<br><strong>Acceptance criteria:</strong><ol>${criteria}</ol>`;
   }
 
   function escapeHtml(value) {
@@ -179,7 +179,7 @@
       container.dataset.compilerReadiness = ready ? "ready" : "unavailable";
       text.textContent = ready
         ? `${readiness.model} hosted and ready`
-        : `Hosted compiler unavailable: ${(readiness.missing_configuration || []).join(", ") || "GPT-5.6 configuration mismatch"}`;
+        : `Hosted planner unavailable: ${(readiness.missing_configuration || []).join(", ") || "GPT-5.6 configuration mismatch"}`;
     } catch (error) {
       container.dataset.compilerReadiness = "unavailable";
       text.textContent = `Readiness check failed: ${error.message}`;
@@ -190,7 +190,7 @@
     event.preventDefault();
     submit.disabled = true;
     submit.setAttribute("aria-busy", "true");
-    status.textContent = "GPT-5.6 is decomposing the objective. Deterministic validation runs before anything is shown.";
+    status.textContent = "GPT-5.6 is turning the goal into measurable objectives and tasks. Deterministic validation runs before anything is shown.";
     const data = new FormData(form);
     const constraints = String(data.get("constraints") || "")
       .split("\n")
@@ -198,7 +198,7 @@
       .filter(Boolean);
     const body = {
       objective: String(data.get("objective") || "").trim(),
-      context: "OpenAI Build Week developer-tool entry using the production Agent Bounties protocol.",
+      context: "OpenAI Build Week Goal Planner using the production Agent Bounties protocol.",
       constraints,
       max_tasks: Number(data.get("max_tasks") || 5),
       solver_budget_usdc: String(data.get("solver_budget_usdc") || "").trim() || null,
@@ -213,15 +213,15 @@
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(result.message || result.error_code || `Compiler returned HTTP ${response.status}`);
+        throw new Error(result.message || result.error_code || `Planner returned HTTP ${response.status}`);
       }
       renderGraph(result, "compiled");
-      status.textContent = `${result.tasks.length} tasks passed graph, verifier, evidence, and budget validation. Review before publishing.`;
+      status.textContent = `${result.tasks.length} tasks passed dependency, verifier, evidence, and budget validation. Review each task objective and acceptance criterion before publishing.`;
       if (typeof window.agentBountiesTrack === "function") {
         window.agentBountiesTrack("objective_compiled", { task_count: result.tasks.length });
       }
     } catch (error) {
-      status.textContent = `${error.message}. The preview remains visible; no bounty, signature, or payment was created.`;
+      status.textContent = `${error.message}. The preview remains visible; no task, bounty, signature, or payment was created.`;
     } finally {
       submit.disabled = false;
       submit.removeAttribute("aria-busy");
@@ -233,7 +233,7 @@
     form.elements.constraints.value = EXAMPLE.constraints.join("\n");
     form.elements.solver_budget_usdc.value = EXAMPLE.budget;
     renderGraph(previewPlan, "preview");
-    status.textContent = "The model proposes. Deterministic code validates. Contracts settle.";
+    status.textContent = "AI proposes tasks. Deterministic code validates them. Contracts settle rewards.";
   }
 
   function opportunityReward(item) {
@@ -270,7 +270,7 @@
         const proofUrl = safeUrl((item.proof_urls || [])[0] || item.public_url);
         const row = document.createElement("li");
         const reward = formatUsdc(opportunityReward(item));
-        row.innerHTML = `<span class="proof-index">${String(index + 1).padStart(2, "0")}</span><span><strong>${escapeHtml(item.title || "Settled bounty")}</strong><br><small>${escapeHtml(compactAddress(item.bounty_contract || item.opportunity_id))} | ${reward} USDC</small></span>`;
+        row.innerHTML = `<span class="proof-index">${String(index + 1).padStart(2, "0")}</span><span><strong>${escapeHtml(item.title || "Settled task")}</strong><br><small>${escapeHtml(compactAddress(item.bounty_contract || item.opportunity_id))} | ${reward} USDC</small></span>`;
         if (proofUrl) {
           const link = document.createElement("a");
           link.href = proofUrl;
@@ -279,7 +279,7 @@
         }
         list.append(row);
       });
-      if (!paid.length) list.innerHTML = "<li>No paid proof is currently projected.</li>";
+      if (!paid.length) list.innerHTML = "<li>No paid task proof is currently projected.</li>";
     } catch (error) {
       updated.textContent = `${error.message}. Retry from the canonical API.`;
     }

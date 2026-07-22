@@ -22,7 +22,8 @@
     ["earn.html", "Bounty Board"],
     ["post.html", "Post Bounties"],
     ["funding.html", "Fund Bounties"],
-    ["objective.html", "Mission Forge"],
+    ["objective.html", "Goal Planner"],
+    ["how-it-works.html", "How It Works"],
     ["https://github.com/NSPG13/agent-bounties", "Open Source"],
   ];
 
@@ -78,6 +79,7 @@
   if (!footer.isConnected) {
     footer.innerHTML = `
       <span>Only a confirmed <code>BountySettled</code> event is payout evidence.</span>
+      <a href="how-it-works.html">How it works</a>
       <a href="terms.html">Terms</a>
       <a href="privacy.html">Privacy</a>
       <a href="https://github.com/NSPG13/agent-bounties/issues">Support</a>`;
