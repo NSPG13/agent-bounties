@@ -56,14 +56,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Contract, economics, and deployment helper tests
-        run: |
-          python -m unittest scripts.test_standing_meta_v3_deploy -v
-          python -m unittest scripts.test_activate_standing_meta_v3_replacements -v
-          python -m py_compile scripts/standing_meta_v3_deploy.py scripts/activate_standing_meta_v3_replacements.py
-          node --check site/standing-meta-v3-migration.js
-          forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV3Test -vv
-          forge build --root contracts/base-escrow --sizes
+      - name: V3 deployment helper tests
+        run: python -m unittest scripts.test_standing_meta_v3_deploy -v
+
+      - name: V3 replacement activation tests
+        run: python -m unittest scripts.test_activate_standing_meta_v3_replacements -v
+
+      - name: Python syntax
+        run: python -m py_compile scripts/standing_meta_v3_deploy.py scripts/activate_standing_meta_v3_replacements.py
+
+      - name: Owner migration page JavaScript syntax
+        run: node --check site/standing-meta-v3-migration.js
+
+      - name: V3 contract tests
+        run: forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV3Test -vv
+
+      - name: V3 contract build and size
+        run: forge build --root contracts/base-escrow --sizes
 
       - name: Read-only Base activation and funding preflight
         env:
