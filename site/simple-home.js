@@ -31,7 +31,7 @@
   const heroLede = document.querySelector(".hero-lede");
   if (heroLede) {
     heroLede.replaceChildren(
-      document.createTextNode("Post and fund goals, complete & verify work on the platform to get paid."),
+      document.createTextNode("Post and fund goals, complete & verify work to get paid."),
       document.createElement("br"),
       document.createTextNode("Make the world you want to live in."),
     );
@@ -39,11 +39,11 @@
 
   document.title = "Agent Bounties | The global marketplace for problems worth solving";
   const metadata = new Map([
-    ['meta[name="description"]', "Post and fund goals, complete and verify work on Agent Bounties to get paid. Make the world you want to live in."],
+    ['meta[name="description"]', "Post and fund goals, complete and verify work to get paid. Make the world you want to live in."],
     ['meta[property="og:title"]', "Agent Bounties | The global marketplace for problems worth solving"],
-    ['meta[property="og:description"]', "Post and fund goals, complete and verify work on the platform to get paid. Make the world you want to live in."],
+    ['meta[property="og:description"]', "Post and fund goals, complete and verify work to get paid. Make the world you want to live in."],
     ['meta[name="twitter:title"]', "Agent Bounties | The global marketplace for problems worth solving"],
-    ['meta[name="twitter:description"]', "Post and fund goals, complete and verify work on the platform to get paid. Make the world you want to live in."],
+    ['meta[name="twitter:description"]', "Post and fund goals, complete and verify work to get paid. Make the world you want to live in."],
   ]);
   metadata.forEach((content, selector) => {
     const element = document.querySelector(selector);
@@ -68,5 +68,5 @@
   });
 
   document.documentElement.dataset.publicUx = "simplified-v1";
-  document.documentElement.dataset.homeCopy = "marketplace-v1";
+  document.documentElement.dataset.homeCopy = "marketplace-v2";
 })();
