@@ -1,2 +1,2 @@
-20260722-8
-This build replaces bounty creation with a real chat transcript, iterative standardized draft review, approval, and Connect wallet flow.
+20260722-9
+This build reduces bounty creation to one normal full-screen chatbot with an inline draft, approval, and wallet connection.
