@@ -1,4 +1,4 @@
-/* Focused homepage community corrections for issues #485, #489, #493, and #520. */
+/* Focused homepage community corrections for issues #485, #489, #493, #520, and #523. */
 
 .community-shell::after {
   content: none;
@@ -29,12 +29,12 @@
   pointer-events: none;
 }
 
-/* Exact user-selected ginkgo image, committed locally for deterministic rendering. */
+/* Exact user-selected ginkgo image, committed locally as a valid WebP. */
 .mission-sprig::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: url("assets/mission-ginkgo-selected.webp?v=520") center / cover no-repeat;
+  background: url("assets/mission-ginkgo-selected.webp?v=523") center / cover no-repeat;
   filter: none;
   mix-blend-mode: normal;
   opacity: 1;
