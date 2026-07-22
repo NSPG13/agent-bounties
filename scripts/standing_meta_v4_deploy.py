@@ -45,6 +45,14 @@ COMPONENT_SPECS: tuple[tuple[str, str], ...] = (
     ("standing_meta_parent_factory", "src/StandingMetaParentFactoryV4.sol:StandingMetaParentFactoryV4"),
     ("standing_meta_v4_bundle", "src/StandingMetaV4Bundle.sol:StandingMetaV4Bundle"),
 )
+REQUIRED_R4_GATES = (
+    "independent_review_complete",
+    "base_sepolia_rehearsal_complete",
+    "base_mainnet_fork_test_complete",
+    "exact_bytecode_evidence_complete",
+    "bounded_wallet_policy_review_complete",
+    "repository_environment_protection_complete",
+)
 
 
 class DeploymentError(RuntimeError):
@@ -350,14 +358,7 @@ def build_plan(foundry: Foundry, readiness_path: Path) -> dict[str, Any]:
         raise DeploymentError("canonical mainnet child factory has no runtime code")
     readiness = load_object(readiness_path)
     r4 = readiness.get("r4_evidence", {})
-    required_r4 = (
-        "independent_review_complete",
-        "base_sepolia_rehearsal_complete",
-        "base_mainnet_fork_test_complete",
-        "exact_bytecode_evidence_complete",
-        "bounded_wallet_policy_review_complete",
-    )
-    r4_complete = all(r4.get(item) is True for item in required_r4)
+    r4_complete = all(r4.get(item) is True for item in REQUIRED_R4_GATES)
     return {
         "schema": "agent-bounties/standing-meta-v4-deployment-plan-v1",
         **config,
@@ -365,7 +366,7 @@ def build_plan(foundry: Foundry, readiness_path: Path) -> dict[str, Any]:
         "keeper_native_balance_wei": foundry.balance(EXPECTED_KEEPER),
         "bounded_wallet": BOUNDED_WALLET,
         "bounded_wallet_source_usdc_cap": MAINNET_SOURCE_USDC_CAP,
-        "r4_gates": {item: r4.get(item) is True for item in required_r4},
+        "r4_gates": {item: r4.get(item) is True for item in REQUIRED_R4_GATES},
         "mainnet_deploy_allowed": chain_id != BASE_MAINNET_CHAIN_ID or r4_complete,
         "artifacts": artifact_evidence(foundry),
         "evidence_boundary": "Read-only compiler and RPC evidence; not deployment, funding, rehearsal, readiness, or payment proof.",
@@ -392,9 +393,11 @@ def require_mainnet_release_gate(readiness_path: Path, acknowledged: bool) -> No
     if not acknowledged:
         raise DeploymentError("mainnet deployment requires --acknowledge-r4-release-gate")
     r4 = load_object(readiness_path).get("r4_evidence", {})
-    incomplete = [name for name, value in r4.items() if name.endswith("_complete") and value is not True]
+    gate_names = set(REQUIRED_R4_GATES)
+    gate_names.update(name for name in r4 if name.endswith("_complete"))
+    incomplete = [name for name in sorted(gate_names) if r4.get(name) is not True]
     if incomplete:
-        raise DeploymentError(f"mainnet R4 gates are incomplete: {', '.join(sorted(incomplete))}")
+        raise DeploymentError(f"mainnet R4 gates are incomplete: {', '.join(incomplete)}")
 
 
 def component_args(name: str, report: Mapping[str, Any]) -> list[str]:

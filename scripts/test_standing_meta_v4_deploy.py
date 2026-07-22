@@ -87,6 +87,24 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             with self.assertRaises(MODULE.DeploymentError):
                 MODULE.require_mainnet_release_gate(path, False)
 
+            MODULE.write_object(
+                path,
+                {
+                    "r4_evidence": {
+                        name: True
+                        for name in MODULE.REQUIRED_R4_GATES
+                        if name != "repository_environment_protection_complete"
+                    }
+                },
+            )
+            with self.assertRaisesRegex(MODULE.DeploymentError, "repository_environment_protection_complete"):
+                MODULE.require_mainnet_release_gate(path, True)
+
+            value = MODULE.load_object(path)
+            value["r4_evidence"]["repository_environment_protection_complete"] = True
+            MODULE.write_object(path, value)
+            MODULE.require_mainnet_release_gate(path, True)
+
     def test_component_constructor_graph_uses_two_distinct_sortitions(self) -> None:
         report = {
             "settlement_token": MODULE.BASE_MAINNET_USDC,
