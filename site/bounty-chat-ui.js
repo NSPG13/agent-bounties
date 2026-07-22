@@ -66,14 +66,17 @@
     if (waiting) scrollConversation();
   }
 
+  function setDraftState(text, tone) {
+    if (!draftState) return;
+    if (draftState.textContent !== text) draftState.textContent = text;
+    if (draftState.dataset.tone !== tone) draftState.dataset.tone = tone;
+  }
+
   function syncDraft() {
     draftSyncQueued = false;
     if (preview.hidden) return;
-    if (draftState && approve?.dataset.approved !== "true") {
-      draftState.textContent = "Draft · not posted";
-      draftState.dataset.tone = "ready";
-    }
-    log.append(preview);
+    if (approve?.dataset.approved !== "true") setDraftState("Draft · not posted", "ready");
+    if (preview.parentElement !== log || preview !== log.lastElementChild) log.append(preview);
     scrollConversation();
   }
 
@@ -85,11 +88,7 @@
 
   function syncApproval() {
     const isApproved = approve?.dataset.approved === "true";
-    if (draftState) {
-      draftState.textContent = isApproved ? "Approved · not posted" : "Draft · not posted";
-      draftState.dataset.tone = isApproved ? "approved" : "ready";
-    }
-    if (connect) connect.textContent = isApproved ? "Connect wallet" : "Connect wallet";
+    setDraftState(isApproved ? "Approved · not posted" : "Draft · not posted", isApproved ? "approved" : "ready");
 
     if (isApproved && !approvedAnnounced) {
       approvedAnnounced = true;
