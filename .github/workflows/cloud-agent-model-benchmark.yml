@@ -37,7 +37,7 @@ jobs:
       CLOUD_AGENT_TIMEOUT_SECONDS: "180"
       CLOUD_AGENT_BENCHMARK_RUNS: ${{ inputs.runs }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 

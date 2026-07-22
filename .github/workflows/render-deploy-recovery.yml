@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || inputs.revision || github.sha }}
 
@@ -83,7 +83,7 @@ jobs:
       PRODUCTION_WEBSITE_BASE_URL: ${{ vars.PRODUCTION_WEBSITE_BASE_URL || 'https://agentbounties.app' }}
       RENDER_DEPLOY_PAUSE_REASON: ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TARGET_REVISION }}
           fetch-depth: 0

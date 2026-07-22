@@ -33,7 +33,7 @@ jobs:
   deterministic-gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: actions/setup-python@v5
         with:
@@ -59,7 +59,7 @@ jobs:
       REGRESSION_VERIFIER_ONE_ADDRESS: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       REGRESSION_VERIFIER_TWO_ADDRESS: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: actions/setup-python@v5
         with:
@@ -86,7 +86,7 @@ jobs:
       REGRESSION_VERIFIER_ONE_ADDRESS: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       REGRESSION_VERIFIER_TWO_ADDRESS: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: actions/setup-python@v5
         with:
