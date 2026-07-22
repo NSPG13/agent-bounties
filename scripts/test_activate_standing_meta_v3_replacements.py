@@ -61,7 +61,8 @@ class ActivateStandingMetaV3Tests(unittest.TestCase):
         )
         self.assertIn("2.00 USDC", body)
         self.assertIn("0.01 USDC", body)
-        self.assertIn("1.00 USDC gross profit", body)
+        self.assertIn("1 USDC gross profit", body)
+        self.assertIn("Guaranteed parent gross margin: **1.00 USDC minimum**", body)
         self.assertIn("Only canonical `BountySettled` proves earnings", body)
         self.assertIn(MODULE.ISSUES[333]["old"], body)
 
