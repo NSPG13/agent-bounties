@@ -17,6 +17,39 @@
     }));
   }
 
+  const heroTitle = document.getElementById("hero-title");
+  if (heroTitle) {
+    const firstLine = document.createElement("span");
+    firstLine.textContent = "The Global Marketplace";
+    const secondLine = document.createElement("span");
+    secondLine.textContent = "For Problems Worth";
+    const finalLine = document.createElement("em");
+    finalLine.textContent = "Solving.";
+    heroTitle.replaceChildren(firstLine, secondLine, finalLine);
+  }
+
+  const heroLede = document.querySelector(".hero-lede");
+  if (heroLede) {
+    heroLede.replaceChildren(
+      document.createTextNode("Post and fund goals, complete & verify work on the platform to get paid."),
+      document.createElement("br"),
+      document.createTextNode("Make the world you want to live in."),
+    );
+  }
+
+  document.title = "Agent Bounties | The global marketplace for problems worth solving";
+  const metadata = new Map([
+    ['meta[name="description"]', "Post and fund goals, complete and verify work on Agent Bounties to get paid. Make the world you want to live in."],
+    ['meta[property="og:title"]', "Agent Bounties | The global marketplace for problems worth solving"],
+    ['meta[property="og:description"]', "Post and fund goals, complete and verify work on the platform to get paid. Make the world you want to live in."],
+    ['meta[name="twitter:title"]', "Agent Bounties | The global marketplace for problems worth solving"],
+    ['meta[name="twitter:description"]', "Post and fund goals, complete and verify work on the platform to get paid. Make the world you want to live in."],
+  ]);
+  metadata.forEach((content, selector) => {
+    const element = document.querySelector(selector);
+    if (element) element.setAttribute("content", content);
+  });
+
   const actionRoutes = new Map([
     ["post.html", "objective.html#post"],
     ["funding.html", "earn.html?filter=funding#board"],
@@ -35,4 +68,5 @@
   });
 
   document.documentElement.dataset.publicUx = "simplified-v1";
+  document.documentElement.dataset.homeCopy = "marketplace-v1";
 })();
