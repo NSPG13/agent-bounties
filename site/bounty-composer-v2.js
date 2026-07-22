@@ -323,6 +323,58 @@
     };
   }
 
+  function requestUserOwnedAi(intent, context = null) {
+    window.dispatchEvent(new CustomEvent("agent-bounties:request-ai-handoff", {
+      detail: { intent, context },
+    }));
+  }
+
+  async function importPreparedDraft(value) {
+    const prepared = window.AgentBountyAI?.parseDraft
+      ? window.AgentBountyAI.parseDraft(value)
+      : value;
+    if (!prepared || typeof prepared !== "object") throw new Error("The prepared bounty draft is invalid.");
+
+    const days = Number(prepared.task_window_days || MAX_TASK_DAYS);
+    const total = Number(prepared.solver_reward_usdc) + Number(prepared.verifier_reward_usdc);
+    if (!Number.isInteger(days) || days < 1 || days > MAX_TASK_DAYS) throw new Error(`The task window must be from 1 to ${MAX_TASK_DAYS} days.`);
+    if (!Number.isFinite(total) || total < MIN_TOTAL_USDC || total > MAX_TOTAL_USDC) throw new Error("The combined reward is invalid.");
+
+    const deadline = new Date(Date.now() + days * 86_400_000);
+    state.phase = "review";
+    state.originalRequest = prepared.goal;
+    state.context = [];
+    state.initialDraft = normalizeDraft({
+      title: prepared.title,
+      goal: prepared.goal,
+      acceptance_criteria: prepared.acceptance_criteria,
+      questions: [],
+      risk_flags: [],
+      benchmark: { type: "creator_review" },
+      evidence_schema: { type: "object", additionalProperties: true },
+    });
+    state.draft = state.initialDraft;
+    state.aiRounds = 0;
+    state.questions = [];
+    state.currentQuestion = null;
+    state.askedQuestions.clear();
+    state.scope = "single";
+    state.horizon = {
+      kind: "date",
+      date: deadline,
+      days,
+      label: `${days} day${days === 1 ? "" : "s"}`,
+    };
+    state.missionPlan = null;
+    state.selectedTaskId = null;
+    state.taskWindowDays = days;
+    state.fundingUsdc = total;
+    state.approved = false;
+    ui.input.value = "";
+    ui.prompt.textContent = "Review the bounty card your AI prepared. You can approve it or ask your AI for a revision.";
+    await renderPreview();
+  }
+
   function queueQuestions(questions) {
     for (const question of questions || []) {
       const normalized = normalizeQuestion(question);
@@ -512,7 +564,8 @@
       state.missionPlan = null;
       state.taskWindowDays = null;
       state.fundingUsdc = parseFunding(value);
-      await generateInitialDraft();
+      requestUserOwnedAi(value);
+      ui.input.value = "";
       return;
     }
     if (state.phase === "ai_question") {
@@ -572,18 +625,15 @@
       return;
     }
     if (state.phase === "revise") {
-      state.context.push(`Requested revision: ${value}`);
-      state.originalRequest = `${state.draft.goal}\nRevision requested by the user: ${value}`;
-      state.aiRounds = 0;
-      state.questions = [];
-      state.askedQuestions.clear();
-      state.initialDraft = null;
-      state.draft = null;
-      state.missionPlan = null;
-      state.selectedTaskId = null;
-      state.visualCache.clear();
-      state.approved = false;
-      await generateInitialDraft();
+      const rewards = splitReward(state.fundingUsdc);
+      requestUserOwnedAi(value, {
+        draft: state.draft,
+        solver_reward_usdc: formatUsdc(Number(rewards.solver) / 1_000_000),
+        verifier_reward_usdc: formatUsdc(Number(rewards.verifier) / 1_000_000),
+        task_window_days: state.taskWindowDays,
+      });
+      ui.input.value = "";
+      return;
     }
   }
 
@@ -685,11 +735,11 @@
     ui.fund.disabled = true;
     ui.preview.hidden = false;
     ui.preview.scrollIntoView({ behavior: "smooth", block: "start" });
-    setStatus("Generating a bounded pre-publication illustration from the AI draft. Nothing has been posted or funded.", "pending");
+    setStatus("Rendering a bounded pre-publication illustration from the prepared draft. Nothing has been posted or funded.", "pending");
     await renderAiVisualForCurrentDraft();
     ui.approve.disabled = false;
     ui.approve.textContent = "Approve bounty card";
-    setStatus("Review the result, tasks, completion checks, horizon, reward, and creator-verification disclosure. Nothing has been posted or funded.");
+    setStatus("Review the result, completion checks, time window, reward, and creator-verification disclosure. Nothing has been posted or funded.");
   }
 
   function validHex(value) {
@@ -777,7 +827,7 @@
   }
 
   async function renderAiVisualForCurrentDraft() {
-    ui.imageStatus.textContent = "Generating AI visual…";
+    ui.imageStatus.textContent = "Preparing visual…";
     ui.imageStatus.dataset.tone = "";
     let spec = extractVisualSpec(state.draft);
     if (!spec && state.scope === "mission") {
@@ -787,7 +837,7 @@
     if (spec) {
       state.visualSpec = spec;
       state.visualSource = "ai";
-      ui.imageStatus.textContent = "AI-generated draft visual";
+      ui.imageStatus.textContent = "AI-prepared draft visual";
       ui.imageStatus.dataset.tone = "ai";
     } else {
       state.visualSpec = fallbackVisualSpec(`${state.draft.title} ${state.draft.goal}`);
@@ -1080,7 +1130,52 @@
 
   function configureSpeech(){const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;if(!Recognition){ui.mic.hidden=true;ui.hint.textContent="Type naturally. Your words are not posted until you approve the final card.";return;}const recognition=new Recognition();recognition.continuous=false;recognition.interimResults=true;recognition.lang=document.documentElement.lang||navigator.language||"en-US";let original="";recognition.addEventListener("start",()=>{original=ui.input.value.trim();ui.mic.dataset.listening="true";setStatus("Listening…","pending");});recognition.addEventListener("result",(event)=>{let transcript="";for(let index=event.resultIndex;index<event.results.length;index+=1)transcript+=event.results[index][0].transcript;ui.input.value=[original,transcript.trim()].filter(Boolean).join(original?" ":"");});recognition.addEventListener("end",()=>{ui.mic.dataset.listening="false";setStatus("Review the dictated text, then continue.");});recognition.addEventListener("error",(event)=>{ui.mic.dataset.listening="false";setStatus(event.error==="not-allowed"?"Microphone permission was not granted. You can still type.":"Dictation stopped. You can continue typing.","error");});ui.mic.addEventListener("click",()=>{if(ui.mic.dataset.listening==="true")recognition.stop();else recognition.start();});state.speech=recognition;}
 
-  async function prefillFromQuery(){const params=new URLSearchParams(window.location.search);const supplied=params.get("goal")||params.get("draftObjective")||params.get("objective");const title=params.get("title");const goal=params.get("goal");const criteria=params.getAll("criterion");if(supplied||title||goal||criteria.length){ui.input.value=[supplied,title&&`Title: ${title}`,goal&&`Result: ${goal}`,criteria.length&&`Completion checks: ${criteria.join("; ")}`].filter(Boolean).join("\n");state.fundingUsdc=parseFunding(params.get("solverReward"));}const draftId=params.get("socialDraft");if(draftId&&/^[0-9a-f-]{36}$/i.test(draftId)){try{const response=await requestJson(`${API}/v1/social/mention-drafts/${draftId}`);const draft=response&&response.draft;if(draft&&draft.state==="review_required_not_published"){ui.input.value=[draft.draft_objective,draft.goal,...(draft.acceptance_criteria||[])].filter(Boolean).join("\n");const solver=Number(draft.solver_reward&&draft.solver_reward.amount||0);const verifier=Number(draft.verifier_reward&&draft.verifier_reward.amount||0);if(Number.isSafeInteger(solver)&&Number.isSafeInteger(verifier))state.fundingUsdc=(solver+verifier)/1_000_000;setStatus("Draft imported. It has not been posted or funded. Describe any changes, then continue.","pending");}}catch(error){setStatus(error.message||String(error),"error");}}}
+  async function prefillFromQuery() {
+    const params = new URLSearchParams(window.location.search);
+    const title = params.get("title");
+    const goal = params.get("goal");
+    const criteria = params.getAll("criterion");
+    const solver = params.get("solverReward");
+    const verifier = params.get("verifierReward");
+
+    if (title && goal && criteria.length && solver && verifier) {
+      try {
+        await importPreparedDraft({
+          title,
+          goal,
+          acceptance_criteria: criteria,
+          solver_reward_usdc: solver,
+          verifier_reward_usdc: verifier,
+          task_window_days: Number(params.get("taskWindowDays") || MAX_TASK_DAYS),
+          source_url: params.get("sourceUrl"),
+          crowdfund: params.get("crowdfund") === "true",
+          discovery_source: params.get("discoverySource") || "AI assistant via MCP",
+        });
+      } catch (error) {
+        setStatus(error.message || String(error), "error");
+      }
+    } else {
+      const supplied = goal || params.get("draftObjective") || params.get("objective");
+      if (supplied) ui.input.value = supplied;
+    }
+
+    const draftId = params.get("socialDraft");
+    if (draftId && /^[0-9a-f-]{36}$/i.test(draftId)) {
+      try {
+        const response = await requestJson(`${API}/v1/social/mention-drafts/${draftId}`);
+        const draft = response && response.draft;
+        if (draft && draft.state === "review_required_not_published") {
+          ui.input.value = [draft.draft_objective, draft.goal, ...(draft.acceptance_criteria || [])].filter(Boolean).join("\n");
+          const importedSolver = Number(draft.solver_reward && draft.solver_reward.amount || 0);
+          const importedVerifier = Number(draft.verifier_reward && draft.verifier_reward.amount || 0);
+          if (Number.isSafeInteger(importedSolver) && Number.isSafeInteger(importedVerifier)) state.fundingUsdc = (importedSolver + importedVerifier) / 1_000_000;
+          setStatus("Draft imported. It has not been posted or funded. Describe any changes, then continue.", "pending");
+        }
+      } catch (error) {
+        setStatus(error.message || String(error), "error");
+      }
+    }
+  }
 
   ui.form.addEventListener("submit",handleComposerSubmit);
   ui.approve.addEventListener("click",approveCard);
@@ -1094,8 +1189,11 @@
   ui.recheck.addEventListener("click",()=>refreshWalletReadiness().catch((error)=>setPaymentStatus(error.message||String(error),"error")));
   ui.fundNow.addEventListener("click",fundApprovedBounty);
   ui.dialog.addEventListener("click",(event)=>{if(event.target===ui.dialog)ui.dialog.close();});
+  window.addEventListener("agent-bounties:prepared-draft", (event) => {
+    importPreparedDraft(event.detail).catch((error) => setStatus(error.message || String(error), "error"));
+  });
 
   configureSpeech();
   setProgress("describe");
-  prefillFromQuery();
+  prefillFromQuery().catch((error) => setStatus(error.message || String(error), "error"));
 })();
