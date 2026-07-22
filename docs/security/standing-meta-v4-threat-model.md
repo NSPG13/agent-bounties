@@ -1,6 +1,6 @@
 # Standing Meta V4 threat model
 
-Status: design, local-test, and Base-mainnet fork evidence only. V4 is not deployed and is not ready to earn. The current fork test deploys the exact staged graph against live Base USDC and the official VRF coordinator, creates and funds a fork-only native subscription, and authorizes both sortition coordinators. Independent review, the real Base Sepolia rehearsal, deployed bytecode/configuration evidence, a funded real VRF subscription, authorized real consumers, and gas sponsorship remain release gates.
+Status: design, local-test, and Base-mainnet fork evidence only. V4 is not deployed and is not ready to earn. The current fork test deploys the exact staged graph against live Base USDC and the official VRF coordinator, creates and funds a fork-only native subscription, and authorizes both sortition coordinators. Independent review, the real Base Sepolia rehearsal, deployed bytecode/configuration evidence, protected repository environments, a funded real VRF subscription, authorized real consumers, and gas sponsorship remain release gates.
 
 ## Security claims
 

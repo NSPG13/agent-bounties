@@ -206,6 +206,8 @@ jobs:
     timeout-minutes: 15
     environment: ${{ github.event.inputs.network == 'base-mainnet' && 'standing-meta-v4-mainnet' || 'standing-meta-v4-sepolia' }}
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
       - name: Require default branch, exact inputs, and explicit mainnet acknowledgement
         env:
           NETWORK: ${{ github.event.inputs.network }}
@@ -226,11 +228,15 @@ jobs:
             test "$ACK" = "independent-review-and-sepolia-rehearsal-complete"
             test "$SOURCE_USDC_BASE_UNITS" -gt 0
             test "$SOURCE_USDC_BASE_UNITS" -le 7000000
+            python - <<'PY'
+          from pathlib import Path
+          from scripts.standing_meta_v4_deploy import require_mainnet_release_gate
+
+          require_mainnet_release_gate(Path("deployments/standing-meta-v4-config.json"), True)
+          PY
           else
             test "$SOURCE_USDC_BASE_UNITS" -eq 0
           fi
-
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
 
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
 

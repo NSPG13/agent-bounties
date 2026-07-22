@@ -69,7 +69,8 @@
     "base_sepolia_rehearsal_complete": false,
     "base_mainnet_fork_test_complete": true,
     "exact_bytecode_evidence_complete": false,
-    "bounded_wallet_policy_review_complete": false
+    "bounded_wallet_policy_review_complete": false,
+    "repository_environment_protection_complete": false
   },
   "sources": [
     "https://docs.chain.link/vrf/v2-5/supported-networks",
