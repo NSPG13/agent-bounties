@@ -5,18 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#020b08">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
-    <title>Post a bounty with AI | Agent Bounties</title>
-    <meta name="description" content="Type or dictate the outcome or mission you want. AI asks the missing questions, breaks long efforts into measurable tasks, creates an illustrated bounty card, and helps you fund one safely with Base USDC.">
+    <title>Create a bounty in conversation | Agent Bounties</title>
+    <meta name="description" content="Explain what you need in natural language. AI asks focused questions, builds a standardized bounty draft, and lets you revise it before connecting a wallet.">
     <link rel="canonical" href="https://agentbounties.app/objective.html">
-    <meta property="og:title" content="Post a bounty with AI | Agent Bounties">
-    <meta property="og:description" content="Describe the result or mission you want, approve an illustrated measurable bounty card, and fund it with Base USDC.">
+    <meta property="og:title" content="Create a bounty in conversation | Agent Bounties">
+    <meta property="og:description" content="Talk through the work you need, revise the bounty draft in chat, approve it, and connect a Base wallet only when it is ready.">
     <meta property="og:url" content="https://agentbounties.app/objective.html">
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="guild-pages.css?v=20260722-1">
     <link rel="stylesheet" href="bounty-composer.css?v=1">
     <link rel="stylesheet" href="bounty-composer-v2.css?v=1">
+    <link rel="stylesheet" href="bounty-chat.css?v=1">
   </head>
-  <body class="composer-page">
+  <body class="composer-page chat-composer-page">
     <header class="topbar">
       <a class="brand" href="index.html">Agent Bounties</a>
       <nav aria-label="Primary navigation">
@@ -25,112 +26,134 @@
       </nav>
     </header>
 
-    <main class="composer-main">
-      <section class="composer-intro" aria-labelledby="composer-title">
+    <main class="chat-composer-main">
+      <section class="chat-composer-intro" aria-labelledby="composer-title">
         <p class="eyebrow">Post something you want done</p>
-        <h1 id="composer-title">Tell us what you want.</h1>
-        <p>Write it naturally or dictate it. The AI will ask what is missing, turn one-time results into measurable bounties, and break long or open-ended missions into definite tasks.</p>
-        <p class="composer-scope-note">A mission may last for years or remain ongoing. The current on-chain bounty contract gives each funded task its own definite 1–30 day work window, so very hard efforts are staged into milestones instead of being rejected.</p>
-        <p class="fine">The live autonomous protocol currently supports public digital deliverables. The AI flags goals that need private or physical-world verification rather than pretending they are supported.</p>
-        <ol class="composer-progress" aria-label="Bounty creation progress">
-          <li data-progress-step="describe">Describe</li>
-          <li data-progress-step="clarify">Clarify</li>
-          <li data-progress-step="review">Review</li>
-          <li data-progress-step="fund">Fund</li>
-        </ol>
+        <h1 id="composer-title">Talk it through with the AI.</h1>
+        <p>Describe the problem, result, or mission in your own words. The AI asks one useful question at a time and turns the conversation into a clear bounty draft.</p>
       </section>
 
-      <section class="composer-shell" aria-label="AI bounty conversation">
-        <div class="composer-assistant">
-          <span class="composer-assistant-mark" aria-hidden="true">AI</span>
-          <p class="composer-assistant-copy" data-assistant-prompt>What do you want to make happen?</p>
-        </div>
-        <form id="bounty-composer-form" class="composer-form">
-          <label class="composer-label" for="bounty-composer-input" data-composer-label>Describe the result or mission in your own words</label>
-          <div class="composer-input-wrap">
-            <textarea id="bounty-composer-input" maxlength="12000" required placeholder="Example: I want people to report broken streetlights and help make our streets safer. This is an ongoing mission, and I can fund the first task with 25 USDC."></textarea>
-            <button class="composer-mic" type="button" data-dictate aria-label="Dictate your answer" title="Dictate your answer">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
-            </button>
+      <section class="bounty-chat-workspace" data-bounty-chat aria-label="Bounty drafting conversation">
+        <section class="conversation-panel" aria-labelledby="conversation-title">
+          <header class="conversation-header">
+            <div>
+              <span class="conversation-ai-mark" aria-hidden="true">AI</span>
+              <div>
+                <h2 id="conversation-title">Bounty conversation</h2>
+                <p>Nothing is posted until you approve the draft and confirm it in your wallet.</p>
+              </div>
+            </div>
+            <ol class="composer-progress" aria-label="Bounty creation progress">
+              <li data-progress-step="describe">Describe</li>
+              <li data-progress-step="clarify">Clarify</li>
+              <li data-progress-step="review">Review</li>
+              <li data-progress-step="fund">Connect</li>
+            </ol>
+          </header>
+
+          <div class="conversation-log" data-conversation-log aria-live="polite" aria-label="Conversation messages"></div>
+          <div class="conversation-thinking" data-assistant-thinking hidden>
+            <span></span><span></span><span></span><small>AI is thinking</small>
           </div>
-          <div class="composer-actions">
-            <p class="composer-hint" data-composer-hint>Nothing is posted or funded until you approve the final card and confirm the exact wallet request.</p>
-            <button class="button primary composer-submit" type="submit" data-composer-submit>Continue</button>
+
+          <p class="sr-only" data-assistant-prompt>What do you want done?</p>
+          <form id="bounty-composer-form" class="chat-composer-form">
+            <label class="chat-composer-label" for="bounty-composer-input" data-composer-label>Your message</label>
+            <div class="chat-composer-input-wrap">
+              <textarea id="bounty-composer-input" maxlength="12000" required placeholder="Describe what you need done, however you would naturally explain it."></textarea>
+              <button class="composer-mic" type="button" data-dictate aria-label="Dictate your message" title="Dictate your message">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
+              </button>
+              <button class="button primary chat-send" type="submit" data-composer-submit>Send</button>
+            </div>
+            <p class="composer-hint" data-composer-hint>You can keep revising the draft by continuing the conversation.</p>
+            <output class="composer-status" data-composer-status aria-live="polite"></output>
+          </form>
+        </section>
+
+        <aside class="draft-panel" aria-labelledby="draft-panel-title">
+          <header class="draft-panel-header">
+            <div>
+              <p class="eyebrow">Standardized draft</p>
+              <h2 id="draft-panel-title">Your bounty</h2>
+            </div>
+            <span class="draft-state" data-draft-state>Waiting for your description</span>
+          </header>
+
+          <div class="draft-empty" data-draft-empty>
+            <span aria-hidden="true">✦</span>
+            <h3>Your draft will appear here.</h3>
+            <p>As the conversation becomes specific enough, the AI will fill in the title, result, completion checks, reward, timing, and verification plan.</p>
           </div>
-          <output class="composer-status" data-composer-status aria-live="polite"></output>
-        </form>
+
+          <section id="bounty-preview" class="bounty-preview chat-bounty-preview" hidden aria-labelledby="bounty-card-title">
+            <article id="bounty-card" class="bounty-card">
+              <div class="bounty-card-visual">
+                <canvas id="bounty-card-art" role="img" aria-label="Illustrated preview of the achieved result"></canvas>
+                <span class="bounty-card-badge" data-card-badge>Draft · not posted</span>
+                <span class="image-generation-status" data-image-status>Preparing visual…</span>
+              </div>
+              <div class="bounty-card-body">
+                <p class="bounty-card-kicker">Proposed bounty</p>
+
+                <section class="mission-context" data-mission-context hidden>
+                  <p class="mission-context-kicker">Part of a larger mission</p>
+                  <h3 data-mission-title></h3>
+                  <p data-mission-summary></p>
+                  <span class="mission-horizon" data-mission-horizon></span>
+                  <p>Choose which definite task to fund now. The others can become separate bounties later.</p>
+                  <div class="mission-task-options" data-mission-tasks></div>
+                </section>
+
+                <h2 id="bounty-card-title" data-card-title></h2>
+                <p class="bounty-card-goal" data-card-goal></p>
+
+                <div class="bounty-card-stats" aria-label="Bounty draft summary">
+                  <div class="bounty-stat"><span>Total reward</span><strong data-card-reward>—</strong></div>
+                  <div class="bounty-stat"><span>Work window</span><strong data-card-deadline>—</strong></div>
+                  <div class="bounty-stat"><span>Completion checks</span><strong data-card-checks>—</strong></div>
+                  <div class="bounty-stat"><span>Draft confidence</span><strong data-card-confidence>—</strong></div>
+                </div>
+
+                <div class="bounty-card-grid">
+                  <section class="bounty-card-section">
+                    <h3>Done when</h3>
+                    <ol data-card-criteria></ol>
+                  </section>
+                  <section class="bounty-card-section">
+                    <h3>Things to review</h3>
+                    <ul data-card-risks></ul>
+                    <p class="bounty-card-note"><strong>You are the verifier by default.</strong> The creator wallet decides pass or fail against the published completion checks.</p>
+                  </section>
+                </div>
+
+                <div class="bounty-card-actions chat-draft-actions">
+                  <button class="button secondary" type="button" data-revise-card>Keep editing in chat</button>
+                  <button class="button secondary" type="button" data-share-card>Share draft</button>
+                  <button class="button secondary" type="button" data-approve-card data-approved="false">Approve draft</button>
+                  <button class="button primary" type="button" data-open-funding disabled>Connect wallet</button>
+                </div>
+                <p class="bounty-card-disclaimer">AI output is a draft. Approval does not publish or fund anything. The bounty is created only after a separate wallet confirmation.</p>
+              </div>
+            </article>
+          </section>
+        </aside>
       </section>
 
-      <section id="bounty-preview" class="bounty-preview" hidden aria-labelledby="bounty-card-title">
-        <article id="bounty-card" class="bounty-card">
-          <div class="bounty-card-visual">
-            <canvas id="bounty-card-art" role="img" aria-label="AI-generated visual preview of the achieved result"></canvas>
-            <span class="bounty-card-badge" data-card-badge>Draft · not posted</span>
-            <span class="image-generation-status" data-image-status>Preparing AI visual…</span>
-          </div>
-          <div class="bounty-card-body">
-            <p class="bounty-card-kicker">Proposed bounty</p>
-
-            <section class="mission-context" data-mission-context hidden>
-              <p class="mission-context-kicker">Part of a larger mission</p>
-              <h3 data-mission-title></h3>
-              <p data-mission-summary></p>
-              <span class="mission-horizon" data-mission-horizon></span>
-              <p>Choose which definite task to fund now. The other tasks remain part of the AI plan and can become separate bounties later.</p>
-              <div class="mission-task-options" data-mission-tasks></div>
-            </section>
-
-            <h2 id="bounty-card-title" data-card-title></h2>
-            <p class="bounty-card-goal" data-card-goal></p>
-
-            <div class="bounty-card-stats" aria-label="Bounty goal stats">
-              <div class="bounty-stat"><span>Total reward</span><strong data-card-reward>—</strong></div>
-              <div class="bounty-stat"><span>Time-bound</span><strong data-card-deadline>—</strong></div>
-              <div class="bounty-stat"><span>Measurable</span><strong data-card-checks>—</strong></div>
-              <div class="bounty-stat"><span>Attainability review</span><strong data-card-confidence>—</strong></div>
-            </div>
-
-            <div class="bounty-card-grid">
-              <section class="bounty-card-section">
-                <h3>Done when</h3>
-                <ol data-card-criteria></ol>
-              </section>
-              <section class="bounty-card-section">
-                <h3>Feasibility notes</h3>
-                <ul data-card-risks></ul>
-                <p class="bounty-card-note"><strong>You are the verifier.</strong> The creator wallet will decide pass or fail against these published completion checks. Contributors can see that subjective risk before claiming.</p>
-              </section>
-            </div>
-
-            <div class="bounty-card-actions">
-              <button class="button secondary" type="button" data-revise-card>Ask AI to revise</button>
-              <button class="button secondary" type="button" data-share-card>Share card</button>
-              <button class="button secondary" type="button" data-approve-card data-approved="false">Approve bounty card</button>
-              <button class="button primary" type="button" data-open-funding disabled>Fund bounty</button>
-            </div>
-            <p class="bounty-card-disclaimer">The AI terms and bounded pre-publication illustration are advisory. Approval does not publish or fund anything. Funding occurs only after a separate wallet confirmation, and payment to a solver is proven only by confirmed <code>BountySettled</code> evidence.</p>
-          </div>
-        </article>
-      </section>
-
-      <dialog id="funding-dialog" class="payment-dialog" aria-labelledby="funding-dialog-title">
+      <dialog id="funding-dialog" class="payment-dialog chat-wallet-dialog" aria-labelledby="funding-dialog-title">
         <div class="payment-dialog-inner">
           <div class="payment-dialog-head">
             <div>
-              <h2 id="funding-dialog-title">Fund bounty</h2>
-              <p>Choose how to fund the exact reward shown on the approved card.</p>
+              <h2 id="funding-dialog-title">Connect a wallet</h2>
+              <p>Choose a wallet on this device. Connecting does not post or fund the bounty.</p>
             </div>
-            <button class="dialog-close" type="button" data-close-funding aria-label="Close funding window">×</button>
+            <button class="dialog-close" type="button" data-close-funding aria-label="Close wallet window">×</button>
           </div>
 
-          <div class="payment-methods" aria-label="Funding methods">
-            <button class="payment-method" type="button" disabled><strong>Stripe</strong><span>Coming soon</span></button>
-            <button class="payment-method" type="button" disabled><strong>PayPal</strong><span>Coming soon</span></button>
-            <button class="payment-method" type="button" data-payment-method="crypto"><strong>Crypto Wallet</strong><span>Base USDC · available now</span></button>
-          </div>
+          <button type="button" data-payment-method="crypto" hidden>Crypto Wallet</button>
 
           <section class="wallet-picker-panel" data-wallet-panel hidden>
-            <h3>Choose a wallet on this device</h3>
+            <h3>Choose a wallet</h3>
             <p data-wallet-message>Looking for compatible wallets…</p>
             <div class="wallet-options" data-wallet-options></div>
           </section>
@@ -146,12 +169,12 @@
             <div class="funding-help" data-funding-help hidden>
               <strong>Wallet not ready yet.</strong>
               <ol>
-                <li>Open the selected wallet and confirm the network is <strong>Base</strong>.</li>
-                <li>Use the wallet’s Buy or Bridge feature to obtain at least <strong data-missing-usdc>—</strong> on Base.</li>
-                <li>Keep a small amount of Base ETH for the creation transaction.</li>
+                <li>Confirm the wallet network is <strong>Base</strong>.</li>
+                <li>Obtain at least <strong data-missing-usdc>—</strong> in native Base USDC.</li>
+                <li>Keep a small amount of Base ETH for gas.</li>
                 <li>Return here and select <strong>Recheck balance</strong>.</li>
               </ol>
-              <p>Verify the USDC token address before acquiring tokens. Never enter a recovery phrase or private key on this website.</p>
+              <p>Never enter a recovery phrase or private key on this website.</p>
             </div>
 
             <div class="wallet-tools">
@@ -162,11 +185,11 @@
 
             <div data-legal-consent data-consent-actions="post_bounty"></div>
             <div class="payment-final-actions">
-              <button class="button primary" type="button" data-fund-now disabled>Review and fund with wallet</button>
+              <button class="button primary" type="button" data-fund-now disabled>Review and post with wallet</button>
             </div>
           </section>
 
-          <output class="payment-status" data-payment-status aria-live="polite">Choose a payment method. A wallet connection is not funding.</output>
+          <output class="payment-status" data-payment-status aria-live="polite">Approve the draft before connecting a wallet.</output>
         </div>
       </dialog>
 
@@ -178,7 +201,7 @@
     </main>
 
     <footer class="guild-shell-footer">
-      <span>Nothing is posted or funded until you approve the card and confirm the exact wallet request.</span>
+      <span>Nothing is posted or funded until you approve the draft and confirm the exact wallet request.</span>
       <a href="how-it-works.html">How it works</a>
       <a href="terms.html">Terms</a>
       <a href="privacy.html">Privacy</a>
@@ -191,5 +214,6 @@
     <script src="legal-consent.js"></script>
     <script src="evm.js"></script>
     <script src="bounty-composer-v2.js?v=1"></script>
+    <script src="bounty-chat-ui.js?v=1"></script>
   </body>
 </html>
