@@ -1,0 +1,138 @@
+name: Standing meta v3 deploy
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/standing-meta-v3-deploy.yml"
+      - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV3.sol"
+      - "contracts/base-escrow/src/StandingMetaV3Bundle.sol"
+      - "contracts/base-escrow/test/CanonicalIndependentChildVerifierV3.t.sol"
+      - "scripts/standing_meta_v3_deploy.py"
+      - "scripts/test_standing_meta_v3_deploy.py"
+      - "docs/standing-meta-v3-profit-invariant.md"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/standing-meta-v3-deploy.yml"
+      - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV3.sol"
+      - "contracts/base-escrow/src/StandingMetaV3Bundle.sol"
+      - "contracts/base-escrow/test/CanonicalIndependentChildVerifierV3.t.sol"
+      - "scripts/standing_meta_v3_deploy.py"
+      - "scripts/test_standing_meta_v3_deploy.py"
+      - "docs/standing-meta-v3-profit-invariant.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standing-meta-v3-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deterministic-gates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Contract, economics, and deployment helper tests
+        run: |
+          python -m unittest scripts.test_standing_meta_v3_deploy -v
+          forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV3Test -vv
+          forge build --root contracts/base-escrow --sizes
+
+      - name: Read-only Base activation and funding preflight
+        env:
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+        run: >-
+          python scripts/standing_meta_v3_deploy.py plan
+          --output target/standing-meta-v3-plan.json
+          --markdown-output target/standing-meta-v3-plan.md
+
+      - name: Publish pull-request preflight
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --body-file target/standing-meta-v3-plan.md
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: standing-meta-v3-plan-${{ github.sha }}
+          path: |
+            target/standing-meta-v3-plan.json
+            target/standing-meta-v3-plan.md
+          if-no-files-found: error
+
+  base-mainnet-deploy:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: deterministic-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Deterministically deploy and attest standing-meta-v3
+        run: >-
+          python scripts/standing_meta_v3_deploy.py deploy
+          --output target/standing-meta-v3-deployment.json
+          --markdown-output target/standing-meta-v3-plan.md
+
+      - name: Publish deployment evidence to migration issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('target/standing-meta-v3-deployment.json').read_text())
+          verification = report['verification']
+          transaction = report.get('transaction') or {}
+          tx_hash = transaction.get('transactionHash') or transaction.get('transaction_hash')
+          lines = [
+              '## Standing-meta-v3 Base deployment reconciled',
+              '',
+              f"- Verifier module: `{verification['verifier_module']}`",
+              f"- Runtime code hash: `{verification['runtime_code_hash']}`",
+              f"- Acceptance criteria hash: `{verification['acceptance_criteria_hash']}`",
+              f"- Deployment transaction: `{tx_hash}`" if tx_hash else '- Deployment was already present and re-attested idempotently.',
+              '- Child floor: **1.00 USDC**',
+              '- Guaranteed parent gross-margin floor: **1.00 USDC**',
+              '',
+              'This proves policy deployment only. It does not prove that replacement parents are created, funded, claimable, or paid.',
+          ]
+          Path('target/standing-meta-v3-deployment.md').write_text('\n'.join(lines) + '\n')
+          PY
+          gh issue comment 527 --body-file target/standing-meta-v3-deployment.md
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: standing-meta-v3-mainnet-${{ github.sha }}
+          path: |
+            target/standing-meta-v3-plan.json
+            target/standing-meta-v3-plan.md
+            target/standing-meta-v3-deployment.json
+            target/standing-meta-v3-deployment.md
+          if-no-files-found: warn
