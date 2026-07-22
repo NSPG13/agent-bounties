@@ -20,6 +20,8 @@ REQUIRED_FILES = [
     "objective.css",
     "objective.js",
     "x402.html",
+    "how-to-earn-money-with-my-ai-agent.html",
+    "blog.css",
     "x402-test-vectors.json",
     "prepare-agent.html",
     "agent-budget.html",
@@ -37,12 +39,18 @@ REQUIRED_FILES = [
     "analytics-config.js",
     "analytics.js",
     "route-alias.js",
+    "bounty-entry.js",
+    "ai-bounty-handoff.js",
+    "ai-bounty-handoff.css",
     "autonomous.js",
     "legal-consent.js",
     "protocol.json",
     "llms.txt",
     ".well-known/agent-bounties.json",
     ".well-known/x402.json",
+    "agent/index.html",
+    "agent/index.md",
+    "agent.css",
     ".nojekyll",
 ]
 
@@ -56,6 +64,7 @@ PUBLIC_INDEXABLE_PAGES = {
     "prepare-agent.html": "https://agentbounties.app/prepare-agent.html",
     "agent-budget.html": "https://agentbounties.app/agent-budget.html",
     "x402.html": "https://agentbounties.app/x402.html",
+    "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
     "terms.html": "https://agentbounties.app/terms.html",
     "privacy.html": "https://agentbounties.app/privacy.html",
     "refunds.html": "https://agentbounties.app/refunds.html",
@@ -175,6 +184,41 @@ def main() -> int:
             ],
         )
 
+    agent_page_path = site_dir / "agent" / "index.html"
+    agent_page = agent_page_path.read_text(encoding="utf-8")
+    agent_parser = LinkParser()
+    agent_parser.feed(agent_page)
+    require_phrases(
+        "agent/index.html",
+        agent_page,
+        [
+            '<link rel="canonical" href="https://agentbounties.app/agent/">',
+            'type="text/markdown"',
+            "AGENT MODE · NO COMPUTER USE REQUIRED",
+            "https://mcp.agentbounties.app/mcp",
+            "https://api.agentbounties.app/api-docs/openapi.json",
+            "https://agentbounties.app/schemas/discovery-manifest.v2.json",
+            "Only <code>BountySettled</code> proves bounty payment",
+        ],
+    )
+    if re.search(r'<meta\s+name="robots"[^>]*noindex', agent_page, re.IGNORECASE):
+        fail("agent/index.html must remain indexable")
+    for link in agent_parser.links:
+        check_internal_link(site_dir, agent_page_path, link, agent_parser.ids)
+
+    agent_markdown = (site_dir / "agent" / "index.md").read_text(encoding="utf-8")
+    require_phrases(
+        "agent/index.md",
+        agent_markdown,
+        [
+            "No computer use is required",
+            "https://agentbounties.app/llms.txt",
+            "https://mcp.agentbounties.app/mcp",
+            "https://api.agentbounties.app/api-docs/openapi.json",
+            "Only a confirmed canonical `BountySettled` event proves bounty payment",
+        ],
+    )
+
     for html_file in sorted(site_dir.glob("*.html")):
         parser = LinkParser()
         text = html_file.read_text(encoding="utf-8")
@@ -212,7 +256,9 @@ def main() -> int:
         for element in sitemap_root.findall("sm:url/sm:loc", sitemap_namespace)
         if element.text
     }
-    expected_sitemap_urls = set(PUBLIC_INDEXABLE_PAGES.values())
+    expected_sitemap_urls = set(PUBLIC_INDEXABLE_PAGES.values()) | {
+        "https://agentbounties.app/agent/"
+    }
     if sitemap_urls != expected_sitemap_urls:
         missing = sorted(expected_sitemap_urls - sitemap_urls)
         extra = sorted(sitemap_urls - expected_sitemap_urls)
@@ -239,11 +285,51 @@ def main() -> int:
         fail("index.html JSON-LD must use the canonical product name")
     if structured_data.get("url") != "https://agentbounties.app/":
         fail("index.html JSON-LD must use the canonical website URL")
+
+    require_phrases(
+        "index.html blog discovery",
+        pages["index.html"],
+        [
+            'href="https://medium.com/search?q=agent%20bounties"',
+            'aria-label="Find Agent Bounties on Medium"',
+            'href="how-to-earn-money-with-my-ai-agent.html">Blog</a>',
+        ],
+    )
+    guide_page = (site_dir / "how-to-earn-money-with-my-ai-agent.html").read_text(encoding="utf-8")
+    require_phrases(
+        "AI agent earning guide",
+        guide_page,
+        [
+            "How to Earn Money With Your AI Agent: 7 Practical Models",
+            "How can I earn money with my AI agent?",
+            "Publisher disclosure",
+            "Revenue is not profit",
+            'id="agent-bounties"',
+            'href="earn.html">Browse live agent bounties</a>',
+            "BountySettled",
+            "https://docs.stripe.com/billing/subscriptions/usage-based",
+            "https://www.ftc.gov/business-guidance/blog/2026/06/back-those-earnings-claims-other-lessons-ftcs-labor-task-force-work",
+        ],
+    )
+    guide_structured_data_match = re.search(
+        r'<script\s+type="application/ld\+json">\s*(\{.*?\})\s*</script>',
+        guide_page,
+        re.DOTALL,
+    )
+    if not guide_structured_data_match:
+        fail("AI agent earning guide must expose JSON-LD")
+    guide_structured_data = json.loads(guide_structured_data_match.group(1))
+    guide_graph = guide_structured_data.get("@graph", [])
+    guide_types = {item.get("@type") for item in guide_graph}
+    if guide_types != {"Article", "FAQPage"}:
+        fail("AI agent earning guide JSON-LD must expose Article and FAQPage")
     recovery_page = (site_dir / "recovery.html").read_text(encoding="utf-8")
     javascript = (site_dir / "autonomous.js").read_text(encoding="utf-8")
     analytics_javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
     analytics_config = (site_dir / "analytics-config.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
+    bounty_entry_javascript = (site_dir / "bounty-entry.js").read_text(encoding="utf-8")
+    ai_handoff_javascript = (site_dir / "ai-bounty-handoff.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     objective_page = (site_dir / "objective.html").read_text(encoding="utf-8")
     objective_javascript = (site_dir / "objective.js").read_text(encoding="utf-8")
@@ -264,6 +350,33 @@ def main() -> int:
     privacy_page = (site_dir / "privacy.html").read_text(encoding="utf-8")
     pages_workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     check_protocol(protocol, deployment)
+
+    require_phrases(
+        "index.html agent and bounty entry",
+        pages["index.html"],
+        [
+            "data-primary-bounty-cta>Post a bounty</a>",
+            'class="mode-switch"',
+            'href="agent/"',
+            'action="objective.html"',
+            'name="autostart" value="1"',
+            'src="bounty-entry.js?v=1"',
+            'type="text/markdown" title="Agent mode (Markdown)"',
+        ],
+    )
+    for retired in ("data-connect-wallet", "data-wallet-provider", 'class="network-chip"'):
+        if retired in pages["index.html"]:
+            fail(f"homepage still exposes retired wallet-first navigation: {retired}")
+    require_phrases(
+        "bounty-entry.js",
+        bounty_entry_javascript,
+        [
+            "agent-bounties:homepage-bounty-intent",
+            "window.sessionStorage.setItem",
+            "window.sessionStorage.removeItem",
+            "objective.html?source=home&autostart=1",
+        ],
+    )
 
     for name, page in pages.items():
         require_phrases(name, page, ["Post your own bounty", "autonomous.js"])
@@ -642,6 +755,8 @@ def main() -> int:
             "/v1/cloud-agent/objective-plans",
             "inventory-summary",
             "Inventory unavailable:",
+            "Preferred agent entry: https://agentbounties.app/agent/index.md",
+            "No browser or computer use is required",
         ],
     )
 
@@ -731,12 +846,28 @@ def main() -> int:
         "objective.html",
         objective_page,
         [
-            "Turn one outcome into verifiable paid work",
-            "GPT-5.6",
+            "Continue in the AI account that already knows you",
+            "https://mcp.agentbounties.app/mcp",
+            "data-ai-draft-import",
+            "ai-bounty-handoff.js?v=5",
+            "Turn one outcome into verifiable paid work with the AI account you already use",
             "Agents have already completed paid loops",
             "Post your own bounty",
         ],
     )
+    require_phrases(
+        "ai-bounty-handoff.js",
+        ai_handoff_javascript,
+        [
+            "prepare_bounty_post",
+            "chatgpt.com",
+            "claude.ai/new",
+            "gemini.google.com/app",
+            "agent-bounties:prepared-draft",
+        ],
+    )
+    if discovery.get("endpoints", {}).get("user_ai_bounty_composer") != "https://agentbounties.app/objective.html":
+        fail("discovery must expose the user-owned AI bounty composer")
     require_phrases(
         "objective.js",
         objective_javascript,
@@ -981,6 +1112,16 @@ def main() -> int:
         ],
     )
     discovery_endpoints = discovery.get("endpoints", {})
+    expected_agent_endpoints = {
+        "agent_mode": "https://agentbounties.app/agent/",
+        "agent_mode_markdown": "https://agentbounties.app/agent/index.md",
+        "openapi": "https://api.agentbounties.app/api-docs/openapi.json",
+        "discovery_manifest_schema": "https://agentbounties.app/schemas/discovery-manifest.v2.json",
+        "cli_source": "https://github.com/NSPG13/agent-bounties/tree/main/crates/cli",
+    }
+    for name, expected in expected_agent_endpoints.items():
+        if discovery_endpoints.get(name) != expected:
+            fail(f"static discovery has the wrong {name} endpoint")
     if discovery_endpoints.get("agent_wallet_readiness") != "https://api.agentbounties.app/v1/base/agent-wallet/readiness":
         fail("static discovery has the wrong agent wallet readiness endpoint")
     if discovery_endpoints.get("autonomous_standing_meta_v2_child_preparation") != (

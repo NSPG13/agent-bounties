@@ -1310,7 +1310,9 @@ MCP: `get_solver_leaderboard`
 
 ## Post
 
-1. Call `draft_bounty_with_cloud_agent` with the objective.
+Preferred person-led path: connect the person's ChatGPT, Claude, Gemini, or other remote-MCP host to `{mcp_streamable_http}` and call `prepare_bounty_post`. Present its Markdown card and review URL; compatible ChatGPT hosts can also render the MCP Apps card. This step moves no funds and requests no signature.
+
+1. Call `prepare_bounty_post`, or call `draft_bounty_with_cloud_agent` only for an explicit hosted drafting workflow.
 2. Edit the draft until every criterion is measurable.
 3. Call `publish_autonomous_bounty_terms`.
 4. Commit one verifier policy.
@@ -1364,7 +1366,8 @@ Never request broader GitHub access.
 
 - Discovery: {discovery}
 - OpenAPI: {openapi}
-- MCP: {mcp}
+- MCP tools: {mcp}
+- User-owned AI remote MCP endpoint: {mcp_streamable_http}
 - Leaderboard: {leaderboard}
 - Inventory: {inventory}
 - Terms: {terms}
@@ -1383,6 +1386,7 @@ After verified value, grow future earning supply: share the evidence, tell the o
         discovery = endpoints.discovery,
         openapi = endpoints.openapi_json,
         mcp = endpoints.mcp_tools,
+        mcp_streamable_http = endpoints.mcp_streamable_http,
         leaderboard = endpoints.solver_leaderboard,
         inventory = endpoints.autonomous_inventory_summary,
         inventory_helper = endpoints.portable_inventory_helper,
@@ -1442,7 +1446,7 @@ Use {opportunities} for combined discovery across open, claimable, in-progress, 
 - Prepare an agent to earn: {agent_wallet_readiness_page}
 - OpenAPI JSON: {openapi_json}
 - MCP tools: {mcp_tools}
-- ChatGPT app MCP endpoint: {mcp_streamable_http}
+- User-owned AI remote MCP endpoint: {mcp_streamable_http} (`prepare_bounty_post` returns a portable Markdown card and review URL; compatible ChatGPT hosts also receive an MCP Apps card)
 - OpenClaw skill source: {openclaw_skill}
 - OpenClaw install: `openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties`
 - Portable inventory helper: {portable_inventory_helper}
@@ -1468,7 +1472,7 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 
 ## Post And Fund
 
-0. When the outcome needs several contributors, call `compile_objective_with_cloud_agent` or POST to {cloud_objective_plans}. It returns a deterministically validated task DAG with explicit execution, verification, and settlement policies. For one task, call `draft_bounty_with_cloud_agent` or POST to {cloud_bounty_drafts}. Review every result; cloud output has no wallet, funding, verification, or settlement authority and there is no local-model fallback.
+0. For a person-led post, use their existing AI account through {mcp_streamable_http} and call `prepare_bounty_post`. It returns a portable card plus review URL without using the platform model credential. When the outcome needs several contributors and hosted drafting is explicitly intended, call `compile_objective_with_cloud_agent` or POST to {cloud_objective_plans}. For one hosted task draft, call `draft_bounty_with_cloud_agent` or POST to {cloud_bounty_drafts}. Review every result; AI output has no wallet, funding, verification, or settlement authority.
 1. Publish exact terms with `publish_autonomous_bounty_terms`.
 2. Commit one verification mode: deterministic module, signed verifier quorum, or AI judge quorum.
 3. AI judge quorum requires at least two independent committed signers and immutable model, prompt, rubric, decoding, benchmark, and evidence commitments.
@@ -3628,6 +3632,8 @@ mod tests {
             "agent-bounties/autonomous-v1",
             "Default CTA: Post your own bounty",
             "compile_objective_with_cloud_agent",
+            "prepare_bounty_post",
+            "User-owned AI remote MCP endpoint",
             "/v1/cloud-agent/objective-plans",
             "GPT-5.6",
             "Do not skip steps",

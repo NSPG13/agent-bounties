@@ -179,10 +179,20 @@
   }
 
   const params = new URLSearchParams(location.search);
-  const supplied = params.get("goal") || params.get("draftObjective") || params.get("objective");
+  const entryIntent = window.AgentBountyEntry?.consume
+    ? window.AgentBountyEntry.consume(params)
+    : { message: "", autostart: false };
+  const supplied = entryIntent.message
+    || params.get("goal")
+    || params.get("draftObjective")
+    || params.get("objective");
   if (supplied) {
     input.value = supplied;
     fitInput();
+  }
+
+  if (entryIntent.autostart && supplied) {
+    lastAssistantText = prompt.textContent.trim();
   }
 
   syncPrompt();
@@ -190,4 +200,8 @@
   scheduleDraftSync();
   syncApproval();
   document.documentElement.dataset.bountyComposer = "chat-v2";
+
+  if (entryIntent.autostart && supplied) {
+    form.requestSubmit();
+  }
 })();
