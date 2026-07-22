@@ -108,9 +108,20 @@
     if (!isApproved) approvedAnnounced = false;
   }
 
+  function prepareNaturalRevision(value) {
+    if (preview.hidden || !revise) return;
+    const alreadyRevising = /what should the ai change/i.test(prompt.textContent);
+    if (alreadyRevising) return;
+
+    revise.click();
+    input.value = value;
+  }
+
   form.addEventListener("submit", () => {
     const value = input.value.trim();
-    if (value) message("user", value);
+    if (!value) return;
+    prepareNaturalRevision(value);
+    message("user", value);
   }, true);
 
   new MutationObserver(syncPrompt).observe(prompt, {
