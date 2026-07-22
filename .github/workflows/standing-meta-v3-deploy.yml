@@ -150,7 +150,7 @@ jobs:
 
           The workflow will post confirmed immutable evidence on success or an explicit failure notice. This start notice is not deployment evidence.
           EOF
-          gh issue comment 527 --body-file /tmp/v3-deploy-start.md
+          gh issue comment 527 --repo "$GITHUB_REPOSITORY" --body-file /tmp/v3-deploy-start.md
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
 
@@ -189,7 +189,7 @@ jobs:
           ]
           Path('target/standing-meta-v3-deployment.md').write_text('\n'.join(lines) + '\n')
           PY
-          gh issue comment 527 --body-file target/standing-meta-v3-deployment.md
+          gh issue comment 527 --repo "$GITHUB_REPOSITORY" --body-file target/standing-meta-v3-deployment.md
 
       - name: Publish explicit deployment failure
         if: failure()
@@ -201,7 +201,7 @@ jobs:
 
           No V3 deployment is being claimed. Inspect the failed step and artifact before retrying.
           EOF
-          gh issue comment 527 --body-file /tmp/v3-deploy-failure.md
+          gh issue comment 527 --repo "$GITHUB_REPOSITORY" --body-file /tmp/v3-deploy-failure.md
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
