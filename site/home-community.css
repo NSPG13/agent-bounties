@@ -1,6 +1,5 @@
-/* Focused homepage community corrections for issues #485, #489, and #493. */
+/* Focused homepage community corrections for issues #485, #489, #493, and #520. */
 
-/* Remove the old raster sprig and render a real public-domain botanical plate. */
 .community-shell::after {
   content: none;
   background: none;
@@ -25,63 +24,38 @@
   height: 218px;
   overflow: hidden;
   border-radius: 0 0 15px 0;
-  opacity: 0.9;
+  opacity: 1;
   filter: drop-shadow(0 0 20px rgba(171, 232, 65, 0.1));
   pointer-events: none;
 }
 
-/*
- * Ginkgo biloba botanical illustration from Larousse du XXe siècle, 1932.
- * CC0 source: Wikimedia Commons, File:Ginkgo biloba Larousse Extracted.png.
- * The color treatment integrates the selected fan-leaf composition into the
- * existing dark solarpunk mission panel without fruit, seeds, or acorns.
- */
+/* Exact user-selected ginkgo image, committed locally for deterministic rendering. */
 .mission-sprig::before {
   content: "";
   position: absolute;
-  inset: -5% -14% -6% -20%;
-  background: url("https://upload.wikimedia.org/wikipedia/commons/1/15/Ginkgo_biloba_Larousse_Extracted.png") 50% 42% / cover no-repeat;
-  filter: invert(1) sepia(1) saturate(2.1) hue-rotate(34deg) brightness(0.78) contrast(1.2);
-  mix-blend-mode: screen;
-  opacity: 0.82;
-  transform: rotate(-1deg) scale(1.03);
-  transform-origin: 52% 100%;
+  inset: 0;
+  background: url("assets/mission-ginkgo-selected.webp?v=520") center / cover no-repeat;
+  filter: none;
+  mix-blend-mode: normal;
+  opacity: 1;
+  transform: none;
 }
 
 .mission-sprig::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(90deg, rgba(5, 14, 10, 0.96), transparent 31%),
-    linear-gradient(180deg, rgba(5, 14, 10, 0.08), transparent 44%, rgba(5, 14, 10, 0.22));
-  pointer-events: none;
+  content: none;
 }
 
 .mission-sprig svg {
   display: none;
 }
 
-/* The previous dynamic oak attribution is obsolete and must not remain visible. */
-.botanical-credit {
-  display: none !important;
-}
-
+/* The selected image already includes its attribution line. */
+.botanical-credit,
 .charter-copy::after {
-  content: "Ginkgo biloba · CC0 botanical plate";
-  position: absolute;
-  z-index: 3;
-  right: 10px;
-  bottom: 8px;
-  max-width: 118px;
-  color: rgba(222, 231, 218, 0.54);
-  font-size: 6px;
-  line-height: 1.25;
-  text-align: right;
-  pointer-events: none;
+  display: none !important;
+  content: none !important;
 }
 
-/* Crop the obsolete +1.2k badge out of the face asset and replace it with live data. */
 .adventurer-crests {
   position: relative;
   display: flex;
@@ -128,7 +102,6 @@
   color: var(--guild-lime-bright);
 }
 
-/* Replace placeholder letters with accessible, recognizable social SVGs. */
 .community-socials {
   display: flex;
   flex-wrap: wrap;
@@ -176,13 +149,6 @@
     bottom: -4px;
     width: 174px;
     height: 296px;
-  }
-
-  .charter-copy::after {
-    right: 17px;
-    bottom: 11px;
-    max-width: 154px;
-    font-size: 7px;
   }
 
   .adventurer-crests {
@@ -236,13 +202,6 @@
     right: 0;
     width: 112px;
     height: 175px;
-  }
-
-  .charter-copy::after {
-    right: 5px;
-    bottom: 6px;
-    max-width: 96px;
-    font-size: 5.5px;
   }
 
   .community-socials {
