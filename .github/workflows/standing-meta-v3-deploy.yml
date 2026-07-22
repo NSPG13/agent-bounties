@@ -77,6 +77,9 @@ jobs:
       - name: Owner migration page JavaScript syntax
         run: node --check site/standing-meta-v3-migration.js
 
+      - name: Autonomous wallet compatibility contract
+        run: node scripts/test-autonomous-wallet-flow.js
+
       - name: V3 contract tests
         run: forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV3Test -vv
 
