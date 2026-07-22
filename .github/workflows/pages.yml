@@ -60,6 +60,7 @@ jobs:
           ! grep -q 'class="network-chip"' site/index.html
           grep -q 'AGENT MODE · NO COMPUTER USE REQUIRED' site/agent/index.html
           grep -q 'No computer use is required' site/agent/index.md
+          grep -q '"agent_mode": "https://agentbounties.app/agent/"' site/.well-known/agent-bounties.json
           grep -q 'data-board-search' site/earn.html
           grep -q 'id="fund-bounty-panel"' site/earn.html
           grep -q 'class="composer-page chat-app-page"' site/objective.html
@@ -161,6 +162,7 @@ jobs:
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
+          include-hidden-files: true
       - id: deployment
         uses: actions/deploy-pages@v5
       - name: Verify the normal chatbot experience
@@ -183,6 +185,7 @@ jobs:
               && curl "${common_curl[@]}" "https://agentbounties.app/?verify=${nonce}" -o /tmp/live-index.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/agent/?verify=${nonce}" -o /tmp/live-agent.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/agent/index.md?verify=${nonce}" -o /tmp/live-agent.md \
+              && curl "${common_curl[@]}" "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/live-agent-manifest.json \
               && curl "${common_curl[@]}" "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/objective.html?verify=${nonce}" -o /tmp/live-objective.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat.css?verify=${nonce}" -o /tmp/live-chat.css \
@@ -201,6 +204,7 @@ jobs:
                 && ! grep -q 'class="network-chip"' /tmp/live-index.html \
                 && grep -q 'AGENT MODE · NO COMPUTER USE REQUIRED' /tmp/live-agent.html \
                 && grep -q 'No computer use is required' /tmp/live-agent.md \
+                && grep -q '"agent_mode": "https://agentbounties.app/agent/"' /tmp/live-agent-manifest.json \
                 && grep -q 'data-public-ux="simplified-v1"' /tmp/live-earn.html \
                 && grep -q 'data-board-search' /tmp/live-earn.html \
                 && grep -q 'id="fund-bounty-panel"' /tmp/live-earn.html \
