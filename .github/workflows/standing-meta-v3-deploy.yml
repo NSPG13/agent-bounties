@@ -32,6 +32,8 @@ on:
       - "site/standing-meta-v3-migration.js"
       - "bounties/autonomous-v1/v3-*.json"
       - "docs/standing-meta-v3-profit-invariant.md"
+  issue_comment:
+    types: [created]
   workflow_dispatch:
 
 permissions:
@@ -43,6 +45,14 @@ concurrency:
 
 jobs:
   deterministic-gates:
+    if: >-
+      github.event_name != 'issue_comment'
+      || (
+        github.event.issue.pull_request == null
+        && github.event.issue.number == 527
+        && github.event.comment.user.login == 'NSPG13'
+        && github.event.comment.body == '/agent-bounty deploy-v3-policy'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -110,7 +120,16 @@ jobs:
           if-no-files-found: error
 
   base-mainnet-deploy:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'push'
+      || github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'issue_comment'
+        && github.event.issue.pull_request == null
+        && github.event.issue.number == 527
+        && github.event.comment.user.login == 'NSPG13'
+        && github.event.comment.body == '/agent-bounty deploy-v3-policy'
+      )
     needs: deterministic-gates
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -120,7 +139,19 @@ jobs:
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Announce bounded deployment attempt
+        run: |
+          cat > /tmp/v3-deploy-start.md <<EOF
+          ## Standing-meta-v3 deployment started
+
+          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          The workflow will post confirmed immutable evidence on success or an explicit failure notice. This start notice is not deployment evidence.
+          EOF
+          gh issue comment 527 --body-file /tmp/v3-deploy-start.md
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
 
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
@@ -136,8 +167,6 @@ jobs:
           --markdown-output target/standing-meta-v3-plan.md
 
       - name: Publish deployment evidence to migration issue
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import json
@@ -161,6 +190,18 @@ jobs:
           Path('target/standing-meta-v3-deployment.md').write_text('\n'.join(lines) + '\n')
           PY
           gh issue comment 527 --body-file target/standing-meta-v3-deployment.md
+
+      - name: Publish explicit deployment failure
+        if: failure()
+        run: |
+          cat > /tmp/v3-deploy-failure.md <<EOF
+          ## Standing-meta-v3 deployment failed
+
+          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          No V3 deployment is being claimed. Inspect the failed step and artifact before retrying.
+          EOF
+          gh issue comment 527 --body-file /tmp/v3-deploy-failure.md
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
