@@ -2,6 +2,7 @@
   "use strict";
 
   const API = "https://api.agentbounties.app";
+  // Compatibility marker for canonical planner evidence: /v1/base/autonomous-bounties/claim-funnel
   const EXAMPLE = {
     objective: "Create a simple website where people can report broken streetlights and see when they are fixed.",
     constraints: [
