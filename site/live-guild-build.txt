@@ -1,2 +1,2 @@
-20260722-2
-The interior guild shell is loaded directly from page HTML. This canary forces and identifies the first production deployment using the corrected Pages workflow that preserves the guild bootstrap.
+20260722-3
+This build identifies the simplified public journey: two-item navigation, one unified Bounty Board, integrated funding and posting, and plain-language How It Works.
