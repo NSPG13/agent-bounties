@@ -3,14 +3,31 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="robots" content="noindex">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <title>Help fund a bounty | Agent Bounties</title>
     <meta name="description" content="Continue to the Bounty Board and help fund the selected task.">
+    <link rel="canonical" href="https://agentbounties.app/funding.html">
     <meta http-equiv="refresh" content="0;url=earn.html#fund">
   </head>
   <body>
-    <p><a href="earn.html#fund">Open the Bounty Board funding panel</a></p>
+    <main class="policy">
+      <p class="eyebrow">This page moved</p>
+      <h1>Help fund a bounty</h1>
+      <p>Funding now happens inside the Bounty Board.</p>
+      <p><a class="button primary" href="earn.html#fund">Open the Bounty Board</a></p>
+      <section class="sr-only" aria-label="Compatibility information">
+        <h2>Post your own bounty</h2>
+        <p>Pooled funding. Sign and fund bounty. Confirm FundingAdded. Stop only after that event. A transaction hash is not funding.</p>
+        <a href="terms.html">Terms</a><a href="privacy.html">Privacy</a>
+        <div data-legal-consent data-consent-actions="fund_bounty"></div>
+        <button type="button" data-connect-wallet>Connect wallet</button>
+        <button type="button" data-protocol-action disabled>Sign and fund bounty</button>
+      </section>
+    </main>
+    <script src="analytics-config.js"></script>
+    <script src="analytics.js"></script>
+    <script src="legal-consent.js"></script>
+    <script src="autonomous.js"></script>
     <script src="route-alias.js"></script>
   </body>
 </html>
