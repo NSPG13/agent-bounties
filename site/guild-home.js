@@ -111,10 +111,10 @@
 
   /*
    * Historical community metrics replace the rolling 30-day paid-solver number.
-   * The platform registry is preferred for participants. Public GitHub history
-   * supplies a live contributor/interactor count and a non-inflating fallback.
+   * The sources are independently deduplicated and are never added together,
+   * because doing so could count the same person or agent twice.
    */
-  const COMMUNITY_CACHE_KEY = "agent-bounties-community-metrics-v2";
+  const COMMUNITY_CACHE_KEY = "agent-bounties-community-metrics-v3";
   const COMMUNITY_CACHE_MS = 60 * 60 * 1_000;
   const COMMUNITY_REFRESH_MS = 30 * 60 * 1_000;
   const GITHUB_PAGE_SIZE = 100;
@@ -274,26 +274,28 @@
   }
 
   function renderCommunityMetrics(metrics) {
-    const contributorTitle = metrics.githubComplete
-      ? "Distinct historical public contributors found across repository commits, issues, pull requests, and comments."
-      : "Distinct historical public contributors found in the available repository history; unavailable sources were not estimated.";
-    const participantTitle = metrics.platformParticipants !== null
+    const contributorTitle = metrics.contributorSource === "github-public-history"
+      ? metrics.githubComplete
+        ? "Distinct historical public contributors found across repository commits, issues, pull requests, and comments."
+        : "Distinct historical public contributors found in the available repository history; unavailable sources were not estimated."
+      : "Historical public participants recorded by the platform audience registry; repository contributor history was temporarily unavailable.";
+    const participantTitle = metrics.participantSource === "platform-audience-registry"
       ? "Historical public participants recorded by the Agent Bounties audience registry."
       : metrics.githubComplete
-        ? "Historical public repository participants, including contributors and stargazers; the platform aggregate is temporarily unavailable."
+        ? "Historical public repository participants, including contributors and stargazers."
         : "Historical public participants found in the available repository records; unavailable sources were not estimated.";
 
     displayHistoricalCount(
       "[data-community-contributors]",
       metrics.contributors,
       contributorTitle,
-      "github-public-history",
+      metrics.contributorSource,
     );
     displayHistoricalCount(
       "[data-community-participants]",
       metrics.participants,
       participantTitle,
-      metrics.platformParticipants !== null ? "platform-audience-registry" : "github-public-history",
+      metrics.participantSource,
     );
 
     const crests = document.querySelector(".adventurer-crests");
@@ -340,16 +342,45 @@
     const github = githubResult.status === "fulfilled"
       ? githubResult.value
       : { contributors: null, participants: null, complete: false };
-    const contributors = Number.isSafeInteger(github.contributors)
+    const githubContributors = Number.isSafeInteger(github.contributors)
       ? github.contributors
+      : null;
+    const githubParticipants = Number.isSafeInteger(github.participants)
+      ? github.participants
+      : null;
+
+    const contributors = githubContributors !== null
+      ? githubContributors
       : platformParticipants;
-    const participants = Number.isSafeInteger(platformParticipants)
-      ? platformParticipants
-      : github.participants;
+    const contributorSource = githubContributors !== null
+      ? "github-public-history"
+      : platformParticipants !== null
+        ? "platform-audience-registry"
+        : "unavailable";
+
+    let participants = null;
+    let participantSource = "unavailable";
+    if (platformParticipants !== null && githubParticipants !== null) {
+      if (platformParticipants >= githubParticipants) {
+        participants = platformParticipants;
+        participantSource = "platform-audience-registry";
+      } else {
+        participants = githubParticipants;
+        participantSource = "github-public-history";
+      }
+    } else if (platformParticipants !== null) {
+      participants = platformParticipants;
+      participantSource = "platform-audience-registry";
+    } else if (githubParticipants !== null) {
+      participants = githubParticipants;
+      participantSource = "github-public-history";
+    }
+
     const metrics = {
       contributors,
       participants,
-      platformParticipants,
+      contributorSource,
+      participantSource,
       githubComplete: github.complete,
     };
     if (Number.isSafeInteger(contributors) && Number.isSafeInteger(participants)) {
