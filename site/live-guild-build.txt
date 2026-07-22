@@ -1,2 +1,2 @@
-20260722-3
-This build identifies the simplified public journey: two-item navigation, one unified Bounty Board, integrated funding and posting, and plain-language How It Works.
+20260722-4
+This build updates the homepage hero to the global marketplace for problems worth solving message.
