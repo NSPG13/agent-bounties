@@ -4,21 +4,33 @@ on:
   pull_request:
     paths:
       - ".github/workflows/standing-meta-v3-deploy.yml"
+      - ".github/workflows/activate-standing-meta-v3-replacements.yml"
       - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV3.sol"
       - "contracts/base-escrow/src/StandingMetaV3Bundle.sol"
       - "contracts/base-escrow/test/CanonicalIndependentChildVerifierV3.t.sol"
       - "scripts/standing_meta_v3_deploy.py"
       - "scripts/test_standing_meta_v3_deploy.py"
+      - "scripts/activate_standing_meta_v3_replacements.py"
+      - "scripts/test_activate_standing_meta_v3_replacements.py"
+      - "site/standing-meta-v3-migration.html"
+      - "site/standing-meta-v3-migration.js"
+      - "bounties/autonomous-v1/v3-*.json"
       - "docs/standing-meta-v3-profit-invariant.md"
   push:
     branches: [main]
     paths:
       - ".github/workflows/standing-meta-v3-deploy.yml"
+      - ".github/workflows/activate-standing-meta-v3-replacements.yml"
       - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV3.sol"
       - "contracts/base-escrow/src/StandingMetaV3Bundle.sol"
       - "contracts/base-escrow/test/CanonicalIndependentChildVerifierV3.t.sol"
       - "scripts/standing_meta_v3_deploy.py"
       - "scripts/test_standing_meta_v3_deploy.py"
+      - "scripts/activate_standing_meta_v3_replacements.py"
+      - "scripts/test_activate_standing_meta_v3_replacements.py"
+      - "site/standing-meta-v3-migration.html"
+      - "site/standing-meta-v3-migration.js"
+      - "bounties/autonomous-v1/v3-*.json"
       - "docs/standing-meta-v3-profit-invariant.md"
   workflow_dispatch:
 
@@ -47,6 +59,9 @@ jobs:
       - name: Contract, economics, and deployment helper tests
         run: |
           python -m unittest scripts.test_standing_meta_v3_deploy -v
+          python -m unittest scripts.test_activate_standing_meta_v3_replacements -v
+          python -m py_compile scripts/standing_meta_v3_deploy.py scripts/activate_standing_meta_v3_replacements.py
+          node --check site/standing-meta-v3-migration.js
           forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV3Test -vv
           forge build --root contracts/base-escrow --sizes
 
