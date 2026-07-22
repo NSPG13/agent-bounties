@@ -1,6 +1,6 @@
-/* Focused homepage community corrections for issue #485. */
+/* Focused homepage community corrections for issues #485 and #489. */
 
-/* The original raster sprig includes stray text. Replace it with clean inline SVG art. */
+/* Remove the old raster sprig and render a real public-domain botanical plate. */
 .community-shell::after {
   content: none;
   background: none;
@@ -13,7 +13,7 @@
 
 .charter-copy > :not(.mission-sprig) {
   position: relative;
-  z-index: 1;
+  z-index: 2;
 }
 
 .mission-sprig {
@@ -23,16 +23,61 @@
   bottom: -7px;
   width: 126px;
   height: 218px;
-  opacity: 0.82;
-  filter: drop-shadow(0 0 18px rgba(171, 232, 65, 0.12));
+  overflow: hidden;
+  border-radius: 0 0 15px 0;
+  opacity: 0.86;
+  filter: drop-shadow(0 0 20px rgba(171, 232, 65, 0.1));
+  pointer-events: none;
+}
+
+/*
+ * Quercus alba botanical plate, 1819, Pierre-Joseph Redouté.
+ * Public domain source: Wikimedia Commons, File:NAS-001 Quercus alba.png.
+ * Inversion plus screen blending removes the paper field while retaining the
+ * natural engraved leaf and branch detail against the dark solarpunk panel.
+ */
+.mission-sprig::before {
+  content: "";
+  position: absolute;
+  inset: -7% -22% -6% -30%;
+  background: url("https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/NAS-001_Quercus_alba.png/500px-NAS-001_Quercus_alba.png") 55% 38% / cover no-repeat;
+  filter: invert(1) sepia(1) saturate(2.2) hue-rotate(34deg) brightness(0.8) contrast(1.22);
+  mix-blend-mode: screen;
+  opacity: 0.78;
+  transform: rotate(-1.5deg) scale(1.02);
+  transform-origin: 55% 100%;
+}
+
+.mission-sprig::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(5, 14, 10, 0.96), transparent 34%),
+    linear-gradient(180deg, rgba(5, 14, 10, 0.12), transparent 42%, rgba(5, 14, 10, 0.22));
   pointer-events: none;
 }
 
 .mission-sprig svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
+  display: none;
+}
+
+.botanical-credit {
+  position: absolute !important;
+  z-index: 3 !important;
+  right: 10px;
+  bottom: 8px;
+  max-width: 115px;
+  color: rgba(222, 231, 218, 0.54) !important;
+  font-size: 6px;
+  line-height: 1.25;
+  text-align: right;
+  text-decoration: none;
+}
+
+.botanical-credit:hover,
+.botanical-credit:focus-visible {
+  color: var(--guild-lime-bright) !important;
 }
 
 /* Crop the obsolete +1.2k badge out of the face asset and replace it with live data. */
@@ -132,6 +177,13 @@
     height: 296px;
   }
 
+  .botanical-credit {
+    right: 17px;
+    bottom: 11px;
+    max-width: 150px;
+    font-size: 7px;
+  }
+
   .adventurer-crests {
     width: 320px;
     height: 73px;
@@ -183,6 +235,13 @@
     right: 0;
     width: 112px;
     height: 175px;
+  }
+
+  .botanical-credit {
+    right: 5px;
+    bottom: 6px;
+    max-width: 94px;
+    font-size: 5.5px;
   }
 
   .community-socials {
