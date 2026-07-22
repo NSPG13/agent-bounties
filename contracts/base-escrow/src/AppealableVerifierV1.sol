@@ -13,6 +13,7 @@ interface IAppealableBountyV1 {
     function verifierModule() external view returns (address);
     function verifierRewardRecipient() external view returns (address);
     function verificationWindowSeconds() external view returns (uint64);
+    function verificationExpiresAt() external view returns (uint64);
     function status() external view returns (uint8);
     function round() external view returns (uint64);
     function solver() external view returns (address);
@@ -91,6 +92,10 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
     uint64 public constant APPEAL_WINDOW = 24 hours;
     uint64 public constant VOTING_WINDOW = 24 hours;
     uint64 public constant REQUIRED_BOUNTY_VERIFICATION_WINDOW = 96 hours;
+    uint64 public constant VRF_FULFILLMENT_WINDOW = 2 hours;
+    uint64 public constant CASE_COMPLETION_BUFFER = 10 minutes;
+    uint64 public constant MINIMUM_CASE_REMAINING = VRF_FULFILLMENT_WINDOW + uint64(PRIMARY_RANKING_SIZE)
+        * RESPONSE_WINDOW + APPEAL_WINDOW + VRF_FULFILLMENT_WINDOW + VOTING_WINDOW + CASE_COMPLETION_BUFFER;
     uint8 public constant PRIMARY_RANKING_SIZE = 4;
     uint8 public constant APPELLATE_SIZE = 5;
     uint8 public constant APPELLATE_THRESHOLD = 3;
@@ -119,6 +124,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
     mapping(bytes32 => mapping(address => bool)) public voted;
     mapping(address => uint256) public credits;
     uint256 public reservedBalance;
+    bool private _entered;
 
     event VerificationCaseOpened(bytes32 indexed caseId, address indexed bounty, uint256 requestId);
     event PrimaryAssigned(bytes32 indexed caseId, address indexed primary, uint64 deadline, uint8 rank);
@@ -135,6 +141,13 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
     event VerifierRewardAllocated(bytes32 indexed caseId, uint256 amount);
     event CreditWithdrawn(address indexed recipient, uint256 amount);
     event ContradictorySignaturesProved(bytes32 indexed caseId, address indexed verifier);
+
+    modifier nonReentrant() {
+        require(!_entered, "reentrant");
+        _entered = true;
+        _;
+        _entered = false;
+    }
 
     constructor(address settlementToken_, address controller_, address sortition_) {
         require(settlementToken_ != address(0), "token zero");
@@ -174,7 +187,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         );
     }
 
-    function openCase(address bounty) external returns (bytes32 caseId, uint256 requestId) {
+    function openCase(address bounty) external nonReentrant returns (bytes32 caseId, uint256 requestId) {
         IAppealableBountyV1 item = IAppealableBountyV1(bounty);
         _validateBounty(item);
         caseId = caseIdFor(bounty);
@@ -191,7 +204,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         emit VerificationCaseOpened(caseId, bounty, requestId);
     }
 
-    function activatePrimary(bytes32 caseId) external {
+    function activatePrimary(bytes32 caseId) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.AwaitingPrimaryRandomness, "primary activation unavailable");
         address[] memory ranking = sortition.selected(item.primaryRequestId);
@@ -203,7 +216,21 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         _assignPrimary(caseId, item, 0);
     }
 
-    function promotePrimary(bytes32 caseId) external {
+    function timeoutPrimaryRandomness(bytes32 caseId) external nonReentrant {
+        VerificationCase storage item = _cases[caseId];
+        require(item.state == CaseState.AwaitingPrimaryRandomness, "primary timeout unavailable");
+        VrfSortitionCoordinatorV1.Request memory request = sortition.requestStatus(item.primaryRequestId);
+        require(
+            request.requestedAt != 0
+                && block.timestamp > uint256(request.requestedAt) + sortition.FULFILLMENT_DEADLINE()
+                && (!request.fulfilled || request.late),
+            "primary timeout pending"
+        );
+        item.state = CaseState.TimedOut;
+        emit VerificationTimedOut(caseId, keccak256("primary-randomness-timeout"));
+    }
+
+    function promotePrimary(bytes32 caseId) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.AwaitingPrimaryVerdict, "primary promotion unavailable");
         require(block.timestamp > item.primaryDeadline, "primary response pending");
@@ -221,7 +248,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         _assignPrimary(caseId, item, next);
     }
 
-    function submitPrimaryVerdict(bytes32 caseId, bool passed, bytes32 responseHash) external {
+    function submitPrimaryVerdict(bytes32 caseId, bool passed, bytes32 responseHash) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.AwaitingPrimaryVerdict, "primary verdict unavailable");
         require(msg.sender == item.primary && block.timestamp <= item.primaryDeadline, "primary unauthorized");
@@ -233,7 +260,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         emit PrimaryVerdictSubmitted(caseId, msg.sender, passed, responseHash, item.appealDeadline);
     }
 
-    function openAppeal(bytes32 caseId) external {
+    function openAppeal(bytes32 caseId) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.PrimaryVerdict && block.timestamp <= item.appealDeadline, "appeal unavailable");
         address eligibleAppellant = item.primaryVerdict ? item.creator : item.solver;
@@ -258,7 +285,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
 
     /// @notice Lets the only eligible appellant waive the remaining appeal
     /// window so an undisputed verdict can finalize in the same block.
-    function waiveAppeal(bytes32 caseId) external {
+    function waiveAppeal(bytes32 caseId) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(
             item.state == CaseState.PrimaryVerdict && block.timestamp <= item.appealDeadline,
@@ -270,7 +297,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         _finalizePrimary(caseId, item);
     }
 
-    function activateAppeal(bytes32 caseId) external {
+    function activateAppeal(bytes32 caseId) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.AwaitingAppealRandomness, "appeal activation unavailable");
         address[] memory ranking = sortition.ranking(item.appealRequestId);
@@ -293,7 +320,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         emit AppealJuryAssigned(caseId, selectedWallets, item.voteDeadline);
     }
 
-    function submitAppealVote(bytes32 caseId, bool passed) external {
+    function submitAppealVote(bytes32 caseId, bool passed) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.AppealVoting && block.timestamp <= item.voteDeadline, "appeal vote unavailable");
         require(isAppellate[caseId][msg.sender] && !voted[caseId][msg.sender], "appeal voter unauthorized");
@@ -304,7 +331,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         emit AppealVoteSubmitted(caseId, msg.sender, passed);
     }
 
-    function finalizeUnappealed(bytes32 caseId) external {
+    function finalizeUnappealed(bytes32 caseId) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.PrimaryVerdict && block.timestamp > item.appealDeadline, "appeal window open");
         _finalizePrimary(caseId, item);
@@ -317,7 +344,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         emit VerificationFinalized(caseId, item.finalVerdict, false, false);
     }
 
-    function finalizeAppeal(bytes32 caseId) external {
+    function finalizeAppeal(bytes32 caseId) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.AppealVoting, "appeal finalization unavailable");
         bool decisive = item.passVotes >= APPELLATE_THRESHOLD || item.failVotes >= APPELLATE_THRESHOLD;
@@ -343,7 +370,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         emit VerificationFinalized(caseId, item.finalVerdict, true, overturned);
     }
 
-    function timeoutAppeal(bytes32 caseId) external {
+    function timeoutAppeal(bytes32 caseId) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(
             item.state == CaseState.AwaitingAppealRandomness || item.state == CaseState.AppealVoting,
@@ -351,13 +378,14 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         );
         VrfSortitionCoordinatorV1.Request memory request = sortition.requestStatus(item.appealRequestId);
         bool randomnessLate = item.state == CaseState.AwaitingAppealRandomness && request.requestedAt != 0
-            && block.timestamp > uint256(request.requestedAt) + sortition.FULFILLMENT_DEADLINE();
+            && block.timestamp > uint256(request.requestedAt) + sortition.FULFILLMENT_DEADLINE()
+            && (!request.fulfilled || request.late);
         bool votingLate = item.state == CaseState.AppealVoting && block.timestamp > item.voteDeadline;
         require(randomnessLate || votingLate, "appeal timeout pending");
         _timeoutAppeal(caseId, item, keccak256("appeal-timeout"));
     }
 
-    function allocateVerifierReward(bytes32 caseId) external {
+    function allocateVerifierReward(bytes32 caseId) external nonReentrant {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.Finalized && !item.rewardAllocated, "reward allocation unavailable");
         uint8 expectedStatus = item.finalVerdict ? SETTLED_STATUS : CLAIMABLE_STATUS;
@@ -376,7 +404,7 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         emit VerifierRewardAllocated(caseId, VERIFIER_REWARD);
     }
 
-    function withdrawCredit() external {
+    function withdrawCredit() external nonReentrant {
         uint256 amount = credits[msg.sender];
         require(amount > 0, "credit empty");
         credits[msg.sender] = 0;
@@ -429,7 +457,10 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
         return keccak256(abi.encodePacked("\x19\x01", domain, value));
     }
 
-    function proveContradictorySignatures(bytes32 caseId, SignedVerdict calldata a, SignedVerdict calldata b) external {
+    function proveContradictorySignatures(bytes32 caseId, SignedVerdict calldata a, SignedVerdict calldata b)
+        external
+        nonReentrant
+    {
         VerificationCase storage item = _cases[caseId];
         require(item.state == CaseState.PrimaryVerdict && !item.appealOpened, "contradiction proof unavailable");
         require(
@@ -512,6 +543,9 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
             "verifier policy mismatch"
         );
         require(item.verificationWindowSeconds() == REQUIRED_BOUNTY_VERIFICATION_WINDOW, "appeal timing mismatch");
+        require(
+            item.verificationExpiresAt() >= block.timestamp + MINIMUM_CASE_REMAINING, "insufficient verification time"
+        );
         require(item.status() == SUBMITTED_STATUS, "bounty not submitted");
     }
 

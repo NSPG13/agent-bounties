@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "../src/StandingMetaV4Bundle.sol";
+import "../src/StandingMetaChildV4.sol";
 
 interface StandingMetaV4Vm {
     function warp(uint256 timestamp) external;
@@ -107,7 +108,7 @@ contract StandingMetaV4Actor {
         parentFactory.claimChildAssignment(parent, bond);
     }
 
-    function submitChild(AgentBounty child, bytes32 submissionHash, bytes32 evidenceHash) external {
+    function submitChild(StandingMetaChildV4 child, bytes32 submissionHash, bytes32 evidenceHash) external {
         child.submit(submissionHash, evidenceHash);
     }
 
@@ -140,6 +141,7 @@ contract StandingMetaV4Test {
     VrfSortitionCoordinatorV1 private verifierSortition;
     VrfSortitionCoordinatorV1 private solverSortition;
     AppealableVerifierV1 private appealableVerifier;
+    StandingMetaChildFactoryV4 private standingMetaChildFactory;
     StandingMetaParentFactoryV4 private parentFactory;
     StandingMetaV4Actor private parentSolver;
     StandingMetaV4Actor[] private childCandidates;
@@ -157,8 +159,12 @@ contract StandingMetaV4Test {
         solverSortition =
             new VrfSortitionCoordinatorV1(address(vrf), address(controller), 77, keccak256("solver-sortition"));
         appealableVerifier = new AppealableVerifierV1(address(token), address(controller), address(verifierSortition));
-        parentFactory =
-            new StandingMetaParentFactoryV4(address(childFactory), address(controller), address(appealableVerifier));
+        standingMetaChildFactory =
+            new StandingMetaChildFactoryV4(address(childFactory), address(appealableVerifier), address(this));
+        parentFactory = new StandingMetaParentFactoryV4(
+            address(childFactory), address(standingMetaChildFactory), address(controller), address(appealableVerifier)
+        );
+        standingMetaChildFactory.configureParentFactory(address(parentFactory));
         controller.configure(
             address(pool),
             address(verifierSortition),
@@ -194,10 +200,34 @@ contract StandingMetaV4Test {
 
     function testAtomicProfitableChildLoopSettlesBothBountiesWithOneUsdcMargin() public {
         StandingMetaParentV4 parent = _createParent();
-        AgentBounty child = _prepareAtomicChildAndDraw(parent, 111);
+        StandingMetaChildV4 child = _prepareAtomicChildAndDraw(parent, 111);
         StandingMetaV4Actor childSolver = StandingMetaV4Actor(_selectedChildSolver(parent));
+        (bool directClaim,) = address(child).call(abi.encodeWithSignature("claim()"));
+        require(!directClaim, "generic direct child claim enabled");
+        StandingMetaParentFactoryV4.BondAuthorization memory unauthorizedBond =
+            _bondAuthorization(keccak256("unauthorized-child-bond"));
+        (bool directAuthorizedClaim,) = address(child)
+            .call(
+                abi.encodeCall(
+                    child.claimAuthorized,
+                    (
+                        address(this),
+                        unauthorizedBond.validAfter,
+                        unauthorizedBond.validBefore,
+                        unauthorizedBond.nonce,
+                        unauthorizedBond.v,
+                        unauthorizedBond.r,
+                        unauthorizedBond.s
+                    )
+                )
+            );
+        require(!directAuthorizedClaim, "non-factory child authorization accepted");
         childSolver.claimChild(parentFactory, address(parent), _bondAuthorization(keccak256("child-bond")));
         childSolver.submitChild(child, keccak256("child-submission"), keccak256("child-evidence"));
+
+        (bool prematureParentSubmission,) =
+            address(parentSolver).call(abi.encodeCall(StandingMetaV4Actor.submitParent, (parent, address(child))));
+        require(!prematureParentSubmission, "unsettled child started parent verification clock");
 
         (bytes32 caseId,) = appealableVerifier.openCase(address(child));
         uint256 verifierRequestId = vrf.nextRequestId() - 1;
@@ -214,7 +244,7 @@ contract StandingMetaV4Test {
         uint256 verifierBalanceBefore = token.balanceOf(address(this));
         parent.verifyAndSettle();
 
-        require(child.bountyStatus() == AgentBounty.BountyStatus.Settled, "child not settled");
+        require(child.bountyStatus() == StandingMetaChildV4.Status.Settled, "child not settled");
         require(parent.bountyStatus() == StandingMetaParentV4.Status.Settled, "parent not settled");
         require(token.balanceOf(address(childSolver)) == 1_000_000, "child solver payout mismatch");
         require(token.balanceOf(address(parentSolver)) == 2_010_000, "parent payout mismatch");
@@ -248,7 +278,7 @@ contract StandingMetaV4Test {
 
         childCandidates[1].setAvailable(pool, AnonymousStakePoolV1.Role.Solver, true);
         childCandidates[2].setAvailable(pool, AnonymousStakePoolV1.Role.Solver, true);
-        AgentBounty child = _prepareAtomicChildAndDraw(parent, 333);
+        StandingMetaChildV4 child = _prepareAtomicChildAndDraw(parent, 333);
         child;
         address[] memory ranking = parentFactory.solverRanking(address(parent), parent.round());
         uint256 requestId = vrf.nextRequestId() - 1;
@@ -268,6 +298,7 @@ contract StandingMetaV4Test {
             address(verifierSortition),
             address(solverSortition),
             address(appealableVerifier),
+            address(standingMetaChildFactory),
             address(parentFactory)
         );
         require(bundle.controller().configured(), "bundle controller not configured");
@@ -277,6 +308,36 @@ contract StandingMetaV4Test {
         );
         require(address(bundle.parentFactory().termsRegistry()) != address(0), "terms registry missing");
         require(bundle.stakePool().MINIMUM_VERIFIER_TICKETS() == 8, "pool minimum drift");
+    }
+
+    function testRejectedChildPromotesNextRankWithoutRerollOrEscrowLoss() public {
+        StandingMetaParentV4 parent = _createParent();
+        StandingMetaChildV4 child = _prepareAtomicChildAndDraw(parent, 444);
+        uint256 requestId = vrf.nextRequestId() - 1;
+        address firstSolverAddress = _selectedChildSolver(parent);
+        StandingMetaV4Actor firstSolver = StandingMetaV4Actor(firstSolverAddress);
+        firstSolver.claimChild(parentFactory, address(parent), _bondAuthorization(keccak256("rejected-child-bond")));
+        firstSolver.submitChild(child, keccak256("rejected-submission"), keccak256("rejected-evidence"));
+
+        (bytes32 caseId,) = appealableVerifier.openCase(address(child));
+        uint256 verifierRequestId = vrf.nextRequestId() - 1;
+        vrf.fulfill(verifierRequestId, 555);
+        verifierSortition.deriveRanking(verifierRequestId);
+        appealableVerifier.activatePrimary(caseId);
+        (,,, address primary,) = appealableVerifier.caseParties(caseId);
+        StandingMetaV4Actor(primary).primaryVerdict(appealableVerifier, caseId, false);
+        firstSolver.waiveAppeal(appealableVerifier, caseId);
+        child.verifyAndSettle(abi.encode(caseId));
+        appealableVerifier.allocateVerifierReward(caseId);
+
+        require(child.bountyStatus() == StandingMetaChildV4.Status.Claimable, "rejected child did not reopen");
+        require(token.balanceOf(address(child)) == 1_000_000, "rejected child escrow changed");
+        parentFactory.promoteRejectedChildSolver(address(parent));
+        address[] memory ranking = parentFactory.solverRanking(address(parent), parent.round());
+        (,, uint8 rank,) = parentFactory.roundTiming(address(parent), parent.round());
+        require(rank == 1 && ranking[1] != firstSolverAddress, "rejected solver was not promoted");
+        require(vrf.nextRequestId() - 1 == verifierRequestId, "rejection promotion rerolled randomness");
+        require(requestId < verifierRequestId, "solver and verifier requests were not distinct");
     }
 
     function _createParent() private returns (StandingMetaParentV4 parent) {
@@ -296,11 +357,11 @@ contract StandingMetaV4Test {
 
     function _prepareAtomicChildAndDraw(StandingMetaParentV4 parent, uint256 randomWord)
         private
-        returns (AgentBounty child)
+        returns (StandingMetaChildV4 child)
     {
         StandingMetaParentFactoryV4.ClaimAndCreateChildRequest memory request = _claimRequest(parent);
         address childAddress = parentSolver.claimAndCreate(parentFactory, address(parent), request);
-        child = AgentBounty(childAddress);
+        child = StandingMetaChildV4(childAddress);
         uint256 requestId = vrf.nextRequestId() - 1;
         vrf.fulfill(requestId, randomWord);
         solverSortition.deriveRanking(requestId);
@@ -331,11 +392,10 @@ contract StandingMetaV4Test {
             verifierRewardRecipient: address(appealableVerifier),
             threshold: 1
         });
-        address[] memory noVerifiers = new address[](0);
-        address predictedChild = childFactory.predictBountyAddress(
-            address(parentSolver), request.childParams, noVerifiers, childCreationNonce
-        );
         uint64 parentRound = parent.round() + 1;
+        address predictedChild = parentFactory.predictChildAddress(
+            address(parent), parentRound, address(parentSolver), request.childParams, childCreationNonce
+        );
         address[] memory candidates = new address[](childCandidates.length);
         for (uint256 i = 0; i < childCandidates.length; i++) {
             candidates[i] = address(childCandidates[i]);

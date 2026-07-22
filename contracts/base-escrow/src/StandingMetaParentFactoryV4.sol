@@ -5,6 +5,8 @@ import "./AgentBountyFactory.sol";
 import "./AnonymousProtocolControllerV1.sol";
 import "./CanonicalIndependentChildVerifierV4.sol";
 import "./OnchainTermsRegistryV4.sol";
+import "./StandingMetaChildFactoryV4.sol";
+import "./StandingMetaChildV4.sol";
 import "./StandingMetaParentV4.sol";
 
 /// @notice Creates exact-economics parents and owns the only atomic preparation
@@ -70,6 +72,7 @@ contract StandingMetaParentFactoryV4 {
     uint8 public constant CLAIMABLE_STATUS = 1;
 
     AgentBountyFactory public immutable childFactory;
+    StandingMetaChildFactoryV4 public immutable standingMetaChildFactory;
     address public immutable settlementToken;
     AnonymousProtocolControllerV1 public immutable controller;
     AppealableVerifierV1 public immutable appealableVerifier;
@@ -80,6 +83,7 @@ contract StandingMetaParentFactoryV4 {
     mapping(address => mapping(uint64 => RoundData)) private _rounds;
     mapping(address => mapping(uint64 => address[])) private _ranking;
     mapping(address => mapping(uint64 => mapping(address => bool))) private _authorized;
+    bool private _entered;
 
     event StandingMetaParentCreated(bytes32 indexed bountyId, address indexed parent, address indexed creator);
     event AtomicChildPrepared(
@@ -108,22 +112,46 @@ contract StandingMetaParentFactoryV4 {
         address indexed parent, uint64 indexed round, address indexed candidate, uint8 rank, bytes32 reason
     );
 
-    constructor(address childFactory_, address controller_, address appealableVerifier_) {
+    modifier nonReentrant() {
+        require(!_entered, "reentrant");
+        _entered = true;
+        _;
+        _entered = false;
+    }
+
+    constructor(
+        address childFactory_,
+        address standingMetaChildFactory_,
+        address controller_,
+        address appealableVerifier_
+    ) {
         require(
-            childFactory_.code.length > 0 && controller_.code.length > 0 && appealableVerifier_.code.length > 0,
+            childFactory_.code.length > 0 && standingMetaChildFactory_.code.length > 0 && controller_.code.length > 0
+                && appealableVerifier_.code.length > 0,
             "factory dependency missing"
         );
         childFactory = AgentBountyFactory(childFactory_);
         settlementToken = childFactory.settlementToken();
+        standingMetaChildFactory = StandingMetaChildFactoryV4(standingMetaChildFactory_);
         controller = AnonymousProtocolControllerV1(controller_);
         appealableVerifier = AppealableVerifierV1(appealableVerifier_);
+        require(
+            address(standingMetaChildFactory.baseChildFactory()) == childFactory_
+                && address(standingMetaChildFactory.appealableVerifier()) == appealableVerifier_
+                && standingMetaChildFactory.settlementToken() == settlementToken,
+            "child factory wiring mismatch"
+        );
         termsRegistry = new OnchainTermsRegistryV4(address(this));
         verifierModule = new CanonicalIndependentChildVerifierV4(
-            address(this), childFactory_, address(termsRegistry), appealableVerifier_, settlementToken
+            address(this), standingMetaChildFactory_, address(termsRegistry), appealableVerifier_, settlementToken
         );
     }
 
-    function createParent(ParentConfig calldata config) external returns (address parentAddress, bytes32 bountyId) {
+    function createParent(ParentConfig calldata config)
+        external
+        nonReentrant
+        returns (address parentAddress, bytes32 bountyId)
+    {
         require(
             config.termsHash != bytes32(0) && config.policyHash != bytes32(0) && config.benchmarkHash != bytes32(0)
                 && config.evidenceSchemaHash != bytes32(0) && config.creationNonce != bytes32(0),
@@ -151,27 +179,26 @@ contract StandingMetaParentFactoryV4 {
 
     function claimAndCreateChild(address parentAddress, ClaimAndCreateChildRequest calldata request)
         external
+        nonReentrant
         returns (address childAddress, bytes32 childBountyId)
     {
         require(isCanonicalParent[parentAddress], "parent not canonical");
         StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
         require(parent.bountyStatus() == StandingMetaParentV4.Status.Claimable, "parent not claimable");
         require(msg.sender != parent.creator(), "parent creator cannot solve");
-        address[] memory noVerifiers = new address[](0);
         address[] memory candidates = _eligibleChildSolvers(parent, msg.sender);
         require(candidates.length >= MINIMUM_CHILD_SOLVER_CANDIDATES, "child solver pool too small");
         bytes32 candidateHash = keccak256(abi.encode(candidates));
-        PreparationContext memory context =
-            _preparationContext(parentAddress, parent, request, noVerifiers, candidateHash);
+        PreparationContext memory context = _preparationContext(parentAddress, parent, request, candidateHash);
         _validateTermsInput(request.terms, parent, context, request.childParams);
         bytes32 publishedTermsHash = termsRegistry.publishFor(msg.sender, request.canonicalTerms, request.terms);
         require(publishedTermsHash == context.childTermsHash, "terms hash drift");
 
-        (childAddress, childBountyId) = childFactory.createBountyWithAuthorization(
+        (childAddress, childBountyId) = standingMetaChildFactory.createAndFund(
+            parentAddress,
+            context.parentRound,
             msg.sender,
             request.childParams,
-            noVerifiers,
-            CHILD_TARGET,
             request.childCreationNonce,
             request.childFundingAuthorization
         );
@@ -216,7 +243,7 @@ contract StandingMetaParentFactoryV4 {
         emit ChildSolverDrawRequested(parentAddress, context.parentRound, requestId, candidateHash, candidates.length);
     }
 
-    function activateChildDraw(address parentAddress) external {
+    function activateChildDraw(address parentAddress) external nonReentrant {
         StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
         uint64 parentRound = parent.round();
         RoundData storage data = _rounds[parentAddress][parentRound];
@@ -232,23 +259,24 @@ contract StandingMetaParentFactoryV4 {
         emit ChildSolverAssigned(parentAddress, parentRound, ranked[0], 0, data.assignmentDeadline);
     }
 
-    function claimChildAssignment(address parentAddress, BondAuthorization calldata bond) external {
+    function claimChildAssignment(address parentAddress, BondAuthorization calldata bond) external nonReentrant {
         StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
         uint64 parentRound = parent.round();
         RoundData storage data = _rounds[parentAddress][parentRound];
         require(data.rankingActivated && data.authorizedSolver == address(0), "assignment unavailable");
         require(block.timestamp <= data.assignmentDeadline, "assignment expired");
         require(_ranking[parentAddress][parentRound][data.currentRank] == msg.sender, "candidate not selected");
-        require(AgentBounty(data.child).status() == CLAIMABLE_STATUS, "child not claimable");
-        AgentBounty(data.child)
-            .claimWithAuthorization(msg.sender, bond.validAfter, bond.validBefore, bond.nonce, bond.v, bond.r, bond.s);
+        require(StandingMetaChildV4(data.child).status() == CLAIMABLE_STATUS, "child not claimable");
+        standingMetaChildFactory.claimAuthorized(
+            data.child, msg.sender, bond.validAfter, bond.validBefore, bond.nonce, bond.v, bond.r, bond.s
+        );
         data.authorizedSolver = msg.sender;
         data.assignmentDeadline = 0;
         _authorized[parentAddress][parentRound][msg.sender] = true;
         emit ChildSolverClaimed(parentAddress, parentRound, msg.sender, data.child);
     }
 
-    function promoteNonresponsiveChildSolver(address parentAddress) external {
+    function promoteNonresponsiveChildSolver(address parentAddress) external nonReentrant {
         StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
         uint64 parentRound = parent.round();
         RoundData storage data = _rounds[parentAddress][parentRound];
@@ -260,11 +288,11 @@ contract StandingMetaParentFactoryV4 {
         _promote(parentAddress, parentRound, data, keccak256("assignment-nonresponse"));
     }
 
-    function promoteRejectedChildSolver(address parentAddress) external {
+    function promoteRejectedChildSolver(address parentAddress) external nonReentrant {
         StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
         uint64 parentRound = parent.round();
         RoundData storage data = _rounds[parentAddress][parentRound];
-        AgentBounty child = AgentBounty(data.child);
+        StandingMetaChildV4 child = StandingMetaChildV4(data.child);
         require(
             data.authorizedSolver != address(0) && child.status() == CLAIMABLE_STATUS && child.solver() == address(0),
             "rejection promotion unavailable"
@@ -310,6 +338,16 @@ contract StandingMetaParentFactoryV4 {
 
     function solverRanking(address parent, uint64 parentRound) external view returns (address[] memory) {
         return _ranking[parent][parentRound];
+    }
+
+    function predictChildAddress(
+        address parentAddress,
+        uint64 parentRound,
+        address creator,
+        AgentBountyFactory.CreateBountyParams calldata params,
+        bytes32 creationNonce
+    ) external view returns (address) {
+        return standingMetaChildFactory.predictChildAddress(parentAddress, parentRound, creator, params, creationNonce);
     }
 
     function _validateChildParams(AgentBountyFactory.CreateBountyParams calldata params, bytes32 termsHash)
@@ -367,14 +405,14 @@ contract StandingMetaParentFactoryV4 {
         address parentAddress,
         StandingMetaParentV4 parent,
         ClaimAndCreateChildRequest calldata request,
-        address[] memory noVerifiers,
         bytes32 candidateHash
     ) private view returns (PreparationContext memory context) {
         context.parentRound = parent.round() + 1;
         context.childTermsHash = keccak256(request.canonicalTerms);
         _validateChildParams(request.childParams, context.childTermsHash);
-        context.predictedChild =
-            childFactory.predictBountyAddress(msg.sender, request.childParams, noVerifiers, request.childCreationNonce);
+        context.predictedChild = standingMetaChildFactory.predictChildAddress(
+            parentAddress, context.parentRound, msg.sender, request.childParams, request.childCreationNonce
+        );
         context.selectionRequestedAt = uint64(block.timestamp);
         context.selectionCommitment = keccak256(
             abi.encode(

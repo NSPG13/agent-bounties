@@ -94,7 +94,7 @@ contract CanonicalIndependentChildVerifierV4 is IAgentBountyVerifier {
     uint8 public constant PARENT_SUBMITTED_STATUS = 3;
     uint8 public constant CHILD_SETTLED_STATUS = 4;
 
-    string public constant ACCEPTANCE_CRITERIA_JSON = '["Use claimAndCreateChild so terms publication, canonical child funding, the active solver-pool snapshot, VRF request, round binding, and the parent bond are atomic.",'
+    string public constant ACCEPTANCE_CRITERIA_JSON = '["Use claimAndCreateChild so terms publication, claim-restricted canonical V4 child funding, the active solver-pool snapshot, VRF request, round binding, and the parent bond are atomic.",'
         '"Fund the child with exactly 1.00 USDC: 0.99 USDC solver reward and 0.01 USDC verifier reward.",'
         '"Use the anonymous staked verifier pool, VRF selection, and symmetric one-round appeal policy.",'
         '"Have a VRF-authorized solver wallet other than the parent solver complete the child and receive canonical settlement.",'
@@ -203,7 +203,7 @@ contract CanonicalIndependentChildVerifierV4 is IAgentBountyVerifier {
     {
         if (
             childAddress == address(0) || childAddress == scope.parent
-                || !IProfitableChildFactoryViewV4(canonicalChildFactory).isCanonicalBounty(childAddress)
+                || !IProfitableChildFactoryViewV4(canonicalChildFactory).isCanonicalChild(childAddress)
         ) revert InvalidChild();
         child = IStandingMetaChildV4View(childAddress);
         if (
@@ -307,5 +307,5 @@ contract CanonicalIndependentChildVerifierV4 is IAgentBountyVerifier {
 }
 
 interface IProfitableChildFactoryViewV4 {
-    function isCanonicalBounty(address bounty) external view returns (bool);
+    function isCanonicalChild(address bounty) external view returns (bool);
 }
