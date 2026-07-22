@@ -1,0 +1,2 @@
+20260722-1
+The interior guild shell is loaded directly from page HTML. This file is a deployment canary for verifying that the live origin serves the current build.
