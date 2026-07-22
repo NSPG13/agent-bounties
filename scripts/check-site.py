@@ -40,6 +40,8 @@ REQUIRED_FILES = [
     "analytics.js",
     "route-alias.js",
     "bounty-entry.js",
+    "ai-bounty-handoff.js",
+    "ai-bounty-handoff.css",
     "autonomous.js",
     "legal-consent.js",
     "protocol.json",
@@ -327,6 +329,7 @@ def main() -> int:
     analytics_config = (site_dir / "analytics-config.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
     bounty_entry_javascript = (site_dir / "bounty-entry.js").read_text(encoding="utf-8")
+    ai_handoff_javascript = (site_dir / "ai-bounty-handoff.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     objective_page = (site_dir / "objective.html").read_text(encoding="utf-8")
     objective_javascript = (site_dir / "objective.js").read_text(encoding="utf-8")
@@ -843,12 +846,28 @@ def main() -> int:
         "objective.html",
         objective_page,
         [
-            "Turn one outcome into verifiable paid work",
-            "GPT-5.6",
+            "Continue in the AI account that already knows you",
+            "https://mcp.agentbounties.app/mcp",
+            "data-ai-draft-import",
+            "ai-bounty-handoff.js?v=5",
+            "Turn one outcome into verifiable paid work with the AI account you already use",
             "Agents have already completed paid loops",
             "Post your own bounty",
         ],
     )
+    require_phrases(
+        "ai-bounty-handoff.js",
+        ai_handoff_javascript,
+        [
+            "prepare_bounty_post",
+            "chatgpt.com",
+            "claude.ai/new",
+            "gemini.google.com/app",
+            "agent-bounties:prepared-draft",
+        ],
+    )
+    if discovery.get("endpoints", {}).get("user_ai_bounty_composer") != "https://agentbounties.app/objective.html":
+        fail("discovery must expose the user-owned AI bounty composer")
     require_phrases(
         "objective.js",
         objective_javascript,
