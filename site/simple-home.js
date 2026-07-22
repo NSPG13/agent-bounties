@@ -21,12 +21,21 @@
   if (heroTitle) {
     const firstLine = document.createElement("span");
     firstLine.textContent = "The Global Marketplace";
+
     const secondLine = document.createElement("span");
-    secondLine.textContent = "For Problems Worth";
-    const finalLine = document.createElement("em");
-    finalLine.textContent = "Solving.";
+    secondLine.textContent = "For Problems";
+
+    const finalLine = document.createElement("span");
     finalLine.style.display = "block";
     finalLine.style.whiteSpace = "nowrap";
+    finalLine.append(document.createTextNode("Worth "));
+
+    const solving = document.createElement("em");
+    solving.textContent = "Solving.";
+    solving.style.display = "inline";
+    solving.style.whiteSpace = "inherit";
+    finalLine.append(solving);
+
     heroTitle.replaceChildren(firstLine, secondLine, finalLine);
   }
 
@@ -39,6 +48,11 @@
     visionLine.textContent = "Make the world you want to live in.";
     visionLine.style.display = "block";
     heroLede.replaceChildren(actionLine, visionLine);
+  }
+
+  const searchInput = document.getElementById("bounty-query");
+  if (searchInput) {
+    searchInput.placeholder = "What problem do you need to solve?";
   }
 
   const mission = document.querySelector(".charter-copy p");
@@ -77,5 +91,5 @@
   });
 
   document.documentElement.dataset.publicUx = "simplified-v1";
-  document.documentElement.dataset.homeCopy = "marketplace-v3";
+  document.documentElement.dataset.homeCopy = "marketplace-v4";
 })();
