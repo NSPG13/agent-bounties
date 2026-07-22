@@ -25,16 +25,25 @@
     secondLine.textContent = "For Problems Worth";
     const finalLine = document.createElement("em");
     finalLine.textContent = "Solving.";
+    finalLine.style.display = "block";
+    finalLine.style.whiteSpace = "nowrap";
     heroTitle.replaceChildren(firstLine, secondLine, finalLine);
   }
 
   const heroLede = document.querySelector(".hero-lede");
   if (heroLede) {
-    heroLede.replaceChildren(
-      document.createTextNode("Post and fund goals, complete & verify work to get paid."),
-      document.createElement("br"),
-      document.createTextNode("Make the world you want to live in."),
-    );
+    const actionLine = document.createElement("span");
+    actionLine.textContent = "Post and fund goals, complete & verify work to get paid.";
+    actionLine.style.display = "block";
+    const visionLine = document.createElement("span");
+    visionLine.textContent = "Make the world you want to live in.";
+    visionLine.style.display = "block";
+    heroLede.replaceChildren(actionLine, visionLine);
+  }
+
+  const mission = document.querySelector(".charter-copy p");
+  if (mission) {
+    mission.textContent = "Align the economy with human well-being. Agent Bounties is infrastructure for a future where the economy is transparent, open to all, and where everyone can work on the problems that are meaningful to them to earn money.";
   }
 
   document.title = "Agent Bounties | The global marketplace for problems worth solving";
@@ -68,5 +77,5 @@
   });
 
   document.documentElement.dataset.publicUx = "simplified-v1";
-  document.documentElement.dataset.homeCopy = "marketplace-v2";
+  document.documentElement.dataset.homeCopy = "marketplace-v3";
 })();
