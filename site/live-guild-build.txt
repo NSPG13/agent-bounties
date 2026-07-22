@@ -1,2 +1,2 @@
-20260722-4
-This build updates the homepage hero to the global marketplace for problems worth solving message.
+20260722-5
+This build removes “on the platform” from the homepage hero and matching social descriptions.
