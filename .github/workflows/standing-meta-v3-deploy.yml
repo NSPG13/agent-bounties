@@ -4,21 +4,33 @@ on:
   pull_request:
     paths:
       - ".github/workflows/standing-meta-v3-deploy.yml"
+      - ".github/workflows/activate-standing-meta-v3-replacements.yml"
       - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV3.sol"
       - "contracts/base-escrow/src/StandingMetaV3Bundle.sol"
       - "contracts/base-escrow/test/CanonicalIndependentChildVerifierV3.t.sol"
       - "scripts/standing_meta_v3_deploy.py"
       - "scripts/test_standing_meta_v3_deploy.py"
+      - "scripts/activate_standing_meta_v3_replacements.py"
+      - "scripts/test_activate_standing_meta_v3_replacements.py"
+      - "site/standing-meta-v3-migration.html"
+      - "site/standing-meta-v3-migration.js"
+      - "bounties/autonomous-v1/v3-*.json"
       - "docs/standing-meta-v3-profit-invariant.md"
   push:
     branches: [main]
     paths:
       - ".github/workflows/standing-meta-v3-deploy.yml"
+      - ".github/workflows/activate-standing-meta-v3-replacements.yml"
       - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV3.sol"
       - "contracts/base-escrow/src/StandingMetaV3Bundle.sol"
       - "contracts/base-escrow/test/CanonicalIndependentChildVerifierV3.t.sol"
       - "scripts/standing_meta_v3_deploy.py"
       - "scripts/test_standing_meta_v3_deploy.py"
+      - "scripts/activate_standing_meta_v3_replacements.py"
+      - "scripts/test_activate_standing_meta_v3_replacements.py"
+      - "site/standing-meta-v3-migration.html"
+      - "site/standing-meta-v3-migration.js"
+      - "bounties/autonomous-v1/v3-*.json"
       - "docs/standing-meta-v3-profit-invariant.md"
   workflow_dispatch:
 
@@ -44,11 +56,35 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Contract, economics, and deployment helper tests
-        run: |
-          python -m unittest scripts.test_standing_meta_v3_deploy -v
-          forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV3Test -vv
-          forge build --root contracts/base-escrow --sizes
+      - name: V3 deployment helper tests
+        run: python -m unittest scripts.test_standing_meta_v3_deploy -v
+
+      - name: V3 activation economics assertion
+        run: python -m unittest scripts.test_activate_standing_meta_v3_replacements.ActivateStandingMetaV3Tests.test_migration_economics_are_exact -v
+
+      - name: V3 creation payload assertion
+        run: python -m unittest scripts.test_activate_standing_meta_v3_replacements.ActivateStandingMetaV3Tests.test_create_payload_uses_published_commitments_and_v3 -v
+
+      - name: V3 issue evidence assertion
+        run: python -m unittest scripts.test_activate_standing_meta_v3_replacements.ActivateStandingMetaV3Tests.test_issue_body_advertises_profit_and_evidence_boundary -v
+
+      - name: V3 temporary policy assertion
+        run: python -m unittest scripts.test_activate_standing_meta_v3_replacements.ActivateStandingMetaV3Tests.test_policy_constants_are_minimally_bounded -v
+
+      - name: Python syntax
+        run: python -m py_compile scripts/standing_meta_v3_deploy.py scripts/activate_standing_meta_v3_replacements.py
+
+      - name: Owner migration page JavaScript syntax
+        run: node --check site/standing-meta-v3-migration.js
+
+      - name: Autonomous wallet compatibility contract
+        run: node scripts/test-autonomous-wallet-flow.js
+
+      - name: V3 contract tests
+        run: forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV3Test -vv
+
+      - name: V3 contract build and size
+        run: forge build --root contracts/base-escrow --sizes
 
       - name: Read-only Base activation and funding preflight
         env:

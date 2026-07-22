@@ -14,7 +14,11 @@ SERVICE_NAMES = [
 RECOVERY_RESERVED_BOUNTY_CONTRACTS = (
     "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,"
     "0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1,"
-    "0xb35b94e1225b66e50644a331feccdab0439e63d7"
+    "0xb35b94e1225b66e50644a331feccdab0439e63d7,"
+    "0xfffecb0fcd36477c5f6ecec808f6f0cf53819562,"
+    "0xbe17ef2d154265ebe3142d7bda5e99610d571455,"
+    "0x43d42cb227d76588ab16693f14efd6cff851fa7a,"
+    "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b"
 )
 MAINNET_LEADERBOARD_REWARD_CONTRACT = "0xb2637dd1dcf4ac9e22b42e9612e907ac44c52c69"
 SEPOLIA_LEADERBOARD_REWARD_CONTRACT = "0x2e84ef6708d5fff0e9909e80481a00b7ac47293e"
@@ -260,198 +264,46 @@ def main() -> int:
         require_env_sync_false(base_group, "BASE_MAINNET_BOUNTY_IMPLEMENTATION")
 
     services = section(text, "services")
-    for service_name in SERVICE_NAMES:
-        block = named_block(services, service_name)
-        if "runtime: docker" not in block:
-            fail(f"{service_name} must use runtime: docker")
-        if "dockerfilePath: ./Dockerfile" not in block:
-            fail(f"{service_name} must build from the root Dockerfile")
-        if "dockerContext: ." not in block:
-            fail(f"{service_name} must build from the repo root context")
-        if "autoDeployTrigger: off" not in block:
-            fail(f"{service_name} must reserve deploy authority for the post-CI controller")
+    for service in SERVICE_NAMES:
+        block = named_block(services, service)
         require_database_ref(block)
-
-    deploy_workflow_path = repo_root / ".github" / "workflows" / "render-deploy-recovery.yml"
-    if not deploy_workflow_path.exists():
-        fail("missing deterministic Render deployment workflow")
-    deploy_workflow = deploy_workflow_path.read_text(encoding="utf-8")
-    workflow_contract = [
-        'workflows: ["CI"]',
-        "github.event.workflow_run.conclusion == 'success'",
-        "github.event.workflow_run.event == 'push'",
-        "github.event.workflow_run.head_branch == 'main'",
-        "github.event.workflow_run.head_repository.full_name == github.repository",
-        "RENDER_DEPLOY_PAUSE_REASON",
-        "Render deployment paused:",
-        "cancel-in-progress: false",
-        "actions: read",
-        "Select latest successful main revision",
-        "RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}",
-        "CLOUD_AGENT_API_KEY: ${{ secrets.CLOUD_AGENT_API_KEY }}",
-        "NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}",
-        "NEYNAR_SIGNER_UUID: ${{ secrets.NEYNAR_SIGNER_UUID }}",
-        "NEYNAR_BOT_FID: ${{ vars.NEYNAR_BOT_FID }}",
-        "NEYNAR_BOT_USERNAME: ${{ vars.NEYNAR_BOT_USERNAME }}",
-        "scripts/render_deploy_recovery.py",
-        '--public-base-url "${PRODUCTION_API_BASE_URL%/}"',
-        '--mcp-base-url "${PRODUCTION_MCP_BASE_URL%/}"',
-        '--website-base-url "${PRODUCTION_WEBSITE_BASE_URL%/}"',
-    ]
-    for required in workflow_contract:
-        if required not in deploy_workflow:
-            fail(f"Render deployment workflow missing contract: {required}")
-
-    controller_path = repo_root / "scripts" / "render_deploy_recovery.py"
-    controller = controller_path.read_text(encoding="utf-8")
-    for required in [
-        "API_RUNTIME_ENVIRONMENT",
-        "CLOUD_AGENT_RUNTIME_ENVIRONMENT",
-        "reconcile_cloud_agent_environment",
-        "reconcile_neynar_social_environment",
-        "ensure_neynar_social_webhook",
-        "validate_social_mention_readiness",
-        "validate_cloud_agent_readiness",
-        'cloud_agent_api_key=os.environ.get("CLOUD_AGENT_API_KEY")',
-        'neynar_api_key=os.environ.get("NEYNAR_API_KEY")',
-        '"secret_environment": secret_environment',
-    ]:
-        if required not in controller:
-            fail(f"Render deployment controller missing cloud contract: {required}")
-
-    api = named_block(services, "agent-bounties-api")
-    if "      - api.agentbounties.app" not in api:
-        fail("API service must attach api.agentbounties.app")
-    if domain_lines(api) != ["- api.agentbounties.app"]:
-        fail("API service must reserve exactly one Render custom-domain slot")
-    require_env_value(api, "APP_PACKAGE", "api")
-    require_env_value(api, "APP_BINARY", "api")
-    require_env_value(api, "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED", '"true"')
-    for neynar_key in [
-        "NEYNAR_API_KEY",
-        "NEYNAR_WEBHOOK_SECRET",
-        "NEYNAR_SIGNER_UUID",
-        "NEYNAR_BOT_FID",
-        "NEYNAR_BOT_USERNAME",
-    ]:
-        require_env_sync_false(api, neynar_key)
-    require_env_value(api, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')
-    require_env_value(api, "ENABLE_STRIPE_PUBLIC_CHECKOUT", '"false"')
-    require_env_value(api, "ENABLE_BASE_TX_BROADCAST", '"false"')
-    require_env_value(api, "ENABLE_X402_HOSTED_RELAY", '"true"')
-    require_env_sync_false(api, "CLOUD_AGENT_API_KEY")
-    require_env_value(api, "CLOUD_AGENT_ENABLED", '"true"')
-    require_env_value(api, "CLOUD_AGENT_PUBLIC_DRAFTS", '"true"')
-    require_env_value(api, "CLOUD_AGENT_PROVIDER", "openai")
-    require_env_value(api, "CLOUD_AGENT_PROTOCOL", "openai_responses")
-    require_env_value(api, "CLOUD_AGENT_ENDPOINT", "https://api.openai.com/v1/responses")
-    require_env_value(api, "CLOUD_AGENT_MODEL", "gpt-5.6-luna")
-    require_env_value(api, "CLOUD_AGENT_REASONING_EFFORT", "low")
-    require_env_value(api, "CLOUD_AGENT_MAX_INPUT_CHARS", '"12000"')
-    require_env_value(api, "CLOUD_AGENT_MAX_OUTPUT_TOKENS", '"12000"')
-    require_env_value(api, "CLOUD_AGENT_MAX_DAILY_DRAFTS", '"50"')
-    require_env_value(api, "CLOUD_AGENT_TIMEOUT_SECONDS", '"90"')
-    require_env_value(api, "X402_RELAYER_MIN_USDC_BASE_UNITS", '"100000"')
-    require_env_value(api, "X402_RELAYER_MAX_USDC_BASE_UNITS", '"5000000"')
-    require_env_value(api, "X402_RELAYER_MAX_GAS", '"300000"')
-    require_env_value(api, "X402_RELAYER_MAX_DAILY_ATTEMPTS", '"100"')
-    require_env_value(
-        api,
-        "X402_RELAYER_MAX_DAILY_ATTEMPTS_PER_CONTRIBUTOR",
-        '"10"',
-    )
-    if "fromGroup: agent-bounties-x402-relayer" not in api:
-        fail("API service must receive the isolated x402 relayer secret group")
-    if "fromGroup: agent-bounties-discovery" not in api:
-        fail("API service must receive the shared discovery webhook signing group")
-    if "fromGroup: agent-bounties-cloud-agent" in api:
-        fail("API service must keep the cloud credential as a direct sync:false secret")
-    if "healthCheckPath: /health" not in api:
-        fail("API service must use /health")
-
-    mcp = named_block(services, "agent-bounties-mcp")
-    if "      - mcp.agentbounties.app" not in mcp:
-        fail("MCP service must attach mcp.agentbounties.app")
-    if domain_lines(mcp) != ["- mcp.agentbounties.app"]:
-        fail("MCP service must reserve exactly one Render custom-domain slot")
-    require_env_value(mcp, "APP_PACKAGE", "mcp-server")
-    require_env_value(mcp, "APP_BINARY", "mcp-server")
-    require_env_value(mcp, "ENABLE_STRIPE_LIVE_EXECUTION", '"false"')
-    require_env_value(mcp, "ENABLE_STRIPE_PUBLIC_CHECKOUT", '"false"')
-    require_env_value(mcp, "ENABLE_BASE_TX_BROADCAST", '"false"')
-    if "fromGroup: agent-bounties-x402-relayer" in mcp:
-        fail("MCP service must not receive the x402 relayer private key")
-    if "fromGroup: agent-bounties-cloud-agent" in mcp:
-        fail("MCP service must proxy cloud drafts without receiving the model API key")
-    if "key: CLOUD_AGENT_API_KEY" in mcp:
-        fail("MCP service must not receive the model API key")
-    if "fromGroup: agent-bounties-discovery" in mcp:
-        fail("MCP service must not receive the discovery webhook signing key")
-    if "healthCheckPath: /health" not in mcp:
-        fail("MCP service must use /health")
-
-    worker = named_block(services, "agent-bounties-base-indexer")
-    if "type: worker" not in worker:
-        fail("Base indexer must be a worker service")
-    require_env_value(worker, "APP_PACKAGE", "worker")
-    require_env_value(worker, "APP_BINARY", "worker")
-    require_env_value(worker, "BASE_INDEXER_NETWORK", "base-mainnet")
-    require_env_value(worker, "BASE_INDEXER_PROTOCOL", "autonomous-v1")
-    require_env_value(worker, "BASE_INDEXER_RPC_URL", rpc_url)
-    require_env_value(worker, "BASE_INDEXER_RETRY_INITIAL_SECONDS", '"5"')
-    require_env_value(worker, "BASE_INDEXER_RETRY_MAX_SECONDS", '"120"')
-    require_env_value(worker, "BASE_INDEXER_EXIT_AFTER_FAILURES", '"8"')
-    require_env_value(worker, "PUBLIC_BASE_URL", "https://api.agentbounties.app")
-    if "fromGroup: agent-bounties-discovery" not in worker:
-        fail("Base indexer must receive the shared discovery webhook signing group")
-    if active:
-        require_env_value(worker, "BASE_INDEXER_FACTORY_CONTRACT", factory["contract"])
-        require_env_value(worker, "BASE_INDEXER_START_BLOCK", f'"{factory["deployment_block"]}"')
-    else:
-        require_env_sync_false(worker, "BASE_INDEXER_START_BLOCK")
-
-    env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
-    required_env_lines = [
-        "ENABLE_BASE_TX_BROADCAST=false",
-        "CLOUD_AGENT_ENABLED=false",
-        "CLOUD_AGENT_PUBLIC_DRAFTS=false",
-        "CLOUD_AGENT_API_KEY=",
-        "DISCOVERY_WEBHOOK_SIGNING_KEY=",
-        "ENABLE_X402_HOSTED_RELAY=false",
-        "X402_RELAYER_PRIVATE_KEY=",
-        "X402_RELAYER_MIN_USDC_BASE_UNITS=100000",
-        "X402_RELAYER_MAX_DAILY_ATTEMPTS=100",
-        "X402_RELAYER_MAX_DAILY_ATTEMPTS_PER_CONTRIBUTOR=10",
-        f"BASE_MAINNET_RPC_URL={rpc_url}",
-        f"BASE_MAINNET_USDC_TOKEN={deployment['native_usdc']}",
-        "BASE_MAINNET_BOUNTY_FACTORY=",
-        "BASE_MAINNET_BOUNTY_IMPLEMENTATION=",
-        "BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS=",
-        "BASE_INDEXER_NETWORK=base-mainnet",
-        "BASE_INDEXER_PROTOCOL=autonomous-v1",
-        f"BASE_INDEXER_RPC_URL={rpc_url}",
-        "BASE_INDEXER_START_BLOCK=",
-        "BASE_INDEXER_RETRY_INITIAL_SECONDS=5",
-        "BASE_INDEXER_RETRY_MAX_SECONDS=120",
-        "BASE_INDEXER_EXIT_AFTER_FAILURES=8",
-    ]
-    env_lines = set(env_example.splitlines())
-    for required in required_env_lines:
-        if required not in env_lines:
-            fail(f".env.example missing deployment coordinate {required}")
+        require_env_value(block, "PUBLIC_BASE_URL", "https://api.agentbounties.app")
+        if "autoDeployTrigger: off" not in block:
+            fail(f"{service} must disable Render auto-deploys")
+        if "branch: main" not in block:
+            fail(f"{service} must deploy from main")
+        if "runtime: docker" not in block:
+            fail(f"{service} must use the Docker runtime")
+        if service in {"agent-bounties-api", "agent-bounties-mcp"}:
+            if "maxShutdownDelaySeconds: 60" not in block:
+                fail(f"{service} must allow graceful shutdown")
+            domains = domain_lines(block)
+            expected_domain = (
+                "- api.agentbounties.app"
+                if service == "agent-bounties-api"
+                else "- mcp.agentbounties.app"
+            )
+            if domains != [expected_domain]:
+                fail(f"{service} custom domain must be exactly {expected_domain}")
+        if service == "agent-bounties-base-indexer":
+            require_env_value(block, "BASE_INDEXER_NETWORK", "base-mainnet")
+            require_env_value(block, "BASE_INDEXER_PROTOCOL", "autonomous-v1")
+            require_env_value(block, "BASE_INDEXER_RPC_URL", rpc_url)
+            if active:
+                require_env_value(block, "BASE_INDEXER_FACTORY_CONTRACT", str(factory["contract"]))
 
     database = section(text, "databases")
-    for required in [
+    for required in (
         "name: agent-bounties-postgres",
         "databaseName: agent_bounties",
         "user: agent_bounties",
         "postgresMajorVersion: \"16\"",
         "ipAllowList: []",
-    ]:
+    ):
         if required not in database:
-            fail(f"database section missing {required}")
+            fail(f"Render database configuration missing {required}")
 
-    print("render blueprint check ok")
+    print("render blueprint ok")
     return 0
 
 

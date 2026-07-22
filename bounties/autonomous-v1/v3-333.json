@@ -1,0 +1,61 @@
+{
+  "schema_version": "agent-bounties/terms-v1",
+  "contract_terms": {
+    "protocol_version": "agent-bounties/autonomous-v1",
+    "creator_wallet": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "network": "base-mainnet",
+    "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "solver_reward": { "amount": 2000000, "currency": "usdc" },
+    "verifier_reward": { "amount": 10000, "currency": "usdc" },
+    "claim_bond": { "amount": 10000, "currency": "usdc" },
+    "initial_funding": { "amount": 2010000, "currency": "usdc" },
+    "funding_deadline": 1791676800,
+    "claim_window_seconds": 1209600,
+    "verification_window_seconds": 1209600,
+    "creation_nonce": "0x178410ff78211749435c551e60c5b7b92e37c23feee66991193132ebe4ba9433"
+  },
+  "title": "Earn 1 USDC profit by creating a paid CLI child bounty",
+  "goal": "Create and fully fund a concrete 1 USDC CLI coding bounty that a different registered participant completes and receives canonical settlement for, then receive the 2 USDC parent reward.",
+  "acceptance_criteria": [
+    "Publish the exact child terms on Base from the parent solver wallet before claiming this bounty.",
+    "Create and fully fund a parent-bound canonical child with a total target of at least 1.00 USDC.",
+    "Keep the child total target at least 1.00 USDC below this bounty solver reward so the parent has positive gross profit.",
+    "Use the committed sandboxed-regression signed verifier quorum and immutable task criteria.",
+    "Have a participant registered before the parent claim, with a different participant ID, complete the child.",
+    "Receive canonical child settlement before submitting the child address to this verifier."
+  ],
+  "benchmark": {
+    "engine": "standing_meta_v3_parent",
+    "lane": "cli",
+    "required_child_engine": "sandboxed_regression_v1",
+    "required_child_status": "settled",
+    "minimum_child_target": 1000000,
+    "minimum_parent_gross_margin": 1000000,
+    "required_child_verifier_set_hash": "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+    "required_child_verifier_threshold": 2,
+    "participant_registry": "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294",
+    "terms_registry": "0x35e5d49c12b75c119d33951c2c4f054c5732208c"
+  },
+  "evidence_schema": {
+    "type": "object",
+    "required": ["child_bounty_contract", "discovery_source", "participation_reason", "improvement_feedback"],
+    "properties": {
+      "child_bounty_contract": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+      "discovery_source": { "type": "string" },
+      "participation_reason": { "type": "string" },
+      "improvement_feedback": { "type": "string" }
+    },
+    "additionalProperties": true
+  },
+  "verification_policy": {
+    "mechanism": "deterministic_module",
+    "verifier_module": "0x8e3d799d3d2cf52112e5be4ce48f105379462077",
+    "verifier_reward_recipient": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+    "verifiers": [],
+    "threshold": 1,
+    "rubric": "The immutable standing-meta-v3 verifier requires a meaningful child, at least 1 USDC gross parent margin, pre-claim terms, distinct participants, the committed regression quorum, and canonical child settlement.",
+    "self_verification_forbidden": true
+  },
+  "source_url": "https://github.com/NSPG13/agent-bounties/issues/333",
+  "discovery_source": "maintainer-seeded profitable standing-meta-v3 inventory"
+}

@@ -80,6 +80,9 @@ def compile_python(platform: str) -> None:
         "scripts/test_bounded_agent_budget.py", "scripts/local_delegate_wallet.py",
         "scripts/test_local_delegate_wallet.py", "scripts/self_heal.py", "scripts/test_self_heal.py",
         "scripts/leaderboard_reward_pipeline.py", "scripts/test_leaderboard_reward_pipeline.py",
+        "scripts/standing_meta_v3_deploy.py", "scripts/test_standing_meta_v3_deploy.py",
+        "scripts/activate_standing_meta_v3_replacements.py",
+        "scripts/test_activate_standing_meta_v3_replacements.py",
         "scripts/check-site.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
         "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
         "scripts/stage_review_contract_root.py", "scripts/test_stage_review_contract_root.py",
@@ -100,6 +103,8 @@ scripts/relay_bounded_wallet_action.py scripts/test_relay_bounded_wallet_action.
 scripts/bounded_agent_create.py scripts/plan_bounded_agent_budget.py scripts/test_bounded_agent_budget.py
 scripts/local_delegate_wallet.py scripts/test_local_delegate_wallet.py scripts/self_heal.py scripts/test_self_heal.py
 scripts/leaderboard_reward_pipeline.py scripts/test_leaderboard_reward_pipeline.py
+scripts/standing_meta_v3_deploy.py scripts/test_standing_meta_v3_deploy.py
+scripts/activate_standing_meta_v3_replacements.py scripts/test_activate_standing_meta_v3_replacements.py
 scripts/github_issue_plan_comment.py scripts/github_funding_comment.py scripts/github_claim_comment.py
 scripts/github_proof_comment.py scripts/sync_hosted_bounty_inventory.py
 scripts/test_sync_hosted_bounty_inventory.py scripts/reconcile_github_bounty_labels.py
@@ -188,6 +193,8 @@ def main() -> int:
         py(f"scripts/{name}.py", "--self-test")
     for name in ("sync_hosted_bounty_inventory", "reconcile_github_bounty_labels", "diagnose_hosted_api", "github_audience_audit", "ruleset_drift_check", "code_size_report", "mcp_tool_registry", "shared_rpc", "relay_autonomous_action", "relay_bounded_wallet_action", "bounded_agent_budget"):
         py(f"scripts/test_{name}.py", "-v")
+    for name in ("standing_meta_v3_deploy", "activate_standing_meta_v3_replacements"):
+        py(f"scripts/test_{name}.py", "-v")
     py("-m", "pip", "install", "-r", "scripts/requirements-wallet.txt")
     for name in ("local_delegate_wallet", "self_heal", "leaderboard_reward_pipeline"):
         py(f"scripts/test_{name}.py", "-v")
@@ -206,6 +213,7 @@ def main() -> int:
         ["scripts/test-autonomous-activation-console.js"], ["--check", "tools/canonical-child-verifier-deployment.js"],
         ["scripts/test-canonical-child-verifier-deployment-console.js"], ["--check", "tools/base-sepolia-sponsor-activation.js"],
         ["scripts/test-base-sepolia-sponsor-activation-console.js"],
+        ["--check", "site/standing-meta-v3-migration.js"],
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")
     py("scripts/test_shared_evm.py", "-v")
