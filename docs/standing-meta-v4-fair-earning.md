@@ -2,7 +2,7 @@
 
 V4 is the additive fairness successor to the already-published, economic-only V3 contracts. It is currently source code and local-test evidence, not a live earning opportunity.
 
-Deployment is staged because an all-in-one constructor would exceed the EIP-3860 initcode limit. The small immutable bundle validates the final component wiring; readiness still requires separate bytecode, VRF, sponsorship, pool, review, rehearsal, and monitoring evidence.
+Deployment is staged because an all-in-one constructor would exceed contract deployment limits. A dedicated immutable V4 child factory keeps child creation code below EIP-170 and is wired once to the parent factory. The small immutable bundle validates the final component wiring; readiness still requires separate bytecode, VRF, sponsorship, pool, review, rehearsal, and monitoring evidence.
 
 ## Who decides and who pays
 
@@ -16,12 +16,14 @@ There is no per-bounty 30-minute enrollment period. Solver wallets register and 
 
 1. snapshots the active, available solver pool after exclusions;
 2. publishes typed child terms;
-3. creates and funds the canonical child;
+3. creates and funds the claim-restricted canonical V4 child;
 4. freezes the candidate hash and requests Chainlink VRF;
 5. binds the request to the next parent round; and
 6. posts the parent bond and activates the parent claim.
 
 After VRF fulfillment, ranking derivation and assignment activation are permissionless and may happen immediately. The selected solver may claim immediately. A nonresponsive solver may be replaced by the next wallet in the same ranking after ten minutes, without a reroll. Primary verdicts and appeal votes may be submitted immediately. The eligible appellant may waive an undisputed appeal window, and three matching appellate votes form an immediately finalizable majority.
+
+The child exposes no generic public claim path. Only the immutable child factory can activate the wallet currently authorized by the frozen ranking. This prevents an unselected wallet from reserving the seven-day child work window before the selected solver.
 
 ## Economics
 
@@ -55,3 +57,19 @@ The V4 API, MCP, CLI, TypeScript, and Python surfaces use explicit V4 names beca
 - `finalize_verification_case`
 
 Direct generic `agent_native_claim` must refuse a V4 parent and point to the atomic preparation flow.
+
+## Agent-native release operations
+
+Release work uses Foundry and JSON-RPC rather than a browser:
+
+```text
+python scripts/standing_meta_v4_deploy.py plan --network base-sepolia --output target/v4-sepolia-plan.json
+python scripts/standing_meta_v4_deploy.py deploy --network base-sepolia --output target/v4-sepolia-deployment.json
+python scripts/standing_meta_v4_deploy.py verify --network base-sepolia --deployment target/v4-sepolia-deployment.json --output target/v4-sepolia-rpc.json
+```
+
+The deploy command is staged and resumable. It creates one VRF subscription, deploys the exact V4 component graph, one-time configures it, authorizes exactly the verifier and solver sortition coordinators, and then re-reads all wiring and the subscription through RPC. It does not fund the subscription or mark V4 ready.
+
+`FundStandingMetaV4Subscription.s.sol` funds an existing subscription only after both consumers are present. It records and checks the exact native-balance delta. On mainnet, `V4_SOURCE_USDC_BASE_UNITS` must be positive and no more than 7,000,000. The funding script does not withdraw or swap USDC; those remain explicit owner-authorized actions with their own receipts.
+
+Mainnet deployment fails closed unless every R4 flag in `deployments/standing-meta-v4-config.json` is true and the protected release acknowledgement is supplied. The workflow additionally requires the default branch and the protected `standing-meta-v4-mainnet` environment. RPC-confirmed deployment or funding still does not make V4 ready until the active pool, gas sponsorship, rehearsal, monitoring, and review gates pass.

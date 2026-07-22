@@ -3,13 +3,11 @@ pragma solidity ^0.8.26;
 
 import "./IAgentBounty.sol";
 
-interface IStandingMetaPreparedChildV4 {
-    function status() external view returns (uint8);
-}
-
-/// @notice Exact-economics parent whose only claim path is the factory's atomic
-/// child creation flow. Missing child evidence reverts and remains retryable.
-contract StandingMetaParentV4 {
+/// @notice Exact-economics V4 child whose claim authority is restricted to the
+/// immutable parent factory. The factory can activate only the wallet selected
+/// from the frozen VRF ranking, so generic direct claims cannot reserve or
+/// drain the child outside the committed draw.
+contract StandingMetaChildV4 {
     using SafeBountyToken for address;
 
     enum Status {
@@ -21,19 +19,20 @@ contract StandingMetaParentV4 {
         Cancelled
     }
 
-    uint256 public constant SOLVER_REWARD = 2_000_000;
+    uint256 public constant SOLVER_REWARD = 990_000;
     uint256 public constant VERIFIER_REWARD = 10_000;
-    uint256 public constant TARGET_AMOUNT = 2_010_000;
-    uint64 public constant WORK_WINDOW = 14 days;
+    uint256 public constant TARGET_AMOUNT = 1_000_000;
+    uint64 public constant CLAIM_WINDOW = 7 days;
     uint64 public constant VERIFICATION_WINDOW = 96 hours;
-    uint8 public constant CHILD_SETTLED_STATUS = 4;
-    bytes32 public constant PROTOCOL_VERSION = keccak256("agent-bounties/standing-meta-v4");
+    uint8 public constant DETERMINISTIC_MODULE_MODE = 0;
+    bytes32 public constant PROTOCOL_VERSION = keccak256("agent-bounties/standing-meta-child-v4");
 
     bytes32 public immutable bountyId;
     address public immutable creator;
     address public immutable factory;
     address public immutable settlementToken;
     address public immutable verifierModule;
+    address public immutable verifierRewardRecipient;
     bytes32 public immutable termsHash;
     bytes32 public immutable policyHash;
     bytes32 public immutable acceptanceCriteriaHash;
@@ -42,25 +41,31 @@ contract StandingMetaParentV4 {
 
     Status private _status;
     uint256 public fundedAmount;
+    uint256 public timeoutBondPool;
     uint64 public round;
     address public solver;
-    address public preparedChild;
-    bytes32 public preparedChildTermsHash;
     uint256 public activeClaimBond;
     uint64 public claimExpiresAt;
-    uint64 public claimActivatedAt;
     uint64 public verificationExpiresAt;
     bytes32 public submissionHash;
     bytes32 public evidenceHash;
     bool private _entered;
 
-    event ParentFunded(bytes32 indexed bountyId, address indexed creator, uint256 amount);
-    event ParentClaimed(
+    event FundingAdded(
+        bytes32 indexed bountyId,
+        address indexed contributor,
+        uint256 amount,
+        uint256 fundedAmount,
+        uint256 targetAmount
+    );
+    event BountyBecameClaimable(bytes32 indexed bountyId, uint256 fundedAmount);
+    event BountyClaimed(
         bytes32 indexed bountyId,
         uint64 indexed round,
         address indexed solver,
-        address child,
-        bytes32 childTermsHash,
+        bytes32 termsHash,
+        bytes32 policyHash,
+        uint256 claimBond,
         uint64 claimExpiresAt
     );
     event SubmissionAdded(
@@ -70,6 +75,24 @@ contract StandingMetaParentV4 {
         bytes32 submissionHash,
         bytes32 evidenceHash,
         uint64 verificationExpiresAt
+    );
+    event SubmissionRejected(
+        bytes32 indexed bountyId,
+        uint64 indexed round,
+        address indexed solver,
+        uint256 verifierReward,
+        uint256 forfeitedBond,
+        bytes32 verificationHash
+    );
+    event ClaimExpired(
+        bytes32 indexed bountyId,
+        uint64 indexed round,
+        address indexed solver,
+        uint256 forfeitedBond,
+        uint256 timeoutBondPool
+    );
+    event SubmissionExpired(
+        bytes32 indexed bountyId, uint64 indexed round, address indexed solver, uint256 refundedBond
     );
     event BountySettled(
         bytes32 indexed bountyId,
@@ -84,20 +107,19 @@ contract StandingMetaParentV4 {
         bytes32 policyHash,
         bytes32 verificationHash
     );
-    event ParentExpired(bytes32 indexed bountyId, uint64 indexed round, address indexed solver, uint256 refundedBond);
     event BountyCancelled(bytes32 indexed bountyId, uint256 refundAmount);
     event RefundWithdrawn(bytes32 indexed bountyId, address indexed contributor, uint256 amount);
+
+    modifier onlyFactory() {
+        require(msg.sender == factory, "factory only");
+        _;
+    }
 
     modifier nonReentrant() {
         require(!_entered, "reentrant");
         _entered = true;
         _;
         _entered = false;
-    }
-
-    modifier onlyFactory() {
-        require(msg.sender == factory, "factory only");
-        _;
     }
 
     constructor(
@@ -115,18 +137,19 @@ contract StandingMetaParentV4 {
         require(
             bountyId_ != bytes32(0) && creator_ != address(0) && factory_ != address(0)
                 && settlementToken_ != address(0) && verifierModule_.code.length > 0,
-            "parent config invalid"
+            "child config invalid"
         );
         require(
             termsHash_ != bytes32(0) && policyHash_ != bytes32(0) && acceptanceCriteriaHash_ != bytes32(0)
                 && benchmarkHash_ != bytes32(0) && evidenceSchemaHash_ != bytes32(0),
-            "parent commitment invalid"
+            "child commitment invalid"
         );
         bountyId = bountyId_;
         creator = creator_;
         factory = factory_;
         settlementToken = settlementToken_;
         verifierModule = verifierModule_;
+        verifierRewardRecipient = verifierModule_;
         termsHash = termsHash_;
         policyHash = policyHash_;
         acceptanceCriteriaHash = acceptanceCriteriaHash_;
@@ -152,11 +175,19 @@ contract StandingMetaParentV4 {
     }
 
     function claimWindowSeconds() external pure returns (uint64) {
-        return WORK_WINDOW;
+        return CLAIM_WINDOW;
     }
 
     function verificationWindowSeconds() external pure returns (uint64) {
         return VERIFICATION_WINDOW;
+    }
+
+    function verificationMode() external pure returns (uint8) {
+        return DETERMINISTIC_MODULE_MODE;
+    }
+
+    function threshold() external pure returns (uint8) {
+        return 1;
     }
 
     function status() external view returns (uint8) {
@@ -172,13 +203,12 @@ contract StandingMetaParentV4 {
         require(IERC20BountyToken(settlementToken).balanceOf(address(this)) == TARGET_AMOUNT, "funding mismatch");
         fundedAmount = TARGET_AMOUNT;
         _status = Status.Claimable;
-        emit ParentFunded(bountyId, creator, TARGET_AMOUNT);
+        emit FundingAdded(bountyId, creator, TARGET_AMOUNT, TARGET_AMOUNT, TARGET_AMOUNT);
+        emit BountyBecameClaimable(bountyId, TARGET_AMOUNT);
     }
 
-    function activatePreparedClaim(
+    function claimAuthorized(
         address solver_,
-        address child,
-        bytes32 childTermsHash,
         uint256 validAfter,
         uint256 validBefore,
         bytes32 authorizationNonce,
@@ -186,61 +216,96 @@ contract StandingMetaParentV4 {
         bytes32 r,
         bytes32 s
     ) external onlyFactory nonReentrant {
-        require(_status == Status.Claimable, "parent not claimable");
-        require(solver_ != address(0) && solver_ != creator && child != address(0), "claim parties invalid");
-        require(childTermsHash != bytes32(0), "child terms missing");
-        round += 1;
-        solver = solver_;
-        preparedChild = child;
-        preparedChildTermsHash = childTermsHash;
+        require(_status == Status.Claimable && activeClaimBond == 0, "child not claimable");
+        require(solver_ != address(0) && solver_ != creator, "child solver invalid");
         activeClaimBond = VERIFIER_REWARD;
-        claimActivatedAt = uint64(block.timestamp);
-        claimExpiresAt = uint64(block.timestamp) + WORK_WINDOW;
-        _status = Status.Claimed;
         settlementToken.safeTransferWithAuthorization(
             solver_, address(this), VERIFIER_REWARD, validAfter, validBefore, authorizationNonce, v, r, s
         );
         require(
-            IERC20BountyToken(settlementToken).balanceOf(address(this)) == TARGET_AMOUNT + VERIFIER_REWARD,
+            IERC20BountyToken(settlementToken).balanceOf(address(this))
+                >= fundedAmount + timeoutBondPool + activeClaimBond,
             "claim bond missing"
         );
-        emit ParentClaimed(bountyId, round, solver_, child, childTermsHash, claimExpiresAt);
+        round += 1;
+        solver = solver_;
+        claimExpiresAt = uint64(block.timestamp) + CLAIM_WINDOW;
+        _status = Status.Claimed;
+        emit BountyClaimed(bountyId, round, solver_, termsHash, policyHash, activeClaimBond, claimExpiresAt);
     }
 
-    function submitChild(address child) external nonReentrant {
+    function submit(bytes32 submissionHash_, bytes32 evidenceHash_) external nonReentrant {
         require(_status == Status.Claimed && msg.sender == solver, "submission unauthorized");
-        require(block.timestamp <= claimExpiresAt && child == preparedChild, "submission invalid");
-        require(
-            child.code.length > 0 && IStandingMetaPreparedChildV4(child).status() == CHILD_SETTLED_STATUS,
-            "child not settled"
-        );
-        submissionHash = keccak256(abi.encode(child));
-        evidenceHash = keccak256(abi.encode(preparedChildTermsHash, child));
+        require(block.timestamp <= claimExpiresAt, "claim expired");
+        require(submissionHash_ != bytes32(0) && evidenceHash_ != bytes32(0), "submission invalid");
+        submissionHash = submissionHash_;
+        evidenceHash = evidenceHash_;
         verificationExpiresAt = uint64(block.timestamp) + VERIFICATION_WINDOW;
         _status = Status.Submitted;
-        emit SubmissionAdded(bountyId, round, solver, submissionHash, evidenceHash, verificationExpiresAt);
+        emit SubmissionAdded(bountyId, round, solver, submissionHash_, evidenceHash_, verificationExpiresAt);
     }
 
-    function verifyAndSettle() external nonReentrant {
+    function verifyAndSettle(bytes calldata proof) external nonReentrant {
         require(_status == Status.Submitted && block.timestamp <= verificationExpiresAt, "verification unavailable");
-        bytes memory proof = abi.encode(preparedChild);
         (bool passed, bytes32 responseHash) = IAgentBountyVerifier(verifierModule)
             .verify(bountyId, round, solver, submissionHash, evidenceHash, policyHash, proof);
-        require(passed, "parent predicate incomplete");
-        uint256 returnedBond = activeClaimBond;
+        bytes32 verificationHash = keccak256(abi.encode(verifierModule, responseHash, keccak256(proof)));
+        if (passed) _settle(verificationHash);
+        else _reject(verificationHash);
+    }
+
+    function expireClaim() external nonReentrant {
+        require(_status == Status.Claimed && block.timestamp > claimExpiresAt, "claim not expired");
+        address expiredSolver = solver;
+        uint256 forfeitedBond = activeClaimBond;
         activeClaimBond = 0;
+        timeoutBondPool += forfeitedBond;
+        _resetClaim();
+        emit ClaimExpired(bountyId, round, expiredSolver, forfeitedBond, timeoutBondPool);
+    }
+
+    function expireSubmission() external nonReentrant {
+        require(_status == Status.Submitted && block.timestamp > verificationExpiresAt, "submission not expired");
+        address expiredSolver = solver;
+        uint256 refundedBond = activeClaimBond;
+        activeClaimBond = 0;
+        _resetClaim();
+        settlementToken.safeTransfer(expiredSolver, refundedBond);
+        emit SubmissionExpired(bountyId, round, expiredSolver, refundedBond);
+    }
+
+    function cancel() external nonReentrant {
+        require(msg.sender == creator && (_status == Status.Open || _status == Status.Claimable), "not cancellable");
+        _status = Status.Cancelled;
+        emit BountyCancelled(bountyId, fundedAmount + timeoutBondPool);
+    }
+
+    function withdrawRefund() external nonReentrant {
+        require(msg.sender == creator && _status == Status.Cancelled && fundedAmount > 0, "refund unavailable");
+        uint256 amount = fundedAmount + timeoutBondPool;
+        fundedAmount = 0;
+        timeoutBondPool = 0;
+        settlementToken.safeTransfer(creator, amount);
+        emit RefundWithdrawn(bountyId, creator, amount);
+    }
+
+    function _settle(bytes32 verificationHash) private {
+        require(fundedAmount == TARGET_AMOUNT, "not fully funded");
+        uint256 returnedBond = activeClaimBond;
+        uint256 timeoutBonus = timeoutBondPool;
+        activeClaimBond = 0;
+        timeoutBondPool = 0;
         fundedAmount = 0;
         _status = Status.Settled;
-        settlementToken.safeTransfer(solver, SOLVER_REWARD + returnedBond);
-        settlementToken.safeTransfer(msg.sender, VERIFIER_REWARD);
-        bytes32 verificationHash = keccak256(abi.encode(verifierModule, responseHash, keccak256(proof)));
+        settlementToken.safeTransfer(solver, SOLVER_REWARD + returnedBond + timeoutBonus);
+        settlementToken.safeTransfer(verifierRewardRecipient, VERIFIER_REWARD);
         emit BountySettled(
             bountyId,
             round,
             solver,
             SOLVER_REWARD,
             returnedBond,
-            0,
+            timeoutBonus,
             VERIFIER_REWARD,
             submissionHash,
             evidenceHash,
@@ -249,39 +314,22 @@ contract StandingMetaParentV4 {
         );
     }
 
-    function expireWork() external nonReentrant {
-        require(
-            (_status == Status.Claimed && block.timestamp > claimExpiresAt)
-                || (_status == Status.Submitted && block.timestamp > verificationExpiresAt),
-            "work not expired"
-        );
-        address expiredSolver = solver;
-        uint256 refundedBond = activeClaimBond;
+    function _reject(bytes32 verificationHash) private {
+        address rejectedSolver = solver;
+        uint256 forfeitedBond = activeClaimBond;
+        require(forfeitedBond == VERIFIER_REWARD, "claim bond invariant");
         activeClaimBond = 0;
+        _resetClaim();
+        settlementToken.safeTransfer(verifierRewardRecipient, VERIFIER_REWARD);
+        emit SubmissionRejected(bountyId, round, rejectedSolver, VERIFIER_REWARD, forfeitedBond, verificationHash);
+    }
+
+    function _resetClaim() private {
         solver = address(0);
-        preparedChild = address(0);
-        preparedChildTermsHash = bytes32(0);
         claimExpiresAt = 0;
-        claimActivatedAt = 0;
         verificationExpiresAt = 0;
         submissionHash = bytes32(0);
         evidenceHash = bytes32(0);
         _status = Status.Claimable;
-        settlementToken.safeTransfer(expiredSolver, refundedBond);
-        emit ParentExpired(bountyId, round, expiredSolver, refundedBond);
-    }
-
-    function cancel() external nonReentrant {
-        require(msg.sender == creator && _status == Status.Claimable, "cancellation unavailable");
-        _status = Status.Cancelled;
-        emit BountyCancelled(bountyId, fundedAmount);
-    }
-
-    function withdrawRefund() external nonReentrant {
-        require(msg.sender == creator && _status == Status.Cancelled && fundedAmount > 0, "refund unavailable");
-        uint256 amount = fundedAmount;
-        fundedAmount = 0;
-        settlementToken.safeTransfer(creator, amount);
-        emit RefundWithdrawn(bountyId, creator, amount);
     }
 }

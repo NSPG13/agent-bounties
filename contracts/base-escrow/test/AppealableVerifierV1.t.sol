@@ -282,7 +282,39 @@ contract AppealableVerifierV1Test {
         require(!settled, "timed-out case executed verdict");
     }
 
+    function testPrimaryRandomnessTimeoutAndLateCaseOpeningFailClosed() public {
+        AgentBounty timedOutBounty = _createSubmittedBounty();
+        (bytes32 timedOutCaseId,) = verifier.openCase(address(timedOutBounty));
+        vm.warp(block.timestamp + 2 hours + 1);
+        verifier.timeoutPrimaryRandomness(timedOutCaseId);
+        require(
+            verifier.caseState(timedOutCaseId) == AppealableVerifierV1.CaseState.TimedOut,
+            "primary randomness did not time out"
+        );
+
+        AgentBounty lateBounty = _createSubmittedBounty();
+        vm.warp(uint256(lateBounty.verificationExpiresAt()) - uint256(verifier.MINIMUM_CASE_REMAINING()) + 1);
+        (bool opened,) = address(verifier).call(abi.encodeCall(verifier.openCase, (address(lateBounty))));
+        require(!opened, "late case opening accepted");
+
+        AgentBounty timelyBounty = _createSubmittedBounty();
+        (bytes32 timelyCaseId,) = verifier.openCase(address(timelyBounty));
+        _fulfillLatestAndDerive(1_010);
+        vm.warp(block.timestamp + 2 hours + 1);
+        (bool incorrectlyTimedOut,) =
+            address(verifier).call(abi.encodeCall(verifier.timeoutPrimaryRandomness, (timelyCaseId)));
+        require(!incorrectlyTimedOut, "timely fulfillment was timed out");
+        verifier.activatePrimary(timelyCaseId);
+    }
+
     function _prepareCase(uint256 randomWord) private returns (AgentBounty bounty, bytes32 caseId) {
+        bounty = _createSubmittedBounty();
+        (caseId,) = verifier.openCase(address(bounty));
+        _fulfillLatestAndDerive(randomWord);
+        verifier.activatePrimary(caseId);
+    }
+
+    function _createSubmittedBounty() private returns (AgentBounty bounty) {
         AgentBountyFactory.CreateBountyParams memory params = AgentBountyFactory.CreateBountyParams({
             solverReward: SOLVER_REWARD,
             verifierReward: VERIFIER_REWARD,
@@ -309,9 +341,6 @@ contract AppealableVerifierV1Test {
         solver.approve(token, address(bounty), type(uint256).max);
         solver.claim(bounty);
         solver.submit(bounty, SUBMISSION_HASH, EVIDENCE_HASH);
-        (caseId,) = verifier.openCase(address(bounty));
-        _fulfillLatestAndDerive(randomWord);
-        verifier.activatePrimary(caseId);
     }
 
     function _openSolverAppeal(bytes32 caseId, uint256 randomWord) private {

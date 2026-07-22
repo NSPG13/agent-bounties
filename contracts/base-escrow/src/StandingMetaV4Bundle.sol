@@ -6,6 +6,7 @@ import "./AnonymousProtocolControllerV1.sol";
 import "./AnonymousStakePoolV1.sol";
 import "./AppealableVerifierV1.sol";
 import "./StandingMetaParentFactoryV4.sol";
+import "./StandingMetaChildFactoryV4.sol";
 import "./VrfSortitionCoordinatorV1.sol";
 
 /// @notice Immutable manifest that validates a staged V4 deployment. Staging
@@ -19,6 +20,7 @@ contract StandingMetaV4Bundle {
     VrfSortitionCoordinatorV1 public immutable verifierSortition;
     VrfSortitionCoordinatorV1 public immutable solverSortition;
     AppealableVerifierV1 public immutable appealableVerifier;
+    StandingMetaChildFactoryV4 public immutable standingMetaChildFactory;
     StandingMetaParentFactoryV4 public immutable parentFactory;
 
     constructor(
@@ -28,12 +30,14 @@ contract StandingMetaV4Bundle {
         address verifierSortition_,
         address solverSortition_,
         address appealableVerifier_,
+        address standingMetaChildFactory_,
         address parentFactory_
     ) {
         require(
             childFactory_.code.length > 0 && controller_.code.length > 0 && stakePool_.code.length > 0
                 && verifierSortition_.code.length > 0 && solverSortition_.code.length > 0
-                && appealableVerifier_.code.length > 0 && parentFactory_.code.length > 0,
+                && appealableVerifier_.code.length > 0 && standingMetaChildFactory_.code.length > 0
+                && parentFactory_.code.length > 0,
             "bundle dependency missing"
         );
         childFactory = AgentBountyFactory(childFactory_);
@@ -42,6 +46,7 @@ contract StandingMetaV4Bundle {
         verifierSortition = VrfSortitionCoordinatorV1(verifierSortition_);
         solverSortition = VrfSortitionCoordinatorV1(solverSortition_);
         appealableVerifier = AppealableVerifierV1(appealableVerifier_);
+        standingMetaChildFactory = StandingMetaChildFactoryV4(standingMetaChildFactory_);
         parentFactory = StandingMetaParentFactoryV4(parentFactory_);
 
         require(controller.configured(), "controller not configured");
@@ -68,8 +73,16 @@ contract StandingMetaV4Bundle {
             "appeal wiring mismatch"
         );
         require(
+            standingMetaChildFactory.configured() && standingMetaChildFactory.parentFactory() == parentFactory_
+                && address(standingMetaChildFactory.baseChildFactory()) == childFactory_
+                && address(standingMetaChildFactory.appealableVerifier()) == appealableVerifier_,
+            "child factory wiring mismatch"
+        );
+        require(
             address(parentFactory.childFactory()) == childFactory_ && address(parentFactory.controller()) == controller_
-                && address(parentFactory.appealableVerifier()) == appealableVerifier_,
+                && address(parentFactory.appealableVerifier()) == appealableVerifier_
+                && address(parentFactory.standingMetaChildFactory()) == standingMetaChildFactory_
+                && parentFactory.verifierModule().canonicalChildFactory() == standingMetaChildFactory_,
             "parent factory wiring mismatch"
         );
     }

@@ -1,6 +1,6 @@
 # Standing Meta V4 threat model
 
-Status: design and local-test evidence only. V4 is not deployed and is not ready to earn. The R4 independent review, Base Sepolia rehearsal, Base-mainnet fork test, bytecode/configuration evidence, funded VRF subscription, authorized consumers, and gas-sponsorship reserve remain release gates.
+Status: design, local-test, and Base-mainnet fork evidence only. V4 is not deployed and is not ready to earn. The current fork test deploys the exact staged graph against live Base USDC and the official VRF coordinator, creates and funds a fork-only native subscription, and authorizes both sortition coordinators. Independent review, the real Base Sepolia rehearsal, deployed bytecode/configuration evidence, a funded real VRF subscription, authorized real consumers, and gas sponsorship remain release gates.
 
 ## Security claims
 
@@ -16,7 +16,7 @@ The only payment proof is a confirmed canonical `BountySettled` event emitted by
 - Appeal bond: 0.10 USDC.
 - The platform funds required gas and the Chainlink VRF 2.5 native-token subscription. These are operational dependencies, not judgment authority.
 - The immutable controller is configured once. A wrong initial configuration is permanent, so deployment evidence and independent review are mandatory.
-- Components are deployed in a reviewed staged sequence, then an immutable `StandingMetaV4Bundle` validates and records their exact wiring. This avoids exceeding the EIP-3860 initcode limit; the bundle is not evidence that VRF funding or consumer authorization succeeded.
+- Components are deployed in a reviewed staged sequence, including a dedicated claim-restricted V4 child factory, then an immutable `StandingMetaV4Bundle` validates and records their exact wiring. This stays below EIP-170 and EIP-3860 limits; the bundle is not evidence that VRF funding or consumer authorization succeeded.
 
 ## Threats and controls
 
@@ -27,11 +27,13 @@ The only payment proof is a confirmed canonical `BountySettled` event emitted by
 | Candidate joins after seeing a target | Child solver candidates are the already-active, available pool snapshotted inside `claimAndCreateChild` | Availability may change after the snapshot; ranking activation and claims still fail closed |
 | Enrollment delay blocks fast work | There is no per-bounty enrollment window; the VRF request is made atomically with the parent claim | New wallets still wait seven days before becoming active, which is a Sybil-cost control |
 | Selected solver does not respond | One ranking is reused and a permissionless promotion becomes available after ten minutes | A ten-minute liveness delay remains for each nonresponsive rank |
+| Unselected wallet directly reserves the child | The specialized V4 child has no generic claim path; only the immutable child factory can activate the currently ranked wallet | A selected wallet can still fail to respond and trigger the bounded promotion delay |
 | Primary verifier does not respond | Primary plus three ranked backups; unavailable primaries lose 0.01 USDC | Exhausting all backups times out rather than accepting a platform verdict |
 | Primary judgment is disputed | Solver may appeal rejection and creator may appeal acceptance; five-wallet jury, three-vote threshold | Subjective judgment can still be wrong or coordinated |
 | Uncontested verdict waits unnecessarily | The only eligible appellant may waive the remaining appeal window, finalizing immediately | Without a waiver, the full appeal window remains available |
 | Jury result is already decisive | Three matching votes can be finalized immediately | A split or missing quorum waits until timeout and then fails closed |
 | Callback griefing or out-of-order fulfillment | Callback only stores request-bound randomness and never performs downstream settlement; ranking is derived separately | A late callback is unusable and requires recovery, never platform randomness |
+| Verification starts too late to finish an appeal | Case opening requires enough time for both VRF windows, all four primary response windows, appeal and voting windows, plus a transaction buffer; primary randomness has an explicit fail-closed timeout | A case not opened promptly can time out the child and require a new round |
 | Reroll or replay | One request per commitment, no cancellation, no replacement request, request-ID binding | A permanently failed request cannot be rescued inside that round |
 | Atomic preparation race | Terms publication, child creation/funding, active-pool snapshot, VRF request, round binding, and parent claim occur in one transaction | The transaction can revert for gas, authorization, pool-size, or subscription failures |
 | Fake profitable economics | Exact integer micro-USDC checks and deterministic parent predicate require 2.00 minus 1.00 equals 1.00 USDC | This is successful-settlement onchain margin, not net profit; labor, compute, tax, failure, and opportunity cost remain |
