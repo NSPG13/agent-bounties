@@ -44,7 +44,17 @@ jobs:
       - run: python scripts/check-site.py
       - run: python scripts/test-homepage-wallet-wiring.py
       - run: node scripts/test-homepage-wallet-flow.js
-      - name: Verify production analytics substitution preserves guild bootstrap
+      - name: Check simplified public scripts
+        run: |
+          node --check site/bounty-board.js
+          node --check site/objective.js
+          node --check site/simple-home.js
+          node --check site/guild-shell.js
+          grep -q 'data-board-search' site/earn.html
+          grep -q 'id="fund-bounty-panel"' site/earn.html
+          grep -q 'id="autonomous-post-form"' site/objective.html
+          grep -q 'You ask. Someone helps. They show proof. They get paid.' site/how-it-works.html
+      - name: Verify production analytics substitution preserves the public shell
         env:
           GA_MEASUREMENT_ID: G-TEST123
         run: |
@@ -64,8 +74,9 @@ jobs:
           )
           if count != 1:
               raise SystemExit("analytics configuration assignment was not found exactly once")
-          if "loadGuildShell" not in updated or "guild-pages.css" not in updated or "guild-shell.js" not in updated:
-              raise SystemExit("Pages analytics substitution removed the guild bootstrap")
+          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js"):
+              if required not in updated:
+                  raise SystemExit(f"Pages analytics substitution removed {required}")
           path.write_text(updated, encoding="utf-8")
           PY
           grep -q 'googleMeasurementId: "G-TEST123"' /tmp/analytics-config.js
@@ -80,7 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v6
-      - name: Configure optional Google Analytics without removing the guild shell
+      - name: Configure optional Google Analytics without removing the public shell
         env:
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
         run: |
@@ -103,8 +114,9 @@ jobs:
           )
           if count != 1:
               raise SystemExit("analytics configuration assignment was not found exactly once")
-          if "loadGuildShell" not in updated or "guild-pages.css" not in updated or "guild-shell.js" not in updated:
-              raise SystemExit("refusing to deploy without the guild bootstrap")
+          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js"):
+              if required not in updated:
+                  raise SystemExit(f"refusing to deploy without {required}")
           path.write_text(updated, encoding="utf-8")
           PY
       - name: Stage bounded-wallet deployment manifest
@@ -117,7 +129,7 @@ jobs:
           path: site
       - id: deployment
         uses: actions/deploy-pages@v5
-      - name: Verify canonical live guild deployment
+      - name: Verify the simplified canonical website
         env:
           GH_TOKEN: ${{ github.token }}
           LIVE_CANARY_ISSUE: "499"
@@ -135,19 +147,29 @@ jobs:
 
             if curl "${common_curl[@]}" "https://agentbounties.app/live-guild-build.txt?verify=${nonce}" -o /tmp/live-canary.txt \
               && curl "${common_curl[@]}" "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html \
-              && curl "${common_curl[@]}" "https://agentbounties.app/analytics-config.js?verify=${nonce}" -o /tmp/live-analytics.js; then
+              && curl "${common_curl[@]}" "https://agentbounties.app/objective.html?verify=${nonce}" -o /tmp/live-objective.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/how-it-works.html?verify=${nonce}" -o /tmp/live-how.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/analytics-config.js?verify=${nonce}" -o /tmp/live-analytics.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/simple-home.js?verify=${nonce}" -o /tmp/live-simple-home.js; then
               actual_build="$(head -n 1 /tmp/live-canary.txt | tr -d '\r\n')"
               if [[ "${actual_build}" == "${expected_build}" ]] \
-                && grep -q 'data-guild-build="20260722-1"' /tmp/live-earn.html \
-                && grep -q '>Bounty Board</a>' /tmp/live-earn.html \
-                && grep -q 'guild-pages.css?v=20260722-1' /tmp/live-earn.html \
-                && grep -q 'loadGuildShell' /tmp/live-analytics.js \
-                && grep -q 'guild-shell.js' /tmp/live-analytics.js; then
+                && grep -q 'data-public-ux="simplified-v1"' /tmp/live-earn.html \
+                && grep -q 'data-board-search' /tmp/live-earn.html \
+                && grep -q 'id="fund-bounty-panel"' /tmp/live-earn.html \
+                && grep -q 'Post something you want done' /tmp/live-earn.html \
+                && grep -q 'bounty-board.js?v=1' /tmp/live-earn.html \
+                && grep -q 'id="autonomous-post-form"' /tmp/live-objective.html \
+                && grep -q 'data-use-selected-task' /tmp/live-objective.html \
+                && grep -q 'You ask. Someone helps. They show proof. They get paid.' /tmp/live-how.html \
+                && grep -q 'simple-home.js' /tmp/live-analytics.js \
+                && grep -q '\["earn.html", "Bounty Board"\]' /tmp/live-simple-home.js \
+                && grep -q '\["how-it-works.html", "How It Works"\]' /tmp/live-simple-home.js \
+                && ! grep -q 'Open Source' /tmp/live-simple-home.js; then
                 success=true
                 failure_detail=""
                 break
               fi
-              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or guild markers were missing"
+              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or simplified public-workflow markers were missing"
             else
               failure_detail="one or more live URLs returned a non-success response"
             fi
@@ -158,19 +180,21 @@ jobs:
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           if [[ "${success}" == "true" ]]; then
             cat > /tmp/live-proof.md <<EOF
-          ✅ **Production guild canary passed**
+          ✅ **Simplified production workflow canary passed**
 
           - Commit: \`${GITHUB_SHA}\`
           - Expected and live build: \`${expected_build}\`
           - Attempts: ${attempt_used}
           - Verified at: ${verified_at}
-          - Live Bounty Board contains the static guild body marker, **Bounty Board** navigation, and cache-busted guild stylesheet.
-          - Live analytics configuration still contains \`loadGuildShell\` and \`guild-shell.js\`.
+          - Live primary navigation assets contain only **Bounty Board** and **How It Works**.
+          - Live Bounty Board contains search filters, visual open-task cards, inline funding, and the posting entry point.
+          - Live Goal Planner contains the integrated posting form.
+          - Live How It Works page contains the plain-language explanation.
           - Workflow: ${run_url}
           EOF
           else
             cat > /tmp/live-proof.md <<EOF
-          ❌ **Production guild canary failed**
+          ❌ **Simplified production workflow canary failed**
 
           - Commit: \`${GITHUB_SHA}\`
           - Expected build: \`${expected_build}\`
