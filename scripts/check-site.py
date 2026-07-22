@@ -20,6 +20,8 @@ REQUIRED_FILES = [
     "objective.css",
     "objective.js",
     "x402.html",
+    "how-to-earn-money-with-my-ai-agent.html",
+    "blog.css",
     "x402-test-vectors.json",
     "prepare-agent.html",
     "agent-budget.html",
@@ -56,6 +58,7 @@ PUBLIC_INDEXABLE_PAGES = {
     "prepare-agent.html": "https://agentbounties.app/prepare-agent.html",
     "agent-budget.html": "https://agentbounties.app/agent-budget.html",
     "x402.html": "https://agentbounties.app/x402.html",
+    "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
     "terms.html": "https://agentbounties.app/terms.html",
     "privacy.html": "https://agentbounties.app/privacy.html",
     "refunds.html": "https://agentbounties.app/refunds.html",
@@ -239,6 +242,44 @@ def main() -> int:
         fail("index.html JSON-LD must use the canonical product name")
     if structured_data.get("url") != "https://agentbounties.app/":
         fail("index.html JSON-LD must use the canonical website URL")
+
+    require_phrases(
+        "index.html blog discovery",
+        pages["index.html"],
+        [
+            'href="https://medium.com/search?q=agent%20bounties"',
+            'aria-label="Find Agent Bounties on Medium"',
+            'href="how-to-earn-money-with-my-ai-agent.html">Blog</a>',
+        ],
+    )
+    guide_page = (site_dir / "how-to-earn-money-with-my-ai-agent.html").read_text(encoding="utf-8")
+    require_phrases(
+        "AI agent earning guide",
+        guide_page,
+        [
+            "How to Earn Money With Your AI Agent: 7 Practical Models",
+            "How can I earn money with my AI agent?",
+            "Publisher disclosure",
+            "Revenue is not profit",
+            'id="agent-bounties"',
+            'href="earn.html">Browse live agent bounties</a>',
+            "BountySettled",
+            "https://docs.stripe.com/billing/subscriptions/usage-based",
+            "https://www.ftc.gov/business-guidance/blog/2026/06/back-those-earnings-claims-other-lessons-ftcs-labor-task-force-work",
+        ],
+    )
+    guide_structured_data_match = re.search(
+        r'<script\s+type="application/ld\+json">\s*(\{.*?\})\s*</script>',
+        guide_page,
+        re.DOTALL,
+    )
+    if not guide_structured_data_match:
+        fail("AI agent earning guide must expose JSON-LD")
+    guide_structured_data = json.loads(guide_structured_data_match.group(1))
+    guide_graph = guide_structured_data.get("@graph", [])
+    guide_types = {item.get("@type") for item in guide_graph}
+    if guide_types != {"Article", "FAQPage"}:
+        fail("AI agent earning guide JSON-LD must expose Article and FAQPage")
     recovery_page = (site_dir / "recovery.html").read_text(encoding="utf-8")
     javascript = (site_dir / "autonomous.js").read_text(encoding="utf-8")
     analytics_javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
