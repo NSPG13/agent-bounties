@@ -8,6 +8,7 @@ on:
       - "site/**"
       - "scripts/check-site.py"
       - "scripts/test-homepage-wallet-wiring.py"
+      - "scripts/test-homepage-wallet-flow.js"
   push:
     branches: [main]
     paths:
@@ -16,6 +17,7 @@ on:
       - "site/**"
       - "scripts/check-site.py"
       - "scripts/test-homepage-wallet-wiring.py"
+      - "scripts/test-homepage-wallet-flow.js"
   workflow_dispatch:
 
 permissions:
@@ -35,8 +37,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - run: python scripts/check-site.py
       - run: python scripts/test-homepage-wallet-wiring.py
+      - run: node scripts/test-homepage-wallet-flow.js
 
   deploy:
     if: github.event_name != 'pull_request'
