@@ -278,6 +278,7 @@ tool_args! {
         acceptance_criteria: Vec<String>,
         solver_reward_usdc: String,
         verifier_reward_usdc: String,
+        task_window_days: Option<u8>,
         source_url: Option<String>,
         #[serde(default)]
         crowdfund: bool,
@@ -294,6 +295,7 @@ tool_args! {
             },
             "solver_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Solver reward in display USDC, for example 2.00."},
             "verifier_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Verifier reward and refundable claim bond in display USDC, for example 0.10."},
+            "task_window_days": {"type": ["integer", "null"], "minimum": 1, "maximum": 30, "description": "Optional bounded work window in days; defaults to 30."},
             "source_url": nullable_string_property("Optional public HTTPS source issue or task URL."),
             "crowdfund": {"type": "boolean", "default": false, "description": "Keep false to fund on creation. Set true only to deposit 0 USDC now."},
             "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties.")
@@ -1525,7 +1527,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_bounty_post",
-            "Use this when posting from ChatGPT. Review the terms, sign, fund, then confirm canonical events. This tool moves no funds.",
+            "Use this when a person wants their current AI assistant to prepare a reviewable Agent Bounties draft. It returns a portable card and secure review URL, moves no funds, and requests no wallet signature.",
             PrepareBountyPostArgs::input_schema(),
         ),
         tool(

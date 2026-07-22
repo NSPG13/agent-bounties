@@ -9,6 +9,7 @@ on:
       - "scripts/check-site.py"
       - "scripts/test-homepage-bounty-wiring.py"
       - "scripts/test-homepage-bounty-flow.js"
+      - "scripts/test-ai-bounty-handoff.js"
   push:
     branches: [main]
     paths:
@@ -18,6 +19,7 @@ on:
       - "scripts/check-site.py"
       - "scripts/test-homepage-bounty-wiring.py"
       - "scripts/test-homepage-bounty-flow.js"
+      - "scripts/test-ai-bounty-handoff.js"
   workflow_dispatch:
 
 permissions:
@@ -44,10 +46,12 @@ jobs:
       - run: python scripts/check-site.py
       - run: python scripts/test-homepage-bounty-wiring.py
       - run: node scripts/test-homepage-bounty-flow.js
+      - run: node scripts/test-ai-bounty-handoff.js
       - name: Check simplified public scripts
         run: |
           node --check site/bounty-board.js
           node --check site/bounty-entry.js
+          node --check site/ai-bounty-handoff.js
           node --check site/bounty-composer-v2.js
           node --check site/bounty-chat-ui.js
           node --check site/simple-home.js
@@ -75,9 +79,12 @@ jobs:
           grep -q 'data-open-funding' site/objective.html
           grep -q '>Connect wallet<' site/objective.html
           grep -q 'data-payment-method="crypto"' site/objective.html
-          grep -q 'bounty-composer-v2.js?v=1' site/objective.html
+          grep -q 'ai-bounty-handoff.js?v=5' site/objective.html
+          grep -q 'bounty-composer-v2.js?v=2' site/objective.html
           grep -q 'bounty-entry.js?v=1' site/objective.html
-          grep -q 'bounty-chat-ui.js?v=3' site/objective.html
+          grep -q 'bounty-chat-ui.js?v=4' site/objective.html
+          grep -q 'data-ai-draft-import' site/objective.html
+          grep -q 'prepare_bounty_post' site/ai-bounty-handoff.js
           ! grep -q 'chat-composer-intro' site/objective.html
           ! grep -q 'draft-panel' site/objective.html
           grep -q 'dataset.bountyComposer = "chat-v2"' site/bounty-chat-ui.js
@@ -189,6 +196,8 @@ jobs:
               && curl "${common_curl[@]}" "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/objective.html?verify=${nonce}" -o /tmp/live-objective.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat.css?verify=${nonce}" -o /tmp/live-chat.css \
+              && curl "${common_curl[@]}" "https://agentbounties.app/ai-bounty-handoff.css?verify=${nonce}" -o /tmp/live-ai-handoff.css \
+              && curl "${common_curl[@]}" "https://agentbounties.app/ai-bounty-handoff.js?verify=${nonce}" -o /tmp/live-ai-handoff.js \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-composer-v2.js?verify=${nonce}" -o /tmp/live-composer.js \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat-ui.js?verify=${nonce}" -o /tmp/live-chat-ui.js \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-entry.js?verify=${nonce}" -o /tmp/live-entry.js \
@@ -217,10 +226,15 @@ jobs:
                 && grep -q 'data-open-funding' /tmp/live-objective.html \
                 && grep -q '>Connect wallet<' /tmp/live-objective.html \
                 && grep -q 'bounty-entry.js?v=1' /tmp/live-objective.html \
-                && grep -q 'bounty-chat-ui.js?v=3' /tmp/live-objective.html \
+                && grep -q 'ai-bounty-handoff.js?v=5' /tmp/live-objective.html \
+                && grep -q 'bounty-chat-ui.js?v=4' /tmp/live-objective.html \
+                && grep -q 'data-ai-draft-import' /tmp/live-objective.html \
                 && ! grep -q 'chat-composer-intro' /tmp/live-objective.html \
                 && ! grep -q 'draft-panel' /tmp/live-objective.html \
                 && grep -q '.chat-app-header' /tmp/live-chat.css \
+                && grep -q '.ai-provider-grid' /tmp/live-ai-handoff.css \
+                && grep -q 'prepare_bounty_post' /tmp/live-ai-handoff.js \
+                && grep -q 'agent-bounties:prepared-draft' /tmp/live-ai-handoff.js \
                 && grep -q 'grid-template-rows: minmax(0, 1fr) auto auto' /tmp/live-chat.css \
                 && grep -q 'x-agent-bounties-draft-visual' /tmp/live-composer.js \
                 && grep -q 'MAX_TASK_DAYS = 30' /tmp/live-composer.js \
@@ -249,20 +263,19 @@ jobs:
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           if [[ "${success}" == "true" ]]; then
             cat > /tmp/live-proof.md <<EOF
-          ✅ **Normal chatbot bounty composer canary passed**
+          ✅ **User-owned AI bounty composer canary passed**
 
           - Commit: \`${GITHUB_SHA}\`
           - Expected and live build: \`${expected_build}\`
           - Attempts: ${attempt_used}
           - Verified at: ${verified_at}
-          - Live bounty creation is one full-screen message thread with a bottom composer.
-          - There is no intro section, progress display, separate draft panel, or guild navigation shell.
-          - The standardized draft appears inline as an AI message and retains edit, approval, and wallet gates.
+          - Live bounty creation hands the original idea to ChatGPT, Claude, Gemini, or another MCP-capable user account without calling a platform model key.
+          - The portable JSON return path renders the standardized draft inline and retains review, approval, and wallet gates.
           - Workflow: ${run_url}
           EOF
           else
             cat > /tmp/live-proof.md <<EOF
-          ❌ **Normal chatbot bounty composer canary failed**
+          ❌ **User-owned AI bounty composer canary failed**
 
           - Commit: \`${GITHUB_SHA}\`
           - Expected build: \`${expected_build}\`
