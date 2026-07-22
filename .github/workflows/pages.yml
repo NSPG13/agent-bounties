@@ -7,6 +7,7 @@ on:
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
       - "scripts/check-site.py"
+      - "scripts/test-homepage-wallet-wiring.py"
   push:
     branches: [main]
     paths:
@@ -14,6 +15,7 @@ on:
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
       - "scripts/check-site.py"
+      - "scripts/test-homepage-wallet-wiring.py"
   workflow_dispatch:
 
 permissions:
@@ -34,6 +36,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/check-site.py
+      - run: python scripts/test-homepage-wallet-wiring.py
 
   deploy:
     if: github.event_name != 'pull_request'
