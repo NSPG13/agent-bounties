@@ -28,7 +28,7 @@
           <p class="eyebrow">Create verified paid work</p>
           <h1>Post a bounty</h1>
           <p>A bounty is a task with a reward, a measurable objective, acceptance criteria, evidence requirements, and a committed verifier.</p>
-          <p class="fine">Fund it on creation, or choose crowdfunding to publish it with a 0 USDC deposit.</p>
+          <p class="fine">Fund on creation, or choose crowdfunding to publish it with a 0 USDC deposit.</p>
         </div>
         <output class="protocol-status" data-protocol-status aria-live="polite">Checking protocol</output>
       </section>
@@ -42,8 +42,8 @@
               <textarea name="draftObjective" rows="3" placeholder="Describe the result you want to make true. The drafting agent will turn it into measurable task terms."></textarea>
             </label>
             <div class="actions compact-actions">
-              <button class="button secondary" type="button" data-cloud-draft>Draft task terms</button>
-              <output class="fine" data-cloud-draft-status aria-live="polite">The draft is advisory. Review the task objective and every acceptance criterion.</output>
+              <button class="button secondary" type="button" data-cloud-draft>Draft measurable terms</button>
+              <output class="fine" data-cloud-draft-status aria-live="polite">The cloud draft is advisory. Review the task objective and every acceptance criterion.</output>
             </div>
             <label>
               Task title
@@ -79,7 +79,7 @@
             <p class="fine">The verifier reward also sets the refundable solver bond.</p>
             <label class="check-line">
               <input name="crowdfund" type="checkbox">
-              Post with 0 USDC now and open the bounty to funding later
+              Post with 0 USDC now and open it to funding later
             </label>
             <p class="fine"><strong>Crowdfunding fallback:</strong> The creator still signs contract creation and pays gas. The task becomes claimable only after the full reward target is funded.</p>
             <details class="advanced">
@@ -115,7 +115,7 @@
             <output class="readiness-panel" data-verifier-scope aria-live="polite">The demo checker proves only that a small computation was completed. It does not check whether your requested task objective or acceptance criteria were satisfied.</output>
             <label class="check-line verifier-warning" data-demo-verifier-warning>
               <input name="demoVerifierAccepted" type="checkbox">
-              <span>I understand this demo checker does not evaluate my task objective or acceptance criteria. I will use it only when the small work proof itself is the result I want.</span>
+              <span>I understand this demo checker does not evaluate my task or acceptance criteria, including the stated objective. I will use it only when the small work proof itself is the result I want.</span>
             </label>
             <details class="advanced">
               <summary>Review advanced verification details</summary>
@@ -138,7 +138,7 @@
                 </label>
               </div>
               <label>
-                Benchmark JSON (exact verification condition)
+                Benchmark JSON (exact payout condition)
                 <textarea name="benchmark" rows="8" readonly required>{"engine":"leading_zero_work_v1","difficulty_bits":16,"hash_function":"keccak256","preimage_abi_types":["bytes32","uint64","address","bytes32","bytes32","bytes32","uint256"],"proof_encoding":"abi.encode(uint256 nonce)","verifier_module":"0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e","reference_command":"cargo run -p cli -- autonomous-mine-work-proof"}</textarea>
               </label>
               <label>
@@ -206,8 +206,8 @@
       <section class="cta">
         <div>
           <p class="eyebrow">Create verified earning opportunities</p>
-          <h2>Post a task with a clear result.</h2>
-          <p>Useful bounties attract funders, contributors, and more verified paid work.</p>
+          <h2>Post your own bounty.</h2>
+          <p>Define one task with a clear objective, acceptance criteria, verifier, and reward.</p>
         </div>
         <div class="actions">
           <a class="button secondary" href="objective.html">Plan a larger goal</a>
