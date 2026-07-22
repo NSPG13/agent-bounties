@@ -7,8 +7,8 @@ on:
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
       - "scripts/check-site.py"
-      - "scripts/test-homepage-wallet-wiring.py"
-      - "scripts/test-homepage-wallet-flow.js"
+      - "scripts/test-homepage-bounty-wiring.py"
+      - "scripts/test-homepage-bounty-flow.js"
   push:
     branches: [main]
     paths:
@@ -16,8 +16,8 @@ on:
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
       - "scripts/check-site.py"
-      - "scripts/test-homepage-wallet-wiring.py"
-      - "scripts/test-homepage-wallet-flow.js"
+      - "scripts/test-homepage-bounty-wiring.py"
+      - "scripts/test-homepage-bounty-flow.js"
   workflow_dispatch:
 
 permissions:
@@ -42,15 +42,24 @@ jobs:
         with:
           node-version: "22"
       - run: python scripts/check-site.py
-      - run: python scripts/test-homepage-wallet-wiring.py
-      - run: node scripts/test-homepage-wallet-flow.js
+      - run: python scripts/test-homepage-bounty-wiring.py
+      - run: node scripts/test-homepage-bounty-flow.js
       - name: Check simplified public scripts
         run: |
           node --check site/bounty-board.js
+          node --check site/bounty-entry.js
           node --check site/bounty-composer-v2.js
           node --check site/bounty-chat-ui.js
           node --check site/simple-home.js
           node --check site/guild-shell.js
+          grep -q 'data-primary-bounty-cta>Post a bounty</a>' site/index.html
+          grep -q 'class="mode-switch"' site/index.html
+          grep -q 'action="objective.html"' site/index.html
+          grep -q 'src="bounty-entry.js?v=1"' site/index.html
+          ! grep -q 'data-connect-wallet' site/index.html
+          ! grep -q 'class="network-chip"' site/index.html
+          grep -q 'AGENT MODE · NO COMPUTER USE REQUIRED' site/agent/index.html
+          grep -q 'No computer use is required' site/agent/index.md
           grep -q 'data-board-search' site/earn.html
           grep -q 'id="fund-bounty-panel"' site/earn.html
           grep -q 'class="composer-page chat-app-page"' site/objective.html
@@ -66,10 +75,12 @@ jobs:
           grep -q '>Connect wallet<' site/objective.html
           grep -q 'data-payment-method="crypto"' site/objective.html
           grep -q 'bounty-composer-v2.js?v=1' site/objective.html
-          grep -q 'bounty-chat-ui.js?v=2' site/objective.html
+          grep -q 'bounty-entry.js?v=1' site/objective.html
+          grep -q 'bounty-chat-ui.js?v=3' site/objective.html
           ! grep -q 'chat-composer-intro' site/objective.html
           ! grep -q 'draft-panel' site/objective.html
           grep -q 'dataset.bountyComposer = "chat-v2"' site/bounty-chat-ui.js
+          grep -q 'entryIntent.autostart' site/bounty-chat-ui.js
           grep -q 'form.requestSubmit()' site/bounty-chat-ui.js
           grep -q 'log.append(preview)' site/bounty-chat-ui.js
           grep -q 'body.classList.contains("chat-app-page")' site/analytics-config.js
@@ -169,16 +180,27 @@ jobs:
             common_curl=(--fail --silent --show-error --location --retry 2 --retry-delay 1 --header "Cache-Control: no-cache" --header "Pragma: no-cache")
 
             if curl "${common_curl[@]}" "https://agentbounties.app/live-guild-build.txt?verify=${nonce}" -o /tmp/live-canary.txt \
+              && curl "${common_curl[@]}" "https://agentbounties.app/?verify=${nonce}" -o /tmp/live-index.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/agent/?verify=${nonce}" -o /tmp/live-agent.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/agent/index.md?verify=${nonce}" -o /tmp/live-agent.md \
               && curl "${common_curl[@]}" "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/objective.html?verify=${nonce}" -o /tmp/live-objective.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat.css?verify=${nonce}" -o /tmp/live-chat.css \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-composer-v2.js?verify=${nonce}" -o /tmp/live-composer.js \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat-ui.js?verify=${nonce}" -o /tmp/live-chat-ui.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-entry.js?verify=${nonce}" -o /tmp/live-entry.js \
               && curl "${common_curl[@]}" "https://agentbounties.app/how-it-works.html?verify=${nonce}" -o /tmp/live-how.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/analytics-config.js?verify=${nonce}" -o /tmp/live-analytics.js \
               && curl "${common_curl[@]}" "https://agentbounties.app/simple-home.js?verify=${nonce}" -o /tmp/live-simple-home.js; then
               actual_build="$(head -n 1 /tmp/live-canary.txt | tr -d '\r\n')"
               if [[ "${actual_build}" == "${expected_build}" ]] \
+                && grep -q 'data-primary-bounty-cta>Post a bounty</a>' /tmp/live-index.html \
+                && grep -q 'class="mode-switch"' /tmp/live-index.html \
+                && grep -q 'action="objective.html"' /tmp/live-index.html \
+                && ! grep -q 'data-connect-wallet' /tmp/live-index.html \
+                && ! grep -q 'class="network-chip"' /tmp/live-index.html \
+                && grep -q 'AGENT MODE · NO COMPUTER USE REQUIRED' /tmp/live-agent.html \
+                && grep -q 'No computer use is required' /tmp/live-agent.md \
                 && grep -q 'data-public-ux="simplified-v1"' /tmp/live-earn.html \
                 && grep -q 'data-board-search' /tmp/live-earn.html \
                 && grep -q 'id="fund-bounty-panel"' /tmp/live-earn.html \
@@ -190,7 +212,8 @@ jobs:
                 && grep -q 'data-approve-card' /tmp/live-objective.html \
                 && grep -q 'data-open-funding' /tmp/live-objective.html \
                 && grep -q '>Connect wallet<' /tmp/live-objective.html \
-                && grep -q 'bounty-chat-ui.js?v=2' /tmp/live-objective.html \
+                && grep -q 'bounty-entry.js?v=1' /tmp/live-objective.html \
+                && grep -q 'bounty-chat-ui.js?v=3' /tmp/live-objective.html \
                 && ! grep -q 'chat-composer-intro' /tmp/live-objective.html \
                 && ! grep -q 'draft-panel' /tmp/live-objective.html \
                 && grep -q '.chat-app-header' /tmp/live-chat.css \
@@ -198,6 +221,8 @@ jobs:
                 && grep -q 'x-agent-bounties-draft-visual' /tmp/live-composer.js \
                 && grep -q 'MAX_TASK_DAYS = 30' /tmp/live-composer.js \
                 && grep -q 'dataset.bountyComposer = "chat-v2"' /tmp/live-chat-ui.js \
+                && grep -q 'entryIntent.autostart' /tmp/live-chat-ui.js \
+                && grep -q 'agent-bounties:homepage-bounty-intent' /tmp/live-entry.js \
                 && grep -q 'log.append(preview)' /tmp/live-chat-ui.js \
                 && grep -q 'body.classList.contains("chat-app-page")' /tmp/live-analytics.js \
                 && grep -q 'You ask. Someone helps. They show proof. They get paid.' /tmp/live-how.html \

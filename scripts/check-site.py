@@ -37,12 +37,16 @@ REQUIRED_FILES = [
     "analytics-config.js",
     "analytics.js",
     "route-alias.js",
+    "bounty-entry.js",
     "autonomous.js",
     "legal-consent.js",
     "protocol.json",
     "llms.txt",
     ".well-known/agent-bounties.json",
     ".well-known/x402.json",
+    "agent/index.html",
+    "agent/index.md",
+    "agent.css",
     ".nojekyll",
 ]
 
@@ -175,6 +179,41 @@ def main() -> int:
             ],
         )
 
+    agent_page_path = site_dir / "agent" / "index.html"
+    agent_page = agent_page_path.read_text(encoding="utf-8")
+    agent_parser = LinkParser()
+    agent_parser.feed(agent_page)
+    require_phrases(
+        "agent/index.html",
+        agent_page,
+        [
+            '<link rel="canonical" href="https://agentbounties.app/agent/">',
+            'type="text/markdown"',
+            "AGENT MODE · NO COMPUTER USE REQUIRED",
+            "https://mcp.agentbounties.app/mcp",
+            "https://api.agentbounties.app/api-docs/openapi.json",
+            "https://agentbounties.app/schemas/discovery-manifest.v2.json",
+            "Only <code>BountySettled</code> proves bounty payment",
+        ],
+    )
+    if re.search(r'<meta\s+name="robots"[^>]*noindex', agent_page, re.IGNORECASE):
+        fail("agent/index.html must remain indexable")
+    for link in agent_parser.links:
+        check_internal_link(site_dir, agent_page_path, link, agent_parser.ids)
+
+    agent_markdown = (site_dir / "agent" / "index.md").read_text(encoding="utf-8")
+    require_phrases(
+        "agent/index.md",
+        agent_markdown,
+        [
+            "No computer use is required",
+            "https://agentbounties.app/llms.txt",
+            "https://mcp.agentbounties.app/mcp",
+            "https://api.agentbounties.app/api-docs/openapi.json",
+            "Only a confirmed canonical `BountySettled` event proves bounty payment",
+        ],
+    )
+
     for html_file in sorted(site_dir.glob("*.html")):
         parser = LinkParser()
         text = html_file.read_text(encoding="utf-8")
@@ -212,7 +251,9 @@ def main() -> int:
         for element in sitemap_root.findall("sm:url/sm:loc", sitemap_namespace)
         if element.text
     }
-    expected_sitemap_urls = set(PUBLIC_INDEXABLE_PAGES.values())
+    expected_sitemap_urls = set(PUBLIC_INDEXABLE_PAGES.values()) | {
+        "https://agentbounties.app/agent/"
+    }
     if sitemap_urls != expected_sitemap_urls:
         missing = sorted(expected_sitemap_urls - sitemap_urls)
         extra = sorted(sitemap_urls - expected_sitemap_urls)
@@ -244,6 +285,7 @@ def main() -> int:
     analytics_javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
     analytics_config = (site_dir / "analytics-config.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
+    bounty_entry_javascript = (site_dir / "bounty-entry.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     objective_page = (site_dir / "objective.html").read_text(encoding="utf-8")
     objective_javascript = (site_dir / "objective.js").read_text(encoding="utf-8")
@@ -264,6 +306,33 @@ def main() -> int:
     privacy_page = (site_dir / "privacy.html").read_text(encoding="utf-8")
     pages_workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     check_protocol(protocol, deployment)
+
+    require_phrases(
+        "index.html agent and bounty entry",
+        pages["index.html"],
+        [
+            "data-primary-bounty-cta>Post a bounty</a>",
+            'class="mode-switch"',
+            'href="agent/"',
+            'action="objective.html"',
+            'name="autostart" value="1"',
+            'src="bounty-entry.js?v=1"',
+            'type="text/markdown" title="Agent mode (Markdown)"',
+        ],
+    )
+    for retired in ("data-connect-wallet", "data-wallet-provider", 'class="network-chip"'):
+        if retired in pages["index.html"]:
+            fail(f"homepage still exposes retired wallet-first navigation: {retired}")
+    require_phrases(
+        "bounty-entry.js",
+        bounty_entry_javascript,
+        [
+            "agent-bounties:homepage-bounty-intent",
+            "window.sessionStorage.setItem",
+            "window.sessionStorage.removeItem",
+            "objective.html?source=home&autostart=1",
+        ],
+    )
 
     for name, page in pages.items():
         require_phrases(name, page, ["Post your own bounty", "autonomous.js"])
@@ -642,6 +711,8 @@ def main() -> int:
             "/v1/cloud-agent/objective-plans",
             "inventory-summary",
             "Inventory unavailable:",
+            "Preferred agent entry: https://agentbounties.app/agent/index.md",
+            "No browser or computer use is required",
         ],
     )
 
@@ -981,6 +1052,16 @@ def main() -> int:
         ],
     )
     discovery_endpoints = discovery.get("endpoints", {})
+    expected_agent_endpoints = {
+        "agent_mode": "https://agentbounties.app/agent/",
+        "agent_mode_markdown": "https://agentbounties.app/agent/index.md",
+        "openapi": "https://api.agentbounties.app/api-docs/openapi.json",
+        "discovery_manifest_schema": "https://agentbounties.app/schemas/discovery-manifest.v2.json",
+        "cli_source": "https://github.com/NSPG13/agent-bounties/tree/main/crates/cli",
+    }
+    for name, expected in expected_agent_endpoints.items():
+        if discovery_endpoints.get(name) != expected:
+            fail(f"static discovery has the wrong {name} endpoint")
     if discovery_endpoints.get("agent_wallet_readiness") != "https://api.agentbounties.app/v1/base/agent-wallet/readiness":
         fail("static discovery has the wrong agent wallet readiness endpoint")
     if discovery_endpoints.get("autonomous_standing_meta_v2_child_preparation") != (

@@ -1,2 +1,2 @@
-20260722-9
-This build reduces bounty creation to one normal full-screen chatbot with an inline draft, approval, and wallet connection.
+20260722-10
+This build makes bounty posting the primary human action and adds direct, browser-free agent entry routes.
