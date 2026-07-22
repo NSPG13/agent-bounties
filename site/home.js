@@ -145,7 +145,7 @@
       const margin = v4.economics?.successful_settlement_margin
         ? formatAmount(v4.economics.successful_settlement_margin)
         : "unknown margin";
-      meta.textContent = `Standing Meta V4: ${margin} successful-settlement onchain margin · ${candidateCount} frozen anonymous candidates · immediate active-pool VRF draw · symmetric appeal with immediate waiver. Wallets may share an owner. Only BountySettled proves payment.`;
+      meta.textContent = `Standing Meta V4: ${margin} successful-settlement onchain margin · claim-restricted V4 child · ${candidateCount} frozen anonymous candidates · immediate active-pool VRF draw · symmetric appeal with immediate waiver. Wallets may share an owner. Only BountySettled proves payment.`;
       article.append(meta);
     }
 

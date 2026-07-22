@@ -119,7 +119,7 @@ pub fn standing_meta_v4_readiness(
             "valid_terms",
             evidence.valid_terms,
             evidence.valid_terms.to_string(),
-            "typed terms validate against the canonical child and parent round",
+            "typed terms validate against the claim-restricted canonical V4 child and parent round",
         ),
         check(
             "profitable_integer_economics",

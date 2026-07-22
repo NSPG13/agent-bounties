@@ -4452,6 +4452,7 @@ fn standing_meta_v4_readiness_from_environment(
     let prefix = standing_meta_v4_environment_prefix(network)?;
     let components = [
         "PARENT_FACTORY",
+        "CHILD_FACTORY",
         "STAKE_POOL",
         "VERIFIER_SORTITION",
         "SOLVER_SORTITION",
