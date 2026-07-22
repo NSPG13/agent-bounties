@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pages: write
   id-token: write
 
@@ -116,3 +117,69 @@ jobs:
           path: site
       - id: deployment
         uses: actions/deploy-pages@v5
+      - name: Verify canonical live guild deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIVE_CANARY_ISSUE: "499"
+        run: |
+          set -euo pipefail
+          expected_build="$(head -n 1 site/live-guild-build.txt | tr -d '\r\n')"
+          success=false
+          attempt_used=0
+          failure_detail="deployment has not propagated"
+
+          for attempt in $(seq 1 60); do
+            attempt_used="$attempt"
+            nonce="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}-${attempt}-$(date +%s)"
+            common_curl=(--fail --silent --show-error --location --retry 2 --retry-delay 1 --header "Cache-Control: no-cache" --header "Pragma: no-cache")
+
+            if curl "${common_curl[@]}" "https://agentbounties.app/live-guild-build.txt?verify=${nonce}" -o /tmp/live-canary.txt \
+              && curl "${common_curl[@]}" "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/analytics-config.js?verify=${nonce}" -o /tmp/live-analytics.js; then
+              actual_build="$(head -n 1 /tmp/live-canary.txt | tr -d '\r\n')"
+              if [[ "${actual_build}" == "${expected_build}" ]] \
+                && grep -q 'data-guild-build="20260722-1"' /tmp/live-earn.html \
+                && grep -q '>Bounty Board</a>' /tmp/live-earn.html \
+                && grep -q 'guild-pages.css?v=20260722-1' /tmp/live-earn.html \
+                && grep -q 'loadGuildShell' /tmp/live-analytics.js \
+                && grep -q 'guild-shell.js' /tmp/live-analytics.js; then
+                success=true
+                failure_detail=""
+                break
+              fi
+              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or guild markers were missing"
+            else
+              failure_detail="one or more live URLs returned a non-success response"
+            fi
+            sleep 5
+          done
+
+          verified_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [[ "${success}" == "true" ]]; then
+            cat > /tmp/live-proof.md <<EOF
+          ✅ **Production guild canary passed**
+
+          - Commit: \`${GITHUB_SHA}\`
+          - Expected and live build: \`${expected_build}\`
+          - Attempts: ${attempt_used}
+          - Verified at: ${verified_at}
+          - Live Bounty Board contains the static guild body marker, **Bounty Board** navigation, and cache-busted guild stylesheet.
+          - Live analytics configuration still contains \`loadGuildShell\` and \`guild-shell.js\`.
+          - Workflow: ${run_url}
+          EOF
+          else
+            cat > /tmp/live-proof.md <<EOF
+          ❌ **Production guild canary failed**
+
+          - Commit: \`${GITHUB_SHA}\`
+          - Expected build: \`${expected_build}\`
+          - Attempts: ${attempt_used}
+          - Last failure: ${failure_detail}
+          - Checked at: ${verified_at}
+          - Workflow: ${run_url}
+          EOF
+          fi
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${LIVE_CANARY_ISSUE}/comments" --raw-field body="$(cat /tmp/live-proof.md)"
+          [[ "${success}" == "true" ]]
