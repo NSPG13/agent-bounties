@@ -46,7 +46,7 @@ envVarGroups:
       - key: BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT
         value: "0x2e84ef6708d5fff0e9909e80481a00b7ac47293e"
       - key: BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS
-        value: "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1,0xb35b94e1225b66e50644a331feccdab0439e63d7"
+        value: "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1,0xb35b94e1225b66e50644a331feccdab0439e63d7,0xfffecb0fcd36477c5f6ecec808f6f0cf53819562,0xbe17ef2d154265ebe3142d7bda5e99610d571455,0x43d42cb227d76588ab16693f14efd6cff851fa7a,0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b"
 
   - name: agent-bounties-x402-relayer
     envVars:
