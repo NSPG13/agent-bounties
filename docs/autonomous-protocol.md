@@ -254,14 +254,50 @@ invalid terms.
 
 #### Independent Child Distribution Module V2
 
-`agent-bounties/independent-child-v2` is the current standing-meta policy. Its
+`agent-bounties/independent-child-v2` is the historical standing-meta policy. Its
 proof remains exactly `abi.encode(address childBounty)`, but the module also
 requires pre-claim terms publication in `OnchainTermsRegistry`, pre-claim
 eligibility in `ParticipantEligibilityRegistry`, different immutable
 participant IDs, and a child committed to the exact sandboxed-regression signed
 verifier set at threshold two. The child must be canonically settled before the
-parent submission. This closes the late-terms, same-operator multi-wallet, and
-unverifiable-child gaps in canonical-child-v1.
+parent submission. This closes the late-terms and unverifiable-child gaps in
+canonical-child-v1. It does not close the same-owner multi-wallet gap:
+participant IDs and wallet addresses are protocol-account identifiers, not
+proof of unrelated ownership. Its two verifier keys share project governance,
+so threshold two is automated quorum rather than organizational independence.
+
+The five funded V2 parents are built-in recovery reservations. They remain in
+the full canonical feed with `verification_ready=false` but are excluded from
+earning and verification jobs because required child funding cannot produce a
+positive gross margin and the governance assurances are insufficient. See
+[`standing-meta-bounty-invariant.md`](standing-meta-bounty-invariant.md) for the
+addresses and cancellation/pull-refund plan.
+
+#### Standing Meta V3 and V4
+
+The already-published V3 contracts correct the parent/child arithmetic but retain
+the historical participant registry and project-governed two-key quorum. V3 is
+an economic successor, not proof of unrelated ownership or organizational
+independence.
+
+V4 is the additive, not-yet-deployed fairness successor. It removes participant
+IDs, uses fixed anonymous role stake, freezes candidates, requests Chainlink VRF
+2.5, and provides symmetric one-round appeals. It guarantees an exact 1 USDC
+successful-settlement onchain margin under its fixed canary economics, not net
+profit. The platform must sponsor gas and VRF costs.
+
+For low latency, V4 has no per-bounty enrollment window. Solver wallets activate
+their global role ticket before opportunities arrive; the atomic parent claim
+snapshots that active pool and requests VRF immediately. Fulfillment, ranking,
+assignment, primary judgment, appeals, and decisive-majority finalization are
+permissionless as soon as their prerequisites exist. The sole eligible
+appellant may waive an undisputed appeal window. A nonresponsive child-solver
+rank is promoted after ten minutes without requesting new randomness.
+
+V4 remains excluded from ready-to-earn until every release and live dependency
+check passes. See
+[`standing-meta-v4-fair-earning.md`](standing-meta-v4-fair-earning.md) and the
+[`standing-meta-v4 threat model`](security/standing-meta-v4-threat-model.md).
 
 ### Signed Quorum
 
@@ -301,11 +337,12 @@ produces no verdict. The candidate is unsigned and cannot settle funds. Each
 precommitted verifier must independently evaluate and sign the exact current
 scope before the contract can settle.
 
-The current standing-meta-v2 verifier set has a no-secrets scheduled runner,
+The historical standing-meta-v2 verifier set has a no-secrets scheduled runner,
 two isolated signing jobs, and a separate keeper relay. Each stage re-fetches
-and validates the exact current job before acting. This enables only the
-precommitted Base-mainnet verifier set; arbitrary signed-quorum bounties still
-fail closed unless their own verifier services are operationally attested.
+and validates the exact current job before acting. This describes deployed
+automation; it is not an assertion that the signer operators are
+organizationally independent. Arbitrary signed-quorum bounties still fail
+closed unless their own verifier services are operationally attested.
 See [`sandboxed-regression-verifier.md`](sandboxed-regression-verifier.md).
 
 Standing-meta-v2 also enforces strict chronology. The exact child terms and

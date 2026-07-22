@@ -118,7 +118,7 @@
               <button id="rotate-agent-delegate" class="button secondary" type="button" disabled>Update policy</button>
               <button id="revoke-agent-budget" class="button secondary" type="button" disabled>Revoke agent authority</button>
             </div>
-            <p class="fine">The update replaces the signer, preserves the standing-meta-v2 verifier, and adds only the exact sandboxed-regression quorum. It starts a fresh policy-period counter but preserves lifetime spend. Revocation blocks all new delegate actions. Neither action moves the wallet's USDC.</p>
+            <p class="fine">The update replaces the signer, preserves the historical standing-meta-v2 verifier, and adds only the exact sandboxed-regression quorum. The five funded V2 parents are recovery-reserved and are not eligible for new earning actions. A future anonymous, appealable successor requires a separate owner-reviewed policy replacement. This update starts a fresh policy-period counter but preserves lifetime spend. Revocation blocks all new delegate actions. Neither action moves the wallet's USDC.</p>
           </div>
         </form>
       </section>
