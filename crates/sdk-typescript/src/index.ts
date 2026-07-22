@@ -170,6 +170,56 @@ export interface AgentNativeClaimResponse {
   evidence_boundary: string;
 }
 
+export interface StandingMetaV4ReadinessCheck {
+  name: string;
+  ready: boolean;
+  observed: string;
+  required: string;
+}
+
+export interface StandingMetaV4ReadinessReport {
+  schema_version: "agent-bounties/standing-meta-v4-readiness-v1";
+  protocol_version: "standing-meta-v4";
+  ready_to_earn: boolean;
+  successful_settlement_margin_base_units: string | null;
+  checks: StandingMetaV4ReadinessCheck[];
+  blockers: string[];
+  next_action: string;
+  decision_authority: string;
+  payment_authority: string;
+  fairness_statement: string;
+  evidence_boundary: string;
+}
+
+export type StandingMetaV4Operation =
+  | "prepare_standing_meta_v4_claim"
+  | "prepare_anonymous_stake_registration"
+  | "set_anonymous_stake_availability"
+  | "list_verification_assignments"
+  | "submit_primary_verdict"
+  | "waive_verification_appeal"
+  | "open_verification_appeal"
+  | "submit_appeal_vote"
+  | "finalize_verification_case";
+
+export interface StandingMetaV4ActionRequest {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  arguments: Record<string, unknown>;
+}
+
+export interface StandingMetaV4ActionPlan {
+  schema_version: "agent-bounties/standing-meta-v4-action-v1";
+  protocol_version: "standing-meta-v4";
+  operation: StandingMetaV4Operation;
+  allowed: boolean;
+  target_contract: string | null;
+  function: string | null;
+  arguments: Record<string, unknown>;
+  blocker: string | null;
+  next_action: string;
+  evidence_boundary: string;
+}
+
 export type AgentClaimSigner = (
   signingPayload: Record<string, unknown>,
   walletRequest?: NonNullable<AgentNativeClaimResponse["wallet_request"]>,
@@ -782,6 +832,78 @@ export class AgentBountiesClient {
       "/v1/base/agent-wallet/readiness",
       request,
     ) as Promise<AgentWalletReadinessReport>;
+  }
+
+  async getStandingMetaV4Readiness(
+    network: "base-mainnet" | "base-sepolia" = "base-mainnet",
+  ): Promise<StandingMetaV4ReadinessReport> {
+    return this.query("/v1/base/standing-meta-v4/readiness", {
+      network,
+    }) as Promise<StandingMetaV4ReadinessReport>;
+  }
+
+  private standingMetaV4Action(
+    path: string,
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.post(`/v1/base/standing-meta-v4/${path}`, {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    }) as Promise<StandingMetaV4ActionPlan>;
+  }
+
+  async prepareStandingMetaV4Claim(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("claim-preparation", request);
+  }
+
+  async prepareAnonymousStakeRegistration(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("stake-registration-preparation", request);
+  }
+
+  async setAnonymousStakeAvailability(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("stake-availability-preparation", request);
+  }
+
+  async listVerificationAssignments(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("verification-assignments", request);
+  }
+
+  async submitPrimaryVerdict(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("primary-verdict-preparation", request);
+  }
+
+  async waiveVerificationAppeal(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("appeal-waiver-preparation", request);
+  }
+
+  async openVerificationAppeal(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("appeal-opening-preparation", request);
+  }
+
+  async submitAppealVote(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("appeal-vote-preparation", request);
+  }
+
+  async finalizeVerificationCase(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("finalization-preparation", request);
   }
 
   async getRiskEvents(request: RiskEventsRequest = {}): Promise<unknown> {

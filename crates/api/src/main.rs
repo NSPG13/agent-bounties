@@ -32,10 +32,10 @@ use chain_base::{
     fetch_transaction_receipt, normalize_evm_address, observe_erc20_balance_safe,
     observe_solver_leaderboard_paid_winner_safe,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
-    standing_meta_v2_parent_context, validate_attestation_request_against_feed,
-    validate_autonomous_creation_against_terms, AgentWalletReadinessReport,
-    AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
+    plan_standing_meta_v4_action, prepare_agent_to_earn as inspect_agent_wallet_readiness,
+    solver_leaderboard_award_id, standing_meta_v2_parent_context, standing_meta_v4_readiness,
+    validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
+    AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
     AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
     AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
     AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
@@ -51,6 +51,8 @@ use chain_base::{
     EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, PrepareAgentToEarnInput,
     RpcTransactionReceipt, SolverLeaderboardAwardSafeObservation,
     StandingMetaV2ChildPreparationPlan, StandingMetaV2ChildPreparationRequest,
+    StandingMetaV4ActionPlan, StandingMetaV4EconomicsEvidence, StandingMetaV4Operation,
+    StandingMetaV4ReadinessEvidence, StandingMetaV4ReadinessReport,
     AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION, AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
     BASE_MAINNET_STANDING_META_V2_VERIFIER,
 };
@@ -171,6 +173,16 @@ use worker::{
         get_unfunded_bounty,
         submit_unfunded_bounty_solution,
         prepare_agent_wallet_to_earn,
+        get_standing_meta_v4_readiness,
+        prepare_standing_meta_v4_claim,
+        prepare_anonymous_stake_registration,
+        set_anonymous_stake_availability,
+        list_verification_assignments,
+        submit_primary_verdict,
+        waive_verification_appeal,
+        open_verification_appeal,
+        submit_appeal_vote,
+        finalize_verification_case,
         list_risk_events,
         list_risk_reviews,
         approve_risk_bounty,
@@ -323,6 +335,12 @@ use worker::{
         ,opportunities::OpportunityAmount
         ,opportunities::OpportunityNextAction
         ,opportunities::OpportunityEmbedLinks
+        ,opportunities::OpportunityStandingMetaV4Economics
+        ,opportunities::OpportunityAnonymousSeparation
+        ,opportunities::OpportunityVerifierGovernance
+        ,opportunities::OpportunityAppealPolicy
+        ,opportunities::OpportunityStandingMetaV4Coordination
+        ,opportunities::OpportunityStandingMetaV4
         ,OpportunitySourceStatus
         ,DiscoverySubscriptionFilters
         ,domain::DiscoveryRewardFilter
@@ -1069,6 +1087,20 @@ struct AgentNativeClaimRequest {
     source: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct StandingMetaV4ReadinessQuery {
+    network: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct StandingMetaV4ActionRequest {
+    network: Option<String>,
+    #[serde(default)]
+    arguments: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct ClaimFunnelQuery {
     window_hours: Option<u32>,
@@ -1674,6 +1706,46 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/agent-wallet/readiness",
             post(prepare_agent_wallet_to_earn),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/readiness",
+            get(get_standing_meta_v4_readiness),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/claim-preparation",
+            post(prepare_standing_meta_v4_claim),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/stake-registration-preparation",
+            post(prepare_anonymous_stake_registration),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/stake-availability-preparation",
+            post(set_anonymous_stake_availability),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/verification-assignments",
+            post(list_verification_assignments),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/primary-verdict-preparation",
+            post(submit_primary_verdict),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/appeal-waiver-preparation",
+            post(waive_verification_appeal),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/appeal-opening-preparation",
+            post(open_verification_appeal),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/appeal-vote-preparation",
+            post(submit_appeal_vote),
+        )
+        .route(
+            "/v1/base/standing-meta-v4/finalization-preparation",
+            post(finalize_verification_case),
         )
         .route("/v1/risk/events", get(list_risk_events))
         .route("/v1/risk/reviews", get(list_risk_reviews))
@@ -4220,6 +4292,215 @@ async fn prepare_agent_wallet_to_earn(
     .map_err(map_agent_wallet_readiness_error)
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/base/standing-meta-v4/readiness",
+    params(("network" = Option<String>, Query, description = "base-mainnet or base-sepolia; defaults to base-mainnet")),
+    responses(
+        (status = 200, description = "Fail-closed Standing Meta V4 readiness report"),
+        (status = 400, description = "Unknown Base network")
+    )
+)]
+async fn get_standing_meta_v4_readiness(
+    Query(query): Query<StandingMetaV4ReadinessQuery>,
+) -> Result<Json<StandingMetaV4ReadinessReport>, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    standing_meta_v4_readiness_from_environment(network).map(Json)
+}
+
+#[utoipa::path(post, path = "/v1/base/standing-meta-v4/claim-preparation", request_body = StandingMetaV4ActionRequest, responses((status = 200, description = "Unsigned fail-closed V4 action plan"), (status = 400, description = "Unknown Base network")))]
+async fn prepare_standing_meta_v4_claim(
+    Json(request): Json<StandingMetaV4ActionRequest>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    standing_meta_v4_action_from_environment(
+        request,
+        StandingMetaV4Operation::PrepareStandingMetaV4Claim,
+        "PARENT_FACTORY",
+        Some("claimAndCreateChild"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/standing-meta-v4/stake-registration-preparation", request_body = StandingMetaV4ActionRequest, responses((status = 200, description = "Unsigned stake-registration plan"), (status = 400, description = "Unknown Base network")))]
+async fn prepare_anonymous_stake_registration(
+    Json(request): Json<StandingMetaV4ActionRequest>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    standing_meta_v4_action_from_environment(
+        request,
+        StandingMetaV4Operation::PrepareAnonymousStakeRegistration,
+        "STAKE_POOL",
+        Some("register"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/standing-meta-v4/stake-availability-preparation", request_body = StandingMetaV4ActionRequest, responses((status = 200, description = "Unsigned stake-availability plan"), (status = 400, description = "Unknown Base network")))]
+async fn set_anonymous_stake_availability(
+    Json(request): Json<StandingMetaV4ActionRequest>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    standing_meta_v4_action_from_environment(
+        request,
+        StandingMetaV4Operation::SetAnonymousStakeAvailability,
+        "STAKE_POOL",
+        Some("setAvailability"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/standing-meta-v4/verification-assignments", request_body = StandingMetaV4ActionRequest, responses((status = 200, description = "Assignment-read plan"), (status = 400, description = "Unknown Base network")))]
+async fn list_verification_assignments(
+    Json(request): Json<StandingMetaV4ActionRequest>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    standing_meta_v4_action_from_environment(
+        request,
+        StandingMetaV4Operation::ListVerificationAssignments,
+        "APPEALABLE_VERIFIER",
+        Some("caseParties"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/standing-meta-v4/primary-verdict-preparation", request_body = StandingMetaV4ActionRequest, responses((status = 200, description = "Unsigned primary-verdict plan"), (status = 400, description = "Unknown Base network")))]
+async fn submit_primary_verdict(
+    Json(request): Json<StandingMetaV4ActionRequest>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    standing_meta_v4_action_from_environment(
+        request,
+        StandingMetaV4Operation::SubmitPrimaryVerdict,
+        "APPEALABLE_VERIFIER",
+        Some("submitPrimaryVerdict"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/standing-meta-v4/appeal-waiver-preparation", request_body = StandingMetaV4ActionRequest, responses((status = 200, description = "Unsigned immediate appeal-waiver plan"), (status = 400, description = "Unknown Base network")))]
+async fn waive_verification_appeal(
+    Json(request): Json<StandingMetaV4ActionRequest>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    standing_meta_v4_action_from_environment(
+        request,
+        StandingMetaV4Operation::WaiveVerificationAppeal,
+        "APPEALABLE_VERIFIER",
+        Some("waiveAppeal"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/standing-meta-v4/appeal-opening-preparation", request_body = StandingMetaV4ActionRequest, responses((status = 200, description = "Unsigned appeal-opening plan"), (status = 400, description = "Unknown Base network")))]
+async fn open_verification_appeal(
+    Json(request): Json<StandingMetaV4ActionRequest>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    standing_meta_v4_action_from_environment(
+        request,
+        StandingMetaV4Operation::OpenVerificationAppeal,
+        "APPEALABLE_VERIFIER",
+        Some("openAppeal"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/standing-meta-v4/appeal-vote-preparation", request_body = StandingMetaV4ActionRequest, responses((status = 200, description = "Unsigned appeal-vote plan"), (status = 400, description = "Unknown Base network")))]
+async fn submit_appeal_vote(
+    Json(request): Json<StandingMetaV4ActionRequest>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    standing_meta_v4_action_from_environment(
+        request,
+        StandingMetaV4Operation::SubmitAppealVote,
+        "APPEALABLE_VERIFIER",
+        Some("submitAppealVote"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/standing-meta-v4/finalization-preparation", request_body = StandingMetaV4ActionRequest, responses((status = 200, description = "Unsigned case-finalization plan"), (status = 400, description = "Unknown Base network")))]
+async fn finalize_verification_case(
+    Json(request): Json<StandingMetaV4ActionRequest>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    let function = match request
+        .arguments
+        .get("mode")
+        .and_then(|value| value.as_str())
+    {
+        Some("unappealed") => Some("finalizeUnappealed"),
+        Some("appeal") => Some("finalizeAppeal"),
+        Some("timeout") => Some("timeoutAppeal"),
+        _ => None,
+    };
+    standing_meta_v4_action_from_environment(
+        request,
+        StandingMetaV4Operation::FinalizeVerificationCase,
+        "APPEALABLE_VERIFIER",
+        function,
+    )
+}
+
+fn standing_meta_v4_action_from_environment(
+    request: StandingMetaV4ActionRequest,
+    operation: StandingMetaV4Operation,
+    component: &str,
+    function: Option<&str>,
+) -> Result<Json<StandingMetaV4ActionPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let prefix = standing_meta_v4_environment_prefix(network)?;
+    let readiness = standing_meta_v4_readiness_from_environment(network)?;
+    let target = optional_evm_address(&format!("{prefix}_{component}"))
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(plan_standing_meta_v4_action(
+        operation,
+        &readiness,
+        target,
+        function.map(str::to_string),
+        request.arguments,
+    )))
+}
+
+fn standing_meta_v4_readiness_from_environment(
+    network: &str,
+) -> Result<StandingMetaV4ReadinessReport, StatusCode> {
+    let prefix = standing_meta_v4_environment_prefix(network)?;
+    let components = [
+        "PARENT_FACTORY",
+        "STAKE_POOL",
+        "VERIFIER_SORTITION",
+        "SOLVER_SORTITION",
+        "APPEALABLE_VERIFIER",
+        "TERMS_REGISTRY",
+    ];
+    let canonical_components_configured = components.iter().all(|component| {
+        optional_evm_address(&format!("{prefix}_{component}"))
+            .ok()
+            .flatten()
+            .is_some()
+    });
+    let evidence = StandingMetaV4ReadinessEvidence {
+        economics: StandingMetaV4EconomicsEvidence::default(),
+        canonical_components_configured,
+        valid_terms: env_flag(&format!("{prefix}_VALID_TERMS")),
+        gas_sponsorship_available: env_flag(&format!("{prefix}_GAS_SPONSORSHIP_AVAILABLE")),
+        vrf_subscription_funded: env_flag(&format!("{prefix}_VRF_SUBSCRIPTION_FUNDED")),
+        vrf_consumers_authorized: env_flag(&format!("{prefix}_VRF_CONSUMERS_AUTHORIZED")),
+        official_vrf_configuration_revalidated: env_flag(&format!(
+            "{prefix}_VRF_CONFIGURATION_REVALIDATED"
+        )),
+        eligible_verifier_wallets: env_u64(&format!("{prefix}_ELIGIBLE_VERIFIER_WALLETS"), 0)
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+            .try_into()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
+        eligible_child_solver_wallets_after_exclusions: env_u64(
+            &format!("{prefix}_ELIGIBLE_CHILD_SOLVER_WALLETS"),
+            0,
+        )
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .try_into()
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
+        safe_timing: env_flag(&format!("{prefix}_SAFE_TIMING")),
+        appeal_path_executable: env_flag(&format!("{prefix}_APPEAL_PATH_EXECUTABLE")),
+        r4_release_evidence_complete: env_flag(&format!("{prefix}_R4_EVIDENCE_COMPLETE")),
+        monitoring_active: env_flag(&format!("{prefix}_MONITORING_ACTIVE")),
+    };
+    Ok(standing_meta_v4_readiness(&evidence))
+}
+
+fn standing_meta_v4_environment_prefix(network: &str) -> Result<&'static str, StatusCode> {
+    match network {
+        "base-mainnet" => Ok("BASE_MAINNET_STANDING_META_V4"),
+        "base-sepolia" => Ok("BASE_SEPOLIA_STANDING_META_V4"),
+        _ => Err(StatusCode::BAD_REQUEST),
+    }
+}
+
 type AgentWalletReadinessProblem = (StatusCode, Json<serde_json::Value>);
 
 fn agent_wallet_readiness_problem(
@@ -6417,6 +6698,15 @@ async fn agent_native_claim(
             "Provide the public Base payout wallet; never provide its private key.",
         )
     })?;
+    if configured_standing_meta_v4_parent(network, &bounty_contract) {
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "standing_meta_v4_atomic_claim_required",
+            "route_v4_claim",
+            "a Standing Meta V4 parent cannot be claimed directly",
+            "Call get_standing_meta_v4_readiness, then prepare_standing_meta_v4_claim. The atomic flow creates and funds the child, snapshots the active solver pool, requests VRF, binds the round, and posts the parent bond in one transaction.",
+        ));
+    }
     let item = indexed_autonomous_bounty(&state, network, &bounty_contract)
         .await
         .map_err(|status| {
@@ -6873,6 +7163,25 @@ async fn agent_native_claim(
         },
         None,
     ))
+}
+
+fn configured_standing_meta_v4_parent(network: &str, bounty_contract: &str) -> bool {
+    let Ok(prefix) = standing_meta_v4_environment_prefix(network) else {
+        return false;
+    };
+    env::var(format!("{prefix}_PARENT_CONTRACTS"))
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|value| normalize_evm_address(&value).ok())
+        .any(|value| value.eq_ignore_ascii_case(bounty_contract))
 }
 
 #[utoipa::path(

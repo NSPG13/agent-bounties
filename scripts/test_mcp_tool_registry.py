@@ -24,7 +24,7 @@ class McpToolRegistryTests(unittest.TestCase):
             source.index("async fn tools()") : source.index("const OPERATOR_TOKEN_REQUIRED")
         ]
         names = re.findall(r'\b(?:operator_)?tool\(\s*"([a-z0-9_]+)"', descriptor_source)
-        self.assertEqual(len(names), 91)
+        self.assertEqual(len(names), 101)
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(names, registry["tools"])
 

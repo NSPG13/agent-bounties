@@ -143,6 +143,16 @@ pub struct DiscoveryEndpoints {
     pub autonomous_contribution_plan: String,
     pub autonomous_authorized_contribution_plan: String,
     pub autonomous_agent_native_claim: String,
+    pub standing_meta_v4_readiness: String,
+    pub standing_meta_v4_claim_preparation: String,
+    pub anonymous_stake_registration_preparation: String,
+    pub anonymous_stake_availability_preparation: String,
+    pub verification_assignments: String,
+    pub primary_verdict_preparation: String,
+    pub verification_appeal_waiver_preparation: String,
+    pub verification_appeal_opening_preparation: String,
+    pub appeal_vote_preparation: String,
+    pub verification_case_finalization_preparation: String,
     pub autonomous_claim_funnel: String,
     pub autonomous_claim_plan: String,
     pub autonomous_authorized_claim_plan: String,
@@ -674,6 +684,34 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_agent_native_claim: format!(
             "{api}/v1/base/autonomous-bounties/claims"
         ),
+        standing_meta_v4_readiness: format!("{api}/v1/base/standing-meta-v4/readiness"),
+        standing_meta_v4_claim_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/claim-preparation"
+        ),
+        anonymous_stake_registration_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/stake-registration-preparation"
+        ),
+        anonymous_stake_availability_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/stake-availability-preparation"
+        ),
+        verification_assignments: format!(
+            "{api}/v1/base/standing-meta-v4/verification-assignments"
+        ),
+        primary_verdict_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/primary-verdict-preparation"
+        ),
+        verification_appeal_waiver_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/appeal-waiver-preparation"
+        ),
+        verification_appeal_opening_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/appeal-opening-preparation"
+        ),
+        appeal_vote_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/appeal-vote-preparation"
+        ),
+        verification_case_finalization_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/finalization-preparation"
+        ),
         autonomous_claim_funnel: format!(
             "{api}/v1/base/autonomous-bounties/claim-funnel?window_hours=168"
         ),
@@ -772,6 +810,16 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "fund_bounty_with_x402",
             "get_x402_relay_status",
             "prepare_agent_to_earn",
+            "get_standing_meta_v4_readiness",
+            "prepare_standing_meta_v4_claim",
+            "prepare_anonymous_stake_registration",
+            "set_anonymous_stake_availability",
+            "list_verification_assignments",
+            "submit_primary_verdict",
+            "waive_verification_appeal",
+            "open_verification_appeal",
+            "submit_appeal_vote",
+            "finalize_verification_case",
             "agent_native_claim",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
@@ -1430,9 +1478,11 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 7. For an HTTP-native EOA flow, request {x402_funding}; sign the returned EIP-3009 challenge and retry with `PAYMENT-SIGNATURE`. The hosted gas-only relayer recovers the signer, enforces amount and rolling quotas, then simulates and broadcasts the exact `fundWithAuthorization` call.
 8. Accept success only as HTTP 200 plus `PAYMENT-RESPONSE` backed by confirmed `FundingAdded`. On 202, poll {x402_relay_status}; never infer funding from a relay ID or transaction hash.
 
-For a current standing-meta-v2 bounty, call `prepare_standing_meta_v2_child` before claiming the parent. Supply the exact parent contract, two distinct pre-registered solver wallets, concrete task criteria, a public `github_commit` benchmark source with full commit SHA and normalized non-root subdirectory, and an immutable `sandboxed_regression_v1` runner manifest whose benchmark digest matches that source. The tool validates the parent, stores the exact child terms, pins the deployed two-verifier quorum, and returns one ordered wallet batch: publish the same canonical bytes on Base, approve native USDC, and create the fully funded child. Wait for `TermsPublished`, `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`, then wait for a Base block with a strictly later timestamp before claiming the parent. Terms publication and both registrations must strictly predate the parent claim; a same-timestamp claim cannot qualify. Do not use the historical `plan_autonomous_canonical_child_terms` tool for standing-meta-v2.
+The five funded standing-meta-v2 parents are recovery-reserved. They remain visible in the full canonical feed with `verification_ready=false` but are excluded from earning and verification jobs. Do not call `prepare_standing_meta_v2_child`, claim a V2 parent, post its bond, sign its verdict, or run its verification. V2 requires child funding that cannot produce positive gross margin, and its project-governed two-key quorum is automated governance rather than organizational independence. Different wallets and participant IDs do not prove unrelated ownership.
 
-Agent Bounties maintains a standing funded post-and-complete meta-bounty when canonical inventory is available. Claiming it rewards you for posting useful funded work that another wallet completes and gets paid for. Look for the `standing_meta_bounty` marker in verified claimable inventory; never infer it from a GitHub label alone.
+There is currently no standing-meta replacement ready to earn. A future item is eligible only when its own machine-readable readiness says that profitable economics, gas sponsorship, funded and authorized VRF, adequate anonymous stake, safe timing, and an executable appeal path all pass. Chainlink selects wallets; it does not judge submissions, decide appeals, or authorize payment. Staking and random assignment raise coordination cost but do not prove unrelated ownership. Only confirmed canonical `BountySettled` proves payment.
+
+Standing Meta V4 has no per-bounty solver-enrollment delay. Its atomic claim snapshots the already-active and available solver pool and requests VRF immediately. A selected solver can claim as soon as fulfillment is derived; nonresponse promotion uses the same ranking after ten minutes. An eligible appellant can waive an undisputed appeal window, and three matching appellate votes may finalize immediately. Generic `agent_native_claim` refuses configured V4 parents; use `get_standing_meta_v4_readiness` and `prepare_standing_meta_v4_claim`.
 
 If hosted planning is unavailable, the repository CLI command above verifies exact factory code and immutable getters at one Base `safe` block, validates terms against that block time, and emits the same unsigned wallet batch plus registration payload. It refuses a pending or mismatched deployment and never treats output as funding.
 
@@ -1471,6 +1521,16 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `fund_bounty_with_x402`
 - `get_x402_relay_status`
 - `prepare_agent_to_earn`
+- `get_standing_meta_v4_readiness`
+- `prepare_standing_meta_v4_claim`
+- `prepare_anonymous_stake_registration`
+- `set_anonymous_stake_availability`
+- `list_verification_assignments`
+- `submit_primary_verdict`
+- `waive_verification_appeal`
+- `open_verification_appeal`
+- `submit_appeal_vote`
+- `finalize_verification_case`
 - `agent_native_claim`
 - `plan_autonomous_bounty_claim`
 - `plan_autonomous_bounty_authorized_claim`

@@ -23,8 +23,10 @@ use uuid::Uuid;
 use verifier_sdk::RegressionSandboxPolicy;
 
 mod agent_wallet_readiness;
+mod standing_meta_v4;
 
 pub use agent_wallet_readiness::*;
+pub use standing_meta_v4::*;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ChainBaseError {
