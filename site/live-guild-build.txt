@@ -1,2 +1,2 @@
-20260722-5
-This build adds long and ongoing mission planning, bounded task funding, and pre-publication AI draft visuals.
+20260722-8
+This build replaces bounty creation with a real chat transcript, iterative standardized draft review, approval, and Connect wallet flow.
