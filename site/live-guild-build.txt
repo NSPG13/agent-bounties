@@ -1,2 +1,2 @@
-20260722-11
-This build keeps Bounty Board and How It Works visible on mobile and adds live Leaderboard, News, and Contact Us community pages.
+20260722-12
+This build verifies mobile community navigation plus the live Leaderboard, News, and Contact Us pages on the custom domain.
