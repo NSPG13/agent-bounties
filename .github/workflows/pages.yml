@@ -43,6 +43,31 @@ jobs:
       - run: python scripts/check-site.py
       - run: python scripts/test-homepage-wallet-wiring.py
       - run: node scripts/test-homepage-wallet-flow.js
+      - name: Verify production analytics substitution preserves guild bootstrap
+        env:
+          GA_MEASUREMENT_ID: G-TEST123
+        run: |
+          cp site/analytics-config.js /tmp/analytics-config.js
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("/tmp/analytics-config.js")
+          source = path.read_text(encoding="utf-8")
+          updated, count = re.subn(
+              r'googleMeasurementId:\s*"(?:|G-[A-Z0-9]+)"',
+              f'googleMeasurementId: "{os.environ["GA_MEASUREMENT_ID"]}"',
+              source,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("analytics configuration assignment was not found exactly once")
+          if "loadGuildShell" not in updated or "guild-pages.css" not in updated or "guild-shell.js" not in updated:
+              raise SystemExit("Pages analytics substitution removed the guild bootstrap")
+          path.write_text(updated, encoding="utf-8")
+          PY
+          grep -q 'googleMeasurementId: "G-TEST123"' /tmp/analytics-config.js
 
   deploy:
     if: github.event_name != 'pull_request'
@@ -54,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v6
-      - name: Configure optional Google Analytics
+      - name: Configure optional Google Analytics without removing the guild shell
         env:
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
         run: |
@@ -62,8 +87,25 @@ jobs:
             echo "GA_MEASUREMENT_ID must match G-[A-Z0-9]+" >&2
             exit 1
           fi
-          printf 'window.agentBountiesAnalyticsConfig = Object.freeze({\n  googleMeasurementId: "%s",\n});\n' \
-            "${GA_MEASUREMENT_ID}" > site/analytics-config.js
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("site/analytics-config.js")
+          source = path.read_text(encoding="utf-8")
+          updated, count = re.subn(
+              r'googleMeasurementId:\s*"(?:|G-[A-Z0-9]+)"',
+              f'googleMeasurementId: "{os.environ.get("GA_MEASUREMENT_ID", "")}"',
+              source,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("analytics configuration assignment was not found exactly once")
+          if "loadGuildShell" not in updated or "guild-pages.css" not in updated or "guild-shell.js" not in updated:
+              raise SystemExit("refusing to deploy without the guild bootstrap")
+          path.write_text(updated, encoding="utf-8")
+          PY
       - name: Stage bounded-wallet deployment manifest
         run: |
           cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json
