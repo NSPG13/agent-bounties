@@ -189,11 +189,14 @@ body.guild-interior .topbar nav a[aria-current="page"]::after {
 }
 
 .guild-shell-network {
+  display: none !important;
+}
+
+.guild-mode-switch {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   min-height: 36px;
-  padding: 0 13px;
+  padding: 3px;
   border: 1px solid rgba(224, 238, 221, 0.27);
   border-radius: 999px;
   background: rgba(4, 13, 9, 0.82);
@@ -204,12 +207,20 @@ body.guild-interior .topbar nav a[aria-current="page"]::after {
   white-space: nowrap;
 }
 
-.guild-shell-network .base-rune {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: linear-gradient(180deg, #7bbaff 0 48%, #3251d0 49% 100%);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.32);
+.guild-mode-switch a {
+  display: grid;
+  place-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #cbd4ca;
+  text-decoration: none;
+}
+
+.guild-mode-switch a:hover,
+.guild-mode-switch a[aria-current="page"] {
+  background: rgba(185, 239, 55, 0.14);
+  color: var(--guild-lime-bright);
 }
 
 body.guild-interior main {
@@ -916,7 +927,7 @@ body.guild-interior main.policy {
     scrollbar-width: none;
   }
 
-  body.guild-interior .guild-shell-network {
+  body.guild-interior .guild-mode-switch {
     grid-column: 2;
     grid-row: 1;
     justify-self: end;
@@ -983,12 +994,13 @@ body.guild-interior main.policy {
     position: sticky;
   }
 
-  .guild-shell-network {
+  .guild-mode-switch {
     padding: 0 10px;
   }
 
-  .guild-shell-network span:last-child {
-    display: none;
+  .guild-mode-switch a {
+    min-height: 32px;
+    padding: 0 8px;
   }
 
   body.guild-interior .protocol-page {
