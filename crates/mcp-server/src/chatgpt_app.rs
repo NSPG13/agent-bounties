@@ -14,10 +14,10 @@ use serde_json::{json, Map, Value};
 use url::Url;
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
-const POST_WIDGET_URI: &str = "ui://agent-bounties/post-bounty-v1.html";
+const POST_WIDGET_URI: &str = "ui://agent-bounties/post-bounty-v2.html";
 const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
 const POST_WIDGET_HTML: &str = include_str!("../../../site/chatgpt-post-widget.html");
-const CHATGPT_TOOL_NAMES: &[&str] = &[
+const AI_ASSISTANT_TOOL_NAMES: &[&str] = &[
     "publish_unfunded_bounty",
     "list_unfunded_bounties",
     "submit_unfunded_bounty_solution",
@@ -47,11 +47,15 @@ pub(super) fn build_bounty_post_handoff(args: &PrepareBountyPostArgs) -> Result<
         .as_deref()
         .map(|value| bounded_text(value, "discovery_source", 500))
         .transpose()?;
+    let task_window_days = args.task_window_days.unwrap_or(30);
+    if !(1..=30).contains(&task_window_days) {
+        return Err("task_window_days must be between 1 and 30".to_string());
+    }
 
     let mut post_url = Url::parse(POST_PAGE_URL).expect("static post URL is valid");
     {
         let mut query = post_url.query_pairs_mut();
-        query.append_pair("from", "chatgpt-app");
+        query.append_pair("from", "mcp-assistant");
         query.append_pair("title", &title);
         query.append_pair("goal", &goal);
         for criterion in &acceptance_criteria {
@@ -59,13 +63,16 @@ pub(super) fn build_bounty_post_handoff(args: &PrepareBountyPostArgs) -> Result<
         }
         query.append_pair("solverReward", &format_usdc(solver_reward));
         query.append_pair("verifierReward", &format_usdc(verifier_reward));
+        query.append_pair("taskWindowDays", &task_window_days.to_string());
         query.append_pair("crowdfund", if args.crowdfund { "true" } else { "false" });
         if let Some(source_url) = &source_url {
             query.append_pair("sourceUrl", source_url);
         }
         query.append_pair(
             "discoverySource",
-            discovery_source.as_deref().unwrap_or("ChatGPT app"),
+            discovery_source
+                .as_deref()
+                .unwrap_or("User-owned AI assistant via MCP"),
         );
     }
     if post_url.as_str().len() > 12_000 {
@@ -77,12 +84,20 @@ pub(super) fn build_bounty_post_handoff(args: &PrepareBountyPostArgs) -> Result<
 
     Ok(json!({
         "schema": "agent-bounties/chatgpt-post-handoff-v1",
+        "interface": "mcp",
+        "prepared_by": "user_owned_ai",
+        "supported_hosts": ["chatgpt", "claude", "gemini", "other-mcp"],
+        "rendering": {
+            "mcp_app_widget": "chatgpt",
+            "portable_fallback": "markdown_card_and_review_url"
+        },
         "state": "review_required_not_published",
         "title": title,
         "goal": goal,
         "acceptance_criteria": acceptance_criteria,
         "solver_reward_usdc": format_usdc(solver_reward),
         "verifier_reward_usdc": format_usdc(verifier_reward),
+        "task_window_days": task_window_days,
         "target_usdc": format_usdc(target),
         "initial_funding_usdc": if args.crowdfund { "0".to_string() } else { format_usdc(target) },
         "crowdfund": args.crowdfund,
@@ -193,7 +208,7 @@ async fn chatgpt_tools() -> Vec<Value> {
         .await
         .0
         .into_iter()
-        .filter(|descriptor| CHATGPT_TOOL_NAMES.contains(&descriptor.name))
+        .filter(|descriptor| AI_ASSISTANT_TOOL_NAMES.contains(&descriptor.name))
         .map(mcp_tool_descriptor)
         .collect()
 }
@@ -277,11 +292,8 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
             let args: PrepareBountyPostArgs = serde_json::from_value(arguments)
                 .map_err(|error| format!("invalid prepare_bounty_post arguments: {error}"))?;
             let value = build_bounty_post_handoff(&args)?;
-            return Ok(tool_result(
-                value,
-                "Prepared a reviewable wallet handoff. No bounty has been published or created yet.",
-                true,
-            ));
+            let markdown = bounty_post_markdown(&value);
+            return Ok(tool_result(value, &markdown, true));
         }
         "list_autonomous_bounties" => {
             let args: AutonomousBountyFeedArgs = serde_json::from_value(arguments)
@@ -291,7 +303,7 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
                 "Returned canonical, event-derived bounty inventory.",
             )
         }
-        _ => return Err(format!("unknown or unavailable ChatGPT app tool: {name}")),
+        _ => return Err(format!("unknown or unavailable AI assistant tool: {name}")),
     };
     match legacy_result(legacy) {
         Ok(value) => Ok(tool_result(value, narration, false)),
@@ -307,6 +319,85 @@ fn legacy_result(value: Value) -> Result<Value, String> {
         .pointer("/content/0/json")
         .cloned()
         .ok_or_else(|| "tool returned an invalid legacy response".to_string())
+}
+
+fn bounty_post_markdown(value: &Value) -> String {
+    let title = markdown_text(
+        value
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Bounty draft"),
+    );
+    let goal = markdown_text(
+        value
+            .get("goal")
+            .and_then(Value::as_str)
+            .unwrap_or("No goal supplied."),
+    );
+    let solver = value
+        .get("solver_reward_usdc")
+        .and_then(Value::as_str)
+        .unwrap_or("—");
+    let verifier = value
+        .get("verifier_reward_usdc")
+        .and_then(Value::as_str)
+        .unwrap_or("—");
+    let days = value
+        .get("task_window_days")
+        .and_then(Value::as_u64)
+        .unwrap_or(30);
+    let post_url = value
+        .get("post_url")
+        .and_then(Value::as_str)
+        .unwrap_or(POST_PAGE_URL);
+    let criteria = value
+        .get("acceptance_criteria")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|item| format!("- {}", markdown_text(item)))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| "- Review required".to_string());
+
+    format!(
+        "## {title}\n\n{goal}\n\n**Reward target:** {solver} USDC solver + {verifier} USDC verifier  \n**Work window:** {days} day{}\n\n**Done when**\n{criteria}\n\n[Review this draft on Agent Bounties]({post_url})\n\n_Draft only — nothing has been posted, funded, or signed._",
+        if days == 1 { "" } else { "s" }
+    )
+}
+
+fn markdown_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(
+            ch,
+            '\\' | '`'
+                | '*'
+                | '_'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '<'
+                | '>'
+                | '#'
+                | '+'
+                | '-'
+                | '.'
+                | '!'
+                | '|'
+                | '('
+                | ')'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 fn tool_result(value: Value, narration: &str, widget: bool) -> Value {
@@ -347,7 +438,7 @@ fn widget_resource_descriptor() -> Value {
         "uri": POST_WIDGET_URI,
         "name": "Agent Bounties post review",
         "title": "Review and post bounty",
-        "description": "Review prepared bounty terms and continue to the secure wallet flow.",
+        "description": "Review bounty terms prepared in the user's AI account and continue to Agent Bounties.",
         "mimeType": "text/html;profile=mcp-app"
     })
 }
@@ -366,7 +457,7 @@ fn widget_resource_contents() -> Value {
                     "resourceDomains": []
                 }
             },
-            "openai/widgetDescription": "A read-only review card for a prepared bounty. Its button opens the public Agent Bounties page where the user connects a wallet and explicitly approves the Base transaction.",
+            "openai/widgetDescription": "A read-only bounty card prepared in the user's AI conversation. Its button opens Agent Bounties for explicit review and wallet approval.",
             "openai/widgetPrefersBorder": true,
             "openai/widgetDomain": "https://mcp.agentbounties.app",
             "openai/widgetCSP": {
@@ -383,12 +474,17 @@ fn post_handoff_output_schema() -> Value {
         "type": "object",
         "properties": {
             "schema": {"type": "string"},
+            "interface": {"type": "string"},
+            "prepared_by": {"type": "string"},
+            "supported_hosts": {"type": "array", "items": {"type": "string"}},
+            "rendering": {"type": "object"},
             "state": {"type": "string"},
             "title": {"type": "string"},
             "goal": {"type": "string"},
             "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
             "solver_reward_usdc": {"type": "string"},
             "verifier_reward_usdc": {"type": "string"},
+            "task_window_days": {"type": "integer"},
             "target_usdc": {"type": "string"},
             "initial_funding_usdc": {"type": "string"},
             "crowdfund": {"type": "boolean"},
@@ -399,7 +495,7 @@ fn post_handoff_output_schema() -> Value {
             "next_action": {"type": "string"},
             "evidence_boundary": {"type": "string"}
         },
-        "required": ["schema", "state", "title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc", "target_usdc", "initial_funding_usdc", "crowdfund", "post_url", "bounty_created", "wallet_signature_requested", "next_action", "evidence_boundary"],
+        "required": ["schema", "interface", "prepared_by", "supported_hosts", "rendering", "state", "title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc", "task_window_days", "target_usdc", "initial_funding_usdc", "crowdfund", "post_url", "bounty_created", "wallet_signature_requested", "next_action", "evidence_boundary"],
         "additionalProperties": false
     })
 }
@@ -509,6 +605,7 @@ mod tests {
             ],
             solver_reward_usdc: "2.00".to_string(),
             verifier_reward_usdc: "0.10".to_string(),
+            task_window_days: Some(14),
             source_url: Some("https://github.com/NSPG13/agent-bounties/issues/386".to_string()),
             crowdfund: false,
             discovery_source: Some("ChatGPT user feedback".to_string()),
@@ -524,6 +621,9 @@ mod tests {
         assert_eq!(handoff["state"], "review_required_not_published");
         assert_eq!(handoff["target_usdc"], "2.1");
         assert_eq!(handoff["initial_funding_usdc"], "2.1");
+        assert_eq!(handoff["interface"], "mcp");
+        assert_eq!(handoff["prepared_by"], "user_owned_ai");
+        assert_eq!(handoff["task_window_days"], 14);
         assert_eq!(handoff["bounty_created"], false);
         assert_eq!(handoff["wallet_signature_requested"], false);
         assert!(pairs
@@ -533,6 +633,12 @@ mod tests {
             pairs.iter().filter(|(key, _)| key == "criterion").count(),
             2
         );
+        assert!(pairs
+            .iter()
+            .any(|(key, value)| key == "from" && value == "mcp-assistant"));
+        assert!(pairs
+            .iter()
+            .any(|(key, value)| key == "taskWindowDays" && value == "14"));
     }
 
     #[test]
@@ -548,6 +654,22 @@ mod tests {
         assert!(build_bounty_post_handoff(&args)
             .unwrap_err()
             .contains("greater than zero"));
+
+        args.solver_reward_usdc = "2".to_string();
+        args.task_window_days = Some(31);
+        assert!(build_bounty_post_handoff(&args)
+            .unwrap_err()
+            .contains("between 1 and 30"));
+    }
+
+    #[test]
+    fn portable_markdown_card_contains_terms_and_review_boundary() {
+        let handoff = build_bounty_post_handoff(&valid_args()).unwrap();
+        let markdown = bounty_post_markdown(&handoff);
+        assert!(markdown.contains("## Fix the reconciliation regression"));
+        assert!(markdown.contains("**Done when**"));
+        assert!(markdown.contains("[Review this draft on Agent Bounties]"));
+        assert!(markdown.contains("nothing has been posted, funded, or signed"));
     }
 
     #[tokio::test]

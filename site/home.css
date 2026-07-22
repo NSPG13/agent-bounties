@@ -239,8 +239,8 @@
   gap: 10px;
 }
 
-.network-chip,
-.wallet-button,
+.mode-switch,
+.primary-cta,
 .round-menu {
   min-height: 37px;
   border-radius: 999px;
@@ -250,35 +250,44 @@
   text-decoration: none;
 }
 
-.network-chip {
+.mode-switch {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 13px;
+  padding: 3px;
   border: 1px solid rgba(224, 238, 221, 0.27);
   background: rgba(4, 13, 9, 0.82);
   color: white;
 }
 
-.base-rune {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: linear-gradient(180deg, #7bbaff 0 48%, #3251d0 49% 100%);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.32);
+.mode-switch a {
+  display: grid;
+  place-items: center;
+  min-height: 29px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #cbd4ca;
+  text-decoration: none;
+  transition: background 160ms ease, color 160ms ease;
 }
 
-.wallet-button {
+.mode-switch a:hover,
+.mode-switch a[aria-current="page"] {
+  background: rgba(185, 239, 55, 0.14);
+  color: var(--guild-lime-bright);
+}
+
+.primary-cta {
+  display: inline-grid;
+  place-items: center;
   min-width: 116px;
   padding: 0 17px;
   border: 1px solid rgba(205, 255, 75, 0.78);
   background: linear-gradient(110deg, #9fd020, #caf04b);
   color: #081006;
-  cursor: pointer;
   transition: transform 160ms ease, box-shadow 160ms ease;
 }
 
-.wallet-button:hover {
+.primary-cta:hover {
   box-shadow: 0 7px 22px rgba(185, 239, 55, 0.2);
   transform: translateY(-1px);
 }
@@ -1367,11 +1376,15 @@
     font-size: 13px;
   }
 
-  .network-chip,
-  .wallet-button,
+  .mode-switch,
+  .primary-cta,
   .round-menu {
     min-height: 44px;
     font-size: 11px;
+  }
+
+  .mode-switch a {
+    min-height: 36px;
   }
 
   .round-menu {
@@ -1727,13 +1740,29 @@
 }
 
 @media (max-width: 820px) {
-  .guild-nav-actions .network-chip,
-  .guild-nav-actions .wallet-button {
+  .guild-nav-actions .primary-cta {
     display: none;
   }
 
   .guild-nav {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    padding-inline: 14px;
+  }
+
+  .guild-brand-copy {
+    display: none;
+  }
+
+  .guild-nav-actions {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .nav-toggle {
+    grid-column: 3;
+    grid-row: 1;
   }
 
   .guild-hero {
