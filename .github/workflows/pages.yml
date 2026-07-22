@@ -53,9 +53,12 @@ jobs:
           node --check site/guild-shell.js
           grep -q 'data-board-search' site/earn.html
           grep -q 'id="fund-bounty-panel"' site/earn.html
+          grep -q 'class="composer-page chat-app-page"' site/objective.html
+          grep -q 'class="chat-app-header"' site/objective.html
           grep -q 'id="bounty-composer-form"' site/objective.html
           grep -q 'data-bounty-chat' site/objective.html
           grep -q 'data-conversation-log' site/objective.html
+          grep -q 'id="bounty-preview"' site/objective.html
           grep -q 'data-mission-context' site/objective.html
           grep -q 'data-image-status' site/objective.html
           grep -q 'data-approve-card' site/objective.html
@@ -63,9 +66,13 @@ jobs:
           grep -q '>Connect wallet<' site/objective.html
           grep -q 'data-payment-method="crypto"' site/objective.html
           grep -q 'bounty-composer-v2.js?v=1' site/objective.html
-          grep -q 'bounty-chat-ui.js?v=1' site/objective.html
-          grep -q 'dataset.bountyComposer = "chat-v1"' site/bounty-chat-ui.js
-          grep -q 'data-conversation-log' site/bounty-chat-ui.js
+          grep -q 'bounty-chat-ui.js?v=2' site/objective.html
+          ! grep -q 'chat-composer-intro' site/objective.html
+          ! grep -q 'draft-panel' site/objective.html
+          grep -q 'dataset.bountyComposer = "chat-v2"' site/bounty-chat-ui.js
+          grep -q 'form.requestSubmit()' site/bounty-chat-ui.js
+          grep -q 'log.append(preview)' site/bounty-chat-ui.js
+          grep -q 'body.classList.contains("chat-app-page")' site/analytics-config.js
           grep -q 'x-agent-bounties-draft-visual' site/bounty-composer-v2.js
           grep -q 'MAX_TASK_DAYS = 30' site/bounty-composer-v2.js
           grep -q 'Ongoing' site/bounty-composer-v2.js
@@ -90,7 +97,7 @@ jobs:
           )
           if count != 1:
               raise SystemExit("analytics configuration assignment was not found exactly once")
-          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js"):
+          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js", "chat-app-page"):
               if required not in updated:
                   raise SystemExit(f"Pages analytics substitution removed {required}")
           path.write_text(updated, encoding="utf-8")
@@ -130,7 +137,7 @@ jobs:
           )
           if count != 1:
               raise SystemExit("analytics configuration assignment was not found exactly once")
-          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js"):
+          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js", "chat-app-page"):
               if required not in updated:
                   raise SystemExit(f"refusing to deploy without {required}")
           path.write_text(updated, encoding="utf-8")
@@ -145,7 +152,7 @@ jobs:
           path: site
       - id: deployment
         uses: actions/deploy-pages@v5
-      - name: Verify the conversational canonical website
+      - name: Verify the normal chatbot experience
         env:
           GH_TOKEN: ${{ github.token }}
           LIVE_CANARY_ISSUE: "499"
@@ -164,6 +171,7 @@ jobs:
             if curl "${common_curl[@]}" "https://agentbounties.app/live-guild-build.txt?verify=${nonce}" -o /tmp/live-canary.txt \
               && curl "${common_curl[@]}" "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/objective.html?verify=${nonce}" -o /tmp/live-objective.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat.css?verify=${nonce}" -o /tmp/live-chat.css \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-composer-v2.js?verify=${nonce}" -o /tmp/live-composer.js \
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat-ui.js?verify=${nonce}" -o /tmp/live-chat-ui.js \
               && curl "${common_curl[@]}" "https://agentbounties.app/how-it-works.html?verify=${nonce}" -o /tmp/live-how.html \
@@ -174,23 +182,24 @@ jobs:
                 && grep -q 'data-public-ux="simplified-v1"' /tmp/live-earn.html \
                 && grep -q 'data-board-search' /tmp/live-earn.html \
                 && grep -q 'id="fund-bounty-panel"' /tmp/live-earn.html \
-                && grep -q 'Post something you want done' /tmp/live-earn.html \
-                && grep -q 'bounty-board.js?v=1' /tmp/live-earn.html \
+                && grep -q 'class="composer-page chat-app-page"' /tmp/live-objective.html \
+                && grep -q 'class="chat-app-header"' /tmp/live-objective.html \
                 && grep -q 'id="bounty-composer-form"' /tmp/live-objective.html \
-                && grep -q 'data-bounty-chat' /tmp/live-objective.html \
                 && grep -q 'data-conversation-log' /tmp/live-objective.html \
-                && grep -q 'data-mission-context' /tmp/live-objective.html \
-                && grep -q 'data-image-status' /tmp/live-objective.html \
+                && grep -q 'id="bounty-preview"' /tmp/live-objective.html \
                 && grep -q 'data-approve-card' /tmp/live-objective.html \
                 && grep -q 'data-open-funding' /tmp/live-objective.html \
                 && grep -q '>Connect wallet<' /tmp/live-objective.html \
-                && grep -q 'data-payment-method="crypto"' /tmp/live-objective.html \
-                && grep -q 'bounty-composer-v2.js?v=1' /tmp/live-objective.html \
-                && grep -q 'bounty-chat-ui.js?v=1' /tmp/live-objective.html \
+                && grep -q 'bounty-chat-ui.js?v=2' /tmp/live-objective.html \
+                && ! grep -q 'chat-composer-intro' /tmp/live-objective.html \
+                && ! grep -q 'draft-panel' /tmp/live-objective.html \
+                && grep -q '.chat-app-header' /tmp/live-chat.css \
+                && grep -q 'grid-template-rows: minmax(0, 1fr) auto auto' /tmp/live-chat.css \
                 && grep -q 'x-agent-bounties-draft-visual' /tmp/live-composer.js \
                 && grep -q 'MAX_TASK_DAYS = 30' /tmp/live-composer.js \
-                && grep -q 'dataset.bountyComposer = "chat-v1"' /tmp/live-chat-ui.js \
-                && grep -q 'data-conversation-log' /tmp/live-chat-ui.js \
+                && grep -q 'dataset.bountyComposer = "chat-v2"' /tmp/live-chat-ui.js \
+                && grep -q 'log.append(preview)' /tmp/live-chat-ui.js \
+                && grep -q 'body.classList.contains("chat-app-page")' /tmp/live-analytics.js \
                 && grep -q 'You ask. Someone helps. They show proof. They get paid.' /tmp/live-how.html \
                 && grep -q 'simple-home.js' /tmp/live-analytics.js \
                 && grep -q '\["earn.html", "Bounty Board"\]' /tmp/live-simple-home.js \
@@ -200,7 +209,7 @@ jobs:
                 failure_detail=""
                 break
               fi
-              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or conversational bounty-workflow markers were missing"
+              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or minimal chatbot markers were missing"
             else
               failure_detail="one or more live URLs returned a non-success response"
             fi
@@ -211,21 +220,20 @@ jobs:
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           if [[ "${success}" == "true" ]]; then
             cat > /tmp/live-proof.md <<EOF
-          ✅ **Conversational bounty composer canary passed**
+          ✅ **Normal chatbot bounty composer canary passed**
 
           - Commit: \`${GITHUB_SHA}\`
           - Expected and live build: \`${expected_build}\`
           - Attempts: ${attempt_used}
           - Verified at: ${verified_at}
-          - Live primary navigation assets contain only **Bounty Board** and **How It Works**.
-          - Live Bounty Board contains search filters, visual open-task cards, inline funding, and the posting entry point.
-          - Live bounty creation is a real message conversation: the AI asks focused questions, updates a standardized draft, accepts continued revision, gates approval, and exposes **Connect wallet** only after approval.
-          - Live How It Works page contains the plain-language explanation.
+          - Live bounty creation is one full-screen message thread with a bottom composer.
+          - There is no intro section, progress display, separate draft panel, or guild navigation shell.
+          - The standardized draft appears inline as an AI message and retains edit, approval, and wallet gates.
           - Workflow: ${run_url}
           EOF
           else
             cat > /tmp/live-proof.md <<EOF
-          ❌ **Conversational bounty composer canary failed**
+          ❌ **Normal chatbot bounty composer canary failed**
 
           - Commit: \`${GITHUB_SHA}\`
           - Expected build: \`${expected_build}\`

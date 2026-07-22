@@ -14,6 +14,8 @@ window.agentBountiesAnalyticsConfig = Object.freeze({
       : window.location.href;
     const base = new URL(".", source);
 
+    if (body.classList.contains("chat-app-page")) return;
+
     if (body.classList.contains("guild-home")) {
       if (!document.querySelector('script[data-simple-home="true"]')) {
         const script = document.createElement("script");
