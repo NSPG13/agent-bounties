@@ -1,4 +1,4 @@
-/* Focused homepage community corrections for issues #485 and #489. */
+/* Focused homepage community corrections for issues #485, #489, and #493. */
 
 /* Remove the old raster sprig and render a real public-domain botanical plate. */
 .community-shell::after {
@@ -25,27 +25,27 @@
   height: 218px;
   overflow: hidden;
   border-radius: 0 0 15px 0;
-  opacity: 0.86;
+  opacity: 0.9;
   filter: drop-shadow(0 0 20px rgba(171, 232, 65, 0.1));
   pointer-events: none;
 }
 
 /*
- * Quercus alba botanical plate, 1819, Pierre-Joseph Redouté.
- * Public domain source: Wikimedia Commons, File:NAS-001 Quercus alba.png.
- * Inversion plus screen blending removes the paper field while retaining the
- * natural engraved leaf and branch detail against the dark solarpunk panel.
+ * Ginkgo biloba botanical illustration from Larousse du XXe siècle, 1932.
+ * CC0 source: Wikimedia Commons, File:Ginkgo biloba Larousse Extracted.png.
+ * The color treatment integrates the selected fan-leaf composition into the
+ * existing dark solarpunk mission panel without fruit, seeds, or acorns.
  */
 .mission-sprig::before {
   content: "";
   position: absolute;
-  inset: -7% -22% -6% -30%;
-  background: url("https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/NAS-001_Quercus_alba.png/500px-NAS-001_Quercus_alba.png") 55% 38% / cover no-repeat;
-  filter: invert(1) sepia(1) saturate(2.2) hue-rotate(34deg) brightness(0.8) contrast(1.22);
+  inset: -5% -14% -6% -20%;
+  background: url("https://upload.wikimedia.org/wikipedia/commons/1/15/Ginkgo_biloba_Larousse_Extracted.png") 50% 42% / cover no-repeat;
+  filter: invert(1) sepia(1) saturate(2.1) hue-rotate(34deg) brightness(0.78) contrast(1.2);
   mix-blend-mode: screen;
-  opacity: 0.78;
-  transform: rotate(-1.5deg) scale(1.02);
-  transform-origin: 55% 100%;
+  opacity: 0.82;
+  transform: rotate(-1deg) scale(1.03);
+  transform-origin: 52% 100%;
 }
 
 .mission-sprig::after {
@@ -53,8 +53,8 @@
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(90deg, rgba(5, 14, 10, 0.96), transparent 34%),
-    linear-gradient(180deg, rgba(5, 14, 10, 0.12), transparent 42%, rgba(5, 14, 10, 0.22));
+    linear-gradient(90deg, rgba(5, 14, 10, 0.96), transparent 31%),
+    linear-gradient(180deg, rgba(5, 14, 10, 0.08), transparent 44%, rgba(5, 14, 10, 0.22));
   pointer-events: none;
 }
 
@@ -62,22 +62,23 @@
   display: none;
 }
 
+/* The previous dynamic oak attribution is obsolete and must not remain visible. */
 .botanical-credit {
-  position: absolute !important;
-  z-index: 3 !important;
+  display: none !important;
+}
+
+.charter-copy::after {
+  content: "Ginkgo biloba · CC0 botanical plate";
+  position: absolute;
+  z-index: 3;
   right: 10px;
   bottom: 8px;
-  max-width: 115px;
-  color: rgba(222, 231, 218, 0.54) !important;
+  max-width: 118px;
+  color: rgba(222, 231, 218, 0.54);
   font-size: 6px;
   line-height: 1.25;
   text-align: right;
-  text-decoration: none;
-}
-
-.botanical-credit:hover,
-.botanical-credit:focus-visible {
-  color: var(--guild-lime-bright) !important;
+  pointer-events: none;
 }
 
 /* Crop the obsolete +1.2k badge out of the face asset and replace it with live data. */
@@ -177,10 +178,10 @@
     height: 296px;
   }
 
-  .botanical-credit {
+  .charter-copy::after {
     right: 17px;
     bottom: 11px;
-    max-width: 150px;
+    max-width: 154px;
     font-size: 7px;
   }
 
@@ -237,10 +238,10 @@
     height: 175px;
   }
 
-  .botanical-credit {
+  .charter-copy::after {
     right: 5px;
     bottom: 6px;
-    max-width: 94px;
+    max-width: 96px;
     font-size: 5.5px;
   }
 
