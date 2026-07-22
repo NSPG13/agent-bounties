@@ -25,6 +25,7 @@
         <button type="button" data-connect-wallet>Connect wallet</button>
         <button type="button" data-protocol-action disabled>Sign and post bounty</button>
         <template id="autonomous-post-compatibility-contract">
+          <select data-wallet-provider aria-label="Wallet provider"><option>Browser wallet</option></select>
           <select name="verificationMode">
             <option value="deterministic_module" selected>Automatic demo proof checker</option>
             <option value="signed_quorum">Trusted verifier wallets</option>
