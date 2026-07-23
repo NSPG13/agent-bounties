@@ -1,0 +1,3 @@
+Trigger the temporary, isolated PR #272 patch-candidate diagnostic.
+
+This branch carries no product, contract, wallet, deployment, funding, verification, or settlement authority. The default-branch workflow may only read the protected original PR backup and repaired competitor-intelligence branch, then write the isolated diagnostic branch.
