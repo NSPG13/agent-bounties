@@ -15,7 +15,7 @@ import activate_routed_v3_replacements as activation
 ROUTER = "0x380c1af742593dd88b6f20387e9ee693a0536731"
 EVENT_SIGNATURE = "PolicyBootstrapped(bytes32,address,bytes32)"
 ACTIVATION_DELAY = 604_800
-LOOKBACK_BLOCKS = 100_000
+LOOKBACK_BLOCKS = 10_000
 
 
 def parse_bootstrap_logs(raw: str) -> dict[str, str | int]:
