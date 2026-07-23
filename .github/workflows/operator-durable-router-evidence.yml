@@ -15,40 +15,121 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == 'NSPG13'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
-      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
-      AGENT_BOUNTIES_API_URL: https://api.agentbounties.app
+      ROUTER: 0x380c1af742593dd88b6f20387e9ee693a0536731
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Re-attest deployed state
-        run: >-
-          python scripts/durable_verifier_router_deploy.py deploy
-          --output target/deployment.json
-          --output-dir target/durable-router-evidence
-      - name: Print compact canonical evidence
+
+      - name: Read bootstrap event and immutable state
         run: |
+          latest="$(cast block-number --rpc-url "$BASE_MAINNET_RPC_URL")"
+          from=$((latest - 50000))
+          cast logs \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --address "$ROUTER" \
+            --from-block "$from" \
+            --to-block latest \
+            "PolicyBootstrapped(bytes32,address,bytes32)" \
+            --json > target-bootstrap-logs.json
           python - <<'PY'
-          import json
-          report = json.load(open('target/deployment.json'))
-          compact = {
-              'schema': report['schema'],
-              'network': report['network'],
-              'chain_id': report['chain_id'],
-              'router': report['router'],
-              'policy_hash': report['policy_hash'],
-              'adapter': report['adapter'],
-              'router_transaction': report.get('router_transaction'),
-              'adapter_transaction': report.get('adapter_transaction'),
-              'bootstrap_transaction': report.get('bootstrap_transaction'),
-              'idempotent': report['idempotent'],
-              'wallet_policy_required': report['wallet_policy_required'],
-              'published_terms': report['published_terms'],
+          import json, os, subprocess
+          from pathlib import Path
+
+          rpc = os.environ['BASE_MAINNET_RPC_URL']
+          router = os.environ['ROUTER'].lower()
+          logs = json.loads(Path('target-bootstrap-logs.json').read_text())
+          if not isinstance(logs, list) or len(logs) != 1:
+              raise SystemExit(f'expected exactly one PolicyBootstrapped event, got {len(logs) if isinstance(logs, list) else "non-list"}')
+          log = logs[0]
+          topics = [str(value).lower() for value in log['topics']]
+          if len(topics) != 3:
+              raise SystemExit('bootstrap event topic shape mismatch')
+          policy_hash = topics[1]
+          adapter = '0x' + topics[2][-40:]
+          data = str(log['data']).lower().removeprefix('0x')
+          if len(data) != 64:
+              raise SystemExit('bootstrap event data shape mismatch')
+          runtime_hash = '0x' + data
+
+          def cast(*args):
+              return subprocess.check_output(['cast', *args, '--rpc-url', rpc], text=True).strip()
+
+          def number(value):
+              text = str(value)
+              return int(text, 16) if text.startswith('0x') else int(text)
+
+          router_code = cast('code', router)
+          adapter_code = cast('code', adapter)
+          if router_code in {'0x','0x0'} or adapter_code in {'0x','0x0'}:
+              raise SystemExit('router or adapter runtime code missing')
+          router_code_hash = cast('keccak', router_code).lower()
+          adapter_code_hash = cast('keccak', adapter_code).lower()
+          if adapter_code_hash != runtime_hash:
+              raise SystemExit('adapter runtime hash differs from bootstrap event')
+
+          factory = cast('call', router, 'canonicalFactory()(address)').lower()
+          registrar = cast('call', router, 'registrar()(address)').lower()
+          guardian = cast('call', router, 'guardian()(address)').lower()
+          delay = number(cast('call', router, 'activationDelay()(uint64)').split()[0])
+          active = cast('call', router, 'isPolicyActive(bytes32)(bool)', policy_hash).lower()
+          record = [line.strip() for line in cast(
+              'call', router,
+              'policies(bytes32)(address,bytes32,uint64,uint64,uint64,bool)',
+              policy_hash,
+          ).splitlines() if line.strip()]
+          if active != 'true' or len(record) != 6:
+              raise SystemExit('router policy is not active or record shape mismatched')
+          if record[0].lower() != adapter or record[1].lower() != runtime_hash:
+              raise SystemExit('router record differs from bootstrap evidence')
+
+          adapter_router = cast('call', adapter, 'verifierRouter()(address)').lower()
+          adapter_policy = cast('call', adapter, 'committedPolicyHash()(bytes32)').lower()
+          adapter_factory = cast('call', adapter, 'canonicalFactory()(address)').lower()
+          acceptance = cast('call', adapter, 'ACCEPTANCE_CRITERIA_HASH()(bytes32)').lower()
+          child_floor = number(cast('call', adapter, 'MINIMUM_CHILD_TARGET()(uint256)').split()[0])
+          margin_floor = number(cast('call', adapter, 'MINIMUM_PARENT_GROSS_MARGIN()(uint256)').split()[0])
+          if adapter_router != router or adapter_policy != policy_hash or adapter_factory != factory:
+              raise SystemExit('adapter immutable metadata mismatch')
+          if child_floor != 1_000_000 or margin_floor != 1_000_000 or delay != 604800:
+              raise SystemExit('economic or activation-delay invariant mismatch')
+
+          report = {
+              'schema': 'agent-bounties/durable-verifier-router-chain-evidence-v1',
+              'network': 'base-mainnet',
+              'chain_id': 8453,
+              'observed_block': number(log['blockNumber']),
+              'bootstrap_transaction': str(log['transactionHash']).lower(),
+              'router': {
+                  'address': router,
+                  'runtime_code_hash': router_code_hash,
+                  'canonical_factory': factory,
+                  'registrar': registrar,
+                  'guardian': guardian,
+                  'activation_delay_seconds': delay,
+              },
+              'policy_hash': policy_hash,
+              'adapter': {
+                  'address': adapter,
+                  'runtime_code_hash': adapter_code_hash,
+                  'acceptance_criteria_hash': acceptance,
+                  'minimum_child_target': child_floor,
+                  'minimum_parent_gross_margin': margin_floor,
+              },
+              'policy_record': {
+                  'verifier': record[0].lower(),
+                  'runtime_code_hash': record[1].lower(),
+                  'proposed_at': number(record[2].split()[0]),
+                  'activate_after': number(record[3].split()[0]),
+                  'activated_at': number(record[4].split()[0]),
+                  'vetoed': record[5].lower() == 'true',
+                  'active': True,
+              },
           }
-          print('DURABLE_ROUTER_EVIDENCE=' + json.dumps(compact, sort_keys=True, separators=(',', ':')))
+          print('DURABLE_ROUTER_CHAIN_EVIDENCE=' + json.dumps(report, sort_keys=True, separators=(',', ':')))
           PY
