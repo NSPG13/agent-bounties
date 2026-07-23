@@ -37,6 +37,7 @@ The only payment proof is a confirmed canonical `BountySettled` event emitted by
 | Reroll or replay | One request per commitment, no cancellation, no replacement request, request-ID binding | A permanently failed request cannot be rescued inside that round |
 | Atomic preparation race | Terms publication, child creation/funding, active-pool snapshot, VRF request, round binding, and parent claim occur in one transaction | The transaction can revert for gas, authorization, pool-size, or subscription failures |
 | Fake profitable economics | Exact integer micro-USDC checks and deterministic parent predicate require 2.00 minus 1.00 equals 1.00 USDC | This is successful-settlement onchain margin, not net profit; labor, compute, tax, failure, and opportunity cost remain |
+| Open parent race externalizes child cost to losers | V4 remains `vrf_assigned_child`; it is not routed through first-valid open competition | A future meta competition needs capped reimbursement or platform-funded children and a separate R4 review |
 | Gas or VRF reserve is depleted | Ready-to-earn is fail-closed unless sponsorship and VRF reserve are observed and consumers authorized | Observation can become stale; monitoring must suppress new earning immediately |
 | Verifier signs contradictory verdicts | Valid contradictory EIP-712 signatures are slashable by 0.10 USDC | A subjective overturned judgment alone is not called fraud |
 | Appeal griefing | Fixed bond, one appellate round, bounded jury and deadlines | An appellant can still impose delay and transaction costs |

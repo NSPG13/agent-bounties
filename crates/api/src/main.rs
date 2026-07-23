@@ -30,10 +30,11 @@ use chain_base::{
     build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
     eth_get_transaction_receipt_request, eth_send_raw_transaction_request, fetch_block_number,
     fetch_transaction_receipt, normalize_evm_address, observe_erc20_balance_safe,
-    observe_solver_leaderboard_paid_winner_safe,
+    observe_solver_leaderboard_paid_winner_safe, open_competition_readiness,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    plan_standing_meta_v4_action, prepare_agent_to_earn as inspect_agent_wallet_readiness,
-    solver_leaderboard_award_id, standing_meta_v2_parent_context, standing_meta_v4_readiness,
+    plan_open_competition_action, plan_standing_meta_v4_action,
+    prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
+    standing_meta_v2_parent_context, standing_meta_v4_readiness,
     validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
     AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
     AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
@@ -48,8 +49,9 @@ use chain_base::{
     AutonomousVerificationJob, BaseNetworkDescriptor, BaseRelayedTransaction, BaseRpcUrlConfig,
     BaseTransactionRelayer, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
     ChainBaseError, Eip3009AuthorizationTypedData, EthGetTransactionReceiptRequest,
-    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, PrepareAgentToEarnInput,
-    RpcTransactionReceipt, SolverLeaderboardAwardSafeObservation,
+    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, OpenCompetitionActionPlan,
+    OpenCompetitionOperation, OpenCompetitionReadinessEvidence, OpenCompetitionReadinessReport,
+    PrepareAgentToEarnInput, RpcTransactionReceipt, SolverLeaderboardAwardSafeObservation,
     StandingMetaV2ChildPreparationPlan, StandingMetaV2ChildPreparationRequest,
     StandingMetaV4ActionPlan, StandingMetaV4EconomicsEvidence, StandingMetaV4Operation,
     StandingMetaV4ReadinessEvidence, StandingMetaV4ReadinessReport,
@@ -173,6 +175,11 @@ use worker::{
         get_unfunded_bounty,
         submit_unfunded_bounty_solution,
         prepare_agent_wallet_to_earn,
+        get_open_competition_readiness,
+        prepare_open_competition_commit,
+        prepare_open_competition_reveal,
+        get_open_competition_status,
+        withdraw_open_competition_bond,
         get_standing_meta_v4_readiness,
         prepare_standing_meta_v4_claim,
         prepare_anonymous_stake_registration,
@@ -1101,6 +1108,22 @@ struct StandingMetaV4ActionRequest {
     arguments: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionReadinessQuery {
+    network: Option<String>,
+    bounty_contract: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionActionRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    #[serde(default)]
+    arguments: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct ClaimFunnelQuery {
     window_hours: Option<u32>,
@@ -1706,6 +1729,26 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/agent-wallet/readiness",
             post(prepare_agent_wallet_to_earn),
+        )
+        .route(
+            "/v1/base/open-competition-v1/readiness",
+            get(get_open_competition_readiness),
+        )
+        .route(
+            "/v1/base/open-competition-v1/commit-preparation",
+            post(prepare_open_competition_commit),
+        )
+        .route(
+            "/v1/base/open-competition-v1/reveal-preparation",
+            post(prepare_open_competition_reveal),
+        )
+        .route(
+            "/v1/base/open-competition-v1/status",
+            post(get_open_competition_status),
+        )
+        .route(
+            "/v1/base/open-competition-v1/bond-withdrawal-preparation",
+            post(withdraw_open_competition_bond),
         )
         .route(
             "/v1/base/standing-meta-v4/readiness",
@@ -4294,6 +4337,133 @@ async fn prepare_agent_wallet_to_earn(
 
 #[utoipa::path(
     get,
+    path = "/v1/base/open-competition-v1/readiness",
+    params(
+        ("network" = Option<String>, Query, description = "base-mainnet or base-sepolia; defaults to base-mainnet"),
+        ("bounty_contract" = Option<String>, Query, description = "canonical open-competition bounty address")
+    ),
+    responses(
+        (status = 200, description = "Fail-closed open competition readiness report"),
+        (status = 400, description = "Unknown Base network or malformed bounty address")
+    )
+)]
+async fn get_open_competition_readiness(
+    Query(query): Query<OpenCompetitionReadinessQuery>,
+) -> Result<Json<OpenCompetitionReadinessReport>, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    open_competition_readiness_from_environment(network, query.bounty_contract.as_deref()).map(Json)
+}
+
+#[utoipa::path(post, path = "/v1/base/open-competition-v1/commit-preparation", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Unsigned fail-closed commitment plan"), (status = 400, description = "Unknown network or malformed bounty address")))]
+async fn prepare_open_competition_commit(
+    Json(request): Json<OpenCompetitionActionRequest>,
+) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
+    open_competition_action_from_environment(
+        request,
+        OpenCompetitionOperation::PrepareOpenCompetitionCommit,
+        Some("commitSolutionWithAuthorization"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/open-competition-v1/reveal-preparation", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Unsigned committed reveal plan"), (status = 400, description = "Unknown network or malformed bounty address")))]
+async fn prepare_open_competition_reveal(
+    Json(request): Json<OpenCompetitionActionRequest>,
+) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
+    open_competition_action_from_environment(
+        request,
+        OpenCompetitionOperation::PrepareOpenCompetitionReveal,
+        Some("revealSolution"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/open-competition-v1/status", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Canonical competition status read plan"), (status = 400, description = "Unknown network or malformed bounty address")))]
+async fn get_open_competition_status(
+    Json(request): Json<OpenCompetitionActionRequest>,
+) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
+    open_competition_action_from_environment(
+        request,
+        OpenCompetitionOperation::GetOpenCompetitionStatus,
+        Some("competitionStatus"),
+    )
+}
+
+#[utoipa::path(post, path = "/v1/base/open-competition-v1/bond-withdrawal-preparation", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Unsigned losing-entry bond withdrawal plan"), (status = 400, description = "Unknown network or malformed bounty address")))]
+async fn withdraw_open_competition_bond(
+    Json(request): Json<OpenCompetitionActionRequest>,
+) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
+    open_competition_action_from_environment(
+        request,
+        OpenCompetitionOperation::WithdrawOpenCompetitionBond,
+        Some("withdrawEntryBond"),
+    )
+}
+
+fn open_competition_action_from_environment(
+    request: OpenCompetitionActionRequest,
+    operation: OpenCompetitionOperation,
+    function: Option<&str>,
+) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    open_competition_environment_prefix(network)?;
+    let bounty_contract =
+        normalize_evm_address(&request.bounty_contract).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let readiness = open_competition_readiness_from_environment(network, Some(&bounty_contract))?;
+    Ok(Json(plan_open_competition_action(
+        operation,
+        &readiness,
+        Some(bounty_contract),
+        function.map(str::to_string),
+        request.arguments,
+    )))
+}
+
+fn open_competition_readiness_from_environment(
+    network: &str,
+    bounty_contract: Option<&str>,
+) -> Result<OpenCompetitionReadinessReport, StatusCode> {
+    let prefix = open_competition_environment_prefix(network)?;
+    let canonical_factory_configured = optional_evm_address(&format!("{prefix}_FACTORY"))
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .is_some()
+        && env_flag(&format!("{prefix}_CANONICAL_FACTORY_RUNTIME"));
+    let canonical_bounty_runtime = match bounty_contract {
+        Some(value) => {
+            let normalized = normalize_evm_address(value).map_err(|_| StatusCode::BAD_REQUEST)?;
+            configured_open_competition(network, &normalized)
+                && env_flag(&format!("{prefix}_CANONICAL_BOUNTY_RUNTIME"))
+        }
+        None => false,
+    };
+    Ok(open_competition_readiness(
+        &OpenCompetitionReadinessEvidence {
+            canonical_factory_configured,
+            canonical_bounty_runtime,
+            valid_terms: env_flag(&format!("{prefix}_VALID_TERMS")),
+            fully_funded: env_flag(&format!("{prefix}_FULLY_FUNDED")),
+            deterministic_verifier_ready: env_flag(&format!(
+                "{prefix}_DETERMINISTIC_VERIFIER_READY"
+            )),
+            competition_open: env_flag(&format!("{prefix}_COMPETITION_OPEN")),
+            entry_capacity_available: env_flag(&format!("{prefix}_ENTRY_CAPACITY_AVAILABLE")),
+            safe_commit_reveal_timing: env_flag(&format!("{prefix}_SAFE_COMMIT_REVEAL_TIMING")),
+            gas_sponsorship_available: env_flag(&format!("{prefix}_GAS_SPONSORSHIP_AVAILABLE")),
+            relay_support_available: env_flag(&format!("{prefix}_RELAY_SUPPORT_AVAILABLE")),
+            r4_release_evidence_complete: env_flag(&format!("{prefix}_R4_EVIDENCE_COMPLETE")),
+            monitoring_active: env_flag(&format!("{prefix}_MONITORING_ACTIVE")),
+        },
+    ))
+}
+
+fn open_competition_environment_prefix(network: &str) -> Result<&'static str, StatusCode> {
+    match network {
+        "base-mainnet" => Ok("BASE_MAINNET_OPEN_COMPETITION_V1"),
+        "base-sepolia" => Ok("BASE_SEPOLIA_OPEN_COMPETITION_V1"),
+        _ => Err(StatusCode::BAD_REQUEST),
+    }
+}
+
+#[utoipa::path(
+    get,
     path = "/v1/base/standing-meta-v4/readiness",
     params(("network" = Option<String>, Query, description = "base-mainnet or base-sepolia; defaults to base-mainnet")),
     responses(
@@ -6708,6 +6878,15 @@ async fn agent_native_claim(
             "Call get_standing_meta_v4_readiness, then prepare_standing_meta_v4_claim. The atomic flow creates and funds the child, snapshots the active solver pool, requests VRF, binds the round, and posts the parent bond in one transaction.",
         ));
     }
+    if configured_open_competition(network, &bounty_contract) {
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "open_competition_commit_required",
+            "route_open_competition_entry",
+            "a first-valid open competition has no exclusive claim path",
+            "Call get_open_competition_readiness, then prepare_open_competition_commit. Keep the salt private and call prepare_open_competition_reveal from the same wallet in a later block.",
+        ));
+    }
     let item = indexed_autonomous_bounty(&state, network, &bounty_contract)
         .await
         .map_err(|status| {
@@ -7171,6 +7350,25 @@ fn configured_standing_meta_v4_parent(network: &str, bounty_contract: &str) -> b
         return false;
     };
     env::var(format!("{prefix}_PARENT_CONTRACTS"))
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|value| normalize_evm_address(&value).ok())
+        .any(|value| value.eq_ignore_ascii_case(bounty_contract))
+}
+
+fn configured_open_competition(network: &str, bounty_contract: &str) -> bool {
+    let Ok(prefix) = open_competition_environment_prefix(network) else {
+        return false;
+    };
+    env::var(format!("{prefix}_BOUNTY_CONTRACTS"))
         .ok()
         .into_iter()
         .flat_map(|value| {
@@ -14209,6 +14407,11 @@ mod tests {
         assert!(paths.contains_key("/schemas/discovery-manifest.v2.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/readiness"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/commit-preparation"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/reveal-preparation"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/status"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/bond-withdrawal-preparation"));
         assert!(paths.contains_key("/v1/cloud-agent/objective-plans"));
         assert!(
             value["paths"]["/v1/cloud-agent/objective-plans"]["post"]["responses"]

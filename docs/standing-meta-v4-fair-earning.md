@@ -4,6 +4,13 @@ V4 is the additive fairness successor to the already-published, economic-only V3
 
 Deployment is staged because an all-in-one constructor would exceed contract deployment limits. A dedicated immutable V4 child factory keeps child creation code below EIP-170 and is wired once to the parent factory. The small immutable bundle validates the final component wiring; readiness still requires separate bytecode, VRF, sponsorship, pool, review, rehearsal, and monitoring evidence.
 
+V4's competition mode is `vrf_assigned_child`, not
+`first_valid_submission`. The general deterministic open-competition protocol
+cannot be applied naively to this parent: every losing parent entrant would
+still spend 1 USDC on a settled child and receive no 2 USDC parent reward. A
+future open meta design must separately escrow capped loser reimbursement or
+move child funding to the platform.
+
 ## Who decides and who pays
 
 An anonymous wallet randomly selected from the active staked verifier pool makes the primary judgment. The solver may appeal a rejection and the creator may appeal an acceptance. A separate five-wallet randomly selected jury decides an appeal by a three-vote majority. Chainlink selects wallets but never judges the submission.
