@@ -1,0 +1,55 @@
+name: Diagnose PR 272 merge conflicts
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    if: github.event.pull_request.number == 272 && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build auditable conflict-marker snapshot on a separate branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin codex/competitor-intelligence
+
+          set +e
+          git merge --no-commit --no-ff origin/codex/competitor-intelligence
+          merge_status=$?
+          set -e
+
+          conflicts="$(git diff --name-only --diff-filter=U | sort)"
+          printf '%s\n' "$conflicts" | tee /tmp/pr-272-conflicts.txt
+
+          if [ "$merge_status" -eq 0 ]; then
+            echo "No conflicts were produced; diagnostic branch is unnecessary."
+            exit 0
+          fi
+          if [ -z "$conflicts" ]; then
+            echo "Merge failed without indexed conflicts." >&2
+            exit 1
+          fi
+
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            git checkout --conflict=merge -- "$path"
+          done <<< "$conflicts"
+
+          mkdir -p target/merge-diagnostics
+          cp /tmp/pr-272-conflicts.txt target/merge-diagnostics/pr-272-conflicts.txt
+          git add -A
+          git commit -m "diagnostic: snapshot PR 272 merge conflicts"
+          git push --force origin HEAD:diagnostic/pr-272-merge-conflicts
