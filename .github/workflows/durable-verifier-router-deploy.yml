@@ -97,6 +97,10 @@ jobs:
     if: >-
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.head_ref == 'ops/deploy-durable-router-now' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.login == 'NSPG13') ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.number == 571 &&
        github.event.comment.user.login == 'NSPG13' &&
