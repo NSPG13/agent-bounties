@@ -1,11 +1,8 @@
 name: Temporary maintainer branch repair
 
 on:
-  issue_comment:
-    types: [created]
-  push:
-    branches:
-      - ops/trigger-pr-272-patch-candidate
+  pull_request:
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write
@@ -13,69 +10,11 @@ permissions:
   pull-requests: read
 
 jobs:
-  snapshot-pr-272:
-    if: >-
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      github.event.issue.number == 272 &&
-      github.actor == 'NSPG13' &&
-      github.event.comment.body == '/maintainer snapshot-pr-272-merge'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: codex/objective-coordination-v1
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build conflict-marker snapshot on a separate branch
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin codex/competitor-intelligence
-
-          set +e
-          git merge --no-commit --no-ff origin/codex/competitor-intelligence
-          merge_status=$?
-          set -e
-
-          conflicts="$(git diff --name-only --diff-filter=U | sort)"
-          printf '%s\n' "$conflicts"
-
-          if [ "$merge_status" -eq 0 ]; then
-            echo "No conflicts were produced; diagnostic branch is unnecessary."
-            exit 0
-          fi
-          if [ -z "$conflicts" ]; then
-            echo "Merge failed without indexed conflicts." >&2
-            exit 1
-          fi
-
-          while IFS= read -r path; do
-            [ -n "$path" ] || continue
-            git checkout --conflict=merge -- "$path"
-          done <<< "$conflicts"
-
-          mkdir -p .merge-diagnostics
-          printf '%s\n' "$conflicts" > .merge-diagnostics/pr-272-conflicts.txt
-          git add -A
-          git commit -m "diagnostic: snapshot PR 272 merge conflicts"
-          git push --force origin HEAD:diagnostic/pr-272-merge-conflicts
-
   patch-candidate-pr-272:
     if: >-
-      (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        github.event.issue.number == 272 &&
-        github.actor == 'NSPG13' &&
-        github.event.comment.body == '/maintainer build-pr-272-patch-candidate'
-      ) || (
-        github.event_name == 'push' &&
-        github.ref == 'refs/heads/ops/trigger-pr-272-patch-candidate'
-      )
+      github.event.pull_request.head.ref == 'ops/trigger-pr-272-patch-pr' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor == 'NSPG13'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
