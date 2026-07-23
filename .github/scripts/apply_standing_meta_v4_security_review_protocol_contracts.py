@@ -54,6 +54,45 @@ def main() -> None:
 """,
     )
 
+    # Resolve canonical-child provenance through the already-exposed immutable
+    # child-factory getter instead of adding another public method to the size-
+    # constrained parent factory.
+    verifier_path = "contracts/base-escrow/src/AppealableVerifierV1.sol"
+    replace_once(
+        verifier_path,
+        """interface ICanonicalAppealableChildRegistryV1 {
+    function isCanonicalAppealableChild(address bounty) external view returns (bool);
+}
+""",
+        """interface ICanonicalAppealableParentFactoryV1 {
+    function standingMetaChildFactory() external view returns (address);
+}
+
+interface ICanonicalAppealableChildFactoryV1 {
+    function isCanonicalChild(address bounty) external view returns (bool);
+}
+""",
+    )
+    replace_once(
+        verifier_path,
+        """        address registry = controller.standingMetaParentFactory();
+        require(
+            controller.configured() && registry.code.length > 0
+                && ICanonicalAppealableChildRegistryV1(registry).isCanonicalAppealableChild(bounty),
+            "bounty not canonical"
+        );
+""",
+        """        address parentFactory = controller.standingMetaParentFactory();
+        require(controller.configured() && parentFactory.code.length > 0, "bounty not canonical");
+        address childFactory = ICanonicalAppealableParentFactoryV1(parentFactory).standingMetaChildFactory();
+        require(
+            childFactory.code.length > 0
+                && ICanonicalAppealableChildFactoryV1(childFactory).isCanonicalChild(bounty),
+            "bounty not canonical"
+        );
+""",
+    )
+
     path = "contracts/base-escrow/src/StandingMetaParentFactoryV4.sol"
     replace_once(
         path,
@@ -68,6 +107,15 @@ def main() -> None:
         address indexed parent, uint64 indexed round, address indexed child, address creator
     );
 """,
+    )
+    replace_once(
+        path,
+        """    function isCanonicalAppealableChild(address bounty) external view returns (bool) {
+        return standingMetaChildFactory.isCanonicalChild(bounty);
+    }
+
+""",
+        "",
     )
     replace_once(
         path,
@@ -97,23 +145,16 @@ def main() -> None:
 """,
     )
 
-    # The main security patch adds parent-ID uniqueness. Keep only a private used
-    # bit to avoid spending scarce EIP-170 runtime bytes on a public address getter.
-    replace_once(
-        path,
-        "    mapping(bytes32 => address) public parentByBountyId;\n",
-        "    mapping(bytes32 => bool) private _parentBountyIdUsed;\n",
-    )
+    # CREATE2 already makes an exact duplicate parent deployment impossible.
+    # Remove the redundant used-ID storage added by the first patch pass and keep
+    # the regression proving the native CREATE2 uniqueness invariant.
+    replace_once(path, "    mapping(bytes32 => address) public parentByBountyId;\n", "")
     replace_once(
         path,
         '        require(parentByBountyId[bountyId] == address(0), "parent bounty id already used");\n',
-        '        require(!_parentBountyIdUsed[bountyId], "parent bounty id already used");\n',
+        "",
     )
-    replace_once(
-        path,
-        "        parentByBountyId[bountyId] = parentAddress;\n",
-        "        _parentBountyIdUsed[bountyId] = true;\n",
-    )
+    replace_once(path, "        parentByBountyId[bountyId] = parentAddress;\n", "")
 
 
 if __name__ == "__main__":
