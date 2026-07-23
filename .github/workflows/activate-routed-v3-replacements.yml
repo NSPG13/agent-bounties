@@ -1,0 +1,113 @@
+name: Activate routed V3 replacements
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: routed-v3-replacement-activation
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request == null &&
+       github.event.issue.number == 571 &&
+       github.event.comment.user.login == 'NSPG13' &&
+       github.event.comment.body == '/agent-bounty activate-routed-v3')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      AGENT_BOUNTIES_API_URL: https://api.agentbounties.app
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Stop after completed migration
+        id: issue
+        run: |
+          state="$(gh issue view 571 --json state --jq .state)"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          if [ "$state" = "CLOSED" ]; then
+            echo "Migration issue is closed; no action remains."
+          fi
+
+      - name: Validate activation code
+        if: steps.issue.outputs.state != 'CLOSED'
+        run: |
+          python -m unittest scripts.test_activate_routed_v3_replacements -v
+          python -m py_compile \
+            scripts/activate_routed_v3_replacements.py \
+            scripts/check_routed_v3_activation_readiness.py
+          node --check site/durable-wallet-policy.js
+
+      - name: Read durable policy readiness
+        if: steps.issue.outputs.state != 'CLOSED'
+        id: readiness
+        run: |
+          python scripts/check_routed_v3_activation_readiness.py \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --output target/routed-v3-readiness.json
+          ready="$(python -c 'import json; print(str(json.load(open("target/routed-v3-readiness.json"))["ready"]).lower())')"
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          cat target/routed-v3-readiness.json
+
+      - name: Remain dormant before owner confirmation
+        if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready != 'true'
+        run: |
+          echo "The exact durable PolicyConfigured state is not active. No financial action was attempted."
+
+      - name: Create, fund, and reconcile four routed parents
+        if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
+        run: python scripts/activate_routed_v3_replacements.py
+
+      - name: Replace issue terms only after canonical reconciliation
+        if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
+        run: |
+          for issue in 333 334 335 336; do
+            gh issue edit "$issue" \
+              --body-file "target/routed-v3-activation/routed-v3-${issue}-issue.md" \
+              --add-label bounty \
+              --add-label ai-agent-welcome \
+              --add-label payments \
+              --add-label good-first-agent-bounty \
+              --add-label funded-live \
+              --add-label claimable-live
+            gh issue edit "$issue" --remove-label verification-unavailable || true
+          done
+
+      - name: Publish evidence and close migration
+        if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
+        run: |
+          gh issue comment 571 --body-file target/routed-v3-activation.md
+          gh issue close 571 --reason completed --comment \
+            "The durable wallet policy and four routed replacements reconciled from canonical Base evidence. Only future BountySettled events prove solver payments."
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: routed-v3-replacement-activation-${{ github.run_id }}
+          path: |
+            target/routed-v3-readiness.json
+            target/routed-v3-activation.json
+            target/routed-v3-activation.md
+            target/routed-v3-activation/
+          if-no-files-found: warn
