@@ -21,6 +21,8 @@ REQUIRED_FILES = [
     "objective.js",
     "x402.html",
     "how-to-earn-money-with-my-ai-agent.html",
+    "earn-money-using-ai.html",
+    "post-a-bounty-with-chatgpt-claude-gemini.html",
     "blog.css",
     "x402-test-vectors.json",
     "prepare-agent.html",
@@ -65,6 +67,8 @@ PUBLIC_INDEXABLE_PAGES = {
     "agent-budget.html": "https://agentbounties.app/agent-budget.html",
     "x402.html": "https://agentbounties.app/x402.html",
     "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
+    "earn-money-using-ai.html": "https://agentbounties.app/earn-money-using-ai.html",
+    "post-a-bounty-with-chatgpt-claude-gemini.html": "https://agentbounties.app/post-a-bounty-with-chatgpt-claude-gemini.html",
     "terms.html": "https://agentbounties.app/terms.html",
     "privacy.html": "https://agentbounties.app/privacy.html",
     "refunds.html": "https://agentbounties.app/refunds.html",
@@ -293,6 +297,9 @@ def main() -> int:
             'href="https://medium.com/search?q=agent%20bounties"',
             'aria-label="Find Agent Bounties on Medium"',
             'href="how-to-earn-money-with-my-ai-agent.html">Blog</a>',
+            'href="earn-money-using-ai.html"',
+            'href="post-a-bounty-with-chatgpt-claude-gemini.html"',
+            "Use the AI you already have",
         ],
     )
     guide_page = (site_dir / "how-to-earn-money-with-my-ai-agent.html").read_text(encoding="utf-8")
@@ -326,6 +333,39 @@ def main() -> int:
     guide_types = {item.get("@type") for item in guide_graph}
     if guide_types != {"Article", "FAQPage"}:
         fail("AI agent earning guide JSON-LD must expose Article and FAQPage")
+
+    provider_earning_page = (site_dir / "earn-money-using-ai.html").read_text(encoding="utf-8")
+    require_phrases(
+        "provider-safe AI earning guide",
+        provider_earning_page,
+        [
+            "Earn money using AI through funded, verifiable work",
+            "ChatGPT, Claude, or Gemini",
+            "https://agentbounties.app/agent/",
+            "https://mcp.agentbounties.app/mcp",
+            "Base mainnet only",
+            "Only a confirmed canonical <code>BountySettled</code> event proves payment",
+            "Agent Bounties does not promise income",
+            "not Solana",
+            "<code>@agent-bounty/sdk</code> does not exist",
+        ],
+    )
+    posting_with_ai_page = (site_dir / "post-a-bounty-with-chatgpt-claude-gemini.html").read_text(encoding="utf-8")
+    require_phrases(
+        "provider-safe AI posting guide",
+        posting_with_ai_page,
+        [
+            "Post a bounty with ChatGPT, Claude, or Gemini",
+            "No provider API key is required",
+            "prepare_bounty_post",
+            "review_required_not_published",
+            "Copy prompt &amp; open",
+            "Nothing is posted, funded, or signed",
+            "Base mainnet",
+            "not Phantom or Solana",
+            "https://agentbounties.app/agent/",
+        ],
+    )
     recovery_page = (site_dir / "recovery.html").read_text(encoding="utf-8")
     javascript = (site_dir / "autonomous.js").read_text(encoding="utf-8")
     analytics_javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
