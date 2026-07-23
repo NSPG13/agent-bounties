@@ -8,6 +8,7 @@ on:
       - "scripts/activate_routed_v3_replacements.py"
       - "scripts/check_routed_v3_activation_readiness.py"
       - "scripts/test_activate_routed_v3_replacements.py"
+      - "scripts/test-durable-wallet-policy.js"
       - "site/durable-wallet-policy.html"
       - "site/durable-wallet-policy.js"
   schedule:
@@ -43,6 +44,7 @@ jobs:
             scripts/activate_routed_v3_replacements.py \
             scripts/check_routed_v3_activation_readiness.py
           node --check site/durable-wallet-policy.js
+          node scripts/test-durable-wallet-policy.js
       - name: Re-attest router and routed policy from Base
         run: |
           python - <<'PY'
