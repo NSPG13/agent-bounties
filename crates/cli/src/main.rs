@@ -352,6 +352,22 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:8090")]
         mcp_base_url: String,
     },
+    StandingMetaV4Readiness {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+    },
+    StandingMetaV4Action {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        operation: String,
+        #[arg(long, default_value = "{}")]
+        arguments_json: String,
+    },
     /// Show the 3 USDC daily and 26 USDC Monday-Sunday rankings.
     Leaderboard {
         #[arg(long, default_value = "https://api.agentbounties.app")]
@@ -676,6 +692,16 @@ async fn async_main() -> Result<()> {
             public_base_url,
             mcp_base_url,
         } => discovery(public_base_url, mcp_base_url),
+        Command::StandingMetaV4Readiness {
+            api_base_url,
+            network,
+        } => standing_meta_v4_readiness_cli(api_base_url, network),
+        Command::StandingMetaV4Action {
+            api_base_url,
+            network,
+            operation,
+            arguments_json,
+        } => standing_meta_v4_action_cli(api_base_url, network, operation, arguments_json),
         Command::Leaderboard {
             api_base_url,
             network,
@@ -2039,6 +2065,56 @@ fn agent_paid_status(agent_id: Uuid, api_base_url: String) -> Result<()> {
     let api = normalize_base_url(&api_base_url);
     let status = get_json(&format!("{api}/v1/agents/{agent_id}/paid-status"))?;
     println!("{}", serde_json::to_string_pretty(&status)?);
+    Ok(())
+}
+
+fn standing_meta_v4_readiness_cli(api_base_url: String, network: String) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let report = get_json(&format!(
+        "{api}/v1/base/standing-meta-v4/readiness?network={network}"
+    ))?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn standing_meta_v4_action_cli(
+    api_base_url: String,
+    network: String,
+    operation: String,
+    arguments_json: String,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let path = match operation.as_str() {
+        "prepare_standing_meta_v4_claim" => "claim-preparation",
+        "prepare_anonymous_stake_registration" => "stake-registration-preparation",
+        "set_anonymous_stake_availability" => "stake-availability-preparation",
+        "list_verification_assignments" => "verification-assignments",
+        "submit_primary_verdict" => "primary-verdict-preparation",
+        "waive_verification_appeal" => "appeal-waiver-preparation",
+        "open_verification_appeal" => "appeal-opening-preparation",
+        "submit_appeal_vote" => "appeal-vote-preparation",
+        "finalize_verification_case" => "finalization-preparation",
+        _ => bail!("unknown Standing Meta V4 operation"),
+    };
+    let arguments: serde_json::Value =
+        serde_json::from_str(&arguments_json).context("arguments_json must be valid JSON")?;
+    require(
+        arguments.is_object(),
+        "arguments_json must contain one JSON object",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let plan = post_json(
+        &format!("{api}/v1/base/standing-meta-v4/{path}"),
+        serde_json::json!({"network": network, "arguments": arguments}),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
     Ok(())
 }
 
