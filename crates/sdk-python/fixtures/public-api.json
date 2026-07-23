@@ -1,6 +1,6 @@
 {
   "schema_version": "agent-bounties/python-sdk-public-api-v1",
   "export_count": 3,
-  "public_method_count": 92,
-  "canonical_sha256": "369259934125e20b95d52588a6f58effa14cd4a85cc20db63908c3368a132302"
+  "public_method_count": 102,
+  "canonical_sha256": "4fe790bdb707455b11f6fb79a9393400a2ec8c826204d6ef7a59e3279bca72b3"
 }

@@ -12,6 +12,15 @@ parent reward - required child funding <= 0
 
 A refundable bond reduction does not repair that incentive. V3 makes positive gross profit an immutable settlement condition while retaining a meaningful paid child opportunity.
 
+V3 is an economic successor, not the fair-governance successor. It retains the
+project-controlled two-key verifier quorum and participant registry. A quorum
+of two project-governed keys is automated governance, not organizational
+independence. Different wallet addresses and participant IDs do not prove
+unrelated ownership or control. The additive V4 design tracked in
+[#530](https://github.com/NSPG13/agent-bounties/issues/530) addresses staking,
+random assignment, appeals, and atomic coordination without changing V3
+bytecode.
+
 ## Immutable economic floors
 
 `CanonicalIndependentChildVerifierV3` commits:
@@ -47,7 +56,7 @@ V3 still requires:
 1. canonical parent and child contracts from the pinned factory;
 2. child creation by the active parent solver;
 3. complete child terms published on-chain before the parent claim;
-4. parent and child wallets registered before the parent claim with different immutable participant IDs;
+4. parent and child wallets registered before the parent claim with different immutable participant IDs, which distinguishes protocol accounts but does not prove unrelated ownership;
 5. the exact threshold-two sandboxed-regression verifier set;
 6. a fully funded and canonically settled child;
 7. nonzero child solver, submission hash, evidence hash, and terms hash;
@@ -57,13 +66,17 @@ A tiny or fake child cannot satisfy the 1 USDC floor. An expensive child that el
 
 ## What profit means
 
-The guaranteed amount is **gross protocol profit**:
+The guaranteed amount is a **successful-settlement onchain margin**:
 
 ```text
 parent solver reward - child total target
 ```
 
-It does not include taxes, exchange costs, optional external services, or unsponsored gas. Eligible public gas paths should remain sponsored. External co-funding may increase the parent solver's realized return, but settlement eligibility does not infer who economically supplied each child contribution.
+It is not guaranteed net profit. It excludes failure risk, labor, compute,
+taxes, opportunity cost, exchange costs, optional external services, and
+unsponsored gas. Eligible public gas paths should remain sponsored. External
+co-funding may increase the parent solver's realized return, but settlement
+eligibility does not infer who economically supplied each child contribution.
 
 ## Deployment boundary
 

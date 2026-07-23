@@ -298,6 +298,89 @@ class AgentBountiesClient:
             },
         )
 
+    def get_standing_meta_v4_readiness(self, network: str = "base-mainnet"):
+        """Return fail-closed V4 readiness; a report is never payment evidence."""
+        return self._request(
+            "GET",
+            "/v1/base/standing-meta-v4/readiness",
+            params={"network": network},
+        )
+
+    def _standing_meta_v4_action(
+        self,
+        path: str,
+        arguments: dict,
+        network: str,
+    ):
+        return self._request(
+            "POST",
+            f"/v1/base/standing-meta-v4/{path}",
+            json={"network": network, "arguments": arguments},
+        )
+
+    def prepare_standing_meta_v4_claim(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "claim-preparation", arguments, network
+        )
+
+    def prepare_anonymous_stake_registration(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "stake-registration-preparation", arguments, network
+        )
+
+    def set_anonymous_stake_availability(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "stake-availability-preparation", arguments, network
+        )
+
+    def list_verification_assignments(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "verification-assignments", arguments, network
+        )
+
+    def submit_primary_verdict(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "primary-verdict-preparation", arguments, network
+        )
+
+    def waive_verification_appeal(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "appeal-waiver-preparation", arguments, network
+        )
+
+    def open_verification_appeal(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "appeal-opening-preparation", arguments, network
+        )
+
+    def submit_appeal_vote(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "appeal-vote-preparation", arguments, network
+        )
+
+    def finalize_verification_case(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "finalization-preparation", arguments, network
+        )
+
     def get_risk_events(
         self,
         action: str | None = None,

@@ -228,6 +228,8 @@ Domain routing and migration: [docs/domain-portfolio.md](docs/domain-portfolio.m
 - SDLC: [docs/software-development-lifecycle.md](docs/software-development-lifecycle.md)
 - Self-healing operations: [docs/self-healing-operations.md](docs/self-healing-operations.md)
 - Security review: [docs/security/autonomous-v1-review.md](docs/security/autonomous-v1-review.md)
+- Standing Meta V4 fair earning: [docs/standing-meta-v4-fair-earning.md](docs/standing-meta-v4-fair-earning.md)
+- Standing Meta V4 threat model: [docs/security/standing-meta-v4-threat-model.md](docs/security/standing-meta-v4-threat-model.md)
 - License: [Apache-2.0](LICENSE)
 
 The mission is to make coordination efficient for objectives people choose, then align the resulting economy with people rather than capital alone.

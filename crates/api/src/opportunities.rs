@@ -70,6 +70,66 @@ pub struct OpportunityEmbedLinks {
     pub iframe: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityStandingMetaV4Economics {
+    pub parent_solver_reward: OpportunityAmount,
+    pub parent_verifier_reward: OpportunityAmount,
+    pub maximum_required_child_outlay: OpportunityAmount,
+    pub successful_settlement_margin: OpportunityAmount,
+    pub gas_sponsorship_available: bool,
+    pub scope_disclaimer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityAnonymousSeparation {
+    pub stake_per_wallet_role: OpportunityAmount,
+    pub sortition_mechanism: String,
+    pub candidate_count: u16,
+    pub selection_proof: Option<String>,
+    pub selection_status: String,
+    pub identity_required: bool,
+    pub unrelated_owner_proven: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityVerifierGovernance {
+    pub governance: String,
+    pub vrf_request_id: Option<String>,
+    pub vrf_proof: Option<String>,
+    pub primary_policy: String,
+    pub appellate_policy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityAppealPolicy {
+    pub eligible_appellants: Vec<String>,
+    pub bond: OpportunityAmount,
+    pub appeal_deadline_seconds: u64,
+    pub jury_size: u8,
+    pub threshold: u8,
+    pub current_state: String,
+    pub immediate_waiver_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityStandingMetaV4Coordination {
+    pub atomic_claim_required: bool,
+    pub child_lifecycle: String,
+    pub per_bounty_enrollment_seconds: u64,
+    pub selected_solver_response_seconds: u64,
+    pub timing_safety: String,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityStandingMetaV4 {
+    pub economics: OpportunityStandingMetaV4Economics,
+    pub anonymous_separation: OpportunityAnonymousSeparation,
+    pub verifier_governance: OpportunityVerifierGovernance,
+    pub appeal_policy: OpportunityAppealPolicy,
+    pub coordination: OpportunityStandingMetaV4Coordination,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct OpportunityItem {
     pub opportunity_id: String,
@@ -86,6 +146,10 @@ pub struct OpportunityItem {
     pub payment_state: String,
     pub payment_committed: bool,
     pub standing_meta_bounty: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub standing_meta_v4: Option<OpportunityStandingMetaV4>,
+    pub decision_authority: String,
+    pub payment_authority: String,
     pub reward: OpportunityAmount,
     pub completion_bonus: Option<OpportunityAmount>,
     pub funded_amount: OpportunityAmount,
@@ -409,6 +473,9 @@ pub fn unfunded_opportunity(
         payment_state: "none".to_string(),
         payment_committed: false,
         standing_meta_bounty: false,
+        standing_meta_v4: None,
+        decision_authority: "The poster reviews this offchain submission; no canonical verifier is configured.".to_string(),
+        payment_authority: "None. This opportunity is unfunded and creates no payment promise.".to_string(),
         reward: OpportunityAmount::usdc_base_units("0"),
         completion_bonus: None,
         funded_amount: OpportunityAmount::usdc_base_units("0"),
@@ -520,6 +587,9 @@ pub fn legacy_opportunity(
         payment_state: payment_state.to_string(),
         payment_committed,
         standing_meta_bounty: false,
+        standing_meta_v4: None,
+        decision_authority: format!("Legacy configured verification path: {verification_method}."),
+        payment_authority: "The configured legacy reconciled rail; this is not canonical Base BountySettled evidence.".to_string(),
         reward: OpportunityAmount::minor_units(bounty.amount.amount, &bounty.amount.currency),
         completion_bonus: None,
         funded_amount: OpportunityAmount::minor_units(
@@ -639,6 +709,15 @@ pub fn canonical_opportunity(
         payment_state: payment_state.to_string(),
         payment_committed,
         standing_meta_bounty: standing_meta_v2_parent_context(item).is_ok(),
+        standing_meta_v4: None,
+        decision_authority: format!(
+            "The immutable canonical verification mode/module configured on {} decides the submission result.",
+            item.bounty_contract
+        ),
+        payment_authority: format!(
+            "The exact canonical bounty contract {} controls escrow; only its confirmed BountySettled event proves payment.",
+            item.bounty_contract
+        ),
         reward: OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
         completion_bonus: Some(OpportunityAmount::usdc_base_units(
             item.timeout_bond_pool.clone(),

@@ -449,6 +449,37 @@ tool_args! {
 }
 
 tool_args! {
+    #[derive(Default)]
+    struct StandingMetaV4ReadinessArgs {
+        network: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet.")
+        }),
+        &[],
+    );
+}
+
+tool_args! {
+    struct StandingMetaV4ActionArgs {
+        network: Option<String>,
+        #[serde(default)]
+        arguments: Value,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the configured V4 contracts."),
+            "arguments": {
+                "type": "object",
+                "description": "Public contract-call arguments only. Never include a private key, seed phrase, or secret."
+            }
+        }),
+        &["arguments"],
+    );
+}
+
+tool_args! {
     struct PlanGitHubIssueBountyArgs {
         repository: String,
         issue_url: String,
@@ -1353,6 +1384,43 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/get_x402_relay_status", post(get_x402_relay_status))
         .route("/tools/prepare_agent_to_earn", post(prepare_agent_to_earn))
         .route(
+            "/tools/get_standing_meta_v4_readiness",
+            post(get_standing_meta_v4_readiness),
+        )
+        .route(
+            "/tools/prepare_standing_meta_v4_claim",
+            post(prepare_standing_meta_v4_claim),
+        )
+        .route(
+            "/tools/prepare_anonymous_stake_registration",
+            post(prepare_anonymous_stake_registration),
+        )
+        .route(
+            "/tools/set_anonymous_stake_availability",
+            post(set_anonymous_stake_availability),
+        )
+        .route(
+            "/tools/list_verification_assignments",
+            post(list_verification_assignments),
+        )
+        .route(
+            "/tools/submit_primary_verdict",
+            post(submit_primary_verdict),
+        )
+        .route(
+            "/tools/waive_verification_appeal",
+            post(waive_verification_appeal),
+        )
+        .route(
+            "/tools/open_verification_appeal",
+            post(open_verification_appeal),
+        )
+        .route("/tools/submit_appeal_vote", post(submit_appeal_vote))
+        .route(
+            "/tools/finalize_verification_case",
+            post(finalize_verification_case),
+        )
+        .route(
             "/tools/plan_autonomous_bounty_claim",
             post(plan_autonomous_bounty_claim),
         )
@@ -1946,13 +2014,13 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_standing_meta_v2_child",
-            "Prepare the complete current standing-meta-v2 child loop from one parent contract and task: validate the exact claimable parent, publish the content-addressed terms to the hosted store, pin the canonical two-verifier sandboxed-regression quorum, and return ordered wallet calls that publish the same bytes on Base and create a fully funded child before the parent claim.",
+            "Legacy standing-meta-v2 preparation endpoint. All five funded V2 parents are recovery-reserved, so canonical hosted calls fail closed before terms publication. V2 cannot produce positive gross margin and its project-governed two-key quorum does not prove organizational independence. Use full inventory only for historical inspection; do not claim, sign, bond, or verify a reserved V2 parent.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-mainnet"], "Optional network; standing-meta-v2 currently requires Base mainnet."),
                     "parent_bounty_contract": string_property("Exact claimable standing-meta-v2 parent contract from canonical inventory."),
                     "parent_solver": string_property("Registered wallet that will publish the child terms, create/fund the child, and claim the parent."),
-                    "intended_child_solver": string_property("Different pre-registered wallet expected to claim and complete the child. Its participant ID must also differ."),
+                    "intended_child_solver": string_property("Historical V2 field: a different pre-registered wallet whose participant ID also differs. Neither distinction proves unrelated ownership."),
                     "title": string_property("Concrete coding child title."),
                     "goal": string_property("Precise child outcome."),
                     "acceptance_criteria": {
@@ -2074,6 +2142,56 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["network", "wallet_address", "bounty_contract", "signing_capabilities", "policy"],
             ),
+        ),
+        tool(
+            "get_standing_meta_v4_readiness",
+            "Fail closed unless exact V4 terms, economics, sponsorship, VRF reserves and authorization, pool sizes, timing, appeals, R4 evidence, and monitoring all pass.",
+            StandingMetaV4ReadinessArgs::input_schema(),
+        ),
+        tool(
+            "prepare_standing_meta_v4_claim",
+            "Prepare the required atomic V4 claim. It snapshots the active solver pool and requests VRF immediately; generic agent_native_claim is forbidden.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "prepare_anonymous_stake_registration",
+            "Prepare one fixed 5 USDC solver or verifier role ticket without identity fields.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "set_anonymous_stake_availability",
+            "Prepare an availability update for an already registered anonymous role ticket.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "list_verification_assignments",
+            "Read request-bound primary or appellate assignment state; wallet assignment is not identity or unrelated-owner proof.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "submit_primary_verdict",
+            "Prepare the selected primary wallet's verdict. Chainlink selected the wallet but did not judge the work.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "waive_verification_appeal",
+            "Let the sole eligible appellant finalize an undisputed verdict immediately instead of waiting for the appeal deadline.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "open_verification_appeal",
+            "Prepare the solver's appeal of rejection or creator's appeal of acceptance with the exact 0.10 USDC bond.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "submit_appeal_vote",
+            "Prepare one selected appellate wallet's vote; three matching votes form an immediately finalizable majority.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "finalize_verification_case",
+            "Prepare unappealed, appealed, or timeout finalization. A verdict is not payment; only canonical BountySettled proves payment.",
+            StandingMetaV4ActionArgs::input_schema(),
         ),
         tool(
             "agent_native_claim",
@@ -3919,6 +4037,100 @@ async fn prepare_agent_to_earn(
     .await
 }
 
+async fn get_standing_meta_v4_readiness(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ReadinessArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let url = format!(
+        "{}/v1/base/standing-meta-v4/readiness?network={network}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().get(url),
+        "standing-meta-v4 readiness API",
+    )
+    .await
+}
+
+async fn prepare_standing_meta_v4_claim(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("claim-preparation", args).await
+}
+
+async fn prepare_anonymous_stake_registration(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("stake-registration-preparation", args).await
+}
+
+async fn set_anonymous_stake_availability(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("stake-availability-preparation", args).await
+}
+
+async fn list_verification_assignments(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("verification-assignments", args).await
+}
+
+async fn submit_primary_verdict(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("primary-verdict-preparation", args).await
+}
+
+async fn waive_verification_appeal(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("appeal-waiver-preparation", args).await
+}
+
+async fn open_verification_appeal(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("appeal-opening-preparation", args).await
+}
+
+async fn submit_appeal_vote(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("appeal-vote-preparation", args).await
+}
+
+async fn finalize_verification_case(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("finalization-preparation", args).await
+}
+
+async fn proxy_standing_meta_v4_action(
+    path: &str,
+    args: StandingMetaV4ActionArgs,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/standing-meta-v4/{path}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().post(url).json(&args),
+        "standing-meta-v4 action API",
+    )
+    .await
+}
+
 async fn proxy_public_json_response(
     request: reqwest::RequestBuilder,
     service: &str,
@@ -4875,7 +5087,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 91);
+        assert_eq!(descriptors.len(), 101);
         assert_eq!(
             descriptors
                 .iter()

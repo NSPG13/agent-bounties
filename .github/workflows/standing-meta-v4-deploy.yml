@@ -1,0 +1,268 @@
+name: Standing meta v4 release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/standing-meta-v4-deploy.yml"
+      - "contracts/base-escrow/src/AnonymousProtocolControllerV1.sol"
+      - "contracts/base-escrow/src/AnonymousStakePoolV1.sol"
+      - "contracts/base-escrow/src/AppealableVerifierV1.sol"
+      - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV4.sol"
+      - "contracts/base-escrow/src/StandingMetaChildFactoryV4.sol"
+      - "contracts/base-escrow/src/StandingMetaChildV4.sol"
+      - "contracts/base-escrow/src/StandingMetaParentFactoryV4.sol"
+      - "contracts/base-escrow/src/StandingMetaParentV4.sol"
+      - "contracts/base-escrow/src/StandingMetaV4Bundle.sol"
+      - "contracts/base-escrow/src/VrfSortitionCoordinatorV1.sol"
+      - "contracts/base-escrow/script/FundStandingMetaV4Subscription.s.sol"
+      - "contracts/base-escrow/test/AppealableVerifierV1.t.sol"
+      - "contracts/base-escrow/test/StandingMetaV4.t.sol"
+      - "contracts/base-escrow/test/StandingMetaV4MainnetFork.t.sol"
+      - "scripts/standing_meta_v4_deploy.py"
+      - "scripts/test_standing_meta_v4_deploy.py"
+      - "deployments/standing-meta-v4-config.json"
+      - "docs/security/standing-meta-v4-threat-model.md"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Read-only plan or protected consumer deployment
+        type: choice
+        required: true
+        default: plan
+        options:
+          - plan
+          - deploy-consumers
+          - fund-subscription
+      network:
+        description: Base network
+        type: choice
+        required: true
+        default: base-sepolia
+        options:
+          - base-sepolia
+          - base-mainnet
+      acknowledge_r4_release_gate:
+        description: Type the exact release acknowledgement for mainnet
+        type: string
+        required: false
+      subscription_id:
+        description: Existing V4 VRF subscription ID for the funding operation
+        type: string
+        required: false
+      native_funding_wei:
+        description: Exact native ETH wei produced by the approved conversion or faucet allocation
+        type: string
+        required: false
+      source_usdc_base_units:
+        description: Mainnet USDC source amount, capped at 7000000; use 0 on Sepolia
+        type: string
+        required: false
+      verifier_sortition:
+        description: Exact deployed V4 verifier-sortition consumer
+        type: string
+        required: false
+      solver_sortition:
+        description: Exact deployed V4 solver-sortition consumer
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standing-meta-v4-${{ github.event.inputs.network || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deterministic-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Deployment helper tests
+        run: python -m unittest scripts.test_standing_meta_v4_deploy -v
+
+      - name: Python syntax
+        run: python -m py_compile scripts/standing_meta_v4_deploy.py scripts/test_standing_meta_v4_deploy.py
+
+      - name: V4 contract and appeal tests
+        run: >-
+          forge test --root contracts/base-escrow
+          --match-contract '(AppealableVerifierV1Test|StandingMetaV4Test)'
+          --fuzz-runs 1000 -vv
+
+      - name: Contract sizes
+        run: forge build --root contracts/base-escrow --sizes
+
+      - name: Base mainnet fork deployment/configuration rehearsal
+        env:
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+        run: >-
+          forge test --root contracts/base-escrow
+          --match-contract StandingMetaV4MainnetForkTest
+          --fork-url "$BASE_MAINNET_RPC_URL" -vv
+
+      - name: Read-only Base Sepolia release plan
+        if: github.event_name == 'pull_request' || github.event.inputs.network == 'base-sepolia'
+        env:
+          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
+        run: >-
+          python scripts/standing_meta_v4_deploy.py plan
+          --network base-sepolia
+          --rpc-url "$BASE_SEPOLIA_RPC_URL"
+          --output target/standing-meta-v4-base-sepolia-plan.json
+
+      - name: Read-only Base mainnet release plan
+        if: github.event_name == 'pull_request' || github.event.inputs.network == 'base-mainnet'
+        env:
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+        run: >-
+          python scripts/standing_meta_v4_deploy.py plan
+          --network base-mainnet
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          --output target/standing-meta-v4-base-mainnet-plan.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: standing-meta-v4-plan-${{ github.sha }}
+          path: target/standing-meta-v4-*-plan.json
+          if-no-files-found: error
+
+  deploy-consumers:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.operation == 'deploy-consumers'
+    needs: deterministic-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ github.event.inputs.network == 'base-mainnet' && 'standing-meta-v4-mainnet' || 'standing-meta-v4-sepolia' }}
+    steps:
+      - name: Require default branch and explicit mainnet acknowledgement
+        env:
+          NETWORK: ${{ github.event.inputs.network }}
+          ACK: ${{ github.event.inputs.acknowledge_r4_release_gate }}
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main"
+          if [ "$NETWORK" = "base-mainnet" ]; then
+            test "$ACK" = "independent-review-and-sepolia-rehearsal-complete"
+          fi
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Deploy and authorize the two exact V4 consumers
+        env:
+          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
+          NETWORK: ${{ github.event.inputs.network }}
+        run: |
+          if [ "$NETWORK" = "base-mainnet" ]; then
+            RPC="$BASE_MAINNET_RPC_URL"
+            R4_FLAG="--acknowledge-r4-release-gate"
+          else
+            RPC="$BASE_SEPOLIA_RPC_URL"
+            R4_FLAG=""
+          fi
+          python scripts/standing_meta_v4_deploy.py deploy \
+            --network "$NETWORK" \
+            --rpc-url "$RPC" \
+            --output "target/standing-meta-v4-$NETWORK-deployment.json" \
+            $R4_FLAG
+
+      - name: Reconfirm deployment through an independent RPC read pass
+        env:
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
+          NETWORK: ${{ github.event.inputs.network }}
+        run: |
+          if [ "$NETWORK" = "base-mainnet" ]; then RPC="$BASE_MAINNET_RPC_URL"; else RPC="$BASE_SEPOLIA_RPC_URL"; fi
+          python scripts/standing_meta_v4_deploy.py verify \
+            --network "$NETWORK" \
+            --rpc-url "$RPC" \
+            --deployment "target/standing-meta-v4-$NETWORK-deployment.json" \
+            --output "target/standing-meta-v4-$NETWORK-rpc-verification.json"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: standing-meta-v4-${{ github.event.inputs.network }}-${{ github.sha }}
+          path: target/standing-meta-v4-${{ github.event.inputs.network }}-*.json
+          if-no-files-found: error
+
+  fund-subscription:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.operation == 'fund-subscription'
+    needs: deterministic-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ github.event.inputs.network == 'base-mainnet' && 'standing-meta-v4-mainnet' || 'standing-meta-v4-sepolia' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - name: Require default branch, exact inputs, and explicit mainnet acknowledgement
+        env:
+          NETWORK: ${{ github.event.inputs.network }}
+          ACK: ${{ github.event.inputs.acknowledge_r4_release_gate }}
+          SUBSCRIPTION_ID: ${{ github.event.inputs.subscription_id }}
+          NATIVE_FUNDING_WEI: ${{ github.event.inputs.native_funding_wei }}
+          SOURCE_USDC_BASE_UNITS: ${{ github.event.inputs.source_usdc_base_units }}
+          VERIFIER_SORTITION: ${{ github.event.inputs.verifier_sortition }}
+          SOLVER_SORTITION: ${{ github.event.inputs.solver_sortition }}
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "$SUBSCRIPTION_ID" -gt 0
+          test "$NATIVE_FUNDING_WEI" -gt 0
+          test -n "$VERIFIER_SORTITION"
+          test -n "$SOLVER_SORTITION"
+          test "$VERIFIER_SORTITION" != "$SOLVER_SORTITION"
+          if [ "$NETWORK" = "base-mainnet" ]; then
+            test "$ACK" = "independent-review-and-sepolia-rehearsal-complete"
+            test "$SOURCE_USDC_BASE_UNITS" -gt 0
+            test "$SOURCE_USDC_BASE_UNITS" -le 7000000
+            python - <<'PY'
+          from pathlib import Path
+          from scripts.standing_meta_v4_deploy import require_mainnet_release_gate
+
+          require_mainnet_release_gate(Path("deployments/standing-meta-v4-config.json"), True)
+          PY
+          else
+            test "$SOURCE_USDC_BASE_UNITS" -eq 0
+          fi
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - name: Fund the exact existing subscription and prove the native-balance delta
+        env:
+          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
+          NETWORK: ${{ github.event.inputs.network }}
+          V4_SUBSCRIPTION_ID: ${{ github.event.inputs.subscription_id }}
+          V4_NATIVE_FUNDING_WEI: ${{ github.event.inputs.native_funding_wei }}
+          V4_SOURCE_USDC_BASE_UNITS: ${{ github.event.inputs.source_usdc_base_units }}
+          V4_VERIFIER_SORTITION: ${{ github.event.inputs.verifier_sortition }}
+          V4_SOLVER_SORTITION: ${{ github.event.inputs.solver_sortition }}
+          FUNDING_EVIDENCE_PATH: ../../target/standing-meta-v4-subscription-funding.json
+        run: |
+          if [ "$NETWORK" = "base-mainnet" ]; then RPC="$BASE_MAINNET_RPC_URL"; else RPC="$BASE_SEPOLIA_RPC_URL"; fi
+          forge script \
+            script/FundStandingMetaV4Subscription.s.sol:FundStandingMetaV4Subscription \
+            --root contracts/base-escrow \
+            --rpc-url "$RPC" \
+            --broadcast --slow -v
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: standing-meta-v4-subscription-funding-${{ github.sha }}
+          path: target/standing-meta-v4-subscription-funding.json
+          if-no-files-found: error

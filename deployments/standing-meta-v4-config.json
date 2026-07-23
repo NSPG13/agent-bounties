@@ -1,0 +1,81 @@
+{
+  "schema": "agent-bounties/standing-meta-v4-deployment-readiness-v1",
+  "protocol_version": "standing-meta-v4",
+  "status": "not_deployed",
+  "last_revalidated_at": "2026-07-22",
+  "configuration": {
+    "minimum_request_confirmations": 3,
+    "random_words": 1,
+    "payment": "native",
+    "fulfillment_deadline_seconds": 7200,
+    "solver_assignment_seconds": 600,
+    "per_bounty_solver_enrollment_seconds": 0
+  },
+  "required_components": [
+    "anonymous_protocol_controller",
+    "anonymous_stake_pool",
+    "verifier_sortition",
+    "solver_sortition",
+    "appealable_verifier",
+    "standing_meta_child_factory",
+    "standing_meta_parent_factory",
+    "onchain_terms_registry",
+    "canonical_independent_child_verifier",
+    "standing_meta_v4_bundle"
+  ],
+  "networks": {
+    "base-mainnet": {
+      "chain_id": 8453,
+      "vrf_coordinator": "0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634",
+      "key_hash": "0x00b81b5a830cb0a4009fbd8904de511e28631e62ce5ad231373d3cdad373ccab",
+      "subscription_id": null,
+      "consumers_authorized": false,
+      "native_subscription_reserve_funded": false,
+      "gas_sponsorship_available": false,
+      "sponsorship_intent": {
+        "source_wallet": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+        "source_asset": "USDC",
+        "maximum_source_amount_base_units": 7000000,
+        "native_conversion_required": true,
+        "owner_action_required": true,
+        "owner": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "intended_withdraw_recipient": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "withdraw_call": {
+          "to": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+          "value_wei": 0,
+          "calldata": "0x01e33667000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913000000000000000000000000c26a630e85134ed30968735c8e7de4576cfa5dbc00000000000000000000000000000000000000000000000000000000006acfc0",
+          "simulated_gas_at_last_revalidation": 81942,
+          "simulation_succeeded": true,
+          "transaction_executed": false
+        },
+        "funding_executed": false
+      },
+      "components": null
+    },
+    "base-sepolia": {
+      "chain_id": 84532,
+      "vrf_coordinator": "0x5C210eF41CD1a72de73bF76eC39637bB0d3d7BEE",
+      "key_hash": "0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae5bf7d14d24a5efd44bf71",
+      "subscription_id": null,
+      "consumers_authorized": false,
+      "native_subscription_reserve_funded": false,
+      "gas_sponsorship_available": false,
+      "components": null
+    }
+  },
+  "r4_evidence": {
+    "threat_model": "docs/security/standing-meta-v4-threat-model.md",
+    "independent_review_complete": false,
+    "base_sepolia_rehearsal_complete": false,
+    "base_mainnet_fork_test_complete": true,
+    "exact_bytecode_evidence_complete": false,
+    "bounded_wallet_policy_review_complete": false,
+    "repository_environment_protection_complete": false
+  },
+  "sources": [
+    "https://docs.chain.link/vrf/v2-5/supported-networks",
+    "https://docs.chain.link/vrf/v2-5/security",
+    "https://docs.chain.link/vrf/v2-5/subscription/get-a-random-number"
+  ],
+  "evidence_boundary": "This file pins predeployment configuration and fail-closed release gates. It is not deployment, funding, authorization, readiness, selection, verdict, settlement, or payment evidence."
+}

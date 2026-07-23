@@ -133,7 +133,19 @@
     if (item.standing_meta_bounty) {
       const meta = document.createElement("p");
       meta.className = "fine opportunity-meta";
-      meta.textContent = "Meta-bounty: create and fund qualifying work that a different wallet completes and receives canonical settlement for.";
+      meta.textContent = "Meta-bounty: inspect its exact version, margin, verifier governance, and appeal path. Wallet separation alone does not prove unrelated ownership.";
+      article.append(meta);
+    }
+
+    if (item.standing_meta_v4) {
+      const meta = document.createElement("p");
+      meta.className = "fine opportunity-meta";
+      const v4 = item.standing_meta_v4;
+      const candidateCount = Number(v4.anonymous_separation?.candidate_count || 0);
+      const margin = v4.economics?.successful_settlement_margin
+        ? formatAmount(v4.economics.successful_settlement_margin)
+        : "unknown margin";
+      meta.textContent = `Standing Meta V4: ${margin} successful-settlement onchain margin · claim-restricted V4 child · ${candidateCount} frozen anonymous candidates · immediate active-pool VRF draw · symmetric appeal with immediate waiver. Wallets may share an owner. Only BountySettled proves payment.`;
       article.append(meta);
     }
 
