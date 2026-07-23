@@ -48,6 +48,6 @@ sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-toki
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
-utoipa = { version = "4", features = ["chrono", "uuid"] }
+utoipa = { version = "5", features = ["chrono", "uuid"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
