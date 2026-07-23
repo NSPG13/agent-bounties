@@ -1,0 +1,3 @@
+Trigger the temporary, exact-SHA standing-meta V4 maintainer security-fix workflow.
+
+This control branch is never merged. It has no contract, deployment, wallet, funding, verification, settlement, or independent-review authority.
