@@ -58,3 +58,58 @@ jobs:
           git add -A
           git commit -m "diagnostic: snapshot PR 272 merge conflicts"
           git push --force origin HEAD:diagnostic/pr-272-merge-conflicts
+
+  patch-candidate-pr-272:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 272 &&
+      github.actor == 'NSPG13' &&
+      github.event.comment.body == '/maintainer build-pr-272-patch-candidate'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/competitor-intelligence
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply the original objective commit onto the repaired migration base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin backup/pr-272-pre-rebase-20260723
+
+          original_head="63b2877f2555d22aee7ec116e82afd3dbbed9658"
+          original_base="f3302f7536dceca184878d420123b017b0248b1e"
+          git diff --binary "$original_base" "$original_head" > /tmp/objective-v1.patch
+
+          set +e
+          git apply --reject --whitespace=fix /tmp/objective-v1.patch
+          apply_status=$?
+          set -e
+
+          if [ -f migrations/0004_objective_coordination.sql ]; then
+            git mv migrations/0004_objective_coordination.sql migrations/0013_objective_coordination.sql
+          fi
+
+          mkdir -p .merge-diagnostics/rejects
+          while IFS= read -r reject; do
+            [ -n "$reject" ] || continue
+            destination=".merge-diagnostics/rejects/${reject%.rej}.rej"
+            mkdir -p "$(dirname "$destination")"
+            mv "$reject" "$destination"
+          done < <(find . -path './.git' -prune -o -name '*.rej' -print | sort)
+
+          {
+            echo "apply_status=$apply_status"
+            echo "base=$(git rev-parse HEAD)"
+            echo "original_head=$original_head"
+            echo "rejects:"
+            find .merge-diagnostics/rejects -type f -print | sort || true
+          } > .merge-diagnostics/pr-272-patch-candidate.txt
+
+          git add -A
+          git commit -m "diagnostic: apply objective-v1 patch to repaired base"
+          git push --force origin HEAD:diagnostic/pr-272-patch-candidate
