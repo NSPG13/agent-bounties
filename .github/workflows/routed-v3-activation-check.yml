@@ -1,0 +1,61 @@
+name: Routed V3 activation check
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/routed-v3-activation-check.yml"
+      - "scripts/activate_routed_v3_dynamic.py"
+      - "scripts/activate_routed_v3_replacements.py"
+      - "scripts/check_routed_v3_activation_readiness.py"
+      - "scripts/test_activate_routed_v3_replacements.py"
+      - "scripts/test-durable-wallet-policy.js"
+      - "site/durable-wallet-policy.html"
+      - "site/durable-wallet-policy.js"
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      ROUTER: 0x380c1af742593dd88b6f20387e9ee693a0536731
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Offline activation and owner-page tests
+        run: |
+          python -m unittest scripts.test_activate_routed_v3_replacements -v
+          python -m py_compile scripts/activate_routed_v3_dynamic.py scripts/activate_routed_v3_replacements.py scripts/check_routed_v3_activation_readiness.py
+          node --check site/durable-wallet-policy.js
+          node scripts/test-durable-wallet-policy.js
+
+      - name: Router runtime exists
+        run: |
+          code="$(cast code "$ROUTER" --rpc-url "$BASE_MAINNET_RPC_URL")"
+          test "$code" != "0x"
+          test "$code" != "0x0"
+
+      - name: Bootstrap event exists
+        run: |
+          latest="$(cast block-number --rpc-url "$BASE_MAINNET_RPC_URL")"
+          from=$((latest - 10000))
+          mkdir -p target
+          cast logs --rpc-url "$BASE_MAINNET_RPC_URL" --address "$ROUTER" --from-block "$from" --to-block latest "PolicyBootstrapped(bytes32,address,bytes32)" --json > target/router-bootstrap.json
+          python -c 'import json; x=json.load(open("target/router-bootstrap.json")); assert isinstance(x,list) and len(x)==1, len(x)'
+
+      - name: Dynamic direct-chain attestation passes
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, 'scripts')
+          import activate_routed_v3_dynamic as dynamic
+          import activate_routed_v3_replacements as activation
+          report = dynamic.discover_deployment(activation.Cast('cast', os.environ['BASE_MAINNET_RPC_URL']))
+          print(json.dumps(report, sort_keys=True))
+          PY
