@@ -1,186 +1,169 @@
 name: Durable verifier router deploy
-# Idempotent deployment retrigger: 2026-07-23
+# Operator branch: direct post-deployment Base attestation only.
 
 on:
   pull_request:
     paths:
       - ".github/workflows/durable-verifier-router-deploy.yml"
-      - "contracts/base-escrow/src/PolicyBoundVerifierRouter.sol"
-      - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV3Routed.sol"
-      - "contracts/base-escrow/test/PolicyBoundVerifierRouter.t.sol"
-      - "scripts/durable_verifier_router_deploy.py"
-      - "scripts/test_durable_verifier_router_deploy.py"
-      - "bounties/autonomous-v1/routed-v3-parent.template.json"
-      - "docs/adr/0003-durable-verifier-router.md"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/durable-verifier-router-deploy.yml"
-      - "contracts/base-escrow/src/PolicyBoundVerifierRouter.sol"
-      - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV3Routed.sol"
-      - "contracts/base-escrow/test/PolicyBoundVerifierRouter.t.sol"
-      - "scripts/durable_verifier_router_deploy.py"
-      - "scripts/test_durable_verifier_router_deploy.py"
-      - "bounties/autonomous-v1/routed-v3-parent.template.json"
-      - "docs/adr/0003-durable-verifier-router.md"
-  issue_comment:
-    types: [created]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: durable-verifier-router-${{ github.ref || github.event.issue.number }}
+  group: durable-verifier-router-evidence-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   deterministic-gates:
-    if: >-
-      github.event_name != 'issue_comment' ||
-      (github.event.issue.number == 571 &&
-       github.event.comment.user.login == 'NSPG13' &&
-       github.event.comment.body == '/agent-bounty deploy-durable-verifier-router')
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Deployment helper tests
-        run: python -m unittest scripts.test_durable_verifier_router_deploy -v
-      - name: Python syntax
-        run: python -m py_compile scripts/durable_verifier_router_deploy.py
-      - name: Router and routed verifier tests
-        run: >-
-          forge test --root contracts/base-escrow
-          --match-contract PolicyBoundVerifierRouterTest
-          --fuzz-runs 1000 -vv
-      - name: Contract build and size
-        run: forge build --root contracts/base-escrow --sizes
-      - name: Read-only Base preflight
-        env:
-          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
-        run: >-
-          python scripts/durable_verifier_router_deploy.py plan
-          --output target/durable-verifier-router-plan.json
-          --markdown-output target/durable-verifier-router-plan.md
-      - name: Publish pull-request preflight
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr comment "$PR_NUMBER" --body-file target/durable-verifier-router-plan.md
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: durable-verifier-router-plan-${{ github.sha }}
-          path: |
-            target/durable-verifier-router-plan.json
-            target/durable-verifier-router-plan.md
-          if-no-files-found: error
+      - run: |
+          python -m unittest scripts.test_durable_verifier_router_deploy -v
+          forge test --root contracts/base-escrow --match-contract PolicyBoundVerifierRouterTest -vv
 
-  base-mainnet-deploy:
+  chain-evidence:
     if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-       github.head_ref == 'ops/deploy-durable-router-now' &&
-       github.event.pull_request.head.repo.full_name == github.repository &&
-       github.event.pull_request.user.login == 'NSPG13') ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.number == 571 &&
-       github.event.comment.user.login == 'NSPG13' &&
-       github.event.comment.body == '/agent-bounty deploy-durable-verifier-router')
+      github.head_ref == 'ops/deploy-durable-router-now' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'NSPG13'
     needs: deterministic-gates
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     permissions:
-      contents: read
-      issues: write
+      contents: write
     env:
-      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
-      AGENT_BOUNTIES_API_URL: https://api.agentbounties.app
-      GH_TOKEN: ${{ github.token }}
+      ROUTER: 0x380c1af742593dd88b6f20387e9ee693a0536731
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ github.head_ref }}
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Publish start notice
-        continue-on-error: true
-        run: |
-          cat > target/durable-router-start.md <<EOF
-          ## Durable verifier-router deployment started
 
-          Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-
-          This does not change the bounded-wallet policy or move its USDC. Confirmed runtime and immutable policy evidence are still required.
-          EOF
-          gh issue comment 571 --body-file target/durable-router-start.md
-      - name: Deploy and attest router policy
-        id: deploy
-        continue-on-error: true
+      - name: Read bootstrap event and immutable state
         run: |
-          set -o pipefail
-          python scripts/durable_verifier_router_deploy.py deploy \
-            --output target/durable-verifier-router-deployment.json \
-            --output-dir target/durable-verifier-router \
-            --markdown-output target/durable-verifier-router-plan.md \
-            2>&1 | tee target/durable-verifier-router-deploy.log
-      - name: Publish deployment result
-        if: always()
-        continue-on-error: true
-        run: |
+          latest="$(cast block-number --rpc-url "$BASE_MAINNET_RPC_URL")"
+          from=$((latest - 50000))
+          cast logs \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --address "$ROUTER" \
+            --from-block "$from" \
+            --to-block latest \
+            "PolicyBootstrapped(bytes32,address,bytes32)" \
+            --json > target-bootstrap-logs.json
           python - <<'PY'
-          import json
-          import os
+          import json, os, subprocess
           from pathlib import Path
-          outcome = os.environ.get('DEPLOY_OUTCOME', '')
-          run_url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-          report_path = Path('target/durable-verifier-router-deployment.json')
-          if outcome == 'success' and report_path.exists():
-              report = json.loads(report_path.read_text())
-              lines = [
-                  '## Durable verifier-router deployment reconciled','',
-                  f"- Router: `{report['router']['address']}`",
-                  f"- Router runtime code hash: `{report['router']['runtime_code_hash']}`",
-                  f"- Active routed policy hash: `{report['policy_hash']}`",
-                  f"- Routed V3 adapter: `{report['adapter']['address']}`",
-                  f"- Adapter runtime code hash: `{report['adapter']['runtime_code_hash']}`",
-                  f"- Acceptance criteria hash: `{report['adapter']['acceptance_criteria_hash']}`",
-                  '- Future policy delay: **7 days**','- Active mappings are append-only and code-hash pinned.','',
-                  f"Workflow: {run_url}",'',
-                  'This proves verifier infrastructure only. The owner still has one final bounded-wallet PolicyConfigured transaction; no replacement bounty is funded or paid yet.',
-              ]
-          else:
-              log_path = Path('target/durable-verifier-router-deploy.log')
-              tail = '\n'.join(log_path.read_text(errors='replace').splitlines()[-40:]) if log_path.exists() else ''
-              lines = ['## Durable verifier-router deployment failed closed','',f"Workflow: {run_url}",'',
-                  'No wallet-policy or replacement-funding success is claimed.','', '```text', tail[:6000], '```']
-          Path('target/durable-router-result.md').write_text('\n'.join(lines) + '\n')
+
+          rpc = os.environ['BASE_MAINNET_RPC_URL']
+          router = os.environ['ROUTER'].lower()
+          logs = json.loads(Path('target-bootstrap-logs.json').read_text())
+          if not isinstance(logs, list) or len(logs) != 1:
+              raise SystemExit(f'expected exactly one PolicyBootstrapped event, got {len(logs) if isinstance(logs, list) else "non-list"}')
+          log = logs[0]
+          topics = [str(value).lower() for value in log['topics']]
+          if len(topics) != 3:
+              raise SystemExit('bootstrap event topic shape mismatch')
+          policy_hash = topics[1]
+          adapter = '0x' + topics[2][-40:]
+          raw_data = str(log['data']).lower().removeprefix('0x')
+          if len(raw_data) != 64:
+              raise SystemExit('bootstrap event data shape mismatch')
+          event_runtime_hash = '0x' + raw_data
+
+          def cast(*args):
+              return subprocess.check_output(['cast', *args, '--rpc-url', rpc], text=True).strip()
+
+          def number(value):
+              text = str(value).split()[0]
+              return int(text, 16) if text.startswith('0x') else int(text)
+
+          router_code = cast('code', router)
+          adapter_code = cast('code', adapter)
+          if router_code in {'0x','0x0'} or adapter_code in {'0x','0x0'}:
+              raise SystemExit('router or adapter runtime code missing')
+          router_code_hash = cast('keccak', router_code).lower()
+          adapter_code_hash = cast('keccak', adapter_code).lower()
+          if adapter_code_hash != event_runtime_hash:
+              raise SystemExit('adapter runtime hash differs from bootstrap event')
+
+          factory = cast('call', router, 'canonicalFactory()(address)').lower()
+          registrar = cast('call', router, 'registrar()(address)').lower()
+          guardian = cast('call', router, 'guardian()(address)').lower()
+          delay = number(cast('call', router, 'activationDelay()(uint64)'))
+          active = cast('call', router, 'isPolicyActive(bytes32)(bool)', policy_hash).lower()
+          record = [line.strip() for line in cast(
+              'call', router,
+              'policies(bytes32)(address,bytes32,uint64,uint64,uint64,bool)',
+              policy_hash,
+          ).splitlines() if line.strip()]
+          if active != 'true' or len(record) != 6:
+              raise SystemExit('router policy is not active or record shape mismatched')
+          if record[0].lower() != adapter or record[1].lower() != event_runtime_hash:
+              raise SystemExit('router record differs from bootstrap evidence')
+
+          adapter_router = cast('call', adapter, 'verifierRouter()(address)').lower()
+          adapter_policy = cast('call', adapter, 'committedPolicyHash()(bytes32)').lower()
+          adapter_factory = cast('call', adapter, 'canonicalFactory()(address)').lower()
+          acceptance = cast('call', adapter, 'ACCEPTANCE_CRITERIA_HASH()(bytes32)').lower()
+          child_floor = number(cast('call', adapter, 'MINIMUM_CHILD_TARGET()(uint256)'))
+          margin_floor = number(cast('call', adapter, 'MINIMUM_PARENT_GROSS_MARGIN()(uint256)'))
+          if adapter_router != router or adapter_policy != policy_hash or adapter_factory != factory:
+              raise SystemExit('adapter immutable metadata mismatch')
+          if child_floor != 1_000_000 or margin_floor != 1_000_000 or delay != 604800:
+              raise SystemExit('economic or activation-delay invariant mismatch')
+
+          report = {
+              'schema': 'agent-bounties/durable-verifier-router-chain-evidence-v1',
+              'network': 'base-mainnet',
+              'chain_id': 8453,
+              'observed_block': number(log['blockNumber']),
+              'bootstrap_transaction': str(log['transactionHash']).lower(),
+              'router': {
+                  'address': router,
+                  'runtime_code_hash': router_code_hash,
+                  'canonical_factory': factory,
+                  'registrar': registrar,
+                  'guardian': guardian,
+                  'activation_delay_seconds': delay,
+              },
+              'policy_hash': policy_hash,
+              'adapter': {
+                  'address': adapter,
+                  'runtime_code_hash': adapter_code_hash,
+                  'acceptance_criteria_hash': acceptance,
+                  'minimum_child_target': child_floor,
+                  'minimum_parent_gross_margin': margin_floor,
+              },
+              'policy_record': {
+                  'verifier': record[0].lower(),
+                  'runtime_code_hash': record[1].lower(),
+                  'proposed_at': number(record[2]),
+                  'activate_after': number(record[3]),
+                  'activated_at': number(record[4]),
+                  'vetoed': record[5].lower() == 'true',
+                  'active': True,
+              },
+              'evidence_boundary': 'Direct Base event and runtime evidence. The bounded-wallet policy and replacement funding are unchanged by this read-only attestation.',
+          }
+          path = Path('operator-evidence/durable-router-chain.json')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(report, sort_keys=True))
           PY
-          gh issue comment 571 --body-file target/durable-router-result.md
-        env:
-          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: durable-verifier-router-mainnet-${{ github.sha }}
-          path: |
-            target/durable-verifier-router-plan.json
-            target/durable-verifier-router-plan.md
-            target/durable-verifier-router-deployment.json
-            target/durable-verifier-router-deploy.log
-            target/durable-verifier-router/
-            target/durable-router-result.md
-          if-no-files-found: warn
-      - name: Fail after reporting deployment error
-        if: steps.deploy.outcome != 'success'
-        run: exit 1
+
+      - name: Commit evidence to operator branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add operator-evidence/durable-router-chain.json
+          git commit -m "evidence: attest durable router on Base"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
