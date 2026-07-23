@@ -24,7 +24,8 @@ jobs:
           python -m py_compile
           .github/scripts/apply_standing_meta_v4_security_review.py
           .github/scripts/apply_standing_meta_v4_security_review_followup.py
-          .github/scripts/apply_standing_meta_v4_security_review_protocol_followup.py
+          .github/scripts/apply_standing_meta_v4_security_review_protocol_contracts.py
+          .github/scripts/apply_standing_meta_v4_security_review_protocol_regressions.py
 
   patch-and-test:
     if: >-
@@ -54,17 +55,20 @@ jobs:
           git fetch origin main
           git show origin/main:.github/scripts/apply_standing_meta_v4_security_review.py > /tmp/apply_v4_security.py
           git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_followup.py > /tmp/apply_v4_security_followup.py
-          git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_protocol_followup.py > /tmp/apply_v4_security_protocol_followup.py
+          git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_protocol_contracts.py > /tmp/apply_v4_security_protocol_contracts.py
+          git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_protocol_regressions.py > /tmp/apply_v4_security_protocol_regressions.py
           python -m py_compile \
             /tmp/apply_v4_security.py \
             /tmp/apply_v4_security_followup.py \
-            /tmp/apply_v4_security_protocol_followup.py
+            /tmp/apply_v4_security_protocol_contracts.py \
+            /tmp/apply_v4_security_protocol_regressions.py
 
       - name: Apply bounded maintainer security fixes and adversarial regressions
         run: |
           python /tmp/apply_v4_security.py
           python /tmp/apply_v4_security_followup.py
-          python /tmp/apply_v4_security_protocol_followup.py
+          python /tmp/apply_v4_security_protocol_contracts.py
+          python /tmp/apply_v4_security_protocol_regressions.py
 
       - name: Format contracts
         run: forge fmt --root contracts/base-escrow
