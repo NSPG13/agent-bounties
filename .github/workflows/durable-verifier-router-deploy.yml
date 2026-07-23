@@ -48,28 +48,21 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-
       - name: Deployment helper tests
         run: python -m unittest scripts.test_durable_verifier_router_deploy -v
-
       - name: Python syntax
         run: python -m py_compile scripts/durable_verifier_router_deploy.py
-
       - name: Router and routed verifier tests
         run: >-
           forge test --root contracts/base-escrow
           --match-contract PolicyBoundVerifierRouterTest
           --fuzz-runs 1000 -vv
-
       - name: Contract build and size
         run: forge build --root contracts/base-escrow --sizes
-
       - name: Read-only Base preflight
         env:
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
@@ -77,14 +70,12 @@ jobs:
           python scripts/durable_verifier_router_deploy.py plan
           --output target/durable-verifier-router-plan.json
           --markdown-output target/durable-verifier-router-plan.md
-
       - name: Publish pull-request preflight
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: gh pr comment "$PR_NUMBER" --body-file target/durable-verifier-router-plan.md
-
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: durable-verifier-router-plan-${{ github.sha }}
@@ -118,14 +109,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-
       - name: Publish start notice
+        continue-on-error: true
         run: |
           cat > target/durable-router-start.md <<EOF
           ## Durable verifier-router deployment started
@@ -135,7 +124,6 @@ jobs:
           This does not change the bounded-wallet policy or move its USDC. Confirmed runtime and immutable policy evidence are still required.
           EOF
           gh issue comment 571 --body-file target/durable-router-start.md
-
       - name: Deploy and attest router policy
         id: deploy
         continue-on-error: true
@@ -146,58 +134,41 @@ jobs:
             --output-dir target/durable-verifier-router \
             --markdown-output target/durable-verifier-router-plan.md \
             2>&1 | tee target/durable-verifier-router-deploy.log
-
       - name: Publish deployment result
         if: always()
+        continue-on-error: true
         run: |
           python - <<'PY'
           import json
           import os
           from pathlib import Path
-
           outcome = os.environ.get('DEPLOY_OUTCOME', '')
           run_url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           report_path = Path('target/durable-verifier-router-deployment.json')
           if outcome == 'success' and report_path.exists():
               report = json.loads(report_path.read_text())
               lines = [
-                  '## Durable verifier-router deployment reconciled',
-                  '',
+                  '## Durable verifier-router deployment reconciled','',
                   f"- Router: `{report['router']['address']}`",
                   f"- Router runtime code hash: `{report['router']['runtime_code_hash']}`",
                   f"- Active routed policy hash: `{report['policy_hash']}`",
                   f"- Routed V3 adapter: `{report['adapter']['address']}`",
                   f"- Adapter runtime code hash: `{report['adapter']['runtime_code_hash']}`",
                   f"- Acceptance criteria hash: `{report['adapter']['acceptance_criteria_hash']}`",
-                  '- Future policy delay: **7 days**',
-                  '- Active mappings are append-only and code-hash pinned.',
-                  '',
-                  f"Workflow: {run_url}",
-                  '',
+                  '- Future policy delay: **7 days**','- Active mappings are append-only and code-hash pinned.','',
+                  f"Workflow: {run_url}",'',
                   'This proves verifier infrastructure only. The owner still has one final bounded-wallet PolicyConfigured transaction; no replacement bounty is funded or paid yet.',
               ]
           else:
-              tail = ''
               log_path = Path('target/durable-verifier-router-deploy.log')
-              if log_path.exists():
-                  tail = '\n'.join(log_path.read_text(errors='replace').splitlines()[-40:])
-              lines = [
-                  '## Durable verifier-router deployment failed closed',
-                  '',
-                  f"Workflow: {run_url}",
-                  '',
-                  'No wallet-policy or replacement-funding success is claimed.',
-                  '',
-                  '```text',
-                  tail[:6000],
-                  '```',
-              ]
+              tail = '\n'.join(log_path.read_text(errors='replace').splitlines()[-40:]) if log_path.exists() else ''
+              lines = ['## Durable verifier-router deployment failed closed','',f"Workflow: {run_url}",'',
+                  'No wallet-policy or replacement-funding success is claimed.','', '```text', tail[:6000], '```']
           Path('target/durable-router-result.md').write_text('\n'.join(lines) + '\n')
           PY
           gh issue comment 571 --body-file target/durable-router-result.md
         env:
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
-
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -210,7 +181,6 @@ jobs:
             target/durable-verifier-router/
             target/durable-router-result.md
           if-no-files-found: warn
-
       - name: Fail after reporting deployment error
         if: steps.deploy.outcome != 'success'
         run: exit 1
