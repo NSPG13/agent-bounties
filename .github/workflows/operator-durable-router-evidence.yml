@@ -1,0 +1,54 @@
+name: Operator durable router evidence
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/operator-durable-router-evidence.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    if: >-
+      github.head_ref == 'ops/deploy-durable-router-now' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'NSPG13'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      AGENT_BOUNTIES_API_URL: https://api.agentbounties.app
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Re-attest deployed state
+        run: >-
+          python scripts/durable_verifier_router_deploy.py deploy
+          --output target/deployment.json
+          --output-dir target/durable-router-evidence
+      - name: Print compact canonical evidence
+        run: |
+          python - <<'PY'
+          import json
+          report = json.load(open('target/deployment.json'))
+          compact = {
+              'schema': report['schema'],
+              'network': report['network'],
+              'chain_id': report['chain_id'],
+              'router': report['router'],
+              'policy_hash': report['policy_hash'],
+              'adapter': report['adapter'],
+              'router_transaction': report.get('router_transaction'),
+              'adapter_transaction': report.get('adapter_transaction'),
+              'bootstrap_transaction': report.get('bootstrap_transaction'),
+              'idempotent': report['idempotent'],
+              'wallet_policy_required': report['wallet_policy_required'],
+              'published_terms': report['published_terms'],
+          }
+          print('DURABLE_ROUTER_EVIDENCE=' + json.dumps(compact, sort_keys=True, separators=(',', ':')))
+          PY
