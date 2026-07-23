@@ -48,10 +48,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Materialize the reviewed runners from the protected default branch
+        run: |
+          git fetch origin main
+          git show origin/main:.github/scripts/apply_standing_meta_v4_security_review.py > /tmp/apply_v4_security.py
+          git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_followup.py > /tmp/apply_v4_security_followup.py
+          python -m py_compile /tmp/apply_v4_security.py /tmp/apply_v4_security_followup.py
+
       - name: Apply bounded maintainer security fixes and adversarial regressions
         run: |
-          python .github/scripts/apply_standing_meta_v4_security_review.py
-          python .github/scripts/apply_standing_meta_v4_security_review_followup.py
+          python /tmp/apply_v4_security.py
+          python /tmp/apply_v4_security_followup.py
 
       - name: Format contracts
         run: forge fmt --root contracts/base-escrow
