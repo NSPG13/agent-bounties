@@ -14,6 +14,67 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 
 def main() -> None:
+    # Adapt the generic appeal harness to the production two-hop provenance
+    # check: controller -> parent factory -> canonical child factory.
+    appeal_test = "contracts/base-escrow/test/AppealableVerifierV1.t.sol"
+    replace_once(
+        appeal_test,
+        """contract AppealVerifierControllerDummy {
+    mapping(address => bool) public isCanonicalAppealableChild;
+
+    function setCanonicalAppealableChild(address bounty, bool canonical) external {
+        isCanonicalAppealableChild[bounty] = canonical;
+    }
+}
+""",
+        """contract AppealVerifierChildFactoryDummy {
+    mapping(address => bool) public isCanonicalChild;
+
+    function setCanonicalChild(address bounty, bool canonical) external {
+        isCanonicalChild[bounty] = canonical;
+    }
+}
+
+contract AppealVerifierControllerDummy {
+    address public immutable standingMetaChildFactory;
+
+    constructor(address childFactory) {
+        standingMetaChildFactory = childFactory;
+    }
+}
+""",
+    )
+    replace_once(
+        appeal_test,
+        """    AppealableVerifierV1 private verifier;
+    AppealVerifierControllerDummy private parentFactory;
+    AppealVerifierActor private solver;
+""",
+        """    AppealableVerifierV1 private verifier;
+    AppealVerifierChildFactoryDummy private canonicalChildFactory;
+    AppealVerifierControllerDummy private parentFactory;
+    AppealVerifierActor private solver;
+""",
+    )
+    replace_once(
+        appeal_test,
+        """        parentFactory = new AppealVerifierControllerDummy();
+""",
+        """        canonicalChildFactory = new AppealVerifierChildFactoryDummy();
+        parentFactory = new AppealVerifierControllerDummy(address(canonicalChildFactory));
+""",
+    )
+    replace_once(
+        appeal_test,
+        "        parentFactory.setCanonicalAppealableChild(address(bounty), false);\n",
+        "        canonicalChildFactory.setCanonicalChild(address(bounty), false);\n",
+    )
+    replace_once(
+        appeal_test,
+        "        parentFactory.setCanonicalAppealableChild(bountyAddress, true);\n",
+        "        canonicalChildFactory.setCanonicalChild(bountyAddress, true);\n",
+    )
+
     v4_test = "contracts/base-escrow/test/StandingMetaV4.t.sol"
     replace_once(
         v4_test,
