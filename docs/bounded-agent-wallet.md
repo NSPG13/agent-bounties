@@ -23,7 +23,7 @@ The proposed first mainnet policy is:
 | Maximum bounty target | 5 USDC |
 | Expiry | 30 days |
 | Actions | create, fund, claim, submit |
-| Verification | exact standing-meta-v2 module plus exact sandboxed-regression signed quorum |
+| Verification | historical standing-meta-v2 module plus exact sandboxed-regression signed quorum |
 
 The first live policy allowed the permissionless proof-of-work module. Policy
 version two replaced that module with the standing-meta-v2 verifier. The
@@ -32,6 +32,10 @@ reviewed version-three policy keeps that module and adds only verifier set
 for `sandboxed_regression_v1`; arbitrary signed quorums and AI-judge actions
 remain disabled at the bounded-wallet layer. Until an on-chain inspection
 reports version three and its exact policy hash, version two remains active.
+The five funded standing-meta-v2 parents are now recovery-reserved and must not
+be selected for new delegated earning actions. Adding a future anonymous,
+appealable successor requires an explicit owner policy replacement after its
+deployment evidence is published; the existing policy does not authorize it.
 Returned
 claim bonds and bounty earnings increase the wallet balance but do not restore
 the gross lifetime budget. The owner must explicitly replace the policy to

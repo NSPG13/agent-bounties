@@ -3482,10 +3482,26 @@ pub fn standing_meta_v2_parent_context(
 pub const RECOVERY_RESERVED_VERIFICATION_REASON: &str =
     "incident recovery reservation is active; do not claim, sign, or post a bond";
 
-pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 3] = [
+pub const STANDING_META_V2_RECOVERY_REASON: &str =
+    "standing-meta-v2 migration reservation is active: required child funding cannot produce positive gross margin, participant IDs do not prove unrelated ownership, and the project-governed verifier pair is not organizationally independent; do not claim, sign, post a bond, or run verification";
+
+pub const BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 5] = [
+    "0xfffecb0fcd36477c5f6ecec808f6f0cf53819562",
+    "0xbe17ef2d154265ebe3142d7bda5e99610d571455",
+    "0x43d42cb227d76588ab16693f14efd6cff851fa7a",
+    "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b",
+    "0x43b23888d90b36448ee4f4a1919f004c14b6bc53",
+];
+
+pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 8] = [
     "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8",
     "0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1",
     "0xb35b94e1225b66e50644a331feccdab0439e63d7",
+    "0xfffecb0fcd36477c5f6ecec808f6f0cf53819562",
+    "0xbe17ef2d154265ebe3142d7bda5e99610d571455",
+    "0x43d42cb227d76588ab16693f14efd6cff851fa7a",
+    "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b",
+    "0x43b23888d90b36448ee4f4a1919f004c14b6bc53",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3532,12 +3548,24 @@ impl AutonomousBountyRecoveryReservations {
             .contains(&bounty_contract.to_ascii_lowercase())
     }
 
+    pub fn verification_reason(&self, bounty_contract: &str) -> Option<&'static str> {
+        if !self.contains(bounty_contract) {
+            return None;
+        }
+        if BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS
+            .iter()
+            .any(|contract| contract.eq_ignore_ascii_case(bounty_contract))
+        {
+            return Some(STANDING_META_V2_RECOVERY_REASON);
+        }
+        Some(RECOVERY_RESERVED_VERIFICATION_REASON)
+    }
+
     pub fn apply(&self, feed: &mut Vec<AutonomousBountyFeedItem>, claimable_only: bool) {
         for item in feed.iter_mut() {
-            if self.contains(&item.bounty_contract) {
+            if let Some(reason) = self.verification_reason(&item.bounty_contract) {
                 item.verification_ready = false;
-                item.verification_readiness_reason =
-                    RECOVERY_RESERVED_VERIFICATION_REASON.to_string();
+                item.verification_readiness_reason = reason.to_string();
             }
         }
         if claimable_only {
@@ -7586,6 +7614,9 @@ mod tests {
         assert!(BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS
             .iter()
             .all(|contract| AutonomousBountyRecoveryReservations::default().contains(contract)));
+        assert!(BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS
+            .iter()
+            .all(|contract| AutonomousBountyRecoveryReservations::default().contains(contract)));
         assert!(matches!(
             AutonomousBountyRecoveryReservations::parse_csv(Some(&format!("{reserved_contract},"))),
             Err(ChainBaseError::InvalidVerificationConfiguration(_))
@@ -7635,6 +7666,20 @@ mod tests {
         only_reserved.exclude_from_verification_jobs(&mut verification_feed);
         assert_eq!(verification_feed.len(), 1);
         assert_eq!(verification_feed[0].bounty_contract, available_contract);
+    }
+
+    #[test]
+    fn standing_meta_v2_builtin_reservations_publish_the_specific_migration_reason() {
+        let reservations = AutonomousBountyRecoveryReservations::default();
+        for contract in BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS {
+            assert_eq!(
+                reservations.verification_reason(contract),
+                Some(STANDING_META_V2_RECOVERY_REASON)
+            );
+            assert!(STANDING_META_V2_RECOVERY_REASON.contains("positive gross margin"));
+            assert!(STANDING_META_V2_RECOVERY_REASON.contains("unrelated ownership"));
+            assert!(STANDING_META_V2_RECOVERY_REASON.contains("organizationally independent"));
+        }
     }
 
     fn claimed_submission_fixture(claim_expires_at: u64) -> AutonomousBountyFeedItem {
