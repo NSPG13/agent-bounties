@@ -1,0 +1,106 @@
+name: Repair PR 482 branch
+
+on:
+  push:
+    branches: [codex/competitor-intelligence]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'ops: trigger PR 482 branch repair'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/competitor-intelligence
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge current main and resolve the three reviewed overlaps
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+
+          set +e
+          git merge --no-edit origin/main
+          merge_status=$?
+          set -e
+
+          if [ "$merge_status" -ne 0 ]; then
+            conflicts="$(git diff --name-only --diff-filter=U | sort)"
+            expected="$(printf '%s\n' '.github/workflows/ci.yml' 'README.md' 'scripts/check.py' | sort)"
+            if [ "$conflicts" != "$expected" ]; then
+              echo "Unexpected merge conflicts:" >&2
+              printf '%s\n' "$conflicts" >&2
+              exit 1
+            fi
+
+            git checkout --theirs -- .github/workflows/ci.yml README.md scripts/check.py
+
+            python - <<'PY'
+          from pathlib import Path
+
+          ci_path = Path('.github/workflows/ci.yml')
+          ci = ci_path.read_text(encoding='utf-8')
+          ci_line = '          cargo test -p db tests::competitor_intelligence_migration_executes_against_migrated_postgres -- --ignored --exact --nocapture'
+          if ci_line not in ci:
+              anchor = '          cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture'
+              if anchor not in ci:
+                  raise SystemExit('CI merge anchor is missing')
+              ci = ci.replace(anchor, anchor + '\n' + ci_line, 1)
+          ci_path.write_text(ci, encoding='utf-8')
+
+          readme_path = Path('README.md')
+          readme = readme_path.read_text(encoding='utf-8')
+          readme_line = '- Daily direct-competitor intelligence: [docs/competitor-intelligence.md](docs/competitor-intelligence.md)'
+          if readme_line not in readme:
+              anchor = '- First-party site analytics: [docs/site-analytics.md](docs/site-analytics.md)'
+              if anchor not in readme:
+                  raise SystemExit('README merge anchor is missing')
+              readme = readme.replace(anchor, anchor + '\n' + readme_line, 1)
+          readme_path.write_text(readme, encoding='utf-8')
+
+          check_path = Path('scripts/check.py')
+          check = check_path.read_text(encoding='utf-8')
+          compile_line = '        "scripts/competitor_intelligence.py", "scripts/test_competitor_intelligence.py",'
+          if compile_line not in check:
+              anchor = '        "scripts/rehearse_canonical_child_verifier.py", "scripts/build_base_sepolia_sponsor_bundle.py",'
+              if anchor not in check:
+                  raise SystemExit('check.py compile inventory anchor is missing')
+              check = check.replace(anchor, anchor + '\n' + compile_line, 1)
+
+          powershell_line = 'scripts/competitor_intelligence.py scripts/test_competitor_intelligence.py'
+          if powershell_line not in check:
+              anchor = 'scripts/test_reconcile_github_bounty_labels.py scripts/validate_real_funding_rehearsal.py'
+              if anchor not in check:
+                  raise SystemExit('check.py PowerShell inventory anchor is missing')
+              check = check.replace(anchor, anchor + '\n' + powershell_line, 1)
+
+          old = '"relay_bounded_wallet_action", "bounded_agent_budget"):'
+          new = '"relay_bounded_wallet_action", "bounded_agent_budget", "competitor_intelligence"):'
+          if '"bounded_agent_budget", "competitor_intelligence"):' not in check:
+              if old not in check:
+                  raise SystemExit('check.py test inventory anchor is missing')
+              check = check.replace(old, new, 1)
+          check_path.write_text(check, encoding='utf-8')
+          PY
+
+            git add .github/workflows/ci.yml README.md scripts/check.py
+          fi
+
+          git rm .github/workflows/rebase-pr-482.yml
+
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git add -A
+            git commit -m "Merge current main into competitor intelligence"
+          else
+            git add -A
+            git commit -m "chore: finish competitor intelligence branch repair"
+          fi
+
+          git push origin HEAD:codex/competitor-intelligence
