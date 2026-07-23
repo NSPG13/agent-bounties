@@ -3,14 +3,19 @@ name: Temporary maintainer branch repair
 on:
   issue_comment:
     types: [created]
+  push:
+    branches:
+      - ops/trigger-pr-272-patch-candidate
 
 permissions:
   contents: write
+  issues: write
   pull-requests: read
 
 jobs:
   snapshot-pr-272:
     if: >-
+      github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       github.event.issue.number == 272 &&
       github.actor == 'NSPG13' &&
@@ -61,10 +66,16 @@ jobs:
 
   patch-candidate-pr-272:
     if: >-
-      github.event.issue.pull_request &&
-      github.event.issue.number == 272 &&
-      github.actor == 'NSPG13' &&
-      github.event.comment.body == '/maintainer build-pr-272-patch-candidate'
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        github.event.issue.number == 272 &&
+        github.actor == 'NSPG13' &&
+        github.event.comment.body == '/maintainer build-pr-272-patch-candidate'
+      ) || (
+        github.event_name == 'push' &&
+        github.ref == 'refs/heads/ops/trigger-pr-272-patch-candidate'
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,8 +86,22 @@ jobs:
 
       - name: Apply the original objective commit onto the repaired migration base
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+          report_exit() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              gh api "repos/$GITHUB_REPOSITORY/issues/272/comments" \
+                --method POST \
+                --raw-field body="PR #272 patch-candidate diagnostic failed in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The source PR branches were not modified." \
+                >/dev/null || true
+            fi
+            exit "$status"
+          }
+          trap report_exit EXIT
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin backup/pr-272-pre-rebase-20260723
@@ -118,3 +143,10 @@ jobs:
           git add -A
           git commit -m "diagnostic: apply objective-v1 patch to repaired base"
           git push --force origin HEAD:diagnostic/pr-272-patch-candidate
+
+          trap - EXIT
+          reject_count="${#rejects[@]}"
+          gh api "repos/$GITHUB_REPOSITORY/issues/272/comments" \
+            --method POST \
+            --raw-field body="PR #272 patch-candidate diagnostic completed with ${reject_count} rejected file(s). Snapshot: diagnostic/pr-272-patch-candidate. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            >/dev/null
