@@ -19,8 +19,11 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Compile the standalone exact-edit runner
-        run: python -m py_compile .github/scripts/apply_standing_meta_v4_security_review.py
+      - name: Compile the standalone exact-edit runners
+        run: >-
+          python -m py_compile
+          .github/scripts/apply_standing_meta_v4_security_review.py
+          .github/scripts/apply_standing_meta_v4_security_review_followup.py
 
   patch-and-test:
     if: >-
@@ -46,7 +49,9 @@ jobs:
           python-version: "3.12"
 
       - name: Apply bounded maintainer security fixes and adversarial regressions
-        run: python .github/scripts/apply_standing_meta_v4_security_review.py
+        run: |
+          python .github/scripts/apply_standing_meta_v4_security_review.py
+          python .github/scripts/apply_standing_meta_v4_security_review_followup.py
 
       - name: Format contracts
         run: forge fmt --root contracts/base-escrow
