@@ -94,13 +94,18 @@ jobs:
             git mv migrations/0004_objective_coordination.sql migrations/0013_objective_coordination.sql
           fi
 
+          mapfile -t rejects < <(
+            find . \
+              -path './.git' -prune -o \
+              -path './.merge-diagnostics' -prune -o \
+              -name '*.rej' -print | sort
+          )
           mkdir -p .merge-diagnostics/rejects
-          while IFS= read -r reject; do
-            [ -n "$reject" ] || continue
-            destination=".merge-diagnostics/rejects/${reject%.rej}.rej"
+          for reject in "${rejects[@]}"; do
+            destination=".merge-diagnostics/rejects/${reject#./}"
             mkdir -p "$(dirname "$destination")"
             mv "$reject" "$destination"
-          done < <(find . -path './.git' -prune -o -name '*.rej' -print | sort)
+          done
 
           {
             echo "apply_status=$apply_status"
