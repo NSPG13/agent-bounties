@@ -1,0 +1,96 @@
+name: Operator durable router deployment
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/operator-durable-router-deploy.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: operator-durable-router-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.head_ref == 'ops/deploy-durable-router-now' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'NSPG13'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      AGENT_BOUNTIES_API_URL: https://api.agentbounties.app
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Revalidate deployment code
+        run: |
+          python -m unittest scripts.test_durable_verifier_router_deploy -v
+          forge test --root contracts/base-escrow --match-contract PolicyBoundVerifierRouterTest -vv
+
+      - name: Deploy idempotently
+        id: deploy
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python scripts/durable_verifier_router_deploy.py deploy \
+            --output target/durable-verifier-router-deployment.json \
+            --output-dir target/durable-verifier-router \
+            --markdown-output target/durable-verifier-router-plan.md \
+            2>&1 | tee target/durable-verifier-router-deploy.log
+
+      - name: Publish exact operator result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          outcome = os.environ['DEPLOY_OUTCOME']
+          report_path = Path('target/durable-verifier-router-deployment.json')
+          if outcome == 'success' and report_path.exists():
+              report = json.loads(report_path.read_text())
+              lines = [
+                  '## Operator deployment reconciled','',
+                  f"- Router: `{report['router']['address']}`",
+                  f"- Router runtime: `{report['router']['runtime_code_hash']}`",
+                  f"- Policy: `{report['policy_hash']}`",
+                  f"- Adapter: `{report['adapter']['address']}`",
+                  f"- Adapter runtime: `{report['adapter']['runtime_code_hash']}`",
+                  f"- Acceptance hash: `{report['adapter']['acceptance_criteria_hash']}`",
+                  '', 'No bounded-wallet policy or wallet USDC changed in this deployment.',
+              ]
+          else:
+              path = Path('target/durable-verifier-router-deploy.log')
+              tail = '\n'.join(path.read_text(errors='replace').splitlines()[-80:]) if path.exists() else 'No deployment log was produced.'
+              lines = ['## Operator deployment failed closed','', 'No bounded-wallet policy or replacement funding is claimed.','', '```text', tail[:12000], '```']
+          Path('target/operator-result.md').write_text('\n'.join(lines) + '\n')
+          PY
+          gh pr comment "$PR_NUMBER" --body-file target/operator-result.md
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: operator-durable-router-${{ github.sha }}
+          path: |
+            target/durable-verifier-router-deployment.json
+            target/durable-verifier-router-deploy.log
+            target/durable-verifier-router/
+            target/operator-result.md
+          if-no-files-found: warn
+
+      - name: Fail after publishing error
+        if: steps.deploy.outcome != 'success'
+        run: exit 1
