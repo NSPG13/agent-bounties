@@ -245,8 +245,11 @@ fn mcp_tool_descriptor(descriptor: ToolDescriptor) -> Value {
         }),
     );
     value.insert("securitySchemes".to_string(), json!([{"type": "noauth"}]));
+    value.insert(
+        "outputSchema".to_string(),
+        assistant_tool_output_schema(descriptor.name),
+    );
     if descriptor.name == "prepare_bounty_post" {
-        value.insert("outputSchema".to_string(), post_handoff_output_schema());
         value.insert(
             "_meta".to_string(),
             json!({
@@ -302,6 +305,7 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
             let args: PrepareBountyPostArgs = serde_json::from_value(arguments)
                 .map_err(|error| format!("invalid prepare_bounty_post arguments: {error}"))?;
             let value = build_bounty_post_handoff(&args)?;
+            let value = normalize_assistant_tool_output(name, value)?;
             let markdown = bounty_post_markdown(&value);
             return Ok(tool_result(value, &markdown, true));
         }
@@ -366,7 +370,10 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
         _ => return Err(format!("unknown or unavailable AI assistant tool: {name}")),
     };
     match legacy_result(legacy) {
-        Ok(value) => Ok(tool_result(value, narration, false)),
+        Ok(value) => match normalize_assistant_tool_output(name, value) {
+            Ok(value) => Ok(tool_result(value, narration, false)),
+            Err(error) => Ok(tool_error(error)),
+        },
         Err(error) => Ok(tool_error(error)),
     }
 }
@@ -379,6 +386,31 @@ fn legacy_result(value: Value) -> Result<Value, String> {
         .pointer("/content/0/json")
         .cloned()
         .ok_or_else(|| "tool returned an invalid legacy response".to_string())
+}
+
+fn normalize_assistant_tool_output(name: &str, value: Value) -> Result<Value, String> {
+    let value = match name {
+        "list_unfunded_bounties" | "list_autonomous_bounties" => {
+            if !value.is_array() {
+                return Err(format!("{name} returned a non-array bounty list"));
+            }
+            json!({"bounties": value})
+        }
+        "list_autonomous_bounty_events" => {
+            if !value.is_array() {
+                return Err("list_autonomous_bounty_events returned a non-array event list".into());
+            }
+            json!({"events": value})
+        }
+        _ => value,
+    };
+    validate_output_schema_value(
+        &assistant_tool_output_schema(name),
+        &value,
+        "structuredContent",
+    )
+    .map_err(|error| format!("{name} returned invalid structured content: {error}"))?;
+    Ok(value)
 }
 
 fn bounty_post_markdown(value: &Value) -> String {
@@ -537,7 +569,15 @@ fn post_handoff_output_schema() -> Value {
             "interface": {"type": "string"},
             "prepared_by": {"type": "string"},
             "supported_hosts": {"type": "array", "items": {"type": "string"}},
-            "rendering": {"type": "object"},
+            "rendering": {
+                "type": "object",
+                "properties": {
+                    "mcp_app_widget": {"type": "string"},
+                    "portable_fallback": {"type": "string"}
+                },
+                "required": ["mcp_app_widget", "portable_fallback"],
+                "additionalProperties": false
+            },
             "state": {"type": "string"},
             "title": {"type": "string"},
             "goal": {"type": "string"},
@@ -555,9 +595,445 @@ fn post_handoff_output_schema() -> Value {
             "next_action": {"type": "string"},
             "evidence_boundary": {"type": "string"}
         },
-        "required": ["schema", "interface", "prepared_by", "supported_hosts", "rendering", "state", "title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc", "task_window_days", "target_usdc", "initial_funding_usdc", "crowdfund", "post_url", "bounty_created", "wallet_signature_requested", "next_action", "evidence_boundary"],
+        "required": ["schema", "interface", "prepared_by", "supported_hosts", "rendering", "state", "title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc", "task_window_days", "target_usdc", "initial_funding_usdc", "crowdfund", "source_url", "post_url", "bounty_created", "wallet_signature_requested", "next_action", "evidence_boundary"],
         "additionalProperties": false
     })
+}
+
+fn assistant_tool_output_schema(name: &str) -> Value {
+    match name {
+        "publish_unfunded_bounty" => unfunded_bounty_output_schema(),
+        "list_unfunded_bounties" => json!({
+            "type": "object",
+            "properties": {
+                "bounties": {
+                    "type": "array",
+                    "items": unfunded_bounty_output_schema()
+                }
+            },
+            "required": ["bounties"],
+            "additionalProperties": false
+        }),
+        "submit_unfunded_bounty_solution" => unfunded_solution_output_schema(),
+        "prepare_bounty_post" => post_handoff_output_schema(),
+        "list_autonomous_bounties" => json!({
+            "type": "object",
+            "properties": {
+                "bounties": {
+                    "type": "array",
+                    "items": autonomous_bounty_output_schema()
+                }
+            },
+            "required": ["bounties"],
+            "additionalProperties": false
+        }),
+        "prepare_agent_to_earn" | "agent_native_claim" => hosted_api_output_schema(),
+        "prepare_autonomous_bounty_submission" => autonomous_submission_output_schema(),
+        "publish_autonomous_submission_evidence" => submission_evidence_output_schema(),
+        "list_autonomous_bounty_events" => json!({
+            "type": "object",
+            "properties": {
+                "events": {
+                    "type": "array",
+                    "items": autonomous_event_output_schema()
+                }
+            },
+            "required": ["events"],
+            "additionalProperties": false
+        }),
+        _ => json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        }),
+    }
+}
+
+fn hosted_api_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "http_status": {"type": "integer"},
+            "body": {"type": "object"}
+        },
+        "required": ["http_status", "body"],
+        "additionalProperties": false
+    })
+}
+
+fn unfunded_solution_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "solution_id": {"type": "string"},
+            "agent_id": {"type": "string"},
+            "summary": {"type": "string"},
+            "deliverable_markdown": {"type": "string"},
+            "evidence": {},
+            "attribution_status": {"type": "string"},
+            "created_at": {"type": "string"},
+            "updated_at": {"type": "string"}
+        },
+        "required": [
+            "solution_id",
+            "agent_id",
+            "summary",
+            "deliverable_markdown",
+            "evidence",
+            "attribution_status",
+            "created_at",
+            "updated_at"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn cloud_demo_solution_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "schema_version": {"type": "string"},
+            "provider": {"type": "string"},
+            "model": {"type": "string"},
+            "agent_name": {"type": "string"},
+            "completion_status": {"type": "string"},
+            "summary": {"type": "string"},
+            "deliverable_markdown": {"type": "string"},
+            "evidence": {},
+            "limitations": {"type": "array", "items": {"type": "string"}},
+            "payment_due_usdc": {"type": "string"},
+            "evidence_boundary": {"type": "string"}
+        },
+        "required": [
+            "schema_version",
+            "provider",
+            "model",
+            "agent_name",
+            "completion_status",
+            "summary",
+            "deliverable_markdown",
+            "evidence",
+            "limitations",
+            "payment_due_usdc",
+            "evidence_boundary"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn unfunded_bounty_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "schema_version": {"type": "string"},
+            "bounty_id": {"type": "string"},
+            "bounty_kind": {"type": "string"},
+            "funding_status": {"type": "string"},
+            "status": {"type": "string"},
+            "title": {"type": "string"},
+            "goal": {"type": "string"},
+            "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+            "source_url": {"type": ["string", "null"]},
+            "demo_agent_solution": cloud_demo_solution_output_schema(),
+            "agent_solutions": {
+                "type": "array",
+                "items": unfunded_solution_output_schema()
+            },
+            "wallet_required": {"type": "boolean"},
+            "initial_funding_usdc": {"type": "string"},
+            "payment_promised": {"type": "boolean"},
+            "canonical_bounty_created": {"type": "boolean"},
+            "public_url": {"type": "string"},
+            "upgrade_url": {"type": "string"},
+            "created_at": {"type": "string"},
+            "expires_at": {"type": "string"},
+            "evidence_boundary": {"type": "string"}
+        },
+        "required": [
+            "schema_version",
+            "bounty_id",
+            "bounty_kind",
+            "funding_status",
+            "status",
+            "title",
+            "goal",
+            "acceptance_criteria",
+            "source_url",
+            "demo_agent_solution",
+            "agent_solutions",
+            "wallet_required",
+            "initial_funding_usdc",
+            "payment_promised",
+            "canonical_bounty_created",
+            "public_url",
+            "upgrade_url",
+            "created_at",
+            "expires_at",
+            "evidence_boundary"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn network_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "chain_id": {"type": "integer"},
+            "rpc_url_env": {"type": "string"},
+            "native_usdc_token_address": {"type": "string"}
+        },
+        "required": [
+            "name",
+            "chain_id",
+            "rpc_url_env",
+            "native_usdc_token_address"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn autonomous_event_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "log_key": {"type": "string"},
+            "tx_hash": {"type": "string"},
+            "block_number": {"type": "integer"},
+            "log_index": {"type": "integer"},
+            "contract_address": {"type": "string"},
+            "bounty_id": {"type": "string"},
+            "kind": {"type": "string"},
+            "data": {},
+            "occurred_at": {"type": "string"}
+        },
+        "required": [
+            "id",
+            "log_key",
+            "tx_hash",
+            "block_number",
+            "log_index",
+            "contract_address",
+            "bounty_id",
+            "kind",
+            "data",
+            "occurred_at"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn autonomous_bounty_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "bounty_id": {"type": "string"},
+            "bounty_contract": {"type": "string"},
+            "creator": {"type": "string"},
+            "status": {"type": "string"},
+            "solver_reward": {"type": "string"},
+            "verifier_reward": {"type": "string"},
+            "claim_bond": {"type": "string"},
+            "timeout_bond_pool": {"type": "string"},
+            "target_amount": {"type": "string"},
+            "funded_amount": {"type": "string"},
+            "terms_hash": {"type": "string"},
+            "terms": {"type": ["object", "null"]},
+            "terms_valid": {"type": "boolean"},
+            "verification_mode": {"type": "string"},
+            "verifier_module": {"type": ["string", "null"]},
+            "verification_ready": {"type": "boolean"},
+            "verification_readiness_reason": {"type": "string"},
+            "validation_errors": {"type": "array", "items": {"type": "string"}},
+            "events": {"type": "array", "items": autonomous_event_output_schema()}
+        },
+        "required": [
+            "bounty_id",
+            "bounty_contract",
+            "creator",
+            "status",
+            "solver_reward",
+            "verifier_reward",
+            "claim_bond",
+            "timeout_bond_pool",
+            "target_amount",
+            "funded_amount",
+            "terms_hash",
+            "terms",
+            "terms_valid",
+            "verification_mode",
+            "verifier_module",
+            "verification_ready",
+            "verification_readiness_reason",
+            "validation_errors",
+            "events"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn autonomous_submission_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "protocol_version": {"type": "string"},
+            "network": network_output_schema(),
+            "bounty_contract": {"type": "string"},
+            "bounty_id": {"type": "string"},
+            "current_bounty_state": {"type": "string"},
+            "expected_bounty_state": {"type": "string"},
+            "expected_canonical_event": {"type": "string"},
+            "solver": {"type": "string"},
+            "round": {"type": "integer"},
+            "claim_expires_at": {"type": "integer"},
+            "authorization_deadline": {"type": "integer"},
+            "artifact_reference": {"type": "string"},
+            "submission_hash": {"type": "string"},
+            "evidence_hash": {"type": "string"},
+            "policy_hash": {"type": "string"},
+            "signing_payload": {"type": "object"},
+            "unsigned_relay_envelope": {"type": "object"},
+            "evidence_publication": {"type": "object"},
+            "relay_issue_url": {"type": ["string", "null"]},
+            "evidence_boundary": {"type": "string"}
+        },
+        "required": [
+            "protocol_version",
+            "network",
+            "bounty_contract",
+            "bounty_id",
+            "current_bounty_state",
+            "expected_bounty_state",
+            "expected_canonical_event",
+            "solver",
+            "round",
+            "claim_expires_at",
+            "authorization_deadline",
+            "artifact_reference",
+            "submission_hash",
+            "evidence_hash",
+            "policy_hash",
+            "signing_payload",
+            "unsigned_relay_envelope",
+            "evidence_publication",
+            "relay_issue_url",
+            "evidence_boundary"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn submission_evidence_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "network": {"type": "string"},
+            "bounty_contract": {"type": "string"},
+            "bounty_id": {"type": "string"},
+            "round": {"type": "integer"},
+            "solver_wallet": {"type": "string"},
+            "artifact_reference": {"type": "string"},
+            "artifact_hash": {"type": "string"},
+            "evidence": {},
+            "evidence_hash": {"type": "string"},
+            "created_at": {"type": "string"}
+        },
+        "required": [
+            "network",
+            "bounty_contract",
+            "bounty_id",
+            "round",
+            "solver_wallet",
+            "artifact_reference",
+            "artifact_hash",
+            "evidence",
+            "evidence_hash",
+            "created_at"
+        ],
+        "additionalProperties": false
+    })
+}
+
+fn validate_output_schema_value(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    if let Some(expected) = schema.get("type") {
+        let matches = match expected {
+            Value::String(kind) => output_type_matches(kind, value),
+            Value::Array(kinds) => kinds
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|kind| output_type_matches(kind, value)),
+            _ => false,
+        };
+        if !matches {
+            return Err(format!(
+                "{path} has JSON type {}, expected {}",
+                output_value_type(value),
+                expected
+            ));
+        }
+    }
+
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            for property in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(property) {
+                    return Err(format!("{path}.{property} is required"));
+                }
+            }
+        }
+        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+            for (property, property_value) in object {
+                if let Some(property_schema) = properties.get(property) {
+                    validate_output_schema_value(
+                        property_schema,
+                        property_value,
+                        &format!("{path}.{property}"),
+                    )?;
+                } else if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+                    return Err(format!("{path}.{property} is not declared"));
+                }
+            }
+        }
+    }
+
+    if let Some(array) = value.as_array() {
+        if let Some(item_schema) = schema.get("items") {
+            for (index, item) in array.iter().enumerate() {
+                validate_output_schema_value(item_schema, item, &format!("{path}[{index}]"))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn output_type_matches(kind: &str, value: &Value) -> bool {
+    match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => value
+            .as_number()
+            .is_some_and(|number| number.is_i64() || number.is_u64()),
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => false,
+    }
+}
+
+fn output_value_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 fn tool_title(name: &str) -> &'static str {
@@ -799,6 +1275,10 @@ mod tests {
                 "assistant tool {name} has a non-discoverable description: {}",
                 descriptor["description"]
             );
+            assert_eq!(
+                descriptor["outputSchema"]["type"], "object",
+                "assistant tool {name} must declare an object outputSchema"
+            );
         }
         let prepare = tools
             .iter()
@@ -860,6 +1340,62 @@ mod tests {
             .unwrap();
         assert_eq!(settlement["title"], "Confirm bounty lifecycle and payment");
         assert_eq!(settlement["annotations"]["readOnlyHint"], true);
+        assert_eq!(
+            settlement["outputSchema"]["properties"]["events"]["type"],
+            "array"
+        );
+        let funded = tools
+            .iter()
+            .find(|tool| tool["name"] == "list_autonomous_bounties")
+            .unwrap();
+        assert_eq!(
+            funded["outputSchema"]["properties"]["bounties"]["type"],
+            "array"
+        );
+    }
+
+    #[test]
+    fn assistant_output_schemas_are_total_and_runtime_checked() {
+        let handoff = build_bounty_post_handoff(&valid_args()).unwrap();
+        assert!(normalize_assistant_tool_output("prepare_bounty_post", handoff).is_ok());
+
+        for name in ["list_unfunded_bounties", "list_autonomous_bounties"] {
+            let normalized = normalize_assistant_tool_output(name, json!([])).unwrap();
+            assert_eq!(normalized, json!({"bounties": []}));
+            assert!(validate_output_schema_value(
+                &assistant_tool_output_schema(name),
+                &json!([]),
+                "structuredContent"
+            )
+            .is_err());
+        }
+
+        let normalized =
+            normalize_assistant_tool_output("list_autonomous_bounty_events", json!([])).unwrap();
+        assert_eq!(normalized, json!({"events": []}));
+
+        let hosted = json!({"http_status": 200, "body": {"ready": true}});
+        assert!(normalize_assistant_tool_output("prepare_agent_to_earn", hosted.clone()).is_ok());
+        let invalid_hosted = json!({
+            "http_status": 200,
+            "body": {"ready": true},
+            "unexpected": true
+        });
+        assert!(normalize_assistant_tool_output("prepare_agent_to_earn", invalid_hosted).is_err());
+
+        let solution = json!({
+            "solution_id": "5cfbdc18-6abc-4709-9fb8-1322e52aa84a",
+            "agent_id": "913e03f2-4c07-4dd4-b28e-e83aff3d65a7",
+            "summary": "Delivered",
+            "deliverable_markdown": "Artifact",
+            "evidence": {"commit": "abc"},
+            "attribution_status": "registered_agent",
+            "created_at": "2026-07-23T00:00:00Z",
+            "updated_at": "2026-07-23T00:00:00Z"
+        });
+        assert!(
+            normalize_assistant_tool_output("submit_unfunded_bounty_solution", solution).is_ok()
+        );
     }
 
     #[test]
