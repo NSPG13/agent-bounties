@@ -38,15 +38,15 @@ ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32 = re.compile(r"^0x[0-9a-fA-F]{64}$")
 CLAIMABLE_EVIDENCE = "confirmed_canonical_autonomous_bounty"
 MAX_REPORT_AGE_SECONDS = 900
-STANDING_META_SCHEMA = "agent-bounties/standing-meta-bounty-v1"
+STANDING_META_SCHEMA = "agent-bounties/standing-meta-bounty-v2"
 STANDING_META_CLASS = "post_bounty_third_party_completion"
-STANDING_META_PROTOCOL = "agent-bounties/canonical-child-v1"
-STANDING_META_VERIFIER = "0x40adac5a1d00a725f77682f8940b893eaed31ecf"
+STANDING_META_PROTOCOL = "agent-bounties/independent-child-v2"
+STANDING_META_VERIFIER = "0xe573cb4f471d38b5bf10ce82237251ac902c9867"
 STANDING_META_VERIFIER_CODE_HASH = (
-    "0xbb6d6df11b85f59b5010aa61f4caf499fb27b94a0f5978aff85fa97ed2bbd2c3"
+    "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c"
 )
 STANDING_META_ACCEPTANCE_HASH = (
-    "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de"
+    "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54"
 )
 
 
@@ -141,14 +141,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--meta-threshold",
         type=int,
-        default=int(os.environ.get("META_BOUNTY_INVENTORY_THRESHOLD", "1")),
-        help="Hard floor for funded, claimable standing meta-bounties (default 1)",
+        default=int(os.environ.get("META_BOUNTY_INVENTORY_THRESHOLD", "5")),
+        help="Hard floor for funded, claimable standing meta-bounties (default 5)",
     )
     p.add_argument(
         "--meta-replenishment-target",
         type=int,
-        default=int(os.environ.get("META_BOUNTY_REPLENISHMENT_TARGET", "2")),
-        help="Target that creates a buffer above the standing meta-bounty floor (default 2)",
+        default=int(os.environ.get("META_BOUNTY_REPLENISHMENT_TARGET", "5")),
+        help="Target for funded, claimable standing meta-bounties (default 5)",
     )
     p.add_argument(
         "--claimable-report",

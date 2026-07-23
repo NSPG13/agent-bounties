@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:examples": "tsc -p tsconfig.examples.json",
-    "check:examples": "tsc -p tsconfig.examples.json --noEmit"
+    "check:examples": "tsc -p tsconfig.examples.json --noEmit",
+    "test": "npm run build && node --test tests/*.mjs"
   },
   "devDependencies": {
     "typescript": "^5.5.0"

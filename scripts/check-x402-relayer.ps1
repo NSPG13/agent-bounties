@@ -1,6 +1,13 @@
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$env:Path = "$repoRoot\.tools\foundry;$env:Path"
+$existingPath = $env:Path
+[Environment]::SetEnvironmentVariable("PATH", $null, [EnvironmentVariableTarget]::Process)
+[Environment]::SetEnvironmentVariable("Path", $null, [EnvironmentVariableTarget]::Process)
+[Environment]::SetEnvironmentVariable(
+    "Path",
+    "$repoRoot\.tools\foundry;$existingPath",
+    [EnvironmentVariableTarget]::Process
+)
 $port = if ($env:X402_RELAYER_TEST_PORT) { $env:X402_RELAYER_TEST_PORT } else { "18545" }
 $rpcUrl = "http://127.0.0.1:$port"
 $logDirectory = Join-Path $repoRoot "target\tmp"

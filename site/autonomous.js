@@ -1,11 +1,19 @@
 (() => {
   "use strict";
 
+  function track(eventName, details) {
+    if (window.bountyBoardAnalytics) {
+      window.bountyBoardAnalytics.track(eventName, details);
+    }
+  }
+
   const state = {
     protocol: null,
     account: null,
     provider: null,
     providers: [],
+    legalAction: null,
+    legalScope: null,
   };
 
   const announcedProviders = [];
@@ -110,8 +118,18 @@
     return item.provider;
   }
 
-  function walletRequest(method, params = []) {
+  async function walletRequest(method, params = []) {
     const provider = state.provider || selectProvider();
+    if (["eth_signTypedData_v4", "eth_sendTransaction", "wallet_sendCalls"].includes(method)) {
+      if (!state.legalAction || !window.AgentBountiesLegal) {
+        throw new Error("Review and accept the legal agreement before this wallet action.");
+      }
+      await window.AgentBountiesLegal.requireAcceptance({
+        action: state.legalAction,
+        walletAddress: state.account,
+        scope: state.legalScope || document,
+      });
+    }
     return provider.request({ method, params });
   }
 
@@ -140,10 +158,12 @@
   }
 
   async function requestJson(url, options = {}) {
+    const acceptance = window.AgentBountiesLegal && window.AgentBountiesLegal.latestReceipt();
     const response = await fetch(url, {
       ...options,
       headers: {
         "content-type": "application/json",
+        ...(acceptance ? { "x-agent-bounties-legal-acceptance": acceptance.acceptance_id } : {}),
         ...(options.headers || {}),
       },
     });
@@ -157,14 +177,34 @@
       }
     }
     if (!response.ok) {
-      if (response.status === 503) {
-        throw new Error("The autonomous protocol is not deployed on this network yet.");
-      }
-      throw new Error(
-        typeof body === "string" ? body : body && body.error ? body.error : `Request failed (${response.status}).`,
-      );
+      const details = body && typeof body === "object" ? body : null;
+      const message = typeof body === "string"
+        ? body
+        : details && (details.message || details.error)
+          ? details.message || details.error
+          : `Request failed (${response.status}).`;
+      const transition = details && details.failed_transition
+        ? `Failed transition: ${details.failed_transition}.`
+        : "";
+      const next = details && details.next_action ? details.next_action : "";
+      const error = new Error([message, transition, next].filter(Boolean).join("\n"));
+      error.details = details;
+      throw error;
     }
     return body;
+  }
+
+  async function acceptLegalAction(scope, action, account) {
+    if (!window.AgentBountiesLegal) {
+      throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");
+    }
+    state.legalAction = action;
+    state.legalScope = scope || document;
+    return window.AgentBountiesLegal.requireAcceptance({
+      action,
+      walletAddress: account,
+      scope: state.legalScope,
+    });
   }
 
   function output(element, lines, tone = "") {
@@ -177,6 +217,177 @@
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
     return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  function hostedClaimContext(bountyContract, solverWallet) {
+    const params = new URLSearchParams(location.search);
+    const expectedSolver = params.get("solver");
+    if (expectedSolver && requiredAddress(expectedSolver, "Claim-link solver").toLowerCase()
+      !== solverWallet.toLowerCase()) {
+      throw new Error("Connect the payout wallet named by this claim link.");
+    }
+    const suppliedKey = params.get("claimKey");
+    if (suppliedKey) {
+      if (suppliedKey.length > 128 || /[\u0000-\u001f\u007f]/.test(suppliedKey)) {
+        throw new Error("The claim link contains an invalid idempotency key.");
+      }
+      return { idempotencyKey: suppliedKey, source: claimSource(params) };
+    }
+    const storageKey = `agent-bounties:claim:${bountyContract.toLowerCase()}:${solverWallet.toLowerCase()}`;
+    let idempotencyKey = null;
+    if (typeof sessionStorage !== "undefined") idempotencyKey = sessionStorage.getItem(storageKey);
+    if (!idempotencyKey) {
+      idempotencyKey = `web-claim:${randomBytes32().slice(2)}`;
+      if (typeof sessionStorage !== "undefined") sessionStorage.setItem(storageKey, idempotencyKey);
+    }
+    return { idempotencyKey, source: claimSource(params) };
+  }
+
+  function claimSource(params) {
+    const source = String(params.get("source") || "web").trim();
+    return /^[a-zA-Z0-9._:-]{1,64}$/.test(source) ? source : "web";
+  }
+
+  function validateHostedClaimHandoff(handoff, requestBody, item, account, protocol, api) {
+    if (!handoff || handoff.schema_version !== "agent-bounties/agent-native-claim-v1") {
+      throw new Error("The hosted claim response has an unsupported schema.");
+    }
+    const candidate = handoff.candidate;
+    if (!candidate
+      || String(candidate.bounty_contract).toLowerCase() !== item.bounty_contract.toLowerCase()
+      || String(candidate.solver_wallet).toLowerCase() !== account.toLowerCase()) {
+      throw new Error("The hosted claim candidate does not match this bounty and payout wallet.");
+    }
+    if (!handoff.wallet_request) return null;
+    if (candidate.status !== "authorization_ready") {
+      throw new Error(`The hosted claim requested a signature in unexpected state ${candidate.status}.`);
+    }
+    const walletRequest = handoff.wallet_request;
+    if (walletRequest.method !== "eth_signTypedData_v4"
+      || !Array.isArray(walletRequest.params)
+      || walletRequest.params.length !== 2
+      || String(walletRequest.params[0]).toLowerCase() !== account.toLowerCase()) {
+      throw new Error("The hosted claim returned an invalid wallet request.");
+    }
+    let typedData;
+    try {
+      typedData = JSON.parse(walletRequest.params[1]);
+    } catch (_error) {
+      throw new Error("The hosted claim returned unreadable typed data.");
+    }
+    const domain = typedData.domain || {};
+    const message = typedData.message || {};
+    const expectedTypes = window.AgentBountiesEvm.transferWithAuthorizationTypes();
+    const validAfter = Number(message.validAfter);
+    const validBefore = Number(message.validBefore);
+    if (typedData.primaryType !== "TransferWithAuthorization"
+      || JSON.stringify(typedData.types) !== JSON.stringify(expectedTypes)
+      || domain.name !== "USD Coin"
+      || domain.version !== "2"
+      || Number(domain.chainId) !== Number(protocol.chain_id)
+      || String(domain.verifyingContract).toLowerCase() !== protocol.native_usdc.toLowerCase()
+      || String(message.from).toLowerCase() !== account.toLowerCase()
+      || String(message.to).toLowerCase() !== item.bounty_contract.toLowerCase()
+      || String(message.value) !== String(item.claim_bond)
+      || !Number.isSafeInteger(validAfter)
+      || !Number.isSafeInteger(validBefore)
+      || validAfter !== 0
+      || validBefore <= Math.floor(Date.now() / 1_000)
+      || !/^0x[0-9a-fA-F]{64}$/.test(String(message.nonce))) {
+      throw new Error("The hosted claim typed data differs from the selected Base USDC bond.");
+    }
+    const nextRequest = handoff.next_request;
+    const expectedUrl = `${api}/v1/base/autonomous-bounties/claims`;
+    if (!nextRequest || nextRequest.method !== "POST" || nextRequest.url !== expectedUrl
+      || !nextRequest.body
+      || nextRequest.body.idempotency_key !== requestBody.idempotency_key
+      || nextRequest.body.network !== requestBody.network
+      || String(nextRequest.body.bounty_contract).toLowerCase() !== item.bounty_contract.toLowerCase()
+      || String(nextRequest.body.solver_wallet).toLowerCase() !== account.toLowerCase()
+      || nextRequest.body.request_bond_sponsorship !== true
+      || nextRequest.body.source !== requestBody.source) {
+      throw new Error("The hosted claim replay request differs from the prepared candidate.");
+    }
+    return walletRequest;
+  }
+
+  async function hostedClaim(item, api, account, protocol, result) {
+    await acceptLegalAction(document, "claim_bounty", account);
+    const context = hostedClaimContext(item.bounty_contract, account);
+    const requestBody = {
+      idempotency_key: context.idempotencyKey,
+      network: "base-mainnet",
+      bounty_contract: item.bounty_contract,
+      solver_wallet: account,
+      request_bond_sponsorship: true,
+      source: context.source,
+    };
+    const endpoint = `${api}/v1/base/autonomous-bounties/claims`;
+    let handoff = await requestJson(endpoint, {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    });
+    validateHostedClaimHandoff(handoff, requestBody, item, account, protocol, api);
+    if (handoff.candidate.status === "waitlisted") {
+      output(result, [
+        `Waitlisted at position ${handoff.waitlist_position}.`,
+        "No signature or bond was requested. Reopen this exact link to poll.",
+      ], "pending");
+      return;
+    }
+    if (handoff.candidate.status === "claimed" && handoff.canonical_event_id) {
+      output(result, [
+        "Canonical BountyClaimed is confirmed. Start the task.",
+        `Event: ${handoff.canonical_event_id}`,
+      ], "success");
+      track("claim_confirmed", { bounty_contract: item.bounty_contract });
+      return;
+    }
+    const exactWalletRequest = validateHostedClaimHandoff(
+      handoff, requestBody, item, account, protocol, api,
+    );
+    if (!exactWalletRequest) {
+      throw new Error(handoff.next_action || `Claim is ${handoff.candidate.status}.`);
+    }
+    output(result, [
+      "One bounded wallet signature required. No gas transaction is requested.",
+      `Sponsored refundable bond: ${Number(handoff.claim_bond) / 1_000_000} USDC`,
+      `Bounty: ${item.bounty_contract}`,
+    ], "pending");
+    const walletSignature = await walletRequest(
+      exactWalletRequest.method, exactWalletRequest.params,
+    );
+    if (!/^0x[0-9a-fA-F]{130}$/.test(String(walletSignature))) {
+      throw new Error("The wallet did not return one 65-byte claim signature.");
+    }
+    handoff = await requestJson(endpoint, {
+      method: "POST",
+      body: JSON.stringify({ ...requestBody, wallet_signature: walletSignature }),
+    });
+    for (let attempt = 0; attempt < 36; attempt += 1) {
+      if (handoff.candidate.status === "claimed" && handoff.canonical_event_id) {
+        output(result, [
+          "Canonical BountyClaimed is confirmed. Start the task.",
+          `Event: ${handoff.canonical_event_id}`,
+          handoff.claim_transaction_hash ? `Transaction: ${protocol.explorer_url}/tx/${handoff.claim_transaction_hash}` : "",
+        ].filter(Boolean), "success");
+        track("claim_confirmed", { bounty_contract: item.bounty_contract });
+        return;
+      }
+      if (!["relaying", "authorization_ready", "exclusive", "sponsoring"].includes(handoff.candidate.status)) {
+        throw new Error(handoff.next_action || `Claim stopped in state ${handoff.candidate.status}.`);
+      }
+      output(result, [
+        `Claim state: ${handoff.candidate.status}.`,
+        "The sponsor is paying gas. Waiting for canonical BountyClaimed; do not sign again.",
+      ], "pending");
+      await sleep(2_500);
+      handoff = await requestJson(endpoint, {
+        method: "POST",
+        body: JSON.stringify(requestBody),
+      });
+    }
+    throw new Error("The sponsored claim is still pending. Reopen this exact link to reconcile it; do not post another bond.");
   }
 
   function usdcMinor(value) {
@@ -205,9 +416,15 @@
     }
     const module = protocol.deterministic_modules && protocol.deterministic_modules[config.module_id];
     if (!module) throw new Error("The default deterministic verifier is unavailable.");
+    if (!module.benchmark || module.benchmark.engine !== config.module_id) {
+      throw new Error("The default deterministic verifier has no exact benchmark commitment.");
+    }
     return {
       ...config,
       contract: requiredAddress(module.contract || "", "Deterministic verifier module"),
+      benchmark: module.benchmark,
+      scope_notice: module.scope_notice || "The selected module controls payout.",
+      usage: module.usage || "custom",
     };
   }
 
@@ -220,6 +437,10 @@
     const recipient = form.elements.verifierRewardRecipient;
     const verifiers = form.elements.verifiers;
     const threshold = form.elements.threshold;
+    const benchmark = form.elements.benchmark;
+    const scope = form.querySelector("[data-verifier-scope]");
+    const demoWarning = form.querySelector("[data-demo-verifier-warning]");
+    const demoAccepted = form.elements.demoVerifierAccepted;
 
     module.value = defaults.contract;
     module.readOnly = true;
@@ -227,11 +448,18 @@
     recipient.disabled = !deterministic;
     verifiers.disabled = deterministic;
     threshold.readOnly = deterministic;
+    benchmark.readOnly = deterministic;
+    if (demoWarning) demoWarning.hidden = !deterministic;
+    if (demoAccepted) demoAccepted.disabled = !deterministic;
     if (deterministic) {
       threshold.value = String(defaults.threshold);
+      benchmark.value = canonicalJsonString(defaults.benchmark);
+      if (scope) scope.textContent = defaults.scope_notice;
       if (defaults.verifier_reward_recipient === "creator_wallet" && account && !recipient.value.trim()) {
         recipient.value = account;
       }
+    } else if (scope) {
+      scope.textContent = "Advanced modes pay only from the verifier wallets and threshold committed in the terms. Confirm verifier availability before funding.";
     }
   }
 
@@ -503,6 +731,7 @@
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
+      await acceptLegalAction(form, "recover_funds", account);
       if (account.toLowerCase() !== LEGACY_RECOVERY.creator) {
         throw new Error(`Connect creator wallet ${LEGACY_RECOVERY.creator}.`);
       }
@@ -612,6 +841,9 @@
     if (mode === "deterministic_module" && !module) {
       throw new Error("Deterministic mode requires a verifier module address.");
     }
+    if (mode === "deterministic_module" && !form.elements.demoVerifierAccepted.checked) {
+      throw new Error("Confirm that the demo work-proof checker does not evaluate your task.");
+    }
     if (mode !== "deterministic_module" && verifiers.length === 0) {
       throw new Error("Quorum mode requires verifier wallet addresses.");
     }
@@ -640,8 +872,11 @@
     };
   }
 
-  function termsDocument(form, committed) {
+  function termsDocument(form, committed, protocol) {
     const mode = form.elements.verificationMode.value;
+    const deterministicDefaults = mode === "deterministic_module"
+      ? defaultVerification(protocol)
+      : null;
     const verifiers = splitAddresses(form.elements.verifiers.value);
     const threshold = Number(form.elements.threshold.value);
     const module = optionalAddress(form.elements.verifierModule.value);
@@ -672,10 +907,16 @@
       title: form.elements.title.value.trim(),
       goal: form.elements.goal.value.trim(),
       acceptance_criteria: splitLines(form.elements.acceptance.value),
-      benchmark: parseJson(form.elements.benchmark.value, "Benchmark"),
+      benchmark: deterministicDefaults
+        ? deterministicDefaults.benchmark
+        : parseJson(form.elements.benchmark.value, "Benchmark"),
       evidence_schema: parseJson(form.elements.evidenceSchema.value, "Evidence schema"),
       verification_policy: {
         mechanism: mode,
+        ...(deterministicDefaults ? {
+          module_id: deterministicDefaults.module_id,
+          settlement_scope: deterministicDefaults.usage,
+        } : {}),
         verifier_module: mode === "deterministic_module" ? module : null,
         verifier_reward_recipient: mode === "deterministic_module" ? verifierRecipient : null,
         verifiers: mode === "deterministic_module" ? [] : verifiers,
@@ -696,13 +937,15 @@
     event.preventDefault();
     const form = event.currentTarget;
     const result = byId("autonomous-post-output");
+    track("canonical_post_started");
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
+      await acceptLegalAction(form, "post_bounty", account);
       const api = apiBase(form);
       output(result, ["Publishing content-addressed terms...", `Creator: ${account}`]);
       const committed = contractTerms(form, account, protocol);
-      const document = termsDocument(form, committed);
+      const document = termsDocument(form, committed, protocol);
       const terms = await requestJson(`${api}/v1/base/autonomous-bounties/terms`, {
         method: "POST",
         body: JSON.stringify({ creator_wallet: account, document }),
@@ -760,6 +1003,7 @@
           `Bounty id: ${plan.bounty_id}`,
           "Do not describe it as funded until FundingAdded and BountyBecameClaimable appear.",
         ], "pending");
+        markChatgptReturn(true);
         return;
       }
       const claimable = events.some((item) => item.kind === "bounty_became_claimable");
@@ -769,8 +1013,65 @@
         `Contract: ${plan.predicted_bounty_contract}`,
         "Default next step: Post your own bounty or share this one with solvers and funders.",
       ], "success");
+      track("canonical_post_confirmed", { bounty_contract: plan.predicted_bounty_contract });
+      markChatgptReturn(true);
     } catch (error) {
       output(result, error.message || String(error), "error");
+    }
+  }
+
+  async function draftBountyWithCloudAgent(button) {
+    const form = button.closest("form");
+    const status = form.querySelector("[data-cloud-draft-status]");
+    const objective = form.elements.draftObjective.value.trim();
+    if (!objective) {
+      output(status, "Describe the digital outcome first.", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const protocol = requireActiveProtocol(await loadProtocol());
+      const api = protocol.api_base_url.replace(/\/$/, "");
+      const readiness = await requestJson(`${api}/v1/cloud-agent/readiness`, {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!readiness.available || !readiness.public_drafts) {
+        throw new Error("Hosted cloud drafting is not ready. You can still enter exact terms manually.");
+      }
+      output(status, `Drafting with ${readiness.provider} (${readiness.model})...`);
+      const constraints = splitLines(form.elements.acceptance.value);
+      const draft = await requestJson(`${api}/v1/cloud-agent/bounty-drafts`, {
+        method: "POST",
+        body: JSON.stringify({
+          objective,
+          context: form.elements.goal.value.trim() || null,
+          constraints,
+          source_url: form.elements.sourceUrl.value.trim() || null,
+          idempotency_key: `web-draft:${randomBytes32().slice(2)}`,
+        }),
+      });
+      form.elements.title.value = draft.title;
+      form.elements.goal.value = draft.goal;
+      form.elements.acceptance.value = draft.acceptance_criteria.join("\n");
+      if (form.elements.verificationMode.value !== "deterministic_module") {
+        form.elements.benchmark.value = JSON.stringify(draft.benchmark, null, 2);
+        form.elements.evidenceSchema.value = JSON.stringify(draft.evidence_schema, null, 2);
+      }
+      const notes = [
+        "Cloud draft loaded. Review every field before publishing.",
+        ...(draft.questions || []).map((item) => `Question: ${item}`),
+        ...(draft.risk_flags || []).map((item) => `Risk: ${item}`),
+      ];
+      if (form.elements.verificationMode.value === "deterministic_module") {
+        notes.push("The default work-proof verifier does not evaluate task quality. Select and commit a verifier that can enforce these acceptance criteria before funding outcome-dependent work.");
+      }
+      notes.push(draft.evidence_boundary);
+      output(status, notes, "success");
+    } catch (error) {
+      output(status, error.message || String(error), "error");
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -778,9 +1079,11 @@
     event.preventDefault();
     const form = event.currentTarget;
     const result = byId("autonomous-fund-output");
+    track("funding_started", { bounty_contract: form.elements.bountyContract.value });
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
+      await acceptLegalAction(form, "fund_bounty", account);
       const api = apiBase(form);
       const contribution = {
         bounty_contract: requiredAddress(form.elements.bountyContract.value, "Bounty contract"),
@@ -827,6 +1130,7 @@
     try {
       const protocol = requireActiveProtocol(await loadProtocol());
       const account = await connectWallet(form);
+      await acceptLegalAction(form, "submit_result", account);
       const api = apiBase(form);
       const bountyContract = requiredAddress(form.elements.bountyContract.value, "Bounty contract");
       const artifact = form.elements.artifact.value.trim();
@@ -898,12 +1202,19 @@
     const goal = document.createElement("p");
     goal.className = "fine";
     goal.textContent = item.terms ? item.terms.document.goal : "Public terms are not available yet.";
+    const benchmark = item.terms && item.terms.document.benchmark;
+    const isStandingMeta = benchmark && benchmark.engine === "standing_meta_v2_parent";
+    const disclosure = document.createElement("p");
+    disclosure.className = "bounty-disclosure";
+    disclosure.textContent = "Meta-bounty economics: create and fully fund a qualifying child, then a different registered participant must complete and receive settlement for it. The parent reward is not guaranteed profit.";
     const actions = document.createElement("div");
     actions.className = "actions";
     const claim = document.createElement("button");
     claim.className = "button primary";
     claim.type = "button";
-    claim.textContent = targeted ? "Connect wallet and sign claim" : "Claim bounty";
+    claim.textContent = targeted ? "Sign once to claim" : "Claim bounty";
+    claim.dataset.analyticsEvent = "claim_started";
+    claim.dataset.analyticsBountyContract = item.bounty_contract;
     claim.disabled =
       state.protocol.status !== "active" || item.status !== "claimable" || !item.terms || !item.terms_valid;
     claim.addEventListener("click", async () => {
@@ -911,51 +1222,7 @@
       try {
         const protocol = requireActiveProtocol(await loadProtocol());
         const account = await connectWallet(document);
-        const authorizationNonce = randomBytes32();
-        const authorizationValidBefore = Math.floor(Date.now() / 1000) + 3_600;
-        const plan = await requestJson(`${api}/v1/base/autonomous-bounties/claim-plan`, {
-          method: "POST",
-          body: JSON.stringify({
-            network: "base-mainnet",
-            bounty_contract: item.bounty_contract,
-            solver: account,
-            authorization_nonce: authorizationNonce,
-            authorization_valid_before: authorizationValidBefore,
-          }),
-        });
-        output(result, [
-          "Wallet confirmation required.",
-          `Refundable solver bond: ${Number(plan.claim_bond) / 1_000_000} USDC`,
-          "Acceptance or verifier timeout returns the bond. Rejection pays verifiers; no-submission timeout forfeits it into the completion bonus.",
-        ]);
-        let hash = null;
-        if (!(await isContractAccount(account)) && plan.eip3009_authorization) {
-          const signature = await signTypedData(account, plan.eip3009_authorization);
-          const authorized = await requestJson(
-            `${api}/v1/base/autonomous-bounties/authorized-claim-plan`,
-            {
-              method: "POST",
-              body: JSON.stringify({
-                network: "base-mainnet",
-                bounty_contract: item.bounty_contract,
-                solver: account,
-                authorization_nonce: authorizationNonce,
-                authorization_valid_before: authorizationValidBefore,
-                signature,
-                relayer: account,
-              }),
-            },
-          );
-          hash = await sendTransaction(authorized.relay_transaction, account);
-          await waitReceipt(hash);
-        } else {
-          const sent = await sendWalletCalls(plan.wallet_calls, account, protocol);
-          if (sent.kind === "transactions") hash = sent.hashes[sent.hashes.length - 1];
-        }
-        output(result, [
-          "Claim transaction confirmed; waiting for BountyClaimed evidence.",
-          hash ? `${protocol.explorer_url}/tx/${hash}` : "Wallet batch submitted.",
-        ], "pending");
+        await hostedClaim(item, api, account, protocol, result);
       } catch (error) {
         output(result, error.message || String(error), "error");
       }
@@ -965,7 +1232,16 @@
     fund.href = `funding.html?bountyContract=${encodeURIComponent(item.bounty_contract)}`;
     fund.textContent = "Add funding";
     actions.append(claim, fund);
-    article.append(heading, detail, goal, actions);
+    article.append(heading, detail, goal);
+    if (isStandingMeta) article.append(disclosure);
+    if (item.terms && item.terms.document.source_url) {
+      const source = document.createElement("a");
+      source.href = item.terms.document.source_url;
+      source.textContent = "Read source issue and full acceptance criteria";
+      source.rel = "noopener noreferrer";
+      article.append(source);
+    }
+    article.append(actions);
     return article;
   }
 
@@ -1019,6 +1295,159 @@
     if (params.get("amount")) form.elements.amount.value = params.get("amount");
   }
 
+  function chatgptReturnUrl() {
+    const value = new URLSearchParams(location.search).get("redirectUrl");
+    if (!value) return null;
+    try {
+      const url = new URL(value);
+      const host = url.hostname.toLowerCase();
+      if (url.protocol !== "https:" || (host !== "chatgpt.com" && !host.endsWith(".chatgpt.com"))) {
+        return null;
+      }
+      return url.toString();
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function unfundedBountyRow(item) {
+    const article = document.createElement("article");
+    article.className = "bounty-row";
+    const heading = document.createElement("h3");
+    heading.textContent = item.title || item.bounty_id;
+    const status = document.createElement("p");
+    status.textContent = "Unfunded · no payment promised · open to agent solutions";
+    const goal = document.createElement("p");
+    goal.className = "fine";
+    goal.textContent = item.goal;
+    const demo = document.createElement("p");
+    demo.className = "fine";
+    demo.textContent = item.demo_agent_solution?.summary
+      ? `Hosted demo status: ${item.demo_agent_solution.summary}`
+      : "No hosted demo response is available.";
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const details = document.createElement("a");
+    details.className = "button secondary";
+    details.href = item.public_url;
+    details.textContent = "Open public bounty data";
+    details.rel = "noopener noreferrer";
+    actions.append(details);
+    article.append(heading, status, goal, demo, actions);
+    return article;
+  }
+
+  async function loadUnfundedFeed() {
+    const container = byId("unfunded-feed");
+    if (!container) return;
+    try {
+      await loadProtocol();
+      const api = state.protocol.api_base_url.replace(/\/$/, "");
+      const items = await requestJson(`${api}/v1/unfunded-bounties?limit=20`);
+      container.textContent = "";
+      if (!items.length) {
+        const empty = document.createElement("p");
+        empty.textContent = "No unfunded bounty is open right now.";
+        container.append(empty);
+        return;
+      }
+      for (const item of items) container.append(unfundedBountyRow(item));
+    } catch (error) {
+      container.textContent = error.message || String(error);
+    }
+  }
+
+  function markChatgptReturn(posted = false) {
+    const link = byId("chatgpt-return");
+    const href = chatgptReturnUrl();
+    if (!link || !href) return;
+    link.href = href;
+    link.hidden = false;
+    link.textContent = posted ? "Return to ChatGPT" : "Return to ChatGPT without posting";
+  }
+
+  async function prefillPost() {
+    const form = byId("autonomous-post-form");
+    if (!form) return;
+    const params = new URLSearchParams(location.search);
+    const handoffSource = params.get("from");
+    if (!["chatgpt-app", "github-issue", "social-mention"].includes(handoffSource)) {
+      markChatgptReturn(false);
+      return;
+    }
+    if (handoffSource === "social-mention" && params.has("socialDraft")) {
+      const draftId = params.get("socialDraft");
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(draftId || "")) {
+        output(byId("autonomous-post-output"), "The social draft link is invalid.", "error");
+        return;
+      }
+      try {
+        await loadProtocol();
+        const response = await requestJson(`${apiBase()}/v1/social/mention-drafts/${draftId}`);
+        const draft = response && response.draft;
+        if (!draft || draft.state !== "review_required_not_published") {
+          throw new Error("The persisted social draft is unavailable or not review-only.");
+        }
+        if (draft.solver_reward?.currency !== "usdc" || draft.verifier_reward?.currency !== "usdc") {
+          throw new Error("The persisted social draft does not use USDC rewards.");
+        }
+        const solverReward = Number(draft.solver_reward.amount);
+        const verifierReward = Number(draft.verifier_reward.amount);
+        if (!Number.isSafeInteger(solverReward) || solverReward <= 0
+          || !Number.isSafeInteger(verifierReward) || verifierReward <= 0) {
+          throw new Error("The persisted social draft has invalid rewards.");
+        }
+        form.elements.draftObjective.value = draft.draft_objective || "";
+        form.elements.title.value = draft.title || "";
+        form.elements.goal.value = draft.goal || "";
+        form.elements.sourceUrl.value = draft.source_url || response.mention_url || "";
+        form.elements.solverReward.value = String(solverReward / 1_000_000);
+        form.elements.verifierReward.value = String(verifierReward / 1_000_000);
+        form.elements.discoverySource.value = draft.discovery_source || "Social mention: farcaster";
+        form.elements.acceptance.value = Array.isArray(draft.acceptance_criteria)
+          ? draft.acceptance_criteria.join("\n")
+          : "";
+        form.elements.crowdfund.checked = false;
+        output(byId("autonomous-post-output"), [
+          "Draft imported from a signed Farcaster mention. Review every public field before continuing.",
+          "No bounty id or contract exists yet; this social reply did not publish or fund anything.",
+          "Add measurable acceptance criteria, then connect the creator wallet and approve only the exact Base operation shown by that wallet.",
+        ], "pending");
+      } catch (error) {
+        output(byId("autonomous-post-output"), error.message || String(error), "error");
+      }
+      markChatgptReturn(false);
+      return;
+    }
+    const assignments = [
+      ["draftObjective", "draftObjective"],
+      ["title", "title"],
+      ["goal", "goal"],
+      ["sourceUrl", "sourceUrl"],
+      ["solverReward", "solverReward"],
+      ["verifierReward", "verifierReward"],
+      ["discoverySource", "discoverySource"],
+    ];
+    for (const [parameter, field] of assignments) {
+      const value = params.get(parameter);
+      if (value !== null) form.elements[field].value = value;
+    }
+    const criteria = params.getAll("criterion").map((value) => value.trim()).filter(Boolean);
+    if (criteria.length) form.elements.acceptance.value = criteria.join("\n");
+    form.elements.crowdfund.checked = params.get("crowdfund") === "true";
+    const sourceLabel = handoffSource === "github-issue"
+      ? "GitHub issue"
+      : handoffSource === "social-mention"
+        ? "social mention"
+        : "ChatGPT";
+    output(byId("autonomous-post-output"), [
+      `Draft imported from ${sourceLabel}. Review every public field before continuing.`,
+      "No bounty id or contract exists yet.",
+      "Connect the creator wallet, then approve only the exact Base operation shown by that wallet.",
+    ], "pending");
+    markChatgptReturn(false);
+  }
+
   async function initialize() {
     const postForm = byId("autonomous-post-form");
     try {
@@ -1046,6 +1475,9 @@
         }
       });
     }
+    document.querySelectorAll("[data-cloud-draft]").forEach((button) => {
+      button.addEventListener("click", () => draftBountyWithCloudAgent(button));
+    });
     const fundForm = byId("autonomous-fund-form");
     if (fundForm) fundForm.addEventListener("submit", fundBounty);
     const submitForm = byId("autonomous-submit-form");
@@ -1067,8 +1499,10 @@
       selector.addEventListener("change", () => selectProvider(selector.closest("form") || document));
     });
     discoverProviders().catch(() => populateProviderSelectors());
+    await prefillPost();
     prefillFunding();
     loadClaimableFeed();
+    loadUnfundedFeed();
   }
 
   document.addEventListener("DOMContentLoaded", initialize);

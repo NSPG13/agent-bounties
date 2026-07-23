@@ -1,4 +1,5 @@
 use app::{
+<<<<<<< ours
     build_live_money_readiness_report, build_objective_canonical_evidence,
     stripe_secret_key_mode_from_secret, AddFundingContributionRequest, ApproveRiskBountyRequest,
     ApproveRiskPayoutRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
@@ -7,6 +8,14 @@ use app::{
     PooledFundingReport, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
     RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, RiskEventFilter,
     SubmitResultRequest, VerifySubmissionRequest,
+=======
+    build_live_money_readiness_report, AddFundingContributionRequest, ApproveRiskBountyRequest,
+    ApproveRiskPayoutRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
+    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
+    LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanStripeTransferRequest,
+    PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest,
+    RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
+>>>>>>> theirs
 };
 use axum::{
     extract::State,
@@ -24,27 +33,33 @@ use chain_base::{
     eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
     fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
-    AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
-    AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
-    AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
-    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseNetworkDescriptor,
-    BaseRpcUrlConfig, CanonicalChildBountyTermsRequest, EvmLog,
+    standing_meta_v2_parent_context, validate_attestation_request_against_feed,
+    validate_autonomous_creation_against_terms, AutonomousBountyAuthorizationSignature,
+    AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
+    AutonomousBountyRecoveryReservations, AutonomousBountySubmissionAuthorizationRequest,
+    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
+    AutonomousVerificationAttestationRequest, BaseRpcUrlConfig, CanonicalChildBountyTermsRequest,
+    EvmLog, PrepareAgentToEarnInput, StandingMetaV2ChildPreparationRequest,
 };
 use chrono::Utc;
-use db::{BountyStatusScope, PostgresStore};
+use db::PostgresStore;
 use domain::{
+<<<<<<< ours
     Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass, EvalRun, HelpRequest, Id,
     Money, Objective, ObjectiveAction, ObjectiveCanonicalEvidence, ObjectiveCreationDraft,
     PaymentRail, PayoutStatus, PrivacyLevel, RiskReviewRecord, SignedObjectiveAction,
     SignedObjectiveCreation,
+=======
+    Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass,
+    DiscoverySubscriptionFilters, EvalRun, HelpRequest, Money, PaymentRail, PayoutStatus,
+    PrivacyLevel,
+>>>>>>> theirs
 };
-use eval_harness::{EvalSuiteResult, LoopSuiteResult};
 use github_app::{
-    bounty_check_output, claim_comment_plan, funding_comment_plan, parse_issue_form_bounty,
-    proof_comment_plan, GitHubClaimCommentInput, GitHubFundingCommentInput, GitHubProofComment,
+    bounty_check_output, claim_comment_plan, create_comment_plan, funding_comment_plan,
+    parse_issue_form_bounty, proof_comment_plan, GitHubClaimCommentInput, GitHubCreateCommentInput,
+    GitHubFundingCommentInput, GitHubProofComment,
 };
-use ledger::Ledger;
 use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper,
     StripePlanner, StripeRequestIntent, StripeWebhookEvent, STRIPE_API_BASE_URL,
@@ -52,11 +67,24 @@ use payments_stripe::{
 use risk::RiskPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+<<<<<<< ours
 use std::collections::BTreeSet;
+=======
+#[cfg(test)]
+use service_runtime::{
+    canonical_mainnet_factory, CANONICAL_BASE_MAINNET_BOUNTY_FACTORY,
+    CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION,
+};
+use service_runtime::{
+    eval_run_from_loop_suite, eval_run_from_suite, LiveMoneyRuntimeSettings, PlannerAddressError,
+};
+>>>>>>> theirs
 use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
+
+mod chatgpt_app;
 
 #[derive(Debug)]
 struct AppState {
@@ -115,51 +143,19 @@ fn require_operator(
     state: &SharedState,
     headers: &HeaderMap,
 ) -> Result<(), Json<serde_json::Value>> {
-    let Some(expected) = state.operator_api_token.as_deref() else {
-        return Ok(());
-    };
-    let Some(provided) = operator_token_from_headers(headers) else {
-        return Err(mcp_error("operator authorization required"));
-    };
-    if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+    if service_runtime::operator_token_is_authorized(
+        state.operator_api_token.as_deref(),
+        headers
+            .get(OPERATOR_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+    ) {
         Ok(())
     } else {
         Err(mcp_error("operator authorization required"))
     }
-}
-
-fn operator_token_from_headers(headers: &HeaderMap) -> Option<String> {
-    if let Some(value) = headers
-        .get(OPERATOR_TOKEN_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(non_empty_borrowed)
-    {
-        return Some(value.to_string());
-    }
-
-    let authorization = headers.get("authorization")?.to_str().ok()?.trim();
-    let token = authorization.strip_prefix("Bearer ")?;
-    non_empty_borrowed(token).map(ToOwned::to_owned)
-}
-
-fn non_empty_borrowed(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (left, right) in left.iter().zip(right.iter()) {
-        diff |= left ^ right;
-    }
-    diff == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,15 +175,48 @@ struct ToolAuthorization {
     required_when: &'static str,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RouteBlockedGoalArgs {
-    goal: String,
-    context: String,
-    budget_minor: i64,
-    currency: String,
-    privacy: PrivacyLevel,
+macro_rules! tool_args {
+    (
+        $(#[$meta:meta])*
+        struct $name:ident {
+            $($(#[$field_meta:meta])* $field:ident: $field_type:ty),* $(,)?
+        }
+        schema |$schema_arg:ident: $schema_arg_type:ty| $schema:expr;
+    ) => {
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        $(#[$meta])*
+        struct $name {
+            $($(#[$field_meta])* $field: $field_type),*
+        }
+
+        impl $name {
+            fn input_schema($schema_arg: $schema_arg_type) -> Value {
+                $schema
+            }
+        }
+    };
+    (
+        $(#[$meta:meta])*
+        struct $name:ident {
+            $($(#[$field_meta:meta])* $field:ident: $field_type:ty),* $(,)?
+        }
+        schema $schema:expr;
+    ) => {
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        $(#[$meta])*
+        struct $name {
+            $($(#[$field_meta])* $field: $field_type),*
+        }
+
+        impl $name {
+            fn input_schema() -> Value {
+                $schema
+            }
+        }
+    };
 }
 
+<<<<<<< ours
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PlanObjectiveCreationArgs {
     draft: ObjectiveCreationDraft,
@@ -217,262 +246,951 @@ struct PlanStripeCheckoutTopUpArgs {
     currency: String,
     success_url: Option<String>,
     cancel_url: Option<String>,
+=======
+macro_rules! tool_registry {
+    ($($descriptor:expr),* $(,)?) => {
+        vec![$($descriptor),*]
+    };
+>>>>>>> theirs
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanStripeConnectAccountArgs {
-    agent_id: Uuid,
+tool_args! {
+    struct RouteBlockedGoalArgs {
+        goal: String,
+        context: String,
+        budget_minor: i64,
+        currency: String,
+        privacy: PrivacyLevel,
+    }
+    schema object_tool_schema(
+        json!({
+            "goal": string_property("Task, workflow, job, or goal where the requester is blocked."),
+            "context": string_property("Relevant constraints, logs, artifacts, URLs, or prior attempts."),
+            "budget_minor": integer_property("Maximum budget in minor units."),
+            "currency": string_property("Lowercase currency code, for example usdc or usd."),
+            "privacy": privacy_property()
+        }),
+        &["goal", "context", "budget_minor", "currency", "privacy"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanStripeConnectTransferArgs {
-    payout_intent_id: Uuid,
-    connected_account_id: String,
+tool_args! {
+    struct DraftBountyWithCloudAgentArgs {
+        objective: String,
+        context: Option<String>,
+        #[serde(default)]
+        constraints: Vec<String>,
+        source_url: Option<String>,
+        idempotency_key: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "objective": string_property("The digital-work outcome the bounty should produce."),
+            "context": nullable_string_property("Optional repository, workflow, constraints, prior attempts, or other task context."),
+            "constraints": {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Optional bounded task constraints."},
+            "source_url": nullable_string_property("Optional public HTTPS source URL."),
+            "idempotency_key": nullable_string_property("Optional stable key for retry-safe drafting."),
+        }),
+        &["objective"],
+    );
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct LiveMoneyReadinessArgs {
-    network: Option<String>,
+tool_args! {
+    struct CompileObjectiveWithCloudAgentArgs {
+        objective: String,
+        context: Option<String>,
+        #[serde(default)]
+        constraints: Vec<String>,
+        #[serde(default = "default_objective_task_limit")]
+        max_tasks: u8,
+        solver_budget_usdc: Option<String>,
+        source_url: Option<String>,
+        idempotency_key: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "objective": string_property("The larger digital objective to coordinate."),
+            "context": nullable_string_property("Optional repository, workflow, prior attempts, or other objective context."),
+            "constraints": {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Optional bounded objective constraints."},
+            "max_tasks": {"type": ["integer", "null"], "minimum": 2, "maximum": 8, "description": "Maximum graph size; defaults to 5."},
+            "solver_budget_usdc": nullable_string_property("Optional advisory solver-only budget allocated deterministically after graph validation."),
+            "source_url": nullable_string_property("Optional public HTTPS source URL."),
+            "idempotency_key": nullable_string_property("Optional stable key for retry-safe compilation."),
+        }),
+        &["objective"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanGitHubIssueBountyArgs {
-    repository: String,
-    issue_url: String,
-    title: String,
-    body: String,
+fn default_objective_task_limit() -> u8 {
+    5
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanGitHubFundingCommentArgs {
-    repository: String,
-    issue_url: String,
-    title: String,
-    body: String,
-    comment_body: String,
-    contributor_login: Option<String>,
-    comment_id: Option<String>,
-    funding_api_base_url: Option<String>,
-    #[serde(default)]
-    existing_idempotency_keys: Vec<String>,
+tool_args! {
+    struct PrepareBountyPostArgs {
+        title: String,
+        goal: String,
+        acceptance_criteria: Vec<String>,
+        solver_reward_usdc: String,
+        verifier_reward_usdc: String,
+        task_window_days: Option<u8>,
+        source_url: Option<String>,
+        #[serde(default)]
+        crowdfund: bool,
+        discovery_source: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Concise public bounty title."},
+            "goal": {"type": "string", "minLength": 1, "maxLength": 4000, "description": "Public digital outcome the solver must deliver."},
+            "acceptance_criteria": {
+                "type": "array", "minItems": 1, "maxItems": 20,
+                "items": {"type": "string", "minLength": 1, "maxLength": 1000},
+                "description": "Binary or measurable public acceptance criteria."
+            },
+            "solver_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Solver reward in display USDC, for example 2.00."},
+            "verifier_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Verifier reward and refundable claim bond in display USDC, for example 0.10."},
+            "task_window_days": {"type": ["integer", "null"], "minimum": 1, "maximum": 30, "description": "Optional bounded work window in days; defaults to 30."},
+            "source_url": nullable_string_property("Optional public HTTPS source issue or task URL."),
+            "crowdfund": {"type": "boolean", "default": false, "description": "Keep false to fund on creation. Set true only to deposit 0 USDC now."},
+            "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties.")
+        }),
+        &["title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanGitHubClaimCommentArgs {
-    repository: String,
-    issue_url: String,
-    title: String,
-    body: String,
-    comment_body: String,
-    contributor_login: Option<String>,
-    comment_id: Option<String>,
-    claim_age_minutes: Option<u64>,
-    #[serde(default)]
-    progress_signal_count: u32,
-    active_claim_login: Option<String>,
+tool_args! {
+    struct PublishUnfundedBountyArgs {
+        title: String,
+        goal: String,
+        acceptance_criteria: Vec<String>,
+        source_url: Option<String>,
+        idempotency_key: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Concise public unfunded bounty title."},
+            "goal": {"type": "string", "minLength": 1, "maxLength": 12000, "description": "Public digital outcome requested from the demo agent."},
+            "acceptance_criteria": {
+                "type": "array", "minItems": 1, "maxItems": 20,
+                "items": {"type": "string", "minLength": 1, "maxLength": 1000},
+                "description": "Measurable criteria for agent solutions."
+            },
+            "source_url": nullable_string_property("Optional public HTTPS source URL. The demo agent will not claim it opened the URL."),
+            "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9:_-]{1,128}$", "description": "Stable unique key for this ChatGPT publication attempt."}
+        }),
+        &["title", "goal", "acceptance_criteria", "idempotency_key"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanGitHubProofCommentArgs {
-    bounty_id: Uuid,
-    proof_url: String,
-    verifier_summary: String,
-    settlement_url: Option<String>,
+tool_args! {
+    #[derive(Default)]
+    struct ListUnfundedBountiesArgs {
+        limit: Option<u32>,
+    }
+    schema object_tool_schema(
+        json!({
+            "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 100, "description": "Optional number of recent unfunded bounties; defaults to 20."}
+        }),
+        &[],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanGitHubProofCommentForProofArgs {
-    proof_id: Uuid,
-    settlement_url: Option<String>,
+tool_args! {
+    struct SubmitUnfundedBountySolutionArgs {
+        bounty_id: Uuid,
+        agent_id: Uuid,
+        summary: String,
+        deliverable_markdown: String,
+        evidence: Value,
+    }
+    schema object_tool_schema(
+        json!({
+            "bounty_id": string_property("Public unfunded bounty UUID."),
+            "agent_id": string_property("Registered Agent Bounties agent UUID."),
+            "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "deliverable_markdown": {"type": "string", "minLength": 1, "maxLength": 40000},
+            "evidence": {"type": "object", "description": "Replayable public evidence; do not include secrets."}
+        }),
+        &["bounty_id", "agent_id", "summary", "deliverable_markdown", "evidence"],
+    );
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct SearchCapabilitiesArgs {
-    class: Option<CapabilityClass>,
-    template_slug: Option<String>,
-    currency: Option<String>,
-    max_price_minor: Option<i64>,
+tool_args! {
+    #[derive(Default)]
+    struct AutonomousInventorySummaryArgs {
+        network: Option<String>,
+        claimable_only: Option<bool>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_string_property("Network name; defaults to base-mainnet."),
+            "claimable_only": {"type": ["boolean", "null"], "description": "Defaults to true."},
+        }),
+        &[],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousBountyCreationArgs {
-    network: Option<String>,
-    create: AutonomousBountyCreate,
+tool_args! {
+    #[derive(Default)]
+    struct SolverLeaderboardArgs {
+        network: Option<String>,
+        at: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_string_property("Defaults to base-mainnet."),
+            "at": nullable_string_property("RFC3339 instant. Omit for current UTC periods."),
+        }),
+        &[],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousBountyContributionArgs {
-    network: Option<String>,
-    contribution: AutonomousBountyContribution,
+tool_args! {
+    struct PlanStripeCheckoutTopUpArgs {
+        organization_id: Uuid,
+        amount_minor: i64,
+        currency: String,
+        success_url: Option<String>,
+        cancel_url: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "organization_id": uuid_property("Organization UUID credited after a paid webhook."),
+            "amount_minor": integer_property("Top-up amount in minor units."),
+            "currency": string_property("Stripe currency code."),
+            "success_url": nullable_string_property("Optional Checkout success URL."),
+            "cancel_url": nullable_string_property("Optional Checkout cancel URL.")
+        }),
+        &["organization_id", "amount_minor", "currency"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousBountyAuthorizedCreationArgs {
-    network: Option<String>,
-    create: AutonomousBountyCreate,
-    signature: AutonomousBountyAuthorizationSignature,
-    relayer: Option<String>,
+tool_args! {
+    struct PlanStripeConnectAccountArgs {
+        agent_id: Uuid,
+    }
+    schema object_tool_schema(
+        json!({ "agent_id": uuid_property("Agent UUID.") }),
+        &["agent_id"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousBountyAuthorizedContributionArgs {
-    network: Option<String>,
-    contribution: AutonomousBountyContribution,
-    signature: AutonomousBountyAuthorizationSignature,
-    relayer: Option<String>,
+tool_args! {
+    struct PlanStripeConnectTransferArgs {
+        payout_intent_id: Uuid,
+        connected_account_id: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "payout_intent_id": uuid_property("Stripe fiat payout intent UUID from bounty status."),
+            "connected_account_id": string_property("Stripe connected account ID receiving the transfer.")
+        }),
+        &["payout_intent_id", "connected_account_id"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct X402BountyFundingArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    amount: Option<u64>,
-    relayer: Option<String>,
-    payment_signature: Option<String>,
+tool_args! {
+    #[derive(Default)]
+    struct LiveMoneyReadinessArgs {
+        network: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet.")
+        }),
+        &[],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GetX402RelayStatusArgs {
-    relay_id: Uuid,
+tool_args! {
+    struct PlanGitHubIssueBountyArgs {
+        repository: String,
+        issue_url: String,
+        title: String,
+        body: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "repository": string_property("GitHub repository, for example owner/repo."),
+            "issue_url": string_property("Canonical GitHub issue URL."),
+            "title": string_property("Issue title."),
+            "body": string_property("Rendered issue form markdown body.")
+        }),
+        &["repository", "issue_url", "title", "body"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousBountyClaimArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    solver: String,
-    authorization_nonce: Option<String>,
-    authorization_valid_before: Option<u64>,
+tool_args! {
+    struct PlanGitHubFundingCommentArgs {
+        repository: String,
+        issue_url: String,
+        title: String,
+        body: String,
+        comment_body: String,
+        contributor_login: Option<String>,
+        comment_id: Option<String>,
+        funding_api_base_url: Option<String>,
+        #[serde(default)]
+        existing_idempotency_keys: Vec<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "repository": string_property("GitHub repository, for example owner/repo."),
+            "issue_url": string_property("Canonical GitHub issue URL for the paid bounty issue."),
+            "title": string_property("Issue title."),
+            "body": string_property("Rendered issue form markdown body."),
+            "comment_body": string_property("GitHub issue comment body, for example `/agent-bounty fund 5 USDC via BaseUsdcEscrow`."),
+            "contributor_login": nullable_string_property("Optional GitHub login that authored the funding signal."),
+            "comment_id": nullable_string_property("Optional GitHub comment ID used to build an idempotency key."),
+            "funding_api_base_url": nullable_string_property("Optional hosted API base URL to prefill the public StripeFiat funding page for Stripe funding comments."),
+            "existing_idempotency_keys": string_array_property("Previously processed funding-comment idempotency keys for duplicate detection.")
+        }),
+        &["repository", "issue_url", "title", "body", "comment_body"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousBountyAuthorizedClaimArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    solver: String,
-    authorization_nonce: String,
-    authorization_valid_before: u64,
-    signature: AutonomousBountyAuthorizationSignature,
-    relayer: Option<String>,
+tool_args! {
+    struct PlanGitHubCreateCommentArgs {
+        repository: String,
+        issue_url: String,
+        title: String,
+        body: String,
+        comment_body: String,
+        contributor_login: Option<String>,
+        comment_id: Option<String>,
+        #[serde(default)]
+        existing_idempotency_keys: Vec<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "repository": string_property("GitHub repository, for example owner/repo."),
+            "issue_url": string_property("Canonical HTTPS GitHub issue URL."),
+            "title": string_property("Current issue title."),
+            "body": string_property("Current issue body used as advisory draft context."),
+            "comment_body": string_property("GitHub comment containing `/agent-bounty create <amount> USDC`."),
+            "contributor_login": nullable_string_property("Optional GitHub login that authored the command."),
+            "comment_id": nullable_string_property("Optional GitHub comment ID used for idempotency."),
+            "existing_idempotency_keys": string_array_property("Previously processed create-comment keys for duplicate detection.")
+        }),
+        &["repository", "issue_url", "title", "body", "comment_body"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousBountySubmissionArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    solver: String,
-    submission_hash: String,
-    evidence_hash: String,
+tool_args! {
+    struct PlanSocialMentionDraftArgs {
+        source_network: String,
+        mention_url: String,
+        mention_id: String,
+        mention_text: String,
+        author_handle: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "source_network": string_property("Social network or connector name, for example farcaster."),
+            "mention_url": string_property("Canonical HTTPS URL for the source mention."),
+            "mention_id": string_property("Stable provider mention ID used for idempotency."),
+            "mention_text": string_property("Mention text containing `/agent-bounty create <amount> USDC` and the requested outcome."),
+            "author_handle": nullable_string_property("Optional public author handle.")
+        }),
+        &["source_network", "mention_url", "mention_id", "mention_text"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousBountySubmissionAuthorizationArgs {
-    network: Option<String>,
-    submission: AutonomousBountySubmissionAuthorizationRequest,
+tool_args! {
+    struct PlanGitHubClaimCommentArgs {
+        repository: String,
+        issue_url: String,
+        title: String,
+        body: String,
+        comment_body: String,
+        contributor_login: Option<String>,
+        comment_id: Option<String>,
+        claim_age_minutes: Option<u64>,
+        #[serde(default)]
+        progress_signal_count: u32,
+        active_claim_login: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "repository": string_property("GitHub repository, for example owner/repo."),
+            "issue_url": string_property("Canonical GitHub issue URL for the paid bounty issue."),
+            "title": string_property("Issue title."),
+            "body": string_property("Rendered issue form markdown body."),
+            "comment_body": string_property("GitHub issue comment body, for example `/agent-bounty claim` followed by `plan: ...`."),
+            "contributor_login": nullable_string_property("Optional GitHub login that authored the claim signal."),
+            "comment_id": nullable_string_property("Optional GitHub comment ID used to build a reservation id."),
+            "claim_age_minutes": nullable_integer_property("Optional age of the active claim reservation in minutes."),
+            "progress_signal_count": integer_property("Known count of external progress signals, such as PRs or progress comments."),
+            "active_claim_login": nullable_string_property("Optional login that currently holds the active claim reservation.")
+        }),
+        &["repository", "issue_url", "title", "body", "comment_body"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PrepareAutonomousBountySubmissionArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    solver_wallet: String,
-    artifact_reference: String,
-    evidence: Value,
+tool_args! {
+    struct PlanGitHubProofCommentArgs {
+        bounty_id: Uuid,
+        proof_url: String,
+        verifier_summary: String,
+        settlement_url: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "bounty_id": uuid_property("Bounty UUID."),
+            "proof_url": string_property("Public proof URL."),
+            "verifier_summary": string_property("Verifier summary to include in the comment."),
+            "settlement_url": nullable_string_property("Optional settlement transaction or record URL.")
+        }),
+        &["bounty_id", "proof_url", "verifier_summary", "settlement_url"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousVerificationAttestationArgs {
-    network: Option<String>,
-    attestation: AutonomousVerificationAttestationRequest,
+tool_args! {
+    struct PlanGitHubProofCommentForProofArgs {
+        proof_id: Uuid,
+        settlement_url: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "proof_id": uuid_property("Public proof record UUID."),
+            "settlement_url": nullable_string_property("Optional settlement transaction or record URL.")
+        }),
+        &["proof_id", "settlement_url"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousModuleSettlementArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    caller: Option<String>,
-    proof: String,
+tool_args! {
+    #[derive(Default)]
+    struct SearchCapabilitiesArgs {
+        class: Option<CapabilityClass>,
+        template_slug: Option<String>,
+        currency: Option<String>,
+        max_price_minor: Option<i64>,
+    }
+    schema object_tool_schema(
+        json!({
+            "class": nullable_enum_property(&[
+                "Coding", "Research", "Extraction", "Verification", "Documentation", "Ci",
+                "BrowserWorkflow"
+            ], "Optional capability class filter."),
+            "template_slug": nullable_string_property("Optional reusable bounty template slug."),
+            "currency": nullable_string_property("Optional lowercase currency code."),
+            "max_price_minor": nullable_integer_property("Optional maximum acceptable minimum price in minor units.")
+        }),
+        &[],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousAttestationSettlementArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    caller: Option<String>,
-    attestations: Vec<AutonomousSignedAttestation>,
+tool_args! {
+    struct PlanAutonomousBountyCreationArgs {
+        network: Option<String>, create: AutonomousBountyCreate,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "create": autonomous_bounty_create_property()
+        }),
+        &["create"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PlanAutonomousLifecycleArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    caller: Option<String>,
+tool_args! {
+    struct PlanAutonomousBountyContributionArgs {
+        network: Option<String>, contribution: AutonomousBountyContribution,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "contribution": {
+                "type": "object",
+                "properties": {
+                    "bounty_contract": string_property("Canonical bounty contract receiving USDC."),
+                    "contributor": string_property("Funding agent or human wallet."),
+                    "amount": money_property("Exact USDC contribution; it must not exceed remaining target funding.", false),
+                    "authorization_nonce": nullable_string_property("Optional unique bytes32 for the one-signature EIP-3009 path."),
+                    "authorization_valid_before": nullable_integer_property("Optional Unix expiry paired with authorization_nonce.")
+                },
+                "required": ["bounty_contract", "contributor", "amount"],
+                "additionalProperties": false
+            }
+        }),
+        &["contribution"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DecodeAutonomousBountyEventsArgs {
-    logs: Vec<EvmLog>,
+tool_args! {
+    struct PlanAutonomousBountyAuthorizedCreationArgs {
+        network: Option<String>, create: AutonomousBountyCreate,
+        signature: AutonomousBountyAuthorizationSignature, relayer: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "create": autonomous_bounty_create_property(),
+            "signature": authorization_signature_property(),
+            "relayer": nullable_string_property("Optional wallet that will sponsor and submit the factory transaction.")
+        }),
+        &["create", "signature"],
+    );
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct ListAutonomousBountyEventsArgs {
-    network: Option<String>,
-    bounty_id: Option<String>,
+tool_args! {
+    struct PlanAutonomousBountyAuthorizedContributionArgs {
+        network: Option<String>, contribution: AutonomousBountyContribution,
+        signature: AutonomousBountyAuthorizationSignature, relayer: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "contribution": {
+                "type": "object",
+                "properties": {
+                    "bounty_contract": string_property("Indexed canonical bounty contract."),
+                    "contributor": string_property("Wallet that signed the authorization."),
+                    "amount": money_property("Exact USDC amount authorized.", false),
+                    "authorization_nonce": string_property("Unique bytes32 signed in the authorization."),
+                    "authorization_valid_before": integer_property("Unix expiry signed in the authorization.")
+                },
+                "required": ["bounty_contract", "contributor", "amount", "authorization_nonce", "authorization_valid_before"],
+                "additionalProperties": false
+            },
+            "signature": authorization_signature_property(),
+            "relayer": nullable_string_property("Optional wallet sponsoring the transaction.")
+        }),
+        &["contribution", "signature"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PublishAutonomousBountyTermsArgs {
-    creator_wallet: String,
-    document: AutonomousBountyTermsDocument,
+tool_args! {
+    struct X402BountyFundingArgs {
+        network: Option<String>, bounty_contract: String, amount: Option<u64>,
+        relayer: Option<String>, payment_signature: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Indexed canonical bounty contract."),
+            "amount": nullable_integer_property("Optional USDC base-unit contribution; defaults to the remaining target."),
+            "relayer": nullable_string_property("Optional gas-paying Base wallet for self-relay fallback. Omit it when the hosted relay is enabled."),
+            "payment_signature": nullable_string_property("Optional base64 x402 v2 PaymentPayload copied from the PAYMENT-SIGNATURE header. Omit it to receive the exact challenge.")
+        }),
+        &["bounty_contract"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GetAutonomousBountyTermsArgs {
-    terms_hash: String,
+tool_args! {
+    struct GetX402RelayStatusArgs { relay_id: Uuid }
+    schema object_tool_schema(
+        json!({ "relay_id": string_property("Relay UUID returned by fund_bounty_with_x402.") }),
+        &["relay_id"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PublishAutonomousSubmissionEvidenceArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    bounty_id: String,
-    round: u64,
-    solver_wallet: String,
-    artifact_reference: String,
-    evidence: Value,
+tool_args! {
+    struct PlanAutonomousBountyClaimArgs {
+        network: Option<String>, bounty_contract: String, solver: String,
+        authorization_nonce: Option<String>, authorization_valid_before: Option<u64>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Fully funded canonical bounty contract."),
+            "solver": string_property("Solver wallet that will receive payout if verification passes."),
+            "authorization_nonce": nullable_string_property("Optional unique bytes32 for a one-signature EIP-3009 bond authorization."),
+            "authorization_valid_before": nullable_integer_property("Optional Unix expiry for the bond authorization.")
+        }),
+        &["bounty_contract", "solver"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GetAutonomousSubmissionEvidenceArgs {
-    network: Option<String>,
-    bounty_contract: String,
-    round: u64,
+tool_args! {
+    struct AgentNativeClaimArgs {
+        idempotency_key: String, network: Option<String>, bounty_contract: String,
+        solver_wallet: String, agent_id: Option<Uuid>,
+        #[serde(default)]
+        request_bond_sponsorship: bool,
+        signature: Option<AutonomousBountyAuthorizationSignature>,
+        wallet_signature: Option<String>, source: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "idempotency_key": string_property("Stable 1-128 character key reused for every retry of this wallet+bounty claim."),
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Verified, funded, claimable, verification-ready canonical bounty contract."),
+            "solver_wallet": string_property("Public Base payout wallet. Never provide a private key or seed phrase."),
+            "agent_id": nullable_uuid_property("Optional registered agent UUID bound to solver_wallet and capability evidence."),
+            "request_bond_sponsorship": boolean_property("Ask the configured sponsor vault to provide the exact capped USDC bond and call claim atomically after one solver signature. The response states availability and identifies the protocol/contract."),
+            "signature": {
+                "type": ["object", "null"],
+                "description": "Legacy split signature. Omit when wallet_signature is provided.",
+                "properties": authorization_signature_property()["properties"].clone(),
+                "required": ["v", "r", "s"],
+                "additionalProperties": false
+            },
+            "wallet_signature": nullable_string_property("Preferred unchanged 0x-prefixed 65-byte result returned by wallet_request. Do not provide this together with signature."),
+            "source": nullable_string_property("Compact discovery/tool source such as github, mcp, curl, python, or cast.")
+        }),
+        &["idempotency_key", "bounty_contract", "solver_wallet", "request_bond_sponsorship"],
+    );
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct AutonomousBountyFeedArgs {
-    network: Option<String>,
-    claimable_only: Option<bool>,
+tool_args! {
+    struct PlanAutonomousBountyAuthorizedClaimArgs {
+        network: Option<String>, bounty_contract: String, solver: String,
+        authorization_nonce: String, authorization_valid_before: u64,
+        signature: AutonomousBountyAuthorizationSignature, relayer: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Fully funded canonical bounty contract."),
+            "solver": string_property("Wallet that signed the claim-bond authorization."),
+            "authorization_nonce": string_property("Unique bytes32 signed in the authorization."),
+            "authorization_valid_before": integer_property("Unix expiry signed in the authorization."),
+            "signature": authorization_signature_property(),
+            "relayer": nullable_string_property("Optional wallet sponsoring the transaction.")
+        }),
+        &["bounty_contract", "solver", "authorization_nonce", "authorization_valid_before", "signature"],
+    );
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct AutonomousVerificationJobsArgs {
-    network: Option<String>,
-    verifier: Option<String>,
+tool_args! {
+    struct PlanAutonomousBountySubmissionArgs {
+        network: Option<String>, bounty_contract: String, solver: String,
+        submission_hash: String, evidence_hash: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Claimed canonical bounty contract."),
+            "solver": string_property("Wallet holding the current claim."),
+            "submission_hash": string_property("0x-prefixed bytes32 artifact commitment."),
+            "evidence_hash": string_property("0x-prefixed bytes32 evidence-package commitment.")
+        }),
+        &["bounty_contract", "solver", "submission_hash", "evidence_hash"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BroadcastBaseSignedTransactionArgs {
-    signed_transaction: String,
-    request_id: Option<u64>,
-    network: Option<String>,
+tool_args! {
+    struct PlanAutonomousBountySubmissionAuthorizationArgs {
+        network: Option<String>, submission: AutonomousBountySubmissionAuthorizationRequest,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "submission": autonomous_submission_authorization_property()
+        }),
+        &["submission"],
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GetBaseTransactionReceiptArgs {
-    tx_hash: String,
-    request_id: Option<u64>,
-    network: Option<String>,
+tool_args! {
+    struct PrepareAutonomousBountySubmissionArgs {
+        network: Option<String>, bounty_contract: String, solver_wallet: String,
+        artifact_reference: String, evidence: Value,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Indexed canonical bounty contract in claimed state."),
+            "solver_wallet": string_property("Wallet that owns the active indexed claim."),
+            "artifact_reference": string_property("Public repository, commit, artifact URI, or canonical result string to commit."),
+            "evidence": {
+                "type": "object",
+                "description": "Public evidence object required by the bounty's immutable evidence schema; maximum encoded size is 256 KiB."
+            }
+        }),
+        &["bounty_contract", "solver_wallet", "artifact_reference", "evidence"],
+    );
+}
+
+tool_args! {
+    struct PlanAutonomousVerificationAttestationArgs {
+        network: Option<String>, attestation: AutonomousVerificationAttestationRequest,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "attestation": autonomous_verification_attestation_property()
+        }),
+        &["attestation"],
+    );
+}
+
+tool_args! {
+    struct PlanAutonomousModuleSettlementArgs {
+        network: Option<String>, bounty_contract: String, caller: Option<String>, proof: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Submitted canonical deterministic-module bounty."),
+            "caller": nullable_string_property("Optional wallet sponsoring the permissionless call."),
+            "proof": string_property("0x-prefixed proof bytes consumed by the committed verifier module.")
+        }),
+        &["bounty_contract", "proof"],
+    );
+}
+
+tool_args! {
+    struct PlanAutonomousAttestationSettlementArgs {
+        network: Option<String>, bounty_contract: String, caller: Option<String>,
+        attestations: Vec<AutonomousSignedAttestation>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Submitted canonical quorum bounty."),
+            "caller": nullable_string_property("Optional wallet sponsoring the relay."),
+            "attestations": {
+                "type": "array", "minItems": 1, "maxItems": 8,
+                "items": autonomous_signed_attestation_property()
+            }
+        }),
+        &["bounty_contract", "attestations"],
+    );
+}
+
+tool_args! {
+    struct PlanAutonomousLifecycleArgs {
+        network: Option<String>, bounty_contract: String, caller: Option<String>,
+    }
+    schema |contract_description: &str| object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property(contract_description),
+            "caller": nullable_string_property("Optional wallet that will send the transaction; refund withdrawal requires it.")
+        }),
+        &["bounty_contract"],
+    );
+}
+
+tool_args! {
+    struct DecodeAutonomousBountyEventsArgs { logs: Vec<EvmLog> }
+    schema object_tool_schema(
+        json!({
+            "logs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "address": string_property("Event-emitting factory or bounty contract."),
+                        "topics": string_array_property("0x-prefixed 32-byte EVM log topics."),
+                        "data": string_property("0x-prefixed ABI-encoded event data."),
+                        "tx_hash": string_property("Confirmed transaction hash."),
+                        "block_number": integer_property("Confirmed block number."),
+                        "log_index": integer_property("Transaction log index."),
+                        "occurred_at": nullable_string_property("Optional RFC3339 event timestamp.")
+                    },
+                    "required": ["address", "topics", "data", "tx_hash", "block_number", "log_index"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        &["logs"],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct ListAutonomousBountyEventsArgs { network: Option<String>, bounty_id: Option<String> }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_id": nullable_string_property("Optional 0x-prefixed bytes32 autonomous bounty id filter.")
+        }),
+        &[],
+    );
+}
+
+tool_args! {
+    struct PublishAutonomousBountyTermsArgs {
+        creator_wallet: String,
+        document: AutonomousBountyTermsDocument,
+    }
+    schema object_tool_schema(
+        json!({
+            "creator_wallet": string_property("Wallet expected to create the canonical bounty."),
+            "document": autonomous_bounty_terms_property()
+        }),
+        &["creator_wallet", "document"],
+    );
+}
+
+tool_args! {
+    struct GetAutonomousBountyTermsArgs { terms_hash: String }
+    schema object_tool_schema(
+        json!({ "terms_hash": string_property("0x-prefixed Keccak hash from a canonical bounty contract.") }),
+        &["terms_hash"],
+    );
+}
+
+tool_args! {
+    struct PublishAutonomousSubmissionEvidenceArgs {
+        network: Option<String>,
+        bounty_contract: String,
+        bounty_id: String,
+        round: u64,
+        solver_wallet: String,
+        artifact_reference: String,
+        evidence: Value,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Indexed canonical submitted bounty contract."),
+            "bounty_id": string_property("0x-prefixed canonical bounty id."),
+            "round": integer_property("Current submission round."),
+            "solver_wallet": string_property("Wallet that holds the indexed claim."),
+            "artifact_reference": string_property("Public repository, commit, artifact URI, or canonical result string."),
+            "evidence": object_property("Public evidence object evaluated under the immutable evidence schema.")
+        }),
+        &["bounty_contract", "bounty_id", "round", "solver_wallet", "artifact_reference", "evidence"],
+    );
+}
+
+tool_args! {
+    struct GetAutonomousSubmissionEvidenceArgs {
+        network: Option<String>, bounty_contract: String, round: u64,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Indexed canonical bounty contract."),
+            "round": integer_property("Positive submission round.")
+        }),
+        &["bounty_contract", "round"],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct AutonomousBountyFeedArgs { network: Option<String>, claimable_only: Option<bool> }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "claimable_only": nullable_boolean_property("When true, return only fully funded unclaimed bounties.")
+        }),
+        &[],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct OpportunityListArgs {
+        network: Option<String>, view: Option<String>, source_type: Option<String>,
+        work_state: Option<String>, payment_state: Option<String>, limit: Option<u32>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional canonical Base network; defaults to base-mainnet."),
+            "view": nullable_enum_property(&["recent", "engineering", "creative", "urgent", "seeking_funding", "ready_to_earn"], "Optional deterministic discovery view. Inclusion factors are returned with each item."),
+            "source_type": nullable_enum_property(&["unfunded_offchain", "legacy_bounty", "canonical_base"], "Optional authoritative-source filter."),
+            "work_state": nullable_enum_property(&["open", "claimable", "in_progress", "submitted", "completed"], "Optional work-lifecycle filter."),
+            "payment_state": nullable_enum_property(&["none", "seeking_funding", "escrowed", "paid"], "Optional payment-state filter."),
+            "limit": nullable_integer_property("Optional combined result limit from 1 to 300.")
+        }),
+        &[],
+    );
+}
+
+tool_args! {
+    struct AnalyzeBountyFitArgs { bounty_contract: String, network: Option<String> }
+    schema object_tool_schema(
+        json!({
+            "bounty_contract": string_property("Indexed canonical autonomous-v1 bounty contract."),
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet.")
+        }),
+        &["bounty_contract"],
+    );
+}
+
+tool_args! {
+    struct CreateDiscoverySubscriptionArgs {
+        endpoint_url: String,
+        #[serde(default)]
+        filters: DiscoverySubscriptionFilters,
+    }
+    schema object_tool_schema(
+        json!({
+            "endpoint_url": string_property("Public HTTPS receiver URL. Private, loopback, link-local, credential-bearing, and redirect-based endpoints are rejected."),
+            "filters": discovery_subscription_filters_property()
+        }),
+        &["endpoint_url"],
+    );
+}
+
+tool_args! {
+    struct ManageDiscoverySubscriptionArgs { subscription_id: Uuid, management_token: String }
+    schema object_tool_schema(
+        json!({
+            "subscription_id": string_property("Discovery subscription UUID."),
+            "management_token": string_property("Secret bbm_ management token returned only when the subscription was created.")
+        }),
+        &["subscription_id", "management_token"],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct OpportunityConversionFunnelArgs { window_hours: Option<u32> }
+    schema object_tool_schema(
+        json!({ "window_hours": nullable_integer_property("Optional cohort lookback from 1 to 8760 hours; defaults to 720.") }),
+        &[],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct SiteAnalyticsArgs { window_hours: Option<u32> }
+    schema object_tool_schema(
+        json!({ "window_hours": nullable_integer_property("Optional lookback from 1 to 8760 hours; defaults to 720.") }),
+        &[],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct AutonomousVerificationJobsArgs { network: Option<String>, verifier: Option<String> }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "verifier": nullable_string_property("Optional committed verifier wallet; deterministic module jobs remain visible to any relayer.")
+        }),
+        &[],
+    );
+}
+
+tool_args! {
+    struct BroadcastBaseSignedTransactionArgs {
+        signed_transaction: String,
+        request_id: Option<u64>,
+        network: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "signed_transaction": string_property("0x-prefixed signed raw EVM transaction."),
+            "request_id": nullable_integer_property("Optional JSON-RPC request id."),
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
+        }),
+        &["signed_transaction"],
+    );
+}
+
+tool_args! {
+    struct GetBaseTransactionReceiptArgs {
+        tx_hash: String,
+        request_id: Option<u64>,
+        network: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "tx_hash": string_property("0x-prefixed transaction hash."),
+            "request_id": nullable_integer_property("Optional JSON-RPC request id."),
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet.")
+        }),
+        &["tx_hash"],
+    );
 }
 
 #[tokio::main]
@@ -534,8 +1252,15 @@ async fn main() -> anyhow::Result<()> {
             "/.well-known/agent-bounties.json",
             get(agent_bounties_discovery),
         )
+        .route(
+            "/mcp",
+            get(chatgpt_app::mcp_get)
+                .post(chatgpt_app::mcp_post)
+                .delete(chatgpt_app::mcp_delete),
+        )
         .route("/tools", get(tools))
         .route("/tools/route_blocked_goal", post(route_blocked_goal))
+<<<<<<< ours
         .route(
             "/tools/plan_objective_creation",
             post(plan_objective_creation),
@@ -549,6 +1274,37 @@ async fn main() -> anyhow::Result<()> {
             post(apply_objective_action),
         )
         .route("/tools/reconcile_objective", post(reconcile_objective))
+=======
+        .route("/tools/prepare_bounty_post", post(prepare_bounty_post))
+        .route(
+            "/tools/publish_unfunded_bounty",
+            post(publish_unfunded_bounty),
+        )
+        .route(
+            "/tools/list_unfunded_bounties",
+            post(list_unfunded_bounties),
+        )
+        .route(
+            "/tools/submit_unfunded_bounty_solution",
+            post(submit_unfunded_bounty_solution),
+        )
+        .route(
+            "/tools/draft_bounty_with_cloud_agent",
+            post(draft_bounty_with_cloud_agent),
+        )
+        .route(
+            "/tools/compile_objective_with_cloud_agent",
+            post(compile_objective_with_cloud_agent),
+        )
+        .route(
+            "/tools/get_autonomous_inventory_summary",
+            post(get_autonomous_inventory_summary),
+        )
+        .route(
+            "/tools/get_solver_leaderboard",
+            post(get_solver_leaderboard),
+        )
+>>>>>>> theirs
         .route("/tools/register_agent", post(register_agent))
         .route("/tools/register_capability", post(register_capability))
         .route("/tools/search_capabilities", post(search_capabilities))
@@ -608,12 +1364,20 @@ async fn main() -> anyhow::Result<()> {
             post(plan_github_issue_bounty),
         )
         .route(
+            "/tools/plan_github_create_comment",
+            post(plan_github_create_comment),
+        )
+        .route(
             "/tools/plan_github_funding_comment",
             post(plan_github_funding_comment),
         )
         .route(
             "/tools/plan_github_claim_comment",
             post(plan_github_claim_comment),
+        )
+        .route(
+            "/tools/plan_social_mention_draft",
+            post(plan_social_mention_draft),
         )
         .route(
             "/tools/plan_github_proof_comment",
@@ -636,6 +1400,10 @@ async fn main() -> anyhow::Result<()> {
             post(plan_autonomous_canonical_child_terms),
         )
         .route(
+            "/tools/prepare_standing_meta_v2_child",
+            post(prepare_standing_meta_v2_child),
+        )
+        .route(
             "/tools/plan_autonomous_bounty_creation",
             post(plan_autonomous_bounty_creation),
         )
@@ -653,10 +1421,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/tools/fund_bounty_with_x402", post(fund_bounty_with_x402))
         .route("/tools/get_x402_relay_status", post(get_x402_relay_status))
+        .route("/tools/prepare_agent_to_earn", post(prepare_agent_to_earn))
         .route(
             "/tools/plan_autonomous_bounty_claim",
             post(plan_autonomous_bounty_claim),
         )
+        .route("/tools/agent_native_claim", post(agent_native_claim))
         .route(
             "/tools/plan_autonomous_bounty_authorized_claim",
             post(plan_autonomous_bounty_authorized_claim),
@@ -729,6 +1499,25 @@ async fn main() -> anyhow::Result<()> {
             "/tools/list_autonomous_bounties",
             post(list_autonomous_bounties),
         )
+        .route("/tools/list_opportunities", post(list_opportunities))
+        .route(
+            "/tools/create_discovery_subscription",
+            post(create_discovery_subscription),
+        )
+        .route(
+            "/tools/get_discovery_subscription",
+            post(get_discovery_subscription),
+        )
+        .route(
+            "/tools/delete_discovery_subscription",
+            post(delete_discovery_subscription),
+        )
+        .route(
+            "/tools/get_opportunity_conversion_funnel",
+            post(get_opportunity_conversion_funnel),
+        )
+        .route("/tools/get_site_analytics", post(get_site_analytics))
+        .route("/tools/analyze_bounty_fit", post(analyze_bounty_fit))
         .route(
             "/tools/list_autonomous_verification_jobs",
             post(list_autonomous_verification_jobs),
@@ -800,20 +1589,51 @@ async fn discovery_manifest_schema() -> impl IntoResponse {
 }
 
 async fn tools() -> Json<Vec<ToolDescriptor>> {
-    Json(vec![
+    Json(tool_registry![
         tool(
             "route_blocked_goal",
             "Route a blocked agent goal into a template, quote, bounty, or verification step.",
-            object_tool_schema(
-                json!({
-                    "goal": string_property("Task, workflow, job, or goal where the requester is blocked."),
-                    "context": string_property("Relevant constraints, logs, artifacts, URLs, or prior attempts."),
-                    "budget_minor": integer_property("Maximum budget in minor units."),
-                    "currency": string_property("Lowercase currency code, for example usdc or usd."),
-                    "privacy": privacy_property()
-                }),
-                &["goal", "context", "budget_minor", "currency", "privacy"],
-            ),
+            RouteBlockedGoalArgs::input_schema(),
+        ),
+        tool(
+            "prepare_bounty_post",
+            "Use this when a person wants their current AI assistant to prepare a reviewable Agent Bounties draft. It returns a portable card and secure review URL, moves no funds, and requests no wallet signature.",
+            PrepareBountyPostArgs::input_schema(),
+        ),
+        tool(
+            "publish_unfunded_bounty",
+            "Publish a seven-day voluntary request with no wallet. It is not claimable and promises no payment.",
+            PublishUnfundedBountyArgs::input_schema(),
+        ),
+        tool(
+            "list_unfunded_bounties",
+            "List voluntary requests. They are not claimable and promise no payment.",
+            ListUnfundedBountiesArgs::input_schema(),
+        ),
+        tool(
+            "submit_unfunded_bounty_solution",
+            "Submit public voluntary work. This creates no payment claim.",
+            SubmitUnfundedBountySolutionArgs::input_schema(),
+        ),
+        tool(
+            "draft_bounty_with_cloud_agent",
+            "Turn an unstructured digital-work objective into measurable draft terms using the hosted cloud model. The output is advisory and cannot sign, fund, verify, settle, or prove payment.",
+            DraftBountyWithCloudAgentArgs::input_schema(),
+        ),
+        tool(
+            "compile_objective_with_cloud_agent",
+            "Use GPT-5.6 to decompose one digital objective into a validated acyclic graph of verifier-ready bounty drafts. The model is advisory; deterministic validation and canonical contracts retain authority.",
+            CompileObjectiveWithCloudAgentArgs::input_schema(),
+        ),
+        tool(
+            "get_autonomous_inventory_summary",
+            "Read funded canonical work. Follow the returned next action.",
+            AutonomousInventorySummaryArgs::input_schema(),
+        ),
+        tool(
+            "get_solver_leaderboard",
+            "Read today's and this week's canonical solver rankings. Follow next_action.",
+            SolverLeaderboardArgs::input_schema(),
         ),
         tool(
             "plan_objective_creation",
@@ -999,23 +1819,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         tool(
             "search_capabilities",
             "Search public solver capabilities before requesting quotes.",
-            object_tool_schema(
-                json!({
-                    "class": nullable_enum_property(&[
-                        "Coding",
-                        "Research",
-                        "Extraction",
-                        "Verification",
-                        "Documentation",
-                        "Ci",
-                        "BrowserWorkflow"
-                    ], "Optional capability class filter."),
-                    "template_slug": nullable_string_property("Optional reusable bounty template slug."),
-                    "currency": nullable_string_property("Optional lowercase currency code."),
-                    "max_price_minor": nullable_integer_property("Optional maximum acceptable minimum price in minor units.")
-                }),
-                &[],
-            ),
+            SearchCapabilitiesArgs::input_schema(),
         ),
         tool(
             "claim_bounty",
@@ -1066,18 +1870,12 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         tool(
             "get_bounty_status",
             "Read bounty lifecycle and verification status.",
-            bounty_id_schema(),
+            BountyIdArgs::input_schema(),
         ),
         tool(
             "get_paid_status",
             "Read payout status for a bounty or agent. After verified value, the response includes an ordered post_value_loop for sharing evidence, telling the human/operator, asking for a star/upvote, posting a useful bounty, and returning to funded work.",
-            object_tool_schema(
-                json!({
-                    "bounty_id": nullable_uuid_property("Optional bounty UUID for bounty-level payout status."),
-                    "agent_id": nullable_uuid_property("Optional agent UUID for agent-level earnings and payout status.")
-                }),
-                &[],
-            ),
+            PaidStatusArgs::input_schema(),
         ),
         tool(
             "register_capability",
@@ -1128,80 +1926,39 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         tool(
             "plan_stripe_checkout_top_up",
             "Build a Stripe Checkout Session request intent for funding a fiat platform balance.",
-            object_tool_schema(
-                json!({
-                    "organization_id": uuid_property("Organization UUID credited after a paid webhook."),
-                    "amount_minor": integer_property("Top-up amount in minor units."),
-                    "currency": string_property("Stripe currency code."),
-                    "success_url": nullable_string_property("Optional Checkout success URL."),
-                    "cancel_url": nullable_string_property("Optional Checkout cancel URL.")
-                }),
-                &["organization_id", "amount_minor", "currency"],
-            ),
+            PlanStripeCheckoutTopUpArgs::input_schema(),
         ),
         tool(
             "plan_stripe_connect_account",
             "Build a Stripe Accounts v2 request intent for agent fiat payout onboarding.",
-            object_tool_schema(
-                json!({ "agent_id": uuid_property("Agent UUID.") }),
-                &["agent_id"],
-            ),
+            PlanStripeConnectAccountArgs::input_schema(),
         ),
         tool(
             "plan_stripe_connect_transfer",
             "Build a Stripe Connect transfer request intent for a specific fiat payout intent. The transfer must still be executed and reconciled from Stripe evidence before payout is marked paid.",
-            object_tool_schema(
-                json!({
-                    "payout_intent_id": uuid_property("Stripe fiat payout intent UUID from bounty status."),
-                    "connected_account_id": string_property("Stripe connected account ID receiving the transfer.")
-                }),
-                &["payout_intent_id", "connected_account_id"],
-            ),
+            PlanStripeConnectTransferArgs::input_schema(),
         ),
         tool(
             "get_live_money_readiness",
             "Return non-secret Stripe/Base readiness gates for this hosted service before agents or operators rely on real-value movement.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet.")
-                }),
-                &[],
-            ),
+            LiveMoneyReadinessArgs::input_schema(),
         ),
         operator_tool(
             "execute_stripe_checkout_top_up",
             "Create a live Stripe Checkout Session for funding a fiat platform balance when operator-enabled.",
-            object_tool_schema(
-                json!({
-                    "organization_id": uuid_property("Organization UUID credited after a paid webhook."),
-                    "amount_minor": integer_property("Top-up amount in minor units."),
-                    "currency": string_property("Stripe currency code."),
-                    "success_url": nullable_string_property("Optional Checkout success URL."),
-                    "cancel_url": nullable_string_property("Optional Checkout cancel URL.")
-                }),
-                &["organization_id", "amount_minor", "currency"],
-            ),
+            PlanStripeCheckoutTopUpArgs::input_schema(),
             OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
         operator_tool(
             "execute_stripe_connect_account",
             "Create a live Stripe Accounts v2 connected account when operator-enabled.",
-            object_tool_schema(
-                json!({ "agent_id": uuid_property("Agent UUID.") }),
-                &["agent_id"],
-            ),
+            PlanStripeConnectAccountArgs::input_schema(),
             OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
         operator_tool(
             "execute_stripe_connect_transfer",
             "Execute a Stripe Connect transfer for a fiat payout intent when operator-enabled. The payout is still marked paid only after transfer event reconciliation.",
-            object_tool_schema(
-                json!({
-                    "payout_intent_id": uuid_property("Stripe fiat payout intent UUID from bounty status."),
-                    "connected_account_id": string_property("Stripe connected account ID receiving the transfer.")
-                }),
-                &["payout_intent_id", "connected_account_id"],
-            ),
+            PlanStripeConnectTransferArgs::input_schema(),
             OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
         operator_tool(
@@ -1254,105 +2011,52 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         tool(
             "plan_github_issue_bounty",
             "Parse a GitHub paid-bounty issue form and produce check-run output for dogfooding.",
-            object_tool_schema(
-                json!({
-                    "repository": string_property("GitHub repository, for example owner/repo."),
-                    "issue_url": string_property("Canonical GitHub issue URL."),
-                    "title": string_property("Issue title."),
-                    "body": string_property("Rendered issue form markdown body.")
-                }),
-                &["repository", "issue_url", "title", "body"],
-            ),
+            PlanGitHubIssueBountyArgs::input_schema(),
+        ),
+        tool(
+            "plan_github_create_comment",
+            "Convert `/agent-bounty create <amount> USDC` on an existing GitHub issue into an idempotent, review-required draft and canonical wallet handoff. This never publishes terms or claims funding.",
+            PlanGitHubCreateCommentArgs::input_schema(),
         ),
         tool(
             "plan_github_funding_comment",
             "Parse a GitHub public co-funding comment into an operator reconciliation signal without crediting funds.",
-            object_tool_schema(
-                json!({
-                    "repository": string_property("GitHub repository, for example owner/repo."),
-                    "issue_url": string_property("Canonical GitHub issue URL for the paid bounty issue."),
-                    "title": string_property("Issue title."),
-                    "body": string_property("Rendered issue form markdown body."),
-                    "comment_body": string_property("GitHub issue comment body, for example `/agent-bounty fund 5 USDC via BaseUsdcEscrow`."),
-                    "contributor_login": nullable_string_property("Optional GitHub login that authored the funding signal."),
-                    "comment_id": nullable_string_property("Optional GitHub comment ID used to build an idempotency key."),
-                    "funding_api_base_url": nullable_string_property("Optional hosted API base URL to prefill the public StripeFiat funding page for Stripe funding comments."),
-                    "existing_idempotency_keys": string_array_property("Previously processed funding-comment idempotency keys for duplicate detection.")
-                }),
-                &["repository", "issue_url", "title", "body", "comment_body"],
-            ),
+            PlanGitHubFundingCommentArgs::input_schema(),
+        ),
+        tool(
+            "plan_social_mention_draft",
+            "Plan a review-only bounty draft from a social mention. The hosted API keeps this disabled until an operator enables rollout and indexed canonical events prove at least three funded and two settled GitHub-originated bounties.",
+            PlanSocialMentionDraftArgs::input_schema(),
         ),
         tool(
             "plan_github_claim_comment",
             "Parse a GitHub public claim or attempt comment into a reservation, stale-release, or review signal without authorizing settlement.",
-            object_tool_schema(
-                json!({
-                    "repository": string_property("GitHub repository, for example owner/repo."),
-                    "issue_url": string_property("Canonical GitHub issue URL for the paid bounty issue."),
-                    "title": string_property("Issue title."),
-                    "body": string_property("Rendered issue form markdown body."),
-                    "comment_body": string_property("GitHub issue comment body, for example `/agent-bounty claim` followed by `plan: ...`."),
-                    "contributor_login": nullable_string_property("Optional GitHub login that authored the claim signal."),
-                    "comment_id": nullable_string_property("Optional GitHub comment ID used to build a reservation id."),
-                    "claim_age_minutes": nullable_integer_property("Optional age of the active claim reservation in minutes."),
-                    "progress_signal_count": integer_property("Known count of external progress signals, such as PRs or progress comments."),
-                    "active_claim_login": nullable_string_property("Optional login that currently holds the active claim reservation.")
-                }),
-                &["repository", "issue_url", "title", "body", "comment_body"],
-            ),
+            PlanGitHubClaimCommentArgs::input_schema(),
         ),
         tool(
             "plan_github_proof_comment",
             "Build a GitHub proof comment and check-run output after a bounty is accepted.",
-            object_tool_schema(
-                json!({
-                    "bounty_id": uuid_property("Bounty UUID."),
-                    "proof_url": string_property("Public proof URL."),
-                    "verifier_summary": string_property("Verifier summary to include in the comment."),
-                    "settlement_url": nullable_string_property("Optional settlement transaction or record URL.")
-                }),
-                &["bounty_id", "proof_url", "verifier_summary", "settlement_url"],
-            ),
+            PlanGitHubProofCommentArgs::input_schema(),
         ),
         tool(
             "plan_github_proof_comment_for_proof",
             "Build a GitHub proof comment and check-run output from a stored public proof record.",
-            object_tool_schema(
-                json!({
-                    "proof_id": uuid_property("Public proof record UUID."),
-                    "settlement_url": nullable_string_property("Optional settlement transaction or record URL.")
-                }),
-                &["proof_id", "settlement_url"],
-            ),
+            PlanGitHubProofCommentForProofArgs::input_schema(),
         ),
         operator_tool(
             "broadcast_base_signed_transaction",
             "Broadcast a signed Base transaction through the configured RPC URL when operator-enabled.",
-            object_tool_schema(
-                json!({
-                    "signed_transaction": string_property("0x-prefixed signed raw EVM transaction."),
-                    "request_id": nullable_integer_property("Optional JSON-RPC request id."),
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-sepolia.")
-                }),
-                &["signed_transaction"],
-            ),
+            BroadcastBaseSignedTransactionArgs::input_schema(),
             OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
         tool(
             "get_base_transaction_receipt",
             "Fetch a Base transaction receipt. Canonical bounty state still comes from the autonomous indexer, not from this receipt alone.",
-            object_tool_schema(
-                json!({
-                    "tx_hash": string_property("0x-prefixed transaction hash."),
-                    "request_id": nullable_integer_property("Optional JSON-RPC request id."),
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet.")
-                }),
-                &["tx_hash"],
-            ),
+            GetBaseTransactionReceiptArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_canonical_child_terms",
-            "Derive the exact task criteria, parent-and-round benchmark commitment, minimum USDC target, deterministic verifier configuration, and proof encoding for a canonical child bounty. The parent cannot pass until a different wallet completes the child and receives canonical settlement.",
+            "Validate the child task criteria and its task-specific deterministic verifier, then derive the parent-and-round benchmark commitment, minimum USDC target, and proof encoding. The parent cannot pass until a different wallet completes the child and receives canonical settlement.",
             object_tool_schema(
                 json!({
                     "parent_bounty_id": string_property("Parent canonical bytes32 bounty ID."),
@@ -1366,7 +2070,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                         "minItems": 1,
                         "maxItems": 20
                     },
-                    "verifier_module": string_property("Deployed canonical-child-v1 verifier module committed by the parent bounty.")
+                    "verifier_module": string_property("Deployed deterministic verifier for the child task. Do not pass the parent's canonical-child verifier or the leading-zero proof-of-work canary.")
                 }),
                 &[
                     "parent_bounty_id", "parent_round", "parent_solver", "parent_solver_reward",
@@ -1375,381 +2079,275 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
         ),
         tool(
-            "plan_autonomous_bounty_creation",
-            "Build a canonical Base USDC autonomous bounty creation plan. The plan supports a wallet-batched approve/create path and returns the predictable bounty address plus Circle USDC EIP-3009 authorization data for a gas-sponsored relayer path.",
+            "prepare_standing_meta_v2_child",
+            "Prepare the complete current standing-meta-v2 child loop from one parent contract and task: validate the exact claimable parent, publish the content-addressed terms to the hosted store, pin the canonical two-verifier sandboxed-regression quorum, and return ordered wallet calls that publish the same bytes on Base and create a fully funded child before the parent claim.",
             object_tool_schema(
                 json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "create": autonomous_bounty_create_property()
+                    "network": nullable_enum_property(&["base-mainnet"], "Optional network; standing-meta-v2 currently requires Base mainnet."),
+                    "parent_bounty_contract": string_property("Exact claimable standing-meta-v2 parent contract from canonical inventory."),
+                    "parent_solver": string_property("Registered wallet that will publish the child terms, create/fund the child, and claim the parent."),
+                    "intended_child_solver": string_property("Different pre-registered wallet expected to claim and complete the child. Its participant ID must also differ."),
+                    "title": string_property("Concrete coding child title."),
+                    "goal": string_property("Precise child outcome."),
+                    "acceptance_criteria": {
+                        "type": "array",
+                        "description": "Explicit deterministic criteria evaluated by the immutable regression command.",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 50
+                    },
+                    "benchmark_source": {
+                        "type": "object",
+                        "description": "Immutable public benchmark snapshot fetched by the verifier before execution.",
+                        "properties": {
+                            "kind": enum_property(&["github_commit"], "Exact supported source kind."),
+                            "repository": string_property("GitHub owner/repository without a URL or .git suffix."),
+                            "commit": string_property("Full 40-character Git commit SHA."),
+                            "subdirectory": string_property("Normalized non-root benchmark directory inside the commit; '.', '..', absolute paths, and backslashes are rejected.")
+                        },
+                        "required": ["kind", "repository", "commit", "subdirectory"],
+                        "additionalProperties": false
+                    },
+                    "runner_manifest": {
+                        "type": "object",
+                        "description": "Immutable sandboxed_regression_v1 runner. Image and benchmark inputs must be content-addressed; command is direct argv and never a shell.",
+                        "properties": {
+                            "schema_version": enum_property(&["agent-bounties/regression-sandbox-v1"], "Exact runner schema."),
+                            "image": string_property("OCI image pinned with @sha256:<64 lowercase hex>."),
+                            "command": string_array_property("Direct argv for the deterministic test command."),
+                            "workdir": enum_property(&["/workspace"], "Fixed sandbox workdir."),
+                            "benchmark_digest": string_property("sha256:<64 lowercase hex> staged benchmark snapshot digest."),
+                            "timeout_seconds": integer_property("1-900 second timeout."),
+                            "cpu_millis": integer_property("100-4000 CPU millicores."),
+                            "memory_bytes": integer_property("64 MiB to 4 GiB memory cap."),
+                            "pids_limit": integer_property("16-512 process cap."),
+                            "max_output_bytes": integer_property("1024 bytes to 16 MiB output cap."),
+                            "tmpfs_bytes": integer_property("64 MiB to 4 GiB tmpfs cap, not above memory."),
+                            "max_source_bytes": integer_property("Maximum staged source bytes."),
+                            "max_source_files": integer_property("Maximum staged source files."),
+                            "max_benchmark_bytes": integer_property("Maximum staged benchmark bytes."),
+                            "max_benchmark_files": integer_property("Maximum staged benchmark files."),
+                            "platform": enum_property(&["linux/amd64", "linux/arm64"], "Pinned execution platform."),
+                            "test_seed": integer_property("Committed deterministic test seed.")
+                        },
+                        "required": ["schema_version", "image", "command", "workdir", "benchmark_digest", "timeout_seconds", "cpu_millis", "memory_bytes", "pids_limit", "max_output_bytes", "tmpfs_bytes", "max_source_bytes", "max_source_files", "max_benchmark_bytes", "max_benchmark_files", "platform", "test_seed"],
+                        "additionalProperties": false
+                    },
+                    "evidence_schema": nullable_object_property("Optional submission schema; defaults to a required sha256 source_snapshot_digest."),
+                    "verifier_reward": nullable_object_property("Optional USDC money object; defaults to 100000 base units and must divide across two verifiers."),
+                    "funding_deadline": nullable_integer_property("Optional child funding deadline; defaults to the immutable parent deadline."),
+                    "claim_window_seconds": nullable_integer_property("Optional child claim window; defaults to 259200 seconds."),
+                    "verification_window_seconds": nullable_integer_property("Optional child verification window; defaults to 259200 seconds."),
+                    "creation_nonce": nullable_string_property("Optional bytes32 creation nonce; otherwise derived deterministically from the parent and task."),
+                    "nonce_salt": nullable_string_property("Optional public salt for preparing a distinct child from otherwise identical task input."),
+                    "source_url": nullable_string_property("Optional public task or issue URL."),
+                    "discovery_source": nullable_string_property("Optional discovery attribution for the child poster.")
                 }),
-                &["create"],
+                &["parent_bounty_contract", "parent_solver", "intended_child_solver", "title", "goal", "acceptance_criteria", "benchmark_source", "runner_manifest"],
             ),
+        ),
+        tool(
+            "plan_autonomous_bounty_creation",
+            "Build the ordered Base USDC creation calls and one-signature authorization payload.",
+            PlanAutonomousBountyCreationArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_bounty_authorized_creation",
-            "After the creator signs the exact EIP-3009 typed data returned by plan_autonomous_bounty_creation, build the single gas-sponsorable factory transaction that creates and funds the predictable bounty contract.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "create": autonomous_bounty_create_property(),
-                    "signature": {
-                        "type": "object",
-                        "properties": {
-                            "v": integer_property("EIP-3009 recovery id: 0, 1, 27, or 28."),
-                            "r": string_property("0x-prefixed bytes32 signature r."),
-                            "s": string_property("0x-prefixed bytes32 signature s.")
-                        },
-                        "required": ["v", "r", "s"],
-                        "additionalProperties": false
-                    },
-                    "relayer": nullable_string_property("Optional wallet that will sponsor and submit the factory transaction.")
-                }),
-                &["create", "signature"],
-            ),
+            "After signing the creation payload, build the single sponsored create-and-fund transaction.",
+            PlanAutonomousBountyAuthorizedCreationArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_bounty_contribution",
-            "Build wallet-batchable approve/fund calls for a permissionless pooled USDC contribution to an existing canonical bounty contract.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "contribution": {
-                        "type": "object",
-                        "properties": {
-                            "bounty_contract": string_property("Canonical bounty contract receiving USDC."),
-                            "contributor": string_property("Funding agent or human wallet."),
-                            "amount": money_property("Exact USDC contribution; it must not exceed remaining target funding.", false),
-                            "authorization_nonce": nullable_string_property("Optional unique bytes32 for the one-signature EIP-3009 path."),
-                            "authorization_valid_before": nullable_integer_property("Optional Unix expiry paired with authorization_nonce.")
-                        },
-                        "required": ["bounty_contract", "contributor", "amount"],
-                        "additionalProperties": false
-                    }
-                }),
-                &["contribution"],
-            ),
+            "Build ordered calls and one-signature data for a pooled USDC contribution.",
+            PlanAutonomousBountyContributionArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_bounty_authorized_contribution",
-            "After a funder signs the EIP-3009 typed data returned by plan_autonomous_bounty_contribution, build the single gas-sponsorable transaction that transfers USDC into the bounty and records the contribution.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "contribution": {
-                        "type": "object",
-                        "properties": {
-                            "bounty_contract": string_property("Indexed canonical bounty contract."),
-                            "contributor": string_property("Wallet that signed the authorization."),
-                            "amount": money_property("Exact USDC amount authorized.", false),
-                            "authorization_nonce": string_property("Unique bytes32 signed in the authorization."),
-                            "authorization_valid_before": integer_property("Unix expiry signed in the authorization.")
-                        },
-                        "required": ["bounty_contract", "contributor", "amount", "authorization_nonce", "authorization_valid_before"],
-                        "additionalProperties": false
-                    },
-                    "signature": {
-                        "type": "object",
-                        "properties": {
-                            "v": integer_property("EIP-3009 recovery id: 0, 1, 27, or 28."),
-                            "r": string_property("0x-prefixed bytes32 signature r."),
-                            "s": string_property("0x-prefixed bytes32 signature s.")
-                        },
-                        "required": ["v", "r", "s"],
-                        "additionalProperties": false
-                    },
-                    "relayer": nullable_string_property("Optional wallet sponsoring the transaction.")
-                }),
-                &["contribution", "signature"],
-            ),
+            "After signing the contribution payload, build the single sponsored funding transaction.",
+            PlanAutonomousBountyAuthorizedContributionArgs::input_schema(),
         ),
         tool(
             "fund_bounty_with_x402",
-            "Fund a canonical bounty through x402 v2. Omit payment_signature for the exact EIP-3009 challenge; retry with the signature and the hosted gas-only relayer broadcasts. Success requires 200 plus PAYMENT-RESPONSE backed by confirmed canonical FundingAdded.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_contract": string_property("Indexed canonical bounty contract."),
-                    "amount": nullable_integer_property("Optional USDC base-unit contribution; defaults to the remaining target."),
-                    "relayer": nullable_string_property("Optional gas-paying Base wallet for self-relay fallback. Omit it when the hosted relay is enabled."),
-                    "payment_signature": nullable_string_property("Optional base64 x402 v2 PaymentPayload copied from the PAYMENT-SIGNATURE header. Omit it to receive the exact challenge.")
-                }),
-                &["bounty_contract"],
-            ),
+            "Fund one canonical bounty. Request the challenge, sign it, retry once, then wait for confirmed FundingAdded.",
+            X402BountyFundingArgs::input_schema(),
         ),
         tool(
             "get_x402_relay_status",
-            "Poll a durable hosted x402 relay. A transaction hash is pending evidence; only status=confirmed with PAYMENT-RESPONSE proves canonical bounty funding.",
+            "Poll one x402 relay until confirmed FundingAdded.",
+            GetX402RelayStatusArgs::input_schema(),
+        ),
+        tool(
+            "prepare_agent_to_earn",
+            "Check one public wallet against one bounty. Fix failed checks. Never provide secrets.",
             object_tool_schema(
                 json!({
-                    "relay_id": string_property("Relay UUID returned by fund_bounty_with_x402.")
+                    "network": enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the canonical bounty."),
+                    "wallet_address": string_property("Public Base solver and payout address. Never provide wallet secrets."),
+                    "bounty_contract": string_property("Canonical bounty contract the agent intends to claim."),
+                    "claim_bond_base_units": nullable_string_property("Optional expected claim bond from prior inventory, as a base-10 USDC base-unit string. The readiness service independently derives the live bond and fails on drift."),
+                    "signing_capabilities": {
+                        "type": "array",
+                        "description": "Declare eip712_typed_data and eip3009_receive_with_authorization for the normal claim flow.",
+                        "items": { "type": "string", "enum": ["eip712_typed_data", "eip3009_receive_with_authorization", "send_transaction", "wallet_send_calls"] },
+                        "uniqueItems": true
+                    },
+                    "wallet_profile": nullable_enum_property(&["generic-evm", "metamask-agent-wallet", "circle-agent-wallet", "cdp-server-wallet", "privy-server-wallet"], "Optional declared provider profile used only for guidance; providers are never inferred from addresses."),
+                    "policy": {
+                        "type": "object",
+                        "description": "Non-secret wallet policy declaration.",
+                        "properties": {
+                            "allowed_chain_ids": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "uniqueItems": true },
+                            "allowed_contracts": string_array_property("Contract allowlist containing canonical native USDC and the intended bounty contract."),
+                            "per_transaction_usdc_base_units": nullable_string_property("Per-transaction USDC cap as a base-10 base-unit string."),
+                            "rolling_24h_usdc_base_units": nullable_string_property("Rolling 24-hour USDC cap as a base-10 base-unit string."),
+                            "human_approval_policy": nullable_enum_property(&["always", "out_of_policy", "never"], "When the wallet must escalate to a human; out_of_policy is recommended for bounded autonomy.")
+                        },
+                        "required": ["allowed_chain_ids", "allowed_contracts", "per_transaction_usdc_base_units", "rolling_24h_usdc_base_units", "human_approval_policy"],
+                        "additionalProperties": false
+                    }
                 }),
-                &["relay_id"],
+                &["network", "wallet_address", "bounty_contract", "signing_capabilities", "policy"],
             ),
         ),
         tool(
+            "agent_native_claim",
+            "Claim one bounty. Reuse the idempotency key, sign wallet_request once, then replay next_request until BountyClaimed is confirmed.",
+            AgentNativeClaimArgs::input_schema(),
+        ),
+        tool(
             "plan_autonomous_bounty_claim",
-            "Build a wallet-batched USDC bond approval and claim. The indexed bond equals one verifier reward: acceptance or verifier timeout returns it, rejection replaces the paid verifier reserve, and a no-submission timeout adds it to the completion bonus.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_contract": string_property("Fully funded canonical bounty contract."),
-                    "solver": string_property("Solver wallet that will receive payout if verification passes."),
-                    "authorization_nonce": nullable_string_property("Optional unique bytes32 for a one-signature EIP-3009 bond authorization."),
-                    "authorization_valid_before": nullable_integer_property("Optional Unix expiry for the bond authorization.")
-                }),
-                &["bounty_contract", "solver"],
-            ),
+            "Use after the hosted relay reports unavailable. Build the direct bond-and-claim calls.",
+            PlanAutonomousBountyClaimArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_bounty_authorized_claim",
             "After the solver signs the exact EIP-3009 bond returned by plan_autonomous_bounty_claim, build one gas-sponsorable transaction that deposits the bond and activates the claim.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_contract": string_property("Fully funded canonical bounty contract."),
-                    "solver": string_property("Wallet that signed the claim-bond authorization."),
-                    "authorization_nonce": string_property("Unique bytes32 signed in the authorization."),
-                    "authorization_valid_before": integer_property("Unix expiry signed in the authorization."),
-                    "signature": {
-                        "type": "object",
-                        "properties": {
-                            "v": integer_property("EIP-3009 recovery id: 0, 1, 27, or 28."),
-                            "r": string_property("0x-prefixed bytes32 signature r."),
-                            "s": string_property("0x-prefixed bytes32 signature s.")
-                        },
-                        "required": ["v", "r", "s"],
-                        "additionalProperties": false
-                    },
-                    "relayer": nullable_string_property("Optional wallet sponsoring the transaction.")
-                }),
-                &["bounty_contract", "solver", "authorization_nonce", "authorization_valid_before", "signature"],
-            ),
+            PlanAutonomousBountyAuthorizedClaimArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_bounty_submission",
             "Build the solver's submission commitment call. The hashes must identify the artifact and evidence evaluated by the immutable verifier policy.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_contract": string_property("Claimed canonical bounty contract."),
-                    "solver": string_property("Wallet holding the current claim."),
-                    "submission_hash": string_property("0x-prefixed bytes32 artifact commitment."),
-                    "evidence_hash": string_property("0x-prefixed bytes32 evidence-package commitment.")
-                }),
-                &["bounty_contract", "solver", "submission_hash", "evidence_hash"],
-            ),
+            PlanAutonomousBountySubmissionArgs::input_schema(),
         ),
         tool(
             "prepare_autonomous_bounty_submission",
-            "Validate the current indexed claim, compute the artifact and canonical evidence hashes, and return the exact EIP-712 signing payload plus unsigned relay and later evidence-publication templates. This does not sign, submit, publish, verify, settle, or prove payment.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_contract": string_property("Indexed canonical bounty contract in claimed state."),
-                    "solver_wallet": string_property("Wallet that owns the active indexed claim."),
-                    "artifact_reference": string_property("Public repository, commit, artifact URI, or canonical result string to commit."),
-                    "evidence": {
-                        "type": "object",
-                        "description": "Public evidence object required by the bounty's immutable evidence schema; maximum encoded size is 256 KiB."
-                    }
-                }),
-                &["bounty_contract", "solver_wallet", "artifact_reference", "evidence"],
-            ),
+            "Prepare one claimed bounty submission. Sign the returned payload, relay it, then publish the returned evidence after SubmissionAdded.",
+            PrepareAutonomousBountySubmissionArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_bounty_submission_authorization",
             "Build the exact EIP-712 submission authorization an active solver signs for a gas-sponsored submitWithSignature relay.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "submission": {
-                        "type": "object",
-                        "properties": {
-                            "bounty_contract": string_property("Claimed canonical bounty contract."),
-                            "bounty_id": string_property("Current canonical bytes32 bounty id."),
-                            "round": integer_property("Current positive claim round."),
-                            "solver": string_property("Wallet holding the current claim."),
-                            "submission_hash": string_property("Nonzero bytes32 artifact commitment."),
-                            "evidence_hash": string_property("Nonzero bytes32 evidence commitment."),
-                            "policy_hash": string_property("Immutable bytes32 verification-policy commitment."),
-                            "deadline": integer_property("Unix expiry no later than the active claim deadline.")
-                        },
-                        "required": ["bounty_contract", "bounty_id", "round", "solver", "submission_hash", "evidence_hash", "policy_hash", "deadline"],
-                        "additionalProperties": false
-                    }
-                }),
-                &["submission"],
-            ),
+            PlanAutonomousBountySubmissionAuthorizationArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_verification_attestation",
             "Build the exact EIP-712 payload a committed verifier signs for the current indexed submission. The planner rejects stale rounds, changed hashes, unauthorized verifiers, and deadlines beyond verification expiry.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "attestation": autonomous_verification_attestation_property()
-                }),
-                &["attestation"],
-            ),
+            PlanAutonomousVerificationAttestationArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_module_settlement",
             "Build the permissionless deterministic verifier transaction. A passing verifier call transfers solver and verifier rewards atomically; a plan or transaction hash is not payout evidence.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_contract": string_property("Submitted canonical deterministic-module bounty."),
-                    "caller": nullable_string_property("Optional wallet sponsoring the permissionless call."),
-                    "proof": string_property("0x-prefixed proof bytes consumed by the committed verifier module.")
-                }),
-                &["bounty_contract", "proof"],
-            ),
+            PlanAutonomousModuleSettlementArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_attestation_settlement",
             "Build the permissionless quorum relay. The canonical contract validates each committed verifier signature and atomically pays on pass or reopens on reject.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_contract": string_property("Submitted canonical quorum bounty."),
-                    "caller": nullable_string_property("Optional wallet sponsoring the relay."),
-                    "attestations": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 8,
-                        "items": autonomous_signed_attestation_property()
-                    }
-                }),
-                &["bounty_contract", "attestations"],
-            ),
+            PlanAutonomousAttestationSettlementArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_expire_claim",
             "Build the permissionless transaction that reopens an expired claim.",
-            autonomous_lifecycle_schema("Claimed canonical bounty contract."),
+            PlanAutonomousLifecycleArgs::input_schema("Claimed canonical bounty contract."),
         ),
         tool(
             "plan_autonomous_expire_submission",
             "Build the permissionless transaction that reopens an expired submission.",
-            autonomous_lifecycle_schema("Submitted canonical bounty contract."),
+            PlanAutonomousLifecycleArgs::input_schema("Submitted canonical bounty contract."),
         ),
         tool(
             "plan_autonomous_cancel",
             "Build cancellation for the creator or any caller after the immutable funding deadline. Contributors then withdraw their own refunds.",
-            autonomous_lifecycle_schema("Open or claimable canonical bounty contract."),
+            PlanAutonomousLifecycleArgs::input_schema("Open or claimable canonical bounty contract."),
         ),
         tool(
             "plan_autonomous_refund_withdrawal",
             "Build a contributor's pull-refund transaction after cancellation.",
-            autonomous_lifecycle_schema("Cancelled canonical bounty contract."),
+            PlanAutonomousLifecycleArgs::input_schema("Cancelled canonical bounty contract."),
         ),
         tool(
             "decode_autonomous_bounty_events",
             "Decode raw EVM logs into evidence-bound autonomous bounty events. Unknown token-transfer logs are ignored; malformed recognized protocol logs fail closed.",
-            object_tool_schema(
-                json!({
-                    "logs": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "address": string_property("Event-emitting factory or bounty contract."),
-                                "topics": string_array_property("0x-prefixed 32-byte EVM log topics."),
-                                "data": string_property("0x-prefixed ABI-encoded event data."),
-                                "tx_hash": string_property("Confirmed transaction hash."),
-                                "block_number": integer_property("Confirmed block number."),
-                                "log_index": integer_property("Transaction log index."),
-                                "occurred_at": nullable_string_property("Optional RFC3339 event timestamp.")
-                            },
-                            "required": ["address", "topics", "data", "tx_hash", "block_number", "log_index"],
-                            "additionalProperties": false
-                        }
-                    }
-                }),
-                &["logs"],
-            ),
+            DecodeAutonomousBountyEventsArgs::input_schema(),
         ),
         tool(
             "list_autonomous_bounty_events",
             "Read persisted confirmed canonical factory and bounty events. Use BountySettled as payout evidence; a signature, plan, or transaction hash alone is not settlement.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_id": nullable_string_property("Optional 0x-prefixed bytes32 autonomous bounty id filter.")
-                }),
-                &[],
-            ),
+            ListAutonomousBountyEventsArgs::input_schema(),
         ),
         tool(
             "publish_autonomous_bounty_terms",
             "Publish a bounded public task document and receive deterministic Keccak commitments for the factory call. Publication is not funding or canonical listing; only a matching canonical factory event creates the bounty.",
-            object_tool_schema(
-                json!({
-                    "creator_wallet": string_property("Wallet expected to create the canonical bounty."),
-                    "document": autonomous_bounty_terms_property()
-                }),
-                &["creator_wallet", "document"],
-            ),
+            PublishAutonomousBountyTermsArgs::input_schema(),
         ),
         tool(
             "get_autonomous_bounty_terms",
             "Resolve and independently hash-check the exact public task specification committed by an on-chain termsHash.",
-            object_tool_schema(
-                json!({
-                    "terms_hash": string_property("0x-prefixed Keccak hash from a canonical bounty contract.")
-                }),
-                &["terms_hash"],
-            ),
+            GetAutonomousBountyTermsArgs::input_schema(),
         ),
         tool(
             "publish_autonomous_submission_evidence",
             "After SubmissionAdded is indexed, publish the exact public artifact reference and evidence object whose SHA-256 commitments match the current canonical submission. Conflicting replays fail closed.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_contract": string_property("Indexed canonical submitted bounty contract."),
-                    "bounty_id": string_property("0x-prefixed canonical bounty id."),
-                    "round": integer_property("Current submission round."),
-                    "solver_wallet": string_property("Wallet that holds the indexed claim."),
-                    "artifact_reference": string_property("Public repository, commit, artifact URI, or canonical result string."),
-                    "evidence": object_property("Public evidence object evaluated under the immutable evidence schema.")
-                }),
-                &["bounty_contract", "bounty_id", "round", "solver_wallet", "artifact_reference", "evidence"],
-            ),
+            PublishAutonomousSubmissionEvidenceArgs::input_schema(),
         ),
         tool(
             "get_autonomous_submission_evidence",
             "Retrieve hash-checked public evidence for a canonical bounty round so deterministic or AI verifier agents can evaluate it.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "bounty_contract": string_property("Indexed canonical bounty contract."),
-                    "round": integer_property("Positive submission round.")
-                }),
-                &["bounty_contract", "round"],
-            ),
+            GetAutonomousSubmissionEvidenceArgs::input_schema(),
         ),
         tool(
             "list_autonomous_bounties",
-            "Discover canonical autonomous bounties joined to their hash-verified public terms and complete event history. Set claimable_only=true to find work an agent can claim and earn from now.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "claimable_only": nullable_boolean_property("When true, return only fully funded unclaimed bounties.")
-                }),
-                &[],
-            ),
+            "List canonical bounties. Set claimable_only=true, then choose one verification-ready result.",
+            AutonomousBountyFeedArgs::input_schema(),
+        ),
+        tool(
+            "list_opportunities",
+            "Discover open, claimable, in-progress, submitted, and completed opportunities across the existing unfunded, funding-needed, legacy, and canonical sources. Work state and payment state are separate; follow each item's authoritative URL and exact next action.",
+            OpportunityListArgs::input_schema(),
+        ),
+        tool(
+            "create_discovery_subscription",
+            "Create a filtered signed-webhook subscription for public opportunity publication and state changes. The endpoint must be public HTTPS. The management token and HMAC signing secret are returned once; store them securely. This subscribes to discovery only and never proves funding, payment, verification, or agent independence.",
+            CreateDiscoverySubscriptionArgs::input_schema(),
+        ),
+        tool(
+            "get_discovery_subscription",
+            "Inspect one discovery webhook subscription using the one-time management token returned at creation. The signing secret is never returned again.",
+            ManageDiscoverySubscriptionArgs::input_schema(),
+        ),
+        tool(
+            "delete_discovery_subscription",
+            "Permanently unsubscribe a discovery webhook and delete its queued deliveries using its management token.",
+            ManageDiscoverySubscriptionArgs::input_schema(),
+        ),
+        tool(
+            "get_opportunity_conversion_funnel",
+            "Measure the observable cross-lifecycle funnel from unfunded publication through canonical settlement. The response separates hosted plans, observed signatures, and confirmed events, and intentionally leaves independent_active_agents null because wallet identity does not prove independence.",
+            OpportunityConversionFunnelArgs::input_schema(),
+        ),
+        tool(
+            "get_site_analytics",
+            "Measure privacy-minimized first-party visitors, sessions, acquisition channels, and observed site conversion actions. Browser-local IDs are not people or wallets; canonical lifecycle and settlement endpoints remain authoritative for payment claims.",
+            SiteAnalyticsArgs::input_schema(),
+        ),
+        tool(
+            "analyze_bounty_fit",
+            "Analyze one indexed canonical bounty's immutable published terms for solver skills, hard requirements, deliverable/evidence checklists, ambiguity, and verification risks. The terms-hash cache is advisory only; live economics and payment state are refreshed from the authoritative record and no score can verify work or predict profit.",
+            AnalyzeBountyFitArgs::input_schema(),
         ),
         tool(
             "list_autonomous_verification_jobs",
-            "List live canonical submissions whose immutable terms and hash-matched evidence preimages are ready for deterministic, signed, or AI-judge verification. Optionally filter quorum jobs to one verifier wallet.",
-            object_tool_schema(
-                json!({
-                    "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-                    "verifier": nullable_string_property("Optional committed verifier wallet; deterministic module jobs remain visible to any relayer.")
-                }),
-                &[],
-            ),
+            "List ready submissions. Run each job's committed verifier exactly.",
+            AutonomousVerificationJobsArgs::input_schema(),
         ),
         tool(
             "run_bountybench",
@@ -1892,13 +2490,6 @@ fn empty_tool_schema() -> Value {
     object_tool_schema(json!({}), &[])
 }
 
-fn bounty_id_schema() -> Value {
-    object_tool_schema(
-        json!({ "bounty_id": uuid_property("Bounty UUID.") }),
-        &["bounty_id"],
-    )
-}
-
 fn bounty_solver_schema() -> Value {
     object_tool_schema(
         json!({
@@ -2012,6 +2603,47 @@ fn autonomous_bounty_create_property() -> Value {
     })
 }
 
+fn authorization_signature_property() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "v": integer_property("EIP-3009 recovery id: 0, 1, 27, or 28."),
+            "r": string_property("0x-prefixed bytes32 signature r."),
+            "s": string_property("0x-prefixed bytes32 signature s.")
+        },
+        "required": ["v", "r", "s"],
+        "additionalProperties": false
+    })
+}
+
+fn discovery_subscription_filters_property() -> Value {
+    json!({
+        "type": "object",
+        "description": "All non-empty filter groups are ANDed; values within one group are ORed.",
+        "properties": {
+            "skills": string_array_property("Required skill labels; case-insensitive exact matches."),
+            "categories": string_array_property("Required deterministic categories such as engineering, creative, or research."),
+            "minimum_committed_reward": {
+                "type": ["object", "null"],
+                "properties": {
+                    "amount": string_property("Unsigned integer amount in the stated unit."),
+                    "currency": string_property("Currency code such as USDC."),
+                    "unit": enum_property(&["base_units", "minor_units"], "Amount unit."),
+                    "decimals": integer_property("Currency decimals, 0 through 18.")
+                },
+                "required": ["amount", "currency", "unit", "decimals"],
+                "additionalProperties": false
+            },
+            "work_states": string_array_property("Any of open, claimable, in_progress, submitted, completed."),
+            "payment_states": string_array_property("Any of none, seeking_funding, escrowed, paid."),
+            "verification_methods": string_array_property("Case-insensitive exact verification method labels."),
+            "source_types": string_array_property("Any of unfunded_offchain, legacy_bounty, canonical_base."),
+            "deadline_within_hours": nullable_integer_property("Positive deadline window, up to 8760 hours.")
+        },
+        "additionalProperties": false
+    })
+}
+
 fn autonomous_verification_attestation_property() -> Value {
     json!({
         "type": "object",
@@ -2035,6 +2667,24 @@ fn autonomous_verification_attestation_property() -> Value {
     })
 }
 
+fn autonomous_submission_authorization_property() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "bounty_contract": string_property("Claimed canonical bounty contract."),
+            "bounty_id": string_property("Current canonical bytes32 bounty id."),
+            "round": integer_property("Current positive claim round."),
+            "solver": string_property("Wallet holding the current claim."),
+            "submission_hash": string_property("Nonzero bytes32 artifact commitment."),
+            "evidence_hash": string_property("Nonzero bytes32 evidence commitment."),
+            "policy_hash": string_property("Immutable bytes32 verification-policy commitment."),
+            "deadline": integer_property("Unix expiry no later than the active claim deadline.")
+        },
+        "required": ["bounty_contract", "bounty_id", "round", "solver", "submission_hash", "evidence_hash", "policy_hash", "deadline"],
+        "additionalProperties": false
+    })
+}
+
 fn autonomous_signed_attestation_property() -> Value {
     json!({
         "type": "object",
@@ -2048,17 +2698,6 @@ fn autonomous_signed_attestation_property() -> Value {
         "required": ["verifier", "passed", "response_hash", "deadline", "signature"],
         "additionalProperties": false
     })
-}
-
-fn autonomous_lifecycle_schema(contract_description: &str) -> Value {
-    object_tool_schema(
-        json!({
-            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-            "bounty_contract": string_property(contract_description),
-            "caller": nullable_string_property("Optional wallet that will send the transaction; refund withdrawal requires it.")
-        }),
-        &["bounty_contract"],
-    )
 }
 
 fn autonomous_bounty_terms_property() -> Value {
@@ -2157,15 +2796,22 @@ async fn route_blocked_goal(
     mcp_json(decision)
 }
 
+<<<<<<< ours
 async fn plan_objective_creation(
     Json(args): Json<PlanObjectiveCreationArgs>,
 ) -> Json<serde_json::Value> {
     match Objective::plan_creation(args.draft) {
         Ok(plan) => mcp_json(plan),
+=======
+async fn prepare_bounty_post(Json(args): Json<PrepareBountyPostArgs>) -> Json<serde_json::Value> {
+    match chatgpt_app::build_bounty_post_handoff(&args) {
+        Ok(handoff) => mcp_json(handoff),
+>>>>>>> theirs
         Err(error) => mcp_error(error),
     }
 }
 
+<<<<<<< ours
 async fn create_objective(
     State(state): State<SharedState>,
     Json(args): Json<SignedObjectiveCreation>,
@@ -2301,38 +2947,161 @@ async fn reconcile_objective(
 }
 
 async fn register_agent(
+=======
+async fn publish_unfunded_bounty(
+>>>>>>> theirs
+    State(state): State<SharedState>,
+    Json(args): Json<PublishUnfundedBountyArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/unfunded-bounties",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    let mut request = reqwest::Client::new().post(url).json(&args);
+    if let Some(token) = state.operator_api_token.as_deref() {
+        request = request.header(OPERATOR_TOKEN_HEADER, token);
+    }
+    proxy_hosted_json(request).await
+}
+
+async fn list_unfunded_bounties(
+    Json(args): Json<ListUnfundedBountiesArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/unfunded-bounties",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(
+        reqwest::Client::new()
+            .get(url)
+            .query(&[("limit", args.limit.unwrap_or(20))]),
+    )
+    .await
+}
+
+async fn submit_unfunded_bounty_solution(
+    Json(args): Json<SubmitUnfundedBountySolutionArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/unfunded-bounties/{}/solutions",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.bounty_id
+    );
+    proxy_hosted_json(reqwest::Client::new().post(url).json(&json!({
+        "agent_id": args.agent_id,
+        "summary": args.summary,
+        "deliverable_markdown": args.deliverable_markdown,
+        "evidence": args.evidence
+    })))
+    .await
+}
+
+async fn draft_bounty_with_cloud_agent(
+    State(state): State<SharedState>,
+    Json(args): Json<DraftBountyWithCloudAgentArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/cloud-agent/bounty-drafts",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    let mut request = reqwest::Client::new().post(url).json(&args);
+    if let Some(token) = state.operator_api_token.as_deref() {
+        request = request.header(OPERATOR_TOKEN_HEADER, token);
+    }
+    proxy_hosted_json(request).await
+}
+
+async fn compile_objective_with_cloud_agent(
+    State(state): State<SharedState>,
+    Json(args): Json<CompileObjectiveWithCloudAgentArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/cloud-agent/objective-plans",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    let mut request = reqwest::Client::new().post(url).json(&args);
+    if let Some(token) = state.operator_api_token.as_deref() {
+        request = request.header(OPERATOR_TOKEN_HEADER, token);
+    }
+    proxy_hosted_json(request).await
+}
+
+async fn get_autonomous_inventory_summary(
+    Json(args): Json<AutonomousInventorySummaryArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/inventory-summary",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&[
+        (
+            "network",
+            args.network.unwrap_or_else(|| "base-mainnet".to_string()),
+        ),
+        (
+            "claimable_only",
+            args.claimable_only.unwrap_or(true).to_string(),
+        ),
+    ]))
+    .await
+}
+
+async fn get_solver_leaderboard(
+    Json(args): Json<SolverLeaderboardArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/leaderboard",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    let mut query = vec![(
+        "network",
+        args.network.unwrap_or_else(|| "base-mainnet".to_string()),
+    )];
+    if let Some(at) = args.at {
+        query.push(("at", at));
+    }
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&query)).await
+}
+
+async fn proxy_hosted_json(request: reqwest::RequestBuilder) -> Json<serde_json::Value> {
+    match request.send().await {
+        Ok(response) => {
+            let status = response.status();
+            match response.bytes().await {
+                Ok(body) if status.is_success() && body.is_empty() => mcp_json(json!({
+                    "http_status": status.as_u16(),
+                    "success": true
+                })),
+                Ok(body) => match serde_json::from_slice::<serde_json::Value>(&body) {
+                    Ok(body) if status.is_success() => mcp_json(body),
+                    Ok(body) => mcp_error(format!("hosted API returned {status}: {body}")),
+                    Err(error) => mcp_error(format!(
+                        "hosted API returned {status} with invalid JSON: {error}"
+                    )),
+                },
+                Err(error) => mcp_error(format!(
+                    "hosted API returned {status} with unreadable body: {error}"
+                )),
+            }
+        }
+        Err(error) => mcp_error(format!("hosted API request failed: {error}")),
+    }
+}
+
+async fn register_agent(
     State(state): State<SharedState>,
     Json(args): Json<RegisterAgentRequest>,
 ) -> Json<serde_json::Value> {
-    let agent = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.register_agent(args)
-    };
-    if let Some(store) = &state.store {
-        if let Err(error) = store.upsert_agent(&agent).await {
-            return mcp_error(error);
-        }
-    }
-    mcp_json(agent)
+    mcp_mutation(service_runtime::register_agent(state.store.as_ref(), &state.network, args).await)
 }
 
 async fn register_capability(
     State(state): State<SharedState>,
     Json(args): Json<RegisterCapabilityRequest>,
 ) -> Json<serde_json::Value> {
-    let capability = {
-        let mut network = state.network.lock().expect("state poisoned");
-        match network.register_capability(args) {
-            Ok(capability) => capability,
-            Err(error) => return mcp_error(error),
-        }
-    };
-    if let Some(store) = &state.store {
-        if let Err(error) = store.upsert_capability(&capability).await {
-            return mcp_error(error);
-        }
-    }
-    mcp_json(capability)
+    mcp_mutation(
+        service_runtime::register_capability(state.store.as_ref(), &state.network, args).await,
+    )
 }
 
 async fn search_capabilities(
@@ -2389,125 +3158,44 @@ async fn request_quotes(
     State(state): State<SharedState>,
     Json(args): Json<CreateHelpRequestRequest>,
 ) -> Json<serde_json::Value> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.create_help_request(args).and_then(|help_request| {
-            network.request_quotes(RequestQuotesRequest {
-                help_request_id: help_request.id,
-            })
-        })
-    };
-    let quotes = match result {
-        Ok(quotes) => quotes,
-        Err(error) => {
-            if let Err(persist_error) = persist_all_risk_events(&state).await {
-                return mcp_error(persist_error);
-            }
-            return mcp_error(error);
-        }
-    };
-    if let Some(store) = &state.store {
-        if let Err(error) = store.upsert_help_request(&quotes.help_request).await {
-            return mcp_error(error);
-        }
-        for quote in &quotes.quotes {
-            if let Err(error) = store.upsert_quote(quote).await {
-                return mcp_error(error);
-            }
-        }
-    }
-    mcp_json(quotes)
+    mcp_mutation(
+        service_runtime::create_help_and_request_quotes(state.store.as_ref(), &state.network, args)
+            .await,
+    )
 }
 
 async fn fund_quote_as_bounty(
     State(state): State<SharedState>,
     Json(args): Json<FundQuoteRequest>,
 ) -> Json<serde_json::Value> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .fund_quote_as_bounty(args)
-            .map(|bounty| (bounty, network.ledger.entries().to_vec()))
-    };
-    let (bounty, ledger_entries) = match result {
-        Ok(result) => result,
-        Err(error) => {
-            if let Err(persist_error) = persist_all_risk_events(&state).await {
-                return mcp_error(persist_error);
-            }
-            return mcp_error(error);
-        }
-    };
-    if let Err(error) = persist_bounty_and_ledger(&state, &bounty, &ledger_entries).await {
-        return mcp_error(error);
-    }
-    mcp_json(bounty)
+    mcp_mutation(
+        service_runtime::fund_quote_as_bounty(state.store.as_ref(), &state.network, args).await,
+    )
 }
 
 async fn post_bounty(
     State(state): State<SharedState>,
     Json(args): Json<PostBountyRequest>,
 ) -> Json<serde_json::Value> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .post_funded_bounty(args)
-            .map(|bounty| (bounty, network.ledger.entries().to_vec()))
-    };
-    let (bounty, ledger_entries) = match result {
-        Ok(result) => result,
-        Err(error) => {
-            if let Err(persist_error) = persist_all_risk_events(&state).await {
-                return mcp_error(persist_error);
-            }
-            return mcp_error(error);
-        }
-    };
-    if let Err(error) = persist_bounty_and_ledger(&state, &bounty, &ledger_entries).await {
-        return mcp_error(error);
-    }
-    mcp_json(bounty)
+    mcp_mutation(service_runtime::post_bounty(state.store.as_ref(), &state.network, args).await)
 }
 
 async fn open_pooled_bounty(
     State(state): State<SharedState>,
     Json(args): Json<OpenPooledBountyRequest>,
 ) -> Json<serde_json::Value> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.open_pooled_bounty(args)
-    };
-    let bounty = match result {
-        Ok(bounty) => bounty,
-        Err(error) => {
-            if let Err(persist_error) = persist_all_risk_events(&state).await {
-                return mcp_error(persist_error);
-            }
-            return mcp_error(error);
-        }
-    };
-    if let Err(error) = persist_bounty_and_ledger(&state, &bounty, &[]).await {
-        return mcp_error(error);
-    }
-    mcp_json(bounty)
+    mcp_mutation(
+        service_runtime::open_pooled_bounty(state.store.as_ref(), &state.network, args).await,
+    )
 }
 
 async fn add_bounty_funding(
     State(state): State<SharedState>,
     Json(args): Json<AddFundingContributionRequest>,
 ) -> Json<serde_json::Value> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.add_funding_contribution(args)
-    };
-    let report = match result {
-        Ok(report) => report,
-        Err(error) => return mcp_error(error),
-    };
-    if let Err(error) = persist_pooled_funding_report(&state, &report).await {
-        return mcp_error(error);
-    }
-    mcp_json(report)
+    mcp_mutation(
+        service_runtime::add_funding_contribution(state.store.as_ref(), &state.network, args).await,
+    )
 }
 
 async fn create_funding_intent(
@@ -2516,18 +3204,15 @@ async fn create_funding_intent(
 ) -> Json<serde_json::Value> {
     let platform_base_url =
         env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.create_funding_intent(args, platform_base_url)
-    };
-    let report = match result {
-        Ok(report) => report,
-        Err(error) => return mcp_error(error),
-    };
-    if let Err(error) = persist_funding_intent_report(&state, &report).await {
-        return mcp_error(error);
-    }
-    mcp_json(report)
+    mcp_mutation(
+        service_runtime::create_funding_intent(
+            state.store.as_ref(),
+            &state.network,
+            args,
+            platform_base_url,
+        )
+        .await,
+    )
 }
 
 async fn list_claimable_bounties(State(state): State<SharedState>) -> Json<serde_json::Value> {
@@ -2544,198 +3229,60 @@ async fn claim_bounty(
     State(state): State<SharedState>,
     Json(args): Json<ClaimBountyRequest>,
 ) -> Json<serde_json::Value> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        match network.claim_bounty(args) {
-            Ok(bounty) => {
-                let claim = network
-                    .claims
-                    .values()
-                    .find(|claim| claim.bounty_id == bounty.id)
-                    .expect("claim exists after successful claim")
-                    .clone();
-                Ok((bounty, claim))
-            }
-            Err(error) => Err(error),
-        }
-    };
-    let (bounty, claim) = match result {
-        Ok(result) => result,
-        Err(error) => return mcp_error(error),
-    };
-    if let Some(store) = &state.store {
-        if let Err(error) = store.upsert_bounty(&bounty).await {
-            return mcp_error(error);
-        }
-        if let Err(error) = store.upsert_claim(&claim).await {
-            return mcp_error(error);
-        }
-    }
-    mcp_json(bounty)
+    mcp_mutation(service_runtime::claim_bounty(state.store.as_ref(), &state.network, args).await)
 }
 
 async fn submit_result(
     State(state): State<SharedState>,
     Json(args): Json<SubmitResultRequest>,
 ) -> Json<serde_json::Value> {
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network.submit_result(args).map(|submission| {
-            let bounty = network
-                .bounties
-                .get(&submission.bounty_id)
-                .expect("submission bounty exists")
-                .clone();
-            (submission, bounty)
-        })
-    };
-    let (submission, bounty) = match result {
-        Ok(result) => result,
-        Err(error) => {
-            if let Err(persist_error) = persist_all_risk_events(&state).await {
-                return mcp_error(persist_error);
-            }
-            return mcp_error(error);
-        }
-    };
-    if let Some(store) = &state.store {
-        if let Err(error) = store.upsert_bounty(&bounty).await {
-            return mcp_error(error);
-        }
-        if let Err(error) = store.upsert_submission(&submission).await {
-            return mcp_error(error);
-        }
-    }
-    mcp_json(submission)
+    mcp_mutation(service_runtime::submit_result(state.store.as_ref(), &state.network, args).await)
 }
 
 async fn request_verification(
     State(state): State<SharedState>,
     Json(args): Json<VerifySubmissionRequest>,
 ) -> Json<serde_json::Value> {
-    let mut network = {
+    let network = {
         let mut guard = state.network.lock().expect("state poisoned");
         std::mem::take(&mut *guard)
     };
-    let result = network.verify_submission(args).await;
-    let (
-        proof,
-        bounty,
-        verifier_result,
-        settlements,
-        funding_contributions,
-        reputation_events,
-        template_signals,
-        ledger_entries,
-    ) = match result {
-        Ok(proof) => {
-            let bounty = network
-                .bounties
-                .get(&proof.bounty_id)
-                .expect("proof bounty exists")
-                .clone();
-            let verifier_result = network
-                .verifier_results
-                .get(&proof.verifier_result_id)
-                .expect("proof verifier result exists")
-                .clone();
-            let settlements = network
-                .settlements
-                .values()
-                .filter(|settlement| settlement.bounty_id == proof.bounty_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let funding_contributions = network
-                .funding_contributions
-                .values()
-                .filter(|contribution| contribution.bounty_id == proof.bounty_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let reputation_events = network
-                .reputation_events
-                .values()
-                .filter(|event| event.bounty_id == proof.bounty_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let template_signals = network
-                .template_signals
-                .values()
-                .filter(|signal| signal.bounty_id == proof.bounty_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let ledger_entries = network.ledger.entries().to_vec();
-            (
-                proof,
-                bounty,
-                verifier_result,
-                settlements,
-                funding_contributions,
-                reputation_events,
-                template_signals,
-                ledger_entries,
-            )
-        }
+    let (network, result) = service_runtime::execute_verification(network, args).await;
+    *state.network.lock().expect("state poisoned") = network;
+    let outcome = match result {
+        Ok(outcome) => outcome,
         Err(error) => {
-            {
-                let mut guard = state.network.lock().expect("state poisoned");
-                *guard = network;
-            }
             if let Err(persist_error) = persist_all_risk_events(&state).await {
                 return mcp_error(persist_error);
             }
             return mcp_error(error);
         }
     };
+    if let Err(error) = service_runtime::persist_verification(state.store.as_ref(), &outcome).await
     {
-        let mut guard = state.network.lock().expect("state poisoned");
-        *guard = network;
+        return mcp_error(error);
     }
-    if let Some(store) = &state.store {
-        if let Err(error) = store.upsert_bounty(&bounty).await {
-            return mcp_error(error);
-        }
-        if let Err(error) = store.upsert_verifier_result(&verifier_result).await {
-            return mcp_error(error);
-        }
-        if let Err(error) = store.upsert_proof_record(&proof).await {
-            return mcp_error(error);
-        }
-        for settlement in &settlements {
-            if let Err(error) = store.upsert_settlement(settlement).await {
-                return mcp_error(error);
-            }
-        }
-        for contribution in &funding_contributions {
-            if let Err(error) = store.upsert_funding_contribution(contribution).await {
-                return mcp_error(error);
-            }
-        }
-        for event in &reputation_events {
-            if let Err(error) = store.upsert_reputation_event(event).await {
-                return mcp_error(error);
-            }
-        }
-        for signal in &template_signals {
-            if let Err(error) = store.upsert_template_signal(signal).await {
-                return mcp_error(error);
-            }
-        }
-        if let Err(error) = persist_ledger_entries(store, &ledger_entries).await {
-            return mcp_error(error);
-        }
-    }
-    mcp_json(proof)
+    mcp_json(outcome.proof)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BountyIdArgs {
-    bounty_id: Uuid,
+tool_args! {
+    struct BountyIdArgs { bounty_id: Uuid }
+    schema object_tool_schema(
+        json!({ "bounty_id": uuid_property("Bounty UUID.") }),
+        &["bounty_id"],
+    );
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct PaidStatusArgs {
-    bounty_id: Option<Uuid>,
-    agent_id: Option<Uuid>,
+tool_args! {
+    #[derive(Default)]
+    struct PaidStatusArgs { bounty_id: Option<Uuid>, agent_id: Option<Uuid> }
+    schema object_tool_schema(
+        json!({
+            "bounty_id": nullable_uuid_property("Optional bounty UUID for bounty-level payout status."),
+            "agent_id": nullable_uuid_property("Optional agent UUID for agent-level earnings and payout status.")
+        }),
+        &[],
+    );
 }
 
 async fn get_bounty_status(
@@ -2752,89 +3299,9 @@ async fn bounty_status_snapshot(
     state: &SharedState,
     bounty_id: Uuid,
 ) -> Result<BountyStatusResponse, String> {
-    if let Some(store) = &state.store {
-        let scope = store
-            .load_bounty_status_scope(bounty_id)
-            .await
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "bounty not found".to_string())?;
-        return bounty_status_from_scope(scope);
-    }
-
-    let status = {
-        let network = state.network.lock().expect("state poisoned");
-        network
-            .status(bounty_id)
-            .map_err(|error| error.to_string())?
-    };
-    Ok(status)
-}
-
-fn bounty_status_from_scope(scope: BountyStatusScope) -> Result<BountyStatusResponse, String> {
-    let bounty_id = scope.bounty.id;
-    let network = BountyNetwork {
-        bounties: [(scope.bounty.id, scope.bounty)].into_iter().collect(),
-        funding_intents: scope
-            .funding_intents
-            .into_iter()
-            .map(|intent| (intent.id, intent))
-            .collect(),
-        funding_contributions: scope
-            .funding_contributions
-            .into_iter()
-            .map(|contribution| (contribution.id, contribution))
-            .collect(),
-        escrows: scope
-            .escrows
-            .into_iter()
-            .map(|escrow| (escrow.id, escrow))
-            .collect(),
-        claims: scope
-            .claims
-            .into_iter()
-            .map(|claim| (claim.id, claim))
-            .collect(),
-        submissions: scope
-            .submissions
-            .into_iter()
-            .map(|submission| (submission.id, submission))
-            .collect(),
-        verifier_results: scope
-            .verifier_results
-            .into_iter()
-            .map(|result| (result.id, result))
-            .collect(),
-        proofs: scope
-            .proofs
-            .into_iter()
-            .map(|proof| (proof.id, proof))
-            .collect(),
-        settlements: scope
-            .settlements
-            .into_iter()
-            .map(|settlement| (settlement.id, settlement))
-            .collect(),
-        reputation_events: scope
-            .reputation_events
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        template_signals: scope
-            .template_signals
-            .into_iter()
-            .map(|signal| (signal.id, signal))
-            .collect(),
-        risk_events: scope
-            .risk_events
-            .into_iter()
-            .map(|event| (event.id, event))
-            .collect(),
-        ..BountyNetwork::default()
-    };
-    let status = network
-        .status(bounty_id)
-        .map_err(|error| error.to_string())?;
-    Ok(status)
+    service_runtime::bounty_status(state.store.as_ref(), &state.network, bounty_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn get_paid_status(
@@ -3249,6 +3716,31 @@ async fn plan_github_funding_comment(
     }))
 }
 
+async fn plan_github_create_comment(
+    Json(args): Json<PlanGitHubCreateCommentArgs>,
+) -> Json<serde_json::Value> {
+    mcp_json(create_comment_plan(GitHubCreateCommentInput {
+        repository: args.repository,
+        issue_url: args.issue_url,
+        title: args.title,
+        body: args.body,
+        comment_body: args.comment_body,
+        contributor_login: args.contributor_login,
+        comment_id: args.comment_id,
+        existing_idempotency_keys: args.existing_idempotency_keys,
+    }))
+}
+
+async fn plan_social_mention_draft(
+    Json(args): Json<PlanSocialMentionDraftArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/social/mention-draft-plan",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().post(url).json(&args)).await
+}
+
 async fn plan_github_claim_comment(
     Json(args): Json<PlanGitHubClaimCommentArgs>,
 ) -> Json<serde_json::Value> {
@@ -3422,49 +3914,22 @@ fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlan
     AutonomousBountyTxPlanner::new(factory, implementation).map_err(|error| error.to_string())
 }
 
-const CANONICAL_BASE_MAINNET_BOUNTY_FACTORY: &str = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
-const CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION: &str =
-    "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9";
-
-fn configured_address(value: Option<String>) -> Option<String> {
-    value
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-}
-
 fn autonomous_planner_addresses(
     chain_id: u64,
     configured_factory: Option<String>,
     configured_implementation: Option<String>,
 ) -> Result<(String, String), String> {
-    let factory = configured_address(configured_factory);
-    let implementation = configured_address(configured_implementation);
-    if chain_id == 8_453 {
-        if factory.as_deref().is_some_and(|address| {
-            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY)
-        }) || implementation.as_deref().is_some_and(|address| {
-            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION)
-        }) {
-            return Err("configured Base mainnet autonomous deployment does not match the canonical attested deployment".to_string());
-        }
-        return Ok((
-            CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_string(),
-            CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION.to_string(),
-        ));
-    }
-    if chain_id == 84_532 {
-        return Ok((
-            factory.ok_or_else(|| {
-                "hosted autonomous protocol is not configured: set BASE_SEPOLIA_BOUNTY_FACTORY"
-                    .to_string()
-            })?,
-            implementation.ok_or_else(|| {
-                "hosted autonomous protocol is not configured: set BASE_SEPOLIA_BOUNTY_IMPLEMENTATION"
-                    .to_string()
-            })?,
-        ));
-    }
-    Err("unsupported Base network".to_string())
+    service_runtime::autonomous_planner_addresses(
+        chain_id,
+        configured_factory,
+        configured_implementation,
+    )
+    .map_err(|error| match error {
+        PlannerAddressError::UnsupportedNetwork => "unsupported Base network".to_string(),
+        PlannerAddressError::NoncanonicalMainnet => "configured Base mainnet autonomous deployment does not match the canonical attested deployment".to_string(),
+        PlannerAddressError::MissingFactory => "hosted autonomous protocol is not configured: set BASE_SEPOLIA_BOUNTY_FACTORY".to_string(),
+        PlannerAddressError::MissingImplementation => "hosted autonomous protocol is not configured: set BASE_SEPOLIA_BOUNTY_IMPLEMENTATION".to_string(),
+    })
 }
 
 async fn require_indexed_canonical_bounty(
@@ -3528,6 +3993,49 @@ async fn plan_autonomous_canonical_child_terms(
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
+}
+
+async fn prepare_standing_meta_v2_child(
+    State(state): State<SharedState>,
+    Json(args): Json<StandingMetaV2ChildPreparationRequest>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    if network != "base-mainnet" {
+        return mcp_error("standing-meta-v2 is deployed only on canonical Base mainnet");
+    }
+    let parent =
+        match indexed_autonomous_bounty(&state, network, &args.parent_bounty_contract).await {
+            Ok(parent) => parent,
+            Err(error) => return mcp_error(error),
+        };
+    let context = match standing_meta_v2_parent_context(&parent) {
+        Ok(context) => context,
+        Err(error) => return mcp_error(error),
+    };
+    if args.parent_solver.eq_ignore_ascii_case(&parent.creator) {
+        return mcp_error("the parent bounty creator cannot be its solver");
+    }
+    let planner = match configured_autonomous_planner(network) {
+        Ok(planner) => planner,
+        Err(error) => return mcp_error(error),
+    };
+    let mut plan = match planner.plan_standing_meta_v2_child(&args, &context, Utc::now()) {
+        Ok(plan) => plan,
+        Err(error) => return mcp_error(error),
+    };
+    let Some(store) = &state.store else {
+        return mcp_error(
+            "DATABASE_URL is required to publish child terms; do not send on-chain calls first",
+        );
+    };
+    if let Err(error) = store.upsert_autonomous_bounty_terms(&plan.terms).await {
+        return mcp_error(format!(
+            "hosted child terms publication failed: {error}; retry the identical request and do not send the on-chain calls"
+        ));
+    }
+    plan.hosted_terms_published = true;
+    plan.current_state = "hosted_child_terms_published_parent_unclaimed".to_string();
+    mcp_json(plan)
 }
 
 async fn plan_autonomous_bounty_creation(
@@ -3674,6 +4182,96 @@ async fn get_x402_relay_status(
         args.relay_id
     );
     proxy_x402_response(reqwest::Client::new().get(url)).await
+}
+
+async fn prepare_agent_to_earn(
+    State(_state): State<SharedState>,
+    Json(args): Json<PrepareAgentToEarnInput>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/agent-wallet/readiness",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().post(url).json(&args),
+        "agent wallet readiness API",
+    )
+    .await
+}
+
+async fn proxy_public_json_response(
+    request: reqwest::RequestBuilder,
+    service: &str,
+) -> Json<serde_json::Value> {
+    let response = match request
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return mcp_error(if error.is_timeout() {
+                format!("{service} timed out")
+            } else {
+                format!("{service} is unavailable")
+            })
+        }
+    };
+    let status = response.status();
+    match response.json::<serde_json::Value>().await {
+        Ok(body) => mcp_json(json!({"http_status": status.as_u16(), "body": body})),
+        Err(_) => mcp_error(format!("{service} returned an unreadable response")),
+    }
+}
+
+async fn agent_native_claim(
+    State(_state): State<SharedState>,
+    Json(mut args): Json<AgentNativeClaimArgs>,
+) -> Json<serde_json::Value> {
+    if args.source.as_deref().is_none_or(str::is_empty) {
+        args.source = Some("mcp".to_string());
+    }
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/claims",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_agent_claim_response(reqwest::Client::new().post(url).json(&args)).await
+}
+
+async fn proxy_agent_claim_response(request: reqwest::RequestBuilder) -> Json<serde_json::Value> {
+    let response = match request
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return mcp_error(if error.is_timeout() {
+                "agent-native claim API timed out; replay the same idempotency_key"
+            } else {
+                "agent-native claim API is unavailable; use plan_autonomous_bounty_claim as the direct-wallet fallback"
+            })
+        }
+    };
+    let status = response.status();
+    let body_text = match response.text().await {
+        Ok(body) => body,
+        Err(_) => return mcp_error("agent-native claim response body is unavailable"),
+    };
+    let body = serde_json::from_str::<serde_json::Value>(&body_text).unwrap_or_else(|_| {
+        json!({
+            "schema_version": "agent-bounties/claim-problem-v1",
+            "state": "failed",
+            "failed_transition": "read_hosted_response",
+            "error": "invalid_hosted_response",
+            "message": if body_text.is_empty() { format!("HTTP {}", status.as_u16()) } else { body_text },
+            "next_action": "Call plan_autonomous_bounty_claim. Submit its exact direct-wallet calls."
+        })
+    });
+    mcp_json(json!({
+        "http_status": status.as_u16(),
+        "body": body
+    }))
 }
 
 async fn proxy_x402_response(request: reqwest::RequestBuilder) -> Json<serde_json::Value> {
@@ -4238,6 +4836,93 @@ async fn list_autonomous_bounties(
     mcp_json(feed)
 }
 
+async fn list_opportunities(Json(args): Json<OpportunityListArgs>) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/opportunities",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
+}
+
+async fn create_discovery_subscription(
+    Json(args): Json<CreateDiscoverySubscriptionArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/discovery/subscriptions",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().post(url).json(&args)).await
+}
+
+async fn get_discovery_subscription(
+    Json(args): Json<ManageDiscoverySubscriptionArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/discovery/subscriptions/{}",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.subscription_id
+    );
+    proxy_hosted_json(
+        reqwest::Client::new()
+            .get(url)
+            .bearer_auth(args.management_token),
+    )
+    .await
+}
+
+async fn delete_discovery_subscription(
+    Json(args): Json<ManageDiscoverySubscriptionArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/discovery/subscriptions/{}",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.subscription_id
+    );
+    proxy_hosted_json(
+        reqwest::Client::new()
+            .delete(url)
+            .bearer_auth(args.management_token),
+    )
+    .await
+}
+
+async fn get_opportunity_conversion_funnel(
+    Json(args): Json<OpportunityConversionFunnelArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/opportunities/conversion-funnel",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
+}
+
+async fn get_site_analytics(Json(args): Json<SiteAnalyticsArgs>) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/analytics/site",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
+}
+
+async fn analyze_bounty_fit(
+    State(state): State<SharedState>,
+    Json(args): Json<AnalyzeBountyFitArgs>,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/{}/analysis",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.bounty_contract
+    );
+    let mut request = reqwest::Client::new().get(url).query(&[(
+        "network",
+        args.network.unwrap_or_else(|| "base-mainnet".to_string()),
+    )]);
+    if let Some(token) = state.operator_api_token.as_deref() {
+        request = request.header(OPERATOR_TOKEN_HEADER, token);
+    }
+    proxy_hosted_json(request).await
+}
+
 async fn list_autonomous_verification_jobs(
     State(state): State<SharedState>,
     Json(args): Json<AutonomousVerificationJobsArgs>,
@@ -4353,78 +5038,27 @@ async fn get_live_money_readiness(
 }
 
 fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyReadinessConfig {
-    let descriptor = base_network_descriptor(network).ok();
-    LiveMoneyReadinessConfig {
-        network: network.to_string(),
-        escrow_contract: descriptor
-            .as_ref()
-            .and_then(|descriptor| autonomous_factory_for_chain(descriptor.chain_id)),
-        usdc_token: descriptor
-            .as_ref()
-            .and_then(base_usdc_token_for_chain)
-            .or_else(|| descriptor.map(|descriptor| descriptor.native_usdc_token_address)),
-        stripe_secret_key_mode: stripe_secret_key_mode_from_secret(
-            state.stripe_secret_key.as_deref(),
-        ),
-        stripe_live_execution_enabled: state.stripe_live_execution_enabled,
-        stripe_payment_method_configuration_configured: state
-            .stripe_payment_method_configuration
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty()),
-        stripe_webhook_secret_configured: env_nonempty_value("STRIPE_WEBHOOK_SECRET").is_some(),
-        allow_unsigned_stripe_webhooks: env_flag("ALLOW_UNSIGNED_STRIPE_WEBHOOKS"),
-        operator_auth_configured: state.operator_api_token.is_some(),
-        base_rpc_url_configured: state.base_rpc_urls.resolve(network).is_ok(),
-        base_broadcast_enabled: state.base_broadcast_enabled,
-    }
-}
-
-fn autonomous_factory_for_chain(chain_id: u64) -> Option<String> {
-    match chain_id {
-        84_532 => env_nonempty_value("BASE_SEPOLIA_BOUNTY_FACTORY"),
-        8_453 => canonical_mainnet_factory(
-            env_nonempty_value("BASE_MAINNET_BOUNTY_FACTORY"),
-            env_nonempty_value("BASE_MAINNET_BOUNTY_IMPLEMENTATION"),
-        ),
-        _ => None,
-    }
-}
-
-fn canonical_mainnet_factory(
-    configured_factory: Option<String>,
-    configured_implementation: Option<String>,
-) -> Option<String> {
-    if configured_factory
-        .as_deref()
-        .is_some_and(|address| !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY))
-        || configured_implementation.as_deref().is_some_and(|address| {
-            !address.eq_ignore_ascii_case(CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION)
-        })
-    {
-        None
-    } else {
-        Some(CANONICAL_BASE_MAINNET_BOUNTY_FACTORY.to_string())
-    }
-}
-
-fn base_usdc_token_for_chain(descriptor: &BaseNetworkDescriptor) -> Option<String> {
-    let configured = match descriptor.chain_id {
-        84_532 => env_nonempty_value("BASE_SEPOLIA_USDC_TOKEN"),
-        8_453 => env_nonempty_value("BASE_MAINNET_USDC_TOKEN"),
-        _ => None,
-    };
-    configured.or_else(|| Some(descriptor.native_usdc_token_address.clone()))
-}
-
-fn env_nonempty_value(name: &str) -> Option<String> {
-    env::var(name).ok().and_then(non_empty_secret)
-}
-
-fn env_flag(name: &str) -> bool {
-    env::var(name)
-        .ok()
-        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
-        .unwrap_or(false)
+    service_runtime::live_money_readiness_config(
+        network,
+        LiveMoneyRuntimeSettings {
+            stripe_secret_key: state.stripe_secret_key.as_deref(),
+            stripe_live_execution_enabled: state.stripe_live_execution_enabled,
+            stripe_payment_method_configuration_configured: state
+                .stripe_payment_method_configuration
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            stripe_webhook_secret_configured: env::var("STRIPE_WEBHOOK_SECRET")
+                .ok()
+                .and_then(non_empty_secret)
+                .is_some(),
+            allow_unsigned_stripe_webhooks: env::var("ALLOW_UNSIGNED_STRIPE_WEBHOOKS")
+                .ok()
+                .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1"),
+            operator_auth_configured: state.operator_api_token.is_some(),
+            base_rpc_url_configured: state.base_rpc_urls.resolve(network).is_ok(),
+            base_broadcast_enabled: state.base_broadcast_enabled,
+        },
+    )
 }
 
 async fn list_risk_events(
@@ -4448,20 +5082,9 @@ async fn approve_risk_bounty(
     if let Err(error) = require_operator(&state, &headers) {
         return error;
     }
-    let result = {
-        let mut network = state.network.lock().expect("state poisoned");
-        network
-            .approve_risk_bounty(args)
-            .map(|approval| (approval, network.ledger.entries().to_vec()))
-    };
-    let (approval, ledger_entries) = match result {
-        Ok(result) => result,
-        Err(error) => return mcp_error(error),
-    };
-    if let Err(error) = persist_reviewed_bounty_approval(&state, &approval, &ledger_entries).await {
-        return mcp_error(error);
-    }
-    mcp_json(approval)
+    mcp_mutation(
+        service_runtime::approve_risk_bounty(state.store.as_ref(), &state.network, args).await,
+    )
 }
 
 async fn approve_risk_payout(
@@ -4472,17 +5095,9 @@ async fn approve_risk_payout(
     if let Err(error) = require_operator(&state, &headers) {
         return error;
     }
-    let review = {
-        let mut network = state.network.lock().expect("state poisoned");
-        match network.approve_risk_payout(args) {
-            Ok(review) => review,
-            Err(error) => return mcp_error(error),
-        }
-    };
-    if let Err(error) = persist_risk_review(&state, &review).await {
-        return mcp_error(error);
-    }
-    mcp_json(review)
+    mcp_mutation(
+        service_runtime::approve_risk_payout(state.store.as_ref(), &state.network, args).await,
+    )
 }
 
 async fn reject_risk_event(
@@ -4493,71 +5108,15 @@ async fn reject_risk_event(
     if let Err(error) = require_operator(&state, &headers) {
         return error;
     }
-    let review = {
-        let mut network = state.network.lock().expect("state poisoned");
-        match network.reject_risk_event(args) {
-            Ok(review) => review,
-            Err(error) => return mcp_error(error),
-        }
-    };
-    if let Err(error) = persist_risk_review(&state, &review).await {
-        return mcp_error(error);
-    }
-    mcp_json(review)
-}
-
-fn eval_run_from_suite(result: &EvalSuiteResult) -> EvalRun {
-    EvalRun {
-        id: Uuid::new_v4(),
-        suite: result.suite.clone(),
-        score: result.score,
-        passed: result.passed,
-        created_at: Utc::now(),
-    }
-}
-
-fn eval_run_from_loop_suite(result: &LoopSuiteResult) -> EvalRun {
-    EvalRun {
-        id: Uuid::new_v4(),
-        suite: result.suite.clone(),
-        score: loop_suite_average_score(result),
-        passed: result.passed,
-        created_at: Utc::now(),
-    }
-}
-
-fn loop_suite_average_score(result: &LoopSuiteResult) -> f32 {
-    if result.loops.is_empty() {
-        return 0.0;
-    }
-
-    let total = result
-        .loops
-        .iter()
-        .map(|loop_result| {
-            loop_result
-                .candidates
-                .iter()
-                .map(|candidate| candidate.score)
-                .fold(0.0_f32, f32::max)
-        })
-        .sum::<f32>();
-    total / result.loops.len() as f32
+    mcp_mutation(
+        service_runtime::reject_risk_event(state.store.as_ref(), &state.network, args).await,
+    )
 }
 
 async fn record_eval_run(state: &SharedState, run: EvalRun) -> Result<(), String> {
-    if let Some(store) = &state.store {
-        store
-            .upsert_eval_run(&run)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    state
-        .eval_runs
-        .lock()
-        .expect("state poisoned")
-        .insert(0, run);
-    Ok(())
+    service_runtime::record_eval_run(state.store.as_ref(), &state.eval_runs, run)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -4582,12 +5141,46 @@ mod tests {
     #[tokio::test]
     async fn tool_descriptors_publish_machine_readable_input_schemas() {
         let descriptors = tools().await.0;
+        let registry: Value = serde_json::from_str(include_str!("../fixtures/tool-registry.json"))
+            .expect("tool registry fixture is valid JSON");
+        assert_eq!(
+            registry["schema_version"],
+            "agent-bounties/mcp-tool-registry-v1"
+        );
+        assert_eq!(
+            app::hash_artifact(&serde_json::to_string(&descriptors).unwrap()),
+            registry["normalized_descriptors_sha256"]
+        );
+        let registered_names = registry["tools"]
+            .as_array()
+            .expect("tool registry contains tools");
 
-        assert!(descriptors.len() >= 20);
+        assert_eq!(descriptors.len(), 91);
+        assert_eq!(
+            descriptors
+                .iter()
+                .map(|descriptor| descriptor.name)
+                .collect::<Vec<_>>(),
+            registered_names
+                .iter()
+                .map(|name| name.as_str().expect("registered tool name is a string"))
+                .collect::<Vec<_>>()
+        );
         for descriptor in &descriptors {
+            assert!(!descriptor.description.trim().is_empty());
+            assert_eq!(
+                descriptor.input_schema["type"], "object",
+                "{}",
+                descriptor.name
+            );
+            assert_eq!(
+                descriptor.input_schema["additionalProperties"], false,
+                "{}",
+                descriptor.name
+            );
             assert!(
-                descriptor.input_schema.get("type").is_some(),
-                "{} missing input_schema.type",
+                descriptor.input_schema["required"].is_array(),
+                "{} missing required array",
                 descriptor.name
             );
         }
@@ -4620,6 +5213,17 @@ mod tests {
             .iter()
             .any(|value| value == "Private"));
 
+        let objective_compiler = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "compile_objective_with_cloud_agent")
+            .expect("objective compiler descriptor exists");
+        assert_eq!(
+            objective_compiler.input_schema["properties"]["max_tasks"]["maximum"],
+            8
+        );
+        assert!(objective_compiler.description.contains("GPT-5.6"));
+        assert!(objective_compiler.description.contains("advisory"));
+
         let operator_tools = [
             "execute_stripe_checkout_top_up",
             "execute_stripe_connect_account",
@@ -4645,6 +5249,14 @@ mod tests {
             assert_eq!(authorization.header, OPERATOR_TOKEN_HEADER);
             assert!(authorization.bearer);
         }
+        assert_eq!(
+            descriptors
+                .iter()
+                .filter(|descriptor| descriptor.authorization.is_some())
+                .map(|descriptor| descriptor.name)
+                .collect::<Vec<_>>(),
+            operator_tools
+        );
 
         let stripe_checkout = descriptors
             .iter()
@@ -4698,6 +5310,30 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "body"));
+
+        let plan_github_create = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_github_create_comment")
+            .expect("plan_github_create_comment descriptor exists");
+        assert!(plan_github_create.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "comment_body"));
+        assert_eq!(
+            plan_github_create.input_schema["properties"]["existing_idempotency_keys"]["type"],
+            "array"
+        );
+
+        let plan_social_mention = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "plan_social_mention_draft")
+            .expect("plan_social_mention_draft descriptor exists");
+        assert!(plan_social_mention.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "mention_text"));
 
         let plan_github_funding = descriptors
             .iter()
@@ -4883,12 +5519,15 @@ mod tests {
 
         for autonomous in [
             "plan_autonomous_canonical_child_terms",
+            "prepare_standing_meta_v2_child",
             "plan_autonomous_bounty_creation",
             "plan_autonomous_bounty_authorized_creation",
             "plan_autonomous_bounty_contribution",
             "plan_autonomous_bounty_authorized_contribution",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "prepare_agent_to_earn",
+            "agent_native_claim",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
             "plan_autonomous_bounty_submission",
@@ -4897,9 +5536,17 @@ mod tests {
             "list_autonomous_verification_jobs",
             "decode_autonomous_bounty_events",
             "list_autonomous_bounty_events",
+            "get_solver_leaderboard",
             "publish_autonomous_bounty_terms",
             "get_autonomous_bounty_terms",
             "list_autonomous_bounties",
+            "list_opportunities",
+            "create_discovery_subscription",
+            "get_discovery_subscription",
+            "delete_discovery_subscription",
+            "get_opportunity_conversion_funnel",
+            "get_site_analytics",
+            "analyze_bounty_fit",
         ] {
             assert!(
                 descriptors
@@ -4919,6 +5566,37 @@ mod tests {
             .iter()
             .any(|value| value == "bounty_contract"));
         assert!(x402_funding.authorization.is_none());
+
+        let prepare_agent = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "prepare_agent_to_earn")
+            .expect("prepare_agent_to_earn descriptor exists");
+        assert!(!prepare_agent.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "claim_bond_base_units"));
+        assert_eq!(
+            prepare_agent.input_schema["properties"]["policy"]["additionalProperties"],
+            false
+        );
+        assert!(prepare_agent.authorization.is_none());
+
+        let agent_claim = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "agent_native_claim")
+            .expect("agent_native_claim descriptor exists");
+        assert_eq!(
+            agent_claim.input_schema["properties"]["wallet_signature"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        assert!(
+            agent_claim.input_schema["properties"]["wallet_signature"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged")
+        );
+        assert!(agent_claim.authorization.is_none());
 
         let prepare_submission = descriptors
             .iter()
@@ -4948,6 +5626,45 @@ mod tests {
             canonical_child_terms.input_schema["properties"]["child_acceptance_criteria"]
                 ["minItems"],
             1
+        );
+        assert!(
+            canonical_child_terms.input_schema["properties"]["verifier_module"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("child task")
+        );
+        assert!(
+            canonical_child_terms.input_schema["properties"]["verifier_module"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Do not pass the parent's canonical-child verifier")
+        );
+
+        let standing_meta_v2 = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "prepare_standing_meta_v2_child")
+            .expect("standing-meta-v2 preparation descriptor exists");
+        for required in [
+            "parent_bounty_contract",
+            "parent_solver",
+            "intended_child_solver",
+            "acceptance_criteria",
+            "benchmark_source",
+            "runner_manifest",
+        ] {
+            assert!(standing_meta_v2.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == required));
+        }
+        assert_eq!(
+            standing_meta_v2.input_schema["properties"]["benchmark_source"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            standing_meta_v2.input_schema["properties"]["runner_manifest"]["additionalProperties"],
+            false
         );
 
         let get_live_money_readiness = descriptors
@@ -5482,11 +6199,13 @@ mod tests {
         let text = llms_txt().await;
 
         assert!(text.contains("# Agent Bounties"));
-        assert!(text.contains("route_blocked_goal"));
-        assert!(text.contains("/.well-known/agent-bounties.json"));
-        assert!(text.contains("docs/agent-quickstart.md"));
         assert!(text.contains("agent-bounties/autonomous-v1"));
+        assert!(text.contains("Do not skip steps"));
+        assert!(text.contains("Use these MCP tools in order"));
+        assert!(text.contains("get_solver_leaderboard"));
         assert!(text.contains("list_autonomous_bounties"));
+        assert!(text.contains("agent_native_claim"));
+        assert!(text.contains("/.well-known/agent-bounties.json"));
         assert!(text.contains("BountySettled"));
         assert!(!text.contains("createEscrow"));
     }
@@ -5612,6 +6331,7 @@ mod tests {
 }
 
 async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork> {
+<<<<<<< ours
     Ok(BountyNetwork {
         agents: store
             .list_agents()
@@ -6000,39 +6720,37 @@ async fn persist_risk_review(state: &SharedState, review: &RiskReviewRecord) -> 
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+=======
+    service_runtime::hydrate_bounty_network(store).await
+>>>>>>> theirs
 }
 
 async fn persist_ledger_entries(
     store: &PostgresStore,
     entries: &[ledger::LedgerEntry],
 ) -> Result<(), String> {
-    for entry in entries {
-        store
-            .insert_ledger_entry(entry)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    service_runtime::persist_ledger_entries(store, entries)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn persist_all_risk_events(state: &SharedState) -> Result<(), String> {
-    let events = {
-        let network = state.network.lock().expect("state poisoned");
-        network.risk_events.values().cloned().collect::<Vec<_>>()
-    };
-    if let Some(store) = &state.store {
-        for event in &events {
-            store
-                .upsert_risk_event(event)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    Ok(())
+    service_runtime::persist_all_risk_events(state.store.as_ref(), &state.network)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 fn mcp_json(value: impl Serialize) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "content": [{ "type": "json", "json": value }] }))
+}
+
+fn mcp_mutation<T: Serialize>(
+    result: Result<T, service_runtime::MutationError>,
+) -> Json<serde_json::Value> {
+    match result {
+        Ok(value) => mcp_json(value),
+        Err(error) => mcp_error(error),
+    }
 }
 
 fn mcp_error(error: impl ToString) -> Json<serde_json::Value> {

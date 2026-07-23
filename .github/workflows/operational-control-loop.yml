@@ -26,17 +26,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  deployment-paused:
+    if: github.event_name != 'workflow_dispatch' && vars.RENDER_DEPLOY_PAUSE_REASON != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report declared deployment pause
+        run: echo "Operational control loop paused - ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}" >> "$GITHUB_STEP_SUMMARY"
+
   observe-plan-verify:
+    if: github.event_name == 'workflow_dispatch' || vars.RENDER_DEPLOY_PAUSE_REASON == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
-      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://agent-bounties-mcp.onrender.com' }}
+      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
+      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.agentbounties.app' }}
       PRODUCTION_EXPECTED_REVISION: ${{ inputs.expected_revision || github.sha }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 

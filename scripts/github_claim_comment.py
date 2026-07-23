@@ -9,11 +9,21 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import urllib.parse
 from typing import Dict, List, Mapping, Optional, TextIO, Tuple
+
+from _shared.github_actions import (
+    append_step_summary as append_github_summary,
+    cargo_body_path,
+    find_executable,
+    json_field,
+    load_issue_comments,
+    publish_issue_comment,
+    read_event as read_github_event,
+    repo_root,
+)
 
 from reconcile_github_bounty_labels import (
     LabelReconciliationError,
@@ -21,6 +31,7 @@ from reconcile_github_bounty_labels import (
     default_http_request,
     fetch_canonical_feeds,
     normalize_api_base_url,
+    require_amount,
 )
 
 
@@ -29,8 +40,9 @@ CLAIM_COMMAND_RE = re.compile(r"(?im)^\s*/(?:agent-bounty\s+)?(claim|attempt)\b"
 COMMENT_ID_RE = re.compile(r"Claim comment id:\s*`?([0-9]+)`?")
 RESERVATION_RE = re.compile(r"Reservation id:\s*`?([^\s`]+)`?")
 CONTRIBUTOR_RE = re.compile(r"Contributor:\s*`?([^\s`]+)`?")
-DEFAULT_API_BASE_URL = "https://agent-bounties-api.onrender.com"
-STATIC_EARN_PAGE_URL = "https://nspg13.github.io/agent-bounties/earn.html"
+DEFAULT_API_BASE_URL = "https://api.agentbounties.app"
+STATIC_EARN_PAGE_URL = "https://agentbounties.app/earn.html"
+EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
 class UserError(RuntimeError):
@@ -38,68 +50,15 @@ class UserError(RuntimeError):
 
 
 def script_repo_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parents[1]
-
-
-def find_executable(names: List[str]) -> Optional[str]:
-    for name in names:
-        path = shutil.which(name)
-        if path:
-            return path
-    return None
-
-
-def is_windows_executable(path: str) -> bool:
-    return path.lower().endswith(".exe")
-
-
-def convert_posix_path_for_windows_tool(path: pathlib.Path) -> str:
-    path_text = str(path)
-    if not path_text.startswith("/"):
-        return path_text
-
-    for converter, args in (("cygpath", ["-w"]), ("wslpath", ["-w"])):
-        converter_path = shutil.which(converter)
-        if not converter_path:
-            continue
-        try:
-            return subprocess.check_output(
-                [converter_path, *args, path_text],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        except (OSError, subprocess.CalledProcessError):
-            continue
-
-    match = re.match(r"^/mnt/([a-zA-Z])/(.*)$", path_text)
-    if match:
-        drive, rest = match.groups()
-        rest_windows = rest.replace("/", "\\")
-        return f"{drive.upper()}:\\{rest_windows}"
-
-    return path_text
-
-
-def cargo_body_path(path: pathlib.Path, cargo_path: str) -> str:
-    if is_windows_executable(cargo_path):
-        return convert_posix_path_for_windows_tool(path)
-    return str(path)
+    return repo_root(__file__)
 
 
 def read_json_field(value: object, field: str) -> object:
-    current = value
-    for part in field.split("."):
-        if not isinstance(current, dict) or part not in current:
-            raise UserError(f"claim planner output missing field: {field}")
-        current = current[part]
-    return current
+    return json_field(value, field, UserError, "claim planner output missing field: {field}")
 
 
 def read_event(env: Mapping[str, str]) -> Dict[str, object]:
-    event_path = env.get("GITHUB_EVENT_PATH")
-    if not event_path:
-        raise UserError("GITHUB_EVENT_PATH is required")
-    return json.loads(pathlib.Path(event_path).read_text(encoding="utf-8"))
+    return read_github_event(env, UserError)
 
 
 def write_issue_files(
@@ -197,12 +156,125 @@ def load_canonical_claim_records(
     return records, earning_pairs
 
 
+def native_claim_request(
+    signal: Mapping[str, object], api_base_url: str, contract: str
+) -> Dict[str, object]:
+    existing = (
+        signal.get("claim_plan_request")
+        if isinstance(signal.get("claim_plan_request"), dict)
+        else {}
+    )
+    existing_body = (
+        existing.get("body") if isinstance(existing.get("body"), dict) else {}
+    )
+    solver_wallet = str(
+        existing_body.get("solver_wallet") or "0xYOUR_PUBLIC_BASE_WALLET"
+    )
+    return {
+        "method": "POST",
+        "url": f"{api_base_url}/v1/base/autonomous-bounties/claims",
+        "body": {
+            "idempotency_key": str(
+                existing_body.get("idempotency_key")
+                or signal.get("reservation_id")
+                or "github-claim-comment"
+            ),
+            "network": "base-mainnet",
+            "bounty_contract": contract,
+            "solver_wallet": solver_wallet,
+            "request_bond_sponsorship": True,
+            "source": "github",
+        },
+        "result": (
+            "The first response reserves an exclusive candidate or waitlist position and "
+            "returns the exact indexed bond plus wallet_request. Send wallet_request to the "
+            "solver wallet once, then copy its unchanged 65-byte result into "
+            "next_request.body.wallet_signature. Only confirmed canonical BountyClaimed owns "
+            "the round."
+        ),
+    }
+
+
+def load_native_claim_handoff(
+    env: Mapping[str, str], request: Mapping[str, object]
+) -> Tuple[int, object]:
+    fixture = env.get("AGENT_BOUNTIES_CLAIM_HANDOFF_FILE")
+    if fixture:
+        payload = json.loads(pathlib.Path(fixture).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise UserError("claim handoff fixture must be an object")
+        return int(payload.get("status") or 0), payload.get("body")
+
+    response = default_http_request(
+        str(request["method"]),
+        str(request["url"]),
+        request.get("body"),
+        {"Accept": "application/json"},
+    )
+    return response.status, response.body
+
+
+def summarize_native_claim_handoff(
+    status: int,
+    payload: object,
+    *,
+    contract: str,
+    solver_wallet: str,
+) -> Tuple[Optional[Dict[str, object]], Optional[Dict[str, object]]]:
+    if not isinstance(payload, dict):
+        return None, {
+            "http_status": status,
+            "error": "claim_handoff_unreadable",
+            "next_action": "Replay the machine claim request later; do not sign anything from this response.",
+        }
+    if status not in {200, 202}:
+        return None, {
+            "http_status": status,
+            "schema_version": payload.get("schema_version"),
+            "state": payload.get("state"),
+            "failed_transition": payload.get("failed_transition"),
+            "error": payload.get("error") or "claim_handoff_failed",
+            "next_action": payload.get("next_action")
+            or "Replay the same machine request after the reported condition is resolved.",
+        }
+
+    candidate = payload.get("candidate")
+    if not isinstance(candidate, dict):
+        raise UserError("hosted claim handoff omitted candidate state")
+    if str(candidate.get("bounty_contract") or "").lower() != contract.lower():
+        raise UserError("hosted claim handoff returned a different bounty contract")
+    if str(candidate.get("solver_wallet") or "").lower() != solver_wallet.lower():
+        raise UserError("hosted claim handoff returned a different solver wallet")
+
+    handoff = {
+        "http_status": status,
+        "schema_version": payload.get("schema_version"),
+        "candidate": {
+            "id": candidate.get("id"),
+            "status": candidate.get("status"),
+            "exclusive_until": candidate.get("exclusive_until"),
+        },
+        "waitlist_position": payload.get("waitlist_position"),
+        "claim_bond": payload.get("claim_bond"),
+        "sponsorship_requested": payload.get("sponsorship_requested"),
+        "sponsorship_available": payload.get("sponsorship_available"),
+        "sponsorship_protocol": payload.get("sponsorship_protocol"),
+        "sponsor_contract": payload.get("sponsor_contract"),
+        "wallet_request": payload.get("wallet_request"),
+        "next_request": payload.get("next_request"),
+        "next_action": payload.get("next_action"),
+        "evidence_boundary": payload.get("evidence_boundary"),
+    }
+    return handoff, None
+
+
 def canonical_unavailable_plan(
     meta: Mapping[str, object],
     *,
     status: str,
     contract: Optional[str],
     reason: str,
+    claim_recovery: Optional[Mapping[str, object]] = None,
 ) -> Dict[str, object]:
     title_by_status = {
         "claimed": "Bounty already has an on-chain solver",
@@ -234,20 +306,84 @@ def canonical_unavailable_plan(
             "Only a confirmed BountySettled event proves payment.",
         ]
     )
+    signal: Dict[str, object] = {
+        "decision": "CanonicalStateUnavailable",
+        "reservation_id": "none",
+        "bounty_contract": contract,
+        "canonical_status": status,
+    }
+    if claim_recovery is not None:
+        signal["claim_recovery"] = dict(claim_recovery)
     return {
         "ready": False,
-        "signal": {
-            "decision": "CanonicalStateUnavailable",
-            "reservation_id": "none",
-            "bounty_contract": contract,
-            "canonical_status": status,
-        },
+        "signal": signal,
         "check": {
             "conclusion": "ActionRequired",
             "title": title_by_status.get(status, "Bounty is not currently claimable"),
             "summary": "Do not sign a claim or post a bond for the current canonical state.",
             "text": details,
         },
+    }
+
+
+def claim_recovery_descriptor(
+    meta: Mapping[str, object],
+    api_base_url: str,
+    records: Optional[Mapping[str, Mapping[str, object]]] = None,
+    earning_pairs: Optional[set[Tuple[str, str]]] = None,
+) -> Dict[str, object]:
+    repository = str(meta["repo"])
+    issue_url = str(meta["url"])
+    query = "is:issue is:open label:claimable-live"
+    alternatives: List[Dict[str, object]] = []
+    for source_url, record in (records or {}).items():
+        contract = str(record.get("bounty_contract") or "").lower()
+        if source_url == issue_url or (source_url, contract) not in (earning_pairs or set()):
+            continue
+        source_issue_number = source_url.rsplit("/", 1)[-1]
+        solver_reward = require_amount(record, "solver_reward")
+        claim_bond = require_amount(record, "claim_bond")
+        alternatives.append(
+            {
+                "source_issue_number": int(source_issue_number),
+                "source_url": source_url,
+                "bounty_contract": contract,
+                "solver_reward_usdc_base_units": str(solver_reward),
+                "claim_bond_usdc_base_units": str(claim_bond),
+                "claim_command": (
+                    f"/claim #{source_issue_number} wallet: 0xYOUR_PUBLIC_BASE_ADDRESS"
+                ),
+            }
+        )
+    alternatives.sort(
+        key=lambda item: (
+            -int(str(item["solver_reward_usdc_base_units"])),
+            int(item["source_issue_number"]),
+        )
+    )
+    return {
+        "schema_version": "agent-bounties/claim-recovery-v1",
+        "failed_issue": issue_url,
+        "claimable_feed": (
+            f"{api_base_url}/v1/base/autonomous-bounties/feed"
+            "?network=base-mainnet&claimable_only=true"
+        ),
+        "github_query": (
+            f"https://github.com/{repository}/issues?q="
+            f"{urllib.parse.quote(query, safe='')}"
+        ),
+        "alternatives": alternatives[:3],
+        "next_action": (
+            "Choose one listed alternative or refresh claimable_feed. Then run its exact "
+            "claim_command with a public Base address. Do not work on the failed issue."
+            if alternatives
+            else "Refresh claimable_feed later. No canonical alternative is currently "
+            "available; do not work on the failed issue."
+        ),
+        "evidence_boundary": (
+            "This recovery object cannot reserve or claim work. Only confirmed canonical "
+            "BountyClaimed owns a round; only BountySettled proves payment."
+        ),
     }
 
 
@@ -266,12 +402,16 @@ def apply_canonical_claim_state(
         records, earning_pairs = load_canonical_claim_records(
             env, str(meta["repo"])
         )
+        claim_recovery = claim_recovery_descriptor(
+            meta, api_base_url, records, earning_pairs
+        )
     except (OSError, ValueError, UserError, LabelReconciliationError) as error:
         return canonical_unavailable_plan(
             meta,
             status="unavailable",
             contract=None,
             reason=str(error),
+            claim_recovery=claim_recovery_descriptor(meta, DEFAULT_API_BASE_URL),
         )
 
     issue_url = str(meta["url"])
@@ -282,6 +422,7 @@ def apply_canonical_claim_state(
             status="missing",
             contract=None,
             reason="the full canonical feed has no exact source_url match",
+            claim_recovery=claim_recovery,
         )
     contract = str(record.get("bounty_contract") or "").lower()
     status = str(record.get("status") or "unknown").lower()
@@ -310,38 +451,76 @@ def apply_canonical_claim_state(
             status=status,
             contract=contract,
             reason=reason,
+            claim_recovery=claim_recovery,
         )
 
+    request = native_claim_request(signal, api_base_url, contract)
+    request_body = request.get("body") if isinstance(request.get("body"), dict) else {}
+    solver_wallet = str(request_body.get("solver_wallet") or "")
+    solver_query = (
+        f"&solver={urllib.parse.quote(solver_wallet, safe='')}"
+        if EVM_ADDRESS_RE.fullmatch(solver_wallet)
+        else ""
+    )
+    claim_key = str(signal.get("reservation_id") or "github-claim-comment")
     handoff = (
         f"{STATIC_EARN_PAGE_URL}?bountyContract={urllib.parse.quote(contract, safe='')}"
-        f"&source=github-claim&issue={urllib.parse.quote(issue_url, safe='')}"
+        f"&claimKey={urllib.parse.quote(claim_key, safe='')}"
+        f"&source=github-claim{solver_query}"
+        f"&issue={urllib.parse.quote(issue_url, safe='')}"
     )
     signal.update(
         {
             "bounty_contract": contract,
             "claim_handoff_url": handoff,
-            "claim_plan_request": {
-                "method": "POST",
-                "url": f"{api_base_url}/v1/base/autonomous-bounties/claim-plan",
-                "body": {
-                    "network": "base-mainnet",
-                    "bounty_contract": contract,
-                    "solver": "0xYOUR_BASE_WALLET",
-                },
-                "result": "The planner returns the exact indexed bond and bounded wallet calls.",
-            },
+            "claim_plan_request": request,
             "operator_note": (
                 f"Canonical contract: {contract}. The exact record is claimable, "
                 "terms-valid, verification-ready, and present in the earning feed. "
-                "A GitHub comment does not reserve or claim the round."
+                "A hosted candidate is coordination state; only canonical BountyClaimed "
+                "owns the round."
             ),
         }
     )
+    solver_wallet = str(request["body"]["solver_wallet"])
+    if EVM_ADDRESS_RE.fullmatch(solver_wallet):
+        try:
+            status_code, response_body = load_native_claim_handoff(env, request)
+            response, problem = summarize_native_claim_handoff(
+                status_code,
+                response_body,
+                contract=contract,
+                solver_wallet=solver_wallet,
+            )
+            if response is not None:
+                signal["claim_handoff_response"] = response
+            if problem is not None:
+                signal["claim_handoff_problem"] = problem
+        except (OSError, ValueError, UserError, LabelReconciliationError) as error:
+            signal["claim_handoff_problem"] = {
+                "error": "claim_handoff_unavailable",
+                "next_action": (
+                    f"{error}. Replay the published machine request with the same "
+                    "idempotency_key; do not sign an unverified payload."
+                ),
+            }
     plan["signal"] = signal
+    handoff_response = signal.get("claim_handoff_response")
+    wallet_request_ready = isinstance(handoff_response, dict) and isinstance(
+        handoff_response.get("wallet_request"), dict
+    )
     plan["check"] = {
         "conclusion": "ActionRequired",
-        "title": "Autonomous bounty requires an on-chain claim",
-        "summary": "Connect the payout wallet, verify the exact indexed bond, and sign the bounded claim.",
+        "title": (
+            "Exact wallet signature requested"
+            if wallet_request_ready
+            else "Autonomous bounty requires an on-chain claim"
+        ),
+        "summary": (
+            "Send the exact wallet_request to the payout wallet once, then replay its unchanged signature."
+            if wallet_request_ready
+            else "Provide a public Base payout wallet or run the published machine request."
+        ),
         "text": "\n".join(
             [
                 f"Issue: {issue_url}",
@@ -361,25 +540,14 @@ def apply_canonical_claim_state(
 
 
 def load_existing_comments(env: Mapping[str, str], meta: Mapping[str, object]) -> List[Mapping[str, object]]:
-    fixture = env.get("AGENT_BOUNTIES_CLAIM_COMMENTS_FILE")
-    if fixture:
-        value = json.loads(pathlib.Path(fixture).read_text(encoding="utf-8"))
-        return value if isinstance(value, list) else []
-
-    if env.get("DRY_RUN") == "1":
-        return []
-
-    gh_path = find_executable(["gh", "gh.exe"])
-    if not gh_path:
-        raise UserError("gh is required to inspect existing claim planner comments")
-
-    comments = subprocess.check_output(
-        [gh_path, "api", f"repos/{meta['repo']}/issues/{meta['number']}/comments"],
-        env=dict(env),
-        text=True,
+    return load_issue_comments(
+        env,
+        meta["repo"],
+        meta["number"],
+        "AGENT_BOUNTIES_CLAIM_COMMENTS_FILE",
+        "gh is required to inspect existing claim planner comments",
+        UserError,
     )
-    value = json.loads(comments)
-    return value if isinstance(value, list) else []
 
 
 def marker_field(pattern: re.Pattern[str], body: str) -> Optional[str]:
@@ -491,6 +659,9 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
     comment_ref = comment_url or f"issue comment {meta['comment_id']}"
     wallet_handoff = str(signal.get("claim_handoff_url") or "").strip()
     machine_request = signal.get("claim_plan_request")
+    handoff_response = signal.get("claim_handoff_response")
+    handoff_problem = signal.get("claim_handoff_problem")
+    claim_recovery = signal.get("claim_recovery")
     if decision == "RecoveryReserved":
         status_line = (
             "This issue is reserved for incident recovery. The claim command created no "
@@ -502,36 +673,87 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
             "sign a claim, or post a bond for this round."
         )
     elif decision == "OnChainClaimRequired":
-        status_line = (
-            "GitHub recorded claim intent but cannot reserve the autonomous contract. "
-            "Use the handoff below to connect the payout wallet, review the exact indexed bond, "
-            "and sign the bounded claim request."
-        )
+        if isinstance(handoff_response, dict) and isinstance(
+            handoff_response.get("wallet_request"), dict
+        ):
+            status_line = (
+                "The hosted service reserved this candidate and returned the exact wallet "
+                "request. This is not yet an on-chain claim: sign once, replay the unchanged "
+                "65-byte result privately through next_request, and wait for confirmed "
+                "BountyClaimed."
+            )
+        elif isinstance(handoff_response, dict):
+            status_line = (
+                "The hosted service recorded the candidate state below but did not request a "
+                "signature. Follow next_action; do not sign while waitlisted or after a "
+                "terminal state."
+            )
+        elif isinstance(handoff_problem, dict):
+            status_line = (
+                "The hosted handoff did not reach signature-ready state. Follow the exact "
+                "failed transition below or replay the same machine request; do not invent or "
+                "post a signature."
+            )
+        else:
+            status_line = (
+                "GitHub recorded claim intent but no valid public payout wallet was supplied. "
+                "Add `wallet: 0xYOUR_PUBLIC_BASE_ADDRESS` to a new `/claim` comment; never post "
+                "a private key or seed phrase."
+            )
     elif ready:
         status_line = "This claim is a temporary coordination signal only; it never authorizes bounty acceptance, escrow release, or payout."
     else:
         status_line = "This claim comment needs a concrete progress signal before it should reserve attention."
 
     claim_actions = []
-    if wallet_handoff:
-        claim_actions.extend(
-            [
-                f"**Connect wallet and sign claim:** {wallet_handoff}",
-                "",
-                "The handoff retrieves canonical state and shows the exact refundable bond before requesting a signature.",
-                "",
-            ]
-        )
     if isinstance(machine_request, dict):
         claim_actions.extend(
             [
-                "<details><summary>Machine claim-plan request</summary>",
+                "**Machine claim request:**",
                 "",
                 "```json",
                 json.dumps(machine_request, indent=2, sort_keys=True),
                 "```",
                 "",
-                "</details>",
+            ]
+        )
+    if isinstance(handoff_response, dict):
+        claim_actions.extend(
+            [
+                "**Hosted claim handoff:**",
+                "",
+                "```json",
+                json.dumps(handoff_response, indent=2, sort_keys=True),
+                "```",
+                "",
+            ]
+        )
+    if isinstance(handoff_problem, dict):
+        claim_actions.extend(
+            [
+                "**Hosted handoff problem:**",
+                "",
+                "```json",
+                json.dumps(handoff_problem, indent=2, sort_keys=True),
+                "```",
+                "",
+            ]
+        )
+    if wallet_handoff:
+        claim_actions.extend(
+            [
+                f"Optional browser fallback: {wallet_handoff}",
+                "",
+            ]
+        )
+    if isinstance(claim_recovery, dict):
+        claim_actions.extend(
+            [
+                "**Recover into live earning inventory:**",
+                "",
+                "```json",
+                json.dumps(claim_recovery, indent=2, sort_keys=True),
+                "```",
                 "",
             ]
         )
@@ -546,6 +768,9 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
             status_line,
             "",
             *claim_actions,
+            "Feedback (never eligibility or payment authority): reply with `discovery_source`, "
+            "`participation_reason`, and `improvement_feedback`.",
+            "",
             f"Claim comment id: `{meta['comment_id']}`",
             f"Claim comment: {comment_ref}",
             f"Contributor: `{contributor}`",
@@ -564,13 +789,7 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
 
 
 def append_step_summary(env: Mapping[str, str], comment: str) -> None:
-    summary_path = env.get("GITHUB_STEP_SUMMARY")
-    if not summary_path:
-        return
-    with pathlib.Path(summary_path).open("a", encoding="utf-8") as handle:
-        handle.write("## Agent bounty claim signal\n\n")
-        handle.write(comment)
-        handle.write("\n")
+    append_github_summary(env, "Agent bounty claim signal", comment)
 
 
 def publish_comment(
@@ -579,50 +798,19 @@ def publish_comment(
     existing_comments: List[Mapping[str, object]],
     comment: str,
 ) -> None:
-    gh_path = find_executable(["gh", "gh.exe"])
-    if not gh_path:
-        raise UserError("gh is required to publish the claim planner comment")
-
-    existing_id = None
-    for existing in existing_comments:
-        body = str(existing.get("body") or "")
-        if MARKER in body and claim_comment_id(body) == str(meta["comment_id"]):
-            existing_id = existing.get("id")
-            break
-
-    if existing_id:
-        subprocess.run(
-            [
-                gh_path,
-                "api",
-                "--method",
-                "PATCH",
-                f"repos/{meta['repo']}/issues/comments/{existing_id}",
-                "--field",
-                f"body={comment}",
-            ],
-            env=dict(env),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-    else:
-        comment_file = pathlib.Path(env.get("RUNNER_TEMP") or ".") / "paid-bounty-claim-comment.md"
-        comment_file.write_text(comment, encoding="utf-8")
-        subprocess.run(
-            [
-                gh_path,
-                "issue",
-                "comment",
-                str(meta["number"]),
-                "--repo",
-                str(meta["repo"]),
-                "--body-file",
-                str(comment_file),
-            ],
-            env=dict(env),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+    publish_issue_comment(
+        env,
+        meta["repo"],
+        meta["number"],
+        MARKER,
+        comment,
+        "paid-bounty-claim-comment.md",
+        "gh is required to publish the claim planner comment",
+        UserError,
+        existing_comments,
+        lambda body: MARKER in body
+        and claim_comment_id(body) == str(meta["comment_id"]),
+    )
 
 
 def run_from_env(env: Mapping[str, str], stdout: TextIO) -> int:
@@ -737,15 +925,19 @@ def run_self_test() -> int:
             "signal": {
                 "decision": "OnChainClaimRequired",
                 "reservation_id": "routing-only",
-                "claim_handoff_url": "https://nspg13.github.io/agent-bounties/earn.html?bountyContract=0x1111111111111111111111111111111111111111",
+                "claim_handoff_url": "https://agentbounties.app/earn.html?bountyContract=0x1111111111111111111111111111111111111111",
                 "claim_plan_request": {
                     "method": "POST",
-                    "url": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/claim-plan",
+                    "url": "https://api.agentbounties.app/v1/base/autonomous-bounties/claims",
                     "body": {
+                        "idempotency_key": "routing-only",
                         "network": "base-mainnet",
                         "bounty_contract": "0x1111111111111111111111111111111111111111",
-                        "solver": "0xYOUR_BASE_WALLET",
+                        "solver_wallet": "0xYOUR_PUBLIC_BASE_WALLET",
+                        "request_bond_sponsorship": True,
+                        "source": "github",
                     },
+                    "result": "Returns the exact indexed bond and wallet_request.",
                 },
             },
             "check": {
@@ -757,10 +949,10 @@ def run_self_test() -> int:
         },
     )
     for required_text in [
-        "cannot reserve the autonomous contract",
-        "Connect wallet and sign claim",
+        "no valid public payout wallet was supplied",
+        "Machine claim request",
         "exact indexed bond",
-        "Machine claim-plan request",
+        "0xYOUR_PUBLIC_BASE_WALLET",
     ]:
         if required_text not in routed:
             raise UserError(f"self-test autonomous route missing: {required_text}")
@@ -776,12 +968,39 @@ def run_self_test() -> int:
     canonical_record = {
         "bounty_contract": contract,
         "status": "claimable",
+        "solver_reward": "1000000",
+        "claim_bond": "10000",
         "target_amount": "1010000",
         "funded_amount": "1010000",
         "terms_valid": True,
         "verification_ready": True,
         "verification_readiness_reason": "deterministic verifier is executable",
-        "terms": {"document": {"source_url": canonical_meta["url"]}},
+        "terms": {
+            "document": {
+                "source_url": canonical_meta["url"],
+                "title": "Primary earning canary",
+            }
+        },
+        "events": [],
+    }
+    alternative_contract = "0x5555555555555555555555555555555555555555"
+    alternative_url = "https://github.com/agent-bounties/agent-bounties/issues/188"
+    alternative_record = {
+        "bounty_contract": alternative_contract,
+        "status": "claimable",
+        "solver_reward": "2000000",
+        "claim_bond": "10000",
+        "target_amount": "2010000",
+        "funded_amount": "2010000",
+        "terms_valid": True,
+        "verification_ready": True,
+        "verification_readiness_reason": "deterministic verifier is executable",
+        "terms": {
+            "document": {
+                "source_url": alternative_url,
+                "title": "Live alternative earning loop",
+            }
+        },
         "events": [],
     }
     canonical_fixture = tmp_dir / "github-claim-canonical-feed.json"
@@ -816,11 +1035,159 @@ def run_self_test() -> int:
         json.loads(json.dumps(base_autonomous_plan)),
     )
     executable_comment = render_comment(canonical_meta, executable_plan)
-    for required_text in [contract, "Connect wallet and sign claim", "Machine claim-plan request"]:
+    for required_text in [contract, "Machine claim request", "0xYOUR_PUBLIC_BASE_WALLET"]:
         if required_text not in executable_comment:
             raise UserError(f"self-test canonical claim route missing: {required_text}")
     if "not published yet" in executable_comment:
         raise UserError("self-test canonical claim route retained stale issue guidance")
+
+    missing_fixture = {
+        "full_feed": [alternative_record],
+        "claimable_feed": [alternative_record],
+    }
+    canonical_fixture.write_text(json.dumps(missing_fixture), encoding="utf-8")
+    missing_plan = apply_canonical_claim_state(
+        canonical_env,
+        canonical_meta,
+        json.loads(json.dumps(base_autonomous_plan)),
+    )
+    missing_comment = render_comment(canonical_meta, missing_plan)
+    for required_text in [
+        "agent-bounties/claim-recovery-v1",
+        "claimable_only=true",
+        "label%3Aclaimable-live",
+        alternative_url,
+        alternative_contract,
+        "/claim #188 wallet: 0xYOUR_PUBLIC_BASE_ADDRESS",
+        '"solver_reward_usdc_base_units": "2000000"',
+    ]:
+        if required_text not in missing_comment:
+            raise UserError(f"self-test claim recovery missing: {required_text}")
+    for forbidden_text in ["Machine claim request", "Hosted claim handoff"]:
+        if forbidden_text in missing_comment:
+            raise UserError(f"self-test claim recovery exposed: {forbidden_text}")
+
+    canonical_fixture.write_text(
+        json.dumps(
+            {
+                "full_feed": [canonical_record],
+                "claimable_feed": [canonical_record],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    solver_wallet = "0x2222222222222222222222222222222222222222"
+    handoff_fixture = tmp_dir / "github-claim-native-handoff.json"
+    handoff_fixture.write_text(
+        json.dumps(
+            {
+                "status": 200,
+                "body": {
+                    "schema_version": "agent-bounties/agent-native-claim-v1",
+                    "candidate": {
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "status": "authorization_ready",
+                        "exclusive_until": "2026-07-16T14:00:00Z",
+                        "bounty_contract": contract,
+                        "solver_wallet": solver_wallet,
+                    },
+                    "waitlist_position": None,
+                    "claim_bond": "10000",
+                    "sponsorship_requested": True,
+                    "sponsorship_available": True,
+                    "sponsorship_protocol": "agent-bounties/atomic-claim-sponsor-v1",
+                    "sponsor_contract": "0x3333333333333333333333333333333333333333",
+                    "wallet_request": {
+                        "method": "eth_signTypedData_v4",
+                        "params": [solver_wallet, "{\"domain\":{}}"],
+                    },
+                    "next_request": {
+                        "method": "POST",
+                        "url": f"{DEFAULT_API_BASE_URL}/v1/base/autonomous-bounties/claims",
+                        "body": {
+                            "wallet_signature": "<replace with the unchanged 0x-prefixed result from wallet_request>"
+                        },
+                    },
+                    "next_action": "Sign once and replay wallet_signature unchanged.",
+                    "evidence_boundary": "Only confirmed canonical BountyClaimed owns the round.",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    wallet_plan = json.loads(json.dumps(base_autonomous_plan))
+    wallet_plan["signal"]["claim_plan_request"] = {
+        "method": "POST",
+        "url": f"{DEFAULT_API_BASE_URL}/v1/base/autonomous-bounties/claims",
+        "body": {
+            "idempotency_key": "github-wallet-self-test",
+            "network": "base-mainnet",
+            "bounty_contract": contract,
+            "solver_wallet": solver_wallet,
+            "request_bond_sponsorship": True,
+            "source": "github",
+        },
+    }
+    wallet_env = {
+        **canonical_env,
+        "AGENT_BOUNTIES_CLAIM_HANDOFF_FILE": str(handoff_fixture),
+    }
+    wallet_plan = apply_canonical_claim_state(
+        wallet_env, canonical_meta, wallet_plan
+    )
+    wallet_comment = render_comment(canonical_meta, wallet_plan)
+    for required_text in [
+        "Exact wallet signature requested",
+        "Hosted claim handoff",
+        "claimKey=",
+        f"solver={solver_wallet}",
+        "eth_signTypedData_v4",
+        "wallet_signature",
+        "10000",
+        "Only confirmed canonical BountyClaimed",
+        "discovery_source",
+    ]:
+        if required_text not in wallet_comment:
+            raise UserError(f"self-test native claim handoff missing: {required_text}")
+
+    response, problem = summarize_native_claim_handoff(
+        503,
+        {
+            "schema_version": "agent-bounties/claim-problem-v1",
+            "state": "sponsorship_unavailable",
+            "failed_transition": "evaluate_sponsorship",
+            "error": "sponsorship_unavailable",
+            "next_action": "Fund the exact bond and retry without sponsorship.",
+        },
+        contract=contract,
+        solver_wallet=solver_wallet,
+    )
+    if response is not None or problem != {
+        "http_status": 503,
+        "schema_version": "agent-bounties/claim-problem-v1",
+        "state": "sponsorship_unavailable",
+        "failed_transition": "evaluate_sponsorship",
+        "error": "sponsorship_unavailable",
+        "next_action": "Fund the exact bond and retry without sponsorship.",
+    }:
+        raise UserError("self-test did not preserve the exact hosted claim failure")
+
+    mismatched_body = json.loads(handoff_fixture.read_text(encoding="utf-8"))["body"]
+    mismatched_body["candidate"]["solver_wallet"] = (
+        "0x4444444444444444444444444444444444444444"
+    )
+    try:
+        summarize_native_claim_handoff(
+            200,
+            mismatched_body,
+            contract=contract,
+            solver_wallet=solver_wallet,
+        )
+    except UserError:
+        pass
+    else:
+        raise UserError("self-test accepted a handoff for a different solver wallet")
 
     for blocked_status in ["open", "claimed", "submitted", "paid", "cancelled"]:
         blocked_record = json.loads(json.dumps(canonical_record))
@@ -853,7 +1220,12 @@ def run_self_test() -> int:
                 }
             ]
         canonical_fixture.write_text(
-            json.dumps({"full_feed": [blocked_record], "claimable_feed": []}),
+            json.dumps(
+                {
+                    "full_feed": [blocked_record, alternative_record],
+                    "claimable_feed": [alternative_record],
+                }
+            ),
             encoding="utf-8",
         )
         blocked_plan = apply_canonical_claim_state(
@@ -864,8 +1236,12 @@ def run_self_test() -> int:
         blocked_comment = render_comment(canonical_meta, blocked_plan)
         if "CanonicalStateUnavailable" not in blocked_comment:
             raise UserError(f"self-test did not block canonical {blocked_status} state")
-        if "Connect wallet and sign claim" in blocked_comment:
+        if "Machine claim request" in blocked_comment:
             raise UserError(f"self-test exposed a claim CTA for {blocked_status}")
+        if alternative_contract not in blocked_comment:
+            raise UserError(
+                f"self-test did not recover canonical {blocked_status} into live inventory"
+            )
 
     unavailable_env = {
         "AGENT_BOUNTIES_CLAIM_FEED_FILE": str(tmp_dir / "missing-claim-feed.json")
@@ -899,7 +1275,7 @@ def run_self_test() -> int:
     ]:
         if required_text not in recovery_output:
             raise UserError(f"self-test recovery guard missing: {required_text}")
-    for forbidden_text in ["Connect wallet and sign claim", "Machine claim-plan request"]:
+    for forbidden_text in ["Machine claim request", "Hosted claim handoff"]:
         if forbidden_text in recovery_output:
             raise UserError(f"self-test recovery guard exposed claim action: {forbidden_text}")
 

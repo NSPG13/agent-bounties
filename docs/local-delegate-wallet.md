@@ -1,0 +1,133 @@
+# Local Delegate Wallet
+
+The local delegate is the immediate provider-neutral signer for a bounded Agent
+Bounties wallet. It replaces the unavailable MetaMask Agent Wallet early-access
+dependency without importing a MetaMask owner key or changing the on-chain
+policy.
+
+The delegate key is generated locally, encrypted as a Web3 Secret Storage v3
+keystore, and stored outside the repository. Its random keystore password is
+protected by Windows DPAPI for the current Windows user. The directory ACL is
+replaced so only that user can read it. The bounded contract wallet, not the
+local process, enforces the network, token, factory, verifier, action, bounty,
+rate, lifetime, and expiry limits.
+
+## Install
+
+```powershell
+python -m pip install -r scripts/requirements-wallet.txt
+python scripts/local_delegate_wallet.py init
+python scripts/local_delegate_wallet.py status
+```
+
+`init` prints only the public delegate address. It never prints the private key
+or keystore password. By default, private state lives at:
+
+```text
+%LOCALAPPDATA%\AgentBounties\delegate
+```
+
+Use the printed address as `--delegate` when generating the one-time owner plan:
+
+```powershell
+python scripts/plan_bounded_agent_budget.py `
+  --owner 0xOWNER `
+  --delegate 0xDELEGATE
+```
+
+The owner reviews and signs that exact policy once. After the factory and wallet
+are deployed and the inspection succeeds, bind this signer to the observed
+wallet. Copy the owner and policy hash from the reviewed activation plan:
+
+```powershell
+python scripts/local_delegate_wallet.py bind `
+  --wallet 0xBOUNDED_WALLET `
+  --expect-owner 0xOWNER `
+  --expect-policy-hash 0xPOLICY_HASH
+```
+
+Binding is intentionally immutable. Rotate by creating a new delegate directory
+and installing a new owner-approved policy.
+
+For a verifier upgrade, keep the old signer recoverable until confirmation by
+using a separate state directory:
+
+```powershell
+$state = Join-Path $env:LOCALAPPDATA "AgentBounties\delegate-v2"
+python scripts/local_delegate_wallet.py --state-dir $state init
+python scripts/local_delegate_wallet.py --state-dir $state status
+```
+
+Enter only the printed public address on `agent-budget.html`. After the exact
+zero-value update is confirmed and independently inspected, bind that directory
+to the new on-chain policy hash with `--state-dir $state`.
+
+## Sign One Gas-Sponsored Creation
+
+First publish terms and request the canonical creation plan from the hosted API.
+Save that JSON as `target/creation-plan.json`, then bind it to the inspected
+wallet policy and current nonce:
+
+```powershell
+python scripts/plan_bounded_agent_action.py create `
+  --wallet 0xBOUNDED_WALLET `
+  --creation-plan target/creation-plan.json `
+  --expect-owner 0xOWNER `
+  --expect-delegate 0xDELEGATE `
+  --expect-policy-hash 0xPOLICY_HASH
+```
+
+Sign only the resulting short-lived EIP-712 action:
+
+```powershell
+python scripts/local_delegate_wallet.py sign-plan `
+  --plan target/bounded-agent-action-plan.json `
+  --issue-number 123
+```
+
+Post the exact output envelope on that `funding-needed` issue:
+
+```text
+/agent-bounty wallet-relay
+{...contents of target/bounded-wallet-relay-envelope.json...}
+```
+
+The trusted-main sponsor revalidates the wallet runtime, policy, nonce, budget,
+canonical ABI, factory prediction, delegate signature, gas ceiling, and final
+factory and bounty state. The bounded wallet needs no ETH and does not
+reimburse the sponsor. It spends only the signed initial USDC funding; the
+keeper pays Base gas from a separate capped reserve.
+
+## Direct-Gas Fallback
+
+An operator may still simulate or broadcast the same exact plan directly:
+
+```powershell
+python scripts/local_delegate_wallet.py execute-plan `
+  --plan target/bounded-agent-action-plan.json `
+  --broadcast
+```
+
+The local signer re-inspects the wallet and bounty, verifies the original safe
+block is canonical and at most five minutes old, re-derives the exact action
+calldata, simulates it, and enforces local gas caps. It rejects arbitrary
+targets, arbitrary calldata, ETH value, a changed policy, stale state, and
+non-canonical bounties. This fallback requires Base ETH at the delegate address;
+the sponsored path does not. USDC always remains in the bounded wallet until an
+allowed action charges it.
+
+## Operational Boundaries
+
+- Back up the encrypted keystore, DPAPI blob, and Windows account recovery
+  material together. DPAPI-protected data is intentionally not portable by
+  itself.
+- Never commit the private state directory or send its files to an API, MCP
+  server, issue, PR, or bounty.
+- Owner revocation remains the emergency stop. Revoke on-chain before retiring
+  or rotating a delegate.
+- A successful transaction applies one bounded action. Only reconciled
+  canonical events prove funding, claim, submission, or payout.
+- Keep sponsor gas accounting separate from bounty funds. Do not transfer ETH
+  into the bounded wallet merely to reimburse a relayer.
+- CDP, Circle, Turnkey, an HSM, or MetaMask Agent Wallet can later replace this
+  adapter by using the same public delegate and action-plan boundaries.

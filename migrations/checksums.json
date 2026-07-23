@@ -5,6 +5,18 @@
     "0001_core.sql": "01c90253c0ecd84c3aedacf400062f3623d7c2a75ad77dbffbb140eb463b9f40",
     "0002_autonomous_protocol.sql": "0af4ab404df1e830c1c8bd60b6553e6af604ed36a076de9eba9d8186175fd820",
     "0003_x402_relayer.sql": "7ae2b75395b319e3ac5e8c41c17dbf7fddb2d3b61ef56d60205299cc0c39a083",
+<<<<<<< ours
     "0004_objective_coordination.sql": "3448f48fe30a24c111c0c9695b82d0633f1a705c8db27e9d14b7a7834da67f19"
+=======
+    "0004_agent_coordination.sql": "71d7e986c99e774e4cbde2faf4cba7328b0dda618f1ba4ef5d2b2bde24421cb2",
+    "0005_trial_bounties.sql": "17a8a3193cac870a94a0afaeb5520f3cbec7d1534304583ed76493a639361c83",
+    "0006_solver_leaderboard.sql": "d71c20cc72e9c455e3d2e0f49f555d20f3a15030f142954acf8fccdd3996294d",
+    "0007_discovery_subscriptions.sql": "2cf29e47fb975290e94365e57eb90cd6f11d74f75e492b36b49b6338b3221b00",
+    "0008_opportunity_conversion.sql": "9dafe45f931943067b906d3e551f4f72536d78d0cda6591b6595414ee6ce365e",
+    "0009_legal_acceptances.sql": "6848f259d1f37ad9e2869e5df1446141a273a6c031f120e71040a42a269fd6a9",
+    "0010_site_analytics.sql": "b44d10b224408a799cb79a5f3ea36f800b4e292793096b702e745bc4365546ed",
+    "0011_social_mention_ingestion.sql": "c6491c713224911dfffcf3d00cac6db5dea8573ce93afdce1734667bcff040fa",
+    "0012_competitor_intelligence.sql": "8b97902944275ff7ad6145ec5a3eb6b82ef969a9c1fbda924ea5dfa2e9310722"
+>>>>>>> theirs
   }
 }

@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -62,11 +62,11 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: "npm"
@@ -74,7 +74,21 @@ jobs:
 
       - uses: foundry-rs/foundry-toolchain@v1
 
-      - run: bash scripts/check.sh
+      - name: Run full repository gate
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p target/ci
+          bash scripts/check.sh 2>&1 | tee target/ci/full-check.log
+
+      - name: Upload full-check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-check-log-${{ github.run_id }}
+          path: target/ci/full-check.log
+          if-no-files-found: warn
+          retention-days: 7
 
   postgres-sync:
     runs-on: ubuntu-latest
@@ -109,3 +123,4 @@ jobs:
           cargo test -p api github_issue_api_sync_postgres -- --ignored --nocapture
           cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture
           cargo test -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding -- --ignored --exact --nocapture
+          cargo test -p db tests::competitor_intelligence_migration_executes_against_migrated_postgres -- --ignored --exact --nocapture

@@ -148,6 +148,17 @@ pub fn build_live_money_readiness_report(
 ) -> Result<LiveMoneyReadinessReport, ChainBaseError> {
     let network_descriptor = base_network_descriptor(&config.network)?;
     let rpc_env = network_descriptor.rpc_url_env.clone();
+    let (factory_env, implementation_env) = match network_descriptor.chain_id {
+        8_453 => (
+            "BASE_MAINNET_BOUNTY_FACTORY",
+            "BASE_MAINNET_BOUNTY_IMPLEMENTATION",
+        ),
+        84_532 => (
+            "BASE_SEPOLIA_BOUNTY_FACTORY",
+            "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION",
+        ),
+        _ => unreachable!("base_network_descriptor returned an unsupported Base chain"),
+    };
     let stripe_secret_key_mode = config.stripe_secret_key_mode.trim().to_ascii_lowercase();
     let stripe_webhook_secret = config.stripe_webhook_secret_configured;
     let unsigned_stripe_webhooks = config.allow_unsigned_stripe_webhooks;
@@ -270,10 +281,7 @@ pub fn build_live_money_readiness_report(
             "Autonomous bounty factory",
             factory_configured && token_configured && token_matches_native,
             "planning canonical bounty creation, pooled funding, claims, and settlement",
-            vec![
-                "BASE_MAINNET_BOUNTY_FACTORY".to_string(),
-                "BASE_MAINNET_BOUNTY_IMPLEMENTATION".to_string(),
-            ],
+            vec![factory_env.to_string(), implementation_env.to_string()],
             if factory_configured && token_configured && token_matches_native {
                 "Canonical factory and the selected network's native USDC address are configured."
             } else if factory_configured && token_configured {
@@ -2366,7 +2374,7 @@ impl BountyNetwork {
             id: Uuid::new_v4(),
             agent_id: submission.solver_agent_id,
             bounty_id: request.bounty_id,
-            capability_class: capability_class.clone(),
+            capability_class,
             template_slug: template_slug.clone(),
             delta: 10,
             reason: reputation_reason.to_string(),
@@ -4240,6 +4248,18 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains(chain_base::BASE_SEPOLIA_USDC_TOKEN_ADDRESS)));
+        let factory_check = report
+            .checks
+            .iter()
+            .find(|check| check.name == "Autonomous bounty factory")
+            .unwrap();
+        assert_eq!(
+            factory_check.env_vars,
+            vec![
+                "BASE_SEPOLIA_BOUNTY_FACTORY".to_string(),
+                "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION".to_string(),
+            ]
+        );
     }
 
     fn stripe_funding_credit(
@@ -4892,7 +4912,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ci_bounty_uses_github_ci_verifier_by_default() {
+    async fn ci_bounty_does_not_pay_from_caller_supplied_github_json() {
         let mut network = BountyNetwork::default();
         let solver = network.register_agent(RegisterAgentRequest {
             handle: "solver".to_string(),
@@ -4923,7 +4943,7 @@ mod tests {
             })
             .unwrap();
 
-        network
+        let error = network
             .verify_submission(VerifySubmissionRequest {
                 bounty_id: bounty.id,
                 submission_id: submission.id,
@@ -4934,15 +4954,19 @@ mod tests {
                 approved_risk_event_id: None,
             })
             .await
-            .unwrap();
+            .unwrap_err();
+        assert!(matches!(error, AppError::VerificationNotAccepted(_)));
 
         let status = network.status(bounty.id).unwrap();
-        assert_eq!(status.bounty.status, BountyStatus::Paid);
+        assert_eq!(status.bounty.status, BountyStatus::Verifying);
         assert_eq!(status.verifier_results[0].kind, VerifierKind::GitHubCi);
         assert_eq!(
             status.verifier_results[0].decision,
-            VerificationDecision::Accepted
+            VerificationDecision::NeedsReview
         );
+        assert!(status.proofs.is_empty());
+        assert!(status.settlements.is_empty());
+        assert!(status.reputation_events.is_empty());
     }
 
     #[tokio::test]

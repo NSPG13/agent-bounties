@@ -188,6 +188,501 @@ pub trait Verifier: Send + Sync {
     async fn verify(&self, input: VerificationInput) -> VerifierResultType<VerifierResult>;
 }
 
+pub const REGRESSION_SANDBOX_POLICY_VERSION: &str = "agent-bounties/regression-sandbox-v1";
+pub const REGRESSION_SANDBOX_RECEIPT_VERSION: &str = "agent-bounties/regression-sandbox-receipt-v1";
+const MIB: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegressionSandboxPolicy {
+    pub schema_version: String,
+    pub image: String,
+    pub command: Vec<String>,
+    pub workdir: String,
+    pub benchmark_digest: String,
+    pub timeout_seconds: u64,
+    pub cpu_millis: u32,
+    pub memory_bytes: u64,
+    pub pids_limit: u32,
+    pub max_output_bytes: u64,
+    pub tmpfs_bytes: u64,
+    pub max_source_bytes: u64,
+    pub max_source_files: u32,
+    pub max_benchmark_bytes: u64,
+    pub max_benchmark_files: u32,
+    pub platform: String,
+    pub test_seed: u64,
+}
+
+impl RegressionSandboxPolicy {
+    pub fn validate(&self) -> VerifierResultType<()> {
+        if self.schema_version != REGRESSION_SANDBOX_POLICY_VERSION {
+            return Err(VerifierError::InvalidInput(
+                "unsupported regression sandbox policy version".to_string(),
+            ));
+        }
+        validate_pinned_image(&self.image)?;
+        validate_sha256_digest("benchmark_digest", &self.benchmark_digest)?;
+        if self.workdir != "/workspace" {
+            return Err(VerifierError::InvalidInput(
+                "regression sandbox workdir must be /workspace".to_string(),
+            ));
+        }
+        if self.command.is_empty() || self.command.len() > 64 {
+            return Err(VerifierError::InvalidInput(
+                "regression command must contain 1 to 64 argv entries".to_string(),
+            ));
+        }
+        let mut command_bytes = 0usize;
+        for argument in &self.command {
+            if argument.is_empty()
+                || argument.len() > 4_096
+                || argument.contains('\0')
+                || argument.contains('\n')
+                || argument.contains('\r')
+            {
+                return Err(VerifierError::InvalidInput(
+                    "regression command contains an empty, oversized, or control-bearing argv entry"
+                        .to_string(),
+                ));
+            }
+            command_bytes = command_bytes.saturating_add(argument.len());
+        }
+        if command_bytes > 16_384 {
+            return Err(VerifierError::InvalidInput(
+                "regression command exceeds the argv byte limit".to_string(),
+            ));
+        }
+        let executable = self.command[0]
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(
+            executable.as_str(),
+            "sh" | "bash" | "dash" | "zsh" | "cmd" | "cmd.exe" | "powershell" | "pwsh"
+        ) {
+            return Err(VerifierError::InvalidInput(
+                "regression sandbox v1 requires direct argv and forbids shell entrypoints"
+                    .to_string(),
+            ));
+        }
+        if !(1..=900).contains(&self.timeout_seconds)
+            || !(100..=4_000).contains(&self.cpu_millis)
+            || !(64 * MIB..=4 * 1024 * MIB).contains(&self.memory_bytes)
+            || !(16..=512).contains(&self.pids_limit)
+            || !(1_024..=16 * MIB).contains(&self.max_output_bytes)
+            || !(64 * MIB..=4 * 1024 * MIB).contains(&self.tmpfs_bytes)
+            || self.tmpfs_bytes > self.memory_bytes
+            || !(1..=2 * 1024 * MIB).contains(&self.max_source_bytes)
+            || !(1..=100_000).contains(&self.max_source_files)
+            || !(1..=512 * MIB).contains(&self.max_benchmark_bytes)
+            || !(1..=50_000).contains(&self.max_benchmark_files)
+        {
+            return Err(VerifierError::InvalidInput(
+                "regression sandbox resource limits are outside protocol bounds".to_string(),
+            ));
+        }
+        if !matches!(self.platform.as_str(), "linux/amd64" | "linux/arm64") {
+            return Err(VerifierError::InvalidInput(
+                "regression sandbox platform must be linux/amd64 or linux/arm64".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn runner_manifest_hash(&self) -> VerifierResultType<String> {
+        self.validate()?;
+        canonical_sha256_digest(self)
+    }
+
+    pub fn command_hash(&self) -> VerifierResultType<String> {
+        self.validate()?;
+        canonical_sha256_digest(&self.command)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegressionSandboxExecution {
+    pub exit_code: i32,
+    pub stdout_sha256: String,
+    pub stderr_sha256: String,
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+    pub isolation: RegressionSandboxIsolation,
+}
+
+impl RegressionSandboxExecution {
+    fn validate(&self, policy: &RegressionSandboxPolicy) -> VerifierResultType<()> {
+        validate_sha256_digest("stdout_sha256", &self.stdout_sha256)?;
+        validate_sha256_digest("stderr_sha256", &self.stderr_sha256)?;
+        if !(0..=124).contains(&self.exit_code)
+            || self
+                .stdout_bytes
+                .checked_add(self.stderr_bytes)
+                .is_none_or(|bytes| bytes > policy.max_output_bytes)
+        {
+            return Err(VerifierError::Failed(
+                "sandbox reported a runtime-reserved exit or output above the committed limit; no verdict was produced"
+                    .to_string(),
+            ));
+        }
+        self.isolation.validate()?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegressionSandboxIsolation {
+    pub runtime: String,
+    pub network: String,
+    pub rootfs_read_only: bool,
+    pub source_read_only: bool,
+    pub benchmark_read_only: bool,
+    pub capabilities: String,
+    pub no_new_privileges: bool,
+    pub user: String,
+}
+
+impl Default for RegressionSandboxIsolation {
+    fn default() -> Self {
+        Self {
+            runtime: "docker".to_string(),
+            network: "none".to_string(),
+            rootfs_read_only: true,
+            source_read_only: true,
+            benchmark_read_only: true,
+            capabilities: "none".to_string(),
+            no_new_privileges: true,
+            user: "65532:65532".to_string(),
+        }
+    }
+}
+
+impl RegressionSandboxIsolation {
+    fn validate(&self) -> VerifierResultType<()> {
+        if self.runtime != "docker"
+            || self.network != "none"
+            || !self.rootfs_read_only
+            || !self.source_read_only
+            || !self.benchmark_read_only
+            || self.capabilities != "none"
+            || !self.no_new_privileges
+            || self.user != "65532:65532"
+        {
+            return Err(VerifierError::Failed(
+                "sandbox isolation evidence does not satisfy regression-sandbox-v1; no verdict was produced"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegressionVerificationScope {
+    pub network: String,
+    pub bounty_id: String,
+    pub bounty_contract: String,
+    pub round: u64,
+    pub solver_wallet: String,
+    pub submission_hash: String,
+    pub evidence_hash: String,
+    pub terms_hash: String,
+    pub committed_policy_hash: String,
+    pub verification_expires_at: u64,
+}
+
+impl RegressionVerificationScope {
+    pub fn validate(&self) -> VerifierResultType<()> {
+        if self.network.is_empty()
+            || self.network.len() > 64
+            || self
+                .network
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        {
+            return Err(VerifierError::InvalidInput(
+                "regression verification network is invalid".to_string(),
+            ));
+        }
+        for (field, value) in [
+            ("bounty_id", &self.bounty_id),
+            ("submission_hash", &self.submission_hash),
+            ("evidence_hash", &self.evidence_hash),
+            ("terms_hash", &self.terms_hash),
+            ("committed_policy_hash", &self.committed_policy_hash),
+        ] {
+            if !is_bytes32_hash(value) {
+                return Err(VerifierError::InvalidInput(format!(
+                    "regression verification {field} must be a 0x-prefixed bytes32 value"
+                )));
+            }
+        }
+        if !is_evm_address(&self.bounty_contract) || !is_evm_address(&self.solver_wallet) {
+            return Err(VerifierError::InvalidInput(
+                "regression verification contract and solver must be EVM addresses".to_string(),
+            ));
+        }
+        if self.round == 0 || self.verification_expires_at == 0 {
+            return Err(VerifierError::InvalidInput(
+                "regression verification round and expiry must be positive".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegressionVerificationTask {
+    pub scope: RegressionVerificationScope,
+    pub source_digest: String,
+}
+
+impl RegressionVerificationTask {
+    pub fn validate(&self) -> VerifierResultType<()> {
+        self.scope.validate()?;
+        validate_sha256_digest("source_digest", &self.source_digest)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegressionVerdict {
+    Passed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegressionSandboxReceipt {
+    pub schema_version: String,
+    pub scope: RegressionVerificationScope,
+    pub runner_manifest_hash: String,
+    pub command_hash: String,
+    pub source_digest: String,
+    pub benchmark_digest: String,
+    pub image: String,
+    pub execution: RegressionSandboxExecution,
+}
+
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum RegressionSandboxExecutorError {
+    #[error("sandbox runtime is unavailable")]
+    RuntimeUnavailable,
+    #[error("sandbox input is unavailable or does not match its committed digest")]
+    InputUnavailable,
+    #[error("sandbox exceeded its committed timeout")]
+    TimedOut,
+    #[error("sandbox exceeded its committed output limit")]
+    OutputLimitExceeded,
+    #[error("sandbox was killed by a resource or runtime limit")]
+    ResourceLimitExceeded,
+    #[error("sandbox execution failed closed")]
+    FailedClosed,
+}
+
+#[async_trait]
+pub trait RegressionSandboxExecutor: Send + Sync {
+    async fn execute(
+        &self,
+        policy: &RegressionSandboxPolicy,
+        source_digest: &str,
+    ) -> Result<RegressionSandboxExecution, RegressionSandboxExecutorError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegressionVerificationOutcome {
+    pub verdict: RegressionVerdict,
+    pub receipt: RegressionSandboxReceipt,
+    pub response_hash: String,
+}
+
+pub fn validate_regression_outcome(
+    policy: &RegressionSandboxPolicy,
+    task: &RegressionVerificationTask,
+    outcome: &RegressionVerificationOutcome,
+) -> VerifierResultType<()> {
+    policy.validate()?;
+    task.validate()?;
+    outcome.receipt.execution.validate(policy)?;
+    if outcome.receipt.schema_version != REGRESSION_SANDBOX_RECEIPT_VERSION
+        || outcome.receipt.scope != task.scope
+        || outcome.receipt.runner_manifest_hash != policy.runner_manifest_hash()?
+        || outcome.receipt.command_hash != policy.command_hash()?
+        || outcome.receipt.source_digest != task.source_digest
+        || outcome.receipt.benchmark_digest != policy.benchmark_digest
+        || outcome.receipt.image != policy.image
+    {
+        return Err(VerifierError::Failed(
+            "regression receipt differs from the immutable task or runner policy; no attestation is allowed"
+                .to_string(),
+        ));
+    }
+    let expected_verdict = if outcome.receipt.execution.exit_code == 0 {
+        RegressionVerdict::Passed
+    } else {
+        RegressionVerdict::Failed
+    };
+    if outcome.verdict != expected_verdict {
+        return Err(VerifierError::Failed(
+            "regression verdict differs from the completed process exit; no attestation is allowed"
+                .to_string(),
+        ));
+    }
+    #[derive(Serialize)]
+    struct ResponsePreimage<'a> {
+        schema_version: &'static str,
+        verdict: RegressionVerdict,
+        receipt: &'a RegressionSandboxReceipt,
+    }
+    let expected_response_hash = canonical_sha256_bytes32(&ResponsePreimage {
+        schema_version: REGRESSION_SANDBOX_RECEIPT_VERSION,
+        verdict: outcome.verdict,
+        receipt: &outcome.receipt,
+    })?;
+    if !outcome
+        .response_hash
+        .eq_ignore_ascii_case(&expected_response_hash)
+    {
+        return Err(VerifierError::Failed(
+            "regression response hash does not commit the exact receipt; no attestation is allowed"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub struct SandboxedRegressionVerifier<E> {
+    pub executor: E,
+    pub policy: RegressionSandboxPolicy,
+}
+
+impl<E: RegressionSandboxExecutor> SandboxedRegressionVerifier<E> {
+    pub async fn verify(
+        &self,
+        task: RegressionVerificationTask,
+    ) -> VerifierResultType<RegressionVerificationOutcome> {
+        self.policy.validate()?;
+        task.validate()?;
+
+        let execution = self
+            .executor
+            .execute(&self.policy, &task.source_digest)
+            .await
+            .map_err(|error| VerifierError::Failed(format!("{error}; no verdict was produced")))?;
+        execution.validate(&self.policy)?;
+        let receipt = RegressionSandboxReceipt {
+            schema_version: REGRESSION_SANDBOX_RECEIPT_VERSION.to_string(),
+            scope: task.scope.clone(),
+            runner_manifest_hash: self.policy.runner_manifest_hash()?,
+            command_hash: self.policy.command_hash()?,
+            source_digest: task.source_digest.clone(),
+            benchmark_digest: self.policy.benchmark_digest.clone(),
+            image: self.policy.image.clone(),
+            execution,
+        };
+        let verdict = if receipt.execution.exit_code == 0 {
+            RegressionVerdict::Passed
+        } else {
+            RegressionVerdict::Failed
+        };
+        let mut outcome = RegressionVerificationOutcome {
+            verdict,
+            receipt,
+            response_hash: String::new(),
+        };
+        #[derive(Serialize)]
+        struct ResponsePreimage<'a> {
+            schema_version: &'static str,
+            verdict: RegressionVerdict,
+            receipt: &'a RegressionSandboxReceipt,
+        }
+        outcome.response_hash = canonical_sha256_bytes32(&ResponsePreimage {
+            schema_version: REGRESSION_SANDBOX_RECEIPT_VERSION,
+            verdict: outcome.verdict,
+            receipt: &outcome.receipt,
+        })?;
+        validate_regression_outcome(&self.policy, &task, &outcome)?;
+        Ok(outcome)
+    }
+}
+
+fn validate_pinned_image(image: &str) -> VerifierResultType<()> {
+    if image.starts_with('-') || image.matches('@').count() != 1 {
+        return Err(VerifierError::InvalidInput(
+            "regression image must be a non-option OCI reference pinned by one sha256 digest"
+                .to_string(),
+        ));
+    }
+    let Some((name, digest)) = image.split_once("@sha256:") else {
+        return Err(VerifierError::InvalidInput(
+            "regression image must be pinned by sha256 digest".to_string(),
+        ));
+    };
+    if name.is_empty()
+        || name.bytes().any(|byte| {
+            !matches!(
+                byte,
+                b'a'..=b'z'
+                    | b'0'..=b'9'
+                    | b'.'
+                    | b'/'
+                    | b':'
+                    | b'_'
+                    | b'-'
+            )
+        })
+        || name.contains("..")
+        || digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(VerifierError::InvalidInput(
+            "regression image has an invalid immutable digest".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sha256_digest(field: &str, value: &str) -> VerifierResultType<()> {
+    let Some(digest) = value.strip_prefix("sha256:") else {
+        return Err(VerifierError::InvalidInput(format!(
+            "{field} must use sha256:<64 lowercase hex>"
+        )));
+    };
+    if digest.len() != 64
+        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || digest.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(VerifierError::InvalidInput(format!(
+            "{field} must use sha256:<64 lowercase hex>"
+        )));
+    }
+    Ok(())
+}
+
+fn canonical_sha256_digest<T: Serialize>(value: &T) -> VerifierResultType<String> {
+    let encoded = serde_json::to_vec(value).map_err(|_| {
+        VerifierError::Failed("failed to encode canonical verifier evidence".to_string())
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(encoded);
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
+}
+
+fn canonical_sha256_bytes32<T: Serialize>(value: &T) -> VerifierResultType<String> {
+    let encoded = serde_json::to_vec(value).map_err(|_| {
+        VerifierError::Failed("failed to encode canonical verifier evidence".to_string())
+    })?;
+    Ok(format!("0x{}", hex::encode(Sha256::digest(encoded))))
+}
+
 #[derive(Debug, Clone)]
 pub struct ManualVerifier {
     pub verifier_agent_id: Option<Id>,
@@ -281,104 +776,52 @@ impl Verifier for GitHubCiVerifier {
     }
 
     async fn verify(&self, input: VerificationInput) -> VerifierResultType<VerifierResult> {
-        let Some(evidence) = input.evidence.as_ref() else {
-            return Ok(make_result(
-                input.bounty_id,
-                input.submission.id,
+        let (summary, payload) = match input.evidence.as_ref() {
+            None => (
+                "caller-supplied GitHub CI JSON has no authenticated provenance and cannot authorize acceptance or rejection; structured evidence is also missing".to_string(),
                 None,
-                VerifierKind::GitHubCi,
-                VerificationDecision::NeedsReview,
-                "GitHub CI evidence needs review: structured evidence is required",
-                0.35,
-            ));
+            ),
+            Some(evidence) => match GitHubCiEvidence::from_value(evidence, &input.submission) {
+                Err(reason) => (
+                    format!(
+                        "caller-supplied GitHub CI JSON has no authenticated provenance and cannot authorize acceptance or rejection; advisory parse failed: {reason}"
+                    ),
+                    Some(evidence.to_string()),
+                ),
+                Ok(parsed) => {
+                    let ownership_reason = parsed.validate_ownership(&input.submission).err();
+                    let acceptance_reason = parsed.automatic_acceptance_review_reason();
+                    let advisory = ownership_reason
+                        .or(acceptance_reason)
+                        .unwrap_or_else(|| "the untrusted fields are internally consistent".to_string());
+                    let pr = parsed
+                        .pull_request_number()
+                        .map(|number| format!("PR #{number}"))
+                        .unwrap_or_else(|| "repository evidence".to_string());
+                    (
+                        format!(
+                            "caller-supplied GitHub CI JSON has no authenticated provenance and cannot authorize acceptance or rejection; parsed {} {} commit {} check {}#{}; advisory: {}",
+                            parsed.repository,
+                            pr,
+                            short_sha(&parsed.commit_sha),
+                            parsed.check_name,
+                            parsed.check_run_id,
+                            advisory
+                        ),
+                        Some(parsed.canonical_payload()),
+                    )
+                }
+            },
         };
-
-        let parsed = match GitHubCiEvidence::from_value(evidence, &input.submission) {
-            Ok(parsed) => parsed,
-            Err(message) => {
-                return Ok(make_result(
-                    input.bounty_id,
-                    input.submission.id,
-                    None,
-                    VerifierKind::GitHubCi,
-                    VerificationDecision::NeedsReview,
-                    format!("GitHub CI evidence needs review: {message}"),
-                    0.35,
-                ));
-            }
-        };
-
-        if let Err(reason) = parsed.validate_ownership(&input.submission) {
-            return Ok(make_result_with_payload(ResultSeed {
-                bounty_id: input.bounty_id,
-                submission_id: input.submission.id,
-                verifier_agent_id: None,
-                kind: VerifierKind::GitHubCi,
-                decision: VerificationDecision::Rejected,
-                summary: format!("GitHub CI evidence rejected: {reason}"),
-                confidence: 0.0,
-                payload: Some(&parsed.canonical_payload()),
-            }));
-        }
-
-        let status = parsed.check_status.to_ascii_lowercase();
-        let conclusion = parsed.check_conclusion.to_ascii_lowercase();
-        let completed = matches!(status.as_str(), "completed" | "success" | "passed");
-        let succeeded = matches!(conclusion.as_str(), "success" | "passed");
-        let accepted = completed && succeeded;
-        let short_sha = short_sha(&parsed.commit_sha);
-        let payload = parsed.canonical_payload();
-        if accepted {
-            if let Some(reason) = parsed.automatic_acceptance_review_reason() {
-                return Ok(make_result_with_payload(ResultSeed {
-                    bounty_id: input.bounty_id,
-                    submission_id: input.submission.id,
-                    verifier_agent_id: None,
-                    kind: VerifierKind::GitHubCi,
-                    decision: VerificationDecision::NeedsReview,
-                    summary: format!("GitHub CI evidence needs review: {reason}"),
-                    confidence: 0.62,
-                    payload: Some(&payload),
-                }));
-            }
-        }
-        let summary = if accepted {
-            format!(
-                "GitHub CI evidence accepted: {} {} commit {} check {}#{} succeeded",
-                parsed.repository,
-                parsed
-                    .pull_request_number()
-                    .map(|number| format!("PR #{number}"))
-                    .unwrap_or_else(|| "repository evidence".to_string()),
-                short_sha,
-                parsed.check_name,
-                parsed.check_run_id
-            )
-        } else {
-            format!(
-                "GitHub CI evidence rejected: check {}#{} for {} commit {} ended with status `{}` and conclusion `{}`",
-                parsed.check_name,
-                parsed.check_run_id,
-                parsed.repository,
-                short_sha,
-                parsed.check_status,
-                parsed.check_conclusion
-            )
-        };
-
         Ok(make_result_with_payload(ResultSeed {
             bounty_id: input.bounty_id,
             submission_id: input.submission.id,
             verifier_agent_id: None,
             kind: VerifierKind::GitHubCi,
-            decision: if accepted {
-                VerificationDecision::Accepted
-            } else {
-                VerificationDecision::Rejected
-            },
+            decision: VerificationDecision::NeedsReview,
             summary,
-            confidence: if accepted { 0.98 } else { 0.0 },
-            payload: Some(&payload),
+            confidence: 0.0,
+            payload: payload.as_deref(),
         }))
     }
 }
@@ -723,32 +1166,14 @@ impl Verifier for DockerCommandVerifier {
     }
 
     async fn verify(&self, input: VerificationInput) -> VerifierResultType<VerifierResult> {
-        let evidence = required_evidence(&input)?;
-        let exit_code = evidence_i64(evidence, "exit_code").ok_or_else(|| {
-            VerifierError::InvalidInput("docker evidence requires exit_code".to_string())
-        })?;
-        let digest_matches = match &input.expected_artifact_digest {
-            Some(expected) => expected == &input.submission.artifact_digest,
-            None => true,
-        };
-        let accepted = exit_code == 0 && digest_matches;
-
         Ok(make_result(
             input.bounty_id,
             input.submission.id,
             None,
             VerifierKind::DockerCommand,
-            if accepted {
-                VerificationDecision::Accepted
-            } else {
-                VerificationDecision::Rejected
-            },
-            if accepted {
-                "Docker command exited successfully"
-            } else {
-                "Docker command evidence failed"
-            },
-            if accepted { 0.96 } else { 0.0 },
+            VerificationDecision::NeedsReview,
+            "self-reported Docker exit evidence cannot authorize acceptance; run the committed policy through SandboxedRegressionVerifier",
+            0.0,
         ))
     }
 }
@@ -1045,7 +1470,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn github_ci_verifier_accepts_success_evidence() {
+    async fn github_ci_verifier_needs_authenticated_success_evidence() {
         let bounty_id = Uuid::new_v4();
         let submission = Submission {
             artifact_uri: "https://github.com/agent-bounties/agent-bounties/pull/42".to_string(),
@@ -1064,13 +1489,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.kind, VerifierKind::GitHubCi);
-        assert_eq!(result.decision, VerificationDecision::Accepted);
-        assert!(result.summary.contains("PR #42"));
+        assert_eq!(result.decision, VerificationDecision::NeedsReview);
+        assert!(result.summary.contains("authenticated provenance"));
         assert_eq!(result.signed_payload_hash.len(), 64);
     }
 
     #[tokio::test]
-    async fn github_ci_verifier_rejects_mismatched_commit_evidence() {
+    async fn github_ci_verifier_does_not_trust_mismatched_commit_json() {
         let bounty_id = Uuid::new_v4();
         let submission = Submission {
             artifact_uri: "https://github.com/agent-bounties/agent-bounties/pull/42".to_string(),
@@ -1091,12 +1516,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.decision, VerificationDecision::Rejected);
-        assert!(result.summary.contains("does not match submitted commit"));
+        assert_eq!(result.decision, VerificationDecision::NeedsReview);
+        assert!(result.summary.contains("authenticated provenance"));
     }
 
     #[tokio::test]
-    async fn github_ci_verifier_rejects_failed_check_evidence() {
+    async fn github_ci_verifier_does_not_trust_failure_json() {
         let bounty_id = Uuid::new_v4();
         let submission = Submission {
             artifact_uri: "https://github.com/agent-bounties/agent-bounties/pull/42".to_string(),
@@ -1116,8 +1541,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.decision, VerificationDecision::Rejected);
-        assert!(result.summary.contains("conclusion `failure`"));
+        assert_eq!(result.decision, VerificationDecision::NeedsReview);
+        assert!(result.summary.contains("authenticated provenance"));
     }
 
     #[tokio::test]
@@ -1142,7 +1567,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.decision, VerificationDecision::NeedsReview);
-        assert!(result.summary.contains("pull_request metadata"));
+        assert!(result.summary.contains("authenticated provenance"));
     }
 
     #[tokio::test]
@@ -1167,7 +1592,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.decision, VerificationDecision::NeedsReview);
-        assert!(result.summary.contains("merged by its author"));
+        assert!(result.summary.contains("authenticated provenance"));
     }
 
     #[tokio::test]
@@ -1197,7 +1622,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.decision, VerificationDecision::NeedsReview);
-        assert!(result.summary.contains("non-author reviewer"));
+        assert!(result.summary.contains("authenticated provenance"));
     }
 
     #[tokio::test]
@@ -1217,11 +1642,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.decision, VerificationDecision::NeedsReview);
-        assert!(result.summary.contains("structured evidence is required"));
+        assert!(result.summary.contains("authenticated provenance"));
     }
 
     #[tokio::test]
-    async fn github_ci_verifier_rejects_replayed_pr_evidence() {
+    async fn github_ci_verifier_does_not_trust_replayed_pr_json() {
         let bounty_id = Uuid::new_v4();
         let submission = Submission {
             artifact_uri: "https://github.com/agent-bounties/agent-bounties/pull/43".to_string(),
@@ -1239,8 +1664,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.decision, VerificationDecision::Rejected);
-        assert!(result.summary.contains("does not match submitted PR"));
+        assert_eq!(result.decision, VerificationDecision::NeedsReview);
+        assert!(result.summary.contains("authenticated provenance"));
     }
 
     #[tokio::test]
@@ -1274,13 +1699,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(first.decision, VerificationDecision::Accepted);
-        assert_eq!(second.decision, VerificationDecision::Accepted);
+        assert_eq!(first.decision, VerificationDecision::NeedsReview);
+        assert_eq!(second.decision, VerificationDecision::NeedsReview);
         assert_ne!(first.signed_payload_hash, second.signed_payload_hash);
     }
 
     #[tokio::test]
-    async fn docker_verifier_requires_zero_exit_and_digest_match() {
+    async fn self_reported_docker_exit_code_cannot_authorize_acceptance() {
         let bounty_id = Uuid::new_v4();
         let submission = submission_for(bounty_id, "abc123abc123abc123");
 
@@ -1296,7 +1721,159 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.kind, VerifierKind::DockerCommand);
-        assert_eq!(result.decision, VerificationDecision::Accepted);
+        assert_eq!(result.decision, VerificationDecision::NeedsReview);
+        assert!(result.summary.contains("self-reported"));
+    }
+
+    #[test]
+    fn regression_policy_requires_immutable_direct_execution() {
+        let policy = regression_policy();
+        policy.validate().expect("valid regression policy");
+        assert_eq!(
+            policy.runner_manifest_hash().unwrap(),
+            policy.runner_manifest_hash().unwrap()
+        );
+        assert_eq!(
+            policy.command_hash().unwrap(),
+            policy.command_hash().unwrap()
+        );
+
+        let mut mutable_image = policy.clone();
+        mutable_image.image = "ghcr.io/agent-bounties/rust-verifier:latest".to_string();
+        assert!(mutable_image.validate().is_err());
+
+        let mut option_injection = policy.clone();
+        option_injection.image = format!("--volume@sha256:{}", "b".repeat(64));
+        assert!(option_injection.validate().is_err());
+
+        let mut uppercase = policy.clone();
+        uppercase.image = format!("GHCR.IO/owner/image@sha256:{}", "b".repeat(64));
+        assert!(uppercase.validate().is_err());
+
+        let mut shell = policy;
+        shell.command = vec!["sh".to_string(), "-c".to_string(), "cargo test".to_string()];
+        assert!(shell.validate().is_err());
+    }
+
+    #[tokio::test]
+    async fn sandboxed_regression_accepts_only_runner_execution_and_hashes_receipt() {
+        let verifier = SandboxedRegressionVerifier {
+            executor: StubRegressionExecutor::completed(0),
+            policy: regression_policy(),
+        };
+        let task = regression_task();
+
+        let first = verifier.verify(task.clone()).await.unwrap();
+        let second = verifier.verify(task).await.unwrap();
+
+        assert_eq!(first.verdict, RegressionVerdict::Passed);
+        assert_eq!(first.receipt.execution.exit_code, 0);
+        assert_eq!(first.response_hash, second.response_hash);
+        assert!(first.response_hash.starts_with("0x"));
+        assert_eq!(first.response_hash.len(), 66);
+        assert_eq!(first.receipt.scope, regression_scope());
+    }
+
+    #[tokio::test]
+    async fn regression_candidate_validation_rejects_scope_verdict_and_hash_mutation() {
+        let policy = regression_policy();
+        let task = regression_task();
+        let outcome = SandboxedRegressionVerifier {
+            executor: StubRegressionExecutor::completed(0),
+            policy: policy.clone(),
+        }
+        .verify(task.clone())
+        .await
+        .unwrap();
+        validate_regression_outcome(&policy, &task, &outcome).unwrap();
+
+        let mut changed_scope = outcome.clone();
+        changed_scope.receipt.scope.round += 1;
+        assert!(validate_regression_outcome(&policy, &task, &changed_scope).is_err());
+
+        let mut changed_verdict = outcome.clone();
+        changed_verdict.verdict = RegressionVerdict::Failed;
+        assert!(validate_regression_outcome(&policy, &task, &changed_verdict).is_err());
+
+        let mut changed_hash = outcome;
+        changed_hash.response_hash = hash("a");
+        assert!(validate_regression_outcome(&policy, &task, &changed_hash).is_err());
+    }
+
+    #[tokio::test]
+    async fn sandboxed_regression_emits_failure_only_for_completed_nonzero_exit() {
+        let failed = SandboxedRegressionVerifier {
+            executor: StubRegressionExecutor::completed(1),
+            policy: regression_policy(),
+        }
+        .verify(regression_task())
+        .await
+        .unwrap();
+        assert_eq!(failed.verdict, RegressionVerdict::Failed);
+
+        let timed_out = SandboxedRegressionVerifier {
+            executor: StubRegressionExecutor {
+                outcome: Err(RegressionSandboxExecutorError::TimedOut),
+            },
+            policy: regression_policy(),
+        }
+        .verify(regression_task())
+        .await
+        .unwrap_err();
+        assert!(timed_out.to_string().contains("no verdict was produced"));
+
+        let reserved_exit = SandboxedRegressionVerifier {
+            executor: StubRegressionExecutor::completed(137),
+            policy: regression_policy(),
+        }
+        .verify(regression_task())
+        .await
+        .unwrap_err();
+        assert!(reserved_exit
+            .to_string()
+            .contains("no verdict was produced"));
+
+        let mut combined_output = StubRegressionExecutor::completed(0);
+        let execution = combined_output.outcome.as_mut().unwrap();
+        execution.stdout_bytes = 700;
+        execution.stderr_bytes = 700;
+        let mut bounded_policy = regression_policy();
+        bounded_policy.max_output_bytes = 1_024;
+        let bounded_output = SandboxedRegressionVerifier {
+            executor: combined_output,
+            policy: bounded_policy,
+        }
+        .verify(regression_task())
+        .await
+        .unwrap_err();
+        assert!(bounded_output
+            .to_string()
+            .contains("no verdict was produced"));
+    }
+
+    #[tokio::test]
+    async fn sandbox_runner_failure_produces_no_verdict() {
+        let verifier = SandboxedRegressionVerifier {
+            executor: StubRegressionExecutor {
+                outcome: Err(RegressionSandboxExecutorError::RuntimeUnavailable),
+            },
+            policy: regression_policy(),
+        };
+        let error = verifier.verify(regression_task()).await.unwrap_err();
+
+        assert!(error.to_string().contains("no verdict was produced"));
+    }
+
+    #[tokio::test]
+    async fn sandboxed_regression_rejects_malformed_payment_scope_before_execution() {
+        let verifier = SandboxedRegressionVerifier {
+            executor: StubRegressionExecutor::completed(0),
+            policy: regression_policy(),
+        };
+        let mut task = regression_task();
+        task.scope.submission_hash = hash("f");
+        task.scope.bounty_contract = "not-an-address".to_string();
+        assert!(verifier.verify(task).await.is_err());
     }
 
     #[tokio::test]
@@ -1377,6 +1954,94 @@ mod tests {
             artifact_uri: "s3://bucket/artifact".to_string(),
             submitted_at: Utc::now(),
         }
+    }
+
+    #[derive(Clone)]
+    struct StubRegressionExecutor {
+        outcome: Result<RegressionSandboxExecution, RegressionSandboxExecutorError>,
+    }
+
+    impl StubRegressionExecutor {
+        fn completed(exit_code: i32) -> Self {
+            Self {
+                outcome: Ok(RegressionSandboxExecution {
+                    exit_code,
+                    stdout_sha256: sha256_digest('d'),
+                    stderr_sha256: sha256_digest('e'),
+                    stdout_bytes: 12,
+                    stderr_bytes: 0,
+                    isolation: RegressionSandboxIsolation::default(),
+                }),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RegressionSandboxExecutor for StubRegressionExecutor {
+        async fn execute(
+            &self,
+            _policy: &RegressionSandboxPolicy,
+            _source_digest: &str,
+        ) -> Result<RegressionSandboxExecution, RegressionSandboxExecutorError> {
+            self.outcome.clone()
+        }
+    }
+
+    fn regression_policy() -> RegressionSandboxPolicy {
+        RegressionSandboxPolicy {
+            schema_version: REGRESSION_SANDBOX_POLICY_VERSION.to_string(),
+            image: format!(
+                "ghcr.io/agent-bounties/rust-verifier@sha256:{}",
+                "b".repeat(64)
+            ),
+            command: vec![
+                "cargo".to_string(),
+                "test".to_string(),
+                "--locked".to_string(),
+                "--target-dir".to_string(),
+                "/tmp/target".to_string(),
+            ],
+            workdir: "/workspace".to_string(),
+            benchmark_digest: sha256_digest('a'),
+            timeout_seconds: 120,
+            cpu_millis: 1_000,
+            memory_bytes: 512 * MIB,
+            pids_limit: 128,
+            max_output_bytes: MIB,
+            tmpfs_bytes: 256 * MIB,
+            max_source_bytes: 512 * MIB,
+            max_source_files: 50_000,
+            max_benchmark_bytes: 64 * MIB,
+            max_benchmark_files: 10_000,
+            platform: "linux/amd64".to_string(),
+            test_seed: 1,
+        }
+    }
+
+    fn regression_task() -> RegressionVerificationTask {
+        RegressionVerificationTask {
+            scope: regression_scope(),
+            source_digest: sha256_digest('c'),
+        }
+    }
+
+    fn regression_scope() -> RegressionVerificationScope {
+        RegressionVerificationScope {
+            network: "base-mainnet".to_string(),
+            bounty_id: hash("a"),
+            bounty_contract: address("2"),
+            round: 3,
+            solver_wallet: address("3"),
+            submission_hash: hash("4"),
+            evidence_hash: hash("5"),
+            terms_hash: hash("6"),
+            committed_policy_hash: hash("7"),
+            verification_expires_at: 2_000_000_000,
+        }
+    }
+
+    fn sha256_digest(character: char) -> String {
+        format!("sha256:{}", character.to_string().repeat(64))
     }
 
     fn github_ci_evidence() -> Value {

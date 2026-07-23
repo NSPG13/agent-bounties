@@ -1,0 +1,70 @@
+name: Leaderboard Reward Runner
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/leaderboard-reward-*.yml"
+      - "contracts/base-escrow/src/SolverLeaderboardRewards.sol"
+      - "contracts/base-escrow/test/SolverLeaderboardRewards.t.sol"
+      - "scripts/leaderboard_reward_pipeline.py"
+      - "scripts/test_leaderboard_reward_pipeline.py"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: leaderboard-reward-runner-mainnet
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - run: |
+          python scripts/test_leaderboard_reward_pipeline.py -v
+          python -m py_compile scripts/leaderboard_reward_pipeline.py
+          cd contracts/base-escrow
+          forge test --match-contract SolverLeaderboardRewardsTest
+
+  generate-no-secrets:
+    if: >-
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/main' &&
+      vars.LEADERBOARD_REWARD_RUNNER_ENABLED == 'true' &&
+      vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT != ''
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      LEADERBOARD_REWARD_CONTRACT: ${{ vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - name: Build closed-period candidates without secrets
+        run: >-
+          python scripts/leaderboard_reward_pipeline.py run
+          --api-base "$API_BASE_URL"
+          --network base-mainnet
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          --contract "$LEADERBOARD_REWARD_CONTRACT"
+          --output target/leaderboard-candidates
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: leaderboard-candidates-${{ github.run_id }}
+          path: target/leaderboard-candidates
+          if-no-files-found: error
+          retention-days: 7

@@ -39,6 +39,7 @@
           "terms_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "document": {
             "title": "Verify a deterministic Base artifact",
+            "source_url": "https://github.com/NSPG13/agent-bounties/issues/275",
             "contract_terms": {
               "protocol_version": "agent-bounties/autonomous-v1",
               "creator_wallet": "0x3333333333333333333333333333333333333333",

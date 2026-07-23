@@ -3,23 +3,51 @@ name: Autonomous Gas Relay
 on:
   issue_comment:
     types: [created, edited]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: autonomous-gas-relay-base-mainnet
   cancel-in-progress: false
 
 jobs:
+  keeper-health:
+    if: github.event_name != 'issue_comment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - name: Validate keeper signer, chain, and gas reserve
+        env:
+          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+        run: python scripts/relay_autonomous_action.py --health-check
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: autonomous-gas-relay-health-${{ github.run_id }}
+          path: target/autonomous-gas-relay.json
+          if-no-files-found: warn
+
   relay:
     if: >-
-      github.event.issue.pull_request == null
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request == null
       && contains(github.event.issue.labels.*.name, 'funded-live')
       && !contains(github.event.issue.labels.*.name, 'verification-unavailable')
       && !contains(github.event.issue.labels.*.name, 'legacy-canary')
       && startsWith(github.event.comment.body, '/agent-bounty relay')
+    permissions:
+      contents: read
+      issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -31,6 +59,10 @@ jobs:
         env:
           BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_RELAY_STATE_WAIT_SECONDS: "120"
+          BASE_RELAY_STATE_POLL_SECONDS: "3"
+          BASE_RELAY_COMMAND_TIMEOUT_SECONDS: "30"
+          BASE_RELAY_OPERATION_TIMEOUT_SECONDS: "240"
           GH_TOKEN: ${{ github.token }}
         run: >-
           python scripts/relay_autonomous_action.py

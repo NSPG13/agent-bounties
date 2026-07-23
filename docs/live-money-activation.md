@@ -219,7 +219,7 @@ After Checkout returns, route funders to the static status page with the hosted
 API URL, bounty id, and external reference:
 
 ```text
-https://nspg13.github.io/agent-bounties/success.html?apiBaseUrl=$PUBLIC_BASE_URL&bountyId=<bounty-id>&externalReference=<external-reference>
+https://agentbounties.app/success.html?apiBaseUrl=$PUBLIC_BASE_URL&bountyId=<bounty-id>&externalReference=<external-reference>
 ```
 
 The page reads `GET /v1/bounties/{id}` and shows `Checkout returned`, `waiting

@@ -2,6 +2,7 @@ import { AgentBountiesClient, hashArtifact } from "../src/index.js";
 
 declare const process: {
   argv: string[];
+  env: Record<string, string | undefined>;
 };
 
 type JsonObject = Record<string, unknown>;
@@ -202,5 +203,10 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
   };
 }
 
-const result = await runExample(new AgentBountiesClient({ baseUrl: baseUrlFromArgs() }));
+const result = await runExample(
+  new AgentBountiesClient({
+    baseUrl: baseUrlFromArgs(),
+    operatorApiToken: process.env.OPERATOR_API_TOKEN,
+  }),
+);
 console.log(JSON.stringify(result, null, 2));

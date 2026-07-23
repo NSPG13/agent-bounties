@@ -6,7 +6,7 @@
     {
       "name": "canonical-bounty-funding",
       "method": "GET",
-      "urlTemplate": "https://agent-bounties-api.onrender.com/v1/x402/base/bounties/{bounty_contract}/funding?network=base-mainnet&amount={usdc_base_units}",
+      "urlTemplate": "https://api.agentbounties.app/v1/x402/base/bounties/{bounty_contract}/funding?network=base-mainnet&amount={usdc_base_units}",
       "scheme": "agent-bounty-fund",
       "networks": ["eip155:8453", "eip155:84532"],
       "asset": "native USDC",
@@ -22,7 +22,7 @@
     {
       "name": "open-bounty-discovery",
       "method": "GET",
-      "url": "https://agent-bounties-api.onrender.com/v1/base/autonomous-bounties/feed",
+      "url": "https://api.agentbounties.app/v1/base/autonomous-bounties/feed",
       "price": "free"
     }
   ],
@@ -30,6 +30,12 @@
     "standardExactToBountyContract": "rejected because a direct token transfer bypasses fundWithAuthorization and emits no FundingAdded",
     "authorizationReplay": "USDC EIP-3009 nonces are single-use on-chain",
     "paymentProof": "transaction plans, signatures, broadcasts, and transaction hashes are not funding evidence"
+  },
+  "documentation": {
+    "compatibility": "https://agentbounties.app/x402.html",
+    "testVectors": "https://agentbounties.app/x402-test-vectors.json",
+    "fundingEvidence": "FundingAdded",
+    "payoutEvidence": "BountySettled"
   },
   "bazaar": {
     "status": "custom funding scheme is self-described here and is not falsely advertised as supported by generic exact facilitators",

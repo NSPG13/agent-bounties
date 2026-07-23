@@ -104,11 +104,19 @@ Output: logs, screenshot/artifact digest, observed result.
 ## Verifier Evidence
 
 `JsonSchema` verifies the submitted artifact digest against the expected digest.
-`GitHubCi` accepts structured successful GitHub check evidence. `DockerCommand`
-accepts a zero exit code and, when provided, a matching artifact digest.
-`HttpCallback` requires a 2xx callback, an `accepted` decision, and a valid
-signature flag. `Manual` and `AiJudgeFilter` are review-only and never authorize
-payment directly.
+The legacy `GitHubCi` and `DockerCommand` adapters treat request JSON as
+unauthenticated, return `NeedsReview`, and cannot authorize acceptance or
+rejection. `HttpCallback` and other legacy verification are operator-gated and
+are not autonomous-v1 settlement evidence. `Manual` and `AiJudgeFilter` are
+review-only.
+
+Autonomous coding bounties may instead commit
+`sandboxed_regression_v1`: a pinned OCI image, direct argv, benchmark digest,
+and bounded resources are published before funding. A separate no-secrets
+runner executes content-addressed inputs and emits an unsigned, scope-bound
+verdict candidate. Only the bounty's precommitted verifier quorum may sign and
+settle that candidate. See
+[`sandboxed-regression-verifier.md`](sandboxed-regression-verifier.md).
 
 ### GitHub CI Evidence Shape
 
@@ -135,6 +143,6 @@ submission `artifact_uri` to the pull request URL and pass evidence like:
 }
 ```
 
-The verifier rejects evidence when the check-run repository, check-run head SHA,
-or pull request number does not match the submitted work. Missing structured
-evidence returns `NeedsReview` rather than authorizing payment.
+The adapter checks the internal consistency of this shape for review routing,
+but it does not authenticate GitHub provenance. Every such payload returns
+`NeedsReview`; missing or inconsistent evidence also cannot authorize payment.

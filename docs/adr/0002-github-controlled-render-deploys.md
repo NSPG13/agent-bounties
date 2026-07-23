@@ -23,7 +23,9 @@ self-healing release path.
   mutation.
 - Use Render's API to deploy the exact SHA and poll all three service deploys
   to terminal `live`.
-- Verify API and MCP `/health` body, protocol, and exact revision headers.
+- Verify API and MCP `/health` body, protocol, and exact revision headers over
+  eight consecutive cache-bypassed probes. Any stale instance resets the
+  bounded stability window.
 - Keep the Render API key only in GitHub Actions and retain redacted evidence.
 - Leave the scheduled public observer read-only and fail-closed.
 

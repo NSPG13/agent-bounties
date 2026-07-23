@@ -12,18 +12,22 @@ app = { path = "../app" }
 axum.workspace = true
 bounty-router = { path = "../bounty-router" }
 chain-base = { path = "../chain-base" }
+cloud-agent = { path = "../cloud-agent" }
 chrono.workspace = true
 db = { path = "../db" }
 domain = { path = "../domain" }
 eval-harness = { path = "../eval-harness" }
 github-app = { path = "../github-app" }
 hex.workspace = true
+hmac.workspace = true
 ledger = { path = "../ledger" }
 payments-stripe = { path = "../payments-stripe" }
 payments-x402 = { path = "../payments-x402" }
 risk = { path = "../risk" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+service-runtime = { path = "../service-runtime" }
 sha2.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
@@ -35,5 +39,4 @@ worker = { path = "../worker" }
 [dev-dependencies]
 alloy.workspace = true
 hex.workspace = true
-hmac.workspace = true
 sha2.workspace = true

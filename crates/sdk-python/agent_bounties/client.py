@@ -1,9 +1,23 @@
 import hashlib
 import os
 import time
+import uuid
 from typing import Callable
 
 import httpx
+
+
+class AgentBountiesHttpError(httpx.HTTPStatusError):
+    """HTTP error that preserves the platform's parsed machine-readable problem."""
+
+    def __init__(self, response: httpx.Response, body):
+        super().__init__(
+            f"{response.request.url.path} failed: {response.status_code}",
+            request=response.request,
+            response=response,
+        )
+        self.status_code = response.status_code
+        self.body = body
 
 
 def hash_artifact(body: str) -> str:
@@ -32,26 +46,66 @@ class AgentBountiesClient:
             return {"x-operator-token": self.operator_api_token}
         return None
 
+    def _http(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict | None = None,
+        params: dict | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        request_headers = self._headers() or {}
+        request_headers.update(headers or {})
+        return httpx.request(
+            method,
+            f"{self.base_url}{path}",
+            json=json,
+            params={key: value for key, value in params.items() if value is not None} if params else None,
+            headers=request_headers or None,
+            timeout=30,
+        )
+
     def _request(
         self,
         method: str,
         path: str,
         json: dict | None = None,
         params: dict | None = None,
+        headers: dict[str, str] | None = None,
     ):
-        query = (
-            {key: value for key, value in params.items() if value is not None}
-            if params
-            else None
-        )
-        response = httpx.request(
-            method,
-            f"{self.base_url}{path}",
-            json=json,
-            params=query,
-            headers=self._headers(),
-            timeout=30,
-        )
+        response = self._http(method, path, json=json, params=params, headers=headers)
+        if response.status_code == 204:
+            return {"http_status": 204, "success": True}
+        try:
+            body = response.json()
+        except ValueError:
+            body = {"error": response.text or f"HTTP {response.status_code}"}
+        if response.is_error:
+            raise AgentBountiesHttpError(response, body)
+        return body
+
+    def _x402_request(
+        self,
+        path: str,
+        accepted_statuses: tuple[int, ...],
+        *,
+        params: dict | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict:
+        response = self._http("GET", path, params=params, headers=headers)
+        if response.status_code not in accepted_statuses:
+            response.raise_for_status()
+        return {
+            "status": response.status_code,
+            "payment_required": response.headers.get("PAYMENT-REQUIRED"),
+            "payment_response": response.headers.get("PAYMENT-RESPONSE"),
+            "body": _x402_response_body(response),
+        }
+
+    def _stripe_event(self, path: str, event: dict, signature: str | None) -> dict:
+        headers = {"stripe-signature": signature} if signature else None
+        response = self._http("POST", path, json=event, headers=headers)
         response.raise_for_status()
         return response.json()
 
@@ -77,6 +131,32 @@ class AgentBountiesClient:
     def get_x402_discovery(self):
         return self._request("GET", "/.well-known/x402.json")
 
+    def compile_objective(
+        self,
+        objective: str,
+        *,
+        context: str | None = None,
+        constraints: list[str] | None = None,
+        max_tasks: int = 5,
+        solver_budget_usdc: str | None = None,
+        source_url: str | None = None,
+        idempotency_key: str | None = None,
+    ):
+        """Compile one objective into an advisory, validated bounty graph."""
+        return self._request(
+            "POST",
+            "/v1/cloud-agent/objective-plans",
+            json={
+                "objective": objective,
+                "context": context,
+                "constraints": constraints or [],
+                "max_tasks": max_tasks,
+                "solver_budget_usdc": solver_budget_usdc,
+                "source_url": source_url,
+                "idempotency_key": idempotency_key,
+            },
+        )
+
     def request_x402_bounty_funding(
         self,
         bounty_contract: str,
@@ -85,46 +165,21 @@ class AgentBountiesClient:
         relayer: str | None = None,
         payment_signature: str | None = None,
     ):
-        headers = self._headers() or {}
-        if payment_signature:
-            headers["PAYMENT-SIGNATURE"] = payment_signature
-        response = httpx.get(
-            f"{self.base_url}/v1/x402/base/bounties/{bounty_contract}/funding",
+        return self._x402_request(
+            f"/v1/x402/base/bounties/{bounty_contract}/funding",
+            (200, 202, 400, 402, 404, 409, 413, 422, 429, 503),
             params={
-                key: value
-                for key, value in {
-                    "network": network,
-                    "amount": amount,
-                    "relayer": relayer,
-                }.items()
-                if value is not None
+                "network": network,
+                "amount": amount,
+                "relayer": relayer,
             },
-            headers=headers or None,
-            timeout=30,
+            headers={"PAYMENT-SIGNATURE": payment_signature} if payment_signature else None,
         )
-        if response.status_code not in (200, 202, 400, 402, 404, 409, 413, 422, 429, 503):
-            response.raise_for_status()
-        return {
-            "status": response.status_code,
-            "payment_required": response.headers.get("PAYMENT-REQUIRED"),
-            "payment_response": response.headers.get("PAYMENT-RESPONSE"),
-            "body": _x402_response_body(response),
-        }
 
     def get_x402_relay_status(self, relay_id: str):
-        response = httpx.get(
-            f"{self.base_url}/v1/x402/base/relays/{relay_id}",
-            headers=self._headers() or None,
-            timeout=30,
+        return self._x402_request(
+            f"/v1/x402/base/relays/{relay_id}", (200, 202, 404, 422, 503)
         )
-        if response.status_code not in (200, 202, 404, 422, 503):
-            response.raise_for_status()
-        return {
-            "status": response.status_code,
-            "payment_required": response.headers.get("PAYMENT-REQUIRED"),
-            "payment_response": response.headers.get("PAYMENT-RESPONSE"),
-            "body": _x402_response_body(response),
-        }
 
     def fund_x402_bounty(
         self,
@@ -212,6 +267,35 @@ class AgentBountiesClient:
             "GET",
             "/v1/readiness/live-money",
             params={"network": network},
+        )
+
+    def prepare_agent_to_earn(
+        self,
+        wallet_address: str,
+        bounty_contract: str,
+        signing_capabilities: list[str],
+        policy: dict,
+        network: str = "base-mainnet",
+        wallet_profile: str | None = None,
+        claim_bond_base_units: str | None = None,
+    ):
+        """Check public wallet readiness without requesting wallet secrets or a signature."""
+        return self._request(
+            "POST",
+            "/v1/base/agent-wallet/readiness",
+            json={
+                "network": network,
+                "wallet_address": wallet_address,
+                "bounty_contract": bounty_contract,
+                "claim_bond_base_units": (
+                    str(claim_bond_base_units)
+                    if claim_bond_base_units is not None
+                    else None
+                ),
+                "signing_capabilities": signing_capabilities,
+                "wallet_profile": wallet_profile,
+                "policy": policy,
+            },
         )
 
     def get_risk_events(
@@ -611,6 +695,92 @@ class AgentBountiesClient:
             params={"network": network, "claimable_only": claimable_only},
         )
 
+    def get_solver_leaderboard(
+        self, network: str | None = None, at: str | None = None
+    ):
+        return self._request(
+            "GET",
+            "/v1/base/autonomous-bounties/leaderboard",
+            params={"network": network, "at": at},
+        )
+
+    def list_opportunities(
+        self,
+        network: str | None = None,
+        view: str | None = None,
+        source_type: str | None = None,
+        work_state: str | None = None,
+        payment_state: str | None = None,
+        limit: int | None = None,
+    ):
+        """Read the combined projection without replacing source-of-truth feeds."""
+        return self._request(
+            "GET",
+            "/v1/opportunities",
+            params={
+                "network": network,
+                "view": view,
+                "source_type": source_type,
+                "work_state": work_state,
+                "payment_state": payment_state,
+                "limit": limit,
+            },
+        )
+
+    def analyze_bounty_fit(
+        self, bounty_contract: str, network: str | None = None
+    ):
+        """Return advisory analysis cached by immutable terms hash."""
+        return self._request(
+            "GET",
+            f"/v1/base/autonomous-bounties/{bounty_contract}/analysis",
+            params={"network": network},
+        )
+
+    def create_discovery_subscription(
+        self, endpoint_url: str, filters: dict | None = None
+    ):
+        """Create a filtered signed webhook; credentials are returned once."""
+        return self._request(
+            "POST",
+            "/v1/discovery/subscriptions",
+            json={"endpoint_url": endpoint_url, "filters": filters or {}},
+        )
+
+    def get_discovery_subscription(
+        self, subscription_id: str, management_token: str
+    ):
+        return self._request(
+            "GET",
+            f"/v1/discovery/subscriptions/{subscription_id}",
+            headers={"authorization": f"Bearer {management_token}"},
+        )
+
+    def delete_discovery_subscription(
+        self, subscription_id: str, management_token: str
+    ):
+        return self._request(
+            "DELETE",
+            f"/v1/discovery/subscriptions/{subscription_id}",
+            headers={"authorization": f"Bearer {management_token}"},
+        )
+
+    def get_opportunity_conversion_funnel(self, window_hours: int | None = None):
+        """Return observable conversions without inferring agent independence."""
+        return self._request(
+            "GET",
+            "/v1/opportunities/conversion-funnel",
+            params={"window_hours": window_hours},
+        )
+
+    def get_site_analytics(self, window_hours: int | None = None):
+        """Return privacy-minimized browser, channel, and site-action aggregates."""
+        return self._request(
+            "GET",
+            "/v1/analytics/site",
+            params={"window_hours": window_hours},
+        )
+
     def list_autonomous_verification_jobs(
         self, network: str | None = None, verifier: str | None = None
     ):
@@ -651,6 +821,7 @@ class AgentBountiesClient:
         parent_round: int,
         parent_solver: str,
         parent_solver_reward: dict,
+        child_acceptance_criteria: list[str],
         verifier_module: str,
     ):
         return self._request(
@@ -661,6 +832,7 @@ class AgentBountiesClient:
                 "parent_round": parent_round,
                 "parent_solver": parent_solver,
                 "parent_solver_reward": parent_solver_reward,
+                "child_acceptance_criteria": child_acceptance_criteria,
                 "verifier_module": verifier_module,
             },
         )
@@ -729,6 +901,85 @@ class AgentBountiesClient:
                 "authorization_valid_before": authorization_valid_before,
             },
         )
+
+    def agent_native_claim(
+        self,
+        bounty_contract: str,
+        solver_wallet: str,
+        signer: Callable[[dict], str | dict] | None = None,
+        *,
+        idempotency_key: str | None = None,
+        network: str = "base-mainnet",
+        agent_id: str | None = None,
+        request_bond_sponsorship: bool = False,
+        source: str = "sdk-python",
+        poll_interval_seconds: float = 1.0,
+        timeout_seconds: float = 60.0,
+    ):
+        """Reserve a claim, optionally sign once, and poll for canonical ownership.
+
+        The signer receives only the server-derived EIP-712 signing_payload and
+        should return the wallet's unchanged 65-byte ``0x...`` result. Legacy
+        ``{"v": int, "r": "0x...", "s": "0x..."}`` results remain accepted.
+        Keys never leave the caller's wallet implementation. When bond
+        sponsorship is requested and available, that one signature authorizes
+        an atomic bond-plus-claim transaction: either both transitions succeed
+        or neither moves value. Only the returned canonical event proves claim
+        ownership.
+        """
+        request = {
+            "idempotency_key": idempotency_key or f"sdk-python-{uuid.uuid4()}",
+            "network": network,
+            "bounty_contract": bounty_contract,
+            "solver_wallet": solver_wallet,
+            "agent_id": agent_id,
+            "request_bond_sponsorship": request_bond_sponsorship,
+            "source": source,
+        }
+        response = self._request(
+            "POST", "/v1/base/autonomous-bounties/claims", json=request
+        )
+        signing_payload = response.get("signing_payload")
+        if signer is None or not isinstance(signing_payload, dict):
+            return response
+
+        signature = signer(signing_payload)
+        if isinstance(signature, str):
+            if (
+                len(signature) != 132
+                or not signature.startswith("0x")
+                or not all(character in "0123456789abcdefABCDEF" for character in signature[2:])
+            ):
+                raise ValueError(
+                    "agent claim signer must return one 65-byte 0x-prefixed signature"
+                )
+            request["wallet_signature"] = signature
+        elif isinstance(signature, dict) and {"v", "r", "s"} <= signature.keys():
+            request["signature"] = signature
+        else:
+            raise ValueError(
+                "agent claim signer must return a wallet signature or legacy v, r, and s"
+            )
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            response = self._request(
+                "POST", "/v1/base/autonomous-bounties/claims", json=request
+            )
+            candidate = response.get("candidate")
+            status = candidate.get("status") if isinstance(candidate, dict) else None
+            if status == "claimed":
+                if not response.get("canonical_event_id"):
+                    raise RuntimeError("claimed response is missing canonical_event_id")
+                return response
+            if status in {"failed", "superseded", "withdrawn"}:
+                raise RuntimeError(f"agent claim ended in terminal state {status}")
+            if status == "waitlisted":
+                return response
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "agent claim timed out; replay the same idempotency key and signature"
+                )
+            time.sleep(poll_interval_seconds)
 
     def plan_autonomous_bounty_authorized_claim(
         self,
@@ -1115,36 +1366,16 @@ class AgentBountiesClient:
         event: dict,
         stripe_signature: str | None = None,
     ):
-        headers = self._headers() or {}
-        if stripe_signature:
-            headers["stripe-signature"] = stripe_signature
-        response = httpx.request(
-            "POST",
-            f"{self.base_url}/v1/stripe/checkout-webhooks",
-            json=event,
-            headers=headers or None,
-            timeout=30,
+        return self._stripe_event(
+            "/v1/stripe/checkout-webhooks", event, stripe_signature
         )
-        response.raise_for_status()
-        return response.json()
 
     def reconcile_stripe_transfer_event(
         self,
         event: dict,
         stripe_signature: str | None = None,
     ):
-        headers = self._headers() or {}
-        if stripe_signature:
-            headers["stripe-signature"] = stripe_signature
-        response = httpx.request(
-            "POST",
-            f"{self.base_url}/v1/stripe/transfer-events",
-            json=event,
-            headers=headers or None,
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json()
+        return self._stripe_event("/v1/stripe/transfer-events", event, stripe_signature)
 
     def run_bountybench(self):
         return self._request("GET", "/v1/evals/bountybench")

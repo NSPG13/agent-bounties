@@ -5,3 +5,6 @@ description = "Python SDK for the Agent Bounties MCP/OpenAPI network"
 requires-python = ">=3.10"
 dependencies = ["httpx>=0.27"]
 
+[tool.setuptools]
+packages = ["agent_bounties"]
+

@@ -5,8 +5,14 @@ use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+<<<<<<< ours
 pub mod objective;
 pub use objective::*;
+=======
+mod leaderboard;
+
+pub use leaderboard::*;
+>>>>>>> theirs
 
 pub type Id = Uuid;
 
@@ -69,7 +75,7 @@ pub enum FundingMode {
     MixedRails,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 pub enum CapabilityClass {
     Coding,
     Research,
@@ -92,6 +98,336 @@ pub enum VerifierKind {
 
 pub const AUTONOMOUS_BOUNTY_PROTOCOL_VERSION: &str = "agent-bounties/autonomous-v1";
 
+fn default_exclusive_claim_seconds() -> u64 {
+    15 * 60
+}
+
+fn default_waitlist_capacity() -> u16 {
+    20
+}
+
+fn default_takeover_grace_seconds() -> u64 {
+    60
+}
+
+fn default_maximum_sponsored_bond_base_units() -> u64 {
+    100_000
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentEligibilityPolicy {
+    pub required_capabilities: Vec<CapabilityClass>,
+    pub minimum_paid_completions: u32,
+    pub minimum_paid_usdc_base_units: u64,
+    pub wallet_allowlist: Vec<String>,
+    pub wallet_denylist: Vec<String>,
+    pub creator_may_claim: bool,
+    pub sponsorship_allowed: bool,
+    #[serde(default = "default_maximum_sponsored_bond_base_units")]
+    pub maximum_sponsored_bond_base_units: u64,
+}
+
+impl Default for AgentEligibilityPolicy {
+    fn default() -> Self {
+        Self {
+            required_capabilities: Vec::new(),
+            minimum_paid_completions: 0,
+            minimum_paid_usdc_base_units: 0,
+            wallet_allowlist: Vec::new(),
+            wallet_denylist: Vec::new(),
+            creator_may_claim: false,
+            sponsorship_allowed: false,
+            maximum_sponsored_bond_base_units: default_maximum_sponsored_bond_base_units(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClaimCoordinationPolicy {
+    #[serde(default = "default_exclusive_claim_seconds")]
+    pub exclusive_claim_seconds: u64,
+    #[serde(default = "default_waitlist_capacity")]
+    pub waitlist_capacity: u16,
+    #[serde(default = "default_takeover_grace_seconds")]
+    pub takeover_grace_seconds: u64,
+}
+
+impl Default for ClaimCoordinationPolicy {
+    fn default() -> Self {
+        Self {
+            exclusive_claim_seconds: default_exclusive_claim_seconds(),
+            waitlist_capacity: default_waitlist_capacity(),
+            takeover_grace_seconds: default_takeover_grace_seconds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AgentEligibilityEvidence {
+    pub agent_id: Option<Id>,
+    pub solver_wallet: String,
+    #[serde(default)]
+    pub capabilities: Vec<CapabilityClass>,
+    pub paid_completions: u32,
+    pub paid_usdc_base_units: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AgentEligibilityDecision {
+    pub eligible: bool,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimCandidateStatus {
+    Waitlisted,
+    Exclusive,
+    Sponsoring,
+    AuthorizationReady,
+    Relaying,
+    Claimed,
+    Superseded,
+    Withdrawn,
+    Failed,
+}
+
+impl ClaimCandidateStatus {
+    pub fn is_active_exclusive(self) -> bool {
+        matches!(
+            self,
+            Self::Exclusive | Self::Sponsoring | Self::AuthorizationReady | Self::Relaying
+        )
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Claimed | Self::Superseded | Self::Withdrawn | Self::Failed
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ClaimCandidate {
+    pub id: Id,
+    pub idempotency_key: String,
+    pub network: String,
+    pub bounty_contract: String,
+    pub solver_wallet: String,
+    pub agent_id: Option<Id>,
+    pub eligibility_evidence: AgentEligibilityEvidence,
+    pub eligibility_decision: AgentEligibilityDecision,
+    pub status: ClaimCandidateStatus,
+    pub exclusive_until: Option<DateTime<Utc>>,
+    pub authorization_nonce: Option<String>,
+    pub authorization_valid_before: Option<u64>,
+    pub claim_transaction_hash: Option<String>,
+    pub canonical_event_id: Option<Id>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BondSponsorshipStatus {
+    Reserved,
+    Broadcast,
+    Confirmed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct BondSponsorship {
+    pub id: Id,
+    pub claim_candidate_id: Id,
+    pub network: String,
+    pub bounty_contract: String,
+    pub solver_wallet: String,
+    pub sponsor_wallet: String,
+    pub amount: u64,
+    pub status: BondSponsorshipStatus,
+    pub transaction_hash: Option<String>,
+    pub confirmed_block: Option<u64>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWebhookEventType {
+    OpportunityPublished,
+    OpportunityStateChanged,
+    FundingConfirmed,
+    ClaimExclusive,
+    ClaimWaitlisted,
+    ClaimTakenOver,
+    ClaimConfirmed,
+    SubmissionConfirmed,
+    VerificationPassed,
+    VerificationFailed,
+    SettlementConfirmed,
+    RecoveryConfirmed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryRewardFilter {
+    pub amount: String,
+    pub currency: String,
+    pub unit: String,
+    pub decimals: u8,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiscoverySubscriptionFilters {
+    pub skills: Vec<String>,
+    pub categories: Vec<String>,
+    pub minimum_committed_reward: Option<DiscoveryRewardFilter>,
+    pub work_states: Vec<String>,
+    pub payment_states: Vec<String>,
+    pub verification_methods: Vec<String>,
+    pub source_types: Vec<String>,
+    pub deadline_within_hours: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DiscoveryOpportunitySnapshot {
+    pub opportunity_id: String,
+    pub source_type: String,
+    pub categories: Vec<String>,
+    pub skills: Vec<String>,
+    pub work_state: String,
+    pub payment_state: String,
+    pub payment_committed: bool,
+    pub reward: DiscoveryRewardFilter,
+    pub deadline: Option<DateTime<Utc>>,
+    pub verification_method: String,
+    pub public_url: String,
+}
+
+impl DiscoverySubscriptionFilters {
+    pub fn matches(&self, opportunity: &DiscoveryOpportunitySnapshot, now: DateTime<Utc>) -> bool {
+        overlaps_case_insensitive(&self.skills, &opportunity.skills)
+            && overlaps_case_insensitive(&self.categories, &opportunity.categories)
+            && contains_case_insensitive(&self.work_states, &opportunity.work_state)
+            && contains_case_insensitive(&self.payment_states, &opportunity.payment_state)
+            && contains_case_insensitive(
+                &self.verification_methods,
+                &opportunity.verification_method,
+            )
+            && contains_case_insensitive(&self.source_types, &opportunity.source_type)
+            && self
+                .minimum_committed_reward
+                .as_ref()
+                .is_none_or(|minimum| {
+                    opportunity.payment_committed
+                        && minimum
+                            .currency
+                            .eq_ignore_ascii_case(&opportunity.reward.currency)
+                        && minimum.unit.eq_ignore_ascii_case(&opportunity.reward.unit)
+                        && minimum.decimals == opportunity.reward.decimals
+                        && parse_unsigned_amount(&opportunity.reward.amount)
+                            .zip(parse_unsigned_amount(&minimum.amount))
+                            .is_some_and(|(reward, minimum)| reward >= minimum)
+                })
+            && self.deadline_within_hours.is_none_or(|hours| {
+                opportunity.deadline.is_some_and(|deadline| {
+                    let seconds = deadline.timestamp() - now.timestamp();
+                    (0..=i64::from(hours) * 60 * 60).contains(&seconds)
+                })
+            })
+    }
+}
+
+fn overlaps_case_insensitive(filter: &[String], values: &[String]) -> bool {
+    filter.is_empty()
+        || filter.iter().any(|expected| {
+            values
+                .iter()
+                .any(|actual| expected.eq_ignore_ascii_case(actual))
+        })
+}
+
+fn contains_case_insensitive(filter: &[String], value: &str) -> bool {
+    filter.is_empty()
+        || filter
+            .iter()
+            .any(|expected| expected.eq_ignore_ascii_case(value))
+}
+
+fn parse_unsigned_amount(value: &str) -> Option<u128> {
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse().ok())
+        .flatten()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AgentWebhookEnvelope {
+    pub schema_version: String,
+    pub event_id: Id,
+    pub event_type: AgentWebhookEventType,
+    pub occurred_at: DateTime<Utc>,
+    pub data: Value,
+}
+
+impl AgentEligibilityPolicy {
+    pub fn evaluate(
+        &self,
+        creator_wallet: &str,
+        evidence: &AgentEligibilityEvidence,
+    ) -> AgentEligibilityDecision {
+        let solver = evidence.solver_wallet.to_ascii_lowercase();
+        let creator = creator_wallet.to_ascii_lowercase();
+        let allowlisted = self
+            .wallet_allowlist
+            .iter()
+            .any(|wallet| wallet.eq_ignore_ascii_case(&solver));
+        let denied = self
+            .wallet_denylist
+            .iter()
+            .any(|wallet| wallet.eq_ignore_ascii_case(&solver));
+        let mut reasons = Vec::new();
+        if denied {
+            reasons.push("solver wallet is denylisted".to_string());
+        }
+        if !self.wallet_allowlist.is_empty() && !allowlisted {
+            reasons.push("solver wallet is not allowlisted".to_string());
+        }
+        if !self.creator_may_claim && solver == creator {
+            reasons.push("creator wallet may not claim this bounty".to_string());
+        }
+        for capability in &self.required_capabilities {
+            if !evidence.capabilities.contains(capability) {
+                reasons.push(format!("missing required capability: {capability:?}"));
+            }
+        }
+        if evidence.paid_completions < self.minimum_paid_completions {
+            reasons.push(format!(
+                "requires at least {} paid completions",
+                self.minimum_paid_completions
+            ));
+        }
+        if evidence.paid_usdc_base_units < self.minimum_paid_usdc_base_units {
+            reasons.push(format!(
+                "requires at least {} paid USDC base units",
+                self.minimum_paid_usdc_base_units
+            ));
+        }
+        AgentEligibilityDecision {
+            eligible: reasons.is_empty(),
+            reasons,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutonomousBountyTermsDocument {
     pub schema_version: String,
@@ -104,6 +440,10 @@ pub struct AutonomousBountyTermsDocument {
     pub verification_policy: Value,
     pub source_url: Option<String>,
     pub discovery_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_eligibility: Option<AgentEligibilityPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_coordination: Option<ClaimCoordinationPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1028,6 +1368,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn discovery_filters_require_committed_comparable_reward_and_all_filter_groups() {
+        let now = Utc::now();
+        let opportunity = DiscoveryOpportunitySnapshot {
+            opportunity_id: "canonical:base-mainnet:0x1".to_string(),
+            source_type: "canonical_base".to_string(),
+            categories: vec!["engineering".to_string()],
+            skills: vec!["Rust".to_string()],
+            work_state: "claimable".to_string(),
+            payment_state: "escrowed".to_string(),
+            payment_committed: true,
+            reward: DiscoveryRewardFilter {
+                amount: "1000000".to_string(),
+                currency: "USDC".to_string(),
+                unit: "base_units".to_string(),
+                decimals: 6,
+            },
+            deadline: Some(now + chrono::Duration::hours(24)),
+            verification_method: "deterministic_module".to_string(),
+            public_url: "https://example.com/opportunity".to_string(),
+        };
+        let filters = DiscoverySubscriptionFilters {
+            skills: vec!["rust".to_string()],
+            categories: vec!["engineering".to_string()],
+            minimum_committed_reward: Some(DiscoveryRewardFilter {
+                amount: "900000".to_string(),
+                currency: "usdc".to_string(),
+                unit: "base_units".to_string(),
+                decimals: 6,
+            }),
+            work_states: vec!["claimable".to_string()],
+            payment_states: vec!["escrowed".to_string()],
+            verification_methods: vec!["deterministic_module".to_string()],
+            source_types: vec!["canonical_base".to_string()],
+            deadline_within_hours: Some(48),
+        };
+        assert!(filters.matches(&opportunity, now));
+
+        let mut uncommitted = opportunity.clone();
+        uncommitted.payment_committed = false;
+        assert!(!filters.matches(&uncommitted, now));
+        let mut wrong_category = opportunity;
+        wrong_category.categories = vec!["creative".to_string()];
+        assert!(!filters.matches(&wrong_category, now));
+    }
+
+    #[test]
     fn zero_money_is_explicit_and_does_not_allow_zero_value_bounties() {
         assert_eq!(
             Money::zero("USDC"),
@@ -1193,6 +1579,52 @@ mod tests {
         policy.max_automatic_payout = Money::new(100, "usdc").unwrap();
         policy.policy_hash = format!("0x{}", "0".repeat(64));
         assert_eq!(policy.validate(), Err(VerificationPolicyError::InvalidHash));
+    }
+
+    #[test]
+    fn eligibility_reports_every_failed_requirement() {
+        let policy = AgentEligibilityPolicy {
+            required_capabilities: vec![CapabilityClass::Coding, CapabilityClass::Ci],
+            minimum_paid_completions: 2,
+            minimum_paid_usdc_base_units: 1_000_000,
+            wallet_allowlist: vec!["0x1111111111111111111111111111111111111111".to_string()],
+            wallet_denylist: Vec::new(),
+            creator_may_claim: false,
+            sponsorship_allowed: true,
+            maximum_sponsored_bond_base_units: 100_000,
+        };
+        let evidence = AgentEligibilityEvidence {
+            agent_id: None,
+            solver_wallet: "0x2222222222222222222222222222222222222222".to_string(),
+            capabilities: vec![CapabilityClass::Coding],
+            paid_completions: 1,
+            paid_usdc_base_units: 500_000,
+        };
+
+        let decision = policy.evaluate("0x3333333333333333333333333333333333333333", &evidence);
+        assert!(!decision.eligible);
+        assert_eq!(decision.reasons.len(), 4);
+    }
+
+    #[test]
+    fn absent_claim_metadata_does_not_appear_in_canonical_terms_json() {
+        let value = serde_json::to_value(AutonomousBountyTermsDocument {
+            schema_version: "agent-bounties/terms-v1".to_string(),
+            contract_terms: serde_json::json!({}),
+            title: "Existing terms".to_string(),
+            goal: "Keep existing hashes stable".to_string(),
+            acceptance_criteria: vec!["unchanged".to_string()],
+            benchmark: serde_json::json!({}),
+            evidence_schema: serde_json::json!({}),
+            verification_policy: serde_json::json!({}),
+            source_url: None,
+            discovery_source: None,
+            agent_eligibility: None,
+            claim_coordination: None,
+        })
+        .unwrap();
+        assert!(value.get("agent_eligibility").is_none());
+        assert!(value.get("claim_coordination").is_none());
     }
 
     fn deterministic_policy() -> AutomaticVerificationPolicy {

@@ -1,0 +1,34 @@
+name: Agent Bounty Create Comments
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: agent-bounty-create-comment-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  reviewable-draft:
+    if: >-
+      github.event.issue.pull_request == null
+      && startsWith(github.event.comment.body, '/agent-bounty create')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Publish review-required draft handoff
+        run: bash scripts/github-create-comment.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -1,6 +1,9 @@
 import { AgentBountiesClient, hashArtifact } from "./index.js";
 
-declare const process: { argv: string[] };
+declare const process: {
+  argv: string[];
+  env: Record<string, string | undefined>;
+};
 
 type JsonObject = Record<string, unknown>;
 
@@ -49,10 +52,18 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
 
   const tools = asArray(discovery.agent_tools, "discovery.agent_tools");
   for (const tool of [
+    "list_opportunities",
+    "create_discovery_subscription",
+    "get_discovery_subscription",
+    "delete_discovery_subscription",
+    "get_opportunity_conversion_funnel",
+    "analyze_bounty_fit",
     "list_autonomous_bounties",
+    "get_solver_leaderboard",
     "plan_autonomous_canonical_child_terms",
     "plan_autonomous_bounty_creation",
     "plan_autonomous_bounty_contribution",
+    "agent_native_claim",
     "plan_autonomous_bounty_claim",
     "plan_autonomous_bounty_submission",
     "prepare_autonomous_bounty_submission",
@@ -73,6 +84,11 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
 
   const endpoints = asObject(discovery.endpoints, "discovery.endpoints");
   for (const endpoint of [
+    "opportunities",
+    "discovery_subscriptions",
+    "discovery_subscription",
+    "opportunity_conversion_funnel",
+    "autonomous_bounty_analysis",
     "autonomous_creation_plan",
     "autonomous_bounty_feed",
     "autonomous_verification_jobs",
@@ -89,7 +105,8 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "schema endpoint requirements",
   );
   requireCondition(
-    endpointRequired.includes("autonomous_creation_plan") &&
+      endpointRequired.includes("autonomous_creation_plan") &&
+      endpointRequired.includes("autonomous_agent_native_claim") &&
       endpointRequired.includes("autonomous_attestation_settlement_plan"),
     "v2 schema does not require autonomous endpoints",
   );
@@ -110,15 +127,28 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "autonomous event decoder rejected an empty batch",
   );
   asArray(await client.listAutonomousBountyEvents("base-mainnet"), "autonomous events");
+  const opportunities = asObject(
+    await client.listOpportunities({ network: "base-mainnet", view: "recent" }),
+    "opportunities",
+  );
+  asArray(opportunities.items, "opportunities.items");
 
   for (const method of [
+    "listOpportunities",
+    "createDiscoverySubscription",
+    "getDiscoverySubscription",
+    "deleteDiscoverySubscription",
+    "getOpportunityConversionFunnel",
+    "analyzeBountyFit",
     "publishAutonomousBountyTerms",
+    "getSolverLeaderboard",
     "publishAutonomousSubmissionEvidence",
     "planAutonomousCanonicalChildTerms",
     "planAutonomousBountyCreation",
     "planAutonomousBountyAuthorizedCreation",
     "planAutonomousBountyContribution",
     "planAutonomousBountyAuthorizedContribution",
+    "agentNativeClaim",
     "planAutonomousBountyClaim",
     "planAutonomousBountyAuthorizedClaim",
     "planAutonomousBountySubmission",
@@ -204,7 +234,12 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
 
 console.log(
   JSON.stringify(
-    await exerciseSurface(new AgentBountiesClient({ baseUrl: baseUrlFromArgs() })),
+    await exerciseSurface(
+      new AgentBountiesClient({
+        baseUrl: baseUrlFromArgs(),
+        operatorApiToken: process.env.OPERATOR_API_TOKEN,
+      }),
+    ),
     null,
     2,
   ),

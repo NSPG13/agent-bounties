@@ -15,11 +15,13 @@ SCRIPT = Path(__file__).resolve().parent / "bounty_inventory_guard.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
-def run_guard(*args: str) -> subprocess.CompletedProcess[str]:
+def run_guard(
+    *args: str, use_meta_defaults: bool = False
+) -> subprocess.CompletedProcess[str]:
     resolved = list(args)
-    if "--meta-threshold" not in resolved:
+    if not use_meta_defaults and "--meta-threshold" not in resolved:
         resolved.extend(["--meta-threshold", "0"])
-    if "--meta-replenishment-target" not in resolved:
+    if not use_meta_defaults and "--meta-replenishment-target" not in resolved:
         resolved.extend(["--meta-replenishment-target", "0"])
     return subprocess.run(
         [sys.executable, str(SCRIPT), *resolved],
@@ -42,40 +44,47 @@ def current_claimable_report(name: str, *, bom: bool = False) -> Path:
     return target
 
 
-def standing_meta_report(*, corrupt_code_hash: bool = False) -> Path:
+def standing_meta_report(
+    *, count: int = 1, corrupt_code_hash: bool = False
+) -> Path:
     data = json.loads(
         (FIXTURES / "bounty_inventory_claimable_above.json").read_text(
             encoding="utf-8"
         )
     )
     data["observed_at"] = datetime.now(timezone.utc).isoformat()
-    item = data["verified_claimable_bounties"][0]
-    item.update(
-        {
-            "verification_mode": "deterministic_module",
-            "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
-            "verification_ready": True,
-            "standing_meta_bounty": {
-                "schema_version": "agent-bounties/standing-meta-bounty-v1",
-                "inventory_class": "post_bounty_third_party_completion",
-                "verifier_protocol": "agent-bounties/canonical-child-v1",
-                "verifier_module": "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
-                "verifier_runtime_code_hash": (
-                    "0x" + "66" * 32
-                    if corrupt_code_hash
-                    else "0xbb6d6df11b85f59b5010aa61f4caf499fb27b94a0f5978aff85fa97ed2bbd2c3"
-                ),
-                "acceptance_criteria_hash": "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
-                "requires_funded_canonical_child": True,
-                "requires_different_solver_wallet": True,
-                "required_child_status": "settled",
-                "observed_block_number": 74565,
-                "observed_block_hash": "0x" + "dd" * 32,
-            },
-        }
-    )
+    items = data["verified_claimable_bounties"]
+    if count < 0 or count > len(items):
+        raise ValueError("standing meta fixture count is out of range")
+    for index, item in enumerate(items[:count]):
+        item.update(
+            {
+                "verification_mode": "deterministic_module",
+                "verifier_module": "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+                "verification_ready": True,
+                "standing_meta_bounty": {
+                    "schema_version": "agent-bounties/standing-meta-bounty-v2",
+                    "inventory_class": "post_bounty_third_party_completion",
+                    "verifier_protocol": "agent-bounties/independent-child-v2",
+                    "verifier_module": "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+                    "verifier_runtime_code_hash": (
+                        "0x" + "66" * 32
+                        if corrupt_code_hash and index == 0
+                        else "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c"
+                    ),
+                    "acceptance_criteria_hash": "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
+                    "requires_funded_canonical_child": True,
+                    "requires_different_solver_wallet": True,
+                    "required_child_status": "settled",
+                    "observed_block_number": 74565 + index,
+                    "observed_block_hash": "0x" + f"{221 + index:02x}" * 32,
+                },
+            }
+        )
     target = ROOT / "target" / "tmp" / (
-        "standing-meta-corrupt.json" if corrupt_code_hash else "standing-meta.json"
+        "standing-meta-corrupt.json"
+        if corrupt_code_hash
+        else f"standing-meta-{count}.json"
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(data), encoding="utf-8")
@@ -83,6 +92,38 @@ def standing_meta_report(*, corrupt_code_hash: bool = False) -> Path:
 
 
 class BountyInventoryGuardTests(unittest.TestCase):
+    def test_default_standing_meta_floor_requires_five(self) -> None:
+        passing = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "5",
+            "--claimable-report",
+            str(standing_meta_report(count=5)),
+            "--fail-below",
+            use_meta_defaults=True,
+        )
+        self.assertEqual(passing.returncode, 0, passing.stderr + passing.stdout)
+        payload = json.loads(passing.stdout.split("--- JSON ---", 1)[1])
+        self.assertEqual(payload["meta_threshold"], 5)
+        self.assertEqual(payload["meta_replenishment_target"], 5)
+        self.assertEqual(payload["verified_meta_claimable_count"], 5)
+
+        below = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "5",
+            "--claimable-report",
+            str(standing_meta_report(count=4)),
+            "--fail-below",
+            use_meta_defaults=True,
+        )
+        self.assertEqual(below.returncode, 2, below.stderr + below.stdout)
+        payload = json.loads(below.stdout.split("--- JSON ---", 1)[1])
+        self.assertEqual(payload["verified_meta_claimable_count"], 4)
+        self.assertTrue(payload["meta_below_threshold"])
+
     def test_claimable_report_accepts_utf8_bom(self) -> None:
         bom_report = current_claimable_report(
             "bounty_inventory_claimable_above.json", bom=True
