@@ -26,6 +26,7 @@ jobs:
           .github/scripts/apply_standing_meta_v4_security_review_followup.py
           .github/scripts/apply_standing_meta_v4_security_review_protocol_contracts.py
           .github/scripts/apply_standing_meta_v4_security_review_protocol_regressions.py
+          .github/scripts/apply_standing_meta_v4_security_review_window_regression.py
 
   patch-and-test:
     if: >-
@@ -57,11 +58,13 @@ jobs:
           git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_followup.py > /tmp/apply_v4_security_followup.py
           git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_protocol_contracts.py > /tmp/apply_v4_security_protocol_contracts.py
           git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_protocol_regressions.py > /tmp/apply_v4_security_protocol_regressions.py
+          git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_window_regression.py > /tmp/apply_v4_security_window_regression.py
           python -m py_compile \
             /tmp/apply_v4_security.py \
             /tmp/apply_v4_security_followup.py \
             /tmp/apply_v4_security_protocol_contracts.py \
-            /tmp/apply_v4_security_protocol_regressions.py
+            /tmp/apply_v4_security_protocol_regressions.py \
+            /tmp/apply_v4_security_window_regression.py
 
       - name: Apply bounded maintainer security fixes and adversarial regressions
         run: |
@@ -69,6 +72,7 @@ jobs:
           python /tmp/apply_v4_security_followup.py
           python /tmp/apply_v4_security_protocol_contracts.py
           python /tmp/apply_v4_security_protocol_regressions.py
+          python /tmp/apply_v4_security_window_regression.py
 
       - name: Format contracts
         run: forge fmt --root contracts/base-escrow
