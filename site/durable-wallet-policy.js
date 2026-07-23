@@ -1,16 +1,35 @@
 (() => {
   "use strict";
 
-  const CONFIG_URL = "durable-verifier-router.json";
   const CHAIN_ID = "0x2105";
   const UINT64_MAX = (1n << 64n) - 1n;
   const REQUIRED_FUNDING = 8_040_000n;
   const ZERO_HASH = `0x${"00".repeat(32)}`;
+  const CONFIG = Object.freeze({
+    wallet: "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    owner: "0x884834e884d6e93462655a2820140ad03e6747bc",
+    keeper: "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+    router: "0x380c1af742593dd88b6f20387e9ee693a0536731",
+    factory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+    usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    activationDelaySeconds: 604800n,
+    expectedCurrentPolicy: Object.freeze({
+      periodSeconds: 86400n,
+      maxPerAction: 5_000_000n,
+      maxPerPeriod: 10_000_000n,
+      maxLifetime: 89_000_000n,
+      maxBountyTarget: 5_000_000n,
+      allowedActions: 15n,
+      allowedModes: 1n,
+      signedHash: ZERO_HASH,
+      aiHash: ZERO_HASH,
+    }),
+  });
   const state = {
-    config: null,
     providers: [],
     provider: null,
     account: null,
+    deployment: null,
     plan: null,
     busy: false,
   };
@@ -18,6 +37,103 @@
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const byId = (id) => document.getElementById(id);
   const form = () => byId("durable-wallet-policy-form");
+
+  const KECCAK_RATE_BYTES = 136;
+  const KECCAK_ROTATIONS = Object.freeze([
+    0, 1, 62, 28, 27,
+    36, 44, 6, 55, 20,
+    3, 10, 43, 25, 39,
+    41, 45, 15, 21, 8,
+    18, 2, 61, 56, 14,
+  ]);
+  const KECCAK_ROUND_CONSTANTS = Object.freeze([
+    0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an,
+    0x8000000080008000n, 0x000000000000808bn, 0x0000000080000001n,
+    0x8000000080008081n, 0x8000000000008009n, 0x000000000000008an,
+    0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an,
+    0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n,
+    0x8000000000008003n, 0x8000000000008002n, 0x8000000000000080n,
+    0x000000000000800an, 0x800000008000000an, 0x8000000080008081n,
+    0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+  ]);
+
+  function rotateLeft64(value, bits) {
+    if (bits === 0) return value;
+    const shift = BigInt(bits);
+    return ((value << shift) | (value >> (64n - shift))) & ((1n << 64n) - 1n);
+  }
+
+  function keccakPermutation(words) {
+    for (const roundConstant of KECCAK_ROUND_CONSTANTS) {
+      const column = Array(5).fill(0n);
+      for (let x = 0; x < 5; x += 1) {
+        for (let y = 0; y < 5; y += 1) column[x] ^= words[x + (5 * y)];
+      }
+      const delta = column.map((_, x) => (
+        column[(x + 4) % 5] ^ rotateLeft64(column[(x + 1) % 5], 1)
+      ));
+      for (let x = 0; x < 5; x += 1) {
+        for (let y = 0; y < 5; y += 1) words[x + (5 * y)] ^= delta[x];
+      }
+      const rotated = Array(25).fill(0n);
+      for (let x = 0; x < 5; x += 1) {
+        for (let y = 0; y < 5; y += 1) {
+          rotated[y + (5 * ((2 * x + 3 * y) % 5))] = rotateLeft64(
+            words[x + (5 * y)], KECCAK_ROTATIONS[x + (5 * y)],
+          );
+        }
+      }
+      for (let x = 0; x < 5; x += 1) {
+        for (let y = 0; y < 5; y += 1) {
+          words[x + (5 * y)] = rotated[x + (5 * y)]
+            ^ ((~rotated[((x + 1) % 5) + (5 * y)])
+              & rotated[((x + 2) % 5) + (5 * y)]);
+        }
+      }
+      words[0] ^= roundConstant;
+    }
+  }
+
+  function absorbKeccakBlock(words, bytes) {
+    for (let index = 0; index < KECCAK_RATE_BYTES; index += 1) {
+      words[Math.floor(index / 8)] ^= BigInt(bytes[index]) << BigInt((index % 8) * 8);
+    }
+    keccakPermutation(words);
+  }
+
+  function keccak256Hex(value) {
+    const input = String(value || "");
+    if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(input)) throw new Error("Keccak input must be hex bytes.");
+    const bytes = new Uint8Array((input.length - 2) / 2);
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Number.parseInt(input.slice(2 + (index * 2), 4 + (index * 2)), 16);
+    }
+    const words = Array(25).fill(0n);
+    let offset = 0;
+    while (offset + KECCAK_RATE_BYTES <= bytes.length) {
+      absorbKeccakBlock(words, bytes.subarray(offset, offset + KECCAK_RATE_BYTES));
+      offset += KECCAK_RATE_BYTES;
+    }
+    const finalBlock = new Uint8Array(KECCAK_RATE_BYTES);
+    finalBlock.set(bytes.subarray(offset));
+    finalBlock[bytes.length - offset] ^= 0x01;
+    finalBlock[KECCAK_RATE_BYTES - 1] ^= 0x80;
+    absorbKeccakBlock(words, finalBlock);
+    let digest = "";
+    for (let index = 0; index < 32; index += 1) {
+      const byte = Number((words[Math.floor(index / 8)] >> BigInt((index % 8) * 8)) & 0xffn);
+      digest += byte.toString(16).padStart(2, "0");
+    }
+    return `0x${digest}`;
+  }
+
+  function textHex(value) {
+    return `0x${Array.from(new TextEncoder().encode(value), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  function selector(signature) {
+    return keccak256Hex(textHex(signature)).slice(0, 10);
+  }
 
   function output(value, tone = "") {
     const element = byId("durable-policy-review");
@@ -43,41 +159,36 @@
     return normalized;
   }
 
-  function requiredSelector(value, label) {
-    const normalized = String(value || "").toLowerCase();
-    if (!/^0x[0-9a-f]{8}$/.test(normalized)) throw new Error(`${label} is not a selector.`);
-    return normalized;
+  function strip0x(value) {
+    return String(value).replace(/^0x/, "").toLowerCase();
   }
 
-  async function loadConfig() {
-    const response = await fetch(CONFIG_URL, { cache: "no-store" });
-    if (!response.ok) throw new Error("Confirmed router deployment configuration is not published yet.");
-    const config = await response.json();
-    if (config.schema !== "agent-bounties/durable-verifier-router-public-v1" || config.status !== "active") {
-      throw new Error("Durable router configuration is not active.");
-    }
-    config.wallet = requiredAddress(config.wallet, "Bounded wallet");
-    config.owner = requiredAddress(config.owner, "Owner");
-    config.keeper = requiredAddress(config.keeper, "Keeper");
-    config.router = requiredAddress(config.router, "Router");
-    config.adapter = requiredAddress(config.adapter, "Routed adapter");
-    config.factory = requiredAddress(config.factory, "Canonical factory");
-    config.usdc = requiredAddress(config.usdc, "Native USDC");
-    config.policy_hash = requiredBytes32(config.policy_hash, "Active routed policy hash");
-    config.adapter_runtime_code_hash = requiredBytes32(
-      config.adapter_runtime_code_hash, "Adapter runtime code hash",
-    );
-    const selectors = config.selectors || {};
-    for (const key of [
-      "wallet_owner", "wallet_policy", "wallet_policy_version", "wallet_lifetime_spent",
-      "wallet_period_spent", "wallet_configure_policy", "balance_of", "router_factory",
-      "router_registrar", "router_guardian", "router_activation_delay", "router_bootstrap_used",
-      "router_policy_active", "router_policy_record",
-    ]) selectors[key] = requiredSelector(selectors[key], key);
-    config.selectors = selectors;
-    state.config = config;
-    status("Confirmed router configuration loaded. Connect the owner wallet.", "pending");
-    updateButtons();
+  function addressWord(value) {
+    return strip0x(requiredAddress(value, "Address")).padStart(64, "0");
+  }
+
+  function bytes32Word(value) {
+    return strip0x(requiredBytes32(value, "bytes32"));
+  }
+
+  function uintWord(value) {
+    const number = BigInt(value);
+    if (number < 0n || number >= (1n << 256n)) throw new Error("Integer outside uint256.");
+    return number.toString(16).padStart(64, "0");
+  }
+
+  function splitWords(value, count) {
+    const raw = strip0x(value);
+    if (raw.length !== count * 64) throw new Error(`Expected ${count} ABI words.`);
+    return Array.from({ length: count }, (_, index) => raw.slice(index * 64, (index + 1) * 64));
+  }
+
+  function resultAddress(value) {
+    return `0x${splitWords(value, 1)[0].slice(-40)}`;
+  }
+
+  function resultBool(value) {
+    return BigInt(value) === 1n;
   }
 
   function providerName(item) {
@@ -149,45 +260,11 @@
     return provider.request({ method, params });
   }
 
-  function strip0x(value) {
-    return String(value).replace(/^0x/, "").toLowerCase();
-  }
-
-  function addressWord(value) {
-    return strip0x(requiredAddress(value, "Address")).padStart(64, "0");
-  }
-
-  function bytes32Word(value) {
-    return strip0x(requiredBytes32(value, "bytes32"));
-  }
-
-  function uintWord(value) {
-    const number = BigInt(value);
-    if (number < 0n || number >= (1n << 256n)) throw new Error("Integer outside uint256.");
-    return number.toString(16).padStart(64, "0");
-  }
-
-  function splitWords(value, count) {
-    const raw = strip0x(value);
-    if (raw.length !== count * 64) throw new Error(`Expected ${count} ABI words.`);
-    return Array.from({ length: count }, (_, index) => raw.slice(index * 64, (index + 1) * 64));
-  }
-
-  function resultAddress(value) {
-    const words = splitWords(value, 1);
-    return `0x${words[0].slice(-40)}`;
-  }
-
-  function resultBool(value) {
-    return BigInt(value) === 1n;
-  }
-
-  async function call(to, data) {
-    return request("eth_call", [{ to, data }, "latest"]);
+  async function call(to, signature, args = "") {
+    return request("eth_call", [{ to, data: `${selector(signature)}${args}` }, "latest"]);
   }
 
   async function connect() {
-    if (!state.config) throw new Error("Confirmed deployment configuration is not loaded.");
     const provider = selectProvider();
     const accounts = await provider.request({ method: "eth_requestAccounts" });
     if (!Array.isArray(accounts) || !accounts[0]) throw new Error("The wallet did not return an account.");
@@ -196,52 +273,73 @@
       await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_ID }] });
     }
     state.account = String(accounts[0]).toLowerCase();
+    state.deployment = null;
     state.plan = null;
-    status(`Connected ${state.account.slice(0, 8)}…`, "pending");
+    status(`Connected ${state.account.slice(0, 8)}… Review the exact Base state.`, "pending");
     updateButtons();
   }
 
-  async function inspect() {
-    const config = state.config;
-    if (!config) throw new Error("Router configuration is missing.");
-    const s = config.selectors;
-    const policyArg = bytes32Word(config.policy_hash);
-    const [
-      walletCode, routerCode, adapterCode, ownerRaw, policyRaw, versionRaw, lifetimeRaw,
-      periodRaw, balanceRaw, routerFactoryRaw, registrarRaw, guardianRaw, delayRaw,
-      bootstrapRaw, activeRaw, recordRaw,
-    ] = await Promise.all([
-      request("eth_getCode", [config.wallet, "latest"]),
-      request("eth_getCode", [config.router, "latest"]),
-      request("eth_getCode", [config.adapter, "latest"]),
-      call(config.wallet, s.wallet_owner),
-      call(config.wallet, s.wallet_policy),
-      call(config.wallet, s.wallet_policy_version),
-      call(config.wallet, s.wallet_lifetime_spent),
-      call(config.wallet, s.wallet_period_spent),
-      call(config.usdc, `${s.balance_of}${addressWord(config.wallet)}`),
-      call(config.router, s.router_factory),
-      call(config.router, s.router_registrar),
-      call(config.router, s.router_guardian),
-      call(config.router, s.router_activation_delay),
-      call(config.router, s.router_bootstrap_used),
-      call(config.router, `${s.router_policy_active}${policyArg}`),
-      call(config.router, `${s.router_policy_record}${policyArg}`),
+  async function discoverDeployment() {
+    if (state.deployment) return state.deployment;
+    const latestHex = await request("eth_blockNumber");
+    const latest = BigInt(latestHex);
+    const from = latest > 100_000n ? latest - 100_000n : 0n;
+    const topic = keccak256Hex(textHex("PolicyBootstrapped(bytes32,address,bytes32)"));
+    const logs = await request("eth_getLogs", [{
+      address: CONFIG.router,
+      fromBlock: `0x${from.toString(16)}`,
+      toBlock: "latest",
+      topics: [topic],
+    }]);
+    if (!Array.isArray(logs) || logs.length !== 1) {
+      throw new Error("Expected exactly one durable router bootstrap event on Base.");
+    }
+    const log = logs[0];
+    if (!Array.isArray(log.topics) || log.topics.length !== 3) {
+      throw new Error("Durable router bootstrap event has the wrong shape.");
+    }
+    const policyHash = requiredBytes32(log.topics[1], "Routed policy hash");
+    const adapter = requiredAddress(`0x${strip0x(log.topics[2]).slice(-40)}`, "Routed adapter");
+    const eventRuntimeHash = requiredBytes32(log.data, "Adapter runtime code hash");
+    const [routerCode, adapterCode] = await Promise.all([
+      request("eth_getCode", [CONFIG.router, "latest"]),
+      request("eth_getCode", [adapter, "latest"]),
     ]);
-    const words = splitWords(policyRaw, 13);
+    if ([routerCode, adapterCode].some((code) => code === "0x" || code === "0x0")) {
+      throw new Error("Durable router or routed adapter bytecode is missing on Base.");
+    }
+    const adapterRuntimeHash = keccak256Hex(adapterCode);
+    if (adapterRuntimeHash !== eventRuntimeHash) {
+      throw new Error("Routed adapter runtime hash differs from the bootstrap event.");
+    }
+    const policyArg = bytes32Word(policyHash);
+    const [
+      factoryRaw, registrarRaw, guardianRaw, delayRaw, bootstrapRaw, activeRaw, recordRaw,
+      adapterRouterRaw, adapterPolicyRaw, adapterFactoryRaw, acceptanceRaw, childFloorRaw, marginFloorRaw,
+    ] = await Promise.all([
+      call(CONFIG.router, "canonicalFactory()"),
+      call(CONFIG.router, "registrar()"),
+      call(CONFIG.router, "guardian()"),
+      call(CONFIG.router, "activationDelay()"),
+      call(CONFIG.router, "bootstrapUsed()"),
+      call(CONFIG.router, "isPolicyActive(bytes32)", policyArg),
+      call(CONFIG.router, "policies(bytes32)", policyArg),
+      call(adapter, "verifierRouter()"),
+      call(adapter, "committedPolicyHash()"),
+      call(adapter, "canonicalFactory()"),
+      call(adapter, "ACCEPTANCE_CRITERIA_HASH()"),
+      call(adapter, "MINIMUM_CHILD_TARGET()"),
+      call(adapter, "MINIMUM_PARENT_GROSS_MARGIN()"),
+    ]);
     const record = splitWords(recordRaw, 6);
-    return {
-      walletCode: String(walletCode).toLowerCase(),
-      routerCode: String(routerCode).toLowerCase(),
-      adapterCode: String(adapterCode).toLowerCase(),
-      owner: resultAddress(ownerRaw),
-      words,
-      policyRaw: `0x${words.join("")}`,
-      version: BigInt(versionRaw),
-      lifetimeSpent: BigInt(lifetimeRaw),
-      periodSpent: BigInt(periodRaw),
-      balance: BigInt(balanceRaw),
-      routerFactory: resultAddress(routerFactoryRaw),
+    const deployment = {
+      policyHash,
+      adapter,
+      adapterRuntimeHash,
+      acceptanceHash: requiredBytes32(acceptanceRaw, "Acceptance criteria hash"),
+      bootstrapTransaction: requiredBytes32(log.transactionHash, "Bootstrap transaction"),
+      bootstrapBlock: BigInt(log.blockNumber),
+      factory: resultAddress(factoryRaw),
       registrar: resultAddress(registrarRaw),
       guardian: resultAddress(guardianRaw),
       activationDelay: BigInt(delayRaw),
@@ -250,38 +348,60 @@
       record: {
         adapter: `0x${record[0].slice(-40)}`,
         runtimeCodeHash: `0x${record[1]}`,
-        proposedAt: BigInt(`0x${record[2]}`),
-        activateAfter: BigInt(`0x${record[3]}`),
         activatedAt: BigInt(`0x${record[4]}`),
         vetoed: BigInt(`0x${record[5]}`) === 1n,
       },
+      adapterRouter: resultAddress(adapterRouterRaw),
+      adapterPolicy: requiredBytes32(adapterPolicyRaw, "Adapter policy hash"),
+      adapterFactory: resultAddress(adapterFactoryRaw),
+      childFloor: BigInt(childFloorRaw),
+      marginFloor: BigInt(marginFloorRaw),
+    };
+    if (deployment.factory !== CONFIG.factory || deployment.registrar !== CONFIG.keeper
+      || deployment.guardian !== CONFIG.owner || deployment.activationDelay !== CONFIG.activationDelaySeconds
+      || !deployment.bootstrapUsed || !deployment.active || deployment.record.vetoed
+      || deployment.record.activatedAt === 0n || deployment.record.adapter !== adapter
+      || deployment.record.runtimeCodeHash !== adapterRuntimeHash
+      || deployment.adapterRouter !== CONFIG.router || deployment.adapterPolicy !== policyHash
+      || deployment.adapterFactory !== CONFIG.factory || deployment.childFloor !== 1_000_000n
+      || deployment.marginFloor !== 1_000_000n) {
+      throw new Error("Durable router or routed policy immutable state failed validation.");
+    }
+    state.deployment = deployment;
+    return deployment;
+  }
+
+  async function inspect() {
+    const deployment = await discoverDeployment();
+    const [
+      walletCode, ownerRaw, policyRaw, versionRaw, lifetimeRaw, periodRaw, periodBucketRaw, balanceRaw,
+    ] = await Promise.all([
+      request("eth_getCode", [CONFIG.wallet, "latest"]),
+      call(CONFIG.wallet, "owner()"),
+      call(CONFIG.wallet, "policy()"),
+      call(CONFIG.wallet, "policyVersion()"),
+      call(CONFIG.wallet, "lifetimeSpent()"),
+      call(CONFIG.wallet, "periodSpent()"),
+      call(CONFIG.wallet, "periodBucket()"),
+      call(CONFIG.usdc, "balanceOf(address)", addressWord(CONFIG.wallet)),
+    ]);
+    if (walletCode === "0x" || walletCode === "0x0") throw new Error("Bounded wallet bytecode is missing.");
+    const words = splitWords(policyRaw, 13);
+    return {
+      deployment,
+      owner: resultAddress(ownerRaw),
+      words,
+      policyRaw: `0x${words.join("")}`,
+      version: BigInt(versionRaw),
+      lifetimeSpent: BigInt(lifetimeRaw),
+      periodSpent: BigInt(periodRaw),
+      periodBucket: BigInt(periodBucketRaw),
+      balance: BigInt(balanceRaw),
     };
   }
 
-  function validateInfrastructure(observed) {
-    const config = state.config;
-    if ([observed.walletCode, observed.routerCode, observed.adapterCode].some((code) => code === "0x" || code === "0x0")) {
-      throw new Error("Wallet, router, or routed adapter bytecode is missing on Base.");
-    }
-    if (observed.owner !== config.owner) throw new Error("Bounded-wallet owner does not match the deployment record.");
-    if (observed.routerFactory !== config.factory) throw new Error("Router factory binding does not match.");
-    if (observed.registrar !== config.keeper) throw new Error("Router registrar does not match the protected keeper.");
-    if (observed.guardian !== config.owner) throw new Error("Router guardian does not match the owner.");
-    if (observed.activationDelay !== BigInt(config.activation_delay_seconds)) {
-      throw new Error("Router activation delay does not match the deployment record.");
-    }
-    if (!observed.bootstrapUsed || !observed.active || observed.record.vetoed || observed.record.activatedAt === 0n) {
-      throw new Error("The initial routed policy is not active.");
-    }
-    if (observed.record.adapter !== config.adapter
-      || observed.record.runtimeCodeHash !== config.adapter_runtime_code_hash) {
-      throw new Error("Active router policy does not match the attested adapter.");
-    }
-  }
-
   function validateCurrentPolicy(observed) {
-    const config = state.config;
-    const p = config.expected_current_policy;
+    if (observed.owner !== CONFIG.owner) throw new Error("Bounded-wallet owner changed.");
     const values = {
       delegate: `0x${observed.words[0].slice(-40)}`,
       validAfter: BigInt(`0x${observed.words[1]}`),
@@ -297,61 +417,37 @@
       signedHash: `0x${observed.words[11]}`,
       aiHash: `0x${observed.words[12]}`,
     };
-    const exact = {
-      periodSeconds: BigInt(p.period_seconds),
-      maxPerAction: BigInt(p.max_per_action),
-      maxPerPeriod: BigInt(p.max_per_period),
-      maxLifetime: BigInt(p.max_lifetime_spend),
-      maxBountyTarget: BigInt(p.max_bounty_target),
-      allowedActions: BigInt(p.allowed_actions),
-      allowedModes: BigInt(p.allowed_verification_modes),
-      signedHash: requiredBytes32(p.signed_quorum_hash, "Expected signed quorum hash"),
-      aiHash: requiredBytes32(p.ai_quorum_hash, "Expected AI quorum hash"),
-    };
-    for (const [key, expected] of Object.entries(exact)) {
+    for (const [key, expected] of Object.entries(CONFIG.expectedCurrentPolicy)) {
       if (values[key] !== expected) throw new Error(`Current wallet ${key} changed; review the new state separately.`);
     }
-    if (observed.periodSpent !== 0n) {
-      throw new Error("Current 24-hour spend counter is nonzero. The policy update is blocked to avoid resetting today's cap.");
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const currentBucket = now / values.periodSeconds;
+    const effectivePeriodSpent = observed.periodBucket === currentBucket ? observed.periodSpent : 0n;
+    const alreadyDurable = values.delegate === CONFIG.keeper
+      && values.deterministicVerifier === CONFIG.router && values.validUntil === UINT64_MAX;
+    if (!alreadyDurable && effectivePeriodSpent !== 0n) {
+      throw new Error("Current 24-hour spend counter is nonzero. Policy update is blocked to avoid resetting today's cap.");
     }
     if (observed.balance < REQUIRED_FUNDING) throw new Error("Bounded-wallet balance is below 8.04 USDC.");
     if (observed.lifetimeSpent + REQUIRED_FUNDING > values.maxLifetime) {
       throw new Error("Remaining lifetime budget is below the 8.04 USDC replacement requirement.");
     }
-    return values;
+    return { ...values, effectivePeriodSpent, alreadyDurable };
   }
 
   async function review() {
     if (!state.account) throw new Error("Connect the owner wallet first.");
+    status("Reading the router event, adapter bytecode, and wallet policy directly from Base…", "pending");
     const observed = await inspect();
-    validateInfrastructure(observed);
     if (observed.owner !== state.account) throw new Error("Connected account is not the bounded-wallet owner.");
     const current = validateCurrentPolicy(observed);
-
-    const next = [
-      addressWord(state.config.keeper),
-      observed.words[1],
-      uintWord(UINT64_MAX),
-      observed.words[3],
-      observed.words[4],
-      observed.words[5],
-      observed.words[6],
-      observed.words[7],
-      observed.words[8],
-      observed.words[9],
-      addressWord(state.config.router),
-      observed.words[11],
-      observed.words[12],
-    ];
-    const nextPolicy = `0x${next.join("")}`;
-    const data = `${state.config.selectors.wallet_configure_policy}${next.join("")}`;
-
-    if (observed.policyRaw === nextPolicy) {
+    if (current.alreadyDurable) {
       status("Durable wallet policy is already active.", "success");
       output([
         `Policy version: ${observed.version}`,
-        `Delegate: ${state.config.keeper}`,
-        `Stable verifier router: ${state.config.router}`,
+        `Delegate: ${CONFIG.keeper}`,
+        `Stable verifier router: ${CONFIG.router}`,
+        `Active routed policy: ${observed.deployment.policyHash}`,
         `Wallet balance: ${(Number(observed.balance) / 1_000_000).toFixed(6)} USDC`,
         "No owner transaction remains.",
       ], "success");
@@ -360,15 +456,28 @@
       updateButtons();
       return;
     }
-
-    await request("eth_call", [{ from: state.account, to: state.config.wallet, data, value: "0x0" }, "latest"]);
+    const next = [
+      addressWord(CONFIG.keeper), observed.words[1], uintWord(UINT64_MAX), observed.words[3],
+      observed.words[4], observed.words[5], observed.words[6], observed.words[7],
+      observed.words[8], observed.words[9], addressWord(CONFIG.router), observed.words[11], observed.words[12],
+    ];
+    const nextPolicy = `0x${next.join("")}`;
+    const configureSelector = selector(
+      "configurePolicy((address,uint64,uint64,uint64,uint256,uint256,uint256,uint256,uint8,uint8,address,bytes32,bytes32))",
+    );
+    const data = `${configureSelector}${next.join("")}`;
+    await request("eth_call", [{ from: state.account, to: CONFIG.wallet, data, value: "0x0" }, "latest"]);
     state.plan = { observed, nextPolicy, data };
     output([
+      `Router bootstrap transaction: ${observed.deployment.bootstrapTransaction}`,
+      `Active routed policy: ${observed.deployment.policyHash}`,
+      `Routed adapter: ${observed.deployment.adapter}`,
+      `Adapter runtime hash: ${observed.deployment.adapterRuntimeHash}`,
       `Current / next policy version: ${observed.version} / ${observed.version + 1n}`,
       `Wallet balance: ${(Number(observed.balance) / 1_000_000).toFixed(6)} USDC`,
       `Lifetime spent / cap: ${(Number(observed.lifetimeSpent) / 1_000_000).toFixed(6)} / ${(Number(current.maxLifetime) / 1_000_000).toFixed(6)} USDC`,
-      `Delegate: ${current.delegate} → ${state.config.keeper}`,
-      `Deterministic verifier: ${current.deterministicVerifier} → ${state.config.router}`,
+      `Delegate: ${current.delegate} → ${CONFIG.keeper}`,
+      `Deterministic verifier: ${current.deterministicVerifier} → ${CONFIG.router}`,
       `Expiry: ${current.validUntil} → ${UINT64_MAX}`,
       `Per action: ${(Number(current.maxPerAction) / 1_000_000).toFixed(2)} USDC (unchanged)`,
       `Per 24 hours: ${(Number(current.maxPerPeriod) / 1_000_000).toFixed(2)} USDC (unchanged)`,
@@ -376,8 +485,6 @@
       `Bounty target cap: ${(Number(current.maxBountyTarget) / 1_000_000).toFixed(2)} USDC (unchanged)`,
       `Action bitmap: ${current.allowedActions} (unchanged)`,
       `Verification-mode bitmap: ${current.allowedModes} (unchanged)`,
-      `Active routed policy: ${state.config.policy_hash}`,
-      `Routed adapter: ${state.config.adapter}`,
       "Transaction value: 0 ETH; token transfer: none.",
     ], "pending");
     form().elements.reviewed.disabled = false;
@@ -392,23 +499,21 @@
     state.busy = true;
     updateButtons();
     try {
+      state.deployment = null;
       const before = await inspect();
-      validateInfrastructure(before);
-      validateCurrentPolicy(before);
-      if (before.owner !== state.account
-        || before.policyRaw !== state.plan.observed.policyRaw
-        || before.version !== state.plan.observed.version
-        || before.lifetimeSpent !== state.plan.observed.lifetimeSpent
-        || before.periodSpent !== state.plan.observed.periodSpent
-        || before.balance !== state.plan.observed.balance) {
-        throw new Error("Base wallet state changed after review. Review again.");
+      const current = validateCurrentPolicy(before);
+      if (current.alreadyDurable) throw new Error("Durable policy became active already; review again.");
+      if (before.owner !== state.account || before.policyRaw !== state.plan.observed.policyRaw
+        || before.version !== state.plan.observed.version || before.lifetimeSpent !== state.plan.observed.lifetimeSpent
+        || before.periodSpent !== state.plan.observed.periodSpent || before.periodBucket !== state.plan.observed.periodBucket
+        || before.balance !== state.plan.observed.balance
+        || before.deployment.policyHash !== state.plan.observed.deployment.policyHash
+        || before.deployment.adapterRuntimeHash !== state.plan.observed.deployment.adapterRuntimeHash) {
+        throw new Error("Base state changed after review. Review again.");
       }
       status("Confirm one zero-value owner transaction in your wallet.", "pending");
       const hash = await request("eth_sendTransaction", [{
-        from: state.account,
-        to: state.config.wallet,
-        data: state.plan.data,
-        value: "0x0",
+        from: state.account, to: CONFIG.wallet, data: state.plan.data, value: "0x0",
       }]);
       const started = Date.now();
       let receipt = null;
@@ -418,22 +523,24 @@
         await sleep(1_500);
       }
       if (!receipt || receipt.status !== "0x1") throw new Error(`Policy transaction failed or timed out: ${hash}`);
+      state.deployment = null;
       const after = await inspect();
-      if (after.policyRaw !== state.plan.nextPolicy
+      const post = validateCurrentPolicy(after);
+      if (!post.alreadyDurable || after.policyRaw !== state.plan.nextPolicy
         || after.version !== state.plan.observed.version + 1n
         || after.lifetimeSpent !== state.plan.observed.lifetimeSpent
-        || after.balance !== state.plan.observed.balance
-        || after.periodSpent !== 0n) {
+        || after.balance !== state.plan.observed.balance || after.periodSpent !== 0n) {
         throw new Error("Confirmed transaction did not produce the exact reviewed durable policy.");
       }
       status("Durable autonomous wallet policy confirmed.", "success");
       output([
         `Policy transaction: ${hash}`,
         `Policy version: ${after.version}`,
-        `Delegate: ${state.config.keeper}`,
-        `Stable verifier router: ${state.config.router}`,
+        `Delegate: ${CONFIG.keeper}`,
+        `Stable verifier router: ${CONFIG.router}`,
+        `Active routed policy: ${after.deployment.policyHash}`,
         `Wallet balance remains ${(Number(after.balance) / 1_000_000).toFixed(6)} USDC`,
-        "The repository control loop can now create and fund the four routed parents without another owner signature.",
+        "The hourly control loop can now create and fund the four routed parents without another owner signature.",
       ], "success");
       state.plan = null;
       form().elements.reviewed.checked = false;
@@ -445,12 +552,9 @@
   }
 
   function updateButtons() {
-    const connectButton = document.querySelector("[data-connect-owner]");
-    const reviewButton = document.querySelector("[data-review-policy]");
-    const approveButton = document.querySelector("[data-approve-policy]");
-    connectButton.disabled = state.busy || !state.config || state.providers.length === 0;
-    reviewButton.disabled = state.busy || !state.account || !state.config;
-    approveButton.disabled = state.busy || !state.plan || !form().elements.reviewed.checked;
+    document.querySelector("[data-connect-owner]").disabled = state.busy || state.providers.length === 0;
+    document.querySelector("[data-review-policy]").disabled = state.busy || !state.account;
+    document.querySelector("[data-approve-policy]").disabled = state.busy || !state.plan || !form().elements.reviewed.checked;
   }
 
   function guard(action) {
@@ -474,11 +578,7 @@
     form().addEventListener("submit", guard(approve));
     form().elements.reviewed.addEventListener("change", updateButtons);
     await discoverProviders();
-    try {
-      await loadConfig();
-    } catch (error) {
-      status(error.message || String(error), "error");
-    }
+    status("Connect the owner wallet. The page will derive and verify all deployment state directly from Base.", "pending");
     updateButtons();
   });
 })();
