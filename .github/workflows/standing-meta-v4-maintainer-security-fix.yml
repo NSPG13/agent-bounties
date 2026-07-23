@@ -28,6 +28,86 @@ jobs:
           .github/scripts/apply_standing_meta_v4_security_review_protocol_regressions.py
           .github/scripts/apply_standing_meta_v4_security_review_window_regression.py
 
+  dry-run-security-patch:
+    if: >-
+      github.event.pull_request.head.ref == 'ops/repair-v4-maintainer-security-fix-runner' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: 686282e7463703ea403f9baa2c73a28d4c766802
+          fetch-depth: 0
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Materialize the exact runners from this review PR
+        env:
+          RUNNER_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch origin "$RUNNER_SHA"
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review.py > /tmp/apply_v4_security.py
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review_followup.py > /tmp/apply_v4_security_followup.py
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review_protocol_contracts.py > /tmp/apply_v4_security_protocol_contracts.py
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review_protocol_regressions.py > /tmp/apply_v4_security_protocol_regressions.py
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review_window_regression.py > /tmp/apply_v4_security_window_regression.py
+          python -m py_compile \
+            /tmp/apply_v4_security.py \
+            /tmp/apply_v4_security_followup.py \
+            /tmp/apply_v4_security_protocol_contracts.py \
+            /tmp/apply_v4_security_protocol_regressions.py \
+            /tmp/apply_v4_security_window_regression.py
+
+      - name: Apply the security patch without pushing
+        run: |
+          python /tmp/apply_v4_security.py
+          python /tmp/apply_v4_security_followup.py
+          python /tmp/apply_v4_security_protocol_contracts.py
+          python /tmp/apply_v4_security_protocol_regressions.py
+          python /tmp/apply_v4_security_window_regression.py
+          forge fmt --root contracts/base-escrow
+
+      - name: Run adversarial regressions and size checks
+        run: |
+          forge test --root contracts/base-escrow \
+            --match-contract '(AnonymousStakeAndVrfSortitionTest|AppealableVerifierV1Test|StandingMetaV4Test)' \
+            --fuzz-runs 1000 -vv
+          forge build --root contracts/base-escrow --sizes
+          python -m unittest scripts.test_standing_meta_v4_deploy -v
+          python -m py_compile scripts/standing_meta_v4_deploy.py scripts/test_standing_meta_v4_deploy.py
+          git diff --check
+
+      - name: Enforce the reviewed changed-file allowlist
+        run: |
+          set -euo pipefail
+          git status --short
+          git status --short | awk '{print $2}' | sort > /tmp/actual-files
+          cat > /tmp/expected-files <<'EOF'
+          contracts/base-escrow/script/FundStandingMetaV4Subscription.s.sol
+          contracts/base-escrow/src/AnonymousProtocolControllerV1.sol
+          contracts/base-escrow/src/AnonymousStakePoolV1.sol
+          contracts/base-escrow/src/AppealableVerifierV1.sol
+          contracts/base-escrow/src/StandingMetaChildFactoryV4.sol
+          contracts/base-escrow/src/StandingMetaChildV4.sol
+          contracts/base-escrow/src/StandingMetaParentFactoryV4.sol
+          contracts/base-escrow/src/StandingMetaParentV4.sol
+          contracts/base-escrow/test/AnonymousStakeAndVrfSortition.t.sol
+          contracts/base-escrow/test/AppealableVerifierV1.t.sol
+          contracts/base-escrow/test/StandingMetaV4.t.sol
+          docs/security/standing-meta-v4-slither-triage.md
+          docs/security/standing-meta-v4-threat-model.md
+          docs/standing-meta-v4-fair-earning.md
+          scripts/standing_meta_v4_deploy.py
+          scripts/test_standing_meta_v4_deploy.py
+          EOF
+          sort -o /tmp/expected-files /tmp/expected-files
+          diff -u /tmp/expected-files /tmp/actual-files
+
   patch-and-test:
     if: >-
       github.event.pull_request.head.ref == 'ops/trigger-v4-maintainer-security-fix' &&
