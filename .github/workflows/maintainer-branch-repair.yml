@@ -29,17 +29,49 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -Eeuo pipefail
-          report_exit() {
-            status=$?
-            if [ "$status" -ne 0 ]; then
-              gh api "repos/$GITHUB_REPOSITORY/issues/272/comments" \
-                --method POST \
-                --raw-field body="PR #272 patch-candidate diagnostic failed in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The source PR branches were not modified." \
-                >/dev/null || true
-            fi
+          exec > >(tee -a /tmp/pr-272-patch-diagnostic.log) 2>&1
+
+          report_failure() {
+            status="$1"
+            line="$2"
+            command="$3"
+            trap - ERR
+            set +e
+            git_status="$(git status --short 2>&1 | tail -n 80)"
+            reject_files="$(find . -path './.git' -prune -o -name '*.rej' -print 2>/dev/null | sort | tail -n 80)"
+            log_tail="$(tail -n 80 /tmp/pr-272-patch-diagnostic.log 2>/dev/null)"
+            body=$(cat <<EOF
+          PR #272 patch-candidate diagnostic failed.
+
+          - Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          - Exit status: $status
+          - Line: $line
+          - Command: \`$command\`
+          - Source PR branches modified: no
+
+          Git status:
+          \`\`\`
+          $git_status
+          \`\`\`
+
+          Reject files:
+          \`\`\`
+          $reject_files
+          \`\`\`
+
+          Sanitized log tail:
+          \`\`\`
+          $log_tail
+          \`\`\`
+          EOF
+          )
+            gh api "repos/$GITHUB_REPOSITORY/issues/272/comments" \
+              --method POST \
+              --raw-field body="$body" \
+              >/dev/null || true
             exit "$status"
           }
-          trap report_exit EXIT
+          trap 'report_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -83,7 +115,7 @@ jobs:
           git commit -m "diagnostic: apply objective-v1 patch to repaired base"
           git push --force origin HEAD:diagnostic/pr-272-patch-candidate
 
-          trap - EXIT
+          trap - ERR
           reject_count="${#rejects[@]}"
           gh api "repos/$GITHUB_REPOSITORY/issues/272/comments" \
             --method POST \
