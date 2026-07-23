@@ -1,6 +1,15 @@
 name: Activate routed V3 replacements
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/activate-routed-v3-replacements.yml"
+      - "scripts/activate_routed_v3_dynamic.py"
+      - "scripts/activate_routed_v3_replacements.py"
+      - "scripts/check_routed_v3_activation_readiness.py"
+      - "scripts/test_activate_routed_v3_replacements.py"
+      - "site/durable-wallet-policy.html"
+      - "site/durable-wallet-policy.js"
   schedule:
     - cron: "17 * * * *"
   issue_comment:
@@ -12,10 +21,40 @@ permissions:
   issues: write
 
 concurrency:
-  group: routed-v3-replacement-activation
+  group: routed-v3-replacement-activation-${{ github.ref || github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate activation code
+        run: |
+          python -m unittest scripts.test_activate_routed_v3_replacements -v
+          python -m py_compile \
+            scripts/activate_routed_v3_dynamic.py \
+            scripts/activate_routed_v3_replacements.py \
+            scripts/check_routed_v3_activation_readiness.py
+          node --check site/durable-wallet-policy.js
+      - name: Re-attest router and routed policy from Base
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, 'scripts')
+          import activate_routed_v3_dynamic as dynamic
+          import activate_routed_v3_replacements as activation
+          cast = activation.Cast('cast', os.environ['BASE_MAINNET_RPC_URL'])
+          report = dynamic.discover_deployment(cast)
+          print(json.dumps(report, sort_keys=True))
+          PY
+
   activate:
     if: >-
       github.event_name == 'schedule' ||
@@ -25,6 +64,7 @@ jobs:
        github.event.issue.number == 571 &&
        github.event.comment.user.login == 'NSPG13' &&
        github.event.comment.body == '/agent-bounty activate-routed-v3')
+    needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -34,9 +74,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
@@ -49,15 +87,6 @@ jobs:
           if [ "$state" = "CLOSED" ]; then
             echo "Migration issue is closed; no action remains."
           fi
-
-      - name: Validate activation code
-        if: steps.issue.outputs.state != 'CLOSED'
-        run: |
-          python -m unittest scripts.test_activate_routed_v3_replacements -v
-          python -m py_compile \
-            scripts/activate_routed_v3_replacements.py \
-            scripts/check_routed_v3_activation_readiness.py
-          node --check site/durable-wallet-policy.js
 
       - name: Read durable policy readiness
         if: steps.issue.outputs.state != 'CLOSED'
@@ -72,12 +101,11 @@ jobs:
 
       - name: Remain dormant before owner confirmation
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready != 'true'
-        run: |
-          echo "The exact durable PolicyConfigured state is not active. No financial action was attempted."
+        run: echo "The exact durable PolicyConfigured state is not active. No financial action was attempted."
 
       - name: Create, fund, and reconcile four routed parents
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
-        run: python scripts/activate_routed_v3_replacements.py
+        run: python scripts/activate_routed_v3_dynamic.py
 
       - name: Replace issue terms only after canonical reconciliation
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
