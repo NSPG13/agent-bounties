@@ -119,6 +119,54 @@ interface ICanonicalAppealableChildFactoryV1 {
     )
     replace_once(
         path,
+        """    function activateChildDraw(address parentAddress) external nonReentrant {
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        uint64 parentRound = parent.round();
+""",
+        """    function activateChildDraw(address parentAddress) external nonReentrant {
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        _requireActiveParentWindow(parent, ASSIGNMENT_WINDOW);
+        uint64 parentRound = parent.round();
+""",
+    )
+    replace_once(
+        path,
+        """    function claimChildAssignment(address parentAddress, BondAuthorization calldata bond) external nonReentrant {
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        uint64 parentRound = parent.round();
+""",
+        """    function claimChildAssignment(address parentAddress, BondAuthorization calldata bond) external nonReentrant {
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        _requireActiveParentWindow(parent, 0);
+        uint64 parentRound = parent.round();
+""",
+    )
+    replace_once(
+        path,
+        """    function promoteNonresponsiveChildSolver(address parentAddress) external nonReentrant {
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        uint64 parentRound = parent.round();
+""",
+        """    function promoteNonresponsiveChildSolver(address parentAddress) external nonReentrant {
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        _requireActiveParentWindow(parent, ASSIGNMENT_WINDOW);
+        uint64 parentRound = parent.round();
+""",
+    )
+    replace_once(
+        path,
+        """    function promoteRejectedChildSolver(address parentAddress) external nonReentrant {
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        uint64 parentRound = parent.round();
+""",
+        """    function promoteRejectedChildSolver(address parentAddress) external nonReentrant {
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        _requireActiveParentWindow(parent, ASSIGNMENT_WINDOW);
+        uint64 parentRound = parent.round();
+""",
+    )
+    replace_once(
+        path,
         """    function roundChild(address parent, uint64 parentRound) external view returns (address) {
 """,
         """    function cancelExpiredChild(address parentAddress, uint64 parentRound) external nonReentrant {
@@ -130,8 +178,10 @@ interface ICanonicalAppealableChildFactoryV1 {
         require(msg.sender == child.creator() && child.status() == CLAIMABLE_STATUS, "child not refundable");
         uint64 currentRound = parent.round();
         StandingMetaParentV4.Status parentStatus = parent.bountyStatus();
+        bool safeWindowClosed = currentRound == parentRound && parentStatus == StandingMetaParentV4.Status.Claimed
+            && uint256(block.timestamp) + CHILD_WORK_WINDOW + CHILD_VERIFICATION_WINDOW > parent.claimExpiresAt();
         require(
-            currentRound > parentRound
+            currentRound > parentRound || safeWindowClosed
                 || (currentRound == parentRound
                     && (parentStatus == StandingMetaParentV4.Status.Claimable
                         || parentStatus == StandingMetaParentV4.Status.Cancelled)),
@@ -142,6 +192,22 @@ interface ICanonicalAppealableChildFactoryV1 {
     }
 
     function roundChild(address parent, uint64 parentRound) external view returns (address) {
+""",
+    )
+    replace_once(
+        path,
+        """    function _requireCurrentlyEligibleSolver(address wallet) private view {
+""",
+        """    function _requireActiveParentWindow(StandingMetaParentV4 parent, uint256 assignmentBuffer) private view {
+        require(parent.bountyStatus() == StandingMetaParentV4.Status.Claimed, "parent round inactive");
+        require(
+            uint256(block.timestamp) + assignmentBuffer + CHILD_WORK_WINDOW + CHILD_VERIFICATION_WINDOW
+                <= parent.claimExpiresAt(),
+            "parent window insufficient"
+        );
+    }
+
+    function _requireCurrentlyEligibleSolver(address wallet) private view {
 """,
     )
 
