@@ -200,20 +200,20 @@ def main() -> None:
 """,
     )
 
-    # Durable threat-model statements for the fixed and residual availability boundaries.
+    # The main patch first rewrites these rows; append the follow-up risks to the post-patch wording.
     replace_once(
         "docs/security/standing-meta-v4-threat-model.md",
-        """| Candidate joins after seeing a target | Child solver candidates are the already-active, available pool snapshotted inside `claimAndCreateChild` | Availability may change after the snapshot; ranking activation and claims still fail closed |
+        """| Candidate joins after seeing a target | Child solver candidates are the already-active, available pool snapshotted inside `claimAndCreateChild`; the selected ticket is rechecked immediately before claim | Availability may change after the snapshot; an ineligible selection waits for bounded promotion and never receives claim authority |
 """,
-        """| Candidate joins after seeing a target | Child solver candidates are the already-active, available pool snapshotted inside `claimAndCreateChild` | Availability may change after the snapshot; ranking activation and claims still fail closed |
+        """| Candidate joins after seeing a target | Child solver candidates are the already-active, available pool snapshotted inside `claimAndCreateChild`; the selected ticket is rechecked immediately before claim | Availability may change after the snapshot; an ineligible selection waits for bounded promotion and never receives claim authority |
 | One role consumes all bounded pool slots | The 64-ticket capacity is enforced independently for solver and verifier roles | A same-role Sybil can still fill that role at the fixed 5 USDC-per-wallet cost; readiness and monitoring must fail closed when healthy eligible depth is missing |
 """,
     )
     replace_once(
         "docs/security/standing-meta-v4-threat-model.md",
-        """| Atomic preparation race | Terms publication, child creation/funding, active-pool snapshot, VRF request, round binding, and parent claim occur in one transaction | The transaction can revert for gas, authorization, pool-size, or subscription failures |
+        """| Atomic preparation race | Terms publication, child creation/funding, active-pool snapshot, VRF request, round binding, and parent claim occur in one transaction; selection time and commitment are derived onchain from the inclusion block | The transaction can revert for gas, authorization, pool-size, or subscription failures |
 """,
-        """| Atomic preparation race | Terms publication, child creation/funding, active-pool snapshot, VRF request, round binding, and parent claim occur in one transaction | The transaction can revert for gas, authorization, pool-size, or subscription failures |
+        """| Atomic preparation race | Terms publication, child creation/funding, active-pool snapshot, VRF request, round binding, and parent claim occur in one transaction; selection time and commitment are derived onchain from the inclusion block | The transaction can revert for gas, authorization, pool-size, or subscription failures |
 | Parent solver cancels the freshly funded child | Child cancellation is factory-only while the parent round is active; the child creator can recover only after that round expires, the parent is cancelled, or a newer round supersedes it | Recovery is permissionless only for the original child creator and still requires separate canonical cancellation/refund evidence |
 """,
     )
