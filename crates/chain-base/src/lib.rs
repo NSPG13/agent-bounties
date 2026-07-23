@@ -23,9 +23,11 @@ use uuid::Uuid;
 use verifier_sdk::RegressionSandboxPolicy;
 
 mod agent_wallet_readiness;
+mod open_competition;
 mod standing_meta_v4;
 
 pub use agent_wallet_readiness::*;
+pub use open_competition::*;
 pub use standing_meta_v4::*;
 
 #[derive(Debug, Error, PartialEq, Eq)]

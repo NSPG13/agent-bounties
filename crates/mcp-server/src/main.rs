@@ -450,6 +450,41 @@ tool_args! {
 
 tool_args! {
     #[derive(Default)]
+    struct OpenCompetitionReadinessArgs {
+        network: Option<String>,
+        bounty_contract: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet."),
+            "bounty_contract": string_property("Canonical open-competition bounty address.")
+        }),
+        &["bounty_contract"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionActionArgs {
+        network: Option<String>,
+        bounty_contract: String,
+        #[serde(default)]
+        arguments: Value,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the competition."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "arguments": {
+                "type": "object",
+                "description": "Public commitment or reveal arguments only. Keep the reveal salt private until reveal; never include wallet secrets."
+            }
+        }),
+        &["bounty_contract", "arguments"],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
     struct StandingMetaV4ReadinessArgs {
         network: Option<String>,
     }
@@ -1384,6 +1419,26 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/get_x402_relay_status", post(get_x402_relay_status))
         .route("/tools/prepare_agent_to_earn", post(prepare_agent_to_earn))
         .route(
+            "/tools/get_open_competition_readiness",
+            post(get_open_competition_readiness),
+        )
+        .route(
+            "/tools/prepare_open_competition_commit",
+            post(prepare_open_competition_commit),
+        )
+        .route(
+            "/tools/prepare_open_competition_reveal",
+            post(prepare_open_competition_reveal),
+        )
+        .route(
+            "/tools/get_open_competition_status",
+            post(get_open_competition_status),
+        )
+        .route(
+            "/tools/withdraw_open_competition_bond",
+            post(withdraw_open_competition_bond),
+        )
+        .route(
             "/tools/get_standing_meta_v4_readiness",
             post(get_standing_meta_v4_readiness),
         )
@@ -2142,6 +2197,31 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["network", "wallet_address", "bounty_contract", "signing_capabilities", "policy"],
             ),
+        ),
+        tool(
+            "get_open_competition_readiness",
+            "Fail closed unless canonical runtime, terms, funding, deterministic verification, timing, entry capacity, sponsorship, relay support, R4 evidence, and monitoring all pass.",
+            OpenCompetitionReadinessArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_commit",
+            "Prepare a commitment-bound entry bond. Generic agent_native_claim is forbidden because open competition has no exclusive claim.",
+            OpenCompetitionActionArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_reveal",
+            "Prepare the same wallet's later-block reveal. The first passing onchain reveal sequence wins; verifier response time does not order competitors.",
+            OpenCompetitionActionArgs::input_schema(),
+        ),
+        tool(
+            "get_open_competition_status",
+            "Read canonical competition, entry, reveal-sequence, winner, and settlement state.",
+            OpenCompetitionActionArgs::input_schema(),
+        ),
+        tool(
+            "withdraw_open_competition_bond",
+            "Prepare a pull withdrawal for a still-committed losing entry after canonical settlement.",
+            OpenCompetitionActionArgs::input_schema(),
         ),
         tool(
             "get_standing_meta_v4_readiness",
@@ -4037,6 +4117,66 @@ async fn prepare_agent_to_earn(
     .await
 }
 
+async fn get_open_competition_readiness(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionReadinessArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let url = format!(
+        "{}/v1/base/open-competition-v1/readiness?network={network}&bounty_contract={}",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.bounty_contract
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().get(url),
+        "open-competition readiness API",
+    )
+    .await
+}
+
+async fn prepare_open_competition_commit(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("commit-preparation", args).await
+}
+
+async fn prepare_open_competition_reveal(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("reveal-preparation", args).await
+}
+
+async fn get_open_competition_status(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("status", args).await
+}
+
+async fn withdraw_open_competition_bond(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("bond-withdrawal-preparation", args).await
+}
+
+async fn proxy_open_competition_action(
+    path: &str,
+    args: OpenCompetitionActionArgs,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/open-competition-v1/{path}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().post(url).json(&args),
+        "open-competition action API",
+    )
+    .await
+}
+
 async fn get_standing_meta_v4_readiness(
     State(_state): State<SharedState>,
     Json(args): Json<StandingMetaV4ReadinessArgs>,
@@ -5087,7 +5227,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 101);
+        assert_eq!(descriptors.len(), 106);
         assert_eq!(
             descriptors
                 .iter()

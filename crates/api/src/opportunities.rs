@@ -113,11 +113,13 @@ pub struct OpportunityAppealPolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct OpportunityStandingMetaV4Coordination {
+    pub competition_mode: String,
     pub atomic_claim_required: bool,
     pub child_lifecycle: String,
     pub per_bounty_enrollment_seconds: u64,
     pub selected_solver_response_seconds: u64,
     pub timing_safety: String,
+    pub why_not_first_valid: String,
     pub next_action: String,
 }
 
@@ -145,6 +147,7 @@ pub struct OpportunityItem {
     pub work_state: String,
     pub payment_state: String,
     pub payment_committed: bool,
+    pub competition_mode: String,
     pub standing_meta_bounty: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub standing_meta_v4: Option<OpportunityStandingMetaV4>,
@@ -472,6 +475,7 @@ pub fn unfunded_opportunity(
         work_state: work_state.to_string(),
         payment_state: "none".to_string(),
         payment_committed: false,
+        competition_mode: "open_unfunded_submission".to_string(),
         standing_meta_bounty: false,
         standing_meta_v4: None,
         decision_authority: "The poster reviews this offchain submission; no canonical verifier is configured.".to_string(),
@@ -586,6 +590,7 @@ pub fn legacy_opportunity(
         work_state: work_state.to_string(),
         payment_state: payment_state.to_string(),
         payment_committed,
+        competition_mode: "exclusive_claim".to_string(),
         standing_meta_bounty: false,
         standing_meta_v4: None,
         decision_authority: format!("Legacy configured verification path: {verification_method}."),
@@ -708,6 +713,7 @@ pub fn canonical_opportunity(
         work_state: work_state.to_string(),
         payment_state: payment_state.to_string(),
         payment_committed,
+        competition_mode: "exclusive_claim".to_string(),
         standing_meta_bounty: standing_meta_v2_parent_context(item).is_ok(),
         standing_meta_v4: None,
         decision_authority: format!(
