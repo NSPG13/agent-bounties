@@ -1,7 +1,11 @@
 use super::{
-    list_autonomous_bounties, list_unfunded_bounties, publish_unfunded_bounty,
-    submit_unfunded_bounty_solution, tools, AutonomousBountyFeedArgs, ListUnfundedBountiesArgs,
-    PrepareBountyPostArgs, PublishUnfundedBountyArgs, SharedState,
+    agent_native_claim, list_autonomous_bounties, list_autonomous_bounty_events,
+    list_unfunded_bounties, prepare_agent_to_earn, prepare_autonomous_bounty_submission,
+    publish_autonomous_submission_evidence, publish_unfunded_bounty,
+    submit_unfunded_bounty_solution, tools, AgentNativeClaimArgs, AutonomousBountyFeedArgs,
+    ListAutonomousBountyEventsArgs, ListUnfundedBountiesArgs, PrepareAgentToEarnInput,
+    PrepareAutonomousBountySubmissionArgs, PrepareBountyPostArgs,
+    PublishAutonomousSubmissionEvidenceArgs, PublishUnfundedBountyArgs, SharedState,
     SubmitUnfundedBountySolutionArgs, ToolDescriptor,
 };
 use axum::{
@@ -23,6 +27,11 @@ const AI_ASSISTANT_TOOL_NAMES: &[&str] = &[
     "submit_unfunded_bounty_solution",
     "prepare_bounty_post",
     "list_autonomous_bounties",
+    "prepare_agent_to_earn",
+    "agent_native_claim",
+    "prepare_autonomous_bounty_submission",
+    "publish_autonomous_submission_evidence",
+    "list_autonomous_bounty_events",
 ];
 
 pub(super) fn build_bounty_post_handoff(args: &PrepareBountyPostArgs) -> Result<Value, String> {
@@ -86,7 +95,7 @@ pub(super) fn build_bounty_post_handoff(args: &PrepareBountyPostArgs) -> Result<
         "schema": "agent-bounties/chatgpt-post-handoff-v1",
         "interface": "mcp",
         "prepared_by": "user_owned_ai",
-        "supported_hosts": ["chatgpt", "claude", "gemini", "other-mcp"],
+        "supported_hosts": ["chatgpt", "claude", "gemini-spark", "other-mcp"],
         "rendering": {
             "mcp_app_widget": "chatgpt",
             "portable_fallback": "markdown_card_and_review_url"
@@ -199,7 +208,7 @@ fn initialize_result(params: &Value) -> Value {
             "title": "Agent Bounties",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "Use publish_unfunded_bounty when a person wants to post with no wallet and no USDC. It creates a public seven-day bounty that agents can discover, while clearly reporting funding_status=unfunded and promising no payment. Use list_unfunded_bounties to discover those opportunities and submit_unfunded_bounty_solution for registered-agent work. Use prepare_bounty_post only for conversion to the on-chain flow. Never call an unfunded bounty canonical, funded, or claimable, and never request a private key or seed phrase."
+        "instructions": "Agent Bounties turns goals into reviewable bounties and lets people or their AI assistants complete funded work. When a person wants something done, use prepare_bounty_post unless they explicitly ask for a public zero-USDC voluntary request; the handoff is a draft and moves no funds. When a person asks how to earn money with AI, find paid AI work, or complete Agent Bounties work, call list_autonomous_bounties with claimable_only=true and keep funded work separate from unfunded requests. Continue the canonical solver sequence with prepare_agent_to_earn, agent_native_claim, prepare_autonomous_bounty_submission, publish_autonomous_submission_evidence, and list_autonomous_bounty_events. Require explicit confirmation before public writes or relaying a wallet signature. Never request a private key or seed phrase. Never call an unfunded bounty canonical, funded, or claimable. Only a confirmed canonical BountySettled event proves payment."
     })
 }
 
@@ -214,23 +223,24 @@ async fn chatgpt_tools() -> Vec<Value> {
 }
 
 fn mcp_tool_descriptor(descriptor: ToolDescriptor) -> Value {
-    let mutates_public_state = matches!(
-        descriptor.name,
-        "publish_unfunded_bounty" | "submit_unfunded_bounty_solution"
-    );
-    let read_only = !mutates_public_state;
-    let open_world = mutates_public_state;
+    let impact = assistant_tool_impact(descriptor.name);
     let mut value = Map::new();
     value.insert("name".to_string(), json!(descriptor.name));
     value.insert("title".to_string(), json!(tool_title(descriptor.name)));
-    value.insert("description".to_string(), json!(descriptor.description));
+    value.insert(
+        "description".to_string(),
+        json!(assistant_tool_description(
+            descriptor.name,
+            descriptor.description
+        )),
+    );
     value.insert("inputSchema".to_string(), descriptor.input_schema);
     value.insert(
         "annotations".to_string(),
         json!({
-            "readOnlyHint": read_only,
-            "destructiveHint": mutates_public_state,
-            "openWorldHint": open_world,
+            "readOnlyHint": impact.read_only,
+            "destructiveHint": impact.destructive,
+            "openWorldHint": impact.open_world,
             "idempotentHint": true
         }),
     );
@@ -301,6 +311,56 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
             (
                 list_autonomous_bounties(State(state), Json(args)).await.0,
                 "Returned canonical, event-derived bounty inventory.",
+            )
+        }
+        "prepare_agent_to_earn" => {
+            let args: PrepareAgentToEarnInput = serde_json::from_value(arguments)
+                .map_err(|error| format!("invalid prepare_agent_to_earn arguments: {error}"))?;
+            (
+                prepare_agent_to_earn(State(state), Json(args)).await.0,
+                "Checked this public wallet and canonical bounty for earning readiness. Fix every failed check before asking the wallet to sign anything; never share wallet secrets.",
+            )
+        }
+        "agent_native_claim" => {
+            let args: AgentNativeClaimArgs = serde_json::from_value(arguments)
+                .map_err(|error| format!("invalid agent_native_claim arguments: {error}"))?;
+            (
+                agent_native_claim(State(state), Json(args)).await.0,
+                "Advanced the idempotent canonical claim flow. If a wallet_request is returned, show its exact scope and ask the user to sign it once in their wallet; replay the same idempotency key until confirmed BountyClaimed.",
+            )
+        }
+        "prepare_autonomous_bounty_submission" => {
+            let args: PrepareAutonomousBountySubmissionArgs = serde_json::from_value(arguments)
+                .map_err(|error| {
+                    format!("invalid prepare_autonomous_bounty_submission arguments: {error}")
+                })?;
+            (
+                prepare_autonomous_bounty_submission(State(state), Json(args))
+                    .await
+                    .0,
+                "Prepared deterministic submission commitments, the exact wallet signing payload, and relay/evidence templates. Nothing was signed, relayed, submitted, verified, or paid by this preparation.",
+            )
+        }
+        "publish_autonomous_submission_evidence" => {
+            let args: PublishAutonomousSubmissionEvidenceArgs = serde_json::from_value(arguments)
+                .map_err(|error| {
+                format!("invalid publish_autonomous_submission_evidence arguments: {error}")
+            })?;
+            (
+                publish_autonomous_submission_evidence(State(state), Json(args))
+                    .await
+                    .0,
+                "Published the exact public evidence preimages only after the canonical submission matched their commitments. This is public evidence, not verification or payout proof.",
+            )
+        }
+        "list_autonomous_bounty_events" => {
+            let args: ListAutonomousBountyEventsArgs =
+                serde_json::from_value(arguments).map_err(|error| {
+                    format!("invalid list_autonomous_bounty_events arguments: {error}")
+                })?;
+            (
+                list_autonomous_bounty_events(State(state), Json(args)).await.0,
+                "Returned confirmed canonical lifecycle events. Report a solver as paid only when the matching BountySettled event is present.",
             )
         }
         _ => return Err(format!("unknown or unavailable AI assistant tool: {name}")),
@@ -506,8 +566,58 @@ fn tool_title(name: &str) -> &'static str {
         "list_unfunded_bounties" => "List unfunded bounties",
         "submit_unfunded_bounty_solution" => "Submit unfunded bounty solution",
         "prepare_bounty_post" => "Prepare bounty for wallet review",
-        "list_autonomous_bounties" => "List canonical bounties",
+        "list_autonomous_bounties" => "Find paid AI work",
+        "prepare_agent_to_earn" => "Check earning readiness",
+        "agent_native_claim" => "Claim funded bounty",
+        "prepare_autonomous_bounty_submission" => "Prepare completed work",
+        "publish_autonomous_submission_evidence" => "Publish submission evidence",
+        "list_autonomous_bounty_events" => "Confirm bounty lifecycle and payment",
         _ => "Agent Bounties tool",
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AssistantToolImpact {
+    read_only: bool,
+    destructive: bool,
+    open_world: bool,
+}
+
+fn assistant_tool_impact(name: &str) -> AssistantToolImpact {
+    match name {
+        "publish_unfunded_bounty"
+        | "agent_native_claim"
+        | "publish_autonomous_submission_evidence" => AssistantToolImpact {
+            read_only: false,
+            destructive: true,
+            open_world: true,
+        },
+        "submit_unfunded_bounty_solution" => AssistantToolImpact {
+            read_only: false,
+            destructive: true,
+            open_world: true,
+        },
+        _ => AssistantToolImpact {
+            read_only: true,
+            destructive: false,
+            open_world: false,
+        },
+    }
+}
+
+fn assistant_tool_description(name: &str, fallback: &'static str) -> &'static str {
+    match name {
+        "prepare_bounty_post" => "Use this when a person wants something done, wants to achieve a goal with paid help, or asks to post an Agent Bounties task. Prepare a reviewable funded or crowdfunded draft from the current conversation; move no funds and request no wallet signature.",
+        "publish_unfunded_bounty" => "Use this when a person explicitly wants to publish a public seven-day voluntary request with no wallet and zero USDC. It is not funded or claimable and promises no payment.",
+        "list_unfunded_bounties" => "Use this when a person explicitly asks for voluntary or unpaid Agent Bounties work. Keep these requests separate from funded earning opportunities and never promise payment.",
+        "submit_unfunded_bounty_solution" => "Use this when a registered agent explicitly wants to publish or replace its public solution to an unfunded voluntary request. This creates no payment claim.",
+        "list_autonomous_bounties" => "Use this when a person asks to earn money with AI, find paid AI tasks, browse funded Agent Bounties work, or choose a bounty to complete. Set claimable_only=true for work that is currently funded and ready to claim.",
+        "prepare_agent_to_earn" => "Use this when a person has chosen one funded canonical bounty and provides a public Base payout wallet. Check wallet, bond, policy, claimability, and verification readiness without requesting secrets or changing state.",
+        "agent_native_claim" => "Use this when a person has chosen a funded verification-ready bounty and explicitly wants to claim it. Reuse one idempotency key, show any wallet_request for one bounded signature, and replay until confirmed BountyClaimed.",
+        "prepare_autonomous_bounty_submission" => "Use this when the active solver has completed a claimed bounty and wants to submit the artifact and public evidence. Prepare deterministic commitments and a bounded signing/relay handoff; do not claim submission, verification, or payment yet.",
+        "publish_autonomous_submission_evidence" => "Use this when confirmed SubmissionAdded exists and the solver wants to publish the exact public artifact and evidence preimages matching the canonical commitments. This public write is not verification or payout proof.",
+        "list_autonomous_bounty_events" => "Use this when a person needs to check the confirmed lifecycle of a canonical bounty, including claim, submission, settlement, or reopening. Only a matching BountySettled event proves that the solver was paid.",
+        _ => fallback,
     }
 }
 
@@ -675,6 +785,21 @@ mod tests {
     #[tokio::test]
     async fn app_tools_have_required_annotations_and_widget_metadata() {
         let tools = chatgpt_tools().await;
+        assert_eq!(tools.len(), AI_ASSISTANT_TOOL_NAMES.len());
+        for name in AI_ASSISTANT_TOOL_NAMES {
+            let descriptor = tools
+                .iter()
+                .find(|tool| tool["name"] == *name)
+                .unwrap_or_else(|| panic!("missing assistant tool {name}"));
+            assert!(
+                descriptor["description"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Use this when"),
+                "assistant tool {name} has a non-discoverable description: {}",
+                descriptor["description"]
+            );
+        }
         let prepare = tools
             .iter()
             .find(|tool| tool["name"] == "prepare_bounty_post")
@@ -704,12 +829,49 @@ mod tests {
         assert_eq!(submit["annotations"]["readOnlyHint"], false);
         assert_eq!(submit["annotations"]["destructiveHint"], true);
         assert_eq!(submit["annotations"]["openWorldHint"], true);
+
+        let claim = tools
+            .iter()
+            .find(|tool| tool["name"] == "agent_native_claim")
+            .unwrap();
+        assert_eq!(claim["title"], "Claim funded bounty");
+        assert_eq!(claim["annotations"]["readOnlyHint"], false);
+        assert_eq!(claim["annotations"]["destructiveHint"], true);
+        assert_eq!(claim["annotations"]["openWorldHint"], true);
+
+        let publish_evidence = tools
+            .iter()
+            .find(|tool| tool["name"] == "publish_autonomous_submission_evidence")
+            .unwrap();
+        assert_eq!(publish_evidence["annotations"]["readOnlyHint"], false);
+        assert_eq!(publish_evidence["annotations"]["destructiveHint"], true);
+        assert_eq!(publish_evidence["annotations"]["openWorldHint"], true);
+
+        let prepare_submission = tools
+            .iter()
+            .find(|tool| tool["name"] == "prepare_autonomous_bounty_submission")
+            .unwrap();
+        assert_eq!(prepare_submission["annotations"]["readOnlyHint"], true);
+        assert_eq!(prepare_submission["annotations"]["openWorldHint"], false);
+
+        let settlement = tools
+            .iter()
+            .find(|tool| tool["name"] == "list_autonomous_bounty_events")
+            .unwrap();
+        assert_eq!(settlement["title"], "Confirm bounty lifecycle and payment");
+        assert_eq!(settlement["annotations"]["readOnlyHint"], true);
     }
 
     #[test]
     fn widget_resource_has_mcp_apps_mime_and_exact_redirect_allowlist() {
         let contents = widget_resource_contents();
         assert_eq!(contents["mimeType"], "text/html;profile=mcp-app");
+        assert_eq!(
+            contents["_meta"]["ui"]["domain"],
+            "https://mcp.agentbounties.app"
+        );
+        assert_eq!(contents["_meta"]["ui"]["csp"]["connectDomains"], json!([]));
+        assert_eq!(contents["_meta"]["ui"]["csp"]["resourceDomains"], json!([]));
         assert_eq!(
             contents["_meta"]["openai/widgetCSP"]["redirect_domains"],
             json!(["https://agentbounties.app"])
