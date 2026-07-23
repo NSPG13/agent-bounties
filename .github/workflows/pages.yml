@@ -7,6 +7,9 @@ on:
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
       - "scripts/check-site.py"
+      - "scripts/test-homepage-bounty-wiring.py"
+      - "scripts/test-homepage-bounty-flow.js"
+      - "scripts/test-ai-bounty-handoff.js"
   push:
     branches: [main]
     paths:
@@ -14,10 +17,14 @@ on:
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
       - "scripts/check-site.py"
+      - "scripts/test-homepage-bounty-wiring.py"
+      - "scripts/test-homepage-bounty-flow.js"
+      - "scripts/test-ai-bounty-handoff.js"
   workflow_dispatch:
 
 permissions:
   contents: read
+  issues: write
   pages: write
   id-token: write
 
@@ -33,7 +40,88 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - run: python scripts/check-site.py
+      - run: python scripts/test-homepage-bounty-wiring.py
+      - run: node scripts/test-homepage-bounty-flow.js
+      - run: node scripts/test-ai-bounty-handoff.js
+      - name: Check simplified public scripts
+        run: |
+          node --check site/bounty-board.js
+          node --check site/bounty-entry.js
+          node --check site/ai-bounty-handoff.js
+          node --check site/bounty-composer-v2.js
+          node --check site/bounty-chat-ui.js
+          node --check site/simple-home.js
+          node --check site/guild-shell.js
+          grep -q 'data-primary-bounty-cta>Post a bounty</a>' site/index.html
+          grep -q 'class="mode-switch"' site/index.html
+          grep -q 'action="objective.html"' site/index.html
+          grep -q 'src="bounty-entry.js?v=1"' site/index.html
+          ! grep -q 'data-connect-wallet' site/index.html
+          ! grep -q 'class="network-chip"' site/index.html
+          grep -q 'AGENT MODE · NO COMPUTER USE REQUIRED' site/agent/index.html
+          grep -q 'No computer use is required' site/agent/index.md
+          grep -q '"agent_mode": "https://agentbounties.app/agent/"' site/.well-known/agent-bounties.json
+          grep -q 'data-board-search' site/earn.html
+          grep -q 'id="fund-bounty-panel"' site/earn.html
+          grep -q 'class="composer-page chat-app-page"' site/objective.html
+          grep -q 'class="chat-app-header"' site/objective.html
+          grep -q 'id="bounty-composer-form"' site/objective.html
+          grep -q 'data-bounty-chat' site/objective.html
+          grep -q 'data-conversation-log' site/objective.html
+          grep -q 'id="bounty-preview"' site/objective.html
+          grep -q 'data-mission-context' site/objective.html
+          grep -q 'data-image-status' site/objective.html
+          grep -q 'data-approve-card' site/objective.html
+          grep -q 'data-open-funding' site/objective.html
+          grep -q '>Connect wallet<' site/objective.html
+          grep -q 'data-payment-method="crypto"' site/objective.html
+          grep -q 'ai-bounty-handoff.js?v=5' site/objective.html
+          grep -q 'bounty-composer-v2.js?v=2' site/objective.html
+          grep -q 'bounty-entry.js?v=1' site/objective.html
+          grep -q 'bounty-chat-ui.js?v=4' site/objective.html
+          grep -q 'data-ai-draft-import' site/objective.html
+          grep -q 'prepare_bounty_post' site/ai-bounty-handoff.js
+          ! grep -q 'chat-composer-intro' site/objective.html
+          ! grep -q 'draft-panel' site/objective.html
+          grep -q 'dataset.bountyComposer = "chat-v2"' site/bounty-chat-ui.js
+          grep -q 'entryIntent.autostart' site/bounty-chat-ui.js
+          grep -q 'form.requestSubmit()' site/bounty-chat-ui.js
+          grep -q 'log.append(preview)' site/bounty-chat-ui.js
+          grep -q 'body.classList.contains("chat-app-page")' site/analytics-config.js
+          grep -q 'x-agent-bounties-draft-visual' site/bounty-composer-v2.js
+          grep -q 'MAX_TASK_DAYS = 30' site/bounty-composer-v2.js
+          grep -q 'Ongoing' site/bounty-composer-v2.js
+          grep -q 'You ask. Someone helps. They show proof. They get paid.' site/how-it-works.html
+      - name: Verify production analytics substitution preserves the public shell
+        env:
+          GA_MEASUREMENT_ID: G-TEST123
+        run: |
+          cp site/analytics-config.js /tmp/analytics-config.js
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("/tmp/analytics-config.js")
+          source = path.read_text(encoding="utf-8")
+          updated, count = re.subn(
+              r'googleMeasurementId:\s*"(?:|G-[A-Z0-9]+)"',
+              f'googleMeasurementId: "{os.environ["GA_MEASUREMENT_ID"]}"',
+              source,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("analytics configuration assignment was not found exactly once")
+          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js", "chat-app-page"):
+              if required not in updated:
+                  raise SystemExit(f"Pages analytics substitution removed {required}")
+          path.write_text(updated, encoding="utf-8")
+          PY
+          grep -q 'googleMeasurementId: "G-TEST123"' /tmp/analytics-config.js
 
   deploy:
     if: github.event_name != 'pull_request'
@@ -45,7 +133,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v6
-      - name: Configure optional Google Analytics
+      - name: Configure optional Google Analytics without removing the public shell
         env:
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
         run: |
@@ -53,8 +141,26 @@ jobs:
             echo "GA_MEASUREMENT_ID must match G-[A-Z0-9]+" >&2
             exit 1
           fi
-          printf 'window.agentBountiesAnalyticsConfig = Object.freeze({\n  googleMeasurementId: "%s",\n});\n' \
-            "${GA_MEASUREMENT_ID}" > site/analytics-config.js
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("site/analytics-config.js")
+          source = path.read_text(encoding="utf-8")
+          updated, count = re.subn(
+              r'googleMeasurementId:\s*"(?:|G-[A-Z0-9]+)"',
+              f'googleMeasurementId: "{os.environ.get("GA_MEASUREMENT_ID", "")}"',
+              source,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("analytics configuration assignment was not found exactly once")
+          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js", "chat-app-page"):
+              if required not in updated:
+                  raise SystemExit(f"refusing to deploy without {required}")
+          path.write_text(updated, encoding="utf-8")
+          PY
       - name: Stage bounded-wallet deployment manifest
         run: |
           cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json
@@ -63,5 +169,122 @@ jobs:
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
+          include-hidden-files: true
       - id: deployment
         uses: actions/deploy-pages@v5
+      - name: Verify the normal chatbot experience
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIVE_CANARY_ISSUE: "499"
+        run: |
+          set -euo pipefail
+          expected_build="$(head -n 1 site/live-guild-build.txt | tr -d '\r\n')"
+          success=false
+          attempt_used=0
+          failure_detail="deployment has not propagated"
+
+          for attempt in $(seq 1 60); do
+            attempt_used="$attempt"
+            nonce="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}-${attempt}-$(date +%s)"
+            common_curl=(--fail --silent --show-error --location --retry 2 --retry-delay 1 --header "Cache-Control: no-cache" --header "Pragma: no-cache")
+
+            if curl "${common_curl[@]}" "https://agentbounties.app/live-guild-build.txt?verify=${nonce}" -o /tmp/live-canary.txt \
+              && curl "${common_curl[@]}" "https://agentbounties.app/?verify=${nonce}" -o /tmp/live-index.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/agent/?verify=${nonce}" -o /tmp/live-agent.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/agent/index.md?verify=${nonce}" -o /tmp/live-agent.md \
+              && curl "${common_curl[@]}" "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/live-agent-manifest.json \
+              && curl "${common_curl[@]}" "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/objective.html?verify=${nonce}" -o /tmp/live-objective.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat.css?verify=${nonce}" -o /tmp/live-chat.css \
+              && curl "${common_curl[@]}" "https://agentbounties.app/ai-bounty-handoff.css?verify=${nonce}" -o /tmp/live-ai-handoff.css \
+              && curl "${common_curl[@]}" "https://agentbounties.app/ai-bounty-handoff.js?verify=${nonce}" -o /tmp/live-ai-handoff.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-composer-v2.js?verify=${nonce}" -o /tmp/live-composer.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat-ui.js?verify=${nonce}" -o /tmp/live-chat-ui.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-entry.js?verify=${nonce}" -o /tmp/live-entry.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/how-it-works.html?verify=${nonce}" -o /tmp/live-how.html \
+              && curl "${common_curl[@]}" "https://agentbounties.app/analytics-config.js?verify=${nonce}" -o /tmp/live-analytics.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/simple-home.js?verify=${nonce}" -o /tmp/live-simple-home.js; then
+              actual_build="$(head -n 1 /tmp/live-canary.txt | tr -d '\r\n')"
+              if [[ "${actual_build}" == "${expected_build}" ]] \
+                && grep -q 'data-primary-bounty-cta>Post a bounty</a>' /tmp/live-index.html \
+                && grep -q 'class="mode-switch"' /tmp/live-index.html \
+                && grep -q 'action="objective.html"' /tmp/live-index.html \
+                && ! grep -q 'data-connect-wallet' /tmp/live-index.html \
+                && ! grep -q 'class="network-chip"' /tmp/live-index.html \
+                && grep -q 'AGENT MODE · NO COMPUTER USE REQUIRED' /tmp/live-agent.html \
+                && grep -q 'No computer use is required' /tmp/live-agent.md \
+                && grep -q '"agent_mode": "https://agentbounties.app/agent/"' /tmp/live-agent-manifest.json \
+                && grep -q 'data-public-ux="simplified-v1"' /tmp/live-earn.html \
+                && grep -q 'data-board-search' /tmp/live-earn.html \
+                && grep -q 'id="fund-bounty-panel"' /tmp/live-earn.html \
+                && grep -q 'class="composer-page chat-app-page"' /tmp/live-objective.html \
+                && grep -q 'class="chat-app-header"' /tmp/live-objective.html \
+                && grep -q 'id="bounty-composer-form"' /tmp/live-objective.html \
+                && grep -q 'data-conversation-log' /tmp/live-objective.html \
+                && grep -q 'id="bounty-preview"' /tmp/live-objective.html \
+                && grep -q 'data-approve-card' /tmp/live-objective.html \
+                && grep -q 'data-open-funding' /tmp/live-objective.html \
+                && grep -q '>Connect wallet<' /tmp/live-objective.html \
+                && grep -q 'bounty-entry.js?v=1' /tmp/live-objective.html \
+                && grep -q 'ai-bounty-handoff.js?v=5' /tmp/live-objective.html \
+                && grep -q 'bounty-chat-ui.js?v=4' /tmp/live-objective.html \
+                && grep -q 'data-ai-draft-import' /tmp/live-objective.html \
+                && ! grep -q 'chat-composer-intro' /tmp/live-objective.html \
+                && ! grep -q 'draft-panel' /tmp/live-objective.html \
+                && grep -q '.chat-app-header' /tmp/live-chat.css \
+                && grep -q '.ai-provider-grid' /tmp/live-ai-handoff.css \
+                && grep -q 'prepare_bounty_post' /tmp/live-ai-handoff.js \
+                && grep -q 'agent-bounties:prepared-draft' /tmp/live-ai-handoff.js \
+                && grep -q 'grid-template-rows: minmax(0, 1fr) auto auto' /tmp/live-chat.css \
+                && grep -q 'x-agent-bounties-draft-visual' /tmp/live-composer.js \
+                && grep -q 'MAX_TASK_DAYS = 30' /tmp/live-composer.js \
+                && grep -q 'dataset.bountyComposer = "chat-v2"' /tmp/live-chat-ui.js \
+                && grep -q 'entryIntent.autostart' /tmp/live-chat-ui.js \
+                && grep -q 'agent-bounties:homepage-bounty-intent' /tmp/live-entry.js \
+                && grep -q 'log.append(preview)' /tmp/live-chat-ui.js \
+                && grep -q 'body.classList.contains("chat-app-page")' /tmp/live-analytics.js \
+                && grep -q 'You ask. Someone helps. They show proof. They get paid.' /tmp/live-how.html \
+                && grep -q 'simple-home.js' /tmp/live-analytics.js \
+                && grep -q '\["earn.html", "Bounty Board"\]' /tmp/live-simple-home.js \
+                && grep -q '\["how-it-works.html", "How It Works"\]' /tmp/live-simple-home.js \
+                && ! grep -q 'Open Source' /tmp/live-simple-home.js; then
+                success=true
+                failure_detail=""
+                break
+              fi
+              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or minimal chatbot markers were missing"
+            else
+              failure_detail="one or more live URLs returned a non-success response"
+            fi
+            sleep 5
+          done
+
+          verified_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [[ "${success}" == "true" ]]; then
+            cat > /tmp/live-proof.md <<EOF
+          ✅ **User-owned AI bounty composer canary passed**
+
+          - Commit: \`${GITHUB_SHA}\`
+          - Expected and live build: \`${expected_build}\`
+          - Attempts: ${attempt_used}
+          - Verified at: ${verified_at}
+          - Live bounty creation hands the original idea to ChatGPT, Claude, Gemini, or another MCP-capable user account without calling a platform model key.
+          - The portable JSON return path renders the standardized draft inline and retains review, approval, and wallet gates.
+          - Workflow: ${run_url}
+          EOF
+          else
+            cat > /tmp/live-proof.md <<EOF
+          ❌ **User-owned AI bounty composer canary failed**
+
+          - Commit: \`${GITHUB_SHA}\`
+          - Expected build: \`${expected_build}\`
+          - Attempts: ${attempt_used}
+          - Last failure: ${failure_detail}
+          - Checked at: ${verified_at}
+          - Workflow: ${run_url}
+          EOF
+          fi
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${LIVE_CANARY_ISSUE}/comments" --raw-field body="$(cat /tmp/live-proof.md)"
+          [[ "${success}" == "true" ]]

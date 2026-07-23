@@ -242,40 +242,42 @@
   }
 
   function setMetric(name, value, decimals = 0) {
-    const output = document.querySelector(`[data-adoption-${name}]`);
-    if (!output) return;
+    const outputs = document.querySelectorAll(`[data-adoption-${name}]`);
+    if (!outputs.length) return;
     const target = Number(value);
-    if (!Number.isFinite(target)) {
-      output.textContent = "--";
-      return;
-    }
+    outputs.forEach((output) => {
+      if (!Number.isFinite(target)) {
+        output.textContent = "--";
+        return;
+      }
 
-    const previous = Number(output.dataset.value);
-    output.dataset.value = String(target);
-    output.dataset.loaded = "true";
-    const animationId = String(++metricAnimationId);
-    output.dataset.animationId = animationId;
-    if (reduceMotion || !Number.isFinite(previous) || previous === target) {
-      output.textContent = formatMetric(target, decimals);
-      return;
-    }
+      const previous = Number(output.dataset.value);
+      output.dataset.value = String(target);
+      output.dataset.loaded = "true";
+      const animationId = String(++metricAnimationId);
+      output.dataset.animationId = animationId;
+      if (reduceMotion || !Number.isFinite(previous) || previous === target) {
+        output.textContent = formatMetric(target, decimals);
+        return;
+      }
 
-    const startedAt = performance.now();
-    const duration = 420;
-    function frame(timestamp) {
-      if (output.dataset.animationId !== animationId) return;
-      const progress = Math.min(1, (timestamp - startedAt) / duration);
-      const eased = 1 - ((1 - progress) ** 3);
-      output.textContent = formatMetric(previous + ((target - previous) * eased), decimals);
-      if (progress < 1) requestAnimationFrame(frame);
-    }
-    requestAnimationFrame(frame);
+      const startedAt = performance.now();
+      const duration = 420;
+      function frame(timestamp) {
+        if (output.dataset.animationId !== animationId) return;
+        const progress = Math.min(1, (timestamp - startedAt) / duration);
+        const eased = 1 - ((1 - progress) ** 3);
+        output.textContent = formatMetric(previous + ((target - previous) * eased), decimals);
+        if (progress < 1) requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    });
   }
 
   function setMetricText(selector, value) {
-    const output = document.querySelector(selector);
-    if (!output) return;
-    output.textContent = value;
+    document.querySelectorAll(selector).forEach((output) => {
+      output.textContent = value;
+    });
   }
 
   function sumUsdc(items, includeCompletionBonus = false) {
@@ -303,14 +305,120 @@
     ]));
   }
 
+  function boardAssurance(item) {
+    if (item.payment_state === "paid") return "Settled";
+    if (item.work_state === "claimable" && item.payment_committed && item.verification_ready) return "Ready to earn";
+    if (item.payment_state === "seeking_funding") return "Seeking funding";
+    if (item.payment_state === "escrowed") return "Escrowed";
+    return "Open";
+  }
+
+  function boardProgress(item) {
+    if (item.payment_state === "paid") return 100;
+    if (item.work_state === "submitted") return 88;
+    if (item.work_state === "in_progress") return 72;
+    if (item.work_state === "claimable" && item.payment_committed) return 58;
+    if (item.payment_state === "seeking_funding") {
+      const funded = amountValue(item.funded_amount);
+      const target = amountValue(item.funding_target);
+      return target > 0 ? Math.max(8, Math.min(96, Math.round((funded / target) * 100))) : 30;
+    }
+    return 24;
+  }
+
+  function appendMarketCard(container, item, index) {
+    const article = document.createElement("article");
+    article.className = "market-bounty-card";
+
+    const visual = document.createElement("div");
+    visual.className = "bounty-visual";
+    const category = document.createElement("span");
+    category.className = "bounty-category";
+    const source = item.source_type === "canonical_base" ? "Base" : "Open";
+    category.textContent = `${source} · ${String(item.work_state || "bounty").replaceAll("_", " ")}`;
+    visual.append(category);
+
+    const copy = document.createElement("div");
+    copy.className = "bounty-card-copy";
+    const title = document.createElement("h3");
+    title.textContent = item.title;
+    const goal = document.createElement("p");
+    goal.className = "bounty-goal";
+    goal.textContent = item.goal || "Open the bounty for the complete mission and acceptance criteria.";
+
+    const meta = document.createElement("div");
+    meta.className = "bounty-card-meta";
+    const reward = document.createElement("span");
+    reward.className = "bounty-reward";
+    reward.textContent = item.payment_committed || item.payment_state === "seeking_funding"
+      ? formatAmount(item.reward)
+      : "Open bounty";
+    const rewardDetail = document.createElement("small");
+    rewardDetail.textContent = item.payment_committed ? "committed reward" : "assurance shown in terms";
+    reward.append(rewardDetail);
+
+    const assurance = document.createElement("span");
+    assurance.className = "bounty-assurance";
+    assurance.textContent = boardAssurance(item);
+    const assuranceDetail = document.createElement("small");
+    assuranceDetail.textContent = item.verification_ready ? " · verification ready" : " · inspect terms";
+    assurance.append(assuranceDetail);
+    meta.append(reward, assurance);
+
+    const progress = document.createElement("span");
+    progress.className = "bounty-progress";
+    progress.style.setProperty("--progress", `${boardProgress(item)}%`);
+    progress.append(document.createElement("span"));
+    meta.append(progress);
+    copy.append(title, goal, meta);
+    article.append(visual, copy);
+
+    const href = actionHref(item);
+    if (href) {
+      const link = document.createElement("a");
+      link.className = "bounty-card-link";
+      link.href = href;
+      link.setAttribute("aria-label", `${actionLabel(item)}: ${item.title}`);
+      if (item.source_type === "canonical_base" && item.work_state === "claimable" && item.payment_committed) {
+        link.dataset.analyticsEvent = "funded_bounty_click";
+        link.dataset.analyticsOpportunityId = item.opportunity_id;
+        link.dataset.analyticsBountyContract = item.source_id;
+      }
+      article.append(link);
+    }
+    article.style.setProperty("--card-index", String(index));
+    container.append(article);
+  }
+
   function renderOpportunityBoard(container, items) {
     const fingerprint = marketFingerprint(items);
     if (fingerprint === marketState.fingerprint) return;
     marketState.fingerprint = fingerprint;
     container.textContent = "";
+
+    const ordered = [];
+    const seen = new Set();
     opportunitySections.forEach((definition) => {
-      appendSection(container, definition, items.filter(definition.matches));
+      items.filter(definition.matches).forEach((item) => {
+        if (seen.has(item.opportunity_id)) return;
+        seen.add(item.opportunity_id);
+        ordered.push(item);
+      });
     });
+    items.forEach((item) => {
+      if (seen.has(item.opportunity_id)) return;
+      seen.add(item.opportunity_id);
+      ordered.push(item);
+    });
+
+    if (!ordered.length) {
+      const empty = document.createElement("p");
+      empty.className = "opportunity-empty";
+      empty.textContent = "No public bounties are visible right now. The board will refresh automatically.";
+      container.append(empty);
+    } else {
+      ordered.slice(0, 4).forEach((item, index) => appendMarketCard(container, item, index));
+    }
     container.classList.remove("market-update");
     requestAnimationFrame(() => container.classList.add("market-update"));
   }
@@ -387,17 +495,14 @@
     const detail = document.querySelector("[data-home-inventory-detail]");
     const proof = document.querySelector("[data-market-proof]");
     const items = projection.items || [];
-    const readyDefinition = opportunitySections.find((definition) => definition.key === "ready");
-    const readyItems = items.filter(readyDefinition.matches);
     const referenceAt = new Date(claim.generated_at || projection.generated_at);
     const oneWeekAgo = referenceAt.getTime() - (7 * 24 * 60 * 60 * 1_000);
-    const cutoff = referenceAt.getTime() - (MARKET_WINDOW_HOURS * 60 * 60 * 1_000);
     const paidItems = items.filter((item) => item.source_type === "canonical_base"
       && item.work_state === "completed"
-      && item.payment_state === "paid"
-      && Date.parse(item.updated_at) >= cutoff);
-    const activeBounties = readyItems;
-    const addedThisWeek = readyItems.filter((item) => {
+      && item.payment_state === "paid");
+    const activeBounties = items.filter((item) => item.work_state !== "completed"
+      && item.payment_state !== "paid");
+    const addedThisWeek = activeBounties.filter((item) => {
       const created = Date.parse(item.created_at);
       return Number.isFinite(created) && created >= oneWeekAgo;
     }).length;
@@ -407,7 +512,7 @@
       return Number.isFinite(updated) && updated >= oneWeekAgo;
     }).length;
     const activeContributors = Number(claim?.canonical_outcomes?.unique_paid_solver_wallets) || 0;
-    const settlements = Number(claim.canonical_outcomes.settlements_confirmed);
+    const settlements = paidItems.length;
 
     setMetric("ready", activeBounties.length);
     setMetricText("[data-adoption-ready-weekly]", `${formatMetric(addedThisWeek, 0)} added this week`);
@@ -415,18 +520,23 @@
     setMetric("settled", settlements);
     setMetricText("[data-adoption-settled-weekly]", `+${formatMetric(solvedThisWeek, 0)} this week`);
     setMetric("paid", activeContributors);
+    setMetricText("[data-board-active]", formatMetric(activeBounties.length, 0));
     renderOpportunityBoard(container, items);
 
-    heroSummary.textContent = `${activeBounties.length} active bounties · ${formatMetric(transactionVolumeUsdc, 2)} USDC on Base · ${settlements} problems solved`;
+    if (heroSummary) {
+      heroSummary.textContent = `${activeBounties.length} active bounties · ${formatMetric(transactionVolumeUsdc, 2)} USDC on Base · ${settlements} problems solved`;
+    }
     const sourceStatuses = projection.source_statuses || [];
     const availableSources = sourceStatuses.filter((source) => source.available).length;
     const unavailable = sourceStatuses
       .filter((source) => !source.available)
       .map((source) => source.source_type);
     const protocolStatus = protocol.status === "active" ? "Base mainnet active" : "Canonical protocol not active";
-    detail.textContent = unavailable.length
-      ? `${protocolStatus} · ${items.length} live opportunities · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
-      : `${protocolStatus} · ${items.length} live opportunities · ${availableSources}/${sourceStatuses.length} sources online · auto-refreshes every 30 seconds`;
+    if (detail) {
+      detail.textContent = unavailable.length
+        ? `${protocolStatus} · ${items.length} live opportunities · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
+        : `${protocolStatus} · ${items.length} live opportunities · ${availableSources}/${sourceStatuses.length} sources online · auto-refreshes every 30 seconds`;
+    }
 
     const proofUrl = newestPaidProof(paidItems);
     if (proof && proofUrl) {
@@ -469,9 +579,9 @@
       setMarketStatus("delayed");
       if (!marketState.rendered) {
         container.textContent = "Opportunity discovery could not be loaded. Use the authoritative unfunded and canonical feeds directly; use the portable skill for a Base safe-block check.";
-        heroSummary.textContent = "Live market feed unavailable · retrying automatically";
-        detail.textContent = error.message || String(error);
-      } else {
+        if (heroSummary) heroSummary.textContent = "Live market feed unavailable · retrying automatically";
+        if (detail) detail.textContent = error.message || String(error);
+      } else if (detail) {
         detail.textContent = "Live feed delayed. Last confirmed market snapshot remains visible while the page retries automatically.";
       }
     } finally {

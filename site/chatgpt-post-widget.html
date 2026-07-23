@@ -4,42 +4,77 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
-    <title>Review bounty post</title>
-    <meta name="description" content="Review a prepared Agent Bounties post before opening the wallet flow.">
+    <title>Review AI-prepared bounty</title>
+    <meta name="description" content="Review the Agent Bounties title, goal, acceptance criteria, work window, and reward prepared in your AI conversation.">
     <meta name="robots" content="noindex,nofollow">
     <style>
-      :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
-      body { margin: 0; padding: 14px; background: transparent; color: CanvasText; }
-      .card { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 16px; padding: 16px; background: color-mix(in srgb, Canvas 96%, CanvasText 4%); }
-      .eyebrow { margin: 0 0 6px; color: #59724d; font-size: 12px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
-      h2 { margin: 0; font-size: 19px; line-height: 1.25; }
-      .goal { margin: 8px 0 12px; line-height: 1.45; }
-      ul { margin: 0 0 14px; padding-left: 20px; }
+      :root {
+        color-scheme: dark;
+        --night: #020b08;
+        --panel: #091710;
+        --panel-soft: #0d2117;
+        --line: rgba(181, 226, 70, .28);
+        --lime: #b9ef37;
+        --lime-bright: #ceff48;
+        --mint: #18d9ac;
+        --gold: #e8bd26;
+        --text: #f6f7ef;
+        --muted: #b9c0b8;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 14px; background: transparent; color: var(--text); }
+      .card {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px;
+        background:
+          radial-gradient(circle at 96% 0, rgba(185, 239, 55, .12), transparent 12rem),
+          linear-gradient(145deg, rgba(13, 33, 23, .98), rgba(4, 16, 10, .98));
+        box-shadow: 0 20px 50px rgba(0, 0, 0, .28);
+      }
+      .card::after { content: "✦"; position: absolute; right: 14px; top: 8px; color: rgba(206, 255, 72, .28); font-size: 20px; }
+      .eyebrow { display: flex; align-items: center; gap: 7px; margin: 0 0 7px; color: var(--lime-bright); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+      .eyebrow::before { content: ""; width: 9px; height: 9px; border: 1px solid currentColor; border-radius: 70% 30% 70% 30%; transform: rotate(-18deg); }
+      h2 { margin: 0; max-width: calc(100% - 28px); color: var(--text); font-size: 21px; line-height: 1.2; letter-spacing: -.03em; }
+      .goal { margin: 9px 0 13px; color: var(--muted); line-height: 1.48; }
+      .label { display: block; margin: 10px 0 4px; color: var(--lime-bright); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+      ul { margin: 0 0 14px; padding-left: 20px; color: var(--muted); }
       li + li { margin-top: 5px; }
-      .economics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
-      .metric { border-radius: 10px; padding: 9px; background: color-mix(in srgb, CanvasText 7%, transparent); }
-      .metric span { display: block; font-size: 11px; opacity: .7; }
-      .metric strong { display: block; margin-top: 3px; font-size: 14px; }
-      .notice { margin: 12px 0; padding: 10px; border-left: 3px solid #d7a527; background: color-mix(in srgb, #d7a527 12%, transparent); font-size: 13px; line-height: 1.4; }
-      button { width: 100%; border: 0; border-radius: 999px; padding: 11px 16px; background: #315f2c; color: white; font: inherit; font-weight: 750; cursor: pointer; }
-      button:disabled { cursor: not-allowed; opacity: .55; }
-      .fine { margin: 9px 0 0; font-size: 12px; opacity: .72; line-height: 1.35; }
+      li::marker { color: var(--lime); }
+      .economics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 13px 0; }
+      .metric { min-width: 0; border: 1px solid rgba(181, 226, 70, .14); border-radius: 12px; padding: 10px; background: rgba(1, 10, 6, .55); }
+      .metric span { display: block; color: var(--muted); font-size: 10px; line-height: 1.25; }
+      .metric strong { display: block; margin-top: 4px; color: var(--text); font-size: 14px; overflow-wrap: anywhere; }
+      .notice { margin: 13px 0; padding: 11px 12px; border: 1px solid rgba(232, 189, 38, .25); border-left: 3px solid var(--gold); border-radius: 0 11px 11px 0; background: rgba(97, 68, 5, .18); color: #f0ddb0; font-size: 13px; line-height: 1.43; }
+      button { width: 100%; min-height: 43px; border: 1px solid rgba(205, 255, 75, .82); border-radius: 999px; padding: 10px 16px; background: linear-gradient(110deg, #9fd020, #caf04b); color: #081006; box-shadow: 0 9px 24px rgba(185, 239, 55, .15); font: inherit; font-size: 13px; font-weight: 820; cursor: pointer; transition: transform 150ms ease, box-shadow 150ms ease; }
+      button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 12px 30px rgba(185, 239, 55, .22); }
+      button:focus-visible { outline: 2px solid var(--lime-bright); outline-offset: 3px; }
+      button:disabled { border-color: rgba(224, 238, 221, .12); background: rgba(89, 103, 94, .18); color: #829087; box-shadow: none; cursor: not-allowed; }
+      .fine { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.38; }
       [hidden] { display: none !important; }
+      @media (max-width: 430px) { .economics { grid-template-columns: 1fr; } }
+      @media (prefers-reduced-motion: reduce) { button { transition: none; } }
     </style>
   </head>
   <body>
     <article class="card">
-      <p class="eyebrow">Prepared · not published</p>
-      <h2 id="title">Review bounty</h2>
+      <p class="eyebrow">Prepared by your AI · not published</p>
+      <h2 id="title">Review task</h2>
+      <span class="label">Measurable objective</span>
       <p id="goal" class="goal"></p>
+      <span class="label">Acceptance criteria</span>
       <ul id="criteria"></ul>
       <div class="economics">
-        <div class="metric"><span>Solver target</span><strong id="solver">—</strong></div>
-        <div class="metric"><span>Verifier target</span><strong id="verifier">—</strong></div>
+        <div class="metric"><span>Solver reward target</span><strong id="solver">—</strong></div>
+        <div class="metric"><span>Verifier reward target</span><strong id="verifier">—</strong></div>
+        <div class="metric"><span>Work window</span><strong id="window">—</strong></div>
         <div class="metric"><span>USDC deposited now</span><strong id="initial">—</strong></div>
       </div>
-      <p class="notice"><strong>You can post with 0 USDC.</strong> Reward amounts are a funding target; funding can happen later. The next page asks you to connect a wallet and approve contract creation on Base, which may require network gas. Never enter a seed phrase or private key.</p>
-      <button id="continue" type="button" disabled>Review and sign in wallet</button>
+      <p class="notice"><strong>A bounty is created only after the wallet step.</strong> You can post the task with 0 USDC, but it will not be claimable paid work until its reward target is fully funded. Review the objective, acceptance criteria, verifier, and amounts before signing. Never enter a seed phrase or private key.</p>
+      <button id="continue" type="button" disabled>Review on Agent Bounties</button>
       <p id="status" class="fine">Waiting for the prepared handoff.</p>
     </article>
     <script>
@@ -51,8 +86,8 @@
         function render(value) {
           if (!value || typeof value !== "object") return;
           current = value;
-          byId("title").textContent = value.title || "Review bounty";
-          byId("goal").textContent = value.goal || "";
+          byId("title").textContent = value.title || "Review task";
+          byId("goal").textContent = value.goal || "No measurable objective was supplied.";
           byId("criteria").replaceChildren(...(Array.isArray(value.acceptance_criteria)
             ? value.acceptance_criteria.map((criterion) => {
                 const item = document.createElement("li");
@@ -62,11 +97,12 @@
             : []));
           byId("solver").textContent = `${value.solver_reward_usdc || "—"} USDC`;
           byId("verifier").textContent = `${value.verifier_reward_usdc || "—"} USDC`;
+          byId("window").textContent = `${value.task_window_days || 30} days`;
           byId("initial").textContent = `${value.initial_funding_usdc ?? "—"} USDC`;
           byId("continue").disabled = !value.post_url;
           byId("status").textContent = value.crowdfund
-            ? "Unfunded posting selected: no USDC will be deposited now."
-            : `Full funding is currently selected (${value.target_usdc || "—"} USDC). On the next page, choose “Post with 0 USDC now” if you only want to try the platform.`;
+            ? "Unfunded posting selected: no USDC will be deposited now and no payment is promised yet."
+            : `Full funding is currently selected (${value.target_usdc || "—"} USDC). On the next page, choose “Post with 0 USDC now” to publish without committing a reward.`;
         }
 
         render(window.openai?.toolOutput);

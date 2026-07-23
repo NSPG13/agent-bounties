@@ -74,7 +74,21 @@ jobs:
 
       - uses: foundry-rs/foundry-toolchain@v1
 
-      - run: bash scripts/check.sh
+      - name: Run full repository gate
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p target/ci
+          bash scripts/check.sh 2>&1 | tee target/ci/full-check.log
+
+      - name: Upload full-check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-check-log-${{ github.run_id }}
+          path: target/ci/full-check.log
+          if-no-files-found: warn
+          retention-days: 7
 
   postgres-sync:
     runs-on: ubuntu-latest
