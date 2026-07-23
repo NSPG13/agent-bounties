@@ -24,6 +24,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Apply the original objective commit onto the repaired migration base
+        id: patch
+        continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -31,47 +33,31 @@ jobs:
           set -Eeuo pipefail
           exec > >(tee -a /tmp/pr-272-patch-diagnostic.log) 2>&1
 
-          report_failure() {
+          persist_failure() {
             status="$1"
             line="$2"
             command="$3"
             trap - ERR
             set +e
-            git_status="$(git status --short 2>&1 | tail -n 80)"
-            reject_files="$(find . -path './.git' -prune -o -name '*.rej' -print 2>/dev/null | sort | tail -n 80)"
-            log_tail="$(tail -n 80 /tmp/pr-272-patch-diagnostic.log 2>/dev/null)"
-            body=$(cat <<EOF
-          PR #272 patch-candidate diagnostic failed.
-
-          - Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
-          - Exit status: $status
-          - Line: $line
-          - Command: \`$command\`
-          - Source PR branches modified: no
-
-          Git status:
-          \`\`\`
-          $git_status
-          \`\`\`
-
-          Reject files:
-          \`\`\`
-          $reject_files
-          \`\`\`
-
-          Sanitized log tail:
-          \`\`\`
-          $log_tail
-          \`\`\`
-          EOF
-          )
-            gh api "repos/$GITHUB_REPOSITORY/issues/272/comments" \
-              --method POST \
-              --raw-field body="$body" \
-              >/dev/null || true
+            mkdir -p .merge-diagnostics
+            {
+              echo "status=$status"
+              echo "line=$line"
+              echo "command=$command"
+              echo "source_pr_branches_modified=no"
+              echo
+              echo "git_status:"
+              git status --short 2>&1 | tail -n 120
+              echo
+              echo "reject_files:"
+              find . -path './.git' -prune -o -name '*.rej' -print 2>/dev/null | sort | tail -n 120
+              echo
+              echo "log_tail:"
+              tail -n 120 /tmp/pr-272-patch-diagnostic.log 2>/dev/null
+            } > .merge-diagnostics/pr-272-patch-failure.txt
             exit "$status"
           }
-          trap 'report_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
+          trap 'persist_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -87,7 +73,7 @@ jobs:
           set -e
 
           if [ -f migrations/0004_objective_coordination.sql ]; then
-            git mv migrations/0004_objective_coordination.sql migrations/0013_objective_coordination.sql
+            mv migrations/0004_objective_coordination.sql migrations/0013_objective_coordination.sql
           fi
 
           mapfile -t rejects < <(
@@ -121,3 +107,28 @@ jobs:
             --method POST \
             --raw-field body="PR #272 patch-candidate diagnostic completed with ${reject_count} rejected file(s). Snapshot: diagnostic/pr-272-patch-candidate. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             >/dev/null
+
+      - name: Persist failed patch state on an isolated branch
+        if: steps.patch.outcome == 'failure'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p .merge-diagnostics
+          if [ ! -f .merge-diagnostics/pr-272-patch-failure.txt ]; then
+            printf '%s\n' 'Patch step failed before its detailed report was written.' > .merge-diagnostics/pr-272-patch-failure.txt
+          fi
+          git add -A
+          git commit --allow-empty -m "diagnostic: preserve failed PR 272 patch state"
+          git push --force origin HEAD:diagnostic/pr-272-patch-failure
+          gh api "repos/$GITHUB_REPOSITORY/issues/272/comments" \
+            --method POST \
+            --raw-field body="PR #272 patch-candidate diagnostic failed; the exact partial tree and report were preserved at diagnostic/pr-272-patch-failure. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The source PR branches were not modified." \
+            >/dev/null
+
+      - name: Mark the diagnostic run failed after preserving evidence
+        if: steps.patch.outcome == 'failure'
+        run: exit 1
