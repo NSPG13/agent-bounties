@@ -1,2 +1,2 @@
-20260722-10
-This build makes bounty posting the primary human action and adds direct, browser-free agent entry routes.
+20260722-13
+This build preserves mobile community navigation and makes the user's ChatGPT, Claude, Gemini, or other MCP-capable AI account the default bounty drafting interface.

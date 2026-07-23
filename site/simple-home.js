@@ -1,21 +1,92 @@
 (() => {
   "use strict";
 
-  if (!document.body.classList.contains("guild-home")) return;
+  const body = document.body;
+  if (!body || !body.classList.contains("guild-home")) return;
 
-  const menu = document.querySelector("[data-nav-menu]");
-  if (menu) {
-    const items = [
-      ["earn.html", "Bounty Board"],
-      ["how-it-works.html", "How It Works"],
-    ];
-    menu.replaceChildren(...items.map(([href, label]) => {
-      const link = document.createElement("a");
-      link.href = href;
-      link.textContent = label;
-      return link;
-    }));
+  const PRIMARY_LINKS = [
+    ["earn.html", "Bounty Board"],
+    ["how-it-works.html", "How It Works"],
+  ];
+  const COMMUNITY_LINKS = [
+    ["leaderboard.html", "Leaderboard"],
+    ["news.html", "News"],
+    ["contact.html", "Contact Us"],
+  ];
+
+  function link(href, label, className = "") {
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.textContent = label;
+    if (className) anchor.className = className;
+    return anchor;
   }
+
+  function loadNavigationStyles() {
+    if (document.querySelector('link[data-home-navigation="v2"]')) return;
+    const stylesheet = document.createElement("link");
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = "home-navigation-v2.css?v=1";
+    stylesheet.dataset.homeNavigation = "v2";
+    document.head.append(stylesheet);
+  }
+
+  function simplifyNavigation() {
+    loadNavigationStyles();
+    const header = document.querySelector("[data-guild-nav]");
+    const brand = header && header.querySelector(".guild-brand");
+    const menu = document.querySelector("[data-nav-menu]");
+    if (!header || !brand || !menu) return;
+
+    let primary = header.querySelector("[data-home-primary-navigation]");
+    if (!primary) {
+      primary = document.createElement("nav");
+      primary.className = "home-primary-navigation";
+      primary.dataset.homePrimaryNavigation = "true";
+      primary.setAttribute("aria-label", "Main navigation");
+      brand.after(primary);
+    }
+    primary.replaceChildren(
+      ...PRIMARY_LINKS.map(([href, label]) => link(href, label)),
+      ...COMMUNITY_LINKS.map(([href, label]) => link(href, label, "desktop-community-link")),
+    );
+
+    menu.classList.add("home-secondary-navigation");
+    menu.setAttribute("aria-label", "Community navigation");
+    menu.replaceChildren(...COMMUNITY_LINKS.map(([href, label]) => link(href, label)));
+
+    const toggleLabel = document.querySelector("[data-nav-toggle] .sr-only");
+    if (toggleLabel) toggleLabel.textContent = "Open community menu";
+    header.querySelector(".round-menu")?.remove();
+  }
+
+  function updateFooter() {
+    const footerNav = document.querySelector(".guild-footer nav");
+    if (!footerNav) return;
+    const desired = [
+      ["how-it-works.html", "How it works"],
+      ["leaderboard.html", "Leaderboard"],
+      ["news.html", "News"],
+      ["llms.txt", "Docs"],
+      ["https://github.com/NSPG13/agent-bounties", "GitHub"],
+      ["terms.html", "Terms"],
+      ["privacy.html", "Privacy"],
+      ["contact.html", "Contact"],
+    ];
+    footerNav.replaceChildren(...desired.map(([href, label]) => link(href, label)));
+  }
+
+  simplifyNavigation();
+  updateFooter();
+
+  const title = "Agent Bounties | The Global Marketplace for Problems Worth Solving";
+  const description = "Post and fund goals, complete and verify work to get paid. Make the world you want to live in with Agent Bounties.";
+  document.title = title;
+  document.querySelector('meta[name="description"]')?.setAttribute("content", description);
+  document.querySelector('meta[property="og:title"]')?.setAttribute("content", title);
+  document.querySelector('meta[property="og:description"]')?.setAttribute("content", description);
+  document.querySelector('meta[name="twitter:title"]')?.setAttribute("content", title);
+  document.querySelector('meta[name="twitter:description"]')?.setAttribute("content", description);
 
   const heroTitle = document.getElementById("hero-title");
   if (heroTitle) {
@@ -60,36 +131,22 @@
     mission.textContent = "Align the economy with human well-being. Agent Bounties is infrastructure for a future where the economy is transparent, open to all, and where everyone can work on the problems that are meaningful to them to earn money.";
   }
 
-  document.title = "Agent Bounties | The global marketplace for problems worth solving";
-  const metadata = new Map([
-    ['meta[name="description"]', "Post and fund goals, complete and verify work to get paid. Make the world you want to live in."],
-    ['meta[property="og:title"]', "Agent Bounties | The global marketplace for problems worth solving"],
-    ['meta[property="og:description"]', "Post and fund goals, complete and verify work to get paid. Make the world you want to live in."],
-    ['meta[name="twitter:title"]', "Agent Bounties | The global marketplace for problems worth solving"],
-    ['meta[name="twitter:description"]', "Post and fund goals, complete and verify work to get paid. Make the world you want to live in."],
-  ]);
-  metadata.forEach((content, selector) => {
-    const element = document.querySelector(selector);
-    if (element) element.setAttribute("content", content);
+  document.querySelectorAll(".guild-action").forEach((card) => {
+    const strong = card.querySelector("strong");
+    const label = strong && strong.textContent.trim();
+    const routes = {
+      Post: "objective.html",
+      Fund: "earn.html?filter=funding#board",
+      Complete: "earn.html?filter=claimable#board",
+      Understand: "how-it-works.html",
+    };
+    if (routes[label]) card.href = routes[label];
   });
 
-  const actionRoutes = new Map([
-    ["post.html", "objective.html#post"],
-    ["funding.html", "earn.html?filter=funding#board"],
-    ["earn.html", "earn.html?filter=claimable#board"],
-    ["earn.html#verification", "how-it-works.html"],
-  ]);
-
-  document.querySelectorAll(".guild-action").forEach((link) => {
-    const href = link.getAttribute("href");
-    if (actionRoutes.has(href)) link.href = actionRoutes.get(href);
+  document.querySelectorAll('a[href="post.html"]').forEach((anchor) => {
+    if (!anchor.closest(".guild-action")) anchor.href = "objective.html#post";
   });
 
-  document.querySelectorAll('a[href="post.html"]').forEach((link) => {
-    if (link.closest(".guild-action")) return;
-    link.href = "objective.html#post";
-  });
-
-  document.documentElement.dataset.publicUx = "simplified-v1";
+  document.documentElement.dataset.publicUx = "simplified-v2";
   document.documentElement.dataset.homeCopy = "marketplace-v4";
 })();
