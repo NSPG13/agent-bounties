@@ -24,6 +24,7 @@ jobs:
           python -m py_compile
           .github/scripts/apply_standing_meta_v4_security_review.py
           .github/scripts/apply_standing_meta_v4_security_review_followup.py
+          .github/scripts/apply_standing_meta_v4_security_review_protocol_followup.py
 
   patch-and-test:
     if: >-
@@ -53,12 +54,17 @@ jobs:
           git fetch origin main
           git show origin/main:.github/scripts/apply_standing_meta_v4_security_review.py > /tmp/apply_v4_security.py
           git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_followup.py > /tmp/apply_v4_security_followup.py
-          python -m py_compile /tmp/apply_v4_security.py /tmp/apply_v4_security_followup.py
+          git show origin/main:.github/scripts/apply_standing_meta_v4_security_review_protocol_followup.py > /tmp/apply_v4_security_protocol_followup.py
+          python -m py_compile \
+            /tmp/apply_v4_security.py \
+            /tmp/apply_v4_security_followup.py \
+            /tmp/apply_v4_security_protocol_followup.py
 
       - name: Apply bounded maintainer security fixes and adversarial regressions
         run: |
           python /tmp/apply_v4_security.py
           python /tmp/apply_v4_security_followup.py
+          python /tmp/apply_v4_security_protocol_followup.py
 
       - name: Format contracts
         run: forge fmt --root contracts/base-escrow
@@ -86,10 +92,13 @@ jobs:
           git add \
             contracts/base-escrow/script/FundStandingMetaV4Subscription.s.sol \
             contracts/base-escrow/src/AnonymousProtocolControllerV1.sol \
+            contracts/base-escrow/src/AnonymousStakePoolV1.sol \
             contracts/base-escrow/src/AppealableVerifierV1.sol \
+            contracts/base-escrow/src/StandingMetaChildFactoryV4.sol \
             contracts/base-escrow/src/StandingMetaChildV4.sol \
             contracts/base-escrow/src/StandingMetaParentFactoryV4.sol \
             contracts/base-escrow/src/StandingMetaParentV4.sol \
+            contracts/base-escrow/test/AnonymousStakeAndVrfSortition.t.sol \
             contracts/base-escrow/test/AppealableVerifierV1.t.sol \
             contracts/base-escrow/test/StandingMetaV4.t.sol \
             docs/security/standing-meta-v4-slither-triage.md \
