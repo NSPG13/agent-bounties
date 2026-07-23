@@ -67,6 +67,47 @@ def main() -> None:
     )
     replace_once(
         "contracts/base-escrow/src/StandingMetaParentFactoryV4.sol",
+        """    function cancelExpiredChild(address parentAddress, uint64 parentRound) external nonReentrant {
+        require(isCanonicalParent[parentAddress], "parent not canonical");
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        RoundData storage data = _rounds[parentAddress][parentRound];
+        require(data.child != address(0), "prepared child missing");
+        StandingMetaChildV4 child = StandingMetaChildV4(data.child);
+        require(msg.sender == child.creator(), "child creator only");
+        require(child.status() == CLAIMABLE_STATUS, "child not refundable");
+        uint64 currentRound = parent.round();
+        StandingMetaParentV4.Status parentStatus = parent.bountyStatus();
+        bool currentRoundClosed = currentRound == parentRound
+            && (parentStatus == StandingMetaParentV4.Status.Claimable
+                || parentStatus == StandingMetaParentV4.Status.Cancelled);
+        require(currentRound > parentRound || currentRoundClosed, "parent round still active");
+        standingMetaChildFactory.cancelAuthorized(data.child);
+        emit PreparedChildCancelled(parentAddress, parentRound, data.child, msg.sender);
+    }
+""",
+        """    function cancelExpiredChild(address parentAddress, uint64 parentRound) external nonReentrant {
+        require(isCanonicalParent[parentAddress], "parent not canonical");
+        StandingMetaParentV4 parent = StandingMetaParentV4(parentAddress);
+        RoundData storage data = _rounds[parentAddress][parentRound];
+        require(data.child != address(0), "prepared child missing");
+        StandingMetaChildV4 child = StandingMetaChildV4(data.child);
+        require(msg.sender == child.creator() && child.status() == CLAIMABLE_STATUS, "child not refundable");
+        uint64 currentRound = parent.round();
+        StandingMetaParentV4.Status parentStatus = parent.bountyStatus();
+        require(
+            currentRound > parentRound
+                || (currentRound == parentRound
+                    && (parentStatus == StandingMetaParentV4.Status.Claimable
+                        || parentStatus == StandingMetaParentV4.Status.Cancelled)),
+            "parent round still active"
+        );
+        standingMetaChildFactory.cancelAuthorized(data.child);
+        emit PreparedChildCancelled(parentAddress, parentRound, data.child, msg.sender);
+    }
+""",
+    )
+    replace_once(
+        "contracts/base-escrow/src/StandingMetaParentFactoryV4.sol",
         """    function roundChild(address parent, uint64 parentRound) external view returns (address) {
 """,
         """    function cancelExpiredChild(address parentAddress, uint64 parentRound) external nonReentrant {
@@ -89,6 +130,24 @@ def main() -> None:
 
     function roundChild(address parent, uint64 parentRound) external view returns (address) {
 """,
+    )
+
+    # The main patch adds parent ID uniqueness. Keep the set private to avoid
+    # spending scarce factory runtime bytes on an unnecessary public getter.
+    replace_once(
+        "contracts/base-escrow/src/StandingMetaParentFactoryV4.sol",
+        "    mapping(bytes32 => address) public parentByBountyId;\n",
+        "    mapping(bytes32 => bool) private _parentBountyIdUsed;\n",
+    )
+    replace_once(
+        "contracts/base-escrow/src/StandingMetaParentFactoryV4.sol",
+        '        require(parentByBountyId[bountyId] == address(0), "parent bounty id already used");\n',
+        '        require(!_parentBountyIdUsed[bountyId], "parent bounty id already used");\n',
+    )
+    replace_once(
+        "contracts/base-escrow/src/StandingMetaParentFactoryV4.sol",
+        "        parentByBountyId[bountyId] = parentAddress;\n",
+        "        _parentBountyIdUsed[bountyId] = true;\n",
     )
 
     # Test actor helpers for the cancellation boundary.
@@ -115,6 +174,18 @@ def main() -> None:
     function withdrawChildRefund(StandingMetaChildV4 child) external {
         child.withdrawRefund();
     }
+""",
+    )
+    replace_once(
+        "contracts/base-escrow/test/StandingMetaV4.t.sol",
+        """        (address firstParent, bytes32 bountyId) = parentFactory.createParent(config);
+        (bool duplicate,) = address(parentFactory).call(abi.encodeCall(parentFactory.createParent, (config)));
+        require(!duplicate, "duplicate canonical parent bounty id accepted");
+        require(parentFactory.parentByBountyId(bountyId) == firstParent, "canonical parent id mapping drift");
+""",
+        """        parentFactory.createParent(config);
+        (bool duplicate,) = address(parentFactory).call(abi.encodeCall(parentFactory.createParent, (config)));
+        require(!duplicate, "duplicate canonical parent bounty id accepted");
 """,
     )
     replace_once(
