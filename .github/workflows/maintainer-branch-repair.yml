@@ -73,7 +73,7 @@ jobs:
           set -e
 
           if [ -f migrations/0004_objective_coordination.sql ]; then
-            git mv migrations/0004_objective_coordination.sql migrations/0013_objective_coordination.sql
+            mv migrations/0004_objective_coordination.sql migrations/0013_objective_coordination.sql
           fi
 
           mapfile -t rejects < <(
