@@ -2,24 +2,21 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
-SCRIPT = Path(__file__).with_name("activate_routed_v3_replacements.py")
-SPEC = importlib.util.spec_from_file_location("activate_routed_v3_replacements", SCRIPT)
-assert SPEC and SPEC.loader
-MODULE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(MODULE)
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
-READY_SCRIPT = Path(__file__).with_name("check_routed_v3_activation_readiness.py")
-READY_SPEC = importlib.util.spec_from_file_location("check_routed_v3_activation_readiness", READY_SCRIPT)
-assert READY_SPEC and READY_SPEC.loader
-READINESS = importlib.util.module_from_spec(READY_SPEC)
-READY_SPEC.loader.exec_module(READINESS)
+import activate_routed_v3_dynamic as DYNAMIC
+import activate_routed_v3_replacements as MODULE
+import check_routed_v3_activation_readiness as READINESS
 
 
 class ActivateRoutedV3Tests(unittest.TestCase):
@@ -40,7 +37,7 @@ class ActivateRoutedV3Tests(unittest.TestCase):
             },
         }
 
-    def test_load_deployment_requires_exact_evidence_shape(self) -> None:
+    def test_legacy_manifest_parser_still_requires_exact_evidence_shape(self) -> None:
         original = MODULE.DEPLOYMENT_PATH
         try:
             with tempfile.TemporaryDirectory() as directory:
@@ -54,6 +51,34 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         finally:
             MODULE.DEPLOYMENT_PATH = original
 
+    def test_bootstrap_event_parser_derives_policy_adapter_and_code_hash(self) -> None:
+        policy = "0x" + "21" * 32
+        adapter = "0x" + "22" * 20
+        runtime = "0x" + "23" * 32
+        transaction = "0x" + "24" * 32
+        raw = json.dumps([
+            {
+                "topics": [
+                    "0x" + "20" * 32,
+                    policy,
+                    "0x" + "00" * 12 + adapter[2:],
+                ],
+                "data": runtime,
+                "transactionHash": transaction,
+                "blockNumber": "0x1234",
+            }
+        ])
+        value = DYNAMIC.parse_bootstrap_logs(raw)
+        self.assertEqual(value["policy_hash"], policy)
+        self.assertEqual(value["adapter"], adapter)
+        self.assertEqual(value["adapter_runtime_code_hash"], runtime)
+        self.assertEqual(value["bootstrap_transaction"], transaction)
+        self.assertEqual(value["bootstrap_block"], 0x1234)
+
+    def test_bootstrap_event_parser_rejects_ambiguous_history(self) -> None:
+        with self.assertRaisesRegex(MODULE.ActivationError, "exactly one"):
+            DYNAMIC.parse_bootstrap_logs("[]")
+
     def test_issue_body_advertises_routed_profit_and_payment_boundary(self) -> None:
         deployment = self.deployment_fixture()
         deployment.update({
@@ -66,8 +91,8 @@ class ActivateRoutedV3Tests(unittest.TestCase):
             "CLI",
             MODULE.ISSUES[333]["old"],
             {
-                "contract": "0x" + "21" * 20,
-                "transaction_hash": "0x" + "22" * 32,
+                "contract": "0x" + "31" * 20,
+                "transaction_hash": "0x" + "32" * 32,
             },
             deployment,
         )
@@ -87,21 +112,19 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         self.assertEqual(value.count("***"), 2)
 
     def test_readiness_probe_fails_closed_without_raising(self) -> None:
-        original = MODULE.DEPLOYMENT_PATH
-        try:
-            MODULE.DEPLOYMENT_PATH = Path("/definitely/missing/deployment.json")
+        with mock.patch.object(DYNAMIC, "discover_deployment", side_effect=RuntimeError("attestation failed")):
             report = READINESS.inspect("https://mainnet.base.org", "cast")
-        finally:
-            MODULE.DEPLOYMENT_PATH = original
         self.assertFalse(report["ready"])
         self.assertFalse(report["financial_action_taken"])
-        self.assertIn("manifest is missing", report["reason"])
+        self.assertIn("attestation failed", report["reason"])
 
     def test_economics_and_scope_are_exact(self) -> None:
         self.assertEqual(MODULE.TARGET, 2_010_000)
         self.assertEqual(MODULE.TOTAL, 8_040_000)
         self.assertEqual(sorted(MODULE.ISSUES), [333, 334, 335, 336])
         self.assertEqual(MODULE.UINT64_MAX, (1 << 64) - 1)
+        self.assertEqual(DYNAMIC.ROUTER, "0x380c1af742593dd88b6f20387e9ee693a0536731")
+        self.assertEqual(DYNAMIC.ACTIVATION_DELAY, 604_800)
 
 
 if __name__ == "__main__":
