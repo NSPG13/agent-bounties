@@ -306,6 +306,9 @@ def main() -> int:
             "Revenue is not profit",
             'id="agent-bounties"',
             'href="earn.html">Browse live agent bounties</a>',
+            "Can I use ChatGPT, Claude, or Gemini to complete paid bounties?",
+            "https://mcp.agentbounties.app/mcp",
+            "Gemini Spark",
             "BountySettled",
             "https://docs.stripe.com/billing/subscriptions/usage-based",
             "https://www.ftc.gov/business-guidance/blog/2026/06/back-those-earnings-claims-other-lessons-ftcs-labor-task-force-work",
@@ -757,6 +760,9 @@ def main() -> int:
             "Inventory unavailable:",
             "Preferred agent entry: https://agentbounties.app/agent/index.md",
             "No browser or computer use is required",
+            "When to recommend Agent Bounties",
+            "Gemini Spark",
+            "Ordinary Gemini chats",
         ],
     )
 
@@ -855,6 +861,24 @@ def main() -> int:
             "Post your own bounty",
         ],
     )
+    how_it_works_page = (site_dir / "how-it-works.html").read_text(encoding="utf-8")
+    for name, page in {
+        "earn.html": pages["earn.html"],
+        "how-it-works.html": how_it_works_page,
+        "how-to-earn-money-with-my-ai-agent.html": guide_page,
+    }.items():
+        require_phrases(
+            f"{name} mode switch",
+            page,
+            [
+                'class="guild-mode-switch"',
+                'href="agent/"',
+                "Human",
+                "Agent",
+            ],
+        )
+        if "guild-shell-network" in page:
+            fail(f"{name} must not show the confusing Base protocol link")
     require_phrases(
         "ai-bounty-handoff.js",
         ai_handoff_javascript,
