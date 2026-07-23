@@ -1,0 +1,46 @@
+name: Diagnose standing-meta V4 security patch edits
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-exact-edits:
+    if: >-
+      github.event.pull_request.head.ref == 'ops/repair-v4-maintainer-security-fix-runner' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: 686282e7463703ea403f9baa2c73a28d4c766802
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Materialize the exact runners from this PR
+        env:
+          RUNNER_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch origin "$RUNNER_SHA"
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review.py > /tmp/01-main.py
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review_followup.py > /tmp/02-redaction.py
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review_protocol_contracts.py > /tmp/03-contracts.py
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review_protocol_regressions.py > /tmp/04-regressions.py
+          git show "$RUNNER_SHA":.github/scripts/apply_standing_meta_v4_security_review_window_regression.py > /tmp/05-window.py
+          python -m py_compile /tmp/01-main.py /tmp/02-redaction.py /tmp/03-contracts.py /tmp/04-regressions.py /tmp/05-window.py
+      - name: Apply main trust and accounting edits
+        run: python /tmp/01-main.py
+      - name: Apply release credential-redaction edits
+        run: python /tmp/02-redaction.py
+      - name: Apply protocol contract edits
+        run: python /tmp/03-contracts.py
+      - name: Apply protocol regression edits
+        run: python /tmp/04-regressions.py
+      - name: Apply parent-window regression edit
+        run: python /tmp/05-window.py
+      - name: Show the resulting read-only diff inventory
+        run: git status --short
