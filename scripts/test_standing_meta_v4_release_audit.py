@@ -57,7 +57,7 @@ def manifest() -> dict:
         "protocol_version": "standing-meta-v4",
         "status": "not_deployed",
         "configuration": dict(MODULE.LATENCY_POLICY),
-        "required_components": ["a", "b"],
+        "required_components": list(MODULE.EXPECTED_CANONICAL_COMPONENTS),
         "r4_evidence": {name: False for name in MODULE.REQUIRED_R4_GATES},
         "networks": {"base-sepolia": dict(network), "base-mainnet": dict(network)},
     }
@@ -99,20 +99,19 @@ class StandingMetaV4ReleaseAuditTests(unittest.TestCase):
 
     def test_manifest_audit_requires_exact_named_component_addresses(self) -> None:
         value = manifest()
-        value["required_components"] = ["controller", "sortition"]
         value["networks"]["base-mainnet"]["components"] = {
-            "wrong_a": "0x" + "11" * 20,
-            "wrong_b": "0x" + "22" * 20,
+            name: "0x" + f"{index + 1:040x}"
+            for index, name in enumerate(MODULE.EXPECTED_CANONICAL_COMPONENTS)
         }
+        value["networks"]["base-mainnet"]["components"].pop("standing_meta_v4_bundle")
+        value["networks"]["base-mainnet"]["components"]["lookalike_bundle"] = "0x" + "22" * 20
         result = MODULE.audit_manifest(value, None)
         checks = result["network_readiness"]["base-mainnet"]["checks"]
         self.assertFalse(checks["exact_component_set"])
         self.assertFalse(checks["all_component_addresses_valid"])
 
-        value["networks"]["base-mainnet"]["components"] = {
-            "controller": "0x" + "11" * 20,
-            "sortition": "not-an-address",
-        }
+        value["networks"]["base-mainnet"]["components"].pop("lookalike_bundle")
+        value["networks"]["base-mainnet"]["components"]["standing_meta_v4_bundle"] = "not-an-address"
         result = MODULE.audit_manifest(value, None)
         checks = result["network_readiness"]["base-mainnet"]["checks"]
         self.assertTrue(checks["exact_component_set"])

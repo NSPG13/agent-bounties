@@ -85,7 +85,10 @@ and the evidence receives review.
 5. Read the deployment artifact and independently run `verify` through a second
    RPC endpoint. Confirm code hashes, constructor arguments, immutable getters,
    controller one-time configuration, subscription owner, and the exact two
-   consumers.
+   consumers. The evidence must also derive and hash the parent factory's
+   internally created `OnchainTermsRegistryV4` and
+   `CanonicalIndependentChildVerifierV4`; recording only the externally
+   deployed factory graph is incomplete.
 6. Dispatch `fund-subscription` with `source_usdc_base_units=0` and the exact
    faucet ETH allocation. Confirm the native subscription balance delta through
    RPC.

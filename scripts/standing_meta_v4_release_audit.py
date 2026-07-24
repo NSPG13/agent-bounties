@@ -32,6 +32,18 @@ REQUIRED_R4_GATES = (
     "bounded_wallet_policy_review_complete",
     "repository_environment_protection_complete",
 )
+EXPECTED_CANONICAL_COMPONENTS = (
+    "anonymous_protocol_controller",
+    "anonymous_stake_pool",
+    "verifier_sortition",
+    "solver_sortition",
+    "appealable_verifier",
+    "standing_meta_child_factory",
+    "standing_meta_parent_factory",
+    "onchain_terms_registry",
+    "canonical_independent_child_verifier",
+    "standing_meta_v4_bundle",
+)
 LATENCY_POLICY: dict[str, Any] = {
     "minimum_request_confirmations": 3,
     "random_words": 1,
@@ -219,11 +231,10 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
     required_components = manifest.get("required_components")
     if (
         not isinstance(required_components, list)
-        or not required_components
-        or any(not isinstance(name, str) or not name for name in required_components)
-        or len(set(required_components)) != len(required_components)
+        or len(required_components) != len(EXPECTED_CANONICAL_COMPONENTS)
+        or set(required_components) != set(EXPECTED_CANONICAL_COMPONENTS)
     ):
-        raise AuditError("manifest required_components must be a non-empty unique string list")
+        raise AuditError("manifest required_components does not match the immutable V4 component schema")
     required_component_names = set(required_components)
     network_checks: dict[str, Any] = {}
     for name in ("base-sepolia", "base-mainnet"):

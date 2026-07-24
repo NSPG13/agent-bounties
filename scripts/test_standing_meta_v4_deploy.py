@@ -52,12 +52,22 @@ class FakeOwnerWithdrawalFoundry:
         return "0x" + "ab" * 32
 
 
+class FakeCanonicalComponentFoundry:
+    def call(self, address: str, signature: str, *args: str) -> str:
+        if signature == "termsRegistry()(address)":
+            return "0x" + "09" * 20
+        if signature == "verifierModule()(address)":
+            return "0x" + "0a" * 20
+        raise AssertionError((address, signature, args))
+
+
 class StandingMetaV4DeployTests(unittest.TestCase):
     def readiness(self, r4_evidence: dict[str, bool]) -> dict:
         return {
             "schema": "agent-bounties/standing-meta-v4-deployment-readiness-v1",
             "protocol_version": "standing-meta-v4",
             "configuration": dict(MODULE.EXPECTED_CONFIGURATION),
+            "required_components": list(MODULE.EXPECTED_CANONICAL_COMPONENTS),
             "networks": {
                 "base-mainnet": {
                     "sponsorship_intent": {
@@ -139,6 +149,15 @@ class StandingMetaV4DeployTests(unittest.TestCase):
         self.assertEqual(MODULE.EXPECTED_CONFIGURATION["minimum_request_confirmations"], 3)
         self.assertEqual(MODULE.EXPECTED_CONFIGURATION["fulfillment_deadline_seconds"], 7_200)
 
+    def test_readiness_rejects_required_component_schema_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "readiness.json"
+            value = self.readiness({})
+            value["required_components"][-1] = "lookalike_bundle"
+            MODULE.write_object(path, value)
+            with self.assertRaisesRegex(MODULE.DeploymentError, "component schema drift"):
+                MODULE.validate_readiness_manifest(path)
+
     def test_subscription_event_parser_requires_one_matching_log(self) -> None:
         foundry = FakeSubscriptionFoundry()
         coordinator = MODULE.BASE_MAINNET_VRF
@@ -219,6 +238,26 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             report["components"]["verifier_sortition"]["address"],
             report["components"]["solver_sortition"]["address"],
         )
+
+    def test_canonical_component_evidence_includes_factory_created_contracts(self) -> None:
+        report_names = (
+            "controller",
+            "stake_pool",
+            "verifier_sortition",
+            "solver_sortition",
+            "appealable_verifier",
+            "standing_meta_child_factory",
+            "standing_meta_parent_factory",
+            "standing_meta_v4_bundle",
+        )
+        components = {
+            name: {"address": "0x" + f"{index + 1:040x}"}
+            for index, name in enumerate(report_names)
+        }
+        addresses = MODULE.canonical_component_addresses(FakeCanonicalComponentFoundry(), components)
+        self.assertEqual(set(addresses), set(MODULE.EXPECTED_CANONICAL_COMPONENTS))
+        self.assertEqual(addresses["onchain_terms_registry"], "0x" + "09" * 20)
+        self.assertEqual(addresses["canonical_independent_child_verifier"], "0x" + "0a" * 20)
 
 
 if __name__ == "__main__":

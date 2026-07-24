@@ -46,6 +46,18 @@ COMPONENT_SPECS: tuple[tuple[str, str], ...] = (
     ("standing_meta_parent_factory", "src/StandingMetaParentFactoryV4.sol:StandingMetaParentFactoryV4"),
     ("standing_meta_v4_bundle", "src/StandingMetaV4Bundle.sol:StandingMetaV4Bundle"),
 )
+EXPECTED_CANONICAL_COMPONENTS = (
+    "anonymous_protocol_controller",
+    "anonymous_stake_pool",
+    "verifier_sortition",
+    "solver_sortition",
+    "appealable_verifier",
+    "standing_meta_child_factory",
+    "standing_meta_parent_factory",
+    "onchain_terms_registry",
+    "canonical_independent_child_verifier",
+    "standing_meta_v4_bundle",
+)
 REQUIRED_R4_GATES = (
     "independent_review_complete",
     "base_sepolia_rehearsal_complete",
@@ -153,6 +165,13 @@ def validate_readiness_manifest(path: Path) -> dict[str, Any]:
     ]
     if mismatches:
         raise DeploymentError(f"standing-meta-v4 latency configuration drift: {', '.join(mismatches)}")
+    required_components = readiness.get("required_components")
+    if (
+        not isinstance(required_components, list)
+        or len(required_components) != len(EXPECTED_CANONICAL_COMPONENTS)
+        or set(required_components) != set(EXPECTED_CANONICAL_COMPONENTS)
+    ):
+        raise DeploymentError("standing-meta-v4 required component schema drift")
     mainnet = readiness.get("networks", {}).get("base-mainnet", {})
     source_cap = mainnet.get("sponsorship_intent", {}).get("maximum_source_amount_base_units")
     if source_cap != MAINNET_SOURCE_USDC_CAP:
@@ -367,6 +386,7 @@ def artifact_evidence(foundry: Foundry) -> dict[str, Any]:
             "canonical_independent_child_verifier": (
                 "src/CanonicalIndependentChildVerifierV4.sol:CanonicalIndependentChildVerifierV4"
             ),
+            "onchain_terms_registry": "src/OnchainTermsRegistryV4.sol:OnchainTermsRegistryV4",
         }
     )
     for name, source in specs.items():
@@ -612,6 +632,59 @@ def assert_uint_call(foundry: Foundry, address: str, signature: str, expected: i
         raise DeploymentError(f"{address} {signature} mismatch: expected {expected}, got {observed}")
 
 
+def canonical_component_addresses(foundry: Foundry, components: Mapping[str, Any]) -> dict[str, str]:
+    required_report_components = {
+        "controller",
+        "stake_pool",
+        "verifier_sortition",
+        "solver_sortition",
+        "appealable_verifier",
+        "standing_meta_child_factory",
+        "standing_meta_parent_factory",
+        "standing_meta_v4_bundle",
+    }
+    missing = sorted(required_report_components - components.keys())
+    if missing:
+        raise DeploymentError(f"canonical component derivation missing: {', '.join(missing)}")
+    addresses = {
+        "anonymous_protocol_controller": normalize_address(
+            components["controller"]["address"], "anonymous_protocol_controller"
+        ),
+        "anonymous_stake_pool": normalize_address(
+            components["stake_pool"]["address"], "anonymous_stake_pool"
+        ),
+        "verifier_sortition": normalize_address(
+            components["verifier_sortition"]["address"], "verifier_sortition"
+        ),
+        "solver_sortition": normalize_address(
+            components["solver_sortition"]["address"], "solver_sortition"
+        ),
+        "appealable_verifier": normalize_address(
+            components["appealable_verifier"]["address"], "appealable_verifier"
+        ),
+        "standing_meta_child_factory": normalize_address(
+            components["standing_meta_child_factory"]["address"], "standing_meta_child_factory"
+        ),
+        "standing_meta_parent_factory": normalize_address(
+            components["standing_meta_parent_factory"]["address"], "standing_meta_parent_factory"
+        ),
+        "standing_meta_v4_bundle": normalize_address(
+            components["standing_meta_v4_bundle"]["address"], "standing_meta_v4_bundle"
+        ),
+    }
+    parent_factory = addresses["standing_meta_parent_factory"]
+    addresses["onchain_terms_registry"] = normalize_address(
+        foundry.call(parent_factory, "termsRegistry()(address)"), "onchain_terms_registry"
+    )
+    addresses["canonical_independent_child_verifier"] = normalize_address(
+        foundry.call(parent_factory, "verifierModule()(address)"),
+        "canonical_independent_child_verifier",
+    )
+    if set(addresses) != set(EXPECTED_CANONICAL_COMPONENTS):
+        raise DeploymentError("derived canonical component schema drift")
+    return addresses
+
+
 def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, Any]:
     components = report.get("components")
     if not isinstance(components, dict):
@@ -634,6 +707,28 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
     base_factory = components["base_child_factory"]["address"]
     token = report["settlement_token"]
     sub_id = int(report["subscription_id"])
+    expected_network = network_config(foundry.chain_id())
+    if normalize_address(token, "settlement token") != expected_network["settlement_token"]:
+        raise DeploymentError("settlement token drift from pinned network configuration")
+    if normalize_address(report["vrf_coordinator"], "VRF coordinator") != expected_network["vrf_coordinator"]:
+        raise DeploymentError("VRF coordinator drift from pinned network configuration")
+    if require_bytes32(report["key_hash"], "VRF key hash") != expected_network["key_hash"]:
+        raise DeploymentError("VRF key hash drift from pinned network configuration")
+    if expected_network["base_child_factory"] and normalize_address(
+        base_factory, "base child factory"
+    ) != expected_network["base_child_factory"]:
+        raise DeploymentError("base child factory drift from pinned network configuration")
+    wait_for_code(foundry, normalize_address(token, "settlement token"), "settlement token")
+    wait_for_code(
+        foundry,
+        normalize_address(report["vrf_coordinator"], "VRF coordinator"),
+        "VRF coordinator",
+    )
+    canonical_components = canonical_component_addresses(foundry, components)
+    terms_registry = canonical_components["onchain_terms_registry"]
+    verifier_module = canonical_components["canonical_independent_child_verifier"]
+    for name, address in canonical_components.items():
+        wait_for_code(foundry, address, name)
 
     assert_call(foundry, base_factory, "settlementToken()(address)", token)
     assert_call(foundry, controller, "configured()(bool)", "true")
@@ -671,13 +766,30 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
     assert_call(foundry, parent_factory, "standingMetaChildFactory()(address)", child_factory)
     assert_call(foundry, parent_factory, "controller()(address)", controller)
     assert_call(foundry, parent_factory, "appealableVerifier()(address)", appeal)
+    assert_call(foundry, parent_factory, "termsRegistry()(address)", terms_registry)
+    assert_call(foundry, parent_factory, "verifierModule()(address)", verifier_module)
     assert_uint_call(foundry, parent_factory, "ASSIGNMENT_WINDOW()(uint64)", 120)
     assert_uint_call(foundry, parent_factory, "CHILD_VERIFICATION_WINDOW()(uint64)", 86_400)
-    verifier_module = normalize_address(
-        foundry.call(parent_factory, "verifierModule()(address)"), "canonical independent child verifier"
-    )
+    assert_call(foundry, terms_registry, "publisherAuthority()(address)", parent_factory)
+    assert_call(foundry, verifier_module, "parentFactory()(address)", parent_factory)
+    assert_call(foundry, verifier_module, "canonicalChildFactory()(address)", child_factory)
+    assert_call(foundry, verifier_module, "settlementToken()(address)", token)
+    assert_call(foundry, verifier_module, "termsRegistry()(address)", terms_registry)
+    assert_call(foundry, verifier_module, "appealableVerifier()(address)", appeal)
+    assert_uint_call(foundry, verifier_module, "MINIMUM_CHILD_TARGET()(uint256)", 1_000_000)
+    assert_uint_call(foundry, verifier_module, "MINIMUM_PARENT_MARGIN()(uint256)", 1_000_000)
+    assert_uint_call(foundry, verifier_module, "CHILD_SOLVER_REWARD()(uint256)", 990_000)
+    assert_uint_call(foundry, verifier_module, "CHILD_VERIFIER_REWARD()(uint256)", 10_000)
+    assert_uint_call(foundry, verifier_module, "CHILD_WORK_WINDOW()(uint64)", 604_800)
     assert_uint_call(foundry, verifier_module, "CHILD_VERIFICATION_WINDOW()(uint64)", 86_400)
+    assert_call(foundry, bundle, "childFactory()(address)", base_factory)
     assert_call(foundry, bundle, "controller()(address)", controller)
+    assert_call(foundry, bundle, "stakePool()(address)", pool)
+    assert_call(foundry, bundle, "verifierSortition()(address)", verifier_sortition)
+    assert_call(foundry, bundle, "solverSortition()(address)", solver_sortition)
+    assert_call(foundry, bundle, "appealableVerifier()(address)", appeal)
+    assert_call(foundry, bundle, "standingMetaChildFactory()(address)", child_factory)
+    assert_call(foundry, bundle, "parentFactory()(address)", parent_factory)
 
     subscription = parse_subscription(foundry, report["vrf_coordinator"], sub_id)
     if subscription["owner"] != report["deployer"]:
@@ -688,9 +800,20 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
     return {
         "rpc_confirmed": True,
         "subscription": subscription,
+        "canonical_component_addresses": canonical_components,
         "runtime_code_hashes": {
-            name: foundry.keccak_text(foundry.code(normalize_address(item["address"], name)))
-            for name, item in components.items()
+            name: foundry.keccak_text(foundry.code(address))
+            for name, address in canonical_components.items()
+        },
+        "dependency_addresses": {
+            "base_child_factory": normalize_address(base_factory, "base child factory"),
+            "settlement_token": normalize_address(token, "settlement token"),
+            "vrf_coordinator": normalize_address(report["vrf_coordinator"], "VRF coordinator"),
+        },
+        "dependency_runtime_code_hashes": {
+            "base_child_factory": foundry.keccak_text(foundry.code(base_factory)),
+            "settlement_token": foundry.keccak_text(foundry.code(token)),
+            "vrf_coordinator": foundry.keccak_text(foundry.code(report["vrf_coordinator"])),
         },
         "consumers_authorized": True,
         "native_subscription_reserve_funded": subscription["native_balance"] > 0,
