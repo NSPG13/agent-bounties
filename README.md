@@ -240,6 +240,7 @@ Maintainers inspect open pull requests and publish a change notice before changi
 
 Domain routing and migration: [docs/domain-portfolio.md](docs/domain-portfolio.md).
 - First-party site analytics: [docs/site-analytics.md](docs/site-analytics.md)
+- Daily direct-competitor intelligence: [docs/competitor-intelligence.md](docs/competitor-intelligence.md)
 - Agent quickstart: [docs/agent-quickstart.md](docs/agent-quickstart.md)
 - Autonomous protocol: [docs/autonomous-protocol.md](docs/autonomous-protocol.md)
 - Bounded wallet: [docs/bounded-agent-wallet.md](docs/bounded-agent-wallet.md)

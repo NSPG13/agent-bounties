@@ -89,6 +89,7 @@ def compile_python(platform: str) -> None:
         "scripts/validate_real_funding_rehearsal.py", "scripts/rehearse_autonomous_activation.py",
         "scripts/build_canonical_child_verifier_bundle.py",
         "scripts/rehearse_canonical_child_verifier.py", "scripts/build_base_sepolia_sponsor_bundle.py",
+        "scripts/competitor_intelligence.py", "scripts/test_competitor_intelligence.py",
     ]
     if platform == "powershell":
         first = """
@@ -109,6 +110,7 @@ scripts/github_issue_plan_comment.py scripts/github_funding_comment.py scripts/g
 scripts/github_proof_comment.py scripts/sync_hosted_bounty_inventory.py
 scripts/test_sync_hosted_bounty_inventory.py scripts/reconcile_github_bounty_labels.py
 scripts/test_reconcile_github_bounty_labels.py scripts/validate_real_funding_rehearsal.py
+scripts/competitor_intelligence.py scripts/test_competitor_intelligence.py
 """.split()
         second = scripts[scripts.index("scripts/check-site.py") :]
         py("-m", "py_compile", *sdk)
@@ -191,7 +193,7 @@ def main() -> int:
     run_many(commands)
     for name in ("github_issue_plan_comment", "github_create_comment", "github_funding_comment", "github_claim_comment", "github_proof_comment"):
         py(f"scripts/{name}.py", "--self-test")
-    for name in ("sync_hosted_bounty_inventory", "reconcile_github_bounty_labels", "diagnose_hosted_api", "github_audience_audit", "ruleset_drift_check", "code_size_report", "mcp_tool_registry", "shared_rpc", "relay_autonomous_action", "relay_bounded_wallet_action", "bounded_agent_budget"):
+    for name in ("sync_hosted_bounty_inventory", "reconcile_github_bounty_labels", "diagnose_hosted_api", "github_audience_audit", "ruleset_drift_check", "code_size_report", "mcp_tool_registry", "shared_rpc", "relay_autonomous_action", "relay_bounded_wallet_action", "bounded_agent_budget", "competitor_intelligence"):
         py(f"scripts/test_{name}.py", "-v")
     for name in ("standing_meta_v3_deploy", "activate_standing_meta_v3_replacements"):
         py(f"scripts/test_{name}.py", "-v")
