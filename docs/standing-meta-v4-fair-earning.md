@@ -28,7 +28,19 @@ There is no per-bounty 30-minute enrollment period. Solver wallets register and 
 5. binds the request to the next parent round; and
 6. posts the parent bond and activates the parent claim.
 
-After VRF fulfillment, ranking derivation and assignment activation are permissionless and may happen immediately. The selected solver may claim immediately. A nonresponsive solver may be replaced by the next wallet in the same ranking after ten minutes, without a reroll. Primary verdicts and appeal votes may be submitted immediately. The eligible appellant may waive an undisputed appeal window, and three matching appellate votes form an immediately finalizable majority.
+After VRF fulfillment, ranking derivation and assignment activation are permissionless and may happen immediately. The selected solver may claim immediately. A nonresponsive solver may be replaced by the next wallet in the same ranking after two minutes, without a reroll. Primary verdicts and appeal votes may be submitted immediately. Each primary or ranked backup has 30 minutes to respond. The eligible appellant has four hours to appeal or may waive immediately; appellate voting lasts at most two hours, and three matching votes form an immediately finalizable majority.
+
+Three VRF confirmations remain the minimum security floor. The two-hour fulfillment deadline is only a fail-closed outage bound: a successful fulfillment can be ranked immediately and never waits for that deadline. The child and parent verification envelopes are 24 hours, which exceeds the 12-hour-10-minute worst-case case-opening budget of two VRF outage bounds, four primary response windows, appeal filing, voting, and the final transaction buffer. Global stake activation and unbonding remain seven days because they deter flash-created tickets and do not add latency for already-active wallets.
+
+Every release plan and post-deployment RPC pass reads the pinned coordinator's
+live request configuration and proving-key registration. V4 refuses deployment
+when three confirmations or the 150,000-gas callback are no longer supported,
+the coordinator is actively reentrancy-locked, or the documented key hash is
+not registered.
+
+These latency values are review-frozen before immutable deployment. Changing
+one reopens independent review; it is not a runtime tuning knob. “Frozen” is a
+source-policy status, not evidence of deployment or approval.
 
 The child exposes no generic public claim path. Only the immutable child factory can activate the wallet currently authorized by the frozen ranking. This prevents an unselected wallet from reserving the seven-day child work window before the selected solver.
 
@@ -75,8 +87,18 @@ python scripts/standing_meta_v4_deploy.py deploy --network base-sepolia --output
 python scripts/standing_meta_v4_deploy.py verify --network base-sepolia --deployment target/v4-sepolia-deployment.json --output target/v4-sepolia-rpc.json
 ```
 
+After exercising every live lifecycle path, seal and validate the complete
+evidence through two distinct Base Sepolia RPC providers with
+`scripts/standing_meta_v4_rehearsal_audit.py`; the exact command and evidence
+schema are documented in
+[`standing-meta-v4-release-runbook.md`](standing-meta-v4-release-runbook.md).
+Source, a transaction hash, or a single-provider JSON response is not rehearsal
+or payment proof.
+
 The deploy command is staged and resumable. It creates one VRF subscription, deploys the exact V4 component graph, one-time configures it, authorizes exactly the verifier and solver sortition coordinators, and then re-reads all wiring and the subscription through RPC. It does not fund the subscription or mark V4 ready.
 
 `FundStandingMetaV4Subscription.s.sol` funds an existing subscription only after both consumers are present. It records and checks the exact native-balance delta. On mainnet, `V4_SOURCE_USDC_BASE_UNITS` must be positive and no more than 7,000,000. The funding script does not withdraw or swap USDC; those remain explicit owner-authorized actions with their own receipts.
 
 Mainnet deployment and funding fail closed unless every R4 flag in `deployments/standing-meta-v4-config.json` is true and the release acknowledgement is supplied. The workflow additionally requires the default branch. Repository administrators must configure the `standing-meta-v4-mainnet` environment with deployment-branch restrictions and independent required reviewers before setting `repository_environment_protection_complete=true`; merely naming an absent environment in workflow YAML is not protection. RPC-confirmed deployment or funding still does not make V4 ready until the active pool, gas sponsorship, rehearsal, monitoring, and review gates pass.
+
+The exact testnet, mainnet, canary, monitoring, containment, and forward-repair sequence is in the [Standing Meta V4 release runbook](standing-meta-v4-release-runbook.md).

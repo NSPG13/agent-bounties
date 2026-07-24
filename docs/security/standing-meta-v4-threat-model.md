@@ -26,7 +26,7 @@ The only payment proof is a confirmed canonical `BountySettled` event emitted by
 | Project chooses favorable verifiers | Candidate set is frozen before one Chainlink VRF request; request ID and commitment are bound; no reroll or fallback randomness | VRF availability and subscription funding are dependencies |
 | Candidate joins after seeing a target | Child solver candidates are the already-active, available pool snapshotted inside `claimAndCreateChild` | Availability may change after the snapshot; ranking activation and claims still fail closed |
 | Enrollment delay blocks fast work | There is no per-bounty enrollment window; the VRF request is made atomically with the parent claim | New wallets still wait seven days before becoming active, which is a Sybil-cost control |
-| Selected solver does not respond | One ranking is reused and a permissionless promotion becomes available after ten minutes | A ten-minute liveness delay remains for each nonresponsive rank |
+| Selected solver does not respond | One ranking is reused and a permissionless promotion becomes available after two minutes | A two-minute liveness delay remains for each nonresponsive rank; an intermittently connected selected wallet can miss the assignment |
 | Unselected wallet directly reserves the child | The specialized V4 child has no generic claim path; only the immutable child factory can activate the currently ranked wallet | A selected wallet can still fail to respond and trigger the bounded promotion delay |
 | Primary verifier does not respond | Primary plus three ranked backups; unavailable primaries lose 0.01 USDC | Exhausting all backups times out rather than accepting a platform verdict |
 | Primary judgment is disputed | Solver may appeal rejection and creator may appeal acceptance; five-wallet jury, three-vote threshold | Subjective judgment can still be wrong or coordinated |
@@ -49,9 +49,33 @@ V4 must remain absent from ready-to-earn and verification-job views until every 
 
 1. Exact source revision, compiler settings, bytecode hashes, constructor arguments, and immutable getters.
 2. Independent contract review with findings resolved or explicitly accepted.
-3. Base Sepolia rehearsals for unappealed/waived, upheld, overturned, timeout, cancellation, refund, child settlement, parent settlement, and canonical `BountySettled` evidence.
+3. Base Sepolia rehearsals for unappealed acceptance, primary rejection, both appeal directions, upheld and overturned appeals, primary promotion, appeal timeout, cancellation, contributor pull-refund, child settlement, parent settlement, and first-valid open competition settlement. The fail-closed rehearsal audit requires two agreeing live RPC passes, canonical contract provenance, decoded receipt values, matching USDC transfers, and canonical `BountySettled` evidence.
 4. Base-mainnet fork test using current USDC and official Chainlink coordinator configuration.
 5. Authorized VRF consumers, funded native-token subscription reserve, and measured callback latency.
 6. Gas sponsorship reserve and a successful sponsored action rehearsal.
 7. At least eight eligible verifier wallets and at least three eligible child-solver wallets after exclusions.
 8. A bounded-wallet policy review covering stake, child funding, claim bonds, appeal bonds, and transaction targets.
+
+## Latency policy before immutable deployment
+
+The reviewed constants intentionally distinguish successful-path latency from
+failure and fairness deadlines:
+
+- per-bounty solver enrollment: zero;
+- VRF request confirmations: three; successful fulfillment proceeds
+  immediately, while two hours is only the fail-closed outage deadline;
+- selected child-solver response: two minutes per ranked wallet;
+- primary and each of three backups: 30 minutes;
+- appeal filing: four hours, with immediate waiver by the only eligible
+  appellant;
+- appellate voting: two hours, with immediate finalization after three matching
+  votes;
+- child and parent verification envelope: 24 hours;
+- global stake activation and unbonding: seven days, paid once per role ticket
+  rather than once per bounty.
+
+Shortening the one-block Open Competition V1 reveal separation or the
+three-confirmation VRF floor would weaken copy-resistance or randomness
+security rather than remove idle application latency. Those values therefore
+remain unchanged. Independent review must evaluate the two-minute assignment
+window for missed-wakeup risk before deployment.

@@ -8,6 +8,8 @@ on:
       - "contracts/base-escrow/src/AnonymousStakePoolV1.sol"
       - "contracts/base-escrow/src/AppealableVerifierV1.sol"
       - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV4.sol"
+      - "contracts/base-escrow/src/OpenCompetitionBountyFactoryV1.sol"
+      - "contracts/base-escrow/src/OpenCompetitionBountyV1.sol"
       - "contracts/base-escrow/src/StandingMetaChildFactoryV4.sol"
       - "contracts/base-escrow/src/StandingMetaChildV4.sol"
       - "contracts/base-escrow/src/StandingMetaParentFactoryV4.sol"
@@ -16,11 +18,18 @@ on:
       - "contracts/base-escrow/src/VrfSortitionCoordinatorV1.sol"
       - "contracts/base-escrow/script/FundStandingMetaV4Subscription.s.sol"
       - "contracts/base-escrow/test/AppealableVerifierV1.t.sol"
+      - "contracts/base-escrow/test/OpenCompetitionBountyV1.t.sol"
       - "contracts/base-escrow/test/StandingMetaV4.t.sol"
       - "contracts/base-escrow/test/StandingMetaV4MainnetFork.t.sol"
       - "scripts/standing_meta_v4_deploy.py"
       - "scripts/test_standing_meta_v4_deploy.py"
+      - "scripts/standing_meta_v4_release_audit.py"
+      - "scripts/test_standing_meta_v4_release_audit.py"
+      - "scripts/standing_meta_v4_rehearsal_audit.py"
+      - "scripts/test_standing_meta_v4_rehearsal_audit.py"
       - "deployments/standing-meta-v4-config.json"
+      - "docs/standing-meta-v4-fair-earning.md"
+      - "docs/standing-meta-v4-release-runbook.md"
       - "docs/security/standing-meta-v4-threat-model.md"
   workflow_dispatch:
     inputs:
@@ -68,6 +77,7 @@ on:
 
 permissions:
   contents: read
+  deployments: read
 
 concurrency:
   group: standing-meta-v4-${{ github.event.inputs.network || github.ref }}
@@ -86,15 +96,31 @@ jobs:
           python-version: "3.12"
 
       - name: Deployment helper tests
-        run: python -m unittest scripts.test_standing_meta_v4_deploy -v
+        run: >-
+          python -m unittest
+          scripts.test_standing_meta_v4_deploy
+          scripts.test_standing_meta_v4_release_audit
+          scripts.test_standing_meta_v4_rehearsal_audit -v
 
       - name: Python syntax
-        run: python -m py_compile scripts/standing_meta_v4_deploy.py scripts/test_standing_meta_v4_deploy.py
+        run: >-
+          python -m py_compile
+          scripts/standing_meta_v4_deploy.py
+          scripts/test_standing_meta_v4_deploy.py
+          scripts/standing_meta_v4_release_audit.py
+          scripts/test_standing_meta_v4_release_audit.py
+          scripts/standing_meta_v4_rehearsal_audit.py
+          scripts/test_standing_meta_v4_rehearsal_audit.py
+
+      - name: Fail-closed manifest and latency audit
+        run: >-
+          python scripts/standing_meta_v4_release_audit.py manifest
+          --output target/standing-meta-v4-release-audit.json
 
       - name: V4 contract and appeal tests
         run: >-
           forge test --root contracts/base-escrow
-          --match-contract '(AppealableVerifierV1Test|StandingMetaV4Test)'
+          --match-contract '(AppealableVerifierV1Test|OpenCompetitionBountyV1Test|StandingMetaV4Test)'
           --fuzz-runs 1000 -vv
 
       - name: Contract sizes
@@ -131,7 +157,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: standing-meta-v4-plan-${{ github.sha }}
-          path: target/standing-meta-v4-*-plan.json
+          path: |
+            target/standing-meta-v4-*-plan.json
+            target/standing-meta-v4-release-audit.json
           if-no-files-found: error
 
   deploy-consumers:
@@ -158,6 +186,14 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
+
+      - name: Read back protected environment and independent reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/standing_meta_v4_release_audit.py github-environments
+          --output target/standing-meta-v4-environments.json
+          --require-complete
 
       - name: Deploy and authorize the two exact V4 consumers
         env:
@@ -196,7 +232,9 @@ jobs:
         if: always()
         with:
           name: standing-meta-v4-${{ github.event.inputs.network }}-${{ github.sha }}
-          path: target/standing-meta-v4-${{ github.event.inputs.network }}-*.json
+          path: |
+            target/standing-meta-v4-${{ github.event.inputs.network }}-*.json
+            target/standing-meta-v4-environments.json
           if-no-files-found: error
 
   fund-subscription:
@@ -207,6 +245,18 @@ jobs:
     environment: ${{ github.event.inputs.network == 'base-mainnet' && 'standing-meta-v4-mainnet' || 'standing-meta-v4-sepolia' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Read back protected environment and independent reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/standing_meta_v4_release_audit.py github-environments
+          --output target/standing-meta-v4-environments.json
+          --require-complete
 
       - name: Require default branch, exact inputs, and explicit mainnet acknowledgement
         env:
@@ -264,5 +314,7 @@ jobs:
         if: always()
         with:
           name: standing-meta-v4-subscription-funding-${{ github.sha }}
-          path: target/standing-meta-v4-subscription-funding.json
+          path: |
+            target/standing-meta-v4-subscription-funding.json
+            target/standing-meta-v4-environments.json
           if-no-files-found: error
