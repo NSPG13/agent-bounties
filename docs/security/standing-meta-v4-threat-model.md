@@ -53,8 +53,9 @@ V4 must remain absent from ready-to-earn and verification-job views until every 
    getters. Deployment checkpoints bind the same tuple and reject source,
    compiler, or manifest drift on resume.
 2. Independent contract review with findings resolved or explicitly accepted,
-   bound to the exact source commit, reviewer identity, HTTPS report location,
-   and report SHA-256. A boolean alone is not review evidence.
+   bound to the exact source commit and Git tree, reviewer identity, HTTPS
+   report location, and report SHA-256. A boolean alone is not review evidence;
+   a squash commit is equivalent only when its full tree hash is unchanged.
 3. Base Sepolia rehearsals for unappealed acceptance, primary rejection, both appeal directions, upheld and overturned appeals, primary promotion, appeal timeout, cancellation, contributor pull-refund, child settlement, parent settlement, and first-valid open competition settlement. The fail-closed rehearsal audit requires two agreeing live RPC passes, canonical contract provenance, decoded receipt values, matching USDC transfers, and canonical `BountySettled` evidence.
 4. Base-mainnet fork test using current USDC and official Chainlink coordinator configuration.
 5. Authorized VRF consumers, funded native-token subscription reserve, and measured callback latency.

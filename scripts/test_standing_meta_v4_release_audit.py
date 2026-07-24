@@ -65,6 +65,7 @@ def manifest() -> dict:
             **{name: False for name in MODULE.REQUIRED_R4_GATES},
             "independent_review_evidence": {
                 "source_commit": None,
+                "source_tree": None,
                 "reviewer_identity": None,
                 "review_url": None,
                 "report_sha256": None,
@@ -121,6 +122,7 @@ class StandingMetaV4ReleaseAuditTests(unittest.TestCase):
 
         value["r4_evidence"]["independent_review_evidence"] = {
             "source_commit": "12" * 20,
+            "source_tree": "23" * 20,
             "reviewer_identity": "External Security Reviewer",
             "review_url": "https://example.test/review/v4",
             "report_sha256": "34" * 32,

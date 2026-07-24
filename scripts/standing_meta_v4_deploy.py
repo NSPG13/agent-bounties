@@ -205,11 +205,14 @@ def source_revision_evidence(repo: Path, git: str) -> dict[str, Any]:
     commit = run([git, "rev-parse", "HEAD"], cwd=repo).strip().lower()
     if not GIT_COMMIT_RE.fullmatch(commit):
         raise DeploymentError("git did not return an exact 40-character source commit")
+    tree = run([git, "rev-parse", "HEAD^{tree}"], cwd=repo).strip().lower()
+    if not GIT_COMMIT_RE.fullmatch(tree):
+        raise DeploymentError("git did not return an exact 40-character source tree")
     status = run(
         [git, "status", "--porcelain=v1", "--untracked-files=normal"],
         cwd=repo,
     )
-    return {"commit": commit, "clean": not bool(status.strip())}
+    return {"commit": commit, "tree": tree, "clean": not bool(status.strip())}
 
 
 def readiness_manifest_evidence(
@@ -223,7 +226,7 @@ def readiness_manifest_evidence(
         raise DeploymentError("readiness manifest must be inside the repository") from error
     return {
         "repository_path": repository_path,
-        "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "content_sha256": content_sha256(readiness),
         "schema": readiness["schema"],
         "latency_policy_status": readiness["latency_policy_status"],
         "latency_policy_decision": readiness["latency_policy_decision"],
@@ -234,7 +237,7 @@ def readiness_manifest_evidence(
 
 def validated_independent_review_evidence(
     readiness: Mapping[str, Any],
-    source_commit: str | None = None,
+    source_revision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     r4 = readiness.get("r4_evidence")
     if not isinstance(r4, dict):
@@ -243,12 +246,15 @@ def validated_independent_review_evidence(
     if not isinstance(evidence, dict):
         raise DeploymentError("independent review evidence is missing")
     reviewed_commit = str(evidence.get("source_commit") or "").lower()
+    reviewed_tree = str(evidence.get("source_tree") or "").lower()
     reviewer_identity = str(evidence.get("reviewer_identity") or "").strip()
     review_url = str(evidence.get("review_url") or "").strip()
     report_sha256 = str(evidence.get("report_sha256") or "").lower()
     findings_resolved = evidence.get("findings_resolved_or_accepted") is True
     if not GIT_COMMIT_RE.fullmatch(reviewed_commit):
         raise DeploymentError("independent review source commit is missing or invalid")
+    if not GIT_COMMIT_RE.fullmatch(reviewed_tree):
+        raise DeploymentError("independent review source tree is missing or invalid")
     if not reviewer_identity or reviewer_identity.casefold() == "nspg13":
         raise DeploymentError("independent reviewer identity is missing or is the maintainer")
     if not review_url.startswith("https://"):
@@ -257,10 +263,16 @@ def validated_independent_review_evidence(
         raise DeploymentError("independent review report SHA-256 is missing or invalid")
     if not findings_resolved:
         raise DeploymentError("independent review findings are not resolved or explicitly accepted")
-    if source_commit is not None and reviewed_commit != source_commit.lower():
-        raise DeploymentError("current source commit differs from the independently reviewed commit")
+    if source_revision is not None:
+        current_commit = str(source_revision.get("commit") or "").lower()
+        current_tree = str(source_revision.get("tree") or "").lower()
+        if reviewed_commit != current_commit and reviewed_tree != current_tree:
+            raise DeploymentError(
+                "current source differs from both the independently reviewed commit and source tree"
+            )
     return {
         "source_commit": reviewed_commit,
+        "source_tree": reviewed_tree,
         "reviewer_identity": reviewer_identity,
         "review_url": review_url,
         "report_sha256": report_sha256,
@@ -829,7 +841,7 @@ def deploy(
     }
     if config["chain_id"] == BASE_MAINNET_CHAIN_ID:
         require_mainnet_release_gate(readiness_path, acknowledge_mainnet)
-        validated_independent_review_evidence(readiness, source_revision["commit"])
+        validated_independent_review_evidence(readiness, source_revision)
     private_key = os.environ.get("BASE_KEEPER_PRIVATE_KEY", "").strip()
     if not private_key:
         raise DeploymentError("BASE_KEEPER_PRIVATE_KEY is required for deployment")

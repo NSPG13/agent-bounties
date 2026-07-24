@@ -80,8 +80,9 @@ and the evidence receives review.
    `s_provingKeys` entry. It fails before deployment when the coordinator's
    minimum confirmations exceed three, its callback-gas ceiling is below
    150,000, its reentrancy lock is active, or the pinned key hash is not
-   registered. It also records the exact clean Git commit, solc and Forge
-   versions, optimizer/EVM/metadata settings, readiness-manifest SHA-256,
+   registered. It also records the exact clean Git commit and tree, solc and
+   Forge versions, optimizer/EVM/metadata settings, canonical-JSON
+   readiness-manifest SHA-256,
    observation block, contract creation/runtime hashes, and a content hash over
    the plan. An address and runtime-code check alone is insufficient.
 
@@ -163,11 +164,12 @@ appeal timing, immutable wiring, consumer authorization, bytecode-size margins,
 the owner withdrawal cap, and incident containment. Resolve findings or record
 an explicit risk acceptance before setting `independent_review_complete=true`.
 The same manifest change must populate `independent_review_evidence` with the
-exact 40-character source commit, a non-maintainer reviewer identity, an HTTPS
-report URL, the report's SHA-256, and
+exact 40-character source commit and tree, a non-maintainer reviewer identity,
+an HTTPS report URL, the report's SHA-256, and
 `findings_resolved_or_accepted=true`. A bare completion boolean fails the
-release audit. Mainnet deployment independently rejects a clean commit that is
-different from the recorded reviewed commit.
+release audit. Mainnet deployment accepts the reviewed commit or a later squash
+commit only when its complete Git tree is identical; any different tree fails
+closed.
 
 Re-run the exact Base-mainnet fork at the reviewed commit. Record compiler
 version/settings, source hashes, creation/runtime bytecode hashes, constructor

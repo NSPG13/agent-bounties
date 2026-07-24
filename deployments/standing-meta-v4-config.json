@@ -93,6 +93,7 @@
     "independent_review_complete": false,
     "independent_review_evidence": {
       "source_commit": null,
+      "source_tree": null,
       "reviewer_identity": null,
       "review_url": null,
       "report_sha256": null,

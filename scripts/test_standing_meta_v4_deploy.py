@@ -126,6 +126,7 @@ class StandingMetaV4DeployTests(unittest.TestCase):
         r4 = dict(r4_evidence)
         r4["independent_review_evidence"] = {
             "source_commit": None,
+            "source_tree": None,
             "reviewer_identity": None,
             "review_url": None,
             "report_sha256": None,
@@ -244,11 +245,12 @@ class StandingMetaV4DeployTests(unittest.TestCase):
 
     def test_source_revision_requires_exact_commit_and_reports_dirty_state(self) -> None:
         commit = "ab" * 20
-        with mock.patch.object(MODULE, "run", side_effect=[commit, ""]):
+        tree = "cd" * 20
+        with mock.patch.object(MODULE, "run", side_effect=[commit, tree, ""]):
             clean = MODULE.source_revision_evidence(Path("repo"), "git")
-        self.assertEqual(clean, {"commit": commit, "clean": True})
+        self.assertEqual(clean, {"commit": commit, "tree": tree, "clean": True})
 
-        with mock.patch.object(MODULE, "run", side_effect=[commit, " M src/X.sol"]):
+        with mock.patch.object(MODULE, "run", side_effect=[commit, tree, " M src/X.sol"]):
             dirty = MODULE.source_revision_evidence(Path("repo"), "git")
         self.assertFalse(dirty["clean"])
 
@@ -297,7 +299,7 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             readiness_path = repo / "deployments" / "standing-meta-v4-config.json"
             MODULE.write_object(readiness_path, self.readiness({}))
             foundry = FakePlanFoundry(repo)
-            source = {"commit": "12" * 20, "clean": True}
+            source = {"commit": "12" * 20, "tree": "23" * 20, "clean": True}
             with (
                 mock.patch.object(MODULE, "source_revision_evidence", return_value=source),
                 mock.patch.object(MODULE, "artifact_evidence", return_value={"component": {}}),
@@ -410,6 +412,7 @@ class StandingMetaV4DeployTests(unittest.TestCase):
 
             value["r4_evidence"]["independent_review_evidence"] = {
                 "source_commit": "12" * 20,
+                "source_tree": "23" * 20,
                 "reviewer_identity": "external-reviewer",
                 "review_url": "https://example.test/reviews/v4",
                 "report_sha256": "34" * 32,
@@ -417,9 +420,27 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             }
             MODULE.write_object(path, value)
             MODULE.require_mainnet_release_gate(path, True)
-            MODULE.validated_independent_review_evidence(value, "12" * 20)
+            MODULE.validated_independent_review_evidence(
+                value, {"commit": "12" * 20, "tree": "23" * 20}
+            )
+            MODULE.validated_independent_review_evidence(
+                value, {"commit": "56" * 20, "tree": "23" * 20}
+            )
             with self.assertRaisesRegex(MODULE.DeploymentError, "differs"):
-                MODULE.validated_independent_review_evidence(value, "56" * 20)
+                MODULE.validated_independent_review_evidence(
+                    value, {"commit": "56" * 20, "tree": "67" * 20}
+                )
+
+    def test_manifest_commitment_is_canonical_across_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = repo / "deployments" / "standing-meta-v4-config.json"
+            value = self.readiness({})
+            MODULE.write_object(path, value)
+            first = MODULE.readiness_manifest_evidence(path, value, repo)
+            path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+            second = MODULE.readiness_manifest_evidence(path, value, repo)
+            self.assertEqual(first["content_sha256"], second["content_sha256"])
 
     def test_component_constructor_graph_uses_two_distinct_sortitions(self) -> None:
         report = {

@@ -104,12 +104,14 @@ def independent_review_status(r4: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(evidence, Mapping):
         evidence = {}
     source_commit = str(evidence.get("source_commit") or "").lower()
+    source_tree = str(evidence.get("source_tree") or "").lower()
     reviewer_identity = str(evidence.get("reviewer_identity") or "").strip()
     review_url = str(evidence.get("review_url") or "").strip()
     report_sha256 = str(evidence.get("report_sha256") or "").lower()
     checks = {
         "gate_complete": r4.get("independent_review_complete") is True,
         "source_commit": GIT_COMMIT_RE.fullmatch(source_commit) is not None,
+        "source_tree": GIT_COMMIT_RE.fullmatch(source_tree) is not None,
         "independent_reviewer_identity": bool(reviewer_identity)
         and reviewer_identity.casefold() != "nspg13",
         "https_review_url": review_url.startswith("https://"),
@@ -120,6 +122,7 @@ def independent_review_status(r4: Mapping[str, Any]) -> dict[str, Any]:
         "complete": all(checks.values()),
         "checks": checks,
         "source_commit": source_commit or None,
+        "source_tree": source_tree or None,
         "reviewer_identity": reviewer_identity or None,
         "review_url": review_url or None,
         "report_sha256": report_sha256 or None,
