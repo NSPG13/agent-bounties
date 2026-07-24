@@ -18,9 +18,10 @@ use serde_json::{json, Map, Value};
 use url::Url;
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
-const POST_WIDGET_URI: &str = "ui://agent-bounties/post-bounty-v2.html";
+const POST_WIDGET_URI: &str = "ui://agent-bounties/post-bounty-v3.html";
 const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
 const POST_WIDGET_HTML: &str = include_str!("../../../site/chatgpt-post-widget.html");
+const POST_WIDGET_SCRIPT: &str = include_str!("../../../site/mcp-post-widget.bundle.js");
 const AI_ASSISTANT_TOOL_NAMES: &[&str] = &[
     "publish_unfunded_bounty",
     "list_unfunded_bounties",
@@ -97,7 +98,7 @@ pub(super) fn build_bounty_post_handoff(args: &PrepareBountyPostArgs) -> Result<
         "prepared_by": "user_owned_ai",
         "supported_hosts": ["chatgpt", "claude", "gemini-spark", "other-mcp"],
         "rendering": {
-            "mcp_app_widget": "chatgpt",
+            "mcp_app_widget": "portable_mcp_apps_hosts",
             "portable_fallback": "markdown_card_and_review_url"
         },
         "state": "review_required_not_published",
@@ -536,14 +537,18 @@ fn widget_resource_descriptor() -> Value {
 }
 
 fn widget_resource_contents() -> Value {
+    let widget_html = POST_WIDGET_HTML.replace(
+        "<!-- MCP_POST_WIDGET_SCRIPT -->",
+        &format!("<script>{POST_WIDGET_SCRIPT}</script>"),
+    );
     json!({
         "uri": POST_WIDGET_URI,
         "mimeType": "text/html;profile=mcp-app",
-        "text": POST_WIDGET_HTML,
+        "text": widget_html,
         "_meta": {
             "ui": {
                 "prefersBorder": true,
-                "domain": "https://mcp.agentbounties.app",
+                "domain": "840fc8c66eefe46904e7dd2c78e7fd12.claudemcpcontent.com",
                 "csp": {
                     "connectDomains": [],
                     "resourceDomains": []
@@ -1404,7 +1409,7 @@ mod tests {
         assert_eq!(contents["mimeType"], "text/html;profile=mcp-app");
         assert_eq!(
             contents["_meta"]["ui"]["domain"],
-            "https://mcp.agentbounties.app"
+            "840fc8c66eefe46904e7dd2c78e7fd12.claudemcpcontent.com"
         );
         assert_eq!(contents["_meta"]["ui"]["csp"]["connectDomains"], json!([]));
         assert_eq!(contents["_meta"]["ui"]["csp"]["resourceDomains"], json!([]));
@@ -1412,6 +1417,18 @@ mod tests {
             contents["_meta"]["openai/widgetCSP"]["redirect_domains"],
             json!(["https://agentbounties.app"])
         );
+        assert_eq!(
+            contents["_meta"]["openai/widgetDomain"],
+            "https://mcp.agentbounties.app"
+        );
+        assert!(!contents["text"]
+            .as_str()
+            .unwrap()
+            .contains("MCP_POST_WIDGET_SCRIPT"));
+        assert!(contents["text"]
+            .as_str()
+            .unwrap()
+            .contains("Agent Bounties bounty review"));
         assert!(contents["text"].as_str().unwrap().contains("openExternal"));
     }
 }
