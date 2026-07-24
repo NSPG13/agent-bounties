@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("standing_meta_v4_deploy.py")
@@ -95,14 +96,49 @@ class FakeCanonicalComponentFoundry:
         raise AssertionError((address, signature, args))
 
 
+class FakePlanFoundry:
+    def __init__(self, repo: Path) -> None:
+        self.repo = repo
+
+    def chain_id(self) -> int:
+        return MODULE.BASE_SEPOLIA_CHAIN_ID
+
+    def code(self, address: str) -> str:
+        return "0x6001"
+
+    def compiler_evidence(self) -> dict:
+        return {**MODULE.EXPECTED_COMPILER_CONFIGURATION, "forge_version": "forge 1.4.0"}
+
+    def block_number(self) -> int:
+        return 123
+
+    def block_timestamp(self, block_number: int) -> int:
+        self.timestamp_block = block_number
+        return 456
+
+    def balance_at(self, address: str, block_number: int) -> int:
+        self.balance_observation = (address, block_number)
+        return 789
+
+
 class StandingMetaV4DeployTests(unittest.TestCase):
     def readiness(self, r4_evidence: dict[str, bool]) -> dict:
+        r4 = dict(r4_evidence)
+        r4["independent_review_evidence"] = {
+            "source_commit": None,
+            "source_tree": None,
+            "reviewer_identity": None,
+            "review_url": None,
+            "report_sha256": None,
+            "findings_resolved_or_accepted": False,
+        }
         return {
             "schema": "agent-bounties/standing-meta-v4-deployment-readiness-v1",
             "protocol_version": "standing-meta-v4",
             "latency_policy_status": MODULE.EXPECTED_LATENCY_POLICY_STATUS,
             "latency_policy_decision": MODULE.EXPECTED_LATENCY_POLICY_DECISION,
             "configuration": dict(MODULE.EXPECTED_CONFIGURATION),
+            "monitoring_policy": dict(MODULE.EXPECTED_MONITORING_POLICY),
             "required_components": list(MODULE.EXPECTED_CANONICAL_COMPONENTS),
             "networks": {
                 "base-mainnet": {
@@ -111,7 +147,7 @@ class StandingMetaV4DeployTests(unittest.TestCase):
                     }
                 }
             },
-            "r4_evidence": r4_evidence,
+            "r4_evidence": r4,
         }
 
     def test_release_errors_redact_signer_and_rpc_credentials(self) -> None:
@@ -207,6 +243,93 @@ class StandingMetaV4DeployTests(unittest.TestCase):
         self.assertEqual(MODULE.EXPECTED_CONFIGURATION["minimum_request_confirmations"], 3)
         self.assertEqual(MODULE.EXPECTED_CONFIGURATION["fulfillment_deadline_seconds"], 7_200)
 
+    def test_source_revision_requires_exact_commit_and_reports_dirty_state(self) -> None:
+        commit = "ab" * 20
+        tree = "cd" * 20
+        with mock.patch.object(MODULE, "run", side_effect=[commit, tree, ""]):
+            clean = MODULE.source_revision_evidence(Path("repo"), "git")
+        self.assertEqual(clean, {"commit": commit, "tree": tree, "clean": True})
+
+        with mock.patch.object(MODULE, "run", side_effect=[commit, tree, " M src/X.sol"]):
+            dirty = MODULE.source_revision_evidence(Path("repo"), "git")
+        self.assertFalse(dirty["clean"])
+
+        with mock.patch.object(MODULE, "run", return_value="short"):
+            with self.assertRaisesRegex(MODULE.DeploymentError, "40-character"):
+                MODULE.source_revision_evidence(Path("repo"), "git")
+
+    def test_compiler_evidence_is_exact_and_fails_on_drift(self) -> None:
+        metadata = {
+            "compiler": {"version": "0.8.26+commit.8a97fa7a"},
+            "settings": {
+                "optimizer": {"enabled": True, "runs": 200},
+                "metadata": {"bytecodeHash": "ipfs"},
+                "evmVersion": "cancun",
+            },
+        }
+        foundry = MODULE.Foundry(Path("repo"), "https://rpc.invalid", "forge", "cast")
+        artifact = {"metadata": metadata}
+        with (
+            mock.patch.object(foundry, "build_artifacts"),
+            mock.patch.object(foundry, "artifact", return_value=artifact),
+            mock.patch.object(MODULE, "run", return_value="forge Version: 1.4.0"),
+        ):
+            evidence = foundry.compiler_evidence()
+        for name, expected in MODULE.EXPECTED_COMPILER_CONFIGURATION.items():
+            self.assertEqual(evidence[name], expected)
+
+        metadata["settings"]["optimizer"]["runs"] = 201
+        with (
+            mock.patch.object(foundry, "build_artifacts"),
+            mock.patch.object(foundry, "artifact", return_value=artifact),
+            mock.patch.object(MODULE, "run", return_value="forge Version: 1.4.0"),
+        ):
+            with self.assertRaisesRegex(MODULE.DeploymentError, "optimizer_runs"):
+                foundry.compiler_evidence()
+
+    def test_compiled_bytecode_rejects_placeholders_and_odd_lengths(self) -> None:
+        self.assertEqual(MODULE.compiled_bytecode({"object": "0x6001"}, "code"), "0x6001")
+        for value in ({"object": "0x1"}, {"object": "0x60__"}, {}, None):
+            with self.subTest(value=value), self.assertRaises(MODULE.DeploymentError):
+                MODULE.compiled_bytecode(value, "code")
+
+    def test_plan_binds_clean_source_compiler_manifest_and_observation_block(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            readiness_path = repo / "deployments" / "standing-meta-v4-config.json"
+            MODULE.write_object(readiness_path, self.readiness({}))
+            foundry = FakePlanFoundry(repo)
+            source = {"commit": "12" * 20, "tree": "23" * 20, "clean": True}
+            with (
+                mock.patch.object(MODULE, "source_revision_evidence", return_value=source),
+                mock.patch.object(MODULE, "artifact_evidence", return_value={"component": {}}),
+                mock.patch.object(
+                    MODULE,
+                    "coordinator_configuration",
+                    return_value={"requested_confirmations": 3},
+                ) as coordinator,
+            ):
+                plan = MODULE.build_plan(foundry, readiness_path)
+
+            self.assertEqual(plan["source_revision"], source)
+            self.assertEqual(plan["observed_block"], 123)
+            self.assertEqual(plan["observed_block_timestamp"], 456)
+            self.assertEqual(plan["keeper_native_balance_wei"], 789)
+            self.assertTrue(plan["release_candidate_clean"])
+            self.assertTrue(plan["selected_network_deploy_allowed"])
+            self.assertFalse(plan["mainnet_deploy_allowed"])
+            self.assertEqual(
+                plan["readiness_manifest"]["repository_path"],
+                "deployments/standing-meta-v4-config.json",
+            )
+            self.assertEqual(plan["content_sha256"], MODULE.content_sha256(plan))
+            coordinator.assert_called_once_with(
+                foundry,
+                MODULE.BASE_SEPOLIA_VRF,
+                MODULE.BASE_SEPOLIA_KEY_HASH,
+                123,
+            )
+
     def test_readiness_rejects_required_component_schema_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "readiness.json"
@@ -223,6 +346,15 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             value["latency_policy_status"] = "draft"
             MODULE.write_object(path, value)
             with self.assertRaisesRegex(MODULE.DeploymentError, "not review-frozen"):
+                MODULE.validate_readiness_manifest(path)
+
+    def test_readiness_rejects_monitoring_policy_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "readiness.json"
+            value = self.readiness({})
+            value["monitoring_policy"]["maximum_snapshot_age_seconds"] = 301
+            MODULE.write_object(path, value)
+            with self.assertRaisesRegex(MODULE.DeploymentError, "monitoring policy drift"):
                 MODULE.validate_readiness_manifest(path)
 
     def test_subscription_event_parser_requires_one_matching_log(self) -> None:
@@ -275,7 +407,40 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             value = MODULE.load_object(path)
             value["r4_evidence"]["repository_environment_protection_complete"] = True
             MODULE.write_object(path, value)
+            with self.assertRaisesRegex(MODULE.DeploymentError, "review source commit"):
+                MODULE.require_mainnet_release_gate(path, True)
+
+            value["r4_evidence"]["independent_review_evidence"] = {
+                "source_commit": "12" * 20,
+                "source_tree": "23" * 20,
+                "reviewer_identity": "external-reviewer",
+                "review_url": "https://example.test/reviews/v4",
+                "report_sha256": "34" * 32,
+                "findings_resolved_or_accepted": True,
+            }
+            MODULE.write_object(path, value)
             MODULE.require_mainnet_release_gate(path, True)
+            MODULE.validated_independent_review_evidence(
+                value, {"commit": "12" * 20, "tree": "23" * 20}
+            )
+            MODULE.validated_independent_review_evidence(
+                value, {"commit": "56" * 20, "tree": "23" * 20}
+            )
+            with self.assertRaisesRegex(MODULE.DeploymentError, "differs"):
+                MODULE.validated_independent_review_evidence(
+                    value, {"commit": "56" * 20, "tree": "67" * 20}
+                )
+
+    def test_manifest_commitment_is_canonical_across_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = repo / "deployments" / "standing-meta-v4-config.json"
+            value = self.readiness({})
+            MODULE.write_object(path, value)
+            first = MODULE.readiness_manifest_evidence(path, value, repo)
+            path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+            second = MODULE.readiness_manifest_evidence(path, value, repo)
+            self.assertEqual(first["content_sha256"], second["content_sha256"])
 
     def test_component_constructor_graph_uses_two_distinct_sortitions(self) -> None:
         report = {

@@ -12,6 +12,7 @@ pub const STANDING_META_V4_CHILD_VERIFIER_REWARD: u64 = 10_000;
 pub const STANDING_META_V4_SUCCESS_MARGIN: u64 = 1_000_000;
 pub const STANDING_META_V4_MINIMUM_VERIFIERS: u16 = 8;
 pub const STANDING_META_V4_MINIMUM_CHILD_SOLVERS: u16 = 3;
+pub const STANDING_META_V4_MAXIMUM_MONITORING_SNAPSHOT_AGE_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,6 +80,7 @@ pub struct StandingMetaV4ReadinessEvidence {
     pub appeal_path_executable: bool,
     pub r4_release_evidence_complete: bool,
     pub monitoring_active: bool,
+    pub monitoring_snapshot_age_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,9 +199,19 @@ pub fn standing_meta_v4_readiness(
         ),
         check(
             "dependency_monitoring",
-            evidence.monitoring_active,
-            evidence.monitoring_active.to_string(),
-            "live suppression monitors active for reserves, pool sizes, assignments, appeals, and settlement",
+            evidence.monitoring_active
+                && evidence.monitoring_snapshot_age_seconds.is_some_and(|age| {
+                    age <= STANDING_META_V4_MAXIMUM_MONITORING_SNAPSHOT_AGE_SECONDS
+                }),
+            format!(
+                "active={} snapshot_age_seconds={}",
+                evidence.monitoring_active,
+                evidence
+                    .monitoring_snapshot_age_seconds
+                    .map(|age| age.to_string())
+                    .unwrap_or_else(|| "missing".to_string())
+            ),
+            "dual-RPC suppression snapshot active and no older than 300 seconds for reserves, pool sizes, assignments, appeals, canary margins, competition ordering, and settlement",
         ),
     ];
     let blockers = checks
@@ -344,6 +356,7 @@ mod tests {
             appeal_path_executable: true,
             r4_release_evidence_complete: true,
             monitoring_active: true,
+            monitoring_snapshot_age_seconds: Some(0),
         }
     }
 
@@ -388,13 +401,29 @@ mod tests {
                 "safe_timing" => evidence.safe_timing = false,
                 "appeal_path" => evidence.appeal_path_executable = false,
                 "r4_release_evidence" => evidence.r4_release_evidence_complete = false,
-                "dependency_monitoring" => evidence.monitoring_active = false,
+                "dependency_monitoring" => evidence.monitoring_snapshot_age_seconds = Some(301),
                 _ => unreachable!(),
             }
             let report = standing_meta_v4_readiness(&evidence);
             assert!(!report.ready_to_earn, "{name} did not fail closed");
             assert!(report.blockers.iter().any(|blocker| blocker == name));
         }
+    }
+
+    #[test]
+    fn monitoring_requires_active_fresh_snapshot() {
+        let mut evidence = ready_evidence();
+        evidence.monitoring_snapshot_age_seconds = None;
+        assert!(!standing_meta_v4_readiness(&evidence).ready_to_earn);
+
+        evidence.monitoring_snapshot_age_seconds = Some(301);
+        assert!(!standing_meta_v4_readiness(&evidence).ready_to_earn);
+
+        evidence.monitoring_snapshot_age_seconds = Some(300);
+        assert!(standing_meta_v4_readiness(&evidence).ready_to_earn);
+
+        evidence.monitoring_active = false;
+        assert!(!standing_meta_v4_readiness(&evidence).ready_to_earn);
     }
 
     #[test]
