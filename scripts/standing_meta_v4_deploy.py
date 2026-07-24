@@ -26,6 +26,7 @@ BASE_MAINNET_KEY_HASH = "0x00b81b5a830cb0a4009fbd8904de511e28631e62ce5ad231373d3
 BASE_SEPOLIA_KEY_HASH = "0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae5bf7d14d24a5efd44bf71"
 EXPECTED_KEEPER = "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
 BOUNDED_WALLET = "0x1eaa1c68772cf76bc5f4e4174766076e33ace662"
+EXPECTED_BOUNDED_WALLET_OWNER = "0x884834e884d6e93462655a2820140ad03e6747bc"
 MAINNET_SOURCE_USDC_CAP = 7_000_000
 EIP170_RUNTIME_LIMIT = 24_576
 EIP3860_INITCODE_LIMIT = 49_152
@@ -716,9 +717,81 @@ def verify_mode(foundry: Foundry, deployment_path: Path, output: Path) -> dict[s
     return evidence
 
 
+def prepare_owner_withdrawal(
+    foundry: Foundry,
+    readiness_path: Path,
+    source_usdc_base_units: int,
+) -> dict[str, Any]:
+    readiness = validate_readiness_manifest(readiness_path)
+    if foundry.chain_id() != BASE_MAINNET_CHAIN_ID:
+        raise DeploymentError("bounded-wallet withdrawal preparation is Base mainnet only")
+    cap = readiness["networks"]["base-mainnet"]["sponsorship_intent"][
+        "maximum_source_amount_base_units"
+    ]
+    if source_usdc_base_units <= 0 or source_usdc_base_units > cap:
+        raise DeploymentError("bounded-wallet withdrawal amount must be positive and within the seven USDC cap")
+    for label, address in (("bounded wallet", BOUNDED_WALLET), ("native USDC", BASE_MAINNET_USDC)):
+        if foundry.code(address) in {"0x", "0x0"}:
+            raise DeploymentError(f"{label} has no runtime code")
+    owner = normalize_address(foundry.call(BOUNDED_WALLET, "owner()(address)"), "bounded-wallet owner")
+    if owner != EXPECTED_BOUNDED_WALLET_OWNER:
+        raise DeploymentError("bounded-wallet owner drift")
+    wallet_balance = parse_uint(
+        foundry.call(BASE_MAINNET_USDC, "balanceOf(address)(uint256)", BOUNDED_WALLET),
+        "bounded-wallet native-USDC balance",
+    )
+    if wallet_balance < source_usdc_base_units:
+        raise DeploymentError("bounded-wallet native-USDC balance is below the requested amount")
+    calldata = foundry.command(
+        "calldata",
+        "withdrawToken(address,address,uint256)",
+        BASE_MAINNET_USDC,
+        EXPECTED_KEEPER,
+        str(source_usdc_base_units),
+    ).strip().lower()
+    if not calldata.startswith("0x") or len(calldata) != 2 + 4 * 2 + 32 * 2 * 3:
+        raise DeploymentError("unexpected withdrawToken calldata")
+    block_number = parse_uint(foundry.rpc("block-number"), "observation block")
+    return {
+        "schema": "agent-bounties/standing-meta-v4-owner-withdrawal-request-v1",
+        "status": "unsigned_not_authorized",
+        "network": "base-mainnet",
+        "chain_id": BASE_MAINNET_CHAIN_ID,
+        "observed_block": block_number,
+        "bounded_wallet": BOUNDED_WALLET,
+        "wallet_owner": owner,
+        "token": BASE_MAINNET_USDC,
+        "recipient": EXPECTED_KEEPER,
+        "amount_base_units": source_usdc_base_units,
+        "maximum_approved_base_units": cap,
+        "wallet_balance_base_units": wallet_balance,
+        "runtime_code_hashes": {
+            "bounded_wallet": foundry.keccak_text(foundry.code(BOUNDED_WALLET)),
+            "native_usdc": foundry.keccak_text(foundry.code(BASE_MAINNET_USDC)),
+        },
+        "unsigned_transaction": {
+            "from": owner,
+            "to": BOUNDED_WALLET,
+            "chainId": BASE_MAINNET_CHAIN_ID,
+            "value": "0x0",
+            "data": calldata,
+        },
+        "ready_to_submit": False,
+        "required_confirmation": (
+            "The wallet owner must compare the chain, wallet, token, recipient, amount, and calldata in an "
+            "independent signer at action time. The signer supplies nonce, fees, and final approval without "
+            "exporting its private key."
+        ),
+        "evidence_boundary": (
+            "This is an unsigned read-only request. It moves no value and proves no authorization, withdrawal, "
+            "swap, VRF funding, deployment, settlement, or payment."
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("plan", "deploy", "verify"))
+    parser.add_argument("mode", choices=("plan", "deploy", "verify", "prepare-owner-withdrawal"))
     parser.add_argument("--network", choices=("base-mainnet", "base-sepolia"), required=True)
     parser.add_argument("--rpc-url")
     parser.add_argument("--forge", default=os.environ.get("FORGE_BIN", "forge"))
@@ -727,6 +800,7 @@ def main() -> int:
     parser.add_argument("--deployment", type=Path)
     parser.add_argument("--readiness", type=Path, default=Path("deployments/standing-meta-v4-config.json"))
     parser.add_argument("--acknowledge-r4-release-gate", action="store_true")
+    parser.add_argument("--source-usdc-base-units", type=int)
     args = parser.parse_args()
 
     repo = Path(__file__).resolve().parents[1]
@@ -742,10 +816,17 @@ def main() -> int:
         write_object(args.output, result)
     elif args.mode == "deploy":
         result = deploy(foundry, args.output, readiness, args.acknowledge_r4_release_gate)
-    else:
+    elif args.mode == "verify":
         if args.deployment is None:
             raise DeploymentError("--deployment is required for verify mode")
         result = verify_mode(foundry, args.deployment, args.output)
+    else:
+        if args.network != "base-mainnet":
+            raise DeploymentError("prepare-owner-withdrawal requires --network base-mainnet")
+        if args.source_usdc_base_units is None:
+            raise DeploymentError("--source-usdc-base-units is required for prepare-owner-withdrawal")
+        result = prepare_owner_withdrawal(foundry, readiness, args.source_usdc_base_units)
+        write_object(args.output, result)
     print(
         json.dumps(
             {

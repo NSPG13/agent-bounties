@@ -21,6 +21,37 @@ class FakeSubscriptionFoundry:
         return "0x" + "11" * 32
 
 
+class FakeOwnerWithdrawalFoundry:
+    def __init__(self, *, owner: str | None = None, wallet_balance: int = 37_000_000) -> None:
+        self.owner = owner or MODULE.EXPECTED_BOUNDED_WALLET_OWNER
+        self.wallet_balance = wallet_balance
+
+    def chain_id(self) -> int:
+        return MODULE.BASE_MAINNET_CHAIN_ID
+
+    def code(self, address: str) -> str:
+        return "0x6001"
+
+    def call(self, address: str, signature: str, *args: str) -> str:
+        if signature == "owner()(address)":
+            return self.owner
+        if signature == "balanceOf(address)(uint256)":
+            return str(self.wallet_balance)
+        raise AssertionError((address, signature, args))
+
+    def command(self, *args: str, timeout: int = 300) -> str:
+        self.calldata_args = args
+        return "0x" + "12" * (4 + 32 * 3)
+
+    def rpc(self, *args: str, timeout: int = 300) -> str:
+        if args == ("block-number",):
+            return "123456"
+        raise AssertionError(args)
+
+    def keccak_text(self, value: str) -> str:
+        return "0x" + "ab" * 32
+
+
 class StandingMetaV4DeployTests(unittest.TestCase):
     def readiness(self, r4_evidence: dict[str, bool]) -> dict:
         return {
@@ -67,6 +98,36 @@ class StandingMetaV4DeployTests(unittest.TestCase):
         self.assertEqual(MODULE.EIP170_RUNTIME_LIMIT, 24_576)
         self.assertEqual(MODULE.EIP3860_INITCODE_LIMIT, 49_152)
         self.assertEqual(MODULE.BOUNDED_WALLET, "0x1eaa1c68772cf76bc5f4e4174766076e33ace662")
+
+    def test_owner_withdrawal_request_is_unsigned_exact_and_capped(self) -> None:
+        foundry = FakeOwnerWithdrawalFoundry()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "readiness.json"
+            MODULE.write_object(path, self.readiness({}))
+            request = MODULE.prepare_owner_withdrawal(foundry, path, 7_000_000)
+
+            self.assertEqual(request["wallet_owner"], MODULE.EXPECTED_BOUNDED_WALLET_OWNER)
+            self.assertEqual(request["recipient"], MODULE.EXPECTED_KEEPER)
+            self.assertEqual(request["amount_base_units"], 7_000_000)
+            self.assertEqual(request["status"], "unsigned_not_authorized")
+            self.assertFalse(request["ready_to_submit"])
+            self.assertNotIn("signature", request["unsigned_transaction"])
+            self.assertNotIn("private_key", request["unsigned_transaction"])
+            self.assertEqual(foundry.calldata_args[1], "withdrawToken(address,address,uint256)")
+
+            with self.assertRaisesRegex(MODULE.DeploymentError, "seven USDC cap"):
+                MODULE.prepare_owner_withdrawal(foundry, path, 7_000_001)
+
+    def test_owner_withdrawal_request_rejects_owner_or_balance_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "readiness.json"
+            MODULE.write_object(path, self.readiness({}))
+            with self.assertRaisesRegex(MODULE.DeploymentError, "owner drift"):
+                MODULE.prepare_owner_withdrawal(
+                    FakeOwnerWithdrawalFoundry(owner="0x" + "11" * 20), path, 1
+                )
+            with self.assertRaisesRegex(MODULE.DeploymentError, "balance is below"):
+                MODULE.prepare_owner_withdrawal(FakeOwnerWithdrawalFoundry(wallet_balance=1), path, 2)
 
     def test_latency_policy_is_fast_and_fail_closed(self) -> None:
         self.assertEqual(MODULE.EXPECTED_CONFIGURATION["per_bounty_solver_enrollment_seconds"], 0)

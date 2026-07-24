@@ -125,18 +125,31 @@ invalidates this evidence.
    acknowledgement does not replace those facts.
 2. Deploy the reviewed component graph from protected `main`, then verify it
    through an independent RPC pass.
-3. The bounded-wallet owner reviews and signs only the manifest's exact
+3. Generate an unsigned, live-RPC-validated withdrawal request without loading
+   the owner key:
+
+   ```powershell
+   python scripts/standing_meta_v4_deploy.py prepare-owner-withdrawal `
+     --network base-mainnet `
+     --source-usdc-base-units 7000000 `
+     --output target/standing-meta-v4-owner-withdrawal-request.json
+   ```
+
+   The request pins the live owner, token, recipient, balance, observation
+   block, code hashes, amount, and exact calldata. It deliberately omits nonce,
+   fees, signature, and private key, and reports `ready_to_submit=false`.
+4. The bounded-wallet owner reviews and signs only the manifest's exact
    `withdrawToken(nativeUSDC, keeper, amount)` calldata. The amount must be
    positive and no more than 7,000,000 micro-USDC. Confirm `TokenWithdrawn`, the
    native-USDC `Transfer`, the wallet debit, and the keeper credit.
-4. Convert no more than that received amount through a separately reviewed
+5. Convert no more than that received amount through a separately reviewed
    Base swap route with explicit minimum ETH output, deadline, recipient,
    allowance, and slippage cap. Confirm the USDC debit and ETH credit. Revoke a
    residual allowance when the route requires approval.
-5. Create the mainnet subscription, authorize exactly the verifier and solver
+6. Create the mainnet subscription, authorize exactly the verifier and solver
    sortition consumers, and fund the exact native ETH amount. Confirm owner,
    native balance, request count, and consumer set through RPC.
-6. Record positive minimum subscription and keeper gas reserves in the manifest.
+7. Record positive minimum subscription and keeper gas reserves in the manifest.
    A boolean without an explicit positive reserve threshold is not readiness.
 
 No private key, recovery phrase, raw signature, private RPC credential, or
