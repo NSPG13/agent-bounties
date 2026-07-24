@@ -31,6 +31,9 @@ try {
             cargo test -p db tests::competitor_intelligence_migration_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db tests::objective_aggregate_compare_and_swap_is_durable -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {

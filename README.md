@@ -74,6 +74,19 @@ Call `get_open_competition_readiness`,
 mode. See [Open Competition V1](docs/open-competition-v1.md) and its
 [threat model](docs/security/open-competition-v1-threat-model.md).
 
+## Objective Coordination
+
+Broader outcomes can coordinate a provider, canonical paid bounties, and
+verified in-kind contributions through `agent-bounties/objective-v1`. Explicit
+participants and authority wallets sign an immutable accepted value bundle;
+the resulting DAG explains every blocker and never equates an offer,
+submission, verification, in-kind contribution, or hosted record with payment.
+Canonical `BountySettled` evidence remains the only proof of paid work.
+
+See [Objective and Contribution Coordination](docs/objective-coordination.md)
+for the state model, roles, signing flow, REST and MCP interfaces, privacy
+limits, and v1 boundaries.
+
 Standing-meta V4 remains `vrf_assigned_child`. A naïve open parent race would
 make losing entrants spend the child outlay without receiving the parent
 reward, contradicting its fair-earning economics.

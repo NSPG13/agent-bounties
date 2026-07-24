@@ -1,8 +1,15 @@
 {
   "schema_version": "agent-bounties/mcp-tool-registry-v1",
-  "normalized_descriptors_sha256": "7772f39601d5fe49bf8a8daeb179c302fa84f9299713fc17649da81af6c07dab",
+  "normalized_descriptors_sha256": "894174829446de8c3576074d2b46a8362e8c1b8e4af45e4618b1ba05d8ccdf76",
   "tools": [
     "route_blocked_goal",
+    "plan_objective_creation",
+    "create_objective",
+    "list_objectives",
+    "get_objective",
+    "plan_objective_action",
+    "apply_objective_action",
+    "reconcile_objective",
     "prepare_bounty_post",
     "publish_unfunded_bounty",
     "list_unfunded_bounties",

@@ -1,11 +1,11 @@
 mod opportunities;
 
 use app::{
-    build_audience_report, build_live_money_readiness_report, hash_artifact,
-    AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
-    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
-    CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport, LiveMoneyReadinessConfig,
-    LiveMoneyReadinessReport, OpenPooledBountyRequest,
+    build_audience_report, build_live_money_readiness_report, build_objective_canonical_evidence,
+    hash_artifact, AddFundingContributionRequest, ApproveRiskBountyRequest,
+    ApproveRiskPayoutRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
+    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest, FundingIntentReport,
+    LiveMoneyReadinessConfig, LiveMoneyReadinessReport, OpenPooledBountyRequest,
     PlanStripeTransferRequest as AppPlanStripeTransferRequest, PooledFundingReport,
     PostBountyRequest, QuoteSet, RecordAudienceInteractionRequest, RecordDiscoveryResponseRequest,
     RecordOutreachAttemptRequest, RegisterAgentRequest, RegisterCapabilityRequest,
@@ -81,9 +81,11 @@ use domain::{
     AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord, BondSponsorship,
     BondSponsorshipStatus, BountyStatus, Capability, CapabilityClass, ClaimCandidate,
     ClaimCandidateStatus, ContributorContact, DiscoveryResponse, DiscoverySubscriptionFilters,
-    EvalRun, HelpRequest, LeaderboardPeriodKind, Money, OutreachAttempt, PaymentRail, PayoutStatus,
-    PrivacyLevel, RiskEvent, RiskReviewRecord, SolverLeaderboardRanking, VerificationDecision,
-    VerifierKind,
+    EvalRun, HelpRequest, Id, LeaderboardPeriodKind, Money, Objective, ObjectiveAction,
+    ObjectiveActionPlan, ObjectiveCanonicalEvidence, ObjectiveCreationDraft, ObjectiveCreationPlan,
+    ObjectiveError, ObjectiveView, OutreachAttempt, PaymentRail, PayoutStatus, PrivacyLevel,
+    RiskEvent, RiskReviewRecord, SignedObjectiveAction, SignedObjectiveCreation,
+    SolverLeaderboardRanking, VerificationDecision, VerifierKind,
 };
 use eval_harness::{
     bundled_abuse_fixtures, bundled_fixtures, bundled_judge_fixtures, run_eval_loops, AbuseBench,
@@ -127,7 +129,7 @@ use service_runtime::{
     CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION,
 };
 use sha2::{Digest, Sha256, Sha512};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration, Instant};
@@ -214,6 +216,13 @@ use worker::{
         record_outreach_attempt,
         list_outreach_attempts,
         audience_report,
+        plan_objective_creation,
+        create_objective,
+        list_objectives,
+        get_objective,
+        plan_objective_action,
+        apply_objective_action,
+        reconcile_objective,
         register_capability,
         search_capabilities,
         create_help_request,
@@ -322,6 +331,13 @@ use worker::{
         DiscoveryResponse,
         OutreachAttempt,
         AudienceReport
+        ,ObjectiveCreationDraft
+        ,ObjectiveCreationPlan
+        ,SignedObjectiveCreation
+        ,ObjectiveAction
+        ,ObjectiveActionPlan
+        ,SignedObjectiveAction
+        ,ObjectiveView
         ,CloudAgentReadiness
         ,CloudBountyDraftRequest
         ,CloudBountyDraft
@@ -1824,6 +1840,21 @@ async fn main() -> anyhow::Result<()> {
             post(record_outreach_attempt).get(list_outreach_attempts),
         )
         .route("/v1/audience/report", get(audience_report))
+        .route(
+            "/v1/objectives/creation-plans",
+            post(plan_objective_creation),
+        )
+        .route(
+            "/v1/objectives",
+            post(create_objective).get(list_objectives),
+        )
+        .route("/v1/objectives/:id", get(get_objective))
+        .route(
+            "/v1/objectives/:id/action-plans",
+            post(plan_objective_action),
+        )
+        .route("/v1/objectives/:id/actions", post(apply_objective_action))
+        .route("/v1/objectives/:id/reconcile", post(reconcile_objective))
         .route("/v1/capabilities", post(register_capability))
         .route("/v1/capabilities/feed", get(public_capability_feed))
         .route("/v1/capabilities/search", post(search_capabilities))
@@ -5326,6 +5357,176 @@ async fn audience_report(
     }
     let network = state.network.lock().expect("state poisoned");
     Ok(Json(network.audience_report()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/objectives/creation-plans",
+    request_body = ObjectiveCreationDraft,
+    responses(
+        (status = 200, body = ObjectiveCreationPlan),
+        (status = 400, description = "Invalid objective declaration or unsupported privacy claim")
+    )
+)]
+async fn plan_objective_creation(
+    Json(draft): Json<ObjectiveCreationDraft>,
+) -> Result<Json<ObjectiveCreationPlan>, StatusCode> {
+    Objective::plan_creation(draft)
+        .map(Json)
+        .map_err(map_objective_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/objectives",
+    request_body = SignedObjectiveCreation,
+    responses(
+        (status = 200, body = ObjectiveView),
+        (status = 400, description = "Invalid declaration or wallet approval"),
+        (status = 409, description = "Objective id already exists or plan is stale")
+    )
+)]
+async fn create_objective(
+    State(state): State<SharedState>,
+    Json(request): Json<SignedObjectiveCreation>,
+) -> Result<Json<ObjectiveView>, StatusCode> {
+    let now = Utc::now();
+    let objective = Objective::create(request, now).map_err(map_objective_error)?;
+    persist_new_objective(&state, &objective).await?;
+    Ok(Json(
+        objective
+            .view(&ObjectiveCanonicalEvidence::default(), now)
+            .map_err(map_objective_error)?,
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/objectives",
+    responses((status = 200, body = Vec<ObjectiveView>))
+)]
+async fn list_objectives(
+    State(state): State<SharedState>,
+) -> Result<Json<Vec<ObjectiveView>>, StatusCode> {
+    let objectives = load_objectives(&state).await?;
+    let evidence = load_objective_canonical_evidence(&state, &objectives).await?;
+    let now = Utc::now();
+    objectives
+        .iter()
+        .map(|objective| objective.view(&evidence, now).map_err(map_objective_error))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/objectives/{id}",
+    params(("id" = Uuid, Path, description = "Objective id")),
+    responses(
+        (status = 200, body = ObjectiveView),
+        (status = 404, description = "Objective not found")
+    )
+)]
+async fn get_objective(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ObjectiveView>, StatusCode> {
+    let objective = load_objective(&state, id).await?;
+    let evidence =
+        load_objective_canonical_evidence(&state, std::slice::from_ref(&objective)).await?;
+    objective
+        .view(&evidence, Utc::now())
+        .map(Json)
+        .map_err(map_objective_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/objectives/{id}/action-plans",
+    params(("id" = Uuid, Path, description = "Objective id")),
+    request_body = ObjectiveAction,
+    responses(
+        (status = 200, body = ObjectiveActionPlan),
+        (status = 404, description = "Objective or referenced record not found"),
+        (status = 409, description = "Action is invalid in the current state")
+    )
+)]
+async fn plan_objective_action(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    Json(action): Json<ObjectiveAction>,
+) -> Result<Json<ObjectiveActionPlan>, StatusCode> {
+    let objective = load_objective(&state, id).await?;
+    objective
+        .plan_action(action, Utc::now())
+        .map(Json)
+        .map_err(map_objective_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/objectives/{id}/actions",
+    params(("id" = Uuid, Path, description = "Objective id")),
+    request_body = SignedObjectiveAction,
+    responses(
+        (status = 200, body = ObjectiveView),
+        (status = 400, description = "Invalid wallet approval"),
+        (status = 404, description = "Objective or referenced record not found"),
+        (status = 409, description = "Stale revision, invalid transition, or unmet readiness requirement")
+    )
+)]
+async fn apply_objective_action(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<SignedObjectiveAction>,
+) -> Result<Json<ObjectiveView>, StatusCode> {
+    if request.plan.objective_id != id {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut objective = load_objective(&state, id).await?;
+    let expected_revision = objective.revision;
+    let evidence =
+        load_objective_canonical_evidence(&state, std::slice::from_ref(&objective)).await?;
+    let now = Utc::now();
+    objective
+        .apply_action(request, now, &evidence)
+        .map_err(map_objective_error)?;
+    persist_objective_replacement(&state, &objective, expected_revision).await?;
+    objective
+        .view(&evidence, now)
+        .map(Json)
+        .map_err(map_objective_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/objectives/{id}/reconcile",
+    params(("id" = Uuid, Path, description = "Objective id")),
+    responses(
+        (status = 200, body = ObjectiveView, description = "Objective refreshed only from confirmed canonical bounty evidence"),
+        (status = 404, description = "Objective not found"),
+        (status = 409, description = "Concurrent objective update; reload and retry")
+    )
+)]
+async fn reconcile_objective(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ObjectiveView>, StatusCode> {
+    let mut objective = load_objective(&state, id).await?;
+    let expected_revision = objective.revision;
+    let evidence =
+        load_objective_canonical_evidence(&state, std::slice::from_ref(&objective)).await?;
+    let now = Utc::now();
+    if objective
+        .reconcile_canonical_evidence(&evidence, now)
+        .map_err(map_objective_error)?
+    {
+        persist_objective_replacement(&state, &objective, expected_revision).await?;
+    }
+    objective
+        .view(&evidence, now)
+        .map(Json)
+        .map_err(map_objective_error)
 }
 
 #[utoipa::path(post, path = "/v1/capabilities")]
@@ -11808,6 +12009,178 @@ async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork>
     service_runtime::hydrate_bounty_network(store).await
 }
 
+fn map_objective_error(error: ObjectiveError) -> StatusCode {
+    match error {
+        ObjectiveError::ProposalNotFound(_)
+        | ObjectiveError::ContributionNeedNotFound(_)
+        | ObjectiveError::ContributionOfferNotFound(_)
+        | ObjectiveError::UnknownParticipant(_) => StatusCode::NOT_FOUND,
+        ObjectiveError::StaleAction
+        | ObjectiveError::ProposalExpired
+        | ObjectiveError::ProposalAlreadyAccepted
+        | ObjectiveError::InvalidAction(_, _)
+        | ObjectiveError::NotReady(_)
+        | ObjectiveError::AmendmentsUnavailable => StatusCode::CONFLICT,
+        _ => StatusCode::BAD_REQUEST,
+    }
+}
+
+fn map_objective_db_error(error: DbError) -> StatusCode {
+    match error {
+        DbError::ObjectiveAlreadyExists(_) | DbError::ObjectiveRevisionConflict { .. } => {
+            StatusCode::CONFLICT
+        }
+        DbError::ObjectiveNotFound(_) => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn load_objective(state: &SharedState, id: Id) -> Result<Objective, StatusCode> {
+    if let Some(store) = &state.store {
+        return store
+            .get_objective(id)
+            .await
+            .map_err(map_objective_db_error)?
+            .ok_or(StatusCode::NOT_FOUND);
+    }
+    state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .get(&id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn load_objectives(state: &SharedState) -> Result<Vec<Objective>, StatusCode> {
+    if let Some(store) = &state.store {
+        return store
+            .list_objectives()
+            .await
+            .map_err(map_objective_db_error);
+    }
+    let mut objectives = state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    objectives.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(objectives)
+}
+
+async fn persist_new_objective(
+    state: &SharedState,
+    objective: &Objective,
+) -> Result<(), StatusCode> {
+    if let Some(store) = &state.store {
+        store
+            .create_objective(objective)
+            .await
+            .map_err(map_objective_db_error)?;
+    } else {
+        let mut network = state.network.lock().expect("state poisoned");
+        if network.objectives.contains_key(&objective.id) {
+            return Err(StatusCode::CONFLICT);
+        }
+        network.objectives.insert(objective.id, objective.clone());
+        return Ok(());
+    }
+    state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .insert(objective.id, objective.clone());
+    Ok(())
+}
+
+async fn persist_objective_replacement(
+    state: &SharedState,
+    objective: &Objective,
+    expected_revision: u64,
+) -> Result<(), StatusCode> {
+    if let Some(store) = &state.store {
+        store
+            .replace_objective(objective, expected_revision)
+            .await
+            .map_err(map_objective_db_error)?;
+    } else {
+        let mut network = state.network.lock().expect("state poisoned");
+        let current_revision = network
+            .objectives
+            .get(&objective.id)
+            .map(|current| current.revision)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        if current_revision != expected_revision {
+            return Err(StatusCode::CONFLICT);
+        }
+        network.objectives.insert(objective.id, objective.clone());
+        return Ok(());
+    }
+    state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .insert(objective.id, objective.clone());
+    Ok(())
+}
+
+async fn load_objective_canonical_evidence(
+    state: &SharedState,
+    objectives: &[Objective],
+) -> Result<ObjectiveCanonicalEvidence, StatusCode> {
+    let Some(store) = &state.store else {
+        return Ok(ObjectiveCanonicalEvidence::default());
+    };
+    let mut networks = BTreeSet::new();
+    for objective in objectives {
+        let Some(bundle) = objective.accepted_value_bundle.as_ref() else {
+            continue;
+        };
+        if let Some(payment) = &bundle.monetary_payment {
+            networks.insert(payment.bounty.network.clone());
+        }
+        for need in &bundle.contribution_needs {
+            if let domain::ContributionCompensation::Paid { payment } = &need.compensation {
+                networks.insert(payment.bounty.network.clone());
+            }
+        }
+    }
+    if networks.is_empty() {
+        return Ok(ObjectiveCanonicalEvidence::default());
+    }
+    let terms = store
+        .list_autonomous_bounty_terms()
+        .await
+        .map_err(map_objective_db_error)?;
+    let mut evidence = ObjectiveCanonicalEvidence::default();
+    for network in networks {
+        let events = store
+            .list_autonomous_bounty_events(&network)
+            .await
+            .map_err(map_objective_db_error)?;
+        let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        state.recovery_reservations.apply(&mut feed, false);
+        let mut network_evidence = build_objective_canonical_evidence(&network, &feed);
+        evidence.funding.append(&mut network_evidence.funding);
+        evidence
+            .settlements
+            .append(&mut network_evidence.settlements);
+    }
+    Ok(evidence)
+}
+
 async fn persist_bounty_and_ledger(
     state: &SharedState,
     bounty: &domain::Bounty,
@@ -11846,6 +12219,10 @@ fn expected_digest_for_body(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::{
+        primitives::B256,
+        signers::{local::PrivateKeySigner, SignerSync},
+    };
     use app::{
         AddFundingContributionRequest, ClaimBountyRequest, CreateFundingIntentRequest,
         OpenPooledBountyRequest, PostBountyRequest, RegisterAgentRequest,
@@ -11853,8 +12230,12 @@ mod tests {
     };
     use chrono::TimeZone;
     use domain::{
-        Bounty, BountyStatus, CapabilityClass, FundingIntentStatus, FundingMode,
-        PaymentEventStatus, PaymentRail, PayoutStatus, ProofRecord, VerifierKind,
+        AffectedPartyDeclaration, Bounty, BountyStatus, CapabilityClass, DeliverableAccessPolicy,
+        ExpectedEffect, FundingIntentStatus, FundingMode, IdentityDisclosure, ObjectiveAuthority,
+        ObjectiveAuthorityKind, ObjectiveParticipant, ObjectivePrivacyDeclaration, ObjectiveStatus,
+        ObjectiveVerificationMechanism, ObjectiveVerificationPolicy, ParticipantKind,
+        PaymentEventStatus, PaymentRail, PayoutStatus, ProofRecord, PublicEvidencePolicy,
+        RightsPolicy, VerifierKind,
     };
     use github_app::GitHubCheckConclusion;
     use hmac::{Hmac, Mac};
@@ -11862,10 +12243,108 @@ mod tests {
     use std::{
         io::{Read, Write},
         net::TcpListener,
+        str::FromStr,
         thread,
     };
 
     type TestHmacSha256 = Hmac<Sha256>;
+
+    #[tokio::test]
+    async fn objective_api_requires_signed_creation_and_preserves_role_boundaries() {
+        let signer: PrivateKeySigner =
+            "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+                .parse()
+                .unwrap();
+        let participant_id = Uuid::new_v4();
+        let draft = ObjectiveCreationDraft {
+            id: Uuid::new_v4(),
+            title: "Publish a verified public report".to_string(),
+            desired_outcome: "A source-linked report passes its committed review.".to_string(),
+            human_purpose: "Enable an informed decision by the named beneficiary.".to_string(),
+            participants: vec![ObjectiveParticipant {
+                id: participant_id,
+                kind: ParticipantKind::Organization,
+                display_name: "Requesting organization".to_string(),
+                wallet: format!("{:#x}", signer.address()),
+                identity_disclosure: IdentityDisclosure::Pseudonymous,
+                public_identity_reference: None,
+            }],
+            requesting_party_id: participant_id,
+            beneficiary_ids: vec![participant_id],
+            affected_parties: vec![AffectedPartyDeclaration {
+                participant_id,
+                expected_effect: ExpectedEffect::Mixed,
+                description: "Receives the result and bears the decision risk.".to_string(),
+            }],
+            authority: ObjectiveAuthority {
+                kind: ObjectiveAuthorityKind::OrganizationWallet,
+                member_ids: vec![participant_id],
+                threshold: 1,
+                public_statement:
+                    "One declared organization wallet controls binding objective decisions."
+                        .to_string(),
+            },
+            available_resources: Vec::new(),
+            expected_final_deliverable: "Public report and evidence package".to_string(),
+            requested_access_policy: DeliverableAccessPolicy::Public,
+            requested_rights_policy: RightsPolicy {
+                owner_ids: vec![participant_id],
+                license_or_terms: "CC-BY-4.0".to_string(),
+                restrictions: Vec::new(),
+            },
+            requested_final_verification: ObjectiveVerificationPolicy {
+                mechanism: ObjectiveVerificationMechanism::CommittedVerifier {
+                    verifier_id: participant_id,
+                },
+                acceptance_criteria: vec!["Every claim links to inspectable evidence.".to_string()],
+                evidence_schema: "https://example.test/report-evidence.schema.json".to_string(),
+                evidence_schema_hash: format!("0x{}", "1".repeat(64)),
+                trust_assumptions: vec![
+                    "The named verifier wallet follows the public criteria.".to_string()
+                ],
+            },
+            privacy: ObjectivePrivacyDeclaration {
+                blockchain_information_is_public: true,
+                evidence_policy: PublicEvidencePolicy::Public,
+                redaction_limits: "No private data is accepted by this public objective."
+                    .to_string(),
+            },
+        };
+        let plan = plan_objective_creation(Json(draft)).await.unwrap().0;
+        let commitment = B256::from_str(&plan.commitment_hash).unwrap();
+        let signature = signer.sign_message_sync(commitment.as_slice()).unwrap();
+        let signed = SignedObjectiveCreation {
+            plan,
+            approvals: vec![domain::WalletApproval {
+                participant_id,
+                signature: signature.to_string(),
+            }],
+        };
+        let state = test_state(BountyNetwork::default());
+        let created = create_objective(State(state.clone()), Json(signed.clone()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(created.objective.status, ObjectiveStatus::OpenForProposals);
+        assert_eq!(created.objective.requesting_party_id, participant_id);
+        assert_eq!(created.objective.authority.member_ids, vec![participant_id]);
+        assert!(!created.readiness.ready);
+        assert!(created
+            .readiness
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("provider proposal")));
+
+        let listed = list_objectives(State(state.clone())).await.unwrap().0;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].objective.id, created.objective.id);
+        assert_eq!(
+            create_objective(State(state), Json(signed))
+                .await
+                .unwrap_err(),
+            StatusCode::CONFLICT
+        );
+    }
 
     #[test]
     fn health_identifies_protocol_and_deployed_revision() {
@@ -14418,6 +14897,12 @@ mod tests {
                 .get("502")
                 .is_some()
         );
+        assert!(paths.contains_key("/v1/objectives/creation-plans"));
+        assert!(paths.contains_key("/v1/objectives"));
+        assert!(paths.contains_key("/v1/objectives/{id}"));
+        assert!(paths.contains_key("/v1/objectives/{id}/action-plans"));
+        assert!(paths.contains_key("/v1/objectives/{id}/actions"));
+        assert!(paths.contains_key("/v1/objectives/{id}/reconcile"));
         assert!(paths.contains_key("/v1/opportunities"));
         assert!(paths.contains_key("/v1/opportunities/feed.rss"));
         assert!(paths.contains_key("/v1/opportunities/feed.atom"));
@@ -14474,6 +14959,16 @@ mod tests {
             "/v1/base/autonomous-bounties/feed",
         ] {
             assert!(paths.contains_key(autonomous), "missing {autonomous}");
+        }
+        for objective in [
+            "/v1/objectives/creation-plans",
+            "/v1/objectives",
+            "/v1/objectives/{id}",
+            "/v1/objectives/{id}/action-plans",
+            "/v1/objectives/{id}/actions",
+            "/v1/objectives/{id}/reconcile",
+        ] {
+            assert!(paths.contains_key(objective), "missing {objective}");
         }
         for retired in [
             "/v1/base/indexer-status",
