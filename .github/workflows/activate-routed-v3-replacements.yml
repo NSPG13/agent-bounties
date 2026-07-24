@@ -55,12 +55,14 @@ jobs:
           echo "router runtime bytes=$(( (${#code} - 2) / 2 ))"
 
       - name: Fetch durable router bootstrap event
+        env:
+          LOG_RPC_URL: https://mainnet.base.org
         run: |
           mkdir -p target
-          latest="$(cast block-number --rpc-url "$BASE_MAINNET_RPC_URL")"
+          latest="$(cast block-number --rpc-url "$LOG_RPC_URL")"
           from=$((latest - 10000))
           cast logs \
-            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --rpc-url "$LOG_RPC_URL" \
             --address "$ROUTER" \
             --from-block "$from" \
             --to-block latest \
