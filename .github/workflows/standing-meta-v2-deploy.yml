@@ -69,7 +69,7 @@ jobs:
           python scripts/standing_meta_v2_deploy.py sepolia
           --rpc-url https://sepolia.base.org
           --output target/base-sepolia-standing-meta-v2-rehearsal.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: base-sepolia-standing-meta-v2-rehearsal
           path: target/base-sepolia-standing-meta-v2-*.json
@@ -96,7 +96,7 @@ jobs:
           python scripts/standing_meta_v2_deploy.py mainnet
           --rpc-url https://mainnet.base.org
           --output target/base-mainnet-standing-meta-v2-deployment.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: base-mainnet-standing-meta-v2-deployment
           path: target/base-mainnet-standing-meta-v2-*.json

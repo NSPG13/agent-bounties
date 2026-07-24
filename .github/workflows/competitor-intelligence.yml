@@ -41,7 +41,7 @@ jobs:
         run: cat target/competitor-intelligence/daily-report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload daily competitor report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: direct-competitor-intelligence-${{ github.run_id }}
           path: target/competitor-intelligence/
