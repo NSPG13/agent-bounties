@@ -104,7 +104,7 @@ jobs:
 
       - name: Upload recovery evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: operational-control-loop-${{ github.run_id }}
           path: target/operations/
