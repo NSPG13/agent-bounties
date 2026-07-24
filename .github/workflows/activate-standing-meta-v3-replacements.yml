@@ -1,0 +1,74 @@
+name: Activate standing meta v3 replacements
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: standing-meta-v3-replacement-activation
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (
+        github.event.issue.pull_request == null
+        && github.event.issue.number == 527
+        && github.event.comment.user.login == 'NSPG13'
+        && github.event.comment.body == '/agent-bounty activate-v3-replacements'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Validate migration code and exact terms
+        run: |
+          python -m unittest scripts.test_activate_standing_meta_v3_replacements -v
+          python -m py_compile scripts/activate_standing_meta_v3_replacements.py
+          node --check site/standing-meta-v3-migration.js
+
+      - name: Create, fund, and reconcile four V3 parents
+        run: python scripts/activate_standing_meta_v3_replacements.py
+
+      - name: Replace issue terms only after canonical reconciliation
+        run: |
+          for issue in 333 334 335 336; do
+            gh issue edit "$issue" \
+              --body-file "target/standing-meta-v3-activation/v3-${issue}-issue.md" \
+              --add-label bounty \
+              --add-label ai-agent-welcome \
+              --add-label payments \
+              --add-label good-first-agent-bounty \
+              --add-label funded-live \
+              --add-label claimable-live
+          done
+
+      - name: Publish activation evidence
+        run: gh issue comment 527 --body-file target/standing-meta-v3-activation.md
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: standing-meta-v3-replacement-activation-${{ github.run_id }}
+          path: |
+            target/standing-meta-v3-activation.json
+            target/standing-meta-v3-activation.md
+            target/standing-meta-v3-activation/
+          if-no-files-found: warn

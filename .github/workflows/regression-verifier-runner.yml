@@ -1,0 +1,76 @@
+name: Regression Verifier Runner
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/regression-verifier-runner.yml"
+      - ".github/workflows/regression-verifier-signer.yml"
+      - "crates/verifier-sdk/**"
+      - "crates/worker/**"
+      - "scripts/regression_verifier_pipeline.py"
+      - "scripts/test_regression_verifier_pipeline.py"
+  workflow_dispatch:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-verifier-runner-mainnet
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          python scripts/test_regression_verifier_pipeline.py -v
+          python -m py_compile scripts/regression_verifier_pipeline.py
+          cargo test -p verifier-sdk -p worker
+
+  run-no-secrets:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
+      VERIFIER_ONE: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+      VERIFIER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build isolated regression worker
+        run: cargo build --release -p worker
+
+      - name: Run canonical jobs without signing secrets
+        run: >-
+          python scripts/regression_verifier_pipeline.py run
+          --api-base "$API_BASE_URL"
+          --network base-mainnet
+          --verifier "$VERIFIER_ONE"
+          --verifier "$VERIFIER_TWO"
+          --worker target/release/worker
+          --staging "$RUNNER_TEMP/regression-staging"
+          --output target/regression-candidates
+          --max-jobs 5
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: regression-candidates-${{ github.run_id }}
+          path: target/regression-candidates
+          if-no-files-found: error
+          retention-days: 7

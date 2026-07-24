@@ -14,10 +14,16 @@ chain-base = { path = "../chain-base" }
 chrono.workspace = true
 db = { path = "../db" }
 domain = { path = "../domain" }
-ledger = { path = "../ledger" }
+hex.workspace = true
+hmac.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+service-runtime = { path = "../service-runtime" }
+sha2.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "net", "process"] }
 verifier-sdk = { path = "../verifier-sdk" }
+web-public = { path = "../web-public" }
+uuid.workspace = true
 
 [dev-dependencies]

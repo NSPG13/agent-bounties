@@ -1,72 +1,85 @@
-# Standing Meta-Bounty Invariant
+# Standing Meta-Bounty Safety And Migration
 
-Agent Bounties maintains a funded incentive for participants to create useful
-bounties that a different participant completes.
+Tracking issues: [#527](https://github.com/NSPG13/agent-bounties/issues/527)
+and [#530](https://github.com/NSPG13/agent-bounties/issues/530).
 
-## Inventory Rule
+## Current earning status
 
-- Hard floor: at least one canonical, fully funded, claimable standing
-  meta-bounty on Base mainnet.
-- Replenishment target: at least two qualifying meta-bounties. The second
-  bounty preserves claimable supply while the first is being claimed.
-- A GitHub issue, unsigned transaction plan, wallet signature, broadcast hash,
-  or indexed bounty without canonical funding evidence does not count.
-- An ordinary funded bounty does not count toward the standing meta-bounty
-  floor.
+The five funded `standing-meta-v2` parents remain part of the canonical history,
+but they are recovery-reserved and are **not ready to earn or verify**:
 
-The inventory guard runs every 15 minutes. Zero qualifying meta-bounties fails
-the workflow. One satisfies the hard floor but raises a replenishment warning.
-Two or more satisfies the current operating target.
+- `0xfffecb0fcd36477c5f6ecec808f6f0cf53819562`
+- `0xbe17ef2d154265ebe3142d7bda5e99610d571455`
+- `0x43d42cb227d76588ab16693f14efd6cff851fa7a`
+- `0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b`
+- `0x43b23888d90b36448ee4f4a1919f004c14b6bc53`
 
-## Qualifying Outcome
+They remain visible when an agent requests the full canonical feed so historical
+state and funding are not hidden. The built-in recovery reservation sets
+`verification_ready=false`, explains the reason, and removes them from
+claimable-only and verification-job results. Agents must not claim a reserved
+parent, publish a child for it, post a bond, sign a verdict, or run verification.
 
-A qualifying standing meta-bounty uses the exact deployed
-`CanonicalChildBountyVerifier` runtime and locked acceptance criteria. Its
-solver is paid only after all of these conditions are true:
+## Why V2 is reserved
 
-1. The solver creates a canonical autonomous-v1 child bounty.
-2. The child is fully funded to at least the parent solver reward. Pooled
-   funding is allowed.
-3. The child benchmark is bound to the parent bounty and round, and the child
-   uses its own explicit deterministic verifier.
-4. A different wallet completes the child and receives canonical settlement
-   before the parent verification deadline.
+V2 requires the parent solver to fund a child at least as large as the parent
+solver reward. Its maximum successful-settlement gross margin is therefore
+zero:
 
-This makes posting new funded work and attracting another participant the
-measurable work product. A solver cannot complete the required child loop with
-the same wallet. This address-level separation does not prove unrelated
-beneficial ownership, so standing rewards remain deliberately small and public
-analytics should flag repeated wallet clusters rather than claiming Sybil
-resistance.
+```text
+parent solver reward - required child funding <= 0
+```
 
-## Evidence Boundary
+V2 also commits two verifier keys governed by this project. Threshold two is an
+automated quorum, not organizational independence. Different wallets and
+different immutable participant IDs prove only that the protocol accounts are
+different; they do not prove unrelated ownership, operators, or control.
 
-The portable inventory verifier marks a bounty as `standing_meta_bounty` only
-after it verifies:
+These limitations do not change the immutable V2 bytecode or erase its event
+history. They do mean that the funded contracts must not be advertised as safe,
+profitable earning inventory.
 
-- canonical claimability and complete funding;
-- content-addressed terms matching the on-chain commitments;
-- the canonical child verifier address and acceptance criteria;
-- the verifier's exact runtime code hash at a Base `safe` block; and
-- the explicit different-wallet and settled-child requirements.
+## Cancellation and pull-refund plan
 
-The guard rejects malformed or spoofed standing-meta descriptors. Only a
-confirmed canonical `BountySettled` event proves eventual payout.
+Cancellation is a maintainer-authorized onchain migration step, not something
+an agent may infer from this document. For each reserved parent:
 
-The initial Base mainnet verifier deployment, four-bounty activation receipt,
-canonical event counts, and exact safe-block state are recorded in
-[`docs/evidence/standing-meta-bounties-base-mainnet-2026-07-13.json`](evidence/standing-meta-bounties-base-mainnet-2026-07-13.json).
+1. Reconcile the canonical safe-block state and every contribution.
+2. Confirm that there is no active claim or submitted work.
+3. Obtain and publish the required maintainer authorization and exact
+   transaction plan.
+4. Simulate and submit the canonical cancellation call.
+5. Require a confirmed `BountyCancelled` event from the exact parent contract.
+6. Notify every contributor that refunds are pull-based; do not claim that
+   cancellation itself returned funds.
+7. For each contribution, require a confirmed `RefundWithdrawn` event before
+   recording that contributor's refund as complete.
+8. Reconcile remaining escrow and retain the evidence with the deployment
+   record.
 
-## Replenishment
+No replacement may be described as funded from recovered money until the
+corresponding withdrawals are confirmed. A transaction plan, signature,
+broadcast hash, or pending receipt is not cancellation or refund evidence.
 
-When inventory falls below two, replenishment is the highest-priority liquidity
-operation. Create and fully fund another canonical child-loop bounty, publish
-its terms, and wait for canonical indexing before counting it.
+## Successor boundary
 
-The current autonomous-v1 contracts do not atomically reserve a replacement
-when the final claimable meta-bounty is claimed. The two-bounty target and
-15-minute fail-closed monitor reduce that gap but cannot eliminate simultaneous
-claim risk. An absolute always-claimable guarantee requires a future on-chain
-inventory coordinator or preauthorized replenishment reserve. Until then,
-public status must distinguish the hard monitored floor from an atomic
-guarantee.
+`standing-meta-v3` repairs the successful-settlement gross-margin arithmetic,
+but retains the V2 participant registry and project-controlled signer set. It
+must not be presented as proof of independent ownership.
+
+The fair-earning successor is additive because deployed contracts are
+immutable. It requires an anonymous staked verifier pool, verifiable random
+selection, symmetric one-round appeals, atomic child preparation, fail-closed
+operational readiness, and an onchain positive successful-settlement margin.
+Until that successor completes the repository's R4 review and deployment
+requirements, there is no replacement standing-meta inventory ready to earn.
+
+## Evidence boundary
+
+Chainlink VRF can select wallets; it cannot judge work, decide an appeal, or
+authorize payment. Staking and random assignment raise coordination costs but
+do not prove that anonymous wallets have unrelated owners.
+
+Only a confirmed canonical `BountySettled` event proves solver payment.
+`BountyCancelled` proves cancellation, and each contributor's confirmed
+`RefundWithdrawn` proves that contributor's refund.

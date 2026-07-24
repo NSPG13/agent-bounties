@@ -1,5 +1,14 @@
 # Deployment
 
+Canonical domain, DNS, redirect, analytics, and search migration procedures are
+defined in [`domain-portfolio.md`](domain-portfolio.md).
+
+The API and Base indexer worker must share the generated
+`DISCOVERY_WEBHOOK_SIGNING_KEY` through the `agent-bounties-discovery` Render
+environment group. The MCP service must not receive it. The API uses it only to
+derive per-subscription secrets; the worker uses it to sign bounded webhook
+deliveries. See [`discovery-subscriptions.md`](discovery-subscriptions.md).
+
 The hosted topology is API, MCP, Postgres, and one autonomous Base event-indexer
 worker. The Base contracts are deployed separately and configured only after
 review and verification.
@@ -24,6 +33,24 @@ The root `render.yaml` creates:
 - `agent-bounties-mcp`,
 - `agent-bounties-base-indexer`.
 
+`CLOUD_AGENT_API_KEY` is a direct `sync: false` secret on
+`agent-bounties-api`; Render ignores `sync: false` inside environment groups.
+MCP proxies the API and must not receive this secret. The exact-SHA controller
+reconciles nonsecret model settings and copies the optional repository Actions
+secret `CLOUD_AGENT_API_KEY` into the API service without logging it. Verify
+`GET /v1/cloud-agent/readiness`; see
+[`cloud-agent-operations.md`](cloud-agent-operations.md).
+
+Farcaster mention ingestion uses five direct `sync: false` API-service values:
+`NEYNAR_API_KEY`, `NEYNAR_WEBHOOK_SECRET`, `NEYNAR_SIGNER_UUID`,
+`NEYNAR_BOT_FID`, and `NEYNAR_BOT_USERNAME`. They are all-or-none at runtime.
+The exact-SHA controller receives two repository secrets and two repository
+variables, creates or updates the FID-filtered Neynar webhook, reads back its
+generated signing secret, installs all five API values, redacts every value
+from evidence, and then requires `GET /v1/social/mention-ingestion/readiness`
+to report the database, canonical gate, webhook verification, and reply signer
+as ready.
+
 Validate before synchronizing:
 
 ```powershell
@@ -40,12 +67,22 @@ succeeds on a push to `main`, the workflow:
 3. resolves all three Render services by exact name and verifies repository,
    branch, and service type;
 4. disables any drifted native auto-deploy setting;
-5. calls Render's deploy API with the exact commit for API, MCP, and worker;
-6. waits for all three deploys to reach `live` and fails on terminal errors;
-7. verifies exact revision and protocol headers from API and MCP `/health`;
-8. stores a redacted 30-day deployment evidence artifact.
+5. reconciles `PUBLIC_BASE_URL`, `MCP_BASE_URL`, and `WEBSITE_BASE_URL` on
+   both public services;
+6. reconciles all nonsecret cloud-agent settings on API and copies the optional
+   GitHub-held model key without including its value in evidence;
+7. creates or updates the optional FID-filtered Neynar provider webhook and
+   reconciles its bot identity, reply signer, and generated signing secret on
+   API without including their values in evidence;
+8. calls Render's deploy API with the exact commit for API, MCP, and worker;
+9. waits for all three deploys to reach `live` and fails on terminal errors;
+10. verifies exact revision and protocol headers from API and MCP `/health`;
+11. attests cloud readiness and fails if a supplied model credential did not
+    become usable;
+12. attests social mention readiness when provider values were supplied;
+13. stores a redacted 30-day deployment evidence artifact.
 
-Configure one GitHub Actions secret named `RENDER_API_KEY`. Create it in the
+Configure the GitHub Actions secret `RENDER_API_KEY`. Create it in the
 Render Dashboard for the workspace that owns these three services, then store
 it only under repository **Settings > Secrets and variables > Actions**. Never
 put the key in Render variables, workflow inputs, logs, issues, or Git. A
@@ -54,6 +91,22 @@ The key can deploy application services, so rotate it after suspected exposure.
 Creating, rotating, or revoking the credential is an explicit R3 access change;
 using the already-provisioned credential for the bounded exact-SHA application
 deploy is R2.
+
+To enable hosted bounty drafting, also configure the repository Actions secret
+`CLOUD_AGENT_API_KEY`. It is passed only to the bounded deployment job, written
+only to `agent-bounties-api`, and redacted from evidence. If it is absent, the
+deployment still succeeds but `/v1/cloud-agent/readiness` remains unavailable
+and reports the missing credential explicitly; no local-model fallback runs.
+
+To activate Farcaster ingestion, provision one approved Neynar signer owned by
+the Agent Bounties bot account. Store `NEYNAR_API_KEY` and `NEYNAR_SIGNER_UUID`
+as repository Actions secrets. Store
+`NEYNAR_BOT_FID` and `NEYNAR_BOT_USERNAME` as repository Actions variables.
+The controller registers the `cast.created` webhook filtered by that FID at
+`https://api.agentbounties.app/v1/social/webhooks/neynar` and installs the
+provider-generated webhook secret directly on Render. A partial provider
+configuration fails deployment instead of launching an unsigned or reply-less
+production listener.
 
 The controller can be rehearsed without credentials:
 
@@ -70,9 +123,87 @@ read-only and continues to fail closed on revision skew; it does not possess
 the Render key. If current `main` is newer and failing, pass the latest
 successful 40-character SHA in the manual `revision` input.
 
+If Render exhausts pipeline minutes, set the repository variable
+`RENDER_DEPLOY_PAUSE_REASON=build_pipeline_minutes_exhausted`. Every deployment
+mode then stops before touching Render. Restore bounded pipeline capacity or
+wait for the billing reset, delete the variable, and dispatch the latest
+successful `main` SHA.
+
+Use `deploy_only` for runtime-only configuration after capacity is available:
+
+1. Read the exact SHA from the production `/health` revision header.
+2. Dispatch `Render Deploy Recovery` from current successful `main`.
+3. Select `deploy_only` and enter that production SHA as `runtime_revision`.
+4. Verify the workflow's exact health and readiness evidence.
+
+`deploy_only` rejects a service whose current live artifact does not match the
+supplied SHA. It reuses that artifact, applies saved environment values, and
+does not build new code. It restarts only API, then requires the supplied SHA
+from `/health` and the exact leaderboard contracts from the live API. Render's
+branch label is recorded but is not artifact evidence. Render currently applies
+the workspace pipeline quota before both deployment modes, so `deploy_only` is
+not a quota bypass.
+
 The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
 implementation, and Base RPC configuration. Canonical planners fail closed
 without Postgres and the active protocol addresses.
+
+### Recover a hosted API that returns 404
+
+Run the deterministic public probe against the URL shown in Render, not a URL
+copied from an old issue or deployment record:
+
+```powershell
+python scripts\diagnose_hosted_api.py `
+  --base-url https://agent-bounties-api.onrender.com `
+  --json-out target\operations\hosted-api-diagnosis.json `
+  --md-out target\operations\hosted-api-diagnosis.md
+```
+
+The command checks DNS and the three public contracts required by the funding
+page: `/health` must return the exact body `ok`, while
+`/v1/readiness/live-money` and `/v1/bounties/funding-feed` must return JSON. A
+nonzero exit is expected until all three contracts pass. A 200 response with a
+static HTML body is classified as a route mismatch rather than healthy.
+
+For an all-404 result, repair in this order:
+
+1. In Render, open **Blueprints** and apply the repository-root `render.yaml`
+   from `NSPG13/agent-bounties` on branch `main`. If the Blueprint does not
+   exist, use **New > Blueprint**, connect the repository, and apply it.
+2. Confirm the Blueprint created the Docker web service
+   `agent-bounties-api`. Its settings must point at `./Dockerfile`, use the
+   repository root as Docker context, and use `/health` as the health check.
+3. Confirm the service variables are `APP_PACKAGE=api` and `APP_BINARY=api`.
+   A worker or MCP binary on this hostname does not expose the funding routes.
+4. Copy the service's current `onrender.com` URL from **Settings** and rerun the
+   diagnostic against it. Do not infer the hostname from the service name.
+5. If the Render URL passes, attach and verify `api.bountyboard.global`, set
+   `PUBLIC_BASE_URL=https://api.bountyboard.global` and
+   `MCP_BASE_URL=https://mcp.bountyboard.global`, then set the repository
+   Actions variable `PRODUCTION_API_BASE_URL` to the verified API URL.
+6. Run `python scripts\check-render-blueprint.py`, dispatch **Render Deploy
+   Recovery** for the latest successful `main` revision, and rerun the
+   diagnostic plus the production smoke check.
+
+The API starts with public Stripe Checkout disabled. After reachability is
+repaired, configure these API-service values in Render:
+
+```text
+STRIPE_SECRET_KEY=sk_test_...                 # secret; use test mode first
+STRIPE_WEBHOOK_SECRET=whsec_...               # secret; signed endpoint
+STRIPE_API_BASE_URL=                           # empty means Stripe default
+STRIPE_PAYMENT_METHOD_CONFIGURATION=          # optional PayPal-capable Dashboard configuration
+OPERATOR_API_TOKEN=<generated secret>
+ENABLE_STRIPE_LIVE_EXECUTION=true
+ENABLE_STRIPE_PUBLIC_CHECKOUT=true
+ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false
+```
+
+Keep both enable flags false until the signed webhook, limits, and test-mode
+rehearsal in [`live-money-activation.md`](live-money-activation.md) pass. Health
+or readiness success is reachability evidence only: it does not create funding,
+credit a balance, authorize payout, or prove a bounty is payable.
 
 ## Environment
 
@@ -101,12 +232,15 @@ control. Every address must have a public incident record. Malformed values stop
 API and MCP startup; configured contracts remain visible in the full canonical
 feed but cannot appear as earning-ready work or verifier jobs.
 
-Secrets belong in Render environment groups, never in Git:
+Shared secrets belong in Render environment groups, never in Git:
 
 - `DATABASE_URL`,
 - managed RPC credentials,
 - optional `OPERATOR_API_TOKEN` for non-protocol administrative surfaces,
 - future Stripe secrets and verified webhook secret.
+
+The hosted model credential is a direct API-service secret, not a shared
+environment-group value. This prevents MCP and the indexer from receiving it.
 
 The separate `RENDER_API_KEY` belongs only in GitHub Actions and is never
 injected into an application container.
@@ -136,24 +270,24 @@ Before any deployment:
 ## Testnet Deployment
 
 Use a dedicated deployer wallet with only testnet funds. Do not paste a seed
-phrase or private key into chat, Git, shell history, or committed files.
+phrase or private key into chat, Git, shell history, browser storage, or
+committed files. The current exact addresses, constructor inputs, bytecode, and
+test-USDC seed are pinned in
+[`deployments/base-sepolia-sponsor-activation.json`](../deployments/base-sepolia-sponsor-activation.json).
 
 ```powershell
 $env:Path = "$PWD\.tools\foundry;$env:Path"
-cd contracts\base-escrow
-forge test --fuzz-runs 1000
-forge create `
-  --broadcast `
-  --chain 84532 `
-  --rpc-url $env:BASE_SEPOLIA_RPC_URL `
-  --private-key $env:BASE_DEPLOYER_PRIVATE_KEY `
-  src/AgentBountyFactory.sol:AgentBountyFactory `
-  --constructor-args 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+forge test --root contracts\base-escrow --fuzz-runs 1000
+python -m http.server 8879 --bind 127.0.0.1
 ```
 
-After confirmation, read `implementation()` from the factory, verify both
-contracts on a Base-compatible explorer, record runtime code hashes and the
-deployment block, then set the Sepolia environment variables.
+Open
+`http://127.0.0.1:8879/tools/base-sepolia-sponsor-activation.html` in the
+browser profile containing the deployer wallet. The locked console verifies
+every action before requesting a wallet confirmation and supports safe resume
+after each confirmed component. See
+[`base-sepolia-runbook.md`](base-sepolia-runbook.md) for regeneration, native
+USDC fork, post-deploy attestation, hosted configuration, and full-loop gates.
 
 ## Mainnet Activation
 
@@ -242,8 +376,8 @@ persistence.
 python scripts\check-site.py
 python scripts\check-render-blueprint.py
 cargo run -p cli -- production-smoke `
-  --api-base-url https://agent-bounties-api.onrender.com `
-  --mcp-base-url https://agent-bounties-mcp.onrender.com
+  --api-base-url https://api.agentbounties.app `
+  --mcp-base-url https://mcp.agentbounties.app
 ```
 
 Check:
@@ -261,8 +395,8 @@ Run the bounded operational controller after production smoke:
 ```powershell
 python scripts\self_heal.py observe `
   --policy ops\self-healing-policy.json `
-  --api-url https://agent-bounties-api.onrender.com `
-  --mcp-url https://agent-bounties-mcp.onrender.com `
+  --api-url https://api.agentbounties.app `
+  --mcp-url https://mcp.agentbounties.app `
   --expected-revision <deployed-git-sha> `
   --snapshot-out target\operations\snapshot.json `
   --plan-out target\operations\recovery-plan.json

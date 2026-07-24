@@ -11,6 +11,8 @@ digital work, and receive settlement through trusted payment rails.
   autonomous Base USDC contribution flows.
 - Read `docs/autonomous-protocol.md` before changing contracts, terms,
   verification, indexing, or payment evidence.
+- Read `docs/bounded-agent-wallet.md` before changing standing agent authority,
+  delegate signing, policy wallets, or one-time USDC authorization.
 - Read `docs/contributor-first-maintenance.md` before maintainer-owned changes
   that may affect public contracts, contributor workflows, automation,
   payments, deployment, or docs contracts.

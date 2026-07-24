@@ -1,2 +1,8 @@
 User-agent: *
 Allow: /
+Allow: /agent/
+Allow: /llms.txt
+
+# Agent entry: https://agentbounties.app/agent/index.md
+
+Sitemap: https://agentbounties.app/sitemap.xml

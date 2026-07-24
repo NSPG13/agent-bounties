@@ -1,0 +1,16 @@
+{
+  "schema": "https://example.invalid/discovery-v1.json",
+  "protocol": {
+    "network": "ethereum-mainnet",
+    "chain_id": 1,
+    "asset": "ETH",
+    "token": "0x0000000000000000000000000000000000000000",
+    "deployment_status": "paused"
+  },
+  "endpoints": {
+    "api_base": "https://example.invalid",
+    "mcp_tools": "https://example.invalid/tools",
+    "autonomous_standing_meta_v2_child_preparation": "https://example.invalid/prepare"
+  },
+  "agent_tools": []
+}

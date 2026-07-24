@@ -3,9 +3,13 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-export const DEFAULT_API_BASE_URL = "https://agent-bounties-api.onrender.com";
-export const DEFAULT_PROTOCOL_URL = "https://nspg13.github.io/agent-bounties/protocol.json";
+export const DEFAULT_API_BASE_URL = "https://api.agentbounties.app";
+export const DEFAULT_PROTOCOL_URL = "https://agentbounties.app/protocol.json";
 export const DEFAULT_BASE_RPC_URL = "https://base-rpc.publicnode.com";
+export const DEFAULT_BASE_RPC_FALLBACK_URLS = Object.freeze([
+  "https://mainnet.base.org",
+]);
+export const CLAIM_HANDOFF_SCHEMA_VERSION = "agent-bounties/check-in-claim-handoff-v1";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
@@ -31,17 +35,29 @@ const KECCAK_ROUND_CONSTANTS = Object.freeze([
 ]);
 const TERMS_SOURCE_COMMIT = "907f8741f8127a9610aa796cbce15c91a0bc690a";
 export const STANDING_META_BOUNTY = Object.freeze({
-  schemaVersion: "agent-bounties/standing-meta-bounty-v1",
+  schemaVersion: "agent-bounties/standing-meta-bounty-v2",
   inventoryClass: "post_bounty_third_party_completion",
-  verifierProtocol: "agent-bounties/canonical-child-v1",
-  verifierModule: "0x40adac5a1d00a725f77682f8940b893eaed31ecf",
-  verifierRuntimeCodeHash: "0xbb6d6df11b85f59b5010aa61f4caf499fb27b94a0f5978aff85fa97ed2bbd2c3",
-  acceptanceCriteriaHash: "0xa103c2c907f96e03a2f2b0e6b2209e0a3ca53686f7e9f79d89d7bfa1f8e314de",
+  verifierProtocol: "agent-bounties/independent-child-v2",
+  verifierModule: "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+  verifierRuntimeCodeHash: "0xe3b6e82880edee69b1f30560506ac80a46b4ebcc6c083cfa8207e3673eede26c",
+  acceptanceCriteriaHash: "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54",
+  childEngine: "sandboxed_regression_v1",
+  childVerifierSetHash: "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+  childVerifierThreshold: 2,
+  participantRegistry: "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294",
+  termsRegistry: "0x35e5d49c12b75c119d33951c2c4f054c5732208c",
+  requiredEvidence: Object.freeze([
+    "child_bounty_contract",
+    "discovery_source",
+    "participation_reason",
+    "improvement_feedback",
+  ]),
   acceptanceCriteria: Object.freeze([
-    "Post a canonical autonomous-v1 child bounty whose creator is the active solver.",
-    "Fully fund the child to at least the parent solver reward; pooled contributors are allowed.",
-    "Bind the child benchmark to the parent bounty ID and round and use an explicit deterministic verifier.",
-    "Have a different wallet complete the child and receive canonical settlement before the parent verification deadline.",
+    "Publish the exact child terms on Base from the parent solver wallet before claiming this bounty.",
+    "Create and fully fund the parent-bound canonical child to at least this bounty solver reward.",
+    "Use the committed sandboxed-regression signed verifier quorum and immutable task criteria.",
+    "Have a participant registered before the parent claim, with a different participant ID, complete the child.",
+    "Receive canonical child settlement before submitting the child address to this verifier.",
   ]),
 });
 
@@ -179,6 +195,156 @@ function normalizePublicUrl(value, label) {
     throw new Error(`${label} must be a credential-free HTTPS URL`);
   }
   return url.toString();
+}
+
+export function githubIssueNumberFromSourceUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== "https:"
+    || url.hostname.toLowerCase() !== "github.com"
+    || url.port
+    || url.username
+    || url.password
+    || url.search
+    || url.hash
+  ) return null;
+  const match = /^\/[^/]+\/[^/]+\/issues\/([1-9][0-9]*)$/.exec(url.pathname);
+  if (!match) return null;
+  const issue = Number(match[1]);
+  return Number.isSafeInteger(issue) ? issue : null;
+}
+
+function sourceUrlFromDocument(document) {
+  const value = document?.source_url;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function normalizeSolverWallet(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const wallet = String(value).trim().toLowerCase();
+  if (!ADDRESS.test(wallet)) throw new Error("solver wallet is not an address");
+  return wallet;
+}
+
+function claimIdempotencyKey(contract, solverWallet) {
+  return `portable-check-in:${contract.slice(2)}:${solverWallet.slice(2)}`;
+}
+
+export function buildClaimHandoff(bounty, solverWallet, apiBaseUrl) {
+  const solver = normalizeSolverWallet(solverWallet);
+  const creator = normalizeSolverWallet(bounty.creator);
+  const sourceIssueNumber = bounty.source_issue_number;
+  const githubAvailable = Number.isSafeInteger(sourceIssueNumber) && sourceIssueNumber > 0;
+  const ready = solver !== null && solver !== creator;
+  const reason = solver === null
+    ? "public_solver_wallet_required"
+    : (solver === creator ? "creator_cannot_claim" : "claim_handoff_complete");
+  const requiredInput = solver === creator
+    ? "non_creator_public_base_address"
+    : (solver === null ? "public_base_address" : null);
+  const claimRequest = ready ? {
+    idempotency_key: claimIdempotencyKey(bounty.contract, solver),
+    network: "base-mainnet",
+    bounty_contract: bounty.contract,
+    solver_wallet: solver,
+    request_bond_sponsorship: true,
+    source: "portable-check-in",
+  } : null;
+  const addressTemplate = "0xYOUR_PUBLIC_BASE_ADDRESS";
+  const issueCommandTemplate = githubAvailable
+    ? `/claim #${sourceIssueNumber} wallet: ${addressTemplate}`
+    : null;
+
+  return {
+    schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+    ready,
+    ready_scope: "claim_handoff_only",
+    wallet_readiness_checked: false,
+    reason,
+    required_input: requiredInput,
+    preferred_path: githubAvailable ? "github_claim_comment" : "agent_native_claim",
+    rerun_command: ready
+      ? null
+      : `node skills/agent-bounties/scripts/check-in.mjs --solver-wallet ${addressTemplate}`,
+    github_claim: githubAvailable ? {
+      issue_url: bounty.source_url,
+      comment_body: ready ? `/claim #${sourceIssueNumber} wallet: ${solver}` : null,
+      comment_body_template: issueCommandTemplate,
+      effect: "Creates or replays hosted claim coordination; it does not claim the contract by itself.",
+    } : null,
+    mcp: {
+      tool: "agent_native_claim",
+      arguments: claimRequest,
+    },
+    api: {
+      method: "POST",
+      url: `${apiBaseUrl}/v1/base/autonomous-bounties/claims`,
+      body: claimRequest,
+    },
+    direct_wallet_fallback: {
+      claim_plan_url: bounty.claim_plan_url,
+      unsigned_plan: bounty.claim_plan || null,
+    },
+    follow_up:
+      "Confirm the wallet can sign under its bounded policy, then follow the returned state. Sign only its exact wallet_request, replay next_request with the unchanged wallet_signature, and start work only after a canonical claim event.",
+    evidence_boundary:
+      "This handoff is read-only output. It did not post a comment, create a candidate, sign, broadcast, claim, fund, submit, verify, or settle.",
+  };
+}
+
+function nextActionFor(verified) {
+  if (verified.length === 0) {
+    return {
+      schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+      action: "post_own_bounty",
+      ready: true,
+      url: "https://agentbounties.app/post.html",
+    };
+  }
+  const selected = verified.find((item) => item.claim_handoff.ready) || verified[0];
+  const handoff = selected.claim_handoff;
+  if (!handoff.ready) {
+    return {
+      schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+      action: "rerun_with_solver_wallet",
+      ready: false,
+      reason: handoff.reason,
+      required_input: handoff.required_input,
+      command: handoff.rerun_command,
+      bounty_id: selected.id,
+      source_issue_number: selected.source_issue_number,
+      never_request: ["private_key", "seed_phrase"],
+    };
+  }
+  if (handoff.github_claim) {
+    return {
+      schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+      action: "post_github_claim_comment",
+      ready: true,
+      ready_scope: "claim_handoff_only",
+      bounty_id: selected.id,
+      source_issue_number: selected.source_issue_number,
+      issue_url: handoff.github_claim.issue_url,
+      comment_body: handoff.github_claim.comment_body,
+      follow_up: handoff.follow_up,
+    };
+  }
+  return {
+    schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
+    action: "call_agent_native_claim",
+    ready: true,
+    ready_scope: "claim_handoff_only",
+    bounty_id: selected.id,
+    mcp: handoff.mcp,
+    api: handoff.api,
+    follow_up: handoff.follow_up,
+  };
 }
 
 async function request(url, parseJson) {
@@ -465,6 +631,7 @@ function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, c
   const normalized = {
     id: bounty.bounty_id.toLowerCase(),
     contract: bounty.contract.toLowerCase(),
+    creator: bounty.creator.toLowerCase(),
     issue: bounty.issue,
     title: bounty.title,
     solver_reward_minor: bounty.solver_reward_minor,
@@ -480,6 +647,7 @@ function normalizedDirectBounty(manifest, bounty, observedBlock, timeoutBonus, c
     terms_path: bounty.terms_path,
     terms_url: `https://github.com/NSPG13/agent-bounties/blob/${TERMS_SOURCE_COMMIT}/bounties/autonomous-v1/${bounty.issue}.json`,
     source_url: bounty.source_url,
+    source_issue_number: githubIssueNumberFromSourceUrl(bounty.source_url),
     claim_plan_url: null,
     claim_plan: claimPlan,
     claim_contract: bounty.contract.toLowerCase(),
@@ -759,15 +927,27 @@ function hostedStandingMetaCandidate(item) {
   return Boolean(
     item?.verification_mode === "deterministic_module"
       && String(item?.verifier_module || "").toLowerCase() === STANDING_META_BOUNTY.verifierModule
+      && String(item?.terms?.acceptance_criteria_hash || "").toLowerCase()
+        === STANDING_META_BOUNTY.acceptanceCriteriaHash
       && exactStrings(document?.acceptance_criteria, STANDING_META_BOUNTY.acceptanceCriteria)
       && policy?.mechanism === "deterministic_module"
       && String(policy?.verifier_module || "").toLowerCase() === STANDING_META_BOUNTY.verifierModule
       && policy?.threshold === 1
-      && benchmark?.engine === "canonical_child_loop_v1"
+      && policy?.self_verification_forbidden === true
+      && benchmark?.engine === "standing_meta_v2_parent"
+      && typeof benchmark?.lane === "string"
+      && benchmark.lane.trim().length > 0
+      && benchmark?.required_child_engine === STANDING_META_BOUNTY.childEngine
       && benchmark?.required_child_status === "settled"
-      && String(benchmark?.verifier_module || "").toLowerCase() === STANDING_META_BOUNTY.verifierModule
-      && Array.isArray(requiredEvidence)
-      && requiredEvidence.includes("child_bounty_contract"),
+      && String(benchmark?.required_child_verifier_set_hash || "").toLowerCase()
+        === STANDING_META_BOUNTY.childVerifierSetHash
+      && benchmark?.required_child_verifier_threshold
+        === STANDING_META_BOUNTY.childVerifierThreshold
+      && String(benchmark?.participant_registry || "").toLowerCase()
+        === STANDING_META_BOUNTY.participantRegistry
+      && String(benchmark?.terms_registry || "").toLowerCase()
+        === STANDING_META_BOUNTY.termsRegistry
+      && exactStrings(requiredEvidence, STANDING_META_BOUNTY.requiredEvidence),
   );
 }
 
@@ -802,9 +982,7 @@ function standingMetaDescriptor({
   };
 }
 
-async function attestStandingMetaVerifier(rpcUrl, rpcTransport) {
-  try {
-    const rpc = normalizeRpcUrl(rpcUrl);
+async function attestStandingMetaVerifierAt(rpc, rpcTransport) {
     const blocks = await rpcTransport(rpc, [
       { key: "standing_meta_safe_block", method: "eth_getBlockByNumber", params: ["safe", false] },
     ]);
@@ -830,19 +1008,44 @@ async function attestStandingMetaVerifier(rpcUrl, rpcTransport) {
       ready: codeHash === STANDING_META_BOUNTY.verifierRuntimeCodeHash,
       codeHash,
       observedBlock,
+      rpc_url: rpc,
       warning: codeHash === STANDING_META_BOUNTY.verifierRuntimeCodeHash
         ? null
         : "standing_meta_verifier_code_mismatch",
     };
-  } catch (error) {
-    return {
-      ready: false,
-      codeHash: null,
-      observedBlock: null,
-      warning: "standing_meta_verifier_attestation_failed",
-      detail: error instanceof Error ? error.message : String(error),
-    };
+}
+
+async function attestStandingMetaVerifier(rpcUrl, rpcTransport) {
+  const candidates = [...new Set([
+    ...String(rpcUrl || DEFAULT_BASE_RPC_URL).split(","),
+    ...DEFAULT_BASE_RPC_FALLBACK_URLS,
+  ].map((value) => value.trim()).filter(Boolean))];
+  const failures = [];
+  for (const candidate of candidates) {
+    let rpc;
+    try {
+      rpc = normalizeRpcUrl(candidate);
+    } catch (error) {
+      failures.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return await attestStandingMetaVerifierAt(rpc, rpcTransport);
+      } catch (error) {
+        failures.push(`${rpc} attempt ${attempt}: ${error instanceof Error ? error.message : String(error)}`);
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
   }
+  return {
+    ready: false,
+    codeHash: null,
+    observedBlock: null,
+    rpc_url: null,
+    warning: "standing_meta_verifier_attestation_failed",
+    detail: failures.join(" | ").slice(0, 2_000),
+  };
 }
 
 export function verifyClaimableItem(item, protocol) {
@@ -914,9 +1117,11 @@ export function verifyClaimableItem(item, protocol) {
 }
 
 function normalizedBounty(item, apiBaseUrl, standingMetaAttestation = null) {
+  const sourceUrl = sourceUrlFromDocument(item.terms.document);
   const normalized = {
     id: item.bounty_id,
     contract: item.bounty_contract,
+    creator: item.creator.toLowerCase(),
     title: item.terms.document.title,
     solver_reward_minor: integerOf(item.solver_reward),
     completion_bonus_minor: integerOf(item.timeout_bond_pool),
@@ -925,6 +1130,8 @@ function normalizedBounty(item, apiBaseUrl, standingMetaAttestation = null) {
     status: item.status,
     evidence: "confirmed_canonical_autonomous_bounty",
     terms_url: `${apiBaseUrl}/v1/base/autonomous-bounties/terms/${item.terms_hash}`,
+    source_url: sourceUrl,
+    source_issue_number: githubIssueNumberFromSourceUrl(sourceUrl),
     claim_plan_url: `${apiBaseUrl}/v1/base/autonomous-bounties/claim-plan`,
     verification_mode: item.verification_mode,
     verifier_module: item.verifier_module?.toLowerCase() || null,
@@ -966,6 +1173,7 @@ export async function collectInventory({
   fixture = null,
 }) {
   const api = normalizeApiBaseUrl(apiBaseUrl || DEFAULT_API_BASE_URL);
+  const solver = normalizeSolverWallet(solverWallet);
   const protocolEndpoint = normalizePublicUrl(protocolUrl, "Protocol URL");
   const [health, protocolResponse, feedResponse, jobsResponse] = await Promise.all([
     fixture ? fixture.health : request(`${api}/health`, false),
@@ -1018,7 +1226,7 @@ export async function collectInventory({
       manifest,
       rpcUrl: baseRpcUrl,
       rpcTransport,
-      solverWallet,
+      solverWallet: solver,
     });
     const existingIds = new Set(verified.map((item) => item.id.toLowerCase()));
     for (const item of direct.verified) {
@@ -1042,6 +1250,10 @@ export async function collectInventory({
   if (standingMetaAttestation?.warning) warnings.push(standingMetaAttestation.warning);
   if (!verified.length) warnings.push("no_verified_funded_bounty_is_claimable");
 
+  for (const item of verified) {
+    item.claim_handoff = buildClaimHandoff(item, solver, api);
+  }
+
   return {
     observed_at: new Date().toISOString(),
     api_base_url: api,
@@ -1061,11 +1273,12 @@ export async function collectInventory({
     live_verification_jobs:
       jobsResponse?.status === 200 ? itemsFrom(jobsResponse.body) : [],
     recommended_action: verified.length ? "claim_verified_bounty" : "post_own_bounty",
+    next_action: nextActionFor(verified),
     links: {
-      post_own_bounty: "https://nspg13.github.io/agent-bounties/post.html",
-      fund_bounty: "https://nspg13.github.io/agent-bounties/funding.html",
+      post_own_bounty: "https://agentbounties.app/post.html",
+      fund_bounty: "https://agentbounties.app/funding.html",
       repository: "https://github.com/NSPG13/agent-bounties",
-      llms_txt: "https://nspg13.github.io/agent-bounties/llms.txt",
+      llms_txt: "https://agentbounties.app/llms.txt",
     },
     warnings,
     evidence_boundary:

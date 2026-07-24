@@ -65,7 +65,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "thiserror 2.0.18",
+ "thiserror",
 ]
 
 [[package]]
@@ -121,7 +121,7 @@ dependencies = [
  "alloy-rlp",
  "crc",
  "serde",
- "thiserror 2.0.18",
+ "thiserror",
 ]
 
 [[package]]
@@ -146,7 +146,7 @@ dependencies = [
  "alloy-rlp",
  "borsh",
  "serde",
- "thiserror 2.0.18",
+ "thiserror",
 ]
 
 [[package]]
@@ -169,7 +169,7 @@ dependencies = [
  "serde",
  "serde_with",
  "sha2",
- "thiserror 2.0.18",
+ "thiserror",
 ]
 
 [[package]]
@@ -210,7 +210,7 @@ dependencies = [
  "http",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror",
  "tracing",
 ]
 
@@ -237,7 +237,7 @@ dependencies = [
  "futures-utils-wasm",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror",
 ]
 
 [[package]]
@@ -313,7 +313,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror",
  "tokio",
  "tracing",
  "url",
@@ -406,7 +406,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "thiserror 2.0.18",
+ "thiserror",
 ]
 
 [[package]]
@@ -432,7 +432,7 @@ dependencies = [
  "either",
  "elliptic-curve",
  "k256",
- "thiserror 2.0.18",
+ "thiserror",
 ]
 
 [[package]]
@@ -448,7 +448,7 @@ dependencies = [
  "async-trait",
  "k256",
  "rand 0.8.7",
- "thiserror 2.0.18",
+ "thiserror",
 ]
 
 [[package]]
@@ -536,7 +536,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror",
  "tokio",
  "tower",
  "tracing",
@@ -663,6 +663,7 @@ dependencies = [
  "bounty-router",
  "chain-base",
  "chrono",
+ "cloud-agent",
  "db",
  "domain",
  "eval-harness",
@@ -672,9 +673,11 @@ dependencies = [
  "ledger",
  "payments-stripe",
  "payments-x402",
+ "reqwest",
  "risk",
  "serde",
  "serde_json",
+ "service-runtime",
  "sha2",
  "tokio",
  "tower-http 0.5.2",
@@ -699,7 +702,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror 1.0.69",
+ "thiserror",
  "tokio",
  "uuid",
  "verifier-sdk",
@@ -1174,7 +1177,7 @@ version = "0.1.0"
 dependencies = [
  "domain",
  "serde",
- "thiserror 1.0.69",
+ "thiserror",
  "utoipa",
  "uuid",
 ]
@@ -1277,9 +1280,10 @@ dependencies = [
  "serde_json",
  "sha2",
  "sha3 0.10.9",
- "thiserror 1.0.69",
+ "thiserror",
  "tokio",
  "uuid",
+ "verifier-sdk",
 ]
 
 [[package]]
@@ -1298,9 +1302,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.1"
+version = "4.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ddb117e43bbf7dacf0a4190fef4d345b9bad68dfc649cb349e7d17d28428e51"
+checksum = "dd059f9da4f5c36b3787f65d38ccaab1cc315f07b01f89abc8359ee6a8205011"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1308,9 +1312,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.0"
+version = "4.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "714a53001bf66416adb0e2ef5ac857140e7dc3a0c48fb28b2f10762fc4b5069f"
+checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1346,6 +1350,7 @@ dependencies = [
  "chain-base",
  "chrono",
  "clap",
+ "db",
  "domain",
  "eval-harness",
  "github-app",
@@ -1361,6 +1366,19 @@ dependencies = [
  "uuid",
  "verifier-sdk",
  "web-public",
+]
+
+[[package]]
+name = "cloud-agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "utoipa",
 ]
 
 [[package]]
@@ -1609,11 +1627,13 @@ dependencies = [
  "chain-base",
  "chrono",
  "domain",
+ "hex",
  "ledger",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
- "thiserror 1.0.69",
+ "thiserror",
  "tokio",
  "uuid",
 ]
@@ -1722,7 +1742,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror",
  "utoipa",
  "uuid",
 ]
@@ -1859,7 +1879,7 @@ dependencies = [
  "risk",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror",
  "tokio",
  "utoipa",
  "uuid",
@@ -2142,7 +2162,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror 1.0.69",
+ "thiserror",
  "uuid",
 ]
 
@@ -2701,7 +2721,7 @@ dependencies = [
  "domain",
  "proptest",
  "serde",
- "thiserror 1.0.69",
+ "thiserror",
  "uuid",
 ]
 
@@ -2818,8 +2838,10 @@ dependencies = [
  "risk",
  "serde",
  "serde_json",
+ "service-runtime",
  "tokio",
  "tower-http 0.5.2",
+ "url",
  "uuid",
  "web-public",
  "worker",
@@ -3052,7 +3074,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror 1.0.69",
+ "thiserror",
  "tokio",
  "uuid",
 ]
@@ -3066,7 +3088,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror",
 ]
 
 [[package]]
@@ -3315,7 +3337,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror 2.0.18",
+ "thiserror",
  "tokio",
  "tracing",
  "web-time",
@@ -3337,7 +3359,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.18",
+ "thiserror",
  "tinyvec",
  "tracing",
  "web-time",
@@ -3602,7 +3624,7 @@ version = "0.1.0"
 dependencies = [
  "domain",
  "serde",
- "thiserror 1.0.69",
+ "thiserror",
  "utoipa",
  "uuid",
 ]
@@ -3992,6 +4014,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "service-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "app",
+ "chain-base",
+ "chrono",
+ "db",
+ "domain",
+ "eval-harness",
+ "ledger",
+ "uuid",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4167,7 +4204,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
- "thiserror 2.0.18",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -4252,7 +4289,7 @@ dependencies = [
  "smallvec",
  "sqlx-core",
  "stringprep",
- "thiserror 2.0.18",
+ "thiserror",
  "tracing",
  "uuid",
  "whoami",
@@ -4291,7 +4328,7 @@ dependencies = [
  "smallvec",
  "sqlx-core",
  "stringprep",
- "thiserror 2.0.18",
+ "thiserror",
  "tracing",
  "uuid",
  "whoami",
@@ -4317,7 +4354,7 @@ dependencies = [
  "serde",
  "serde_urlencoded",
  "sqlx-core",
- "thiserror 2.0.18",
+ "thiserror",
  "tracing",
  "url",
  "uuid",
@@ -4425,19 +4462,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "thiserror"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
-dependencies = [
- "thiserror-impl 1.0.69",
 ]
 
 [[package]]
@@ -4446,18 +4474,7 @@ version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
 dependencies = [
- "thiserror-impl 2.0.18",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
+ "thiserror-impl",
 ]
 
 [[package]]
@@ -4537,9 +4554,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.52.3"
+version = "1.52.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
+checksum = "317fafbbe3f02fc663dad00ea6186197de963cd4190e86a26d8d0fae095539af"
 dependencies = [
  "bytes",
  "libc",
@@ -4854,9 +4871,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.23.4"
+version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf80a72845275afea99e7f2b434723d3bc7e38470fcd1c7ed39a599c73319a53"
+checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -4888,7 +4905,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror 1.0.69",
+ "thiserror",
  "tokio",
  "uuid",
 ]
@@ -5301,11 +5318,17 @@ dependencies = [
  "chrono",
  "db",
  "domain",
- "ledger",
+ "hex",
+ "hmac",
+ "reqwest",
  "serde",
  "serde_json",
+ "service-runtime",
+ "sha2",
  "tokio",
+ "uuid",
  "verifier-sdk",
+ "web-public",
 ]
 
 [[package]]

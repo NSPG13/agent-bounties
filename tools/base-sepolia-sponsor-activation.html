@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'unsafe-inline'">
+    <title>Base Sepolia Sponsor Activation</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #111315; color: #f4f5f5; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: #111315; }
+      main { width: min(960px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 64px; }
+      header { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding-bottom: 20px; border-bottom: 1px solid #34383b; }
+      h1 { margin: 0; font-size: 30px; line-height: 1.1; letter-spacing: 0; }
+      h2 { margin: 0 0 12px; font-size: 17px; letter-spacing: 0; }
+      p { color: #b8bec2; line-height: 1.55; }
+      code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #d9e7df; overflow-wrap: anywhere; }
+      .badge { padding: 6px 9px; border: 1px solid #4c5256; border-radius: 4px; color: #d9dddf; font-size: 12px; white-space: nowrap; }
+      section { padding: 24px 0; border-bottom: 1px solid #2b2f32; }
+      .facts { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 10px 18px; margin: 0; }
+      .facts dt { color: #8f989e; }
+      .facts dd { margin: 0; }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+      button, select { min-height: 42px; border: 1px solid #4b5358; border-radius: 6px; padding: 0 15px; background: #252a2d; color: #f8f9f9; font: inherit; font-weight: 650; }
+      button { cursor: pointer; }
+      select { min-width: 220px; }
+      button.primary { background: #e9f4ed; border-color: #e9f4ed; color: #152019; }
+      button:disabled { cursor: not-allowed; opacity: .42; }
+      output { display: block; min-height: 92px; margin-top: 16px; padding: 14px; border: 1px solid #343a3e; border-radius: 6px; background: #0b0d0e; color: #c8ced1; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+      output[data-tone="success"] { border-color: #3e7654; color: #cce8d4; }
+      output[data-tone="error"] { border-color: #8a4b4b; color: #f2c9c9; }
+      .fine { font-size: 13px; color: #929ba0; }
+      @media (max-width: 640px) { main { width: min(100% - 24px, 960px); padding-top: 24px; } header { align-items: start; flex-direction: column; } .facts { grid-template-columns: 1fr; gap: 4px; } .facts dd { margin-bottom: 10px; } button { flex: 1 1 100%; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Base Sepolia Sponsor Activation</h1>
+          <p>Locked autonomous-v1 testnet deployment and acquisition-budget console.</p>
+        </div>
+        <span class="badge">Testnet only</span>
+      </header>
+
+      <section>
+        <h2>Committed Components</h2>
+        <dl class="facts">
+          <dt>Source commit</dt><dd><code data-source-commit>Loading...</code></dd>
+          <dt>Deployer</dt><dd><code data-deployer>Loading...</code></dd>
+          <dt>Factory</dt><dd><code data-factory>Loading...</code></dd>
+          <dt>Implementation</dt><dd><code data-implementation>Loading...</code></dd>
+          <dt>Verifier</dt><dd><code data-verifier>Loading...</code></dd>
+          <dt>Atomic sponsor</dt><dd><code data-sponsor>Loading...</code></dd>
+          <dt>Policy signer</dt><dd><code data-grant-signer>Loading...</code></dd>
+          <dt>Sponsor seed</dt><dd><code>0.10 test USDC</code></dd>
+        </dl>
+        <p class="fine">This page accepts no address, amount, calldata, RPC, nonce, or contract override.</p>
+      </section>
+
+      <section>
+        <h2>1. Inspect Wallet And Chain</h2>
+        <p>Connect an injected wallet. Inspection checks Base Sepolia, the exact deployer, nonce continuity, balances, address occupancy, runtime bytecode, immutable getters, and live gas estimates.</p>
+        <div class="actions">
+          <select id="wallet-provider" aria-label="Wallet provider" disabled></select>
+          <button class="primary" id="inspect">Connect and inspect</button>
+        </div>
+        <output id="inspect-output">Waiting for wallet inspection.</output>
+      </section>
+
+      <section>
+        <h2>2. Deploy Canonical Factory</h2>
+        <p>Creates the reviewed autonomous-v1 factory and its implementation with zero ETH value.</p>
+        <button id="deploy-factory" disabled>Deploy exact factory</button>
+        <output id="factory-output">Disabled until inspection passes.</output>
+      </section>
+
+      <section>
+        <h2>3. Deploy Deterministic Verifier</h2>
+        <p>Creates the committed 16-bit leading-zero verifier with zero ETH value.</p>
+        <button id="deploy-verifier" disabled>Deploy exact verifier</button>
+        <output id="verifier-output">Disabled until the factory is verified.</output>
+      </section>
+
+      <section>
+        <h2>4. Deploy Atomic Claim Sponsor</h2>
+        <p>Creates the capped sponsor bound to the exact factory, native test USDC, and dedicated policy signer.</p>
+        <button id="deploy-sponsor" disabled>Deploy exact sponsor</button>
+        <output id="sponsor-output">Disabled until prior components are verified.</output>
+      </section>
+
+      <section>
+        <h2>5. Seed Test Acquisition Budget</h2>
+        <p>Transfers exactly 0.10 test USDC to the verified sponsor. This is not a bounty payment.</p>
+        <button id="fund-sponsor" disabled>Seed 0.10 test USDC</button>
+        <output id="funding-output">Disabled until the sponsor is verified.</output>
+      </section>
+    </main>
+    <script src="base-sepolia-sponsor-activation.js"></script>
+  </body>
+</html>

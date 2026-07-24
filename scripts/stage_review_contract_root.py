@@ -14,6 +14,7 @@ from pathlib import Path
 REQUIRED_SOURCES = (
     Path("crates/api/src/main.rs"),
     Path("crates/mcp-server/src/main.rs"),
+    Path("crates/mcp-server/fixtures/tool-registry.json"),
 )
 MAX_SOURCE_BYTES = 5 * 1024 * 1024
 

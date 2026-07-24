@@ -1,0 +1,49 @@
+name: Direct competitor intelligence
+
+on:
+  schedule:
+    - cron: "22 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: direct-competitor-intelligence
+  cancel-in-progress: false
+
+jobs:
+  collect-and-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COMPETITOR_INTELLIGENCE_DATABASE_URL: ${{ secrets.COMPETITOR_INTELLIGENCE_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install database driver
+        run: python -m pip install --disable-pip-version-check "psycopg[binary]>=3.2,<4"
+      - name: Collect reviewed public competitor evidence
+        run: |
+          if [ -z "$COMPETITOR_INTELLIGENCE_DATABASE_URL" ]; then
+            echo "::error title=Missing database configuration::Set the COMPETITOR_INTELLIGENCE_DATABASE_URL Actions secret to the restricted production Postgres connection string."
+            exit 1
+          fi
+          python scripts/competitor_intelligence.py \
+            --database-url "$COMPETITOR_INTELLIGENCE_DATABASE_URL" \
+            --require-database \
+            --json-out target/competitor-intelligence/daily-report.json \
+            --markdown-out target/competitor-intelligence/daily-report.md
+      - name: Publish daily report summary
+        if: always() && hashFiles('target/competitor-intelligence/daily-report.md') != ''
+        run: cat target/competitor-intelligence/daily-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload daily competitor report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: direct-competitor-intelligence-${{ github.run_id }}
+          path: target/competitor-intelligence/
+          if-no-files-found: warn
+          retention-days: 90

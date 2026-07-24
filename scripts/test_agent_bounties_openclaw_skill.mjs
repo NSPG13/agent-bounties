@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   collectInventory,
+  githubIssueNumberFromSourceUrl,
   keccak256Hex,
   normalizeApiBaseUrl,
   rpcBatchTransport,
@@ -113,6 +114,24 @@ test("local Ethereum Keccak-256 matches canonical vectors", () => {
   );
 });
 
+test("source issue parsing accepts only exact public GitHub issue URLs", () => {
+  assert.equal(
+    githubIssueNumberFromSourceUrl("https://github.com/NSPG13/agent-bounties/issues/275"),
+    275,
+  );
+  for (const value of [
+    undefined,
+    "",
+    "not a URL",
+    "http://github.com/NSPG13/agent-bounties/issues/275",
+    "https://github.com/NSPG13/agent-bounties/pull/275",
+    "https://github.com/NSPG13/agent-bounties/issues/0",
+    "https://github.com/NSPG13/agent-bounties/issues/275?claim=true",
+    "https://github.com/NSPG13/agent-bounties/issues/275#comment",
+    "https://example.com/NSPG13/agent-bounties/issues/275",
+  ]) assert.equal(githubIssueNumberFromSourceUrl(value), null);
+});
+
 function directTransport(manifest, mutate = null) {
   const byIssue = new Map(manifest.bounties.map((item) => [String(item.issue), item]));
   return async (_rpcUrl, calls) => {
@@ -197,20 +216,27 @@ function standingMetaTransport(runtimeCodeHash = STANDING_META_BOUNTY.verifierRu
 
 function makeHostedStandingMetaCandidate(item) {
   item.verifier_module = STANDING_META_BOUNTY.verifierModule;
+  item.terms.acceptance_criteria_hash = STANDING_META_BOUNTY.acceptanceCriteriaHash;
   item.terms.document.acceptance_criteria = [...STANDING_META_BOUNTY.acceptanceCriteria];
   item.terms.document.benchmark = {
-    engine: "canonical_child_loop_v1",
+    engine: "standing_meta_v2_parent",
+    lane: "cli",
+    required_child_engine: STANDING_META_BOUNTY.childEngine,
     required_child_status: "settled",
-    verifier_module: STANDING_META_BOUNTY.verifierModule,
+    required_child_verifier_set_hash: STANDING_META_BOUNTY.childVerifierSetHash,
+    required_child_verifier_threshold: STANDING_META_BOUNTY.childVerifierThreshold,
+    participant_registry: STANDING_META_BOUNTY.participantRegistry,
+    terms_registry: STANDING_META_BOUNTY.termsRegistry,
   };
   item.terms.document.evidence_schema = {
     type: "object",
-    required: ["child_bounty_contract"],
+    required: [...STANDING_META_BOUNTY.requiredEvidence],
   };
   item.terms.document.verification_policy = {
     mechanism: "deterministic_module",
     verifier_module: STANDING_META_BOUNTY.verifierModule,
     threshold: 1,
+    self_verification_forbidden: true,
   };
   return item;
 }
@@ -269,7 +295,7 @@ test("portable skill metadata and install contracts remain publishable", async (
   const activationItems = [...activation.bounties, ...standingMetaActivation.bounties];
 
   assert.match(skill, /^---\r?\nname: agent-bounties\r?\n/);
-  assert.match(skill, /\r?\nversion: 1\.3\.0\r?\n/);
+  assert.match(skill, /\r?\nversion: 1\.4\.5\r?\n/);
   assert.match(skill, /\r?\nauthor: Agent Bounties contributors\r?\n/);
   assert.match(skill, /\r?\n  hermes:\r?\n/);
   assert.match(skill, /\r?\n    category: agent-commerce\r?\n/);
@@ -284,10 +310,10 @@ test("portable skill metadata and install contracts remain publishable", async (
 
   assert.equal(plugin.name, "agent-bounties");
   assert.equal(plugin.displayName, "Agent Bounties");
-  assert.equal(plugin.version, "1.3.0");
+  assert.equal(plugin.version, "1.4.5");
   assert.equal(plugin.license, "MIT");
   assert.equal(plugin.repository, "https://github.com/NSPG13/agent-bounties");
-  assert.equal(plugin.homepage, "https://nspg13.github.io/agent-bounties/");
+  assert.equal(plugin.homepage, "https://agentbounties.app/");
   assert.equal(plugin.mcpServers, undefined);
   assert.equal(plugin.hooks, undefined);
   assert.equal(plugin.experimental, undefined);
@@ -309,6 +335,8 @@ test("portable skill metadata and install contracts remain publishable", async (
   assert.ok(llms.includes("--solver-wallet 0xYourPublicBaseAddress"));
   assert.ok(llms.includes("autonomous-bounty-plan"));
   assert.ok(skill.includes("autonomous-bounty-plan"));
+  assert.ok(skill.includes("label:claimable-live"));
+  assert.ok(skill.includes("funding-needed` is a crowdfunding opportunity"));
 
   assert.equal(chainManifest.factory, activation.deployment.expected_factory);
   assert.equal(chainManifest.implementation, activation.deployment.expected_implementation);
@@ -420,6 +448,7 @@ test("direct safe-chain verifier accepts deterministic module earning inventory"
   assert.equal(report.excluded.length, 0);
   for (const item of report.verified) {
     assert.equal(item.evidence_source, "direct_safe_chain");
+    assert.equal(item.source_issue_number, item.issue);
     assert.equal(item.claim_plan.ready, true);
     assert.deepEqual(
       item.claim_plan.wallet_calls.map((call) => call.function),
@@ -586,6 +615,23 @@ test("only active canonical autonomous inventory is claimable", async () => {
     report.verified_claimable_bounties[0].claim_plan_url,
     "https://api.example.test/v1/base/autonomous-bounties/claim-plan",
   );
+  assert.equal(
+    report.verified_claimable_bounties[0].source_url,
+    "https://github.com/NSPG13/agent-bounties/issues/275",
+  );
+  assert.equal(report.verified_claimable_bounties[0].source_issue_number, 275);
+  assert.equal(report.verified_claimable_bounties[0].claim_handoff.ready, false);
+  assert.equal(
+    report.verified_claimable_bounties[0].claim_handoff.reason,
+    "public_solver_wallet_required",
+  );
+  assert.equal(
+    report.verified_claimable_bounties[0].claim_handoff.github_claim.comment_body_template,
+    "/claim #275 wallet: 0xYOUR_PUBLIC_BASE_ADDRESS",
+  );
+  assert.equal(report.next_action.action, "rerun_with_solver_wallet");
+  assert.equal(report.next_action.required_input, "public_base_address");
+  assert.deepEqual(report.next_action.never_request, ["private_key", "seed_phrase"]);
   assert.deepEqual(
     report.excluded_claimable_candidates.map((item) => [item.id, item.reason]),
     [
@@ -598,6 +644,97 @@ test("only active canonical autonomous inventory is claimable", async () => {
   assert.equal(report.recommended_action, "claim_verified_bounty");
   assert.equal(report.funding_candidates.length, 1);
   assert.equal(report.live_verification_jobs.length, 1);
+});
+
+test("hosted check-in emits an exact side-effect-free claim handoff", async () => {
+  const solver = "0x7777777777777777777777777777777777777777";
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: await fixture("verified-claimable.json"),
+    solverWallet: solver,
+  });
+  const bounty = report.verified_claimable_bounties[0];
+  const handoff = bounty.claim_handoff;
+
+  assert.equal(handoff.schema_version, "agent-bounties/check-in-claim-handoff-v1");
+  assert.equal(handoff.ready, true);
+  assert.equal(handoff.ready_scope, "claim_handoff_only");
+  assert.equal(handoff.wallet_readiness_checked, false);
+  assert.equal(handoff.reason, "claim_handoff_complete");
+  assert.equal(handoff.preferred_path, "github_claim_comment");
+  assert.equal(handoff.github_claim.issue_url, bounty.source_url);
+  assert.equal(handoff.github_claim.comment_body, `/claim #275 wallet: ${solver}`);
+  assert.equal(handoff.mcp.tool, "agent_native_claim");
+  assert.deepEqual(handoff.mcp.arguments, {
+    idempotency_key: `portable-check-in:${bounty.contract.slice(2)}:${solver.slice(2)}`,
+    network: "base-mainnet",
+    bounty_contract: bounty.contract,
+    solver_wallet: solver,
+    request_bond_sponsorship: true,
+    source: "portable-check-in",
+  });
+  assert.equal(handoff.api.method, "POST");
+  assert.equal(
+    handoff.api.url,
+    "https://api.example.test/v1/base/autonomous-bounties/claims",
+  );
+  assert.deepEqual(handoff.api.body, handoff.mcp.arguments);
+  assert.match(handoff.evidence_boundary, /did not post a comment/);
+  assert.deepEqual(report.next_action, {
+    schema_version: "agent-bounties/check-in-claim-handoff-v1",
+    action: "post_github_claim_comment",
+    ready: true,
+    ready_scope: "claim_handoff_only",
+    bounty_id: bounty.id,
+    source_issue_number: 275,
+    issue_url: bounty.source_url,
+    comment_body: `/claim #275 wallet: ${solver}`,
+    follow_up: handoff.follow_up,
+  });
+});
+
+test("check-in refuses a creator wallet and invalid public addresses", async () => {
+  const input = await fixture("verified-claimable.json");
+  const creator = input.autonomous_feed.body[0].creator;
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: input,
+    solverWallet: creator,
+  });
+  const handoff = report.verified_claimable_bounties[0].claim_handoff;
+  assert.equal(handoff.ready, false);
+  assert.equal(handoff.reason, "creator_cannot_claim");
+  assert.equal(handoff.required_input, "non_creator_public_base_address");
+  assert.equal(handoff.github_claim.comment_body, null);
+  assert.equal(handoff.mcp.arguments, null);
+  assert.equal(handoff.api.body, null);
+  assert.equal(report.next_action.action, "rerun_with_solver_wallet");
+
+  await assert.rejects(
+    collectInventory({
+      apiBaseUrl: "https://api.example.test",
+      fixture: await fixture("verified-claimable.json"),
+      solverWallet: "not-a-wallet",
+    }),
+    /solver wallet is not an address/,
+  );
+});
+
+test("hosted inventory keeps absent or malformed source metadata non-authoritative", async () => {
+  for (const sourceUrl of [undefined, "not a URL"]) {
+    const input = await fixture("verified-claimable.json");
+    if (sourceUrl === undefined) delete input.autonomous_feed.body[0].terms.document.source_url;
+    else input.autonomous_feed.body[0].terms.document.source_url = sourceUrl;
+    const report = await collectInventory({
+      apiBaseUrl: "https://api.example.test",
+      fixture: input,
+    });
+    const bounty = report.verified_claimable_bounties[0];
+    assert.equal(bounty.source_url, sourceUrl ?? null);
+    assert.equal(bounty.source_issue_number, null);
+    assert.equal(bounty.claim_handoff.preferred_path, "agent_native_claim");
+    assert.equal(bounty.claim_handoff.github_claim, null);
+  }
 });
 
 test("hosted inventory emits a standing meta marker after exact-code safe-block attestation", async () => {
@@ -617,6 +754,31 @@ test("hosted inventory emits a standing meta marker after exact-code safe-block 
   assert.ok(!report.warnings.includes("standing_meta_verifier_attestation_failed"));
 });
 
+test("standing meta attestation retries and fails over without weakening bytecode checks", async () => {
+  const input = await fixture("verified-claimable.json");
+  makeHostedStandingMetaCandidate(input.autonomous_feed.body[0]);
+  const attempted = [];
+  const healthy = standingMetaTransport();
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: input,
+    baseRpcUrl: "https://unavailable-rpc.example.test",
+    rpcTransport: async (rpcUrl, calls) => {
+      attempted.push(rpcUrl);
+      if (rpcUrl.includes("unavailable-rpc")) throw new Error("transient RPC failure");
+      return healthy(rpcUrl, calls);
+    },
+  });
+
+  assert.equal(attempted.filter((url) => url.includes("unavailable-rpc")).length, 2);
+  assert.ok(attempted.some((url) => url.startsWith("https://mainnet.base.org")));
+  assert.equal(
+    report.verified_claimable_bounties[0].standing_meta_bounty.verifier_runtime_code_hash,
+    STANDING_META_BOUNTY.verifierRuntimeCodeHash,
+  );
+  assert.ok(!report.warnings.includes("standing_meta_verifier_attestation_failed"));
+});
+
 test("hosted meta-looking terms do not count when verifier bytecode differs", async () => {
   const input = await fixture("verified-claimable.json");
   makeHostedStandingMetaCandidate(input.autonomous_feed.body[0]);
@@ -630,6 +792,21 @@ test("hosted meta-looking terms do not count when verifier bytecode differs", as
   assert.equal(report.verified_claimable_bounties.length, 1);
   assert.equal(report.verified_claimable_bounties[0].standing_meta_bounty, undefined);
   assert.ok(report.warnings.includes("standing_meta_verifier_code_mismatch"));
+});
+
+test("hosted meta-looking terms do not count when the child quorum drifts", async () => {
+  const input = await fixture("verified-claimable.json");
+  const item = makeHostedStandingMetaCandidate(input.autonomous_feed.body[0]);
+  item.terms.document.benchmark.required_child_verifier_set_hash = `0x${"66".repeat(32)}`;
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: input,
+    baseRpcUrl: "https://rpc.example.test",
+    rpcTransport: standingMetaTransport(),
+  });
+
+  assert.equal(report.verified_claimable_bounties.length, 1);
+  assert.equal(report.verified_claimable_bounties[0].standing_meta_bounty, undefined);
 });
 
 test("hosted quorum bounty is excluded without a service availability attestation", async () => {
@@ -656,6 +833,7 @@ test("unavailable hosted API cannot create imaginary inventory", async () => {
   assert.equal(report.hosted_api_healthy, false);
   assert.deepEqual(report.verified_claimable_bounties, []);
   assert.equal(report.recommended_action, "post_own_bounty");
+  assert.equal(report.next_action.action, "post_own_bounty");
   assert.ok(report.warnings.includes("hosted_api_health_not_confirmed"));
   assert.ok(report.warnings.includes("autonomous_feed_unavailable"));
   assert.ok(report.warnings.includes("autonomous_protocol_not_active"));

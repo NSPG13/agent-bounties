@@ -23,8 +23,10 @@ risk = { path = "../risk" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+service-runtime = { path = "../service-runtime" }
 tokio.workspace = true
 tower-http.workspace = true
+url.workspace = true
 uuid.workspace = true
 web-public = { path = "../web-public" }
 worker = { path = "../worker" }

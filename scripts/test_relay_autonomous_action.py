@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import relay_autonomous_action as relay
 
@@ -12,6 +13,7 @@ CONTRACT = "0x4000000000000000000000000000000000000004"
 NOW = 1_800_000_000
 HASH_A = "0x" + "11" * 32
 HASH_B = "0x" + "22" * 32
+PRIVATE_KEY = "0x" + "01" * 32
 
 
 def bounty_state(**overrides: object) -> relay.BountyState:
@@ -123,6 +125,9 @@ class FakeClient:
         self.private_key = private_key
         return "0x3000000000000000000000000000000000000003"
 
+    def chain_id(self) -> int:
+        return relay.CHAIN_ID
+
     def estimate(self, keeper: str, contract: str, signature: str, *args: str) -> int:
         self.estimated = True
         self.estimate_args = (keeper, contract, signature, args)
@@ -178,7 +183,114 @@ class RelayTests(unittest.TestCase):
             with self.assertRaisesRegex(relay.RelayError, "disabled"):
                 relay.parse_event(path)
 
+    def test_invalid_network_replay_retains_source_and_gives_exact_correction(self) -> None:
+        fixture = Path(__file__).with_name("fixtures") / "autonomous_relay_invalid_network.json"
+        source, body = relay.parse_event_source(fixture)
+        self.assertEqual(source.issue_number, 244)
+        self.assertEqual(source.comment_id, 424424)
+        with self.assertRaises(relay.RelayError) as raised:
+            relay.parse_event_request(source, body)
+        self.assertIn('received \'Base\'', str(raised.exception))
+        self.assertEqual(
+            raised.exception.details["correction"],
+            'Set "network" to "base-mainnet" and post a new `/agent-bounty relay` command.',
+        )
+
+    def test_published_invalid_request_is_handled_without_initializing_keeper(self) -> None:
+        fixture = Path(__file__).with_name("fixtures") / "autonomous_relay_invalid_network.json"
+        published: list[tuple[relay.RelaySource, str]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "report.json"
+            comment_path = Path(directory) / "comment.md"
+            with (
+                mock.patch.object(
+                    relay,
+                    "publish_comment",
+                    side_effect=lambda source, comment, env: published.append((source, comment)),
+                ),
+                mock.patch.object(
+                    relay,
+                    "CastClient",
+                    side_effect=AssertionError("keeper must not initialize for malformed input"),
+                ),
+            ):
+                result = relay.main(
+                    [
+                        "--event",
+                        str(fixture),
+                        "--execute",
+                        "--publish",
+                        "--report",
+                        str(report_path),
+                        "--comment",
+                        str(comment_path),
+                    ]
+                )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            comment = comment_path.read_text(encoding="utf-8")
+        self.assertEqual(result, 0)
+        self.assertEqual(report["outcome"], "refused")
+        self.assertEqual(report["error_code"], "request_invalid")
+        self.assertEqual(report["workflow_disposition"], "handled_after_feedback")
+        self.assertEqual(report["action"], "submit")
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0][0].comment_id, 424424)
+        self.assertIn('Set "network" to "base-mainnet"', comment)
+        self.assertIn("No transaction was broadcast", comment)
+
+    def test_operational_relay_failure_remains_red_after_feedback(self) -> None:
+        payload = json.loads(
+            (Path(__file__).with_name("fixtures") / "autonomous_relay_invalid_network.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        body = str(payload["comment"]["body"]).replace('"network":"Base"', '"network":"base-mainnet"')
+        payload["comment"]["body"] = body
+        published: list[str] = []
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            report_path = Path(directory) / "report.json"
+            comment_path = Path(directory) / "comment.md"
+            event_path.write_text(json.dumps(payload), encoding="utf-8")
+            with (
+                mock.patch.object(relay, "CastClient", return_value=object()),
+                mock.patch.object(
+                    relay,
+                    "relay",
+                    side_effect=relay.RelayError(
+                        "keeper chain unavailable",
+                        code="keeper_chain_unavailable",
+                        retryable=True,
+                    ),
+                ),
+                mock.patch.object(
+                    relay,
+                    "publish_comment",
+                    side_effect=lambda source, comment, env: published.append(comment),
+                ),
+            ):
+                result = relay.main(
+                    [
+                        "--event",
+                        str(event_path),
+                        "--execute",
+                        "--publish",
+                        "--report",
+                        str(report_path),
+                        "--comment",
+                        str(comment_path),
+                    ]
+                )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(result, 1)
+        self.assertEqual(report["outcome"], "retryable")
+        self.assertEqual(report["error_code"], "keeper_chain_unavailable")
+        self.assertEqual(len(published), 2)
+
     def test_common_validation_rejects_noncanonical_and_large_bounties(self) -> None:
+        relay.validate_common(
+            bounty_state(verifier_module=relay.STANDING_META_V2_VERIFIER_MODULE)
+        )
         with self.assertRaisesRegex(relay.RelayError, "canonical"):
             relay.validate_common(bounty_state(canonical=False))
         with self.assertRaisesRegex(relay.RelayError, "5 USDC"):
@@ -258,11 +370,116 @@ class RelayTests(unittest.TestCase):
         relay.read_state = lambda ignored, contract, block=None: states.pop(0)  # type: ignore[assignment]
         try:
             report = relay.relay(
-                client, event(envelope), execute=True, private_key="secret"
+                client, event(envelope), execute=True, private_key=PRIVATE_KEY
             )
             return report, client
         finally:
             relay.read_state = original
+
+    def test_keeper_preflight_rejects_malformed_secret_before_chain_state(self) -> None:
+        original = relay.read_state
+        relay.read_state = (  # type: ignore[assignment]
+            lambda *args, **kwargs: self.fail("chain state read before signer preflight")
+        )
+        try:
+            with self.assertRaises(relay.RelayError) as raised:
+                relay.relay(
+                    FakeClient(),
+                    event(claim_envelope()),
+                    execute=True,
+                    private_key="not-a-key",
+                )
+        finally:
+            relay.read_state = original
+        self.assertEqual(raised.exception.code, "keeper_configuration_invalid")
+        self.assertTrue(raised.exception.retryable)
+
+    def test_keeper_health_checks_signer_chain_and_gas_reserve(self) -> None:
+        report = relay.keeper_health(FakeClient(), PRIVATE_KEY)
+        self.assertEqual(report["outcome"], "healthy")
+        self.assertEqual(report["chain_id"], relay.CHAIN_ID)
+        self.assertGreaterEqual(
+            report["keeper_balance_wei"], report["minimum_balance_wei"]
+        )
+
+    def test_settlement_uses_latest_state_after_bounded_predecessor_wait(self) -> None:
+        claimed = bounty_state(
+            status=relay.STATUS_CLAIMED,
+            round=1,
+            solver=SOLVER,
+            claim_expires_at=NOW + 1_000,
+            active_claim_bond=100_000,
+        )
+        submitted = bounty_state(
+            status=relay.STATUS_SUBMITTED,
+            round=1,
+            solver=SOLVER,
+            verification_expires_at=NOW + 1_000,
+            active_claim_bond=100_000,
+            submission_hash=HASH_A,
+            evidence_hash=HASH_B,
+        )
+        settled = bounty_state(
+            status=relay.STATUS_SETTLED,
+            round=1,
+            solver=SOLVER,
+            funded_amount=0,
+            submission_hash=HASH_A,
+            evidence_hash=HASH_B,
+        )
+        states = [claimed, submitted, settled]
+        blocks: list[str | None] = []
+        original = relay.read_state
+
+        def read(ignored, contract, block=None):
+            blocks.append(block)
+            return states.pop(0)
+
+        relay.read_state = read  # type: ignore[assignment]
+        try:
+            report = relay.relay(
+                FakeClient(),
+                event(settle_envelope()),
+                execute=True,
+                private_key=PRIVATE_KEY,
+                state_wait_seconds=5,
+                state_poll_seconds=0.1,
+                sleep_fn=lambda ignored: None,
+                clock=lambda: 0.0,
+            )
+        finally:
+            relay.read_state = original
+        self.assertEqual(report["outcome"], "relayed")
+        self.assertEqual(report["lifecycle_block_tag"], "latest")
+        self.assertEqual(report["state_attempts"], 2)
+        self.assertEqual(blocks, ["latest", "latest", "0x1234"])
+
+    def test_predecessor_wait_times_out_with_retryable_terminal_status(self) -> None:
+        client = FakeClient()
+        claimed = bounty_state(
+            status=relay.STATUS_CLAIMED,
+            round=1,
+            solver=SOLVER,
+            claim_expires_at=NOW + 1_000,
+            active_claim_bond=100_000,
+        )
+        original = relay.read_state
+        relay.read_state = lambda ignored, contract, block=None: claimed  # type: ignore[assignment]
+        try:
+            with self.assertRaises(relay.RelayError) as raised:
+                relay.relay(
+                    client,
+                    event(settle_envelope()),
+                    execute=True,
+                    private_key=PRIVATE_KEY,
+                    state_wait_seconds=0,
+                )
+        finally:
+            relay.read_state = original
+        self.assertEqual(raised.exception.code, "lifecycle_state_timeout")
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(raised.exception.details["observed_status"], "claimed")
+        self.assertFalse(client.sent)
 
     def test_executes_claim_once_and_validates_post_state(self) -> None:
         report, client = self.run_relay(
@@ -335,7 +552,7 @@ class RelayTests(unittest.TestCase):
         relay.read_state = lambda ignored, contract, block=None: state  # type: ignore[assignment]
         try:
             report = relay.relay(
-                client, event(claim_envelope()), execute=True, private_key="secret"
+                client, event(claim_envelope()), execute=True, private_key=PRIVATE_KEY
             )
         finally:
             relay.read_state = original
@@ -350,7 +567,7 @@ class RelayTests(unittest.TestCase):
         try:
             with self.assertRaisesRegex(relay.RelayError, "gas limit"):
                 relay.relay(
-                    client, event(claim_envelope()), execute=True, private_key="secret"
+                    client, event(claim_envelope()), execute=True, private_key=PRIVATE_KEY
                 )
         finally:
             relay.read_state = original
@@ -378,6 +595,17 @@ class RelayTests(unittest.TestCase):
         )
         self.assertIn("only `BountySettled` proves solver payment", comment)
         self.assertIn("Source comment id: `99`", comment)
+        processing = relay.render_comment(
+            {
+                "outcome": "processing",
+                "action": "settle",
+                "bounty_contract": CONTRACT,
+                "state_wait_seconds": 120,
+            },
+            100,
+        )
+        self.assertIn("Request received", processing)
+        self.assertIn("bounded lifecycle wait of 120 seconds", processing)
 
 
 if __name__ == "__main__":

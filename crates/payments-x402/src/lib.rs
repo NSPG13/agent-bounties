@@ -188,9 +188,19 @@ pub fn base_usdc_funding_challenge(
     }
     let asset = normalize_address(asset)?;
     let bounty_contract = normalize_address(bounty_contract)?;
+    let network = network.into();
+    let eip712_name = match network.as_str() {
+        "eip155:8453" => "USD Coin",
+        "eip155:84532" => "USDC",
+        _ => {
+            return Err(X402Error::InvalidChallenge(
+                "network must be Base mainnet or Base Sepolia",
+            ));
+        }
+    };
     let mut extra = BTreeMap::new();
     extra.insert("assetTransferMethod".to_string(), json!("eip3009"));
-    extra.insert("name".to_string(), json!("USD Coin"));
+    extra.insert("name".to_string(), json!(eip712_name));
     extra.insert("version".to_string(), json!("2"));
     extra.insert("fundingMethod".to_string(), json!("fundWithAuthorization"));
     extra.insert("fundingEvent".to_string(), json!("FundingAdded"));
@@ -224,7 +234,7 @@ pub fn base_usdc_funding_challenge(
         },
         accepts: vec![PaymentRequirements {
             scheme: AGENT_BOUNTY_FUND_SCHEME.to_string(),
-            network: network.into(),
+            network,
             asset,
             amount: amount.to_string(),
             pay_to: bounty_contract,
@@ -512,11 +522,13 @@ mod tests {
     use alloy::signers::{local::PrivateKeySigner, SignerSync};
 
     const ASSET: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+    const SEPOLIA_ASSET: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
     const BOUNTY: &str = "0x1111111111111111111111111111111111111111";
     const FUNDER: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
     const TEST_PRIVATE_KEY: &str =
         "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
     const FOUNDRY_TYPED_DATA_SIGNATURE: &str = "0x525987b32d816adbfab6840381acfb64549b4f00e7d2ec2229e67182f676a80c768b69e91496161b6039cafe5a71925101fd751f06c29cd34ef3ae5cf91674601c";
+    const SEPOLIA_FOUNDRY_TYPED_DATA_SIGNATURE: &str = "0x8551589ae4ba572d312a887e4efedc8cc5ce3519642e9a97c64afdd2a3e4be6b2de86e7c95e6990737efc5bac5b8cb820c5129f543a21b516c6dd6595c2e80241b";
     const NONCE: &str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     fn challenge() -> PaymentRequired {
@@ -581,6 +593,33 @@ mod tests {
     }
 
     #[test]
+    fn base_sepolia_challenge_uses_the_live_usdc_domain_name() {
+        let required = base_usdc_funding_challenge(
+            "https://api.example/v1/x402/base/bounties/0x111/funding?network=base-sepolia&amount=150000",
+            "eip155:84532",
+            SEPOLIA_ASSET,
+            BOUNTY,
+            150_000,
+            300,
+        )
+        .unwrap();
+        assert_eq!(required.accepts[0].extra["name"], "USDC");
+        assert_eq!(required.accepts[0].extra["version"], "2");
+        let digest = eip3009_authorization_digest(&required.accepts[0], &authorization()).unwrap();
+        let signer = TEST_PRIVATE_KEY.parse::<PrivateKeySigner>().unwrap();
+        assert_eq!(
+            signer.sign_hash_sync(&digest).unwrap().to_string(),
+            SEPOLIA_FOUNDRY_TYPED_DATA_SIGNATURE
+        );
+        let fixture: Value =
+            serde_json::from_str(include_str!("../fixtures/base-sepolia-usdc-eip3009.json"))
+                .unwrap();
+        assert_eq!(fixture["domain"]["name"], "USDC");
+        assert_eq!(fixture["domain"]["chainId"], 84532);
+        assert!(validate_funding_payload(&payment(&required), &required, 1_000).is_ok());
+    }
+
+    #[test]
     fn payment_required_and_signature_headers_round_trip() {
         let required = challenge();
         let required_header = encode_payment_required_header(&required).unwrap();
@@ -630,6 +669,36 @@ mod tests {
         assert!(matches!(validated.v, 27 | 28));
         assert_eq!(validated.r.len(), 66);
         assert_eq!(validated.s.len(), 66);
+    }
+
+    #[test]
+    fn published_compatibility_vector_is_executable() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../../site/x402-test-vectors.json")).unwrap();
+        for id in [
+            "valid_custom_bounty_funding",
+            "valid_base_sepolia_custom_bounty_funding",
+        ] {
+            let vector = fixture["vectors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|vector| vector["id"] == id)
+                .unwrap();
+            let required: PaymentRequired =
+                serde_json::from_value(vector["payment_required"].clone()).unwrap();
+            let payload: PaymentPayload =
+                serde_json::from_value(vector["payment_payload"].clone()).unwrap();
+            let now = vector["now_unix_seconds"].as_u64().unwrap();
+
+            let validated = validate_funding_payload(&payload, &required, now).unwrap();
+            assert_eq!(validated.contributor, vector["expected"]["contributor"]);
+            assert_eq!(
+                validated.bounty_contract,
+                vector["expected"]["bounty_contract"]
+            );
+            assert_eq!(validated.amount.to_string(), vector["expected"]["amount"]);
+        }
     }
 
     #[test]

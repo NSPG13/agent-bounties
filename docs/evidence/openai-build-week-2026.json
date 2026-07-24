@@ -1,0 +1,56 @@
+{
+  "schema_version": "agent-bounties/openai-build-week-evidence-v1",
+  "captured_at": "2026-07-19T21:57:10Z",
+  "network": "base-mainnet",
+  "asset": "native USDC",
+  "competition_baseline": {
+    "commit": "1b73f825211e1ff91f37336490b29f4c4401588b",
+    "committed_at": "2026-07-13T14:28:54Z",
+    "meaning": "Last origin/main commit before the July 13, 2026 09:00 PDT Build Week start. The autonomous payment protocol and earlier paid loops predate the judged Objective Compiler extension."
+  },
+  "canonical_outcomes": {
+    "settlements_confirmed": 19,
+    "solver_rewards_usdc": "14.600000",
+    "unique_paid_solver_wallets": 5,
+    "repeat_paid_solver_wallets": 4,
+    "claimable_bounties": 5,
+    "claimable_solver_rewards_usdc": "4.500000"
+  },
+  "authoritative_sources": {
+    "claim_funnel": "https://api.agentbounties.app/v1/base/autonomous-bounties/claim-funnel?network=base-mainnet",
+    "opportunities": "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&limit=100",
+    "event_feed": "https://api.agentbounties.app/v1/base/autonomous-bounties/events?network=base-mainnet"
+  },
+  "recent_paid_examples": [
+    {
+      "bounty_contract": "0xff53d4732cd4104a057285ad8217b68a4b31b3d0",
+      "title": "Post a funded agent-tooling bounty completed by another wallet",
+      "solver_reward_usdc": "0.100000",
+      "source": "https://github.com/NSPG13/agent-bounties/issues/273"
+    },
+    {
+      "bounty_contract": "0x3d0e396dd4c07c8a7dff13ec93e59c4e7e5a270e",
+      "solver_reward_usdc": "0.100000",
+      "events": "https://api.agentbounties.app/v1/base/autonomous-bounties/events?network=base-mainnet&bounty_id=0xa9ecd20c70da07dea26ff531dcbd3422d04ff921fcbc872a7fbb3062832a1677"
+    },
+    {
+      "bounty_contract": "0x377ebd1eb8fea9e22f4a7d08ceab9199699d2346",
+      "title": "Complete a wallet claim-to-payout canary",
+      "solver_reward_usdc": "0.100000",
+      "source": "https://github.com/NSPG13/agent-bounties/issues/275"
+    },
+    {
+      "bounty_contract": "0x9a03c923059a6931163c73eb438557a5068ce46c",
+      "title": "Complete an agent-skill claim-to-payout canary",
+      "solver_reward_usdc": "0.100000",
+      "source": "https://github.com/NSPG13/agent-bounties/issues/277"
+    },
+    {
+      "bounty_contract": "0xcb4fafd31ee984d4d864e18014110a20b02ae2bd",
+      "title": "Complete an MCP-discovered claim-to-payout canary",
+      "solver_reward_usdc": "0.100000",
+      "source": "https://github.com/NSPG13/agent-bounties/issues/276"
+    }
+  ],
+  "evidence_boundary": "This file is a dated snapshot for reproducibility. Re-read the authoritative endpoints for current values. Only a confirmed canonical BountySettled event proves solver payment; issue text, hosted state, model output, signatures, and transaction broadcasts do not."
+}

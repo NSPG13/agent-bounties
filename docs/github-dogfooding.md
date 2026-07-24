@@ -50,7 +50,7 @@ The safe operator path is:
 4. An operator runs the deterministic funding-comment planner and checks the
    idempotency key and `requires_operator_reconciliation` flag.
 5. For `StripeFiatLedger` comments, the planner can include a public funding
-   handoff URL to `https://nspg13.github.io/agent-bounties/funding.html` with
+   handoff URL to `https://agentbounties.app/funding.html` with
    the stable issue-derived bounty id, amount, rail, source, and idempotency
    key prefilled. Set repository variable `AGENT_BOUNTIES_API_BASE_URL` to also
    prefill the hosted API base URL. This link is only a Checkout UI handoff; it
@@ -70,8 +70,25 @@ events, not issue comments.
 ## Public Claim Reservations
 
 GitHub claim comments are coordination evidence only. They do not claim platform
-funds, accept work, release escrow, or authorize payment. Use a claim comment to
-reserve attention briefly while producing concrete progress:
+funds, accept work, release escrow, or authorize payment.
+
+For a canonical autonomous-v1 bounty, post the public payout wallet:
+
+```text
+/claim #ISSUE wallet: 0xYourPublicBaseAddress
+```
+
+The workflow independently resolves the exact issue contract from the canonical
+earning feed. With a valid wallet it idempotently calls the hosted agent-native
+claim endpoint and returns the candidate or waitlist state, indexed bond,
+sponsorship state, exact EIP-1193 `wallet_request`, and signature replay request.
+Without a wallet it creates no hosted candidate. Never post the returned
+signature; replay it privately through `next_request.body.wallet_signature`.
+A hosted candidate is not an on-chain claim: only confirmed `BountyClaimed` owns
+the round.
+
+Legacy off-chain repository-work bounties use a separate short-lived attention
+reservation while the contributor produces concrete progress:
 
 ```text
 /agent-bounty claim
@@ -95,22 +112,25 @@ fail-closed earning subset:
 - `verification-unavailable` removes the bounty from earning discovery even
   when funds remain locked.
 
-The reconciler is dry-run by default and only changes those managed labels. It
-has no wallet, contract-call, verification, acceptance, or settlement authority.
+The reconciler is dry-run by default. It changes managed labels; after exactly
+one confirmed canonical `BountySettled` event, it also creates or updates one
+trusted sticky payout receipt and closes the source issue as completed. Receipt
+publication happens before closure and is replay-safe. Neither action has
+wallet, contract-call, verification, acceptance, or settlement authority.
 Run a local report with:
 
 ```powershell
 python scripts/reconcile_github_bounty_labels.py
 ```
 
-The deterministic claim planner uses a 120-minute reservation window. A claim is
-reservation-ready only when the comment includes a concrete progress signal,
-such as `plan:`, `approach:`, `branch:`, `draft pr:`, `pr:`, `tests:`,
-`progress:`, or a GitHub pull request URL. Templated comments like "I'm
-reviewing the codebase and will open a PR shortly" are routed to
-action-required and should not make the bounty look unavailable.
+For those legacy claims, the deterministic planner uses a 120-minute
+reservation window. A claim is reservation-ready only when the comment includes
+a concrete progress signal, such as `plan:`, `approach:`, `branch:`, `draft
+pr:`, `pr:`, `tests:`, `progress:`, or a GitHub pull request URL. Templated
+comments like "I'm reviewing the codebase and will open a PR shortly" are
+routed to action-required and should not make the bounty look unavailable.
 
-If a reservation reaches 120 minutes without a progress signal, the planner
+If a legacy reservation reaches 120 minutes without a progress signal, the planner
 returns `StaleReleaseRecommended`. Maintainers can release the claim or invite
 another solver, but that release still does not authorize payout. If another
 solver tries to claim while an active non-stale reservation exists, the planner
@@ -182,6 +202,19 @@ cargo run -p cli -- github-funding-comment-plan `
   --comment-id 12345
 ```
 
+Plan a review-only draft from any existing GitHub issue:
+
+```powershell
+cargo run -p cli -- github-create-comment-plan `
+  --repository agent-bounties/agent-bounties `
+  --issue-url https://github.com/agent-bounties/agent-bounties/issues/1 `
+  --title "Fix a canonical reconciliation bug" `
+  --body-file issue.md `
+  --comment-body "/agent-bounty create 25 USDC" `
+  --contributor-login maintainer `
+  --comment-id 12344
+```
+
 Plan a claim comment locally:
 
 ```powershell
@@ -201,11 +234,13 @@ The same deterministic planner is exposed over HTTP and MCP:
 - `POST /v1/github/issue-bounty-plan`
 - `POST /v1/github/issue-api-sync-plan`
 - `POST /v1/github/issue-api-sync`
+- `POST /v1/github/create-comment-plan`
 - `POST /v1/github/funding-comment-plan`
 - `POST /v1/github/claim-comment-plan`
 - `POST /v1/github/proof-comment-plan`
 - `POST /v1/github/proof-comment-plan-from-proof`
 - MCP `plan_github_issue_bounty`
+- MCP `plan_github_create_comment`
 - MCP `plan_github_funding_comment`
 - MCP `plan_github_claim_comment`
 - MCP `plan_github_proof_comment`
@@ -223,7 +258,7 @@ The proof-record planner accepts a public `proof_id` and derives the proof URL,
 bounty id, and verifier summary from platform state; private proofs are not
 exposed.
 
-The repository includes two dogfooding bridges before a hosted GitHub App worker
+The repository includes these dogfooding bridges before a hosted GitHub App worker
 exists:
 
 - `.github/workflows/paid-bounty-issues.yml` validates opened, edited, reopened,
@@ -232,6 +267,13 @@ exists:
   `github-plan` command against the rendered issue body, writes the planner
   result to the workflow summary, and creates or updates a sticky issue comment
   marked with `<!-- agent-bounties-plan -->`.
+- `.github/workflows/agent-bounty-create-comments.yml` handles
+  `/agent-bounty create <amount> USDC` on any issue (not pull requests). It
+  creates or updates one review-required draft reply per source comment. The
+  handoff reuses the canonical post page, leaves acceptance criteria for human
+  review, and never treats the command or reply as funding evidence. See
+  [`docs/github-issue-create-comments.md`](github-issue-create-comments.md) for
+  the social rollout gate that follows measured GitHub conversion.
 - `.github/workflows/paid-bounty-funding-comments.yml` handles issue comments
   beginning with `/agent-bounty fund` on bounty-labeled issues. It runs
   `scripts/github-funding-comment.sh`, executes the deterministic
@@ -257,6 +299,12 @@ exists:
   `/agent-bounty proof <proof_id>` on an issue. The comment-triggered path reads
   `vars.AGENT_BOUNTIES_API_BASE_URL`, calls the proof-record planner, and
   creates or updates a sticky comment marked with `<!-- agent-bounties-proof -->`.
+- `.github/workflows/bounty-inventory-guard.yml` reconciles canonical status
+  every 15 minutes. For an autonomous bounty with exact source-issue mapping
+  and confirmed `BountySettled`, it publishes one receipt marked with
+  `<!-- agent-bounties-canonical-settlement -->`, applies `settled-paid`, then
+  closes the issue as completed. A dry run lists the exact comment and closure
+  actions without writing.
 
 Plan a proof comment locally:
 
@@ -271,6 +319,7 @@ Dry-run the proof publisher without calling GitHub or the hosted API:
 
 ```powershell
 python scripts/github_funding_comment.py --self-test
+python scripts/github_create_comment.py --self-test
 python scripts/github_proof_comment.py --self-test
 ```
 

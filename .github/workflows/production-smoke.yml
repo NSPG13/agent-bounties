@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       api_base_url:
-        description: "Deployed API base URL, for example https://agent-bounties-api.onrender.com"
+        description: "Deployed API base URL, for example https://api.agentbounties.app"
         required: false
         type: string
       mcp_base_url:
-        description: "Deployed MCP base URL, for example https://agent-bounties-mcp.onrender.com"
+        description: "Deployed MCP base URL, for example https://mcp.agentbounties.app"
         required: false
         type: string
       expected_revision:
@@ -31,12 +31,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  deployment-paused:
+    if: github.event_name != 'workflow_dispatch' && vars.RENDER_DEPLOY_PAUSE_REASON != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report declared deployment pause
+        run: echo "Production smoke paused - ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}" >> "$GITHUB_STEP_SUMMARY"
+
   production-smoke:
+    if: github.event_name == 'workflow_dispatch' || vars.RENDER_DEPLOY_PAUSE_REASON == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://agent-bounties-api.onrender.com' }}
-      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://agent-bounties-mcp.onrender.com' }}
+      PRODUCTION_API_BASE_URL: ${{ inputs.api_base_url || vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
+      PRODUCTION_MCP_BASE_URL: ${{ inputs.mcp_base_url || vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.agentbounties.app' }}
       PRODUCTION_EXPECTED_REVISION: ${{ inputs.expected_revision || github.sha }}
       REQUIRE_EVAL_HISTORY_INPUT: ${{ inputs.require_eval_history || 'false' }}
       REQUIRE_EVAL_HISTORY_VAR: ${{ vars.PRODUCTION_SMOKE_REQUIRE_EVAL_HISTORY || 'false' }}

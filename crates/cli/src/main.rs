@@ -9,12 +9,17 @@ use chain_base::{
     autonomous_bounty_create_from_terms, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_terms_record, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, fetch_transaction_receipt, keccak256_canonical_json,
-    verify_autonomous_factory_safe_state, AutonomousBountyCreationBatchPlan,
+    normalize_evm_address, verify_autonomous_factory_safe_state, AutonomousBountyCreationBatchPlan,
     AutonomousBountyCreationPlan, AutonomousBountyTxPlanner, AutonomousFactoryExpectedState,
     AutonomousFactorySafeObservation, BaseRpcUrlConfig, EvmTransactionIntent,
     AUTONOMOUS_BOUNTY_PROTOCOL_HASH, BASE_MAINNET_USDC_TOKEN_ADDRESS,
 };
+#[cfg(test)]
+use clap::CommandFactory;
 use clap::{Args as ClapArgs, Parser, Subcommand};
+#[cfg(test)]
+use db::DurableTableSnapshot;
+use db::{DurableDataSnapshot, PostgresStore};
 use domain::{
     AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, CapabilityClass, FundingMode,
     Money, PaymentRail, PrivacyLevel, VerifierKind,
@@ -24,9 +29,10 @@ use eval_harness::{
     BountyBench, JudgeBench,
 };
 use github_app::{
-    bounty_check_output, claim_comment_plan, funding_comment_plan, issue_api_sync_plan,
-    parse_issue_form_bounty, proof_comment_plan, GitHubClaimCommentInput,
-    GitHubFundingCommentInput, GitHubIssueApiSyncInput, GitHubProofComment,
+    bounty_check_output, claim_comment_plan, create_comment_plan, funding_comment_plan,
+    issue_api_sync_plan, parse_issue_form_bounty, proof_comment_plan, GitHubClaimCommentInput,
+    GitHubCreateCommentInput, GitHubFundingCommentInput, GitHubIssueApiSyncInput,
+    GitHubProofComment,
 };
 use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, StripePlanner, StripeRequestIntent,
@@ -46,14 +52,9 @@ use std::{
 };
 use uuid::Uuid;
 
-// Solc 0.8.26 keys immutable references by declaration id. Pinning both ids
-// makes compiler/source drift fail closed instead of swapping constructor values.
-const FACTORY_SETTLEMENT_TOKEN_IMMUTABLE_ID: &str = "2738";
-const FACTORY_IMPLEMENTATION_IMMUTABLE_ID: &str = "2740";
-
 #[derive(Parser)]
 #[command(name = "agent-bounties")]
-#[command(about = "Open-source agent bounty network CLI")]
+#[command(about = "Claim verified work. Earn Base USDC.")]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -69,6 +70,18 @@ struct GithubFundingCommentPlanCli {
     contributor_login: Option<String>,
     comment_id: Option<String>,
     funding_api_base_url: Option<String>,
+    existing_idempotency_keys: Vec<String>,
+}
+
+#[derive(Debug)]
+struct GithubCreateCommentPlanCli {
+    repository: String,
+    issue_url: String,
+    title: String,
+    body_file: String,
+    comment_body: String,
+    contributor_login: Option<String>,
+    comment_id: Option<String>,
     existing_idempotency_keys: Vec<String>,
 }
 
@@ -283,6 +296,24 @@ enum Command {
         #[arg(long = "existing-idempotency-key")]
         existing_idempotency_keys: Vec<String>,
     },
+    GithubCreateCommentPlan {
+        #[arg(long)]
+        repository: String,
+        #[arg(long)]
+        issue_url: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body_file: String,
+        #[arg(long)]
+        comment_body: String,
+        #[arg(long)]
+        contributor_login: Option<String>,
+        #[arg(long)]
+        comment_id: Option<String>,
+        #[arg(long = "existing-idempotency-key")]
+        existing_idempotency_keys: Vec<String>,
+    },
     GithubClaimCommentPlan {
         #[arg(long)]
         repository: String,
@@ -320,6 +351,51 @@ enum Command {
         public_base_url: String,
         #[arg(long, default_value = "http://127.0.0.1:8090")]
         mcp_base_url: String,
+    },
+    OpenCompetitionReadiness {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        bounty_contract: String,
+    },
+    OpenCompetitionAction {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        bounty_contract: String,
+        #[arg(long)]
+        operation: String,
+        #[arg(long, default_value = "{}")]
+        arguments_json: String,
+    },
+    StandingMetaV4Readiness {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+    },
+    StandingMetaV4Action {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        operation: String,
+        #[arg(long, default_value = "{}")]
+        arguments_json: String,
+    },
+    /// Show the 3 USDC daily and 26 USDC Monday-Sunday rankings.
+    Leaderboard {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        at: Option<String>,
     },
     DiscoveryReport(DiscoveryReportArgs),
     DocsContractCheck {
@@ -584,6 +660,25 @@ async fn async_main() -> Result<()> {
             funding_api_base_url,
             existing_idempotency_keys,
         }),
+        Command::GithubCreateCommentPlan {
+            repository,
+            issue_url,
+            title,
+            body_file,
+            comment_body,
+            contributor_login,
+            comment_id,
+            existing_idempotency_keys,
+        } => github_create_comment_plan(GithubCreateCommentPlanCli {
+            repository,
+            issue_url,
+            title,
+            body_file,
+            comment_body,
+            contributor_login,
+            comment_id,
+            existing_idempotency_keys,
+        }),
         Command::GithubClaimCommentPlan {
             repository,
             issue_url,
@@ -617,6 +712,39 @@ async fn async_main() -> Result<()> {
             public_base_url,
             mcp_base_url,
         } => discovery(public_base_url, mcp_base_url),
+        Command::OpenCompetitionReadiness {
+            api_base_url,
+            network,
+            bounty_contract,
+        } => open_competition_readiness_cli(api_base_url, network, bounty_contract),
+        Command::OpenCompetitionAction {
+            api_base_url,
+            network,
+            bounty_contract,
+            operation,
+            arguments_json,
+        } => open_competition_action_cli(
+            api_base_url,
+            network,
+            bounty_contract,
+            operation,
+            arguments_json,
+        ),
+        Command::StandingMetaV4Readiness {
+            api_base_url,
+            network,
+        } => standing_meta_v4_readiness_cli(api_base_url, network),
+        Command::StandingMetaV4Action {
+            api_base_url,
+            network,
+            operation,
+            arguments_json,
+        } => standing_meta_v4_action_cli(api_base_url, network, operation, arguments_json),
+        Command::Leaderboard {
+            api_base_url,
+            network,
+            at,
+        } => leaderboard(api_base_url, network, at).await,
         Command::DiscoveryReport(args) => {
             discovery_report(args.input_fixture, args.json_out, args.markdown_out)
         }
@@ -896,16 +1024,8 @@ fn autonomous_activation_bundle(
     let factory_runtime = artifact_runtime_with_immutables(
         &factory_artifact,
         &[
-            (
-                FACTORY_SETTLEMENT_TOKEN_IMMUTABLE_ID,
-                "settlementToken",
-                BASE_MAINNET_USDC_TOKEN_ADDRESS,
-            ),
-            (
-                FACTORY_IMPLEMENTATION_IMMUTABLE_ID,
-                "implementation",
-                &expected_implementation,
-            ),
+            ("settlementToken", BASE_MAINNET_USDC_TOKEN_ADDRESS),
+            ("implementation", &expected_implementation),
         ],
     )?;
     let implementation_runtime =
@@ -1347,7 +1467,7 @@ fn artifact_hex<'a>(artifact: &'a serde_json::Value, pointer: &str) -> Result<&'
 
 fn artifact_runtime_with_immutables(
     artifact: &serde_json::Value,
-    immutable_addresses: &[(&str, &str, &str)],
+    immutable_addresses: &[(&str, &str)],
 ) -> Result<Vec<u8>> {
     let mut runtime = hex::decode(artifact_hex(artifact, "/deployedBytecode/object")?)?;
     let references = artifact
@@ -1361,11 +1481,21 @@ fn artifact_runtime_with_immutables(
             references.len()
         );
     }
+    let mut declarations = BTreeMap::new();
+    collect_immutable_address_declarations(
+        artifact.get("ast").context(
+            "contract artifact is missing its source AST; rebuild with forge build --ast",
+        )?,
+        &mut declarations,
+    )?;
     let mut patched = BTreeSet::new();
-    for (declaration_id, name, address) in immutable_addresses {
-        let locations = references.get(*declaration_id).ok_or_else(|| {
-            anyhow!("contract artifact has no immutable declaration {declaration_id} for {name}")
-        })?;
+    for (name, address) in immutable_addresses {
+        let declaration_id = declarations
+            .get(*name)
+            .ok_or_else(|| anyhow!("contract artifact has no immutable address named {name}"))?;
+        let locations = references
+            .get(declaration_id)
+            .ok_or_else(|| anyhow!("contract artifact has no immutable references for {name}"))?;
         let normalized = normalize_cli_address(address)?;
         let mut word = [0u8; 32];
         word[12..].copy_from_slice(&hex::decode(&normalized[2..])?);
@@ -1396,12 +1526,66 @@ fn artifact_runtime_with_immutables(
         }
         patched.insert(name.to_string());
     }
-    for (_, name, _) in immutable_addresses {
+    for (name, _) in immutable_addresses {
         if !patched.contains(*name) {
             bail!("contract artifact has no immutable references for {name}");
         }
     }
     Ok(runtime)
+}
+
+fn collect_immutable_address_declarations(
+    node: &serde_json::Value,
+    declarations: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    match node {
+        serde_json::Value::Object(object) => {
+            let is_immutable = object.get("nodeType").and_then(serde_json::Value::as_str)
+                == Some("VariableDeclaration")
+                && object.get("mutability").and_then(serde_json::Value::as_str)
+                    == Some("immutable")
+                && object
+                    .get("stateVariable")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true);
+            if is_immutable {
+                let name = object
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .context("immutable declaration is missing its name")?;
+                let declaration_id = object
+                    .get("id")
+                    .and_then(serde_json::Value::as_u64)
+                    .context("immutable declaration is missing its numeric id")?
+                    .to_string();
+                let type_string = object
+                    .get("typeDescriptions")
+                    .and_then(serde_json::Value::as_object)
+                    .and_then(|types| types.get("typeString"))
+                    .and_then(serde_json::Value::as_str)
+                    .context("immutable declaration is missing its type")?;
+                if type_string != "address" {
+                    bail!("immutable {name} is not an address");
+                }
+                if declarations
+                    .insert(name.to_string(), declaration_id)
+                    .is_some()
+                {
+                    bail!("contract artifact has duplicate immutable address {name}");
+                }
+            }
+            for child in object.values() {
+                collect_immutable_address_declarations(child, declarations)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                collect_immutable_address_declarations(child, declarations)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn normalize_cli_address(value: &str) -> Result<String> {
@@ -1922,6 +2106,112 @@ fn agent_paid_status(agent_id: Uuid, api_base_url: String) -> Result<()> {
     Ok(())
 }
 
+fn open_competition_readiness_cli(
+    api_base_url: String,
+    network: String,
+    bounty_contract: String,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let bounty_contract = normalize_evm_address(&bounty_contract)?;
+    let api = normalize_base_url(&api_base_url);
+    let report = get_json(&format!(
+        "{api}/v1/base/open-competition-v1/readiness?network={network}&bounty_contract={bounty_contract}"
+    ))?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn open_competition_action_cli(
+    api_base_url: String,
+    network: String,
+    bounty_contract: String,
+    operation: String,
+    arguments_json: String,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let bounty_contract = normalize_evm_address(&bounty_contract)?;
+    let path = match operation.as_str() {
+        "prepare_open_competition_commit" => "commit-preparation",
+        "prepare_open_competition_reveal" => "reveal-preparation",
+        "get_open_competition_status" => "status",
+        "withdraw_open_competition_bond" => "bond-withdrawal-preparation",
+        _ => bail!("unknown Open Competition V1 operation"),
+    };
+    let arguments: serde_json::Value =
+        serde_json::from_str(&arguments_json).context("arguments_json must be valid JSON")?;
+    require(
+        arguments.is_object(),
+        "arguments_json must contain one JSON object",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let plan = post_json(
+        &format!("{api}/v1/base/open-competition-v1/{path}"),
+        serde_json::json!({
+            "network": network,
+            "bounty_contract": bounty_contract,
+            "arguments": arguments
+        }),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
+fn standing_meta_v4_readiness_cli(api_base_url: String, network: String) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let report = get_json(&format!(
+        "{api}/v1/base/standing-meta-v4/readiness?network={network}"
+    ))?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn standing_meta_v4_action_cli(
+    api_base_url: String,
+    network: String,
+    operation: String,
+    arguments_json: String,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let path = match operation.as_str() {
+        "prepare_standing_meta_v4_claim" => "claim-preparation",
+        "prepare_anonymous_stake_registration" => "stake-registration-preparation",
+        "set_anonymous_stake_availability" => "stake-availability-preparation",
+        "list_verification_assignments" => "verification-assignments",
+        "submit_primary_verdict" => "primary-verdict-preparation",
+        "waive_verification_appeal" => "appeal-waiver-preparation",
+        "open_verification_appeal" => "appeal-opening-preparation",
+        "submit_appeal_vote" => "appeal-vote-preparation",
+        "finalize_verification_case" => "finalization-preparation",
+        _ => bail!("unknown Standing Meta V4 operation"),
+    };
+    let arguments: serde_json::Value =
+        serde_json::from_str(&arguments_json).context("arguments_json must be valid JSON")?;
+    require(
+        arguments.is_object(),
+        "arguments_json must contain one JSON object",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let plan = post_json(
+        &format!("{api}/v1/base/standing-meta-v4/{path}"),
+        serde_json::json!({"network": network, "arguments": arguments}),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
 async fn base_broadcast_signed_transaction(
     signed_transaction: String,
     request_id: u64,
@@ -2165,6 +2455,22 @@ fn github_funding_comment_plan(args: GithubFundingCommentPlanCli) -> Result<()> 
         contributor_login: args.contributor_login,
         comment_id: args.comment_id,
         funding_api_base_url: args.funding_api_base_url,
+        existing_idempotency_keys: args.existing_idempotency_keys,
+    });
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
+fn github_create_comment_plan(args: GithubCreateCommentPlanCli) -> Result<()> {
+    let body = fs::read_to_string(args.body_file)?;
+    let plan = create_comment_plan(GitHubCreateCommentInput {
+        repository: args.repository,
+        issue_url: args.issue_url,
+        title: args.title,
+        body,
+        comment_body: args.comment_body,
+        contributor_login: args.contributor_login,
+        comment_id: args.comment_id,
         existing_idempotency_keys: args.existing_idempotency_keys,
     });
     println!("{}", serde_json::to_string_pretty(&plan)?);
@@ -3062,6 +3368,12 @@ async fn production_smoke_check(
         value_str(&discovery, "/endpoints/mcp_tools").is_some_and(|url| url.starts_with(mcp)),
         "discovery manifest must point MCP tools at the checked MCP URL",
     )?;
+    let expected_mcp_endpoint = format!("{mcp}/mcp");
+    require(
+        value_str(&discovery, "/endpoints/mcp_streamable_http")
+            == Some(expected_mcp_endpoint.as_str()),
+        "discovery manifest must expose the standard Streamable HTTP MCP endpoint",
+    )?;
 
     let autonomous_endpoints = [
         "protocol_status",
@@ -3076,6 +3388,7 @@ async fn production_smoke_check(
         "autonomous_authorized_creation_plan",
         "autonomous_contribution_plan",
         "autonomous_authorized_contribution_plan",
+        "autonomous_agent_native_claim",
         "autonomous_claim_plan",
         "autonomous_authorized_claim_plan",
         "autonomous_submission_plan",
@@ -3119,6 +3432,7 @@ async fn production_smoke_check(
         "publish_autonomous_bounty_terms",
         "plan_autonomous_bounty_creation",
         "plan_autonomous_bounty_contribution",
+        "agent_native_claim",
         "plan_autonomous_bounty_claim",
         "plan_autonomous_bounty_submission",
         "plan_autonomous_module_settlement",
@@ -3261,6 +3575,7 @@ async fn production_smoke_check(
         "/v1/base/autonomous-bounties/authorized-creation-plan",
         "/v1/base/autonomous-bounties/contribution-plan",
         "/v1/base/autonomous-bounties/authorized-contribution-plan",
+        "/v1/base/autonomous-bounties/claims",
         "/v1/base/autonomous-bounties/claim-plan",
         "/v1/base/autonomous-bounties/authorized-claim-plan",
         "/v1/base/autonomous-bounties/submission-plan",
@@ -3342,10 +3657,14 @@ async fn production_smoke_check(
         )?;
     }
     for expected in [
+        "publish_unfunded_bounty",
+        "list_unfunded_bounties",
+        "submit_unfunded_bounty_solution",
         "plan_autonomous_bounty_creation",
         "plan_autonomous_bounty_authorized_creation",
         "plan_autonomous_bounty_contribution",
         "plan_autonomous_bounty_authorized_contribution",
+        "agent_native_claim",
         "plan_autonomous_bounty_claim",
         "plan_autonomous_bounty_authorized_claim",
         "plan_autonomous_bounty_submission",
@@ -3368,6 +3687,32 @@ async fn production_smoke_check(
             &format!("MCP tool list missing {expected}"),
         )?;
     }
+
+    let mcp_streamable_http = value_str(&discovery, "/endpoints/mcp_streamable_http")
+        .context("Streamable HTTP MCP url missing")?;
+    let initialize_response = client
+        .post(mcp_streamable_http)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "production-smoke", "version": "1"}
+            }
+        }))
+        .send()
+        .await?;
+    require(
+        initialize_response.status().is_success(),
+        "Streamable HTTP MCP initialize must succeed",
+    )?;
+    let initialize_json: serde_json::Value = initialize_response.json().await?;
+    require(
+        value_str(&initialize_json, "/result/serverInfo/name") == Some("agent-bounties"),
+        "Streamable HTTP MCP initialize returned the wrong server",
+    )?;
     for retired in [
         "plan_base_log_query",
         "reconcile_base_escrow_event",
@@ -3453,7 +3798,8 @@ fn print_production_smoke_report(report: &ProductionSmokeReport) -> Result<()> {
 async fn service_smoke(api_base_url: String, mcp_base_url: String) -> Result<()> {
     let api = normalize_base_url(&api_base_url);
     let mcp = normalize_base_url(&mcp_base_url);
-    let report = service_smoke_check(&api, &mcp).await?;
+    let operator_token = env::var("OPERATOR_API_TOKEN").ok();
+    let report = service_smoke_check(&api, &mcp, operator_token.as_deref(), true).await?;
     print_service_smoke_report(&report)
 }
 
@@ -3468,7 +3814,12 @@ struct ServiceSmokeReport {
     mcp_tools: usize,
 }
 
-async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport> {
+async fn service_smoke_check(
+    api: &str,
+    mcp: &str,
+    operator_token: Option<&str>,
+    expect_shared_persistence: bool,
+) -> Result<ServiceSmokeReport> {
     wait_for_health(&format!("{api}/health"))?;
     wait_for_health(&format!("{mcp}/health"))?;
     let _production_contract = production_smoke_check(api, mcp, false, None).await?;
@@ -3585,7 +3936,7 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
     )?;
     let submission_id =
         value_str(&submission, "/id").context("service smoke submission id missing")?;
-    let proof = post_json(
+    let proof = post_json_with_operator_token(
         &format!("{api}/v1/bounties/{bounty_id}/verify"),
         serde_json::json!({
             "bounty_id": bounty_id,
@@ -3596,6 +3947,9 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
             "evidence": null,
             "approved_risk_event_id": null
         }),
+        operator_token.context(
+            "OPERATOR_API_TOKEN is required for the legacy simulated verification smoke step",
+        )?,
     )?;
     require(
         value_str(&proof, "/proof_hash").is_some(),
@@ -3609,6 +3963,28 @@ async fn service_smoke_check(api: &str, mcp: &str) -> Result<ServiceSmokeReport>
         final_status == "Paid",
         "simulated local bounty loop must finish Paid",
     )?;
+
+    let retried_status = get_json(&format!("{api}/v1/bounties/{bounty_id}"))?;
+    require(
+        status == retried_status,
+        "API bounty status retries must be idempotent",
+    )?;
+    if expect_shared_persistence {
+        let mcp_status = mcp_tool_post(
+            mcp,
+            "get_bounty_status",
+            serde_json::json!({ "bounty_id": bounty_id.as_str() }),
+        )?;
+        let retried_mcp_status = mcp_tool_post(
+            mcp,
+            "get_bounty_status",
+            serde_json::json!({ "bounty_id": bounty_id.as_str() }),
+        )?;
+        require(
+            status == mcp_status && mcp_status == retried_mcp_status,
+            "API and MCP bounty status retries must be idempotent and remain in parity",
+        )?;
+    }
 
     let tools = get_json(&format!("{mcp}/tools"))?;
     let tool_list = tools.as_array().context("MCP tools must be an array")?;
@@ -3688,6 +4064,7 @@ async fn service_smoke_spawn(
     database_url: Option<String>,
     verify_restart_persistence: bool,
 ) -> Result<()> {
+    const SMOKE_OPERATOR_TOKEN: &str = "agent-bounties-local-service-smoke";
     let api = normalize_base_url(&api_base_url);
     let mcp = normalize_base_url(&mcp_base_url);
     if verify_restart_persistence && database_url.is_none() {
@@ -3704,6 +4081,7 @@ async fn service_smoke_spawn(
             ("API_BIND_ADDR", api_bind.as_str()),
             ("PUBLIC_BASE_URL", api.as_str()),
             ("MCP_BASE_URL", mcp.as_str()),
+            ("OPERATOR_API_TOKEN", SMOKE_OPERATOR_TOKEN),
         ],
         database_url.as_deref(),
     )
@@ -3724,28 +4102,46 @@ async fn service_smoke_spawn(
         }
     };
 
-    let result = service_smoke_check(&api, &mcp).await;
+    let result = service_smoke_check(
+        &api,
+        &mcp,
+        Some(SMOKE_OPERATOR_TOKEN),
+        database_url.is_some(),
+    )
+    .await;
     stop_child(&mut api_child);
     stop_child(&mut mcp_child);
     let report = result?;
 
     if verify_restart_persistence {
+        let store = PostgresStore::connect(database_url.as_deref().unwrap())
+            .await
+            .context("failed to connect for the pre-restart durable-data snapshot")?;
+        let before = store
+            .durable_data_snapshot()
+            .await
+            .context("failed to capture the pre-restart durable-data snapshot")?;
         verify_service_smoke_restart_persistence(
             &api,
             &mcp,
             database_url.as_deref().unwrap(),
             &report,
-        )?;
+            SMOKE_OPERATOR_TOKEN,
+            &before,
+        )
+        .await?;
     }
 
     print_service_smoke_report(&report)
 }
 
-fn verify_service_smoke_restart_persistence(
+async fn verify_service_smoke_restart_persistence(
     api: &str,
     mcp: &str,
     database_url: &str,
     report: &ServiceSmokeReport,
+    operator_token: &str,
+    before: &DurableDataSnapshot,
 ) -> Result<()> {
     let api_bind = bind_addr_from_base_url(api)?;
     let mcp_bind = bind_addr_from_base_url(mcp)?;
@@ -3758,6 +4154,7 @@ fn verify_service_smoke_restart_persistence(
             ("API_BIND_ADDR", api_bind.as_str()),
             ("PUBLIC_BASE_URL", api),
             ("MCP_BASE_URL", mcp),
+            ("OPERATOR_API_TOKEN", operator_token),
         ],
         Some(database_url),
     )
@@ -3815,6 +4212,16 @@ fn verify_service_smoke_restart_persistence(
             "restarted API must hydrate the contribution ledger linkage",
         )?;
 
+        let mcp_bounty_status = mcp_tool_post(
+            mcp,
+            "get_bounty_status",
+            serde_json::json!({ "bounty_id": report.paid_bounty_id.as_str() }),
+        )?;
+        require(
+            api_bounty_status == mcp_bounty_status,
+            "restarted API and MCP adapters must hydrate identical shared-runtime bounty status",
+        )?;
+
         let mcp_paid_status = mcp_tool_post(
             mcp,
             "get_paid_status",
@@ -3849,7 +4256,47 @@ fn verify_service_smoke_restart_persistence(
 
     stop_child(&mut api_child);
     stop_child(&mut mcp_child);
-    result
+    result?;
+
+    let after = PostgresStore::connect(database_url)
+        .await
+        .context("failed to connect for the post-restart durable-data snapshot")?
+        .durable_data_snapshot()
+        .await
+        .context("failed to capture the post-restart durable-data snapshot")?;
+    require(
+        before == &after,
+        &format!(
+            "restart hydration changed durable rows: {}",
+            durable_snapshot_changes(before, &after).join(", ")
+        ),
+    )
+}
+
+fn durable_snapshot_changes(
+    before: &DurableDataSnapshot,
+    after: &DurableDataSnapshot,
+) -> Vec<String> {
+    before
+        .tables
+        .keys()
+        .chain(after.tables.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|table| {
+            let old = before.tables.get(table);
+            let new = after.tables.get(table);
+            (old != new).then(|| match (old, new) {
+                (Some(old), Some(new)) => format!(
+                    "{table} rows {}->{} sha256 {}->{}",
+                    old.rows, new.rows, old.canonical_sha256, new.canonical_sha256
+                ),
+                (Some(old), None) => format!("{table} removed after {} rows", old.rows),
+                (None, Some(new)) => format!("{table} added with {} rows", new.rows),
+                (None, None) => unreachable!(),
+            })
+        })
+        .collect()
 }
 
 fn wait_for_health(url: &str) -> Result<()> {
@@ -3871,6 +4318,22 @@ fn post_json(url: &str, body: serde_json::Value) -> Result<serde_json::Value> {
         "POST",
         url,
         Some(body.to_string()),
+    )?)?)
+}
+
+fn post_json_with_operator_token(
+    url: &str,
+    body: serde_json::Value,
+    operator_token: &str,
+) -> Result<serde_json::Value> {
+    if operator_token.is_empty() || operator_token.bytes().any(|byte| byte.is_ascii_control()) {
+        bail!("operator token cannot be empty or contain control characters");
+    }
+    Ok(serde_json::from_str(&http_request_with_headers(
+        "POST",
+        url,
+        Some(body.to_string()),
+        &[("x-operator-token", operator_token)],
     )?)?)
 }
 
@@ -4003,7 +4466,42 @@ async fn production_get_text(client: &reqwest::Client, url: &str) -> Result<Stri
     Ok(response.text().await?)
 }
 
+async fn leaderboard(api_base_url: String, network: String, at: Option<String>) -> Result<()> {
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/leaderboard",
+        api_base_url.trim_end_matches('/')
+    );
+    let mut query = vec![("network", network)];
+    if let Some(at) = at {
+        query.push(("at", at));
+    }
+    let response = reqwest::Client::new()
+        .get(&url)
+        .query(&query)
+        .send()
+        .await
+        .with_context(|| format!("GET {url} failed"))?;
+    let status = response.status();
+    let body = response.text().await?;
+    require(
+        status.is_success(),
+        &format!("GET {url} failed with HTTP {status}: {body}"),
+    )?;
+    let value: serde_json::Value = serde_json::from_str(&body)?;
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
 fn http_request(method: &str, url: &str, body: Option<String>) -> Result<String> {
+    http_request_with_headers(method, url, body, &[])
+}
+
+fn http_request_with_headers(
+    method: &str,
+    url: &str,
+    body: Option<String>,
+    headers: &[(&str, &str)],
+) -> Result<String> {
     let parsed = parse_http_url(url)?;
     let body = body.unwrap_or_default();
     let content_headers = if method == "POST" {
@@ -4014,10 +4512,25 @@ fn http_request(method: &str, url: &str, body: Option<String>) -> Result<String>
     } else {
         String::new()
     };
+    let mut extra_headers = String::new();
+    for (name, value) in headers {
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || value.bytes().any(|byte| byte.is_ascii_control())
+        {
+            bail!("service smoke HTTP header is invalid");
+        }
+        extra_headers.push_str(name);
+        extra_headers.push_str(": ");
+        extra_headers.push_str(value);
+        extra_headers.push_str("\r\n");
+    }
     let request = format!(
         "{method} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n{}\
-         \r\n{}",
-        parsed.path, parsed.authority, content_headers, body
+         {}\r\n{}",
+        parsed.path, parsed.authority, content_headers, extra_headers, body
     );
     let mut stream = TcpStream::connect((parsed.host.as_str(), parsed.port))
         .with_context(|| format!("failed to connect to {}", parsed.authority))?;
@@ -4191,6 +4704,7 @@ fn check_agent_quickstart_contract(root: &Path, issues: &mut Vec<DocsContractIss
         "publish_autonomous_bounty_terms",
         "plan_autonomous_bounty_creation",
         "plan_autonomous_bounty_contribution",
+        "agent_native_claim",
         "plan_autonomous_bounty_claim",
         "plan_autonomous_bounty_submission",
         "publish_autonomous_submission_evidence",
@@ -4562,23 +5076,27 @@ fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
 }
 
 fn load_mcp_tools(contract_root: &Path) -> Result<BTreeSet<String>> {
-    let source_path = contract_root.join("crates/mcp-server/src/main.rs");
-    let source = fs::read_to_string(&source_path)
-        .with_context(|| format!("failed to read {}", source_path.display()))?;
-    let mut tools = BTreeSet::new();
-    let mut expecting_name = false;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed == "tool(" || trimmed == "operator_tool(" {
-            expecting_name = true;
-            continue;
-        }
-        if expecting_name {
-            if let Some(name) = first_string_literal(trimmed) {
-                tools.insert(name.to_string());
-                expecting_name = false;
-            }
-        }
+    let path = contract_root.join("crates/mcp-server/fixtures/tool-registry.json");
+    let registry: serde_json::Value = serde_json::from_slice(
+        &fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", path.display()))?;
+    if registry["schema_version"] != "agent-bounties/mcp-tool-registry-v1" {
+        bail!("unsupported MCP tool registry schema in {}", path.display());
+    }
+    let names = registry["tools"]
+        .as_array()
+        .context("MCP tool registry tools must be an array")?;
+    let tools = names
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .map(str::to_string)
+                .context("MCP tool registry names must be strings")
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if tools.len() != names.len() {
+        bail!("MCP tool registry contains duplicate names");
     }
     Ok(tools)
 }
@@ -5394,6 +5912,25 @@ fn stop_child(child: &mut Child) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cli_help_matches_compatibility_fixture() {
+        let mut root = Args::command();
+        let mut sections = vec![root.render_long_help().to_string()];
+        for subcommand in Args::command().get_subcommands() {
+            let mut subcommand = subcommand.clone();
+            let name = subcommand.get_name().to_string();
+            sections.push(format!(
+                "$ agent-bounties {name} --help\n{}",
+                subcommand.render_long_help()
+            ));
+        }
+        let help = sections.join("\n---\n").replace("\r\n", "\n");
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/public-help-contract.json")).unwrap();
+        assert_eq!(help.lines().count(), fixture["normalized_lines"]);
+        assert_eq!(hash_artifact(&help), fixture["normalized_sha256"]);
+    }
+
     fn production_health(revision: &str) -> ProductionHealth {
         ProductionHealth {
             body: "ok".to_string(),
@@ -5431,6 +5968,27 @@ mod tests {
         assert!(error
             .to_string()
             .contains("API and MCP must serve the same deployed revision"));
+    }
+
+    #[test]
+    fn durable_snapshot_diff_reports_counts_and_hashes_without_row_contents() {
+        let snapshot = |rows, hash: &str| DurableDataSnapshot {
+            schema_version: "agent-bounties/durable-data-snapshot-v1".to_string(),
+            tables: [(
+                "bounties".to_string(),
+                DurableTableSnapshot {
+                    rows,
+                    canonical_sha256: hash.to_string(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let before = snapshot(2, "aaaa");
+        assert!(durable_snapshot_changes(&before, &before).is_empty());
+
+        let changes = durable_snapshot_changes(&before, &snapshot(3, "bbbb"));
+        assert_eq!(changes, ["bounties rows 2->3 sha256 aaaa->bbbb"]);
     }
 
     #[test]
@@ -5495,23 +6053,46 @@ mod tests {
     #[test]
     fn factory_runtime_hash_patches_constructor_immutables_without_generated_files() {
         let artifact = serde_json::json!({
+            "ast": {
+                "nodeType": "SourceUnit",
+                "nodes": [{
+                    "nodeType": "ContractDefinition",
+                    "nodes": [
+                        {
+                            "id": 5271,
+                            "mutability": "immutable",
+                            "name": "settlementToken",
+                            "nodeType": "VariableDeclaration",
+                            "stateVariable": true,
+                            "typeDescriptions": { "typeString": "address" }
+                        },
+                        {
+                            "id": 5273,
+                            "mutability": "immutable",
+                            "name": "implementation",
+                            "nodeType": "VariableDeclaration",
+                            "stateVariable": true,
+                            "typeDescriptions": { "typeString": "address" }
+                        }
+                    ]
+                }]
+            },
             "deployedBytecode": {
                 "object": format!("0x{}", "00".repeat(96)),
                 "immutableReferences": {
-                    "1": [
+                    "5271": [
                         { "start": 0, "length": 32 },
                         { "start": 64, "length": 32 }
                     ],
-                    "2": [{ "start": 32, "length": 32 }]
+                    "5273": [{ "start": 32, "length": 32 }]
                 }
             }
         });
         let runtime = artifact_runtime_with_immutables(
             &artifact,
             &[
-                ("1", "settlementToken", BASE_MAINNET_USDC_TOKEN_ADDRESS),
+                ("settlementToken", BASE_MAINNET_USDC_TOKEN_ADDRESS),
                 (
-                    "2",
                     "implementation",
                     "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9",
                 ),
@@ -5524,6 +6105,42 @@ mod tests {
         assert_eq!(&runtime[12..32], settlement);
         assert_eq!(&runtime[44..64], implementation);
         assert_eq!(&runtime[76..96], settlement);
+    }
+
+    #[test]
+    fn factory_runtime_hash_resolves_immutable_ids_from_the_current_ast() {
+        let artifact = serde_json::json!({
+            "ast": {
+                "nodeType": "SourceUnit",
+                "nodes": [{
+                    "id": 991_337,
+                    "mutability": "immutable",
+                    "name": "settlementToken",
+                    "nodeType": "VariableDeclaration",
+                    "stateVariable": true,
+                    "typeDescriptions": { "typeString": "address" }
+                }]
+            },
+            "deployedBytecode": {
+                "object": format!("0x{}", "00".repeat(32)),
+                "immutableReferences": {
+                    "991337": [{ "start": 0, "length": 32 }]
+                }
+            }
+        });
+
+        let runtime = artifact_runtime_with_immutables(
+            &artifact,
+            &[("settlementToken", BASE_MAINNET_USDC_TOKEN_ADDRESS)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            &runtime[12..32],
+            hex::decode(&BASE_MAINNET_USDC_TOKEN_ADDRESS[2..])
+                .unwrap()
+                .as_slice()
+        );
     }
 
     fn active_deployment_fixture() -> serde_json::Value {

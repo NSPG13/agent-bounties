@@ -7,6 +7,11 @@ envVarGroups:
       - key: OPERATOR_API_TOKEN
         generateValue: true
 
+  - name: agent-bounties-discovery
+    envVars:
+      - key: DISCOVERY_WEBHOOK_SIGNING_KEY
+        generateValue: true
+
   - name: agent-bounties-stripe
     envVars:
       - key: STRIPE_SECRET_KEY
@@ -36,17 +41,32 @@ envVarGroups:
         value: 0x082c52131aaf0c56e76b075f895eab6fcab6d2f9
       - key: BASE_MAINNET_BOUNTY_IMPLEMENTATION
         value: 0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9
+      - key: BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT
+        value: "0xb2637dd1dcf4ac9e22b42e9612e907ac44c52c69"
+      - key: BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT
+        value: "0x2e84ef6708d5fff0e9909e80481a00b7ac47293e"
       - key: BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS
-        value: "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1"
+        value: "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1,0xb35b94e1225b66e50644a331feccdab0439e63d7,0xfffecb0fcd36477c5f6ecec808f6f0cf53819562,0xbe17ef2d154265ebe3142d7bda5e99610d571455,0x43d42cb227d76588ab16693f14efd6cff851fa7a,0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b"
 
   - name: agent-bounties-x402-relayer
     envVars:
       - key: X402_RELAYER_PRIVATE_KEY
         sync: false
 
+  - name: agent-bounties-bond-sponsor
+    envVars:
+      - key: BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY
+        sync: false
+      - key: BOND_SPONSOR_BASE_MAINNET_CONTRACT
+        sync: false
+      - key: BOND_SPONSOR_BASE_SEPOLIA_CONTRACT
+        sync: false
+
 services:
   - type: web
     name: agent-bounties-api
+    domains:
+      - api.agentbounties.app
     runtime: docker
     plan: starter
     region: oregon
@@ -65,9 +85,23 @@ services:
       - key: RUST_LOG
         value: info
       - key: PUBLIC_BASE_URL
-        value: https://agent-bounties-api.onrender.com
+        value: https://api.agentbounties.app
+      - key: WEBSITE_BASE_URL
+        value: https://agentbounties.app
       - key: MCP_BASE_URL
-        value: https://agent-bounties-mcp.onrender.com
+        value: https://mcp.agentbounties.app
+      - key: AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED
+        value: "true"
+      - key: NEYNAR_API_KEY
+        sync: false
+      - key: NEYNAR_WEBHOOK_SECRET
+        sync: false
+      - key: NEYNAR_SIGNER_UUID
+        sync: false
+      - key: NEYNAR_BOT_FID
+        sync: false
+      - key: NEYNAR_BOT_USERNAME
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: agent-bounties-postgres
@@ -96,19 +130,61 @@ services:
         value: "15"
       - key: X402_RELAYER_LEASE_SECONDS
         value: "45"
+      - key: ENABLE_BOND_SPONSORSHIP
+        value: "false"
+      - key: BOND_SPONSOR_MAX_BOND_BASE_UNITS
+        value: "100000"
+      - key: BOND_SPONSOR_MAX_NETWORK_24H_BASE_UNITS
+        value: "1000000"
+      - key: BOND_SPONSOR_MAX_SOLVER_24H_BASE_UNITS
+        value: "100000"
+      - key: BOND_SPONSOR_MAX_GAS
+        value: "500000"
+      - key: BOND_SPONSOR_MAX_FEE_PER_GAS_WEI
+        value: "10000000000"
+      - key: BOND_SPONSOR_RPC_TIMEOUT_SECONDS
+        value: "15"
       - key: ENABLE_STRIPE_LIVE_EXECUTION
         value: "false"
       - key: ENABLE_STRIPE_PUBLIC_CHECKOUT
         value: "false"
       - key: ALLOW_UNSIGNED_STRIPE_WEBHOOKS
         value: "false"
+      - key: CLOUD_AGENT_API_KEY
+        sync: false
+      - key: CLOUD_AGENT_ENABLED
+        value: "true"
+      - key: CLOUD_AGENT_PUBLIC_DRAFTS
+        value: "true"
+      - key: CLOUD_AGENT_PROVIDER
+        value: openai
+      - key: CLOUD_AGENT_PROTOCOL
+        value: openai_responses
+      - key: CLOUD_AGENT_ENDPOINT
+        value: https://api.openai.com/v1/responses
+      - key: CLOUD_AGENT_MODEL
+        value: gpt-5.6-luna
+      - key: CLOUD_AGENT_REASONING_EFFORT
+        value: low
+      - key: CLOUD_AGENT_MAX_INPUT_CHARS
+        value: "12000"
+      - key: CLOUD_AGENT_MAX_OUTPUT_TOKENS
+        value: "12000"
+      - key: CLOUD_AGENT_MAX_DAILY_DRAFTS
+        value: "50"
+      - key: CLOUD_AGENT_TIMEOUT_SECONDS
+        value: "90"
       - fromGroup: agent-bounties-operator
       - fromGroup: agent-bounties-stripe
       - fromGroup: agent-bounties-base
       - fromGroup: agent-bounties-x402-relayer
+      - fromGroup: agent-bounties-bond-sponsor
+      - fromGroup: agent-bounties-discovery
 
   - type: web
     name: agent-bounties-mcp
+    domains:
+      - mcp.agentbounties.app
     runtime: docker
     plan: starter
     region: oregon
@@ -127,9 +203,9 @@ services:
       - key: RUST_LOG
         value: info
       - key: PUBLIC_BASE_URL
-        value: https://agent-bounties-api.onrender.com
+        value: https://api.agentbounties.app
       - key: MCP_BASE_URL
-        value: https://agent-bounties-mcp.onrender.com
+        value: https://mcp.agentbounties.app
       - key: DATABASE_URL
         fromDatabase:
           name: agent-bounties-postgres
@@ -164,6 +240,8 @@ services:
         value: worker
       - key: RUST_LOG
         value: info
+      - key: PUBLIC_BASE_URL
+        value: https://api.agentbounties.app
       - key: DATABASE_URL
         fromDatabase:
           name: agent-bounties-postgres
@@ -191,6 +269,7 @@ services:
       - key: BASE_INDEXER_EXIT_AFTER_FAILURES
         value: "8"
       - fromGroup: agent-bounties-base
+      - fromGroup: agent-bounties-discovery
 
 databases:
   - name: agent-bounties-postgres

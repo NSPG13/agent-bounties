@@ -79,25 +79,14 @@ class StageReviewContractRootTests(unittest.TestCase):
 
     def test_review_scripts_pass_the_staged_contract_root(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        powershell = (repo_root / "scripts/review-external-pr.ps1").read_text(
-            encoding="utf-8"
-        )
-        shell = (repo_root / "scripts/review-external-pr.sh").read_text(
-            encoding="utf-8"
-        )
+        engine = (repo_root / "scripts/review_external_pr.py").read_text(encoding="utf-8")
 
-        self.assertIn("stage_review_contract_root.py", powershell)
-        self.assertIn("baseRefOid", powershell)
-        self.assertIn("--worktree $baseWorktreeFull", powershell)
-        self.assertIn('Join-Path $baseWorktreeFull "Cargo.toml"', powershell)
-        self.assertIn('"--contract-root", $contractRootFull', powershell)
-        self.assertNotIn('"--contract-root", $repoRoot', powershell)
-        self.assertIn("stage_review_contract_root.py", shell)
-        self.assertIn("baseRefOid", shell)
-        self.assertIn('--worktree "$base_worktree"', shell)
-        self.assertIn('--manifest-path "$base_worktree/Cargo.toml"', shell)
-        self.assertIn('--contract-root "$contract_root"', shell)
-        self.assertNotIn('--contract-root "$repo_root"', shell)
+        self.assertIn("stage_review_contract_root.py", engine)
+        self.assertIn('pr_data["baseRefOid"]', engine)
+        self.assertIn('"--worktree",', engine)
+        self.assertIn('base / "Cargo.toml"', engine)
+        self.assertIn('"--contract-root",', engine)
+        self.assertNotIn('"--contract-root",\n                    ROOT', engine)
 
 
 if __name__ == "__main__":

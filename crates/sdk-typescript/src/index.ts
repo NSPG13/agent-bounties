@@ -125,6 +125,7 @@ export interface CanonicalChildBountyTermsRequest {
   parent_round: number;
   parent_solver: string;
   parent_solver_reward: { amount: number; currency: "usdc" };
+  child_acceptance_criteria: string[];
   verifier_module: string;
 }
 
@@ -132,6 +133,150 @@ export interface AutonomousAuthorizationSignature {
   v: number;
   r: string;
   s: string;
+}
+
+export interface AgentNativeClaimRequest {
+  idempotency_key?: string;
+  network?: "base-mainnet" | "base-sepolia";
+  bounty_contract: string;
+  solver_wallet: string;
+  agent_id?: string | null;
+  request_bond_sponsorship?: boolean;
+  wallet_signature?: string;
+  signature?: AutonomousAuthorizationSignature;
+  source?: string;
+}
+
+export interface AgentNativeClaimResponse {
+  schema_version: string;
+  candidate: Record<string, unknown> & { status?: string };
+  waitlist_position?: number | null;
+  claim_bond: string;
+  sponsorship_requested: boolean;
+  sponsorship_available: boolean;
+  sponsorship_protocol?: "agent-bounties/atomic-claim-sponsor-v1" | null;
+  sponsor_contract?: string | null;
+  sponsorship?: Record<string, unknown> | null;
+  signing_payload?: Record<string, unknown> | null;
+  wallet_request?: {
+    method: "eth_signTypedData_v4";
+    params: [string, string];
+  } | null;
+  claim_transaction_hash?: string | null;
+  canonical_event_id?: string | null;
+  next_action: string;
+  next_request?: Record<string, unknown> | null;
+  browser_fallback_url: string;
+  evidence_boundary: string;
+}
+
+export interface StandingMetaV4ReadinessCheck {
+  name: string;
+  ready: boolean;
+  observed: string;
+  required: string;
+}
+
+export interface OpenCompetitionReadinessCheck {
+  name: string;
+  ready: boolean;
+  observed: string;
+  required: string;
+}
+
+export interface OpenCompetitionReadinessReport {
+  schema_version: "agent-bounties/open-competition-v1-readiness-v1";
+  protocol_version: "open-competition-v1";
+  competition_mode: "first_valid_submission";
+  ready_to_compete: boolean;
+  checks: OpenCompetitionReadinessCheck[];
+  blockers: string[];
+  first_means: string;
+  ordering_authority: string;
+  decision_authority: string;
+  payment_authority: string;
+  next_action: string;
+  fairness_statement: string;
+  evidence_boundary: string;
+}
+
+export type OpenCompetitionOperation =
+  | "prepare_open_competition_commit"
+  | "prepare_open_competition_reveal"
+  | "get_open_competition_status"
+  | "withdraw_open_competition_bond";
+
+export interface OpenCompetitionActionRequest {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  bounty_contract: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface OpenCompetitionActionPlan {
+  schema_version: "agent-bounties/open-competition-v1-action-v1";
+  protocol_version: "open-competition-v1";
+  competition_mode: "first_valid_submission";
+  operation: OpenCompetitionOperation;
+  allowed: boolean;
+  target_contract: string | null;
+  function: string | null;
+  arguments: Record<string, unknown>;
+  blocker: string | null;
+  next_action: string;
+  evidence_boundary: string;
+}
+
+export interface StandingMetaV4ReadinessReport {
+  schema_version: "agent-bounties/standing-meta-v4-readiness-v1";
+  protocol_version: "standing-meta-v4";
+  ready_to_earn: boolean;
+  successful_settlement_margin_base_units: string | null;
+  checks: StandingMetaV4ReadinessCheck[];
+  blockers: string[];
+  next_action: string;
+  decision_authority: string;
+  payment_authority: string;
+  fairness_statement: string;
+  evidence_boundary: string;
+}
+
+export type StandingMetaV4Operation =
+  | "prepare_standing_meta_v4_claim"
+  | "prepare_anonymous_stake_registration"
+  | "set_anonymous_stake_availability"
+  | "list_verification_assignments"
+  | "submit_primary_verdict"
+  | "waive_verification_appeal"
+  | "open_verification_appeal"
+  | "submit_appeal_vote"
+  | "finalize_verification_case";
+
+export interface StandingMetaV4ActionRequest {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  arguments: Record<string, unknown>;
+}
+
+export interface StandingMetaV4ActionPlan {
+  schema_version: "agent-bounties/standing-meta-v4-action-v1";
+  protocol_version: "standing-meta-v4";
+  operation: StandingMetaV4Operation;
+  allowed: boolean;
+  target_contract: string | null;
+  function: string | null;
+  arguments: Record<string, unknown>;
+  blocker: string | null;
+  next_action: string;
+  evidence_boundary: string;
+}
+
+export type AgentClaimSigner = (
+  signingPayload: Record<string, unknown>,
+  walletRequest?: NonNullable<AgentNativeClaimResponse["wallet_request"]>,
+) => Promise<string | AutonomousAuthorizationSignature>;
+
+export interface AgentClaimLoopOptions {
+  pollIntervalMs?: number;
+  timeoutMs?: number;
 }
 
 export interface AutonomousLifecycleRequest {
@@ -144,6 +289,159 @@ export type StripeConnectSnapshot = Record<string, unknown>;
 export type StripeWebhookEvent = Record<string, unknown>;
 export type DiscoveryManifest = Record<string, unknown>;
 export type DiscoveryManifestSchema = Record<string, unknown>;
+
+export type OpportunityWorkState =
+  | "open"
+  | "claimable"
+  | "in_progress"
+  | "submitted"
+  | "completed";
+export type OpportunityPaymentState = "none" | "seeking_funding" | "escrowed" | "paid";
+export type OpportunitySourceType = "unfunded_offchain" | "legacy_bounty" | "canonical_base";
+export type OpportunityView =
+  | "recent"
+  | "engineering"
+  | "creative"
+  | "urgent"
+  | "seeking_funding"
+  | "ready_to_earn";
+
+export interface OpportunityQuery {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  view?: OpportunityView | null;
+  source_type?: OpportunitySourceType | null;
+  work_state?: OpportunityWorkState | null;
+  payment_state?: OpportunityPaymentState | null;
+  limit?: number | null;
+}
+
+export interface OpportunityProjection extends Record<string, unknown> {
+  schema_version: "agent-bounties/opportunity-projection-v1";
+  generated_at: string;
+  network: string;
+  applied_view: OpportunityView | null;
+  degraded: boolean;
+  source_statuses: Array<Record<string, unknown>>;
+  items: Array<Record<string, unknown>>;
+}
+
+export interface DiscoveryRewardFilter {
+  amount: string;
+  currency: string;
+  unit: "base_units" | "minor_units";
+  decimals: number;
+}
+
+export interface DiscoverySubscriptionFilters {
+  skills?: string[];
+  categories?: string[];
+  minimum_committed_reward?: DiscoveryRewardFilter | null;
+  work_states?: OpportunityWorkState[];
+  payment_states?: OpportunityPaymentState[];
+  verification_methods?: string[];
+  source_types?: OpportunitySourceType[];
+  deadline_within_hours?: number | null;
+}
+
+export interface DiscoverySubscription extends Record<string, unknown> {
+  schema_version: "agent-bounties/discovery-subscription-v1";
+  subscription_id: string;
+  endpoint_url: string;
+  event_types: Array<"opportunity_published" | "opportunity_state_changed">;
+  filters: DiscoverySubscriptionFilters;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface CreatedDiscoverySubscription extends DiscoverySubscription {
+  management_token: string;
+  signing_secret: string;
+}
+
+export interface OpportunityConversionFunnel extends Record<string, unknown> {
+  schema_version: "agent-bounties/opportunity-conversion-funnel-v1";
+  window_hours: number;
+  stages: Array<Record<string, unknown>>;
+  rates: Array<Record<string, unknown>>;
+  average_seconds_to_first_solution: number | null;
+  average_seconds_creation_to_settlement: number | null;
+  actors: Record<string, unknown>;
+}
+
+export interface SiteAnalyticsReport extends Record<string, unknown> {
+  schema_version: "agent-bounties/site-analytics-v1";
+  window_hours: number;
+  window_started_at: string;
+  generated_at: string;
+  overview: {
+    unique_visitors: number;
+    returning_visitors: number;
+    sessions: number;
+    page_views: number;
+    first_event_at: string | null;
+    last_event_at: string | null;
+  };
+  event_counts: Array<Record<string, unknown>>;
+  daily: Array<Record<string, unknown>>;
+  channels: Array<Record<string, unknown>>;
+  rates: Array<Record<string, unknown>>;
+  definitions: string[];
+  evidence_boundary: string;
+}
+
+export interface CloudBountyAnalysis extends Record<string, unknown> {
+  schema_version: "agent-bounties/cloud-bounty-analysis-v1";
+  terms_hash: string;
+  required_skills: string[];
+  hard_requirements: string[];
+  deliverable_checklist: string[];
+  evidence_checklist: string[];
+  verification_risks: string[];
+  ambiguous_requirements: string[];
+  missing_information: string[];
+  confidence: number;
+}
+
+export interface CloudObjectivePlanRequest {
+  objective: string;
+  context?: string | null;
+  constraints?: string[];
+  max_tasks?: number;
+  solver_budget_usdc?: string | null;
+  source_url?: string | null;
+  idempotency_key?: string | null;
+}
+
+export interface CloudObjectiveTask extends Record<string, unknown> {
+  task_id: string;
+  title: string;
+  goal: string;
+  depends_on: string[];
+  acceptance_criteria: string[];
+  verifier: Record<string, unknown>;
+  evidence_schema: Record<string, unknown>;
+  effort_weight: number;
+  suggested_solver_reward_usdc: string | null;
+}
+
+export interface CloudObjectivePlan extends Record<string, unknown> {
+  schema_version: "agent-bounties/cloud-objective-plan-v1";
+  provider: string;
+  model: string;
+  title: string;
+  objective: string;
+  success_definition: string;
+  tasks: CloudObjectiveTask[];
+  parallel_layers: string[][];
+  solver_budget_usdc: string | null;
+  execution_policy: Record<string, unknown>;
+  verification_policy: Record<string, unknown>;
+  settlement_policy: Record<string, unknown>;
+  questions: string[];
+  risk_flags: string[];
+  next_action: string;
+  evidence_boundary: string;
+}
 
 export interface X402BountyFundingRequest {
   bounty_contract: string;
@@ -173,6 +471,68 @@ export interface X402FundingLoopOptions {
 export interface AgentBountiesClientOptions {
   baseUrl?: string;
   operatorApiToken?: string | null;
+}
+
+export type AgentWalletSigningCapability =
+  | "eip712_typed_data"
+  | "eip3009_receive_with_authorization"
+  | "send_transaction"
+  | "wallet_send_calls";
+
+export type AgentWalletProfile =
+  | "generic-evm"
+  | "metamask-agent-wallet"
+  | "circle-agent-wallet"
+  | "cdp-server-wallet"
+  | "privy-server-wallet";
+
+export interface PrepareAgentToEarnRequest {
+  network: "base-mainnet" | "base-sepolia";
+  wallet_address: string;
+  bounty_contract: string;
+  claim_bond_base_units?: string | null;
+  signing_capabilities: AgentWalletSigningCapability[];
+  wallet_profile?: AgentWalletProfile | null;
+  policy: {
+    allowed_chain_ids: number[];
+    allowed_contracts: string[];
+    per_transaction_usdc_base_units: string;
+    rolling_24h_usdc_base_units: string;
+    human_approval_policy: "always" | "out_of_policy" | "never";
+  };
+}
+
+export interface AgentWalletReadinessReport extends Record<string, unknown> {
+  schema_version: "agent-bounties/agent-wallet-readiness-v1";
+  ready: boolean;
+  status: "ready" | "blocked";
+  recommended_claim_path: "agent_native_claim" | "direct_wallet_claim_plan" | null;
+  checks: Array<Record<string, unknown>>;
+  next_actions: string[];
+}
+
+export interface AgentWalletReadinessProblem extends Record<string, unknown> {
+  schema_version: "agent-bounties/agent-wallet-readiness-problem-v1";
+  state: "failed";
+  failed_transition: string;
+  error: string;
+  retryable: boolean;
+  message: string;
+  next_action: string;
+}
+
+export class AgentBountiesHttpError extends Error {
+  readonly path: string;
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(path: string, status: number, body: unknown) {
+    super(`${path} failed: ${status}`);
+    this.name = "AgentBountiesHttpError";
+    this.path = path;
+    this.status = status;
+    this.body = body;
+  }
 }
 
 export interface PlanStripeCheckoutTopUpRequest {
@@ -309,6 +669,15 @@ async function x402ResponseBody(response: Response): Promise<Record<string, unkn
   }
 }
 
+function parseHttpBody(text: string, status: number): unknown {
+  if (!text) return { error: `HTTP ${status}` };
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return { error: text };
+  }
+}
+
 export class AgentBountiesClient {
   private readonly baseUrl: string;
   private readonly operatorApiToken?: string;
@@ -335,24 +704,43 @@ export class AgentBountiesClient {
         ...(init?.headers ?? {}),
       },
     });
+    const body = parseHttpBody(await response.text(), response.status);
     if (!response.ok) {
-      throw new Error(`${path} failed: ${response.status}`);
+      throw new AgentBountiesHttpError(path, response.status, body);
     }
-    return response.json();
+    return body;
+  }
+
+  private post(path: string, body?: unknown, headers?: HeadersInit): Promise<unknown> {
+    return this.request(path, {
+      method: "POST",
+      ...(headers ? { headers } : {}),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  }
+
+  private queryPath(
+    path: string,
+    values: object,
+  ): string {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(values)) {
+      if (value != null && value !== "") params.set(key, String(value));
+    }
+    const encoded = params.toString();
+    return `${path}${encoded ? `?${encoded}` : ""}`;
+  }
+
+  private query(path: string, values: object): Promise<unknown> {
+    return this.request(this.queryPath(path, values));
   }
 
   private async autonomousPost(action: string, body: Record<string, unknown>): Promise<unknown> {
-    return this.request(`/v1/base/autonomous-bounties/${action}`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    return this.post(`/v1/base/autonomous-bounties/${action}`, body);
   }
 
   async routeBlockedGoal(request: RouteBlockedGoalRequest): Promise<unknown> {
-    return this.request("/v1/route-blocked-goal", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/route-blocked-goal", request);
   }
 
   async getDiscoveryManifest(): Promise<DiscoveryManifest> {
@@ -367,14 +755,22 @@ export class AgentBountiesClient {
     return this.request("/.well-known/x402.json") as Promise<Record<string, unknown>>;
   }
 
+  async compileObjective(request: CloudObjectivePlanRequest): Promise<CloudObjectivePlan> {
+    return this.post("/v1/cloud-agent/objective-plans", {
+      constraints: [],
+      max_tasks: 5,
+      ...request,
+    }) as Promise<CloudObjectivePlan>;
+  }
+
   async requestX402BountyFunding(
     request: X402BountyFundingRequest,
   ): Promise<X402BountyFundingResponse> {
-    const params = new URLSearchParams();
-    params.set("network", request.network ?? "base-mainnet");
-    if (request.amount != null) params.set("amount", String(request.amount));
-    if (request.relayer) params.set("relayer", request.relayer);
-    const path = `/v1/x402/base/bounties/${request.bounty_contract}/funding?${params.toString()}`;
+    const path = this.queryPath(`/v1/x402/base/bounties/${request.bounty_contract}/funding`, {
+      network: request.network ?? "base-mainnet",
+      amount: request.amount,
+      relayer: request.relayer,
+    });
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "GET",
       headers: {
@@ -475,21 +871,136 @@ export class AgentBountiesClient {
   }
 
   async getLiveMoneyReadiness(network?: string | null): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    const query = params.toString();
-    return this.request(`/v1/readiness/live-money${query ? `?${query}` : ""}`);
+    return this.query("/v1/readiness/live-money", { network });
+  }
+
+  async prepareAgentToEarn(
+    request: PrepareAgentToEarnRequest,
+  ): Promise<AgentWalletReadinessReport> {
+    return this.post(
+      "/v1/base/agent-wallet/readiness",
+      request,
+    ) as Promise<AgentWalletReadinessReport>;
+  }
+
+  async getStandingMetaV4Readiness(
+    network: "base-mainnet" | "base-sepolia" = "base-mainnet",
+  ): Promise<StandingMetaV4ReadinessReport> {
+    return this.query("/v1/base/standing-meta-v4/readiness", {
+      network,
+    }) as Promise<StandingMetaV4ReadinessReport>;
+  }
+
+  async getOpenCompetitionReadiness(
+    bountyContract: string,
+    network: "base-mainnet" | "base-sepolia" = "base-mainnet",
+  ): Promise<OpenCompetitionReadinessReport> {
+    return this.query("/v1/base/open-competition-v1/readiness", {
+      network,
+      bounty_contract: bountyContract,
+    }) as Promise<OpenCompetitionReadinessReport>;
+  }
+
+  private openCompetitionAction(
+    path: string,
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.post(`/v1/base/open-competition-v1/${path}`, {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    }) as Promise<OpenCompetitionActionPlan>;
+  }
+
+  async prepareOpenCompetitionCommit(
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.openCompetitionAction("commit-preparation", request);
+  }
+
+  async prepareOpenCompetitionReveal(
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.openCompetitionAction("reveal-preparation", request);
+  }
+
+  async getOpenCompetitionStatus(
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.openCompetitionAction("status", request);
+  }
+
+  async withdrawOpenCompetitionBond(
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.openCompetitionAction("bond-withdrawal-preparation", request);
+  }
+
+  private standingMetaV4Action(
+    path: string,
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.post(`/v1/base/standing-meta-v4/${path}`, {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    }) as Promise<StandingMetaV4ActionPlan>;
+  }
+
+  async prepareStandingMetaV4Claim(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("claim-preparation", request);
+  }
+
+  async prepareAnonymousStakeRegistration(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("stake-registration-preparation", request);
+  }
+
+  async setAnonymousStakeAvailability(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("stake-availability-preparation", request);
+  }
+
+  async listVerificationAssignments(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("verification-assignments", request);
+  }
+
+  async submitPrimaryVerdict(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("primary-verdict-preparation", request);
+  }
+
+  async waiveVerificationAppeal(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("appeal-waiver-preparation", request);
+  }
+
+  async openVerificationAppeal(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("appeal-opening-preparation", request);
+  }
+
+  async submitAppealVote(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("appeal-vote-preparation", request);
+  }
+
+  async finalizeVerificationCase(
+    request: StandingMetaV4ActionRequest,
+  ): Promise<StandingMetaV4ActionPlan> {
+    return this.standingMetaV4Action("finalization-preparation", request);
   }
 
   async getRiskEvents(request: RiskEventsRequest = {}): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (request.action) params.set("action", request.action);
-    if (request.surface) params.set("surface", request.surface);
-    if (request.bounty_id) params.set("bounty_id", request.bounty_id);
-    if (request.agent_id) params.set("agent_id", request.agent_id);
-    if (request.limit != null) params.set("limit", String(request.limit));
-    const query = params.toString();
-    return this.request(`/v1/risk/events${query ? `?${query}` : ""}`);
+    return this.query("/v1/risk/events", request);
   }
 
   async listRiskReviews(): Promise<unknown> {
@@ -497,94 +1008,64 @@ export class AgentBountiesClient {
   }
 
   async approveRiskBounty(request: ApproveRiskBountyRequest): Promise<unknown> {
-    return this.request("/v1/risk/bounty-approvals", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/risk/bounty-approvals", request);
   }
 
   async approveRiskPayout(request: ApproveRiskPayoutRequest): Promise<unknown> {
-    return this.request("/v1/risk/payout-approvals", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/risk/payout-approvals", request);
   }
 
   async rejectRiskEvent(request: RejectRiskEventRequest): Promise<unknown> {
-    return this.request(`/v1/risk/events/${request.risk_event_id}/reject`, {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post(`/v1/risk/events/${request.risk_event_id}/reject`, request);
   }
 
   async registerAgent(handle: string, payoutWallet?: string): Promise<unknown> {
-    return this.request("/v1/agents", {
-      method: "POST",
-      body: JSON.stringify({ handle, payout_wallet: payoutWallet ?? null }),
-    });
+    return this.post("/v1/agents", { handle, payout_wallet: payoutWallet ?? null });
   }
 
   async registerCapability(request: RegisterCapabilityRequest): Promise<unknown> {
-    return this.request("/v1/capabilities", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/capabilities", request);
   }
 
   async createHelpRequest(request: CreateHelpRequestRequest): Promise<unknown> {
-    return this.request("/v1/help-requests", {
-      method: "POST",
-      body: JSON.stringify({ ...request, required_confidence: request.required_confidence ?? null }),
+    return this.post("/v1/help-requests", {
+      ...request,
+      required_confidence: request.required_confidence ?? null,
     });
   }
 
   async requestQuotes(helpRequestId: string): Promise<unknown> {
-    return this.request(`/v1/help-requests/${helpRequestId}/quotes`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
+    return this.post(`/v1/help-requests/${helpRequestId}/quotes`, {});
   }
 
   async fundQuoteAsBounty(quoteId: string, request: FundQuoteRequest = {}): Promise<unknown> {
-    return this.request(`/v1/quotes/${quoteId}/fund-bounty`, {
-      method: "POST",
-      body: JSON.stringify({
-        quote_id: quoteId,
-        title: request.title ?? null,
-        funding_mode: request.funding_mode ?? null,
-      }),
+    return this.post(`/v1/quotes/${quoteId}/fund-bounty`, {
+      quote_id: quoteId,
+      title: request.title ?? null,
+      funding_mode: request.funding_mode ?? null,
     });
   }
 
   async postBounty(request: PostBountyRequest): Promise<unknown> {
-    return this.request("/v1/bounties", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/bounties", request);
   }
 
   async openPooledBounty(request: OpenPooledBountyRequest): Promise<unknown> {
-    return this.request("/v1/bounties/pooled", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/bounties/pooled", request);
   }
 
   async addFundingContribution(
     bountyId: string,
     request: AddFundingContributionRequest,
   ): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/funding-contributions`, {
-      method: "POST",
-      body: JSON.stringify({
-        bounty_id: bountyId,
-        contributor_agent_id: request.contributor_agent_id ?? null,
-        source_organization_id: request.source_organization_id ?? null,
-        amount_minor: request.amount_minor,
-        currency: request.currency,
-        rail: request.rail,
-        external_reference: request.external_reference ?? null,
-      }),
+    return this.post(`/v1/bounties/${bountyId}/funding-contributions`, {
+      bounty_id: bountyId,
+      contributor_agent_id: request.contributor_agent_id ?? null,
+      source_organization_id: request.source_organization_id ?? null,
+      amount_minor: request.amount_minor,
+      currency: request.currency,
+      rail: request.rail,
+      external_reference: request.external_reference ?? null,
     });
   }
 
@@ -592,23 +1073,20 @@ export class AgentBountiesClient {
     bountyId: string,
     request: CreateFundingIntentRequest,
   ): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/funding-intents`, {
-      method: "POST",
-      body: JSON.stringify({
-        bounty_id: bountyId,
-        contributor_agent_id: request.contributor_agent_id ?? null,
-        source_organization_id: request.source_organization_id ?? null,
-        amount_minor: request.amount_minor,
-        currency: request.currency,
-        rail: request.rail,
-        external_reference: request.external_reference ?? null,
-        stripe_success_url: request.stripe_success_url ?? null,
-        stripe_cancel_url: request.stripe_cancel_url ?? null,
-        base_escrow_contract: request.base_escrow_contract ?? null,
-        base_payer: request.base_payer ?? null,
-        base_token: request.base_token ?? null,
-        base_network: request.base_network ?? null,
-      }),
+    return this.post(`/v1/bounties/${bountyId}/funding-intents`, {
+      bounty_id: bountyId,
+      contributor_agent_id: request.contributor_agent_id ?? null,
+      source_organization_id: request.source_organization_id ?? null,
+      amount_minor: request.amount_minor,
+      currency: request.currency,
+      rail: request.rail,
+      external_reference: request.external_reference ?? null,
+      stripe_success_url: request.stripe_success_url ?? null,
+      stripe_cancel_url: request.stripe_cancel_url ?? null,
+      base_escrow_contract: request.base_escrow_contract ?? null,
+      base_payer: request.base_payer ?? null,
+      base_token: request.base_token ?? null,
+      base_network: request.base_network ?? null,
     });
   }
 
@@ -629,42 +1107,30 @@ export class AgentBountiesClient {
   }
 
   async searchCapabilities(request: SearchCapabilitiesRequest = {}): Promise<unknown> {
-    return this.request("/v1/capabilities/search", {
-      method: "POST",
-      body: JSON.stringify({
-        class: request.class ?? null,
-        template_slug: request.template_slug ?? null,
-        currency: request.currency ?? null,
-        max_price_minor: request.max_price_minor ?? null,
-      }),
+    return this.post("/v1/capabilities/search", {
+      class: request.class ?? null,
+      template_slug: request.template_slug ?? null,
+      currency: request.currency ?? null,
+      max_price_minor: request.max_price_minor ?? null,
     });
   }
 
   async claimBounty(bountyId: string, request: ClaimBountyRequest): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/claim`, {
-      method: "POST",
-      body: JSON.stringify({ bounty_id: bountyId, ...request }),
-    });
+    return this.post(`/v1/bounties/${bountyId}/claim`, { bounty_id: bountyId, ...request });
   }
 
   async submitResult(bountyId: string, request: SubmitResultRequest): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/submit`, {
-      method: "POST",
-      body: JSON.stringify({ bounty_id: bountyId, ...request }),
-    });
+    return this.post(`/v1/bounties/${bountyId}/submit`, { bounty_id: bountyId, ...request });
   }
 
   async requestVerification(bountyId: string, request: VerifySubmissionRequest): Promise<unknown> {
-    return this.request(`/v1/bounties/${bountyId}/verify`, {
-      method: "POST",
-      body: JSON.stringify({
-        bounty_id: bountyId,
-        ...request,
-        verifier_kind: request.verifier_kind ?? null,
-        rubric: request.rubric ?? null,
-        evidence: request.evidence ?? null,
-        approved_risk_event_id: request.approved_risk_event_id ?? null,
-      }),
+    return this.post(`/v1/bounties/${bountyId}/verify`, {
+      bounty_id: bountyId,
+      ...request,
+      verifier_kind: request.verifier_kind ?? null,
+      rubric: request.rubric ?? null,
+      evidence: request.evidence ?? null,
+      approved_risk_event_id: request.approved_risk_event_id ?? null,
     });
   }
 
@@ -721,11 +1187,9 @@ export class AgentBountiesClient {
     round: number,
     network?: string | null,
   ): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    const query = params.toString();
-    return this.request(
-      `/v1/base/autonomous-bounties/submission-evidence/${bountyContract}/${round}${query ? `?${query}` : ""}`,
+    return this.query(
+      `/v1/base/autonomous-bounties/submission-evidence/${bountyContract}/${round}`,
+      { network },
     );
   }
 
@@ -733,35 +1197,93 @@ export class AgentBountiesClient {
     network?: string | null,
     claimableOnly?: boolean | null,
   ): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    if (claimableOnly != null) params.set("claimable_only", String(claimableOnly));
-    const query = params.toString();
-    return this.request(`/v1/base/autonomous-bounties/feed${query ? `?${query}` : ""}`);
+    return this.query("/v1/base/autonomous-bounties/feed", {
+      network,
+      claimable_only: claimableOnly,
+    });
+  }
+
+  async getSolverLeaderboard(
+    network?: string | null,
+    at?: string | null,
+  ): Promise<unknown> {
+    return this.query("/v1/base/autonomous-bounties/leaderboard", { network, at });
+  }
+
+  async listOpportunities(query: OpportunityQuery = {}): Promise<OpportunityProjection> {
+    return this.query("/v1/opportunities", query) as Promise<OpportunityProjection>;
+  }
+
+  async createDiscoverySubscription(
+    endpointUrl: string,
+    filters: DiscoverySubscriptionFilters = {},
+  ): Promise<CreatedDiscoverySubscription> {
+    return this.post("/v1/discovery/subscriptions", {
+      endpoint_url: endpointUrl,
+      filters,
+    }) as Promise<CreatedDiscoverySubscription>;
+  }
+
+  async getDiscoverySubscription(
+    subscriptionId: string,
+    managementToken: string,
+  ): Promise<DiscoverySubscription> {
+    return this.request(`/v1/discovery/subscriptions/${subscriptionId}`, {
+      headers: { authorization: `Bearer ${managementToken}` },
+    }) as Promise<DiscoverySubscription>;
+  }
+
+  async deleteDiscoverySubscription(
+    subscriptionId: string,
+    managementToken: string,
+  ): Promise<void> {
+    await this.request(`/v1/discovery/subscriptions/${subscriptionId}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${managementToken}` },
+    });
+  }
+
+  async getOpportunityConversionFunnel(
+    windowHours?: number | null,
+  ): Promise<OpportunityConversionFunnel> {
+    return this.query("/v1/opportunities/conversion-funnel", {
+      window_hours: windowHours,
+    }) as Promise<OpportunityConversionFunnel>;
+  }
+
+  async getSiteAnalytics(windowHours?: number | null): Promise<SiteAnalyticsReport> {
+    return this.query("/v1/analytics/site", {
+      window_hours: windowHours,
+    }) as Promise<SiteAnalyticsReport>;
+  }
+
+  async analyzeBountyFit(
+    bountyContract: string,
+    network?: "base-mainnet" | "base-sepolia" | null,
+  ): Promise<CloudBountyAnalysis> {
+    return this.query(`/v1/base/autonomous-bounties/${bountyContract}/analysis`, {
+      network,
+    }) as Promise<CloudBountyAnalysis>;
   }
 
   async listAutonomousVerificationJobs(
     network?: string | null,
     verifier?: string | null,
   ): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    if (verifier) params.set("verifier", verifier);
-    const query = params.toString();
-    return this.request(
-      `/v1/base/autonomous-bounties/verification-jobs${query ? `?${query}` : ""}`,
-    );
+    return this.query("/v1/base/autonomous-bounties/verification-jobs", {
+      network,
+      verifier,
+    });
   }
 
   async listAutonomousBountyEvents(
     network?: string | null,
     bountyId?: string | null,
   ): Promise<unknown> {
-    const params = new URLSearchParams();
-    if (network) params.set("network", network);
-    if (bountyId) params.set("bounty_id", bountyId);
-    const query = params.toString();
-    return this.request(`/v1/base/autonomous-bounties/events${query ? `?${query}` : ""}`);
+    return this.query("/v1/base/autonomous-bounties/events", {
+      network,
+      bounty_id: bountyId,
+    });
   }
 
   async decodeAutonomousBountyEvents(logs: AutonomousEvmLog[]): Promise<unknown> {
@@ -832,6 +1354,60 @@ export class AgentBountiesClient {
       authorization_nonce: request.authorization_nonce ?? null,
       authorization_valid_before: request.authorization_valid_before ?? null,
     });
+  }
+
+  async agentNativeClaim(
+    request: AgentNativeClaimRequest,
+    signer?: AgentClaimSigner,
+    options: AgentClaimLoopOptions = {},
+  ): Promise<AgentNativeClaimResponse> {
+    const body: AgentNativeClaimRequest = {
+      ...request,
+      idempotency_key: request.idempotency_key ?? `sdk-typescript-${globalThis.crypto.randomUUID()}`,
+      network: request.network ?? "base-mainnet",
+      request_bond_sponsorship: request.request_bond_sponsorship ?? false,
+      source: request.source ?? "sdk-typescript",
+    };
+    let response = (await this.post(
+      "/v1/base/autonomous-bounties/claims",
+      body,
+    )) as AgentNativeClaimResponse;
+    if (!signer || !response.signing_payload) return response;
+
+    const signature = await signer(response.signing_payload, response.wallet_request ?? undefined);
+    if (typeof signature === "string") {
+      if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) {
+        throw new Error("agent claim signer must return one 65-byte 0x-prefixed signature");
+      }
+      body.wallet_signature = signature;
+    } else {
+      if (!signature?.r || !signature?.s || !Number.isInteger(signature.v)) {
+        throw new Error("agent claim signer must return a wallet signature or legacy v, r, and s");
+      }
+      body.signature = signature;
+    }
+    const deadline = Date.now() + (options.timeoutMs ?? 60_000);
+    while (true) {
+      response = (await this.post(
+        "/v1/base/autonomous-bounties/claims",
+        body,
+      )) as AgentNativeClaimResponse;
+      const status = response.candidate?.status;
+      if (status === "claimed") {
+        if (!response.canonical_event_id) {
+          throw new Error("claimed response is missing canonical_event_id");
+        }
+        return response;
+      }
+      if (["failed", "superseded", "withdrawn"].includes(status ?? "")) {
+        throw new Error(`agent claim ended in terminal state ${status}`);
+      }
+      if (status === "waitlisted") return response;
+      if (Date.now() >= deadline) {
+        throw new Error("agent claim timed out; replay the same idempotency key and signature");
+      }
+      await new Promise((resolve) => setTimeout(resolve, options.pollIntervalMs ?? 1_000));
+    }
   }
 
   async planAutonomousBountyAuthorizedClaim(request: {
@@ -961,182 +1537,135 @@ export class AgentBountiesClient {
   async broadcastBaseSignedTransaction(
     request: BroadcastBaseSignedTransactionRequest,
   ): Promise<unknown> {
-    return this.request("/v1/base/broadcast-signed-transaction", {
-      method: "POST",
-      body: JSON.stringify({
-        signed_transaction: request.signed_transaction,
-        request_id: request.request_id ?? null,
-        network: request.network ?? null,
-      }),
+    return this.post("/v1/base/broadcast-signed-transaction", {
+      signed_transaction: request.signed_transaction,
+      request_id: request.request_id ?? null,
+      network: request.network ?? null,
     });
   }
 
   async getBaseTransactionReceipt(request: GetBaseTransactionReceiptRequest): Promise<unknown> {
-    return this.request("/v1/base/transaction-receipt", {
-      method: "POST",
-      body: JSON.stringify({
-        tx_hash: request.tx_hash,
-        request_id: request.request_id ?? null,
-        network: request.network ?? null,
-      }),
+    return this.post("/v1/base/transaction-receipt", {
+      tx_hash: request.tx_hash,
+      request_id: request.request_id ?? null,
+      network: request.network ?? null,
     });
   }
 
   async planStripeCheckoutTopUp(request: PlanStripeCheckoutTopUpRequest): Promise<unknown> {
-    return this.request("/v1/stripe/checkout-top-ups", {
-      method: "POST",
-      body: JSON.stringify({
-        organization_id: request.organization_id,
-        amount_minor: request.amount_minor,
-        currency: request.currency ?? "usd",
-        success_url: request.success_url ?? null,
-        cancel_url: request.cancel_url ?? null,
-      }),
+    return this.post("/v1/stripe/checkout-top-ups", {
+      organization_id: request.organization_id,
+      amount_minor: request.amount_minor,
+      currency: request.currency ?? "usd",
+      success_url: request.success_url ?? null,
+      cancel_url: request.cancel_url ?? null,
     });
   }
 
   async planStripeConnectAccount(request: PlanStripeConnectAccountRequest): Promise<unknown> {
-    return this.request("/v1/stripe/connect-accounts", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/stripe/connect-accounts", request);
   }
 
   async planStripeConnectTransfer(request: PlanStripeConnectTransferRequest): Promise<unknown> {
-    return this.request("/v1/stripe/connect-transfers", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/stripe/connect-transfers", request);
   }
 
   async executeStripeCheckoutTopUp(request: PlanStripeCheckoutTopUpRequest): Promise<unknown> {
-    return this.request("/v1/stripe/live/checkout-top-ups", {
-      method: "POST",
-      body: JSON.stringify({
-        organization_id: request.organization_id,
-        amount_minor: request.amount_minor,
-        currency: request.currency ?? "usd",
-        success_url: request.success_url ?? null,
-        cancel_url: request.cancel_url ?? null,
-      }),
+    return this.post("/v1/stripe/live/checkout-top-ups", {
+      organization_id: request.organization_id,
+      amount_minor: request.amount_minor,
+      currency: request.currency ?? "usd",
+      success_url: request.success_url ?? null,
+      cancel_url: request.cancel_url ?? null,
     });
   }
 
   async executeStripeFundingIntentCheckout(fundingIntentId: string): Promise<unknown> {
-    return this.request(
-      `/v1/stripe/live/funding-intents/${fundingIntentId}/checkout-session`,
-      {
-        method: "POST",
-      },
-    );
+    return this.post(`/v1/stripe/live/funding-intents/${fundingIntentId}/checkout-session`);
   }
 
   async executeStripeConnectAccount(request: PlanStripeConnectAccountRequest): Promise<unknown> {
-    return this.request("/v1/stripe/live/connect-accounts", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/stripe/live/connect-accounts", request);
   }
 
   async executeStripeConnectTransfer(request: PlanStripeConnectTransferRequest): Promise<unknown> {
-    return this.request("/v1/stripe/live/connect-transfers", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/stripe/live/connect-transfers", request);
   }
 
   async planGitHubIssueBounty(request: PlanGitHubIssueBountyRequest): Promise<unknown> {
-    return this.request("/v1/github/issue-bounty-plan", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
+    return this.post("/v1/github/issue-bounty-plan", request);
   }
 
   async planGitHubFundingComment(request: PlanGitHubFundingCommentRequest): Promise<unknown> {
-    return this.request("/v1/github/funding-comment-plan", {
-      method: "POST",
-      body: JSON.stringify({
-        repository: request.repository,
-        issue_url: request.issue_url,
-        title: request.title,
-        body: request.body,
-        comment_body: request.comment_body,
-        contributor_login: request.contributor_login ?? null,
-        comment_id: request.comment_id ?? null,
-        existing_idempotency_keys: request.existing_idempotency_keys ?? [],
-      }),
+    return this.post("/v1/github/funding-comment-plan", {
+      repository: request.repository,
+      issue_url: request.issue_url,
+      title: request.title,
+      body: request.body,
+      comment_body: request.comment_body,
+      contributor_login: request.contributor_login ?? null,
+      comment_id: request.comment_id ?? null,
+      existing_idempotency_keys: request.existing_idempotency_keys ?? [],
     });
   }
 
   async planGitHubClaimComment(request: PlanGitHubClaimCommentRequest): Promise<unknown> {
-    return this.request("/v1/github/claim-comment-plan", {
-      method: "POST",
-      body: JSON.stringify({
-        repository: request.repository,
-        issue_url: request.issue_url,
-        title: request.title,
-        body: request.body,
-        comment_body: request.comment_body,
-        contributor_login: request.contributor_login ?? null,
-        comment_id: request.comment_id ?? null,
-        claim_age_minutes: request.claim_age_minutes ?? null,
-        progress_signal_count: request.progress_signal_count ?? 0,
-        active_claim_login: request.active_claim_login ?? null,
-      }),
+    return this.post("/v1/github/claim-comment-plan", {
+      repository: request.repository,
+      issue_url: request.issue_url,
+      title: request.title,
+      body: request.body,
+      comment_body: request.comment_body,
+      contributor_login: request.contributor_login ?? null,
+      comment_id: request.comment_id ?? null,
+      claim_age_minutes: request.claim_age_minutes ?? null,
+      progress_signal_count: request.progress_signal_count ?? 0,
+      active_claim_login: request.active_claim_login ?? null,
     });
   }
 
   async planGitHubProofComment(request: PlanGitHubProofCommentRequest): Promise<unknown> {
-    return this.request("/v1/github/proof-comment-plan", {
-      method: "POST",
-      body: JSON.stringify({
-        bounty_id: request.bounty_id,
-        proof_url: request.proof_url,
-        verifier_summary: request.verifier_summary,
-        settlement_url: request.settlement_url ?? null,
-      }),
+    return this.post("/v1/github/proof-comment-plan", {
+      bounty_id: request.bounty_id,
+      proof_url: request.proof_url,
+      verifier_summary: request.verifier_summary,
+      settlement_url: request.settlement_url ?? null,
     });
   }
 
   async planGitHubProofCommentFromProof(
     request: PlanGitHubProofCommentFromProofRequest,
   ): Promise<unknown> {
-    return this.request("/v1/github/proof-comment-plan-from-proof", {
-      method: "POST",
-      body: JSON.stringify({
-        proof_id: request.proof_id,
-        settlement_url: request.settlement_url ?? null,
-      }),
+    return this.post("/v1/github/proof-comment-plan-from-proof", {
+      proof_id: request.proof_id,
+      settlement_url: request.settlement_url ?? null,
     });
   }
 
   async reconcileStripeConnectSnapshot(snapshot: StripeConnectSnapshot): Promise<unknown> {
-    return this.request("/v1/stripe/connect-snapshots", {
-      method: "POST",
-      body: JSON.stringify(snapshot),
-    });
+    return this.post("/v1/stripe/connect-snapshots", snapshot);
   }
 
   async reconcileStripeCheckoutWebhook(
     event: StripeWebhookEvent,
     stripeSignature?: string,
   ): Promise<unknown> {
-    return this.request("/v1/stripe/checkout-webhooks", {
-      method: "POST",
-      headers: stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
-      body: JSON.stringify(event),
-    });
+    return this.post(
+      "/v1/stripe/checkout-webhooks",
+      event,
+      stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
+    );
   }
 
   async reconcileStripeTransferEvent(
     event: StripeWebhookEvent,
     stripeSignature?: string,
   ): Promise<unknown> {
-    return this.request("/v1/stripe/transfer-events", {
-      method: "POST",
-      headers: stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
-      body: JSON.stringify(event),
-    });
+    return this.post(
+      "/v1/stripe/transfer-events",
+      event,
+      stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
+    );
   }
 
   async runBountyBench(): Promise<unknown> {

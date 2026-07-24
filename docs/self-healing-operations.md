@@ -173,8 +173,8 @@ Run read-only public probes:
 ```powershell
 python scripts/self_heal.py observe `
   --policy ops/self-healing-policy.json `
-  --api-url https://agent-bounties-api.onrender.com `
-  --mcp-url https://agent-bounties-mcp.onrender.com `
+  --api-url https://api.agentbounties.app `
+  --mcp-url https://mcp.agentbounties.app `
   --expected-revision <40-character-git-sha> `
   --snapshot-out target/operations/snapshot.json `
   --plan-out target/operations/recovery-plan.json

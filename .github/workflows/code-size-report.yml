@@ -1,0 +1,63 @@
+name: Code Size Report
+
+on:
+  pull_request:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-size-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Test reporter
+        run: python scripts/test_code_size_report.py -v
+
+      - name: Select comparison
+        id: comparison
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ -n "$PR_BASE_SHA" ]]; then
+            base_ref="$PR_BASE_SHA"
+          else
+            base_ref="$(git rev-list -1 --before='7 days ago' HEAD)"
+          fi
+          if [[ -z "$base_ref" ]]; then
+            base_ref="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
+          echo "base_ref=$base_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Build report
+        run: |
+          python scripts/code_size_report.py \
+            --head-ref HEAD \
+            --base-ref "${{ steps.comparison.outputs.base_ref }}" \
+            --json-out target/code-size/report.json \
+            --markdown-out target/code-size/report.md
+          cat target/code-size/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-size-${{ github.run_id }}
+          path: |
+            target/code-size/report.json
+            target/code-size/report.md
+          if-no-files-found: error
+          retention-days: 90

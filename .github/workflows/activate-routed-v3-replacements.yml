@@ -1,0 +1,217 @@
+name: Activate routed V3 replacements
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/activate-routed-v3-replacements.yml"
+      - "scripts/activate_routed_v3_dynamic.py"
+      - "scripts/activate_routed_v3_replacements.py"
+      - "scripts/check_routed_v3_activation_readiness.py"
+      - "scripts/test_activate_routed_v3_replacements.py"
+      - "scripts/test-durable-wallet-policy.js"
+      - "site/durable-wallet-policy.html"
+      - "site/durable-wallet-policy.js"
+  schedule:
+    - cron: "17 * * * *"
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: routed-v3-replacement-activation-${{ github.ref || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      ROUTER: 0x380c1af742593dd88b6f20387e9ee693a0536731
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Validate activation code
+        run: |
+          python -m unittest scripts.test_activate_routed_v3_replacements -v
+          python -m py_compile \
+            scripts/activate_routed_v3_dynamic.py \
+            scripts/activate_routed_v3_replacements.py \
+            scripts/check_routed_v3_activation_readiness.py
+          node --check site/durable-wallet-policy.js
+          node scripts/test-durable-wallet-policy.js
+
+      - name: Confirm durable router runtime on Base
+        run: |
+          code="$(cast code "$ROUTER" --rpc-url "$BASE_MAINNET_RPC_URL")"
+          test "$code" != "0x" && test "$code" != "0x0"
+          echo "router runtime bytes=$(( (${#code} - 2) / 2 ))"
+
+      - name: Fetch durable router bootstrap event
+        run: |
+          latest="$(cast block-number --rpc-url "$BASE_MAINNET_RPC_URL")"
+          from=$((latest - 10000))
+          cast logs \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --address "$ROUTER" \
+            --from-block "$from" \
+            --to-block latest \
+            "PolicyBootstrapped(bytes32,address,bytes32)" \
+            --json > target/router-bootstrap.json
+          python - <<'PY'
+          import json
+          logs = json.load(open('target/router-bootstrap.json'))
+          if not isinstance(logs, list) or len(logs) != 1:
+              raise SystemExit(f'expected one bootstrap event, got {len(logs) if isinstance(logs, list) else "non-list"}')
+          print(json.dumps(logs[0], sort_keys=True))
+          PY
+
+      - name: Decode durable router bootstrap event
+        id: bootstrap
+        run: |
+          python - <<'PY'
+          import json, os
+          log = json.load(open('target/router-bootstrap.json'))[0]
+          topics = [str(value).lower() for value in log['topics']]
+          if len(topics) != 3:
+              raise SystemExit('bootstrap topic shape mismatch')
+          policy = topics[1]
+          adapter = '0x' + topics[2][-40:]
+          runtime = str(log['data']).lower()
+          if len(policy) != 66 or len(adapter) != 42 or len(runtime) != 66:
+              raise SystemExit('decoded bootstrap field shape mismatch')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'policy={policy}\n')
+              output.write(f'adapter={adapter}\n')
+              output.write(f'runtime={runtime}\n')
+          print(json.dumps({'policy': policy, 'adapter': adapter, 'runtime': runtime}, sort_keys=True))
+          PY
+
+      - name: Confirm active append-only router policy
+        run: |
+          test "$(cast call "$ROUTER" 'canonicalFactory()(address)' --rpc-url "$BASE_MAINNET_RPC_URL" | tr '[:upper:]' '[:lower:]')" = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
+          test "$(cast call "$ROUTER" 'registrar()(address)' --rpc-url "$BASE_MAINNET_RPC_URL" | tr '[:upper:]' '[:lower:]')" = "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
+          test "$(cast call "$ROUTER" 'guardian()(address)' --rpc-url "$BASE_MAINNET_RPC_URL" | tr '[:upper:]' '[:lower:]')" = "0x884834e884d6e93462655a2820140ad03e6747bc"
+          test "$(cast call "$ROUTER" 'activationDelay()(uint64)' --rpc-url "$BASE_MAINNET_RPC_URL" | awk '{print $1}')" = "604800"
+          test "$(cast call "$ROUTER" 'isPolicyActive(bytes32)(bool)' '${{ steps.bootstrap.outputs.policy }}' --rpc-url "$BASE_MAINNET_RPC_URL")" = "true"
+          cast call "$ROUTER" \
+            'policies(bytes32)(address,bytes32,uint64,uint64,uint64,bool)' \
+            '${{ steps.bootstrap.outputs.policy }}' \
+            --rpc-url "$BASE_MAINNET_RPC_URL" > target/router-policy-record.txt
+          cat target/router-policy-record.txt
+
+      - name: Confirm routed adapter immutables and economics
+        run: |
+          adapter='${{ steps.bootstrap.outputs.adapter }}'
+          code="$(cast code "$adapter" --rpc-url "$BASE_MAINNET_RPC_URL")"
+          test "$code" != "0x" && test "$code" != "0x0"
+          test "$(cast keccak "$code" | tr '[:upper:]' '[:lower:]')" = '${{ steps.bootstrap.outputs.runtime }}'
+          test "$(cast call "$adapter" 'verifierRouter()(address)' --rpc-url "$BASE_MAINNET_RPC_URL" | tr '[:upper:]' '[:lower:]')" = "$ROUTER"
+          test "$(cast call "$adapter" 'committedPolicyHash()(bytes32)' --rpc-url "$BASE_MAINNET_RPC_URL" | tr '[:upper:]' '[:lower:]')" = '${{ steps.bootstrap.outputs.policy }}'
+          test "$(cast call "$adapter" 'canonicalFactory()(address)' --rpc-url "$BASE_MAINNET_RPC_URL" | tr '[:upper:]' '[:lower:]')" = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
+          test "$(cast call "$adapter" 'MINIMUM_CHILD_TARGET()(uint256)' --rpc-url "$BASE_MAINNET_RPC_URL" | awk '{print $1}')" = "1000000"
+          test "$(cast call "$adapter" 'MINIMUM_PARENT_GROSS_MARGIN()(uint256)' --rpc-url "$BASE_MAINNET_RPC_URL" | awk '{print $1}')" = "1000000"
+
+      - name: Re-attest router and routed policy through activation code
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, 'scripts')
+          import activate_routed_v3_dynamic as dynamic
+          import activate_routed_v3_replacements as activation
+          cast = activation.Cast('cast', os.environ['BASE_MAINNET_RPC_URL'])
+          report = dynamic.discover_deployment(cast)
+          print(json.dumps(report, sort_keys=True))
+          PY
+
+  activate:
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request == null &&
+       github.event.issue.number == 571 &&
+       github.event.comment.user.login == 'NSPG13' &&
+       github.event.comment.body == '/agent-bounty activate-routed-v3')
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      AGENT_BOUNTIES_API_URL: https://api.agentbounties.app
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Stop after completed migration
+        id: issue
+        run: |
+          state="$(gh issue view 571 --json state --jq .state)"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          if [ "$state" = "CLOSED" ]; then
+            echo "Migration issue is closed; no action remains."
+          fi
+
+      - name: Read durable policy readiness
+        if: steps.issue.outputs.state != 'CLOSED'
+        id: readiness
+        run: |
+          python scripts/check_routed_v3_activation_readiness.py \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --output target/routed-v3-readiness.json
+          ready="$(python -c 'import json; print(str(json.load(open("target/routed-v3-readiness.json"))["ready"]).lower())')"
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          cat target/routed-v3-readiness.json
+
+      - name: Remain dormant before owner confirmation
+        if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready != 'true'
+        run: echo "The exact durable PolicyConfigured state is not active. No financial action was attempted."
+
+      - name: Create, fund, and reconcile four routed parents
+        if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
+        run: python scripts/activate_routed_v3_dynamic.py
+
+      - name: Replace issue terms only after canonical reconciliation
+        if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
+        run: |
+          for issue in 333 334 335 336; do
+            gh issue edit "$issue" \
+              --body-file "target/routed-v3-activation/routed-v3-${issue}-issue.md" \
+              --add-label bounty \
+              --add-label ai-agent-welcome \
+              --add-label payments \
+              --add-label good-first-agent-bounty \
+              --add-label funded-live \
+              --add-label claimable-live
+            gh issue edit "$issue" --remove-label verification-unavailable || true
+          done
+
+      - name: Publish evidence and close migration
+        if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
+        run: |
+          gh issue comment 571 --body-file target/routed-v3-activation.md
+          gh issue close 571 --reason completed --comment \
+            "The durable wallet policy and four routed replacements reconciled from canonical Base evidence. Only future BountySettled events prove solver payments."
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: routed-v3-replacement-activation-${{ github.run_id }}
+          path: |
+            target/routed-v3-readiness.json
+            target/routed-v3-activation.json
+            target/routed-v3-activation.md
+            target/routed-v3-activation/
+          if-no-files-found: warn

@@ -1,0 +1,79 @@
+{
+  "schema_version": "agent-bounties/objective-compiler-eval-v1",
+  "cases": [
+    {
+      "name": "agent-bounties-release",
+      "objective": "Ship Agent Bounties as reliable coordination rails where specialized AI agents can turn an ambitious digital objective into funded, verified work and canonical Base USDC payment.",
+      "context": "The repository has an Axum API, MCP server, public site, autonomous-v1 contracts, and production payment evidence.",
+      "constraints": [
+        "Do not change autonomous-v1 payment authority.",
+        "Every task must have replayable digital evidence.",
+        "Keep the judge path under three minutes."
+      ],
+      "max_tasks": 5,
+      "solver_budget_usdc": "12.00",
+      "expected_terms": ["api", "mcp", "evidence"]
+    },
+    {
+      "name": "regression-verifier",
+      "objective": "Build a sandboxed regression-test verifier for coding bounties that checks an untrusted patch against a pinned repository revision.",
+      "context": "The verifier must produce machine-readable evidence without exposing secrets or trusting contributor code.",
+      "constraints": [
+        "Fail closed on timeout.",
+        "Pin dependencies and the repository revision.",
+        "Never execute with production credentials."
+      ],
+      "max_tasks": 4,
+      "solver_budget_usdc": "8.00",
+      "expected_terms": ["sandbox", "test", "evidence"]
+    },
+    {
+      "name": "source-backed-research",
+      "objective": "Create a source-backed competitor report from public documentation and publish a structured dataset plus a concise decision memo.",
+      "context": "Every assertion must remain traceable to a URL and retrieval timestamp.",
+      "constraints": [
+        "Separate observed facts from inference.",
+        "Emit JSON that validates against a committed schema."
+      ],
+      "max_tasks": 4,
+      "solver_budget_usdc": "6.00",
+      "expected_terms": ["source", "schema", "report"]
+    },
+    {
+      "name": "api-migration",
+      "objective": "Migrate a public API from version one to version two without breaking existing clients and prove rollback readiness.",
+      "context": "The service has OpenAPI, Python and TypeScript SDKs, and a production smoke test.",
+      "constraints": [
+        "Maintain backward compatibility during the migration window.",
+        "Include a deterministic rollback test."
+      ],
+      "max_tasks": 5,
+      "solver_budget_usdc": "10.00",
+      "expected_terms": ["api", "compatib", "rollback"]
+    },
+    {
+      "name": "browser-workflow",
+      "objective": "Automate a browser workflow and prove it remains correct across desktop and mobile viewports.",
+      "context": "The result must include reproducible fixtures, screenshots, and machine-readable assertions.",
+      "constraints": [
+        "Use no private production credentials.",
+        "Detect blank, overlapping, or off-screen primary controls."
+      ],
+      "max_tasks": 4,
+      "solver_budget_usdc": "5.00",
+      "expected_terms": ["browser", "viewport", "screenshot"]
+    },
+    {
+      "name": "proof-distribution",
+      "objective": "Turn each canonically paid bounty into a public proof artifact and measure which proof pages cause new funded bounties.",
+      "context": "Only confirmed BountySettled events permit paid language.",
+      "constraints": [
+        "Redact private task data.",
+        "Attribute conversion without third-party tracking pixels."
+      ],
+      "max_tasks": 4,
+      "solver_budget_usdc": "8.00",
+      "expected_terms": ["proof", "settled", "conversion"]
+    }
+  ]
+}
