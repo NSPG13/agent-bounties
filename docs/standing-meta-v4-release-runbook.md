@@ -7,6 +7,11 @@ funding, settlement, or payment evidence.
 
 ## Immutable latency policy
 
+The manifest marks this exact policy `review_frozen`. That means the values are
+the release candidate submitted for independent review; it does not mean the
+contracts are deployed or the review is complete. Any value or decision-string
+change invalidates the deployment plan and requires a new review pass.
+
 Successful paths proceed as soon as their prerequisite transaction is
 confirmed:
 
@@ -69,6 +74,12 @@ and the evidence receives review.
    python scripts/standing_meta_v4_deploy.py plan --network base-sepolia `
      --output target/standing-meta-v4-base-sepolia-plan.json
    ```
+
+   The plan must also read the coordinator's live `s_config` and pinned
+   `s_provingKeys` entry. It fails before deployment when the coordinator's
+   minimum confirmations exceed three, its callback-gas ceiling is below
+   150,000, its reentrancy lock is active, or the pinned key hash is not
+   registered. An address and runtime-code check alone is insufficient.
 
 2. Fund the keeper with faucet Base Sepolia ETH from an option in the
    [official Base faucet directory](https://docs.base.org/base-chain/network-information/network-faucets).
@@ -158,7 +169,9 @@ invalidates this evidence.
 1. Confirm every R4 evidence flag and environment read-back. The release
    acknowledgement does not replace those facts.
 2. Deploy the reviewed component graph from protected `main`, then verify it
-   through an independent RPC pass.
+   through an independent RPC pass. The second pass must repeat the live
+   coordinator-configuration and proving-key checks; a previously valid plan
+   cannot authorize deployment after coordinator drift.
 3. Generate an unsigned, live-RPC-validated withdrawal request without loading
    the owner key:
 

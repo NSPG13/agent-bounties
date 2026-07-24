@@ -20,6 +20,10 @@ REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 EXPECTED_REPOSITORY = "NSPG13/agent-bounties"
 READY_STATUS = "ready_to_earn"
+EXPECTED_LATENCY_POLICY_STATUS = "review_frozen"
+EXPECTED_LATENCY_POLICY_DECISION = (
+    "maximum_response_and_failure_bounds_with_immediate_success_paths_and_symmetric_human_appeals"
+)
 REQUIRED_ENVIRONMENTS = (
     "standing-meta-v4-sepolia",
     "standing-meta-v4-mainnet",
@@ -213,6 +217,8 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
     schema_valid = manifest.get("schema") == "agent-bounties/standing-meta-v4-deployment-readiness-v1"
     protocol_valid = manifest.get("protocol_version") == "standing-meta-v4"
     status_valid = manifest.get("status") == READY_STATUS
+    latency_status_valid = manifest.get("latency_policy_status") == EXPECTED_LATENCY_POLICY_STATUS
+    latency_decision_valid = manifest.get("latency_policy_decision") == EXPECTED_LATENCY_POLICY_DECISION
     configuration = manifest.get("configuration")
     if not isinstance(configuration, dict):
         raise AuditError("manifest configuration is missing")
@@ -290,6 +296,10 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
         blockers.append("manifest protocol mismatch")
     if not status_valid:
         blockers.append(f"manifest status is not {READY_STATUS}")
+    if not latency_status_valid:
+        blockers.append("latency policy is not review-frozen")
+    if not latency_decision_valid:
+        blockers.append("latency policy decision drift")
     blockers.extend(f"latency policy mismatch: {name}" for name in latency_mismatches)
     blockers.extend(f"R4 gate incomplete: {name}" for name, passed in r4_gates.items() if not passed)
     if not environment_complete:
@@ -302,6 +312,8 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
         schema_valid
         and protocol_valid
         and status_valid
+        and latency_status_valid
+        and latency_decision_valid
         and not latency_mismatches
         and all(r4_gates.values())
         and environment_complete
@@ -316,6 +328,10 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
         "manifest_schema_valid": schema_valid,
         "protocol_version_valid": protocol_valid,
         "manifest_status_valid": status_valid,
+        "latency_policy_status": manifest.get("latency_policy_status"),
+        "latency_policy_status_valid": latency_status_valid,
+        "latency_policy_decision": manifest.get("latency_policy_decision"),
+        "latency_policy_decision_valid": latency_decision_valid,
         "latency_policy": LATENCY_POLICY,
         "latency_policy_mismatches": latency_mismatches,
         "r4_gates": r4_gates,

@@ -28,6 +28,8 @@ EXPECTED_KEEPER = "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
 BOUNDED_WALLET = "0x1eaa1c68772cf76bc5f4e4174766076e33ace662"
 EXPECTED_BOUNDED_WALLET_OWNER = "0x884834e884d6e93462655a2820140ad03e6747bc"
 MAINNET_SOURCE_USDC_CAP = 7_000_000
+VRF_REQUEST_CONFIRMATIONS = 3
+VRF_CALLBACK_GAS_LIMIT = 150_000
 EIP170_RUNTIME_LIMIT = 24_576
 EIP3860_INITCODE_LIMIT = 49_152
 SUBSCRIPTION_CREATED_EVENT = "SubscriptionCreated(uint256,address)"
@@ -82,6 +84,10 @@ EXPECTED_CONFIGURATION: dict[str, Any] = {
     "bounty_verification_seconds": 86_400,
     "fast_path": "immediate_after_vrf_or_waiver_or_decisive_majority",
 }
+EXPECTED_LATENCY_POLICY_STATUS = "review_frozen"
+EXPECTED_LATENCY_POLICY_DECISION = (
+    "maximum_response_and_failure_bounds_with_immediate_success_paths_and_symmetric_human_appeals"
+)
 
 
 class DeploymentError(RuntimeError):
@@ -137,6 +143,15 @@ def parse_uint(value: object, label: str) -> int:
     return int(match.group(1), 0)
 
 
+def parse_bool(value: object, label: str) -> bool:
+    text = str(value).strip().lower()
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    raise DeploymentError(f"{label} is not a boolean")
+
+
 def load_object(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -155,6 +170,10 @@ def validate_readiness_manifest(path: Path) -> dict[str, Any]:
         raise DeploymentError("standing-meta-v4 readiness schema mismatch")
     if readiness.get("protocol_version") != "standing-meta-v4":
         raise DeploymentError("standing-meta-v4 protocol version mismatch")
+    if readiness.get("latency_policy_status") != EXPECTED_LATENCY_POLICY_STATUS:
+        raise DeploymentError("standing-meta-v4 latency policy is not review-frozen")
+    if readiness.get("latency_policy_decision") != EXPECTED_LATENCY_POLICY_DECISION:
+        raise DeploymentError("standing-meta-v4 latency policy decision drift")
     configuration = readiness.get("configuration")
     if not isinstance(configuration, dict):
         raise DeploymentError("standing-meta-v4 readiness configuration missing")
@@ -377,6 +396,46 @@ def parse_subscription(foundry: Foundry, coordinator: str, subscription_id: int)
     }
 
 
+def coordinator_configuration(foundry: Foundry, coordinator: str, key_hash: str) -> dict[str, Any]:
+    output = foundry.call(
+        coordinator,
+        "s_config()(uint16,uint32,bool,uint32,uint32,uint32,uint32,uint8,uint8)",
+    )
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(lines) != 9:
+        raise DeploymentError("VRF coordinator configuration returned an unexpected shape")
+    config = {
+        "minimum_request_confirmations": parse_uint(lines[0], "coordinator minimum confirmations"),
+        "maximum_callback_gas_limit": parse_uint(lines[1], "coordinator maximum callback gas"),
+        "reentrancy_lock": parse_bool(lines[2], "coordinator reentrancy lock"),
+        "feed_staleness_seconds": parse_uint(lines[3], "coordinator feed staleness"),
+        "gas_after_payment_calculation": parse_uint(lines[4], "coordinator post-payment gas"),
+        "native_flat_fee_ppm": parse_uint(lines[5], "coordinator native flat fee"),
+        "link_flat_fee_discount_ppm": parse_uint(lines[6], "coordinator LINK fee discount"),
+        "native_premium_percentage": parse_uint(lines[7], "coordinator native premium"),
+        "link_premium_percentage": parse_uint(lines[8], "coordinator LINK premium"),
+    }
+    proving_key_marker = normalize_address(
+        foundry.call(coordinator, "s_provingKeys(bytes32)(address)", key_hash),
+        "coordinator proving-key marker",
+    )
+    if config["reentrancy_lock"]:
+        raise DeploymentError("VRF coordinator reentrancy lock is active")
+    if config["minimum_request_confirmations"] > VRF_REQUEST_CONFIRMATIONS:
+        raise DeploymentError("VRF coordinator minimum confirmations exceed the immutable V4 request")
+    if config["maximum_callback_gas_limit"] < VRF_CALLBACK_GAS_LIMIT:
+        raise DeploymentError("VRF coordinator maximum callback gas is below the immutable V4 request")
+    if int(proving_key_marker, 16) == 0:
+        raise DeploymentError("pinned VRF key hash is not registered on the coordinator")
+    return {
+        **config,
+        "requested_confirmations": VRF_REQUEST_CONFIRMATIONS,
+        "requested_callback_gas_limit": VRF_CALLBACK_GAS_LIMIT,
+        "proving_key_registered": True,
+        "proving_key_marker": proving_key_marker,
+    }
+
+
 def artifact_evidence(foundry: Foundry) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
     specs = dict(COMPONENT_SPECS)
@@ -426,6 +485,9 @@ def build_plan(foundry: Foundry, readiness_path: Path) -> dict[str, Any]:
         "keeper_native_balance_wei": foundry.balance(EXPECTED_KEEPER),
         "bounded_wallet": BOUNDED_WALLET,
         "bounded_wallet_source_usdc_cap": MAINNET_SOURCE_USDC_CAP,
+        "coordinator_configuration": coordinator_configuration(
+            foundry, config["vrf_coordinator"], config["key_hash"]
+        ),
         "r4_gates": {item: r4.get(item) is True for item in REQUIRED_R4_GATES},
         "mainnet_deploy_allowed": chain_id != BASE_MAINNET_CHAIN_ID or r4_complete,
         "artifacts": artifact_evidence(foundry),
@@ -724,6 +786,9 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
         normalize_address(report["vrf_coordinator"], "VRF coordinator"),
         "VRF coordinator",
     )
+    coordinator_config = coordinator_configuration(
+        foundry, report["vrf_coordinator"], report["key_hash"]
+    )
     canonical_components = canonical_component_addresses(foundry, components)
     terms_registry = canonical_components["onchain_terms_registry"]
     verifier_module = canonical_components["canonical_independent_child_verifier"]
@@ -747,7 +812,12 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
         if parse_uint(foundry.call(sortition, "subscriptionId()(uint256)"), "sortition subscription") != sub_id:
             raise DeploymentError("sortition subscription id drift")
         assert_call(foundry, sortition, "keyHash()(bytes32)", report["key_hash"])
-        assert_uint_call(foundry, sortition, "REQUEST_CONFIRMATIONS()(uint16)", 3)
+        assert_uint_call(
+            foundry,
+            sortition,
+            "REQUEST_CONFIRMATIONS()(uint16)",
+            VRF_REQUEST_CONFIRMATIONS,
+        )
         assert_uint_call(foundry, sortition, "NUM_WORDS()(uint32)", 1)
         assert_uint_call(foundry, sortition, "FULFILLMENT_DEADLINE()(uint64)", 7_200)
     assert_call(foundry, appeal, "settlementToken()(address)", token)
@@ -799,6 +869,7 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
         raise DeploymentError("subscription must authorize exactly the two V4 sortition coordinators")
     return {
         "rpc_confirmed": True,
+        "coordinator_configuration": coordinator_config,
         "subscription": subscription,
         "canonical_component_addresses": canonical_components,
         "runtime_code_hashes": {

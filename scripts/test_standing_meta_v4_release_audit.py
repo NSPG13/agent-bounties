@@ -56,6 +56,8 @@ def manifest() -> dict:
         "schema": "agent-bounties/standing-meta-v4-deployment-readiness-v1",
         "protocol_version": "standing-meta-v4",
         "status": "not_deployed",
+        "latency_policy_status": MODULE.EXPECTED_LATENCY_POLICY_STATUS,
+        "latency_policy_decision": MODULE.EXPECTED_LATENCY_POLICY_DECISION,
         "configuration": dict(MODULE.LATENCY_POLICY),
         "required_components": list(MODULE.EXPECTED_CANONICAL_COMPONENTS),
         "r4_evidence": {name: False for name in MODULE.REQUIRED_R4_GATES},
@@ -125,6 +127,14 @@ class StandingMetaV4ReleaseAuditTests(unittest.TestCase):
             result["latency_policy_mismatches"]["solver_assignment_seconds"],
             {"expected": 120, "actual": 600},
         )
+
+    def test_manifest_audit_requires_review_frozen_latency_decision(self) -> None:
+        value = manifest()
+        value["latency_policy_status"] = "draft"
+        result = MODULE.audit_manifest(value, None)
+        self.assertFalse(result["ready_for_mainnet"])
+        self.assertFalse(result["latency_policy_status_valid"])
+        self.assertIn("latency policy is not review-frozen", result["blockers"])
 
 
 if __name__ == "__main__":

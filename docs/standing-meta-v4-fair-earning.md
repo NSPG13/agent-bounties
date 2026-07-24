@@ -32,6 +32,16 @@ After VRF fulfillment, ranking derivation and assignment activation are permissi
 
 Three VRF confirmations remain the minimum security floor. The two-hour fulfillment deadline is only a fail-closed outage bound: a successful fulfillment can be ranked immediately and never waits for that deadline. The child and parent verification envelopes are 24 hours, which exceeds the 12-hour-10-minute worst-case case-opening budget of two VRF outage bounds, four primary response windows, appeal filing, voting, and the final transaction buffer. Global stake activation and unbonding remain seven days because they deter flash-created tickets and do not add latency for already-active wallets.
 
+Every release plan and post-deployment RPC pass reads the pinned coordinator's
+live request configuration and proving-key registration. V4 refuses deployment
+when three confirmations or the 150,000-gas callback are no longer supported,
+the coordinator is actively reentrancy-locked, or the documented key hash is
+not registered.
+
+These latency values are review-frozen before immutable deployment. Changing
+one reopens independent review; it is not a runtime tuning knob. “Frozen” is a
+source-policy status, not evidence of deployment or approval.
+
 The child exposes no generic public claim path. Only the immutable child factory can activate the wallet currently authorized by the frozen ranking. This prevents an unselected wallet from reserving the seven-day child work window before the selected solver.
 
 ## Economics

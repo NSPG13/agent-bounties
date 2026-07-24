@@ -21,6 +21,40 @@ class FakeSubscriptionFoundry:
         return "0x" + "11" * 32
 
 
+class FakeCoordinatorFoundry:
+    def __init__(
+        self,
+        *,
+        minimum_confirmations: int = 0,
+        maximum_callback_gas: int = 2_500_000,
+        reentrancy_lock: bool = False,
+        proving_key_marker: str = "0x" + "00" * 19 + "01",
+    ) -> None:
+        self.minimum_confirmations = minimum_confirmations
+        self.maximum_callback_gas = maximum_callback_gas
+        self.reentrancy_lock = reentrancy_lock
+        self.proving_key_marker = proving_key_marker
+
+    def call(self, address: str, signature: str, *args: str) -> str:
+        if signature == "s_config()(uint16,uint32,bool,uint32,uint32,uint32,uint32,uint8,uint8)":
+            return "\n".join(
+                (
+                    str(self.minimum_confirmations),
+                    str(self.maximum_callback_gas),
+                    str(self.reentrancy_lock).lower(),
+                    "172800",
+                    "42500",
+                    "0",
+                    "0",
+                    "60",
+                    "50",
+                )
+            )
+        if signature == "s_provingKeys(bytes32)(address)":
+            return self.proving_key_marker
+        raise AssertionError((address, signature, args))
+
+
 class FakeOwnerWithdrawalFoundry:
     def __init__(self, *, owner: str | None = None, wallet_balance: int = 37_000_000) -> None:
         self.owner = owner or MODULE.EXPECTED_BOUNDED_WALLET_OWNER
@@ -66,6 +100,8 @@ class StandingMetaV4DeployTests(unittest.TestCase):
         return {
             "schema": "agent-bounties/standing-meta-v4-deployment-readiness-v1",
             "protocol_version": "standing-meta-v4",
+            "latency_policy_status": MODULE.EXPECTED_LATENCY_POLICY_STATUS,
+            "latency_policy_decision": MODULE.EXPECTED_LATENCY_POLICY_DECISION,
             "configuration": dict(MODULE.EXPECTED_CONFIGURATION),
             "required_components": list(MODULE.EXPECTED_CANONICAL_COMPONENTS),
             "networks": {
@@ -102,6 +138,28 @@ class StandingMetaV4DeployTests(unittest.TestCase):
         self.assertEqual(sepolia["key_hash"], MODULE.BASE_SEPOLIA_KEY_HASH)
         with self.assertRaises(MODULE.DeploymentError):
             MODULE.network_config(1)
+
+    def test_coordinator_configuration_is_live_and_compatible(self) -> None:
+        config = MODULE.coordinator_configuration(
+            FakeCoordinatorFoundry(), MODULE.BASE_SEPOLIA_VRF, MODULE.BASE_SEPOLIA_KEY_HASH
+        )
+        self.assertEqual(config["requested_confirmations"], 3)
+        self.assertEqual(config["requested_callback_gas_limit"], 150_000)
+        self.assertEqual(config["maximum_callback_gas_limit"], 2_500_000)
+        self.assertTrue(config["proving_key_registered"])
+
+    def test_coordinator_configuration_fails_closed_on_incompatible_state(self) -> None:
+        cases = (
+            (FakeCoordinatorFoundry(minimum_confirmations=4), "minimum confirmations"),
+            (FakeCoordinatorFoundry(maximum_callback_gas=149_999), "maximum callback gas"),
+            (FakeCoordinatorFoundry(reentrancy_lock=True), "reentrancy lock"),
+            (FakeCoordinatorFoundry(proving_key_marker="0x" + "00" * 20), "not registered"),
+        )
+        for foundry, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(MODULE.DeploymentError, message):
+                MODULE.coordinator_configuration(
+                    foundry, MODULE.BASE_SEPOLIA_VRF, MODULE.BASE_SEPOLIA_KEY_HASH
+                )
 
     def test_mainnet_source_cap_is_exactly_seven_usdc(self) -> None:
         self.assertEqual(MODULE.MAINNET_SOURCE_USDC_CAP, 7_000_000)
@@ -156,6 +214,15 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             value["required_components"][-1] = "lookalike_bundle"
             MODULE.write_object(path, value)
             with self.assertRaisesRegex(MODULE.DeploymentError, "component schema drift"):
+                MODULE.validate_readiness_manifest(path)
+
+    def test_readiness_rejects_unfrozen_latency_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "readiness.json"
+            value = self.readiness({})
+            value["latency_policy_status"] = "draft"
+            MODULE.write_object(path, value)
+            with self.assertRaisesRegex(MODULE.DeploymentError, "not review-frozen"):
                 MODULE.validate_readiness_manifest(path)
 
     def test_subscription_event_parser_requires_one_matching_log(self) -> None:

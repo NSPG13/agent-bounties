@@ -3,6 +3,8 @@
   "protocol_version": "standing-meta-v4",
   "status": "not_deployed",
   "last_revalidated_at": "2026-07-23",
+  "latency_policy_status": "review_frozen",
+  "latency_policy_decision": "maximum_response_and_failure_bounds_with_immediate_success_paths_and_symmetric_human_appeals",
   "configuration": {
     "minimum_request_confirmations": 3,
     "random_words": 1,
