@@ -88,6 +88,17 @@ EXPECTED_LATENCY_POLICY_STATUS = "review_frozen"
 EXPECTED_LATENCY_POLICY_DECISION = (
     "maximum_response_and_failure_bounds_with_immediate_success_paths_and_symmetric_human_appeals"
 )
+EXPECTED_MONITORING_POLICY: dict[str, Any] = {
+    "maximum_snapshot_age_seconds": 300,
+    "maximum_rpc_head_difference_blocks": 5,
+    "maximum_vrf_fulfillment_latency_seconds": 7_200,
+    "minimum_eligible_verifier_wallets": 8,
+    "minimum_eligible_solver_wallets": 3,
+    "minimum_successful_settlement_margin_base_units": 1_000_000,
+    "required_standing_meta_canary_settlements": 1,
+    "required_open_competition_canary_settlements": 1,
+    "incident_response": "suppress_earning_only_no_automated_value_or_governance_mutations",
+}
 
 
 class DeploymentError(RuntimeError):
@@ -184,6 +195,8 @@ def validate_readiness_manifest(path: Path) -> dict[str, Any]:
     ]
     if mismatches:
         raise DeploymentError(f"standing-meta-v4 latency configuration drift: {', '.join(mismatches)}")
+    if readiness.get("monitoring_policy") != EXPECTED_MONITORING_POLICY:
+        raise DeploymentError("standing-meta-v4 monitoring policy drift")
     required_components = readiness.get("required_components")
     if (
         not isinstance(required_components, list)
@@ -245,8 +258,54 @@ class Foundry:
     def balance(self, address: str) -> int:
         return parse_uint(self.rpc("balance", address), "native balance")
 
+    def balance_at(self, address: str, block_number: int) -> int:
+        return parse_uint(
+            self.rpc("balance", address, "--block", str(block_number)),
+            "native balance",
+        )
+
+    def block_number(self) -> int:
+        return parse_uint(self.rpc("block-number"), "block number")
+
+    def block_timestamp(self, block_number: int | str = "latest") -> int:
+        return parse_uint(
+            self.rpc("block", str(block_number), "--field", "timestamp"),
+            "block timestamp",
+        )
+
     def call(self, address: str, signature: str, *args: str) -> str:
         return self.rpc("call", address, signature, *args).strip()
+
+    def call_at(self, address: str, signature: str, block_number: int, *args: str) -> str:
+        return self.rpc(
+            "call", address, signature, *args, "--block", str(block_number)
+        ).strip()
+
+    def logs(
+        self,
+        address: str,
+        signature: str,
+        from_block: int,
+        to_block: int,
+    ) -> list[dict[str, Any]]:
+        raw = self.rpc(
+            "logs",
+            "--json",
+            "--address",
+            normalize_address(address, "log address"),
+            "--from-block",
+            str(from_block),
+            "--to-block",
+            str(to_block),
+            signature,
+        )
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise DeploymentError("cast logs did not return JSON") from error
+        if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+            raise DeploymentError("cast logs returned an unexpected shape")
+        return value
 
     def address_for_key(self, private_key: str) -> str:
         return normalize_address(

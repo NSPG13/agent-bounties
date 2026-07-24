@@ -86,6 +86,7 @@ def compile_python(platform: str) -> None:
         "scripts/standing_meta_v4_deploy.py", "scripts/test_standing_meta_v4_deploy.py",
         "scripts/standing_meta_v4_release_audit.py", "scripts/test_standing_meta_v4_release_audit.py",
         "scripts/standing_meta_v4_rehearsal_audit.py", "scripts/test_standing_meta_v4_rehearsal_audit.py",
+        "scripts/standing_meta_v4_monitor.py", "scripts/test_standing_meta_v4_monitor.py",
         "scripts/check-site.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
         "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
         "scripts/stage_review_contract_root.py", "scripts/test_stage_review_contract_root.py",
@@ -112,6 +113,7 @@ scripts/activate_standing_meta_v3_replacements.py scripts/test_activate_standing
 scripts/standing_meta_v4_deploy.py scripts/test_standing_meta_v4_deploy.py
 scripts/standing_meta_v4_release_audit.py scripts/test_standing_meta_v4_release_audit.py
 scripts/standing_meta_v4_rehearsal_audit.py scripts/test_standing_meta_v4_rehearsal_audit.py
+scripts/standing_meta_v4_monitor.py scripts/test_standing_meta_v4_monitor.py
 scripts/github_issue_plan_comment.py scripts/github_funding_comment.py scripts/github_claim_comment.py
 scripts/github_proof_comment.py scripts/sync_hosted_bounty_inventory.py
 scripts/test_sync_hosted_bounty_inventory.py scripts/reconcile_github_bounty_labels.py

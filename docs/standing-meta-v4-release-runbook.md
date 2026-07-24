@@ -221,6 +221,37 @@ before repointing public issues to funded, claimable replacements.
 
 ## Monitoring and stop conditions
 
+Create a non-secret activity file using schema
+`agent-bounties/standing-meta-v4-monitor-activity-v1`. It pins the first block
+to scan, the canonical Open Competition factory, and the exact standing-meta
+and Open Competition canary addresses. Generate a snapshot against two
+independent RPC providers:
+
+```powershell
+python scripts/standing_meta_v4_monitor.py `
+  --network base-mainnet `
+  --deployment target/standing-meta-v4-base-mainnet-deployment.json `
+  --activity target/standing-meta-v4-mainnet-monitor-activity.json `
+  --rpc-url $env:BASE_MAINNET_RPC_URL `
+  --secondary-rpc-url $env:BASE_MAINNET_SECONDARY_RPC_URL `
+  --output target/standing-meta-v4-mainnet-monitor.json `
+  --require-healthy
+```
+
+The monitor independently revalidates immutable wiring, subscription authority
+and reserve, keeper gas, available stake pools, every observed VRF request,
+open verification cases, canonical canary provenance and settlement events,
+the actual standing-meta margin, and competition activity. It emits a SHA-256
+commitment and `earning_suppressed=true` on any failure. It never performs a
+top-up, reroll, deployment, judgment, settlement, cancellation, refund, swap,
+withdrawal, or other governance/value mutation.
+
+Agent-native readiness may set `*_MONITORING_ACTIVE=true` only while the most
+recent successful snapshot's `observed_at_unix` is also supplied as
+`*_MONITORING_OBSERVED_AT_UNIX`. The API fails closed when that timestamp is
+missing, in the future, or more than 300 seconds old. A boolean flag alone is
+not monitoring evidence.
+
 Suppress new earning immediately when any of these is false or stale:
 
 - exact runtime hashes and immutable wiring;

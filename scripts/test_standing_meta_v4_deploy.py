@@ -103,6 +103,7 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             "latency_policy_status": MODULE.EXPECTED_LATENCY_POLICY_STATUS,
             "latency_policy_decision": MODULE.EXPECTED_LATENCY_POLICY_DECISION,
             "configuration": dict(MODULE.EXPECTED_CONFIGURATION),
+            "monitoring_policy": dict(MODULE.EXPECTED_MONITORING_POLICY),
             "required_components": list(MODULE.EXPECTED_CANONICAL_COMPONENTS),
             "networks": {
                 "base-mainnet": {
@@ -223,6 +224,15 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             value["latency_policy_status"] = "draft"
             MODULE.write_object(path, value)
             with self.assertRaisesRegex(MODULE.DeploymentError, "not review-frozen"):
+                MODULE.validate_readiness_manifest(path)
+
+    def test_readiness_rejects_monitoring_policy_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "readiness.json"
+            value = self.readiness({})
+            value["monitoring_policy"]["maximum_snapshot_age_seconds"] = 301
+            MODULE.write_object(path, value)
+            with self.assertRaisesRegex(MODULE.DeploymentError, "monitoring policy drift"):
                 MODULE.validate_readiness_manifest(path)
 
     def test_subscription_event_parser_requires_one_matching_log(self) -> None:

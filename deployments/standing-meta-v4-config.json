@@ -21,6 +21,17 @@
     "bounty_verification_seconds": 86400,
     "fast_path": "immediate_after_vrf_or_waiver_or_decisive_majority"
   },
+  "monitoring_policy": {
+    "maximum_snapshot_age_seconds": 300,
+    "maximum_rpc_head_difference_blocks": 5,
+    "maximum_vrf_fulfillment_latency_seconds": 7200,
+    "minimum_eligible_verifier_wallets": 8,
+    "minimum_eligible_solver_wallets": 3,
+    "minimum_successful_settlement_margin_base_units": 1000000,
+    "required_standing_meta_canary_settlements": 1,
+    "required_open_competition_canary_settlements": 1,
+    "incident_response": "suppress_earning_only_no_automated_value_or_governance_mutations"
+  },
   "required_components": [
     "anonymous_protocol_controller",
     "anonymous_stake_pool",

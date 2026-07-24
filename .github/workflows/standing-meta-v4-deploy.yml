@@ -27,6 +27,8 @@ on:
       - "scripts/test_standing_meta_v4_release_audit.py"
       - "scripts/standing_meta_v4_rehearsal_audit.py"
       - "scripts/test_standing_meta_v4_rehearsal_audit.py"
+      - "scripts/standing_meta_v4_monitor.py"
+      - "scripts/test_standing_meta_v4_monitor.py"
       - "deployments/standing-meta-v4-config.json"
       - "docs/standing-meta-v4-fair-earning.md"
       - "docs/standing-meta-v4-release-runbook.md"
@@ -100,7 +102,8 @@ jobs:
           python -m unittest
           scripts.test_standing_meta_v4_deploy
           scripts.test_standing_meta_v4_release_audit
-          scripts.test_standing_meta_v4_rehearsal_audit -v
+          scripts.test_standing_meta_v4_rehearsal_audit
+          scripts.test_standing_meta_v4_monitor -v
 
       - name: Python syntax
         run: >-
@@ -111,6 +114,8 @@ jobs:
           scripts/test_standing_meta_v4_release_audit.py
           scripts/standing_meta_v4_rehearsal_audit.py
           scripts/test_standing_meta_v4_rehearsal_audit.py
+          scripts/standing_meta_v4_monitor.py
+          scripts/test_standing_meta_v4_monitor.py
 
       - name: Fail-closed manifest and latency audit
         run: >-

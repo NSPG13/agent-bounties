@@ -59,6 +59,7 @@ def manifest() -> dict:
         "latency_policy_status": MODULE.EXPECTED_LATENCY_POLICY_STATUS,
         "latency_policy_decision": MODULE.EXPECTED_LATENCY_POLICY_DECISION,
         "configuration": dict(MODULE.LATENCY_POLICY),
+        "monitoring_policy": dict(MODULE.MONITORING_POLICY),
         "required_components": list(MODULE.EXPECTED_CANONICAL_COMPONENTS),
         "r4_evidence": {name: False for name in MODULE.REQUIRED_R4_GATES},
         "networks": {"base-sepolia": dict(network), "base-mainnet": dict(network)},
@@ -135,6 +136,13 @@ class StandingMetaV4ReleaseAuditTests(unittest.TestCase):
         self.assertFalse(result["ready_for_mainnet"])
         self.assertFalse(result["latency_policy_status_valid"])
         self.assertIn("latency policy is not review-frozen", result["blockers"])
+
+    def test_manifest_audit_rejects_monitoring_policy_drift(self) -> None:
+        value = manifest()
+        value["monitoring_policy"]["minimum_eligible_verifier_wallets"] = 7
+        result = MODULE.audit_manifest(value, None)
+        self.assertFalse(result["monitoring_policy_valid"])
+        self.assertIn("monitoring policy drift", result["blockers"])
 
 
 if __name__ == "__main__":

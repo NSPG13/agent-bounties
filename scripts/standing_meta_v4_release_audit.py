@@ -64,6 +64,17 @@ LATENCY_POLICY: dict[str, Any] = {
     "bounty_verification_seconds": 86_400,
     "fast_path": "immediate_after_vrf_or_waiver_or_decisive_majority",
 }
+MONITORING_POLICY: dict[str, Any] = {
+    "maximum_snapshot_age_seconds": 300,
+    "maximum_rpc_head_difference_blocks": 5,
+    "maximum_vrf_fulfillment_latency_seconds": 7_200,
+    "minimum_eligible_verifier_wallets": 8,
+    "minimum_eligible_solver_wallets": 3,
+    "minimum_successful_settlement_margin_base_units": 1_000_000,
+    "required_standing_meta_canary_settlements": 1,
+    "required_open_competition_canary_settlements": 1,
+    "incident_response": "suppress_earning_only_no_automated_value_or_governance_mutations",
+}
 
 
 class AuditError(RuntimeError):
@@ -227,6 +238,7 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
         for name, expected in LATENCY_POLICY.items()
         if configuration.get(name) != expected
     }
+    monitoring_policy_valid = manifest.get("monitoring_policy") == MONITORING_POLICY
     r4 = manifest.get("r4_evidence")
     if not isinstance(r4, dict):
         raise AuditError("manifest r4_evidence is missing")
@@ -301,6 +313,8 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
     if not latency_decision_valid:
         blockers.append("latency policy decision drift")
     blockers.extend(f"latency policy mismatch: {name}" for name in latency_mismatches)
+    if not monitoring_policy_valid:
+        blockers.append("monitoring policy drift")
     blockers.extend(f"R4 gate incomplete: {name}" for name, passed in r4_gates.items() if not passed)
     if not environment_complete:
         blockers.append("live protected-environment evidence is missing or incomplete")
@@ -315,6 +329,7 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
         and latency_status_valid
         and latency_decision_valid
         and not latency_mismatches
+        and monitoring_policy_valid
         and all(r4_gates.values())
         and environment_complete
         and network_checks["base-sepolia"]["complete"]
@@ -334,6 +349,8 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
         "latency_policy_decision_valid": latency_decision_valid,
         "latency_policy": LATENCY_POLICY,
         "latency_policy_mismatches": latency_mismatches,
+        "monitoring_policy": MONITORING_POLICY,
+        "monitoring_policy_valid": monitoring_policy_valid,
         "r4_gates": r4_gates,
         "environment_evidence_complete": environment_complete,
         "network_readiness": network_checks,
