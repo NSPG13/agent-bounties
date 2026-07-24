@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently create, fund, and reconcile four profitable routed-V3 parent bounties."""
+"""Idempotently create, fund, and reconcile five profitable routed-V3 parent bounties."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ ISSUES = {
     334: {"lane": "API", "old": "0xbe17ef2d154265ebe3142d7bda5e99610d571455"},
     335: {"lane": "MCP", "old": "0x43d42cb227d76588ab16693f14efd6cff851fa7a"},
     336: {"lane": "wallet UX", "old": "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b"},
+    590: {"lane": "agent discovery", "old": None},
 }
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
@@ -343,13 +344,24 @@ def reconcile(api: str, contract: str, bounty_id: str, timeout_seconds: int = 18
     raise ActivationError(f"canonical activation did not reconcile for {contract}")
 
 
-def issue_body(issue: int, lane: str, old: str, result: Mapping[str, object], deployment: Mapping[str, Any]) -> str:
+def issue_body(
+    issue: int,
+    lane: str,
+    old: str | None,
+    result: Mapping[str, object],
+    deployment: Mapping[str, Any],
+) -> str:
     contract = str(result["contract"])
     transaction_hash = str(result["transaction_hash"])
     transaction_line = (
         f"- Creation and funding transaction: https://basescan.org/tx/{transaction_hash}"
         if BYTES32_RE.fullmatch(transaction_hash)
         else "- Creation and funding transaction: previously confirmed canonical creation"
+    )
+    legacy_line = (
+        f"The previous unprofitable V2 contract `{old}` is retired from earning discovery and preserved as immutable history."
+        if old
+        else "This is a new profitable inventory slot and does not replace a legacy contract."
     )
     return f"""## Goal
 
@@ -372,7 +384,7 @@ Create and fully fund a concrete **1 USDC {lane} child bounty** that a different
 - Routed implementation: `{deployment['adapter_address']}`
 - Status: `claimable`
 
-The previous unprofitable V2 contract `{old}` is retired from earning discovery and preserved as immutable history.
+{legacy_line}
 
 ## Earn this bounty
 
@@ -502,7 +514,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             "reconciliation": reconciled,
         }
         (args.output_dir / f"routed-v3-{issue}-issue.md").write_text(
-            issue_body(issue, str(config["lane"]), str(config["old"]), result, deployment),
+            issue_body(issue, str(config["lane"]), config["old"], result, deployment),
             encoding="utf-8",
         )
         results.append(result)
@@ -538,7 +550,7 @@ def markdown(report: Mapping[str, object]) -> str:
     results = report["results"]
     assert isinstance(results, list)
     lines = [
-        "## Four profitable routed-V3 replacements activated",
+        "## Five profitable routed-V3 bounties activated",
         "",
         f"- Stable verifier router: `{report['router']}`",
         f"- Immutable routed policy: `{report['policy_hash']}`",

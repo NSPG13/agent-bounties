@@ -19,7 +19,7 @@ class DurableVerifierRouterDeployTests(unittest.TestCase):
     def test_materialized_terms_share_router_policy_and_unique_nonces(self) -> None:
         router = "0x" + "12" * 20
         documents = MODULE.materialize_terms(Path(__file__).resolve().parents[1], router)
-        self.assertEqual(sorted(documents), [333, 334, 335, 336])
+        self.assertEqual(sorted(documents), [333, 334, 335, 336, 590])
         nonces = set()
         policies = []
         for issue, document in documents.items():
@@ -29,7 +29,7 @@ class DurableVerifierRouterDeployTests(unittest.TestCase):
             self.assertIn(str(issue), document["source_url"])
             nonces.add(document["contract_terms"]["creation_nonce"])
             policies.append(document["verification_policy"])
-        self.assertEqual(len(nonces), 4)
+        self.assertEqual(len(nonces), 5)
         self.assertTrue(all(policy == policies[0] for policy in policies))
 
     def test_create_payload_uses_published_commitments_and_router(self) -> None:
@@ -69,11 +69,11 @@ class DurableVerifierRouterDeployTests(unittest.TestCase):
                 "usdc_balance_base_units": 37_000_000,
                 "policy": {"deterministic_verifier": "0x" + "78" * 20},
             },
-            "replacement_economics": {"total_funding_required": 8_040_000},
+            "replacement_economics": {"total_funding_required": 10_050_000},
         }
         value = MODULE.markdown(report)
         self.assertIn("7 days", value)
-        self.assertIn("28.960000 USDC", value)
+        self.assertIn("26.950000 USDC", value)
         self.assertIn("cannot move funds", value)
         self.assertIn("not deployment", value)
 
