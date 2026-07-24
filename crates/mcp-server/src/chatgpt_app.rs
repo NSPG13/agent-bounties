@@ -18,7 +18,7 @@ use serde_json::{json, Map, Value};
 use url::Url;
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
-const POST_WIDGET_URI: &str = "ui://agent-bounties/post-bounty-v3.html";
+const POST_WIDGET_URI: &str = "ui://agent-bounties/post-bounty-v4.html";
 const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
 const POST_WIDGET_HTML: &str = include_str!("../../../site/chatgpt-post-widget.html");
 const POST_WIDGET_SCRIPT: &str = include_str!("../../../site/mcp-post-widget.bundle.js");
@@ -209,7 +209,7 @@ fn initialize_result(params: &Value) -> Value {
             "title": "Agent Bounties",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "Agent Bounties turns goals into reviewable bounties and lets people or their AI assistants complete funded work. When a person wants something done, use prepare_bounty_post unless they explicitly ask for a public zero-USDC voluntary request; the handoff is a draft and moves no funds. When a person asks how to earn money with AI, find paid AI work, or complete Agent Bounties work, call list_autonomous_bounties with claimable_only=true and keep funded work separate from unfunded requests. Continue the canonical solver sequence with prepare_agent_to_earn, agent_native_claim, prepare_autonomous_bounty_submission, publish_autonomous_submission_evidence, and list_autonomous_bounty_events. Require explicit confirmation before public writes or relaying a wallet signature. Never request a private key or seed phrase. Never call an unfunded bounty canonical, funded, or claimable. Only a confirmed canonical BountySettled event proves payment."
+        "instructions": "Agent Bounties turns goals into reviewable bounties and lets people or their AI assistants complete funded work. When a person wants something done, use prepare_bounty_post unless they explicitly ask for a public zero-USDC voluntary request; the handoff is a draft and moves no funds. When a person asks how to earn money with AI, find paid AI work, or complete Agent Bounties work, that request is sufficient permission for the read-only list_autonomous_bounties lookup: call it with claimable_only=true without asking for a second conversational confirmation, and keep funded work separate from unfunded requests. If the safe feed is empty, say plainly that no funded, verification-ready task is available right now, do not request a wallet or imply that a match exists, and offer to check again later. Continue the canonical solver sequence with prepare_agent_to_earn, agent_native_claim, prepare_autonomous_bounty_submission, publish_autonomous_submission_evidence, and list_autonomous_bounty_events only after a funded verification-ready bounty is selected. Require explicit confirmation before public writes or relaying a wallet signature. Never request a private key or seed phrase. Never call an unfunded bounty canonical, funded, or claimable. Only a confirmed canonical BountySettled event proves payment."
     })
 }
 
@@ -256,6 +256,7 @@ fn mcp_tool_descriptor(descriptor: ToolDescriptor) -> Value {
             json!({
                 "securitySchemes": [{"type": "noauth"}],
                 "ui": {"resourceUri": POST_WIDGET_URI},
+                "ui/resourceUri": POST_WIDGET_URI,
                 "openai/outputTemplate": POST_WIDGET_URI,
                 "openai/toolInvocation/invoking": "Preparing bounty handoff…",
                 "openai/toolInvocation/invoked": "Bounty ready to review"
@@ -313,10 +314,18 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
         "list_autonomous_bounties" => {
             let args: AutonomousBountyFeedArgs = serde_json::from_value(arguments)
                 .map_err(|error| format!("invalid list_autonomous_bounties arguments: {error}"))?;
-            (
-                list_autonomous_bounties(State(state), Json(args)).await.0,
-                "Returned canonical, event-derived bounty inventory.",
-            )
+            let claimable_only = args.claimable_only.unwrap_or(false);
+            let legacy = list_autonomous_bounties(State(state), Json(args)).await.0;
+            return Ok(match legacy_result(legacy) {
+                Ok(value) => match normalize_assistant_tool_output(name, value) {
+                    Ok(value) => {
+                        let narration = autonomous_inventory_narration(claimable_only, &value);
+                        tool_result(value, &narration, false)
+                    }
+                    Err(error) => tool_error(error),
+                },
+                Err(error) => tool_error(error),
+            });
         }
         "prepare_agent_to_earn" => {
             let args: PrepareAgentToEarnInput = serde_json::from_value(arguments)
@@ -532,7 +541,8 @@ fn widget_resource_descriptor() -> Value {
         "name": "Agent Bounties post review",
         "title": "Review and post bounty",
         "description": "Review bounty terms prepared in the user's AI account and continue to Agent Bounties.",
-        "mimeType": "text/html;profile=mcp-app"
+        "mimeType": "text/html;profile=mcp-app",
+        "_meta": widget_resource_meta()
     })
 }
 
@@ -545,23 +555,27 @@ fn widget_resource_contents() -> Value {
         "uri": POST_WIDGET_URI,
         "mimeType": "text/html;profile=mcp-app",
         "text": widget_html,
-        "_meta": {
-            "ui": {
-                "prefersBorder": true,
-                "domain": "840fc8c66eefe46904e7dd2c78e7fd12.claudemcpcontent.com",
-                "csp": {
-                    "connectDomains": [],
-                    "resourceDomains": []
-                }
-            },
-            "openai/widgetDescription": "A read-only bounty card prepared in the user's AI conversation. Its button opens Agent Bounties for explicit review and wallet approval.",
-            "openai/widgetPrefersBorder": true,
-            "openai/widgetDomain": "https://mcp.agentbounties.app",
-            "openai/widgetCSP": {
-                "connect_domains": [],
-                "resource_domains": [],
-                "redirect_domains": ["https://agentbounties.app"]
+        "_meta": widget_resource_meta()
+    })
+}
+
+fn widget_resource_meta() -> Value {
+    json!({
+        "ui": {
+            "prefersBorder": true,
+            "domain": "840fc8c66eefe46904e7dd2c78e7fd12.claudemcpcontent.com",
+            "csp": {
+                "connectDomains": [],
+                "resourceDomains": []
             }
+        },
+        "openai/widgetDescription": "A read-only bounty card prepared in the user's AI conversation. Its button opens Agent Bounties for explicit review and wallet approval.",
+        "openai/widgetPrefersBorder": true,
+        "openai/widgetDomain": "https://mcp.agentbounties.app",
+        "openai/widgetCSP": {
+            "connect_domains": [],
+            "resource_domains": [],
+            "redirect_domains": ["https://agentbounties.app"]
         }
     })
 }
@@ -1092,13 +1106,33 @@ fn assistant_tool_description(name: &str, fallback: &'static str) -> &'static st
         "publish_unfunded_bounty" => "Use this when a person explicitly wants to publish a public seven-day voluntary request with no wallet and zero USDC. It is not funded or claimable and promises no payment.",
         "list_unfunded_bounties" => "Use this when a person explicitly asks for voluntary or unpaid Agent Bounties work. Keep these requests separate from funded earning opportunities and never promise payment.",
         "submit_unfunded_bounty_solution" => "Use this when a registered agent explicitly wants to publish or replace its public solution to an unfunded voluntary request. This creates no payment claim.",
-        "list_autonomous_bounties" => "Use this when a person asks to earn money with AI, find paid AI tasks, browse funded Agent Bounties work, or choose a bounty to complete. Set claimable_only=true for work that is currently funded and ready to claim.",
+        "list_autonomous_bounties" => "Use this when a person asks to earn money with AI, find paid AI tasks, browse funded Agent Bounties work, or choose a bounty to complete. This is a read-only lookup that claims nothing and moves no funds; the user's request is sufficient to run it without another conversational confirmation. Set claimable_only=true for work that is currently funded and verification-ready. If the result is empty, say that no safe funded work is available now and do not request a wallet.",
         "prepare_agent_to_earn" => "Use this when a person has chosen one funded canonical bounty and provides a public Base payout wallet. Check wallet, bond, policy, claimability, and verification readiness without requesting secrets or changing state.",
         "agent_native_claim" => "Use this when a person has chosen a funded verification-ready bounty and explicitly wants to claim it. Reuse one idempotency key, show any wallet_request for one bounded signature, and replay until confirmed BountyClaimed.",
         "prepare_autonomous_bounty_submission" => "Use this when the active solver has completed a claimed bounty and wants to submit the artifact and public evidence. Prepare deterministic commitments and a bounded signing/relay handoff; do not claim submission, verification, or payment yet.",
         "publish_autonomous_submission_evidence" => "Use this when confirmed SubmissionAdded exists and the solver wants to publish the exact public artifact and evidence preimages matching the canonical commitments. This public write is not verification or payout proof.",
         "list_autonomous_bounty_events" => "Use this when a person needs to check the confirmed lifecycle of a canonical bounty, including claim, submission, settlement, or reopening. Only a matching BountySettled event proves that the solver was paid.",
         _ => fallback,
+    }
+}
+
+fn autonomous_inventory_narration(claimable_only: bool, value: &Value) -> String {
+    let count = value
+        .get("bounties")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+
+    match (claimable_only, count) {
+        (true, 0) => "No funded, verification-ready Agent Bounties work is available right now. Tell the user that plainly. Do not request a wallet, suggest claim preparation, or imply that a match exists. Offer to check the read-only inventory again later; discuss voluntary unfunded work only if the user explicitly asks.".to_string(),
+        (true, count) => format!(
+            "Returned {count} funded, verification-ready canonical Agent Bounties task{}. Present the best matching task, its exact reward, bond, deadline, acceptance criteria, evidence requirements, and verifier before any claim preparation. This read-only lookup did not claim work or move funds.",
+            if count == 1 { "" } else { "s" }
+        ),
+        (false, count) => format!(
+            "Returned {count} canonical, event-derived Agent Bounties record{}. Do not present a record as paid work unless it is claimable, fully funded, terms-valid, and verification-ready.",
+            if count == 1 { "" } else { "s" }
+        ),
     }
 }
 
@@ -1298,6 +1332,7 @@ mod tests {
         assert_eq!(prepare["annotations"]["destructiveHint"], false);
         assert_eq!(prepare["annotations"]["openWorldHint"], false);
         assert_eq!(prepare["_meta"]["ui"]["resourceUri"], POST_WIDGET_URI);
+        assert_eq!(prepare["_meta"]["ui/resourceUri"], POST_WIDGET_URI);
         assert_eq!(prepare["_meta"]["openai/outputTemplate"], POST_WIDGET_URI);
         assert!(prepare["description"]
             .as_str()
@@ -1357,6 +1392,43 @@ mod tests {
             funded["outputSchema"]["properties"]["bounties"]["type"],
             "array"
         );
+        assert!(funded["description"]
+            .as_str()
+            .unwrap()
+            .contains("without another conversational confirmation"));
+
+        let initialized = initialize_result(&json!({"protocolVersion": MCP_PROTOCOL_VERSION}));
+        let instructions = initialized["instructions"].as_str().unwrap();
+        assert!(instructions.contains("sufficient permission for the read-only"));
+        assert!(instructions.contains("no funded, verification-ready task is available"));
+    }
+
+    #[test]
+    fn inventory_narration_is_honest_and_actionable_when_safe_work_is_empty() {
+        let empty = json!({"bounties": []});
+        let narration = autonomous_inventory_narration(true, &empty);
+        assert!(narration.contains("No funded, verification-ready"));
+        assert!(narration.contains("Do not request a wallet"));
+        assert!(narration.contains("check the read-only inventory again later"));
+        assert!(!narration.contains("Returned canonical"));
+
+        let serialized_result = tool_result(empty.clone(), &narration, false);
+        assert_eq!(serialized_result["structuredContent"], empty);
+        assert!(serialized_result.get("isError").is_none());
+        assert!(serialized_result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("No funded, verification-ready"));
+
+        let one = json!({"bounties": [{}]});
+        let narration = autonomous_inventory_narration(true, &one);
+        assert!(narration.contains("Returned 1 funded"));
+        assert!(narration.contains("exact reward, bond, deadline"));
+        assert!(narration.contains("did not claim work or move funds"));
+
+        let all = autonomous_inventory_narration(false, &one);
+        assert!(all.contains("Returned 1 canonical"));
+        assert!(all.contains("claimable, fully funded, terms-valid, and verification-ready"));
     }
 
     #[test]
@@ -1405,7 +1477,11 @@ mod tests {
 
     #[test]
     fn widget_resource_has_mcp_apps_mime_and_exact_redirect_allowlist() {
+        let descriptor = widget_resource_descriptor();
         let contents = widget_resource_contents();
+        assert_eq!(descriptor["uri"], POST_WIDGET_URI);
+        assert_eq!(descriptor["mimeType"], "text/html;profile=mcp-app");
+        assert_eq!(descriptor["_meta"], contents["_meta"]);
         assert_eq!(contents["mimeType"], "text/html;profile=mcp-app");
         assert_eq!(
             contents["_meta"]["ui"]["domain"],
