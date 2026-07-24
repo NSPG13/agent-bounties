@@ -57,6 +57,9 @@ class DurableVerifierRouterDeployTests(unittest.TestCase):
         self.assertNotIn("credentialed", rendered)
         self.assertEqual(rendered.count("***"), 2)
 
+    def test_singleton_deployment_has_explicit_gas_headroom(self) -> None:
+        self.assertEqual(MODULE.SINGLETON_DEPLOY_GAS_LIMIT, 3_000_000)
+
     def test_markdown_reports_durable_signature_boundary(self) -> None:
         report = {
             "predicted_router": "0x" + "56" * 20,

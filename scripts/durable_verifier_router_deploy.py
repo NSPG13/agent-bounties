@@ -33,6 +33,7 @@ ROUTER_ACTIVATION_DELAY = 7 * 24 * 60 * 60
 ROUTER_SALT_TEXT = "agent-bounties/policy-bound-verifier-router/base-mainnet/v1"
 ADAPTER_SALT_PREFIX = "agent-bounties/independent-child-v3-routed/base-mainnet/v1"
 MIN_KEEPER_ETH_WEI = 100_000_000_000_000
+SINGLETON_DEPLOY_GAS_LIMIT = 3_000_000
 PARENT_TARGET = 2_010_000
 TOTAL_REPLACEMENT_FUNDING = 5 * PARENT_TARGET
 TEMPLATE_PATH = Path("bounties/autonomous-v1/routed-v3-parent.template.json")
@@ -192,10 +193,19 @@ class Foundry:
         predicted = require_address("0x" + prediction_hash[-40:], "predicted contract")
         return predicted, salt, init_hash
 
-    def send(self, target: str, signature: str, *args: str, private_key: str) -> dict[str, Any]:
-        raw = self.rpc(
-            "send", target, signature, *args, "--private-key", private_key, "--json", timeout=180
-        )
+    def send(
+        self,
+        target: str,
+        signature: str,
+        *args: str,
+        private_key: str,
+        gas_limit: int | None = None,
+    ) -> dict[str, Any]:
+        command = ["send", target, signature, *args, "--private-key", private_key]
+        if gas_limit is not None:
+            command.extend(["--gas-limit", str(gas_limit)])
+        command.append("--json")
+        raw = self.rpc(*command, timeout=180)
         try:
             transaction = json.loads(raw)
         except json.JSONDecodeError as error:
@@ -391,6 +401,7 @@ def deploy_singleton(
         init_code,
         salt,
         private_key=private_key,
+        gas_limit=SINGLETON_DEPLOY_GAS_LIMIT,
     )
     wait_for_code(foundry, target)
     return transaction
