@@ -43,11 +43,13 @@ jobs:
           test "$code" != "0x0"
 
       - name: Bootstrap event exists
+        env:
+          LOG_RPC_URL: https://mainnet.base.org
         run: |
-          latest="$(cast block-number --rpc-url "$BASE_MAINNET_RPC_URL")"
-          from=$((latest - 10000))
+          latest="$(cast block-number --rpc-url "$LOG_RPC_URL")"
+          from=$((latest - 9999))
           mkdir -p target
-          cast logs --rpc-url "$BASE_MAINNET_RPC_URL" --address "$ROUTER" --from-block "$from" --to-block latest "PolicyBootstrapped(bytes32,address,bytes32)" --json > target/router-bootstrap.json
+          cast logs --rpc-url "$LOG_RPC_URL" --address "$ROUTER" --from-block "$from" --to-block latest "PolicyBootstrapped(bytes32,address,bytes32)" --json > target/router-bootstrap.json
           python -c 'import json; x=json.load(open("target/router-bootstrap.json")); assert isinstance(x,list) and len(x)==1, len(x)'
 
       - name: Dynamic direct-chain attestation passes
