@@ -29,7 +29,7 @@ repository = "https://github.com/agent-bounties/agent-bounties"
 rust-version = "1.88"
 
 [workspace.dependencies]
-alloy = { version = "=1.4.1", default-features = false, features = ["std", "provider-http", "reqwest-rustls-tls", "rpc-types", "signer-local", "sol-types"] }
+alloy = { version = "=1.6.3", default-features = false, features = ["std", "provider-http", "reqwest-rustls-tls", "rpc-types", "signer-local", "sol-types"] }
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.7"
