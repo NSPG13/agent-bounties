@@ -18,7 +18,7 @@ use serde_json::{json, Map, Value};
 use url::Url;
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
-const POST_WIDGET_URI: &str = "ui://agent-bounties/post-bounty-v3.html";
+const POST_WIDGET_URI: &str = "ui://agent-bounties/post-bounty-v4.html";
 const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
 const POST_WIDGET_HTML: &str = include_str!("../../../site/chatgpt-post-widget.html");
 const POST_WIDGET_SCRIPT: &str = include_str!("../../../site/mcp-post-widget.bundle.js");
@@ -256,6 +256,7 @@ fn mcp_tool_descriptor(descriptor: ToolDescriptor) -> Value {
             json!({
                 "securitySchemes": [{"type": "noauth"}],
                 "ui": {"resourceUri": POST_WIDGET_URI},
+                "ui/resourceUri": POST_WIDGET_URI,
                 "openai/outputTemplate": POST_WIDGET_URI,
                 "openai/toolInvocation/invoking": "Preparing bounty handoff…",
                 "openai/toolInvocation/invoked": "Bounty ready to review"
@@ -532,7 +533,8 @@ fn widget_resource_descriptor() -> Value {
         "name": "Agent Bounties post review",
         "title": "Review and post bounty",
         "description": "Review bounty terms prepared in the user's AI account and continue to Agent Bounties.",
-        "mimeType": "text/html;profile=mcp-app"
+        "mimeType": "text/html;profile=mcp-app",
+        "_meta": widget_resource_meta()
     })
 }
 
@@ -545,23 +547,27 @@ fn widget_resource_contents() -> Value {
         "uri": POST_WIDGET_URI,
         "mimeType": "text/html;profile=mcp-app",
         "text": widget_html,
-        "_meta": {
-            "ui": {
-                "prefersBorder": true,
-                "domain": "840fc8c66eefe46904e7dd2c78e7fd12.claudemcpcontent.com",
-                "csp": {
-                    "connectDomains": [],
-                    "resourceDomains": []
-                }
-            },
-            "openai/widgetDescription": "A read-only bounty card prepared in the user's AI conversation. Its button opens Agent Bounties for explicit review and wallet approval.",
-            "openai/widgetPrefersBorder": true,
-            "openai/widgetDomain": "https://mcp.agentbounties.app",
-            "openai/widgetCSP": {
-                "connect_domains": [],
-                "resource_domains": [],
-                "redirect_domains": ["https://agentbounties.app"]
+        "_meta": widget_resource_meta()
+    })
+}
+
+fn widget_resource_meta() -> Value {
+    json!({
+        "ui": {
+            "prefersBorder": true,
+            "domain": "840fc8c66eefe46904e7dd2c78e7fd12.claudemcpcontent.com",
+            "csp": {
+                "connectDomains": [],
+                "resourceDomains": []
             }
+        },
+        "openai/widgetDescription": "A read-only bounty card prepared in the user's AI conversation. Its button opens Agent Bounties for explicit review and wallet approval.",
+        "openai/widgetPrefersBorder": true,
+        "openai/widgetDomain": "https://mcp.agentbounties.app",
+        "openai/widgetCSP": {
+            "connect_domains": [],
+            "resource_domains": [],
+            "redirect_domains": ["https://agentbounties.app"]
         }
     })
 }
@@ -1298,6 +1304,7 @@ mod tests {
         assert_eq!(prepare["annotations"]["destructiveHint"], false);
         assert_eq!(prepare["annotations"]["openWorldHint"], false);
         assert_eq!(prepare["_meta"]["ui"]["resourceUri"], POST_WIDGET_URI);
+        assert_eq!(prepare["_meta"]["ui/resourceUri"], POST_WIDGET_URI);
         assert_eq!(prepare["_meta"]["openai/outputTemplate"], POST_WIDGET_URI);
         assert!(prepare["description"]
             .as_str()
@@ -1405,7 +1412,11 @@ mod tests {
 
     #[test]
     fn widget_resource_has_mcp_apps_mime_and_exact_redirect_allowlist() {
+        let descriptor = widget_resource_descriptor();
         let contents = widget_resource_contents();
+        assert_eq!(descriptor["uri"], POST_WIDGET_URI);
+        assert_eq!(descriptor["mimeType"], "text/html;profile=mcp-app");
+        assert_eq!(descriptor["_meta"], contents["_meta"]);
         assert_eq!(contents["mimeType"], "text/html;profile=mcp-app");
         assert_eq!(
             contents["_meta"]["ui"]["domain"],
