@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
-      ROUTER: 0x380c1af742593dd88b6f20387e9ee693a0536731
+      ROUTER: "0x380c1af742593dd88b6f20387e9ee693a0536731"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
