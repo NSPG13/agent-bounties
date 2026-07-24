@@ -14,6 +14,7 @@
     "0010_site_analytics.sql": "b44d10b224408a799cb79a5f3ea36f800b4e292793096b702e745bc4365546ed",
     "0011_social_mention_ingestion.sql": "c6491c713224911dfffcf3d00cac6db5dea8573ce93afdce1734667bcff040fa",
     "0012_competitor_intelligence.sql": "8b97902944275ff7ad6145ec5a3eb6b82ef969a9c1fbda924ea5dfa2e9310722",
-    "0013_objective_coordination.sql": "3448f48fe30a24c111c0c9695b82d0633f1a705c8db27e9d14b7a7834da67f19"
+    "0013_objective_coordination.sql": "3448f48fe30a24c111c0c9695b82d0633f1a705c8db27e9d14b7a7834da67f19",
+    "0014_remove_public_competitor_intelligence.sql": "1dcc2d3a21644daea47f5ebca2dd34579f85233154a8b1b35c8b7890888ae925"
   }
 }
