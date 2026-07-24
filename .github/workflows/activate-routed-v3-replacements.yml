@@ -60,7 +60,7 @@ jobs:
         run: |
           mkdir -p target
           latest="$(cast block-number --rpc-url "$LOG_RPC_URL")"
-          from=$((latest - 10000))
+          from=$((latest - 9999))
           cast logs \
             --rpc-url "$LOG_RPC_URL" \
             --address "$ROUTER" \
