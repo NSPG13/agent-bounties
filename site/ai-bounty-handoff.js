@@ -61,7 +61,13 @@
     const verifier = parseUsdc(raw.verifier_reward_usdc, "Verifier reward");
     if (Number(solver) + Number(verifier) > MAX_TOTAL_USDC) throw new Error("The combined reward is too large.");
 
-    const days = Number(raw.task_window_days ?? 30);
+    if (!Object.prototype.hasOwnProperty.call(raw, "task_window_days")) {
+      if (Object.prototype.hasOwnProperty.call(raw, "deadline_days")) {
+        throw new Error("Use task_window_days instead of deadline_days so the work window is imported exactly.");
+      }
+      throw new Error("task_window_days is required so Agent Bounties does not guess or change the work window.");
+    }
+    const days = Number(raw.task_window_days);
     if (!Number.isInteger(days) || days < 1 || days > 30) throw new Error("task_window_days must be a whole number from 1 to 30.");
 
     const sourceUrl = raw.source_url == null || String(raw.source_url).trim() === ""
