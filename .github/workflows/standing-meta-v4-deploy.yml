@@ -8,6 +8,8 @@ on:
       - "contracts/base-escrow/src/AnonymousStakePoolV1.sol"
       - "contracts/base-escrow/src/AppealableVerifierV1.sol"
       - "contracts/base-escrow/src/CanonicalIndependentChildVerifierV4.sol"
+      - "contracts/base-escrow/src/OpenCompetitionBountyFactoryV1.sol"
+      - "contracts/base-escrow/src/OpenCompetitionBountyV1.sol"
       - "contracts/base-escrow/src/StandingMetaChildFactoryV4.sol"
       - "contracts/base-escrow/src/StandingMetaChildV4.sol"
       - "contracts/base-escrow/src/StandingMetaParentFactoryV4.sol"
@@ -16,12 +18,15 @@ on:
       - "contracts/base-escrow/src/VrfSortitionCoordinatorV1.sol"
       - "contracts/base-escrow/script/FundStandingMetaV4Subscription.s.sol"
       - "contracts/base-escrow/test/AppealableVerifierV1.t.sol"
+      - "contracts/base-escrow/test/OpenCompetitionBountyV1.t.sol"
       - "contracts/base-escrow/test/StandingMetaV4.t.sol"
       - "contracts/base-escrow/test/StandingMetaV4MainnetFork.t.sol"
       - "scripts/standing_meta_v4_deploy.py"
       - "scripts/test_standing_meta_v4_deploy.py"
       - "scripts/standing_meta_v4_release_audit.py"
       - "scripts/test_standing_meta_v4_release_audit.py"
+      - "scripts/standing_meta_v4_rehearsal_audit.py"
+      - "scripts/test_standing_meta_v4_rehearsal_audit.py"
       - "deployments/standing-meta-v4-config.json"
       - "docs/standing-meta-v4-fair-earning.md"
       - "docs/standing-meta-v4-release-runbook.md"
@@ -94,7 +99,8 @@ jobs:
         run: >-
           python -m unittest
           scripts.test_standing_meta_v4_deploy
-          scripts.test_standing_meta_v4_release_audit -v
+          scripts.test_standing_meta_v4_release_audit
+          scripts.test_standing_meta_v4_rehearsal_audit -v
 
       - name: Python syntax
         run: >-
@@ -103,6 +109,8 @@ jobs:
           scripts/test_standing_meta_v4_deploy.py
           scripts/standing_meta_v4_release_audit.py
           scripts/test_standing_meta_v4_release_audit.py
+          scripts/standing_meta_v4_rehearsal_audit.py
+          scripts/test_standing_meta_v4_rehearsal_audit.py
 
       - name: Fail-closed manifest and latency audit
         run: >-
@@ -112,7 +120,7 @@ jobs:
       - name: V4 contract and appeal tests
         run: >-
           forge test --root contracts/base-escrow
-          --match-contract '(AppealableVerifierV1Test|StandingMetaV4Test)'
+          --match-contract '(AppealableVerifierV1Test|OpenCompetitionBountyV1Test|StandingMetaV4Test)'
           --fuzz-runs 1000 -vv
 
       - name: Contract sizes

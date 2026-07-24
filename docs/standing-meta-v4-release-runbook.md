@@ -98,10 +98,41 @@ and the evidence receives review.
    primary timeout/promotion, appeal timeout, cancellation, contributor pull
    refund, child settlement, parent settlement, and first-valid open competition
    settlement. Testnet events are rehearsal evidence only.
+9. Assemble `target/standing-meta-v4-base-sepolia-rehearsal-draft.json` using
+   schema `agent-bounties/standing-meta-v4-sepolia-rehearsal-v1`. It must contain
+   the exact twelve named scenarios enforced by
+   `scripts/standing_meta_v4_rehearsal_audit.py`, their canonical subject type,
+   exact clean source commit, subject and actor addresses, bounty/case IDs,
+   confirmed transaction and log
+   locations, the open-competition factory, faucet receipts, positive reserve
+   floors, and primary/secondary RPC observation blocks. Then seal and audit it
+   through two distinct RPC providers:
+
+   ```powershell
+   python scripts/standing_meta_v4_rehearsal_audit.py `
+     --evidence target/standing-meta-v4-base-sepolia-rehearsal-draft.json `
+     --seal-output target/standing-meta-v4-base-sepolia-rehearsal.json `
+     --deployment target/standing-meta-v4-base-sepolia-deployment.json `
+     --rpc-url $env:BASE_SEPOLIA_RPC_URL `
+     --secondary-rpc-url $env:BASE_SEPOLIA_SECONDARY_RPC_URL `
+     --output target/standing-meta-v4-base-sepolia-rehearsal-audit.json `
+     --require-complete
+   ```
+
+   The validator compiles and immutable-normalizes all ten canonical V4
+   components, the Sepolia base child factory, and the open-competition factory
+   against the exact clean source commit. It verifies canonical subject
+   provenance, decodes verdict/appeal/order/payout
+   facts from receipt logs, matches USDC transfers, proves the parent-to-child
+   relationship and 1 USDC successful-settlement margin, checks both VRF
+   consumers and live pool/reserve floors, and requires both RPC passes to
+   agree. It never records RPC URLs or credentials.
 
 The rehearsal is complete only when a content-addressed evidence bundle maps
 every path to confirmed receipts, code/runtime hashes, configuration reads,
-balances, and canonical events.
+balances, canonical events, and matching token transfers. A structurally valid
+or SHA-256-sealed JSON file without both successful live RPC passes remains
+incomplete.
 
 The deployment manifest may use intermediate descriptive states while evidence
 is being assembled. Set its exact status to `ready_to_earn` only after both

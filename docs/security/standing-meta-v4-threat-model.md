@@ -49,7 +49,7 @@ V4 must remain absent from ready-to-earn and verification-job views until every 
 
 1. Exact source revision, compiler settings, bytecode hashes, constructor arguments, and immutable getters.
 2. Independent contract review with findings resolved or explicitly accepted.
-3. Base Sepolia rehearsals for unappealed/waived, upheld, overturned, timeout, cancellation, refund, child settlement, parent settlement, and canonical `BountySettled` evidence.
+3. Base Sepolia rehearsals for unappealed acceptance, primary rejection, both appeal directions, upheld and overturned appeals, primary promotion, appeal timeout, cancellation, contributor pull-refund, child settlement, parent settlement, and first-valid open competition settlement. The fail-closed rehearsal audit requires two agreeing live RPC passes, canonical contract provenance, decoded receipt values, matching USDC transfers, and canonical `BountySettled` evidence.
 4. Base-mainnet fork test using current USDC and official Chainlink coordinator configuration.
 5. Authorized VRF consumers, funded native-token subscription reserve, and measured callback latency.
 6. Gas sponsorship reserve and a successful sponsored action rehearsal.

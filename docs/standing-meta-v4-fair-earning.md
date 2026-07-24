@@ -77,6 +77,14 @@ python scripts/standing_meta_v4_deploy.py deploy --network base-sepolia --output
 python scripts/standing_meta_v4_deploy.py verify --network base-sepolia --deployment target/v4-sepolia-deployment.json --output target/v4-sepolia-rpc.json
 ```
 
+After exercising every live lifecycle path, seal and validate the complete
+evidence through two distinct Base Sepolia RPC providers with
+`scripts/standing_meta_v4_rehearsal_audit.py`; the exact command and evidence
+schema are documented in
+[`standing-meta-v4-release-runbook.md`](standing-meta-v4-release-runbook.md).
+Source, a transaction hash, or a single-provider JSON response is not rehearsal
+or payment proof.
+
 The deploy command is staged and resumable. It creates one VRF subscription, deploys the exact V4 component graph, one-time configures it, authorizes exactly the verifier and solver sortition coordinators, and then re-reads all wiring and the subscription through RPC. It does not fund the subscription or mark V4 ready.
 
 `FundStandingMetaV4Subscription.s.sol` funds an existing subscription only after both consumers are present. It records and checks the exact native-balance delta. On mainnet, `V4_SOURCE_USDC_BASE_UNITS` must be positive and no more than 7,000,000. The funding script does not withdraw or swap USDC; those remain explicit owner-authorized actions with their own receipts.
