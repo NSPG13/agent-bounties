@@ -179,14 +179,14 @@ jobs:
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready != 'true'
         run: echo "The exact durable PolicyConfigured state is not active. No financial action was attempted."
 
-      - name: Create, fund, and reconcile four routed parents
+      - name: Create, fund, and reconcile five routed parents
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
         run: python scripts/activate_routed_v3_dynamic.py
 
       - name: Replace issue terms only after canonical reconciliation
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
         run: |
-          for issue in 333 334 335 336; do
+          for issue in 333 334 335 336 590; do
             gh issue edit "$issue" \
               --body-file "target/routed-v3-activation/routed-v3-${issue}-issue.md" \
               --add-label bounty \
@@ -203,7 +203,7 @@ jobs:
         run: |
           gh issue comment 571 --body-file target/routed-v3-activation.md
           gh issue close 571 --reason completed --comment \
-            "The durable wallet policy and four routed replacements reconciled from canonical Base evidence. Only future BountySettled events prove solver payments."
+            "The durable wallet policy and five routed bounties reconciled from canonical Base evidence. Only future BountySettled events prove solver payments."
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

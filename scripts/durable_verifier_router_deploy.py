@@ -34,13 +34,14 @@ ROUTER_SALT_TEXT = "agent-bounties/policy-bound-verifier-router/base-mainnet/v1"
 ADAPTER_SALT_PREFIX = "agent-bounties/independent-child-v3-routed/base-mainnet/v1"
 MIN_KEEPER_ETH_WEI = 100_000_000_000_000
 PARENT_TARGET = 2_010_000
-TOTAL_REPLACEMENT_FUNDING = 4 * PARENT_TARGET
+TOTAL_REPLACEMENT_FUNDING = 5 * PARENT_TARGET
 TEMPLATE_PATH = Path("bounties/autonomous-v1/routed-v3-parent.template.json")
 LANES: dict[int, tuple[str, str]] = {
     333: ("cli", "CLI"),
     334: ("api", "API"),
     335: ("mcp", "MCP"),
     336: ("wallet_ux", "wallet UX"),
+    590: ("agent_discovery", "agent discovery"),
 }
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
@@ -324,7 +325,7 @@ def build_router_plan(foundry: Foundry) -> dict[str, Any]:
             "address": BOUNDED_WALLET,
             "owner": require_address(foundry.call(BOUNDED_WALLET, "owner()(address)"), "wallet owner"),
             "usdc_balance_base_units": wallet_balance,
-            "can_fund_four_replacements": wallet_balance >= TOTAL_REPLACEMENT_FUNDING,
+            "can_fund_five_replacements": wallet_balance >= TOTAL_REPLACEMENT_FUNDING,
             "policy_version": parse_uint(
                 foundry.call(BOUNDED_WALLET, "policyVersion()(uint64)"), "wallet policy version"
             ),
@@ -683,7 +684,7 @@ def markdown(report: Mapping[str, Any]) -> str:
             f"- Future-policy activation delay: **{report['activation_delay_seconds'] // 86400} days**",
             f"- Bounded wallet: `{wallet['address']}`",
             f"- Bounded-wallet USDC: **{wallet['usdc_balance_base_units'] / 1_000_000:.6f}**",
-            f"- Four replacement parents require: **{economics['total_funding_required'] / 1_000_000:.6f} USDC**",
+            f"- Five replacement parents require: **{economics['total_funding_required'] / 1_000_000:.6f} USDC**",
             f"- Expected balance after funding: **{(wallet['usdc_balance_base_units'] - economics['total_funding_required']) / 1_000_000:.6f} USDC**",
             f"- Current wallet verifier: `{wallet['policy']['deterministic_verifier']}`",
             "",

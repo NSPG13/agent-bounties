@@ -123,6 +123,7 @@ jobs:
 
       - name: Publish start notice
         run: |
+          mkdir -p target
           cat > target/durable-router-start.md <<EOF
           ## Durable verifier-router deployment started
 
@@ -146,6 +147,7 @@ jobs:
       - name: Publish deployment result
         if: always()
         run: |
+          mkdir -p target
           python - <<'PY'
           import json
           import os
