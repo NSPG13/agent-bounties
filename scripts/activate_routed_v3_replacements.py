@@ -283,13 +283,14 @@ def policy_state(cast: Cast, deployment: Mapping[str, Any]) -> dict[str, Any]:
     current_bucket = now // state["period_seconds"]
     observed_bucket = parse_uint(cast.call(WALLET, "periodBucket()(uint256)"), "period bucket")
     period_spent = state["period_spent"] if observed_bucket == current_bucket else 0
-    if period_spent + TOTAL > state["max_per_period"]:
-        raise ActivationError("remaining current-period budget is below 8.04 USDC")
-    if state["wallet_balance"] < TOTAL:
-        raise ActivationError("bounded wallet balance is below 8.04 USDC")
-    if state["lifetime_spent"] + TOTAL > state["max_lifetime_spend"]:
-        raise ActivationError("bounded wallet remaining lifetime budget is below 8.04 USDC")
     state["effective_period_spent"] = period_spent
+    state["remaining_period_budget"] = state["max_per_period"] - period_spent
+    state["remaining_lifetime_budget"] = state["max_lifetime_spend"] - state["lifetime_spent"]
+    state["affordable_creations"] = min(
+        state["remaining_period_budget"] // TARGET,
+        state["remaining_lifetime_budget"] // TARGET,
+        state["wallet_balance"] // TARGET,
+    )
     return state
 
 
@@ -438,6 +439,8 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
     manifest = planner_manifest(args.output_dir / "bounded-wallet-routed-v3-manifest.json", deployment["router_address"])
     documents = durable.materialize_terms(ROOT, deployment["router_address"])
     results: list[dict[str, Any]] = []
+    pending: list[int] = []
+    spend_available = int(before["affordable_creations"])
 
     for issue, config in ISSUES.items():
         document = documents[issue]
@@ -495,12 +498,16 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         if canonical:
             tx_hash = "already-canonical"
         else:
+            if spend_available <= 0:
+                pending.append(issue)
+                continue
             sent = cast.send_data(
                 address(direct.get("to"), "direct transaction target"),
                 str(direct.get("data")),
                 private_key,
             )
             tx_hash = str(sent.get("transactionHash") or sent.get("transaction_hash"))
+            spend_available -= 1
         reconciled = reconcile(args.api, predicted, bounty_id)
         result = {
             "issue": issue,
@@ -538,6 +545,8 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         "lifetime_spent_before": before["lifetime_spent"],
         "lifetime_spent_after": after["lifetime_spent"],
         "new_spend": expected_spend,
+        "complete": not pending,
+        "pending_issues": pending,
         "results": results,
         "evidence_boundary": (
             "Confirmed canonical creation, FundingAdded, BountyBecameClaimable, valid terms, and verification readiness "
@@ -550,7 +559,11 @@ def markdown(report: Mapping[str, object]) -> str:
     results = report["results"]
     assert isinstance(results, list)
     lines = [
-        "## Five profitable routed-V3 bounties activated",
+        (
+            "## Five profitable routed-V3 bounties activated"
+            if report["complete"]
+            else "## Profitable routed-V3 activation checkpoint"
+        ),
         "",
         f"- Stable verifier router: `{report['router']}`",
         f"- Immutable routed policy: `{report['policy_hash']}`",
@@ -564,6 +577,15 @@ def markdown(report: Mapping[str, object]) -> str:
         assert isinstance(item, dict)
         lines.append(
             f"- #{item['issue']} `{item['contract']}` — 2.00 USDC solver / 0.01 verifier / 0.01 refundable bond"
+        )
+    pending = report.get("pending_issues", [])
+    if pending:
+        lines.extend(
+            [
+                "",
+                "Daily wallet cap reached. The hourly control loop will activate the remaining "
+                f"issue(s) after the next policy-period reset: {', '.join(f'#{issue}' for issue in pending)}.",
+            ]
         )
     lines.extend(
         [

@@ -184,12 +184,14 @@ jobs:
 
       - name: Create, fund, and reconcile five routed parents
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
+        id: activation
         run: python scripts/activate_routed_v3_dynamic.py
 
       - name: Replace issue terms only after canonical reconciliation
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
         run: |
           for issue in 333 334 335 336 590; do
+            test -f "target/routed-v3-activation/routed-v3-${issue}-issue.md" || continue
             gh issue edit "$issue" \
               --body-file "target/routed-v3-activation/routed-v3-${issue}-issue.md" \
               --add-label bounty \
@@ -205,8 +207,11 @@ jobs:
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
         run: |
           gh issue comment 571 --body-file target/routed-v3-activation.md
-          gh issue close 571 --reason completed --comment \
-            "The durable wallet policy and five routed bounties reconciled from canonical Base evidence. Only future BountySettled events prove solver payments."
+          complete="$(python -c 'import json; print(str(json.load(open("target/routed-v3-activation.json"))["complete"]).lower())')"
+          if [ "$complete" = "true" ]; then
+            gh issue close 571 --reason completed --comment \
+              "The durable wallet policy and five routed bounties reconciled from canonical Base evidence. Only future BountySettled events prove solver payments."
+          fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
