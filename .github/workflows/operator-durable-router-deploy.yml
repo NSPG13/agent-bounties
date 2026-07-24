@@ -1,41 +1,25 @@
-name: Durable verifier router deploy
-# Operator branch: direct post-deployment Base attestation only.
+name: Operator durable router deployment
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/durable-verifier-router-deploy.yml"
+      - ".github/workflows/operator-durable-router-deploy.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: durable-verifier-router-evidence-${{ github.ref }}
+  group: operator-durable-router-evidence
   cancel-in-progress: false
 
 jobs:
-  deterministic-gates:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: "3.12"
-      - run: |
-          python -m unittest scripts.test_durable_verifier_router_deploy -v
-          forge test --root contracts/base-escrow --match-contract PolicyBoundVerifierRouterTest -vv
-
-  chain-evidence:
+  evidence:
     if: >-
       github.head_ref == 'ops/deploy-durable-router-now' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == 'NSPG13'
-    needs: deterministic-gates
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
+    timeout-minutes: 12
     env:
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
       ROUTER: 0x380c1af742593dd88b6f20387e9ee693a0536731
@@ -43,10 +27,17 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           ref: ${{ github.head_ref }}
+
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
+
+      - name: Revalidate router source and tests
+        run: |
+          python -m unittest scripts.test_durable_verifier_router_deploy -v
+          forge test --root contracts/base-escrow --match-contract PolicyBoundVerifierRouterTest -vv
 
       - name: Read bootstrap event and immutable state
         run: |
@@ -74,10 +65,10 @@ jobs:
               raise SystemExit('bootstrap event topic shape mismatch')
           policy_hash = topics[1]
           adapter = '0x' + topics[2][-40:]
-          raw_data = str(log['data']).lower().removeprefix('0x')
-          if len(raw_data) != 64:
+          data = str(log['data']).lower().removeprefix('0x')
+          if len(data) != 64:
               raise SystemExit('bootstrap event data shape mismatch')
-          event_runtime_hash = '0x' + raw_data
+          runtime_hash = '0x' + data
 
           def cast(*args):
               return subprocess.check_output(['cast', *args, '--rpc-url', rpc], text=True).strip()
@@ -92,7 +83,7 @@ jobs:
               raise SystemExit('router or adapter runtime code missing')
           router_code_hash = cast('keccak', router_code).lower()
           adapter_code_hash = cast('keccak', adapter_code).lower()
-          if adapter_code_hash != event_runtime_hash:
+          if adapter_code_hash != runtime_hash:
               raise SystemExit('adapter runtime hash differs from bootstrap event')
 
           factory = cast('call', router, 'canonicalFactory()(address)').lower()
@@ -107,7 +98,7 @@ jobs:
           ).splitlines() if line.strip()]
           if active != 'true' or len(record) != 6:
               raise SystemExit('router policy is not active or record shape mismatched')
-          if record[0].lower() != adapter or record[1].lower() != event_runtime_hash:
+          if record[0].lower() != adapter or record[1].lower() != runtime_hash:
               raise SystemExit('router record differs from bootstrap evidence')
 
           adapter_router = cast('call', adapter, 'verifierRouter()(address)').lower()
