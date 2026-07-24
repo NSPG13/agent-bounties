@@ -11,6 +11,7 @@ from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parent
+WORKFLOWS = SCRIPTS.parent / ".github" / "workflows"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
@@ -125,6 +126,15 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         self.assertEqual(MODULE.UINT64_MAX, (1 << 64) - 1)
         self.assertEqual(DYNAMIC.ROUTER, "0x380c1af742593dd88b6f20387e9ee693a0536731")
         self.assertEqual(DYNAMIC.ACTIVATION_DELAY, 604_800)
+
+    def test_router_address_is_quoted_in_activation_workflow_yaml(self) -> None:
+        expected = 'ROUTER: "0x380c1af742593dd88b6f20387e9ee693a0536731"'
+        for name in (
+            "activate-routed-v3-replacements.yml",
+            "routed-v3-activation-check.yml",
+        ):
+            workflow = (WORKFLOWS / name).read_text(encoding="utf-8")
+            self.assertIn(expected, workflow, name)
 
 
 if __name__ == "__main__":

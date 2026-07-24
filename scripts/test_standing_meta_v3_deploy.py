@@ -8,6 +8,7 @@ import unittest
 
 
 SCRIPT = Path(__file__).with_name("standing_meta_v3_deploy.py")
+WORKFLOW = SCRIPT.parent.parent / ".github" / "workflows" / "standing-meta-v3-deploy.yml"
 SPEC = importlib.util.spec_from_file_location("standing_meta_v3_deploy", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -15,6 +16,16 @@ SPEC.loader.exec_module(MODULE)
 
 
 class StandingMetaV3DeployTests(unittest.TestCase):
+    def test_deployment_notices_do_not_depend_on_checkout(self) -> None:
+        issue_comment_commands = [
+            line.strip()
+            for line in WORKFLOW.read_text().splitlines()
+            if "gh issue comment 527" in line
+        ]
+        self.assertEqual(len(issue_comment_commands), 3)
+        for command in issue_comment_commands:
+            self.assertIn('--repo "$GITHUB_REPOSITORY"', command)
+
     def test_economics_require_exact_four_parent_funding(self) -> None:
         self.assertEqual(MODULE.PARENT_TARGET_BASE_UNITS, 2_010_000)
         self.assertEqual(MODULE.REPLACEMENT_COUNT, 4)
