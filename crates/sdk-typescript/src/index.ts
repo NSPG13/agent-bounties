@@ -177,6 +177,55 @@ export interface StandingMetaV4ReadinessCheck {
   required: string;
 }
 
+export interface OpenCompetitionReadinessCheck {
+  name: string;
+  ready: boolean;
+  observed: string;
+  required: string;
+}
+
+export interface OpenCompetitionReadinessReport {
+  schema_version: "agent-bounties/open-competition-v1-readiness-v1";
+  protocol_version: "open-competition-v1";
+  competition_mode: "first_valid_submission";
+  ready_to_compete: boolean;
+  checks: OpenCompetitionReadinessCheck[];
+  blockers: string[];
+  first_means: string;
+  ordering_authority: string;
+  decision_authority: string;
+  payment_authority: string;
+  next_action: string;
+  fairness_statement: string;
+  evidence_boundary: string;
+}
+
+export type OpenCompetitionOperation =
+  | "prepare_open_competition_commit"
+  | "prepare_open_competition_reveal"
+  | "get_open_competition_status"
+  | "withdraw_open_competition_bond";
+
+export interface OpenCompetitionActionRequest {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  bounty_contract: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface OpenCompetitionActionPlan {
+  schema_version: "agent-bounties/open-competition-v1-action-v1";
+  protocol_version: "open-competition-v1";
+  competition_mode: "first_valid_submission";
+  operation: OpenCompetitionOperation;
+  allowed: boolean;
+  target_contract: string | null;
+  function: string | null;
+  arguments: Record<string, unknown>;
+  blocker: string | null;
+  next_action: string;
+  evidence_boundary: string;
+}
+
 export interface StandingMetaV4ReadinessReport {
   schema_version: "agent-bounties/standing-meta-v4-readiness-v1";
   protocol_version: "standing-meta-v4";
@@ -840,6 +889,50 @@ export class AgentBountiesClient {
     return this.query("/v1/base/standing-meta-v4/readiness", {
       network,
     }) as Promise<StandingMetaV4ReadinessReport>;
+  }
+
+  async getOpenCompetitionReadiness(
+    bountyContract: string,
+    network: "base-mainnet" | "base-sepolia" = "base-mainnet",
+  ): Promise<OpenCompetitionReadinessReport> {
+    return this.query("/v1/base/open-competition-v1/readiness", {
+      network,
+      bounty_contract: bountyContract,
+    }) as Promise<OpenCompetitionReadinessReport>;
+  }
+
+  private openCompetitionAction(
+    path: string,
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.post(`/v1/base/open-competition-v1/${path}`, {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    }) as Promise<OpenCompetitionActionPlan>;
+  }
+
+  async prepareOpenCompetitionCommit(
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.openCompetitionAction("commit-preparation", request);
+  }
+
+  async prepareOpenCompetitionReveal(
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.openCompetitionAction("reveal-preparation", request);
+  }
+
+  async getOpenCompetitionStatus(
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.openCompetitionAction("status", request);
+  }
+
+  async withdrawOpenCompetitionBond(
+    request: OpenCompetitionActionRequest,
+  ): Promise<OpenCompetitionActionPlan> {
+    return this.openCompetitionAction("bond-withdrawal-preparation", request);
   }
 
   private standingMetaV4Action(

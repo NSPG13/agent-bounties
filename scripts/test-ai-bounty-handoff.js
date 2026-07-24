@@ -89,6 +89,21 @@ for (const invalid of [
   if (!rejected) throw new Error(`unsafe AI draft was accepted: ${JSON.stringify(invalid)}`);
 }
 
+for (const invalid of [
+  { ...draft },
+  { ...draft, deadline_days: 14 },
+]) {
+  delete invalid.task_window_days;
+  let message = "";
+  try { api.parseDraft(invalid); } catch (error) { message = error.message; }
+  if (!message.includes("task_window_days")) {
+    throw new Error(`AI draft without an exact task window was not rejected clearly: ${message}`);
+  }
+  if ("deadline_days" in invalid && !message.includes("instead of deadline_days")) {
+    throw new Error(`deadline_days alias did not receive a targeted correction: ${message}`);
+  }
+}
+
 const prompt = api.promptFor("Build a public climate dashboard");
 for (const marker of ["prepare_bounty_post", api.mcpUrl, "return ONLY one JSON object", "Do not claim that anything is posted"]) {
   if (!prompt.includes(marker)) throw new Error(`AI handoff prompt missing: ${marker}`);

@@ -869,6 +869,7 @@ async fn hydrate(
         help_requests: index_by_id(store.list_help_requests().await?, |value| value.id),
         quotes: index_by_id(store.list_quotes().await?, |value| value.id),
         bounties: index_by_id(store.list_bounties().await?, |value| value.id),
+        objectives: index_by_id(store.list_objectives().await?, |value| value.id),
         funding_intents: index_by_id(store.list_funding_intents().await?, |value| value.id),
         funding_contributions: index_by_id(store.list_funding_contributions().await?, |value| {
             value.id

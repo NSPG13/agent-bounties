@@ -46,6 +46,19 @@ a publisher name in this document.
 | `publish_autonomous_submission_evidence` | false | true | true | Upserts the public artifact and evidence preimages for a confirmed canonical submission. |
 | `list_autonomous_bounty_events` | true | false | false | Reads confirmed canonical lifecycle events without changing state. |
 
+## Output contract
+
+All ten tools declare an object `outputSchema`, and the MCP adapter validates
+each successful `structuredContent` result before returning it to the host.
+List results use stable object roots instead of bare arrays:
+
+- `list_unfunded_bounties` returns `{"bounties": [...]}`;
+- `list_autonomous_bounties` returns `{"bounties": [...]}`;
+- `list_autonomous_bounty_events` returns `{"events": [...]}`.
+
+If an upstream response drifts from its declared schema, the app returns a tool
+error rather than exposing malformed structured content to the conversation.
+
 ## Positive tests
 
 1. **Prepare a funded bounty**
@@ -102,7 +115,9 @@ actions remain bounded and user-reviewed.
 - Wait until the exact release revision is live, then select `Scan Tools`.
   Review all ten discovered names, descriptions, schemas, security schemes,
   annotations, `_meta` values, output structures, MCP instructions, linked UI
-  metadata, and widget CSP. Fix discrepancies in source and scan again.
+  metadata, and widget CSP. Confirm every tool has an object `outputSchema` and
+  that the three list tools use their documented object wrappers. Fix
+  discrepancies in source and scan again.
 - Audit representative production MCP responses against the privacy policy.
   Remove unnecessary personal data, authentication secrets, debug payloads,
   trace/session identifiers, and undisclosed user-related fields.

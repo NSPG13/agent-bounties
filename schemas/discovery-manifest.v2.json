@@ -147,7 +147,13 @@
         "autonomous_expire_claim_plan",
         "autonomous_expire_submission_plan",
         "autonomous_cancel_plan",
-        "autonomous_refund_withdrawal_plan"
+        "autonomous_refund_withdrawal_plan",
+        "objective_collection",
+        "objective_creation_plan",
+        "objective_action_plan",
+        "objective_action_apply",
+        "objective_reconcile",
+        "objective_coordination_guide"
       ],
       "additionalProperties": { "type": "string", "minLength": 1 }
     },

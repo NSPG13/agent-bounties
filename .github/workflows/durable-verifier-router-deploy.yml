@@ -1,4 +1,5 @@
 name: Durable verifier router deploy
+# Idempotent deployment retrigger: 2026-07-23
 
 on:
   pull_request:

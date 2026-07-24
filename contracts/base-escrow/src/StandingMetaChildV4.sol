@@ -23,7 +23,7 @@ contract StandingMetaChildV4 {
     uint256 public constant VERIFIER_REWARD = 10_000;
     uint256 public constant TARGET_AMOUNT = 1_000_000;
     uint64 public constant CLAIM_WINDOW = 7 days;
-    uint64 public constant VERIFICATION_WINDOW = 96 hours;
+    uint64 public constant VERIFICATION_WINDOW = 24 hours;
     uint8 public constant DETERMINISTIC_MODULE_MODE = 0;
     bytes32 public constant PROTOCOL_VERSION = keccak256("agent-bounties/standing-meta-child-v4");
 

@@ -2,14 +2,24 @@
   "schema": "agent-bounties/standing-meta-v4-deployment-readiness-v1",
   "protocol_version": "standing-meta-v4",
   "status": "not_deployed",
-  "last_revalidated_at": "2026-07-22",
+  "last_revalidated_at": "2026-07-23",
+  "latency_policy_status": "review_frozen",
+  "latency_policy_decision": "maximum_response_and_failure_bounds_with_immediate_success_paths_and_symmetric_human_appeals",
   "configuration": {
     "minimum_request_confirmations": 3,
     "random_words": 1,
     "payment": "native",
     "fulfillment_deadline_seconds": 7200,
-    "solver_assignment_seconds": 600,
-    "per_bounty_solver_enrollment_seconds": 0
+    "solver_assignment_seconds": 120,
+    "per_bounty_solver_enrollment_seconds": 0,
+    "stake_activation_seconds": 604800,
+    "stake_unbonding_seconds": 604800,
+    "primary_response_seconds": 1800,
+    "primary_ranked_backups": 3,
+    "appeal_filing_seconds": 14400,
+    "appeal_voting_seconds": 7200,
+    "bounty_verification_seconds": 86400,
+    "fast_path": "immediate_after_vrf_or_waiver_or_decisive_majority"
   },
   "required_components": [
     "anonymous_protocol_controller",
@@ -31,7 +41,9 @@
       "subscription_id": null,
       "consumers_authorized": false,
       "native_subscription_reserve_funded": false,
+      "minimum_native_subscription_reserve_wei": null,
       "gas_sponsorship_available": false,
+      "minimum_gas_sponsorship_reserve_wei": null,
       "sponsorship_intent": {
         "source_wallet": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
         "source_asset": "USDC",
@@ -59,7 +71,9 @@
       "subscription_id": null,
       "consumers_authorized": false,
       "native_subscription_reserve_funded": false,
+      "minimum_native_subscription_reserve_wei": null,
       "gas_sponsorship_available": false,
+      "minimum_gas_sponsorship_reserve_wei": null,
       "components": null
     }
   },
@@ -70,7 +84,8 @@
     "base_mainnet_fork_test_complete": true,
     "exact_bytecode_evidence_complete": false,
     "bounded_wallet_policy_review_complete": false,
-    "repository_environment_protection_complete": false
+    "repository_environment_protection_complete": false,
+    "repository_environment_partial_evidence": "docs/evidence/standing-meta-v4-repository-environments-2026-07-23.json"
   },
   "sources": [
     "https://docs.chain.link/vrf/v2-5/supported-networks",

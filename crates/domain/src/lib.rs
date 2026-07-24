@@ -5,6 +5,8 @@ use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+pub mod objective;
+pub use objective::*;
 mod leaderboard;
 
 pub use leaderboard::*;

@@ -1,0 +1,18 @@
+{
+  "name": "agent-bounties-mcp-post-widget",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild index.js --bundle --minify --format=iife --platform=browser --target=es2022 --legal-comments=inline --outfile=../../site/mcp-post-widget.bundle.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.11"
+  }
+}

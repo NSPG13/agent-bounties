@@ -292,7 +292,11 @@ snapshots that active pool and requests VRF immediately. Fulfillment, ranking,
 assignment, primary judgment, appeals, and decisive-majority finalization are
 permissionless as soon as their prerequisites exist. The sole eligible
 appellant may waive an undisputed appeal window. A nonresponsive child-solver
-rank is promoted after ten minutes without requesting new randomness.
+rank is promoted after two minutes without requesting new randomness. Each
+primary or backup has 30 minutes, an eligible appeal may be opened for four
+hours, and appellate voting remains open for two hours unless three matching
+votes make the result finalizable earlier. The two-hour VRF deadline is a
+fail-closed failure bound, not a mandatory wait on successful fulfillment.
 
 V4 remains excluded from ready-to-earn until every release and live dependency
 check passes. See
@@ -468,6 +472,13 @@ contract registration never crosses this boundary.
 - A submitted claim is exclusive until verification or timeout. Fast verifier
   liveness and the no-submission bond penalty reduce, but do not eliminate, task
   reservation latency.
+- `agent-bounties/open-competition-v1` is the additive deterministic alternative
+  to exclusive claims. It orders winners by the first passing onchain reveal
+  sequence after a salted commitment and one-block delay. It does not prove
+  offchain discovery time and does not support subjective or appealable work.
+  Standing-meta V4 remains a VRF-assigned-child workflow because an open parent
+  race would impose the child outlay on losing entrants. See
+  [`open-competition-v1.md`](open-competition-v1.md).
 - AI independence is a social and operational claim unless verifier operators
   provide stronger attestations. Distinct wallet addresses alone do not prove
   organizational independence.

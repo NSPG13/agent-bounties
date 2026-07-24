@@ -26,7 +26,10 @@ BASE_MAINNET_KEY_HASH = "0x00b81b5a830cb0a4009fbd8904de511e28631e62ce5ad231373d3
 BASE_SEPOLIA_KEY_HASH = "0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae5bf7d14d24a5efd44bf71"
 EXPECTED_KEEPER = "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
 BOUNDED_WALLET = "0x1eaa1c68772cf76bc5f4e4174766076e33ace662"
+EXPECTED_BOUNDED_WALLET_OWNER = "0x884834e884d6e93462655a2820140ad03e6747bc"
 MAINNET_SOURCE_USDC_CAP = 7_000_000
+VRF_REQUEST_CONFIRMATIONS = 3
+VRF_CALLBACK_GAS_LIMIT = 150_000
 EIP170_RUNTIME_LIMIT = 24_576
 EIP3860_INITCODE_LIMIT = 49_152
 SUBSCRIPTION_CREATED_EVENT = "SubscriptionCreated(uint256,address)"
@@ -45,6 +48,18 @@ COMPONENT_SPECS: tuple[tuple[str, str], ...] = (
     ("standing_meta_parent_factory", "src/StandingMetaParentFactoryV4.sol:StandingMetaParentFactoryV4"),
     ("standing_meta_v4_bundle", "src/StandingMetaV4Bundle.sol:StandingMetaV4Bundle"),
 )
+EXPECTED_CANONICAL_COMPONENTS = (
+    "anonymous_protocol_controller",
+    "anonymous_stake_pool",
+    "verifier_sortition",
+    "solver_sortition",
+    "appealable_verifier",
+    "standing_meta_child_factory",
+    "standing_meta_parent_factory",
+    "onchain_terms_registry",
+    "canonical_independent_child_verifier",
+    "standing_meta_v4_bundle",
+)
 REQUIRED_R4_GATES = (
     "independent_review_complete",
     "base_sepolia_rehearsal_complete",
@@ -52,6 +67,26 @@ REQUIRED_R4_GATES = (
     "exact_bytecode_evidence_complete",
     "bounded_wallet_policy_review_complete",
     "repository_environment_protection_complete",
+)
+EXPECTED_CONFIGURATION: dict[str, Any] = {
+    "minimum_request_confirmations": 3,
+    "random_words": 1,
+    "payment": "native",
+    "fulfillment_deadline_seconds": 7_200,
+    "solver_assignment_seconds": 120,
+    "per_bounty_solver_enrollment_seconds": 0,
+    "stake_activation_seconds": 604_800,
+    "stake_unbonding_seconds": 604_800,
+    "primary_response_seconds": 1_800,
+    "primary_ranked_backups": 3,
+    "appeal_filing_seconds": 14_400,
+    "appeal_voting_seconds": 7_200,
+    "bounty_verification_seconds": 86_400,
+    "fast_path": "immediate_after_vrf_or_waiver_or_decisive_majority",
+}
+EXPECTED_LATENCY_POLICY_STATUS = "review_frozen"
+EXPECTED_LATENCY_POLICY_DECISION = (
+    "maximum_response_and_failure_bounds_with_immediate_success_paths_and_symmetric_human_appeals"
 )
 
 
@@ -108,6 +143,15 @@ def parse_uint(value: object, label: str) -> int:
     return int(match.group(1), 0)
 
 
+def parse_bool(value: object, label: str) -> bool:
+    text = str(value).strip().lower()
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    raise DeploymentError(f"{label} is not a boolean")
+
+
 def load_object(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -118,6 +162,40 @@ def load_object(path: Path) -> dict[str, Any]:
 def write_object(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def validate_readiness_manifest(path: Path) -> dict[str, Any]:
+    readiness = load_object(path)
+    if readiness.get("schema") != "agent-bounties/standing-meta-v4-deployment-readiness-v1":
+        raise DeploymentError("standing-meta-v4 readiness schema mismatch")
+    if readiness.get("protocol_version") != "standing-meta-v4":
+        raise DeploymentError("standing-meta-v4 protocol version mismatch")
+    if readiness.get("latency_policy_status") != EXPECTED_LATENCY_POLICY_STATUS:
+        raise DeploymentError("standing-meta-v4 latency policy is not review-frozen")
+    if readiness.get("latency_policy_decision") != EXPECTED_LATENCY_POLICY_DECISION:
+        raise DeploymentError("standing-meta-v4 latency policy decision drift")
+    configuration = readiness.get("configuration")
+    if not isinstance(configuration, dict):
+        raise DeploymentError("standing-meta-v4 readiness configuration missing")
+    mismatches = [
+        name
+        for name, expected in EXPECTED_CONFIGURATION.items()
+        if configuration.get(name) != expected
+    ]
+    if mismatches:
+        raise DeploymentError(f"standing-meta-v4 latency configuration drift: {', '.join(mismatches)}")
+    required_components = readiness.get("required_components")
+    if (
+        not isinstance(required_components, list)
+        or len(required_components) != len(EXPECTED_CANONICAL_COMPONENTS)
+        or set(required_components) != set(EXPECTED_CANONICAL_COMPONENTS)
+    ):
+        raise DeploymentError("standing-meta-v4 required component schema drift")
+    mainnet = readiness.get("networks", {}).get("base-mainnet", {})
+    source_cap = mainnet.get("sponsorship_intent", {}).get("maximum_source_amount_base_units")
+    if source_cap != MAINNET_SOURCE_USDC_CAP:
+        raise DeploymentError("standing-meta-v4 mainnet source cap drift")
+    return readiness
 
 
 def network_config(chain_id: int) -> dict[str, Any]:
@@ -318,6 +396,46 @@ def parse_subscription(foundry: Foundry, coordinator: str, subscription_id: int)
     }
 
 
+def coordinator_configuration(foundry: Foundry, coordinator: str, key_hash: str) -> dict[str, Any]:
+    output = foundry.call(
+        coordinator,
+        "s_config()(uint16,uint32,bool,uint32,uint32,uint32,uint32,uint8,uint8)",
+    )
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(lines) != 9:
+        raise DeploymentError("VRF coordinator configuration returned an unexpected shape")
+    config = {
+        "minimum_request_confirmations": parse_uint(lines[0], "coordinator minimum confirmations"),
+        "maximum_callback_gas_limit": parse_uint(lines[1], "coordinator maximum callback gas"),
+        "reentrancy_lock": parse_bool(lines[2], "coordinator reentrancy lock"),
+        "feed_staleness_seconds": parse_uint(lines[3], "coordinator feed staleness"),
+        "gas_after_payment_calculation": parse_uint(lines[4], "coordinator post-payment gas"),
+        "native_flat_fee_ppm": parse_uint(lines[5], "coordinator native flat fee"),
+        "link_flat_fee_discount_ppm": parse_uint(lines[6], "coordinator LINK fee discount"),
+        "native_premium_percentage": parse_uint(lines[7], "coordinator native premium"),
+        "link_premium_percentage": parse_uint(lines[8], "coordinator LINK premium"),
+    }
+    proving_key_marker = normalize_address(
+        foundry.call(coordinator, "s_provingKeys(bytes32)(address)", key_hash),
+        "coordinator proving-key marker",
+    )
+    if config["reentrancy_lock"]:
+        raise DeploymentError("VRF coordinator reentrancy lock is active")
+    if config["minimum_request_confirmations"] > VRF_REQUEST_CONFIRMATIONS:
+        raise DeploymentError("VRF coordinator minimum confirmations exceed the immutable V4 request")
+    if config["maximum_callback_gas_limit"] < VRF_CALLBACK_GAS_LIMIT:
+        raise DeploymentError("VRF coordinator maximum callback gas is below the immutable V4 request")
+    if int(proving_key_marker, 16) == 0:
+        raise DeploymentError("pinned VRF key hash is not registered on the coordinator")
+    return {
+        **config,
+        "requested_confirmations": VRF_REQUEST_CONFIRMATIONS,
+        "requested_callback_gas_limit": VRF_CALLBACK_GAS_LIMIT,
+        "proving_key_registered": True,
+        "proving_key_marker": proving_key_marker,
+    }
+
+
 def artifact_evidence(foundry: Foundry) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
     specs = dict(COMPONENT_SPECS)
@@ -327,6 +445,7 @@ def artifact_evidence(foundry: Foundry) -> dict[str, Any]:
             "canonical_independent_child_verifier": (
                 "src/CanonicalIndependentChildVerifierV4.sol:CanonicalIndependentChildVerifierV4"
             ),
+            "onchain_terms_registry": "src/OnchainTermsRegistryV4.sol:OnchainTermsRegistryV4",
         }
     )
     for name, source in specs.items():
@@ -356,7 +475,7 @@ def build_plan(foundry: Foundry, readiness_path: Path) -> dict[str, Any]:
             raise DeploymentError(f"{label} has no runtime code at {config[label]}")
     if config["base_child_factory"] and foundry.code(config["base_child_factory"]) in {"0x", "0x0"}:
         raise DeploymentError("canonical mainnet child factory has no runtime code")
-    readiness = load_object(readiness_path)
+    readiness = validate_readiness_manifest(readiness_path)
     r4 = readiness.get("r4_evidence", {})
     r4_complete = all(r4.get(item) is True for item in REQUIRED_R4_GATES)
     return {
@@ -366,6 +485,9 @@ def build_plan(foundry: Foundry, readiness_path: Path) -> dict[str, Any]:
         "keeper_native_balance_wei": foundry.balance(EXPECTED_KEEPER),
         "bounded_wallet": BOUNDED_WALLET,
         "bounded_wallet_source_usdc_cap": MAINNET_SOURCE_USDC_CAP,
+        "coordinator_configuration": coordinator_configuration(
+            foundry, config["vrf_coordinator"], config["key_hash"]
+        ),
         "r4_gates": {item: r4.get(item) is True for item in REQUIRED_R4_GATES},
         "mainnet_deploy_allowed": chain_id != BASE_MAINNET_CHAIN_ID or r4_complete,
         "artifacts": artifact_evidence(foundry),
@@ -392,7 +514,7 @@ def checkpoint_base(config: Mapping[str, Any], deployer: str) -> dict[str, Any]:
 def require_mainnet_release_gate(readiness_path: Path, acknowledged: bool) -> None:
     if not acknowledged:
         raise DeploymentError("mainnet deployment requires --acknowledge-r4-release-gate")
-    r4 = load_object(readiness_path).get("r4_evidence", {})
+    r4 = validate_readiness_manifest(readiness_path).get("r4_evidence", {})
     gate_names = set(REQUIRED_R4_GATES)
     gate_names.update(name for name in r4 if name.endswith("_complete"))
     incomplete = [name for name in sorted(gate_names) if r4.get(name) is not True]
@@ -449,6 +571,7 @@ def deploy(
     acknowledge_mainnet: bool,
 ) -> dict[str, Any]:
     config = network_config(foundry.chain_id())
+    validate_readiness_manifest(readiness_path)
     if config["chain_id"] == BASE_MAINNET_CHAIN_ID:
         require_mainnet_release_gate(readiness_path, acknowledge_mainnet)
     private_key = os.environ.get("BASE_KEEPER_PRIVATE_KEY", "").strip()
@@ -565,6 +688,65 @@ def assert_call(foundry: Foundry, address: str, signature: str, expected: str, *
         raise DeploymentError(f"{address} {signature} mismatch: expected {expected}, got {observed}")
 
 
+def assert_uint_call(foundry: Foundry, address: str, signature: str, expected: int) -> None:
+    observed = parse_uint(foundry.call(address, signature), signature)
+    if observed != expected:
+        raise DeploymentError(f"{address} {signature} mismatch: expected {expected}, got {observed}")
+
+
+def canonical_component_addresses(foundry: Foundry, components: Mapping[str, Any]) -> dict[str, str]:
+    required_report_components = {
+        "controller",
+        "stake_pool",
+        "verifier_sortition",
+        "solver_sortition",
+        "appealable_verifier",
+        "standing_meta_child_factory",
+        "standing_meta_parent_factory",
+        "standing_meta_v4_bundle",
+    }
+    missing = sorted(required_report_components - components.keys())
+    if missing:
+        raise DeploymentError(f"canonical component derivation missing: {', '.join(missing)}")
+    addresses = {
+        "anonymous_protocol_controller": normalize_address(
+            components["controller"]["address"], "anonymous_protocol_controller"
+        ),
+        "anonymous_stake_pool": normalize_address(
+            components["stake_pool"]["address"], "anonymous_stake_pool"
+        ),
+        "verifier_sortition": normalize_address(
+            components["verifier_sortition"]["address"], "verifier_sortition"
+        ),
+        "solver_sortition": normalize_address(
+            components["solver_sortition"]["address"], "solver_sortition"
+        ),
+        "appealable_verifier": normalize_address(
+            components["appealable_verifier"]["address"], "appealable_verifier"
+        ),
+        "standing_meta_child_factory": normalize_address(
+            components["standing_meta_child_factory"]["address"], "standing_meta_child_factory"
+        ),
+        "standing_meta_parent_factory": normalize_address(
+            components["standing_meta_parent_factory"]["address"], "standing_meta_parent_factory"
+        ),
+        "standing_meta_v4_bundle": normalize_address(
+            components["standing_meta_v4_bundle"]["address"], "standing_meta_v4_bundle"
+        ),
+    }
+    parent_factory = addresses["standing_meta_parent_factory"]
+    addresses["onchain_terms_registry"] = normalize_address(
+        foundry.call(parent_factory, "termsRegistry()(address)"), "onchain_terms_registry"
+    )
+    addresses["canonical_independent_child_verifier"] = normalize_address(
+        foundry.call(parent_factory, "verifierModule()(address)"),
+        "canonical_independent_child_verifier",
+    )
+    if set(addresses) != set(EXPECTED_CANONICAL_COMPONENTS):
+        raise DeploymentError("derived canonical component schema drift")
+    return addresses
+
+
 def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, Any]:
     components = report.get("components")
     if not isinstance(components, dict):
@@ -587,6 +769,31 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
     base_factory = components["base_child_factory"]["address"]
     token = report["settlement_token"]
     sub_id = int(report["subscription_id"])
+    expected_network = network_config(foundry.chain_id())
+    if normalize_address(token, "settlement token") != expected_network["settlement_token"]:
+        raise DeploymentError("settlement token drift from pinned network configuration")
+    if normalize_address(report["vrf_coordinator"], "VRF coordinator") != expected_network["vrf_coordinator"]:
+        raise DeploymentError("VRF coordinator drift from pinned network configuration")
+    if require_bytes32(report["key_hash"], "VRF key hash") != expected_network["key_hash"]:
+        raise DeploymentError("VRF key hash drift from pinned network configuration")
+    if expected_network["base_child_factory"] and normalize_address(
+        base_factory, "base child factory"
+    ) != expected_network["base_child_factory"]:
+        raise DeploymentError("base child factory drift from pinned network configuration")
+    wait_for_code(foundry, normalize_address(token, "settlement token"), "settlement token")
+    wait_for_code(
+        foundry,
+        normalize_address(report["vrf_coordinator"], "VRF coordinator"),
+        "VRF coordinator",
+    )
+    coordinator_config = coordinator_configuration(
+        foundry, report["vrf_coordinator"], report["key_hash"]
+    )
+    canonical_components = canonical_component_addresses(foundry, components)
+    terms_registry = canonical_components["onchain_terms_registry"]
+    verifier_module = canonical_components["canonical_independent_child_verifier"]
+    for name, address in canonical_components.items():
+        wait_for_code(foundry, address, name)
 
     assert_call(foundry, base_factory, "settlementToken()(address)", token)
     assert_call(foundry, controller, "configured()(bool)", "true")
@@ -597,24 +804,62 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
     assert_call(foundry, controller, "standingMetaParentFactory()(address)", parent_factory)
     assert_call(foundry, pool, "settlementToken()(address)", token)
     assert_call(foundry, pool, "controller()(address)", controller)
+    assert_uint_call(foundry, pool, "ACTIVATION_DELAY()(uint64)", 604_800)
+    assert_uint_call(foundry, pool, "UNBONDING_DELAY()(uint64)", 604_800)
     for sortition in (verifier_sortition, solver_sortition):
         assert_call(foundry, sortition, "vrfCoordinator()(address)", report["vrf_coordinator"])
         assert_call(foundry, sortition, "controller()(address)", controller)
         if parse_uint(foundry.call(sortition, "subscriptionId()(uint256)"), "sortition subscription") != sub_id:
             raise DeploymentError("sortition subscription id drift")
         assert_call(foundry, sortition, "keyHash()(bytes32)", report["key_hash"])
+        assert_uint_call(
+            foundry,
+            sortition,
+            "REQUEST_CONFIRMATIONS()(uint16)",
+            VRF_REQUEST_CONFIRMATIONS,
+        )
+        assert_uint_call(foundry, sortition, "NUM_WORDS()(uint32)", 1)
+        assert_uint_call(foundry, sortition, "FULFILLMENT_DEADLINE()(uint64)", 7_200)
     assert_call(foundry, appeal, "settlementToken()(address)", token)
     assert_call(foundry, appeal, "controller()(address)", controller)
     assert_call(foundry, appeal, "sortition()(address)", verifier_sortition)
+    assert_uint_call(foundry, appeal, "RESPONSE_WINDOW()(uint64)", 1_800)
+    assert_uint_call(foundry, appeal, "APPEAL_WINDOW()(uint64)", 14_400)
+    assert_uint_call(foundry, appeal, "VOTING_WINDOW()(uint64)", 7_200)
+    assert_uint_call(foundry, appeal, "REQUIRED_BOUNTY_VERIFICATION_WINDOW()(uint64)", 86_400)
     assert_call(foundry, child_factory, "configured()(bool)", "true")
     assert_call(foundry, child_factory, "baseChildFactory()(address)", base_factory)
     assert_call(foundry, child_factory, "appealableVerifier()(address)", appeal)
     assert_call(foundry, child_factory, "parentFactory()(address)", parent_factory)
+    assert_uint_call(foundry, child_factory, "CHILD_VERIFICATION_WINDOW()(uint64)", 86_400)
     assert_call(foundry, parent_factory, "childFactory()(address)", base_factory)
     assert_call(foundry, parent_factory, "standingMetaChildFactory()(address)", child_factory)
     assert_call(foundry, parent_factory, "controller()(address)", controller)
     assert_call(foundry, parent_factory, "appealableVerifier()(address)", appeal)
+    assert_call(foundry, parent_factory, "termsRegistry()(address)", terms_registry)
+    assert_call(foundry, parent_factory, "verifierModule()(address)", verifier_module)
+    assert_uint_call(foundry, parent_factory, "ASSIGNMENT_WINDOW()(uint64)", 120)
+    assert_uint_call(foundry, parent_factory, "CHILD_VERIFICATION_WINDOW()(uint64)", 86_400)
+    assert_call(foundry, terms_registry, "publisherAuthority()(address)", parent_factory)
+    assert_call(foundry, verifier_module, "parentFactory()(address)", parent_factory)
+    assert_call(foundry, verifier_module, "canonicalChildFactory()(address)", child_factory)
+    assert_call(foundry, verifier_module, "settlementToken()(address)", token)
+    assert_call(foundry, verifier_module, "termsRegistry()(address)", terms_registry)
+    assert_call(foundry, verifier_module, "appealableVerifier()(address)", appeal)
+    assert_uint_call(foundry, verifier_module, "MINIMUM_CHILD_TARGET()(uint256)", 1_000_000)
+    assert_uint_call(foundry, verifier_module, "MINIMUM_PARENT_MARGIN()(uint256)", 1_000_000)
+    assert_uint_call(foundry, verifier_module, "CHILD_SOLVER_REWARD()(uint256)", 990_000)
+    assert_uint_call(foundry, verifier_module, "CHILD_VERIFIER_REWARD()(uint256)", 10_000)
+    assert_uint_call(foundry, verifier_module, "CHILD_WORK_WINDOW()(uint64)", 604_800)
+    assert_uint_call(foundry, verifier_module, "CHILD_VERIFICATION_WINDOW()(uint64)", 86_400)
+    assert_call(foundry, bundle, "childFactory()(address)", base_factory)
     assert_call(foundry, bundle, "controller()(address)", controller)
+    assert_call(foundry, bundle, "stakePool()(address)", pool)
+    assert_call(foundry, bundle, "verifierSortition()(address)", verifier_sortition)
+    assert_call(foundry, bundle, "solverSortition()(address)", solver_sortition)
+    assert_call(foundry, bundle, "appealableVerifier()(address)", appeal)
+    assert_call(foundry, bundle, "standingMetaChildFactory()(address)", child_factory)
+    assert_call(foundry, bundle, "parentFactory()(address)", parent_factory)
 
     subscription = parse_subscription(foundry, report["vrf_coordinator"], sub_id)
     if subscription["owner"] != report["deployer"]:
@@ -624,10 +869,22 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
         raise DeploymentError("subscription must authorize exactly the two V4 sortition coordinators")
     return {
         "rpc_confirmed": True,
+        "coordinator_configuration": coordinator_config,
         "subscription": subscription,
+        "canonical_component_addresses": canonical_components,
         "runtime_code_hashes": {
-            name: foundry.keccak_text(foundry.code(normalize_address(item["address"], name)))
-            for name, item in components.items()
+            name: foundry.keccak_text(foundry.code(address))
+            for name, address in canonical_components.items()
+        },
+        "dependency_addresses": {
+            "base_child_factory": normalize_address(base_factory, "base child factory"),
+            "settlement_token": normalize_address(token, "settlement token"),
+            "vrf_coordinator": normalize_address(report["vrf_coordinator"], "VRF coordinator"),
+        },
+        "dependency_runtime_code_hashes": {
+            "base_child_factory": foundry.keccak_text(foundry.code(base_factory)),
+            "settlement_token": foundry.keccak_text(foundry.code(token)),
+            "vrf_coordinator": foundry.keccak_text(foundry.code(report["vrf_coordinator"])),
         },
         "consumers_authorized": True,
         "native_subscription_reserve_funded": subscription["native_balance"] > 0,
@@ -654,9 +911,81 @@ def verify_mode(foundry: Foundry, deployment_path: Path, output: Path) -> dict[s
     return evidence
 
 
+def prepare_owner_withdrawal(
+    foundry: Foundry,
+    readiness_path: Path,
+    source_usdc_base_units: int,
+) -> dict[str, Any]:
+    readiness = validate_readiness_manifest(readiness_path)
+    if foundry.chain_id() != BASE_MAINNET_CHAIN_ID:
+        raise DeploymentError("bounded-wallet withdrawal preparation is Base mainnet only")
+    cap = readiness["networks"]["base-mainnet"]["sponsorship_intent"][
+        "maximum_source_amount_base_units"
+    ]
+    if source_usdc_base_units <= 0 or source_usdc_base_units > cap:
+        raise DeploymentError("bounded-wallet withdrawal amount must be positive and within the seven USDC cap")
+    for label, address in (("bounded wallet", BOUNDED_WALLET), ("native USDC", BASE_MAINNET_USDC)):
+        if foundry.code(address) in {"0x", "0x0"}:
+            raise DeploymentError(f"{label} has no runtime code")
+    owner = normalize_address(foundry.call(BOUNDED_WALLET, "owner()(address)"), "bounded-wallet owner")
+    if owner != EXPECTED_BOUNDED_WALLET_OWNER:
+        raise DeploymentError("bounded-wallet owner drift")
+    wallet_balance = parse_uint(
+        foundry.call(BASE_MAINNET_USDC, "balanceOf(address)(uint256)", BOUNDED_WALLET),
+        "bounded-wallet native-USDC balance",
+    )
+    if wallet_balance < source_usdc_base_units:
+        raise DeploymentError("bounded-wallet native-USDC balance is below the requested amount")
+    calldata = foundry.command(
+        "calldata",
+        "withdrawToken(address,address,uint256)",
+        BASE_MAINNET_USDC,
+        EXPECTED_KEEPER,
+        str(source_usdc_base_units),
+    ).strip().lower()
+    if not calldata.startswith("0x") or len(calldata) != 2 + 4 * 2 + 32 * 2 * 3:
+        raise DeploymentError("unexpected withdrawToken calldata")
+    block_number = parse_uint(foundry.rpc("block-number"), "observation block")
+    return {
+        "schema": "agent-bounties/standing-meta-v4-owner-withdrawal-request-v1",
+        "status": "unsigned_not_authorized",
+        "network": "base-mainnet",
+        "chain_id": BASE_MAINNET_CHAIN_ID,
+        "observed_block": block_number,
+        "bounded_wallet": BOUNDED_WALLET,
+        "wallet_owner": owner,
+        "token": BASE_MAINNET_USDC,
+        "recipient": EXPECTED_KEEPER,
+        "amount_base_units": source_usdc_base_units,
+        "maximum_approved_base_units": cap,
+        "wallet_balance_base_units": wallet_balance,
+        "runtime_code_hashes": {
+            "bounded_wallet": foundry.keccak_text(foundry.code(BOUNDED_WALLET)),
+            "native_usdc": foundry.keccak_text(foundry.code(BASE_MAINNET_USDC)),
+        },
+        "unsigned_transaction": {
+            "from": owner,
+            "to": BOUNDED_WALLET,
+            "chainId": BASE_MAINNET_CHAIN_ID,
+            "value": "0x0",
+            "data": calldata,
+        },
+        "ready_to_submit": False,
+        "required_confirmation": (
+            "The wallet owner must compare the chain, wallet, token, recipient, amount, and calldata in an "
+            "independent signer at action time. The signer supplies nonce, fees, and final approval without "
+            "exporting its private key."
+        ),
+        "evidence_boundary": (
+            "This is an unsigned read-only request. It moves no value and proves no authorization, withdrawal, "
+            "swap, VRF funding, deployment, settlement, or payment."
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("plan", "deploy", "verify"))
+    parser.add_argument("mode", choices=("plan", "deploy", "verify", "prepare-owner-withdrawal"))
     parser.add_argument("--network", choices=("base-mainnet", "base-sepolia"), required=True)
     parser.add_argument("--rpc-url")
     parser.add_argument("--forge", default=os.environ.get("FORGE_BIN", "forge"))
@@ -665,6 +994,7 @@ def main() -> int:
     parser.add_argument("--deployment", type=Path)
     parser.add_argument("--readiness", type=Path, default=Path("deployments/standing-meta-v4-config.json"))
     parser.add_argument("--acknowledge-r4-release-gate", action="store_true")
+    parser.add_argument("--source-usdc-base-units", type=int)
     args = parser.parse_args()
 
     repo = Path(__file__).resolve().parents[1]
@@ -680,10 +1010,17 @@ def main() -> int:
         write_object(args.output, result)
     elif args.mode == "deploy":
         result = deploy(foundry, args.output, readiness, args.acknowledge_r4_release_gate)
-    else:
+    elif args.mode == "verify":
         if args.deployment is None:
             raise DeploymentError("--deployment is required for verify mode")
         result = verify_mode(foundry, args.deployment, args.output)
+    else:
+        if args.network != "base-mainnet":
+            raise DeploymentError("prepare-owner-withdrawal requires --network base-mainnet")
+        if args.source_usdc_base_units is None:
+            raise DeploymentError("--source-usdc-base-units is required for prepare-owner-withdrawal")
+        result = prepare_owner_withdrawal(foundry, readiness, args.source_usdc_base_units)
+        write_object(args.output, result)
     print(
         json.dumps(
             {

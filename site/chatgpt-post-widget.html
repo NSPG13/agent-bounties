@@ -77,57 +77,6 @@
       <button id="continue" type="button" disabled>Review on Agent Bounties</button>
       <p id="status" class="fine">Waiting for the prepared handoff.</p>
     </article>
-    <script>
-      (() => {
-        "use strict";
-        let current = null;
-        const byId = (id) => document.getElementById(id);
-
-        function render(value) {
-          if (!value || typeof value !== "object") return;
-          current = value;
-          byId("title").textContent = value.title || "Review task";
-          byId("goal").textContent = value.goal || "No measurable objective was supplied.";
-          byId("criteria").replaceChildren(...(Array.isArray(value.acceptance_criteria)
-            ? value.acceptance_criteria.map((criterion) => {
-                const item = document.createElement("li");
-                item.textContent = String(criterion);
-                return item;
-              })
-            : []));
-          byId("solver").textContent = `${value.solver_reward_usdc || "—"} USDC`;
-          byId("verifier").textContent = `${value.verifier_reward_usdc || "—"} USDC`;
-          byId("window").textContent = `${value.task_window_days || 30} days`;
-          byId("initial").textContent = `${value.initial_funding_usdc ?? "—"} USDC`;
-          byId("continue").disabled = !value.post_url;
-          byId("status").textContent = value.crowdfund
-            ? "Unfunded posting selected: no USDC will be deposited now and no payment is promised yet."
-            : `Full funding is currently selected (${value.target_usdc || "—"} USDC). On the next page, choose “Post with 0 USDC now” to publish without committing a reward.`;
-        }
-
-        render(window.openai?.toolOutput);
-        window.addEventListener("openai:set_globals", (event) => {
-          render(event.detail?.globals?.toolOutput ?? window.openai?.toolOutput);
-        }, { passive: true });
-        window.addEventListener("message", (event) => {
-          if (event.source !== window.parent) return;
-          const message = event.data;
-          if (!message || message.jsonrpc !== "2.0") return;
-          if (message.method === "ui/notifications/tool-result") {
-            render(message.params?.structuredContent);
-          }
-        }, { passive: true });
-
-        byId("continue").addEventListener("click", async () => {
-          if (!current?.post_url) return;
-          byId("status").textContent = "Opening the secure wallet handoff…";
-          if (window.openai?.openExternal) {
-            await window.openai.openExternal({ href: current.post_url });
-          } else {
-            window.open(current.post_url, "_blank", "noopener,noreferrer");
-          }
-        });
-      })();
-    </script>
+    <!-- MCP_POST_WIDGET_SCRIPT -->
   </body>
 </html>

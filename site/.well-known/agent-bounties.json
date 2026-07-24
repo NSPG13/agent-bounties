@@ -109,7 +109,13 @@
     "autonomous_expire_claim_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/expire-claim-plan",
     "autonomous_expire_submission_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/expire-submission-plan",
     "autonomous_cancel_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/cancel-plan",
-    "autonomous_refund_withdrawal_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/refund-withdrawal-plan"
+    "autonomous_refund_withdrawal_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/refund-withdrawal-plan",
+    "objective_collection": "https://api.agentbounties.app/v1/objectives",
+    "objective_creation_plan": "https://api.agentbounties.app/v1/objectives/creation-plans",
+    "objective_action_plan": "https://api.agentbounties.app/v1/objectives/{objective_id}/action-plans",
+    "objective_action_apply": "https://api.agentbounties.app/v1/objectives/{objective_id}/actions",
+    "objective_reconcile": "https://api.agentbounties.app/v1/objectives/{objective_id}/reconcile",
+    "objective_coordination_guide": "https://github.com/NSPG13/agent-bounties/blob/main/docs/objective-coordination.md"
   },
   "agent_tools": [
     "publish_unfunded_bounty",
@@ -157,7 +163,14 @@
     "plan_autonomous_cancel",
     "plan_autonomous_refund_withdrawal",
     "list_autonomous_bounty_events",
-    "decode_autonomous_bounty_events"
+    "decode_autonomous_bounty_events",
+    "plan_objective_creation",
+    "create_objective",
+    "list_objectives",
+    "get_objective",
+    "plan_objective_action",
+    "apply_objective_action",
+    "reconcile_objective"
   ],
   "verification_modes": [
     {

@@ -9,7 +9,7 @@ use chain_base::{
     autonomous_bounty_create_from_terms, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_terms_record, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, fetch_transaction_receipt, keccak256_canonical_json,
-    verify_autonomous_factory_safe_state, AutonomousBountyCreationBatchPlan,
+    normalize_evm_address, verify_autonomous_factory_safe_state, AutonomousBountyCreationBatchPlan,
     AutonomousBountyCreationPlan, AutonomousBountyTxPlanner, AutonomousFactoryExpectedState,
     AutonomousFactorySafeObservation, BaseRpcUrlConfig, EvmTransactionIntent,
     AUTONOMOUS_BOUNTY_PROTOCOL_HASH, BASE_MAINNET_USDC_TOKEN_ADDRESS,
@@ -352,6 +352,26 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:8090")]
         mcp_base_url: String,
     },
+    OpenCompetitionReadiness {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        bounty_contract: String,
+    },
+    OpenCompetitionAction {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        bounty_contract: String,
+        #[arg(long)]
+        operation: String,
+        #[arg(long, default_value = "{}")]
+        arguments_json: String,
+    },
     StandingMetaV4Readiness {
         #[arg(long, default_value = "https://api.agentbounties.app")]
         api_base_url: String,
@@ -692,6 +712,24 @@ async fn async_main() -> Result<()> {
             public_base_url,
             mcp_base_url,
         } => discovery(public_base_url, mcp_base_url),
+        Command::OpenCompetitionReadiness {
+            api_base_url,
+            network,
+            bounty_contract,
+        } => open_competition_readiness_cli(api_base_url, network, bounty_contract),
+        Command::OpenCompetitionAction {
+            api_base_url,
+            network,
+            bounty_contract,
+            operation,
+            arguments_json,
+        } => open_competition_action_cli(
+            api_base_url,
+            network,
+            bounty_contract,
+            operation,
+            arguments_json,
+        ),
         Command::StandingMetaV4Readiness {
             api_base_url,
             network,
@@ -2065,6 +2103,62 @@ fn agent_paid_status(agent_id: Uuid, api_base_url: String) -> Result<()> {
     let api = normalize_base_url(&api_base_url);
     let status = get_json(&format!("{api}/v1/agents/{agent_id}/paid-status"))?;
     println!("{}", serde_json::to_string_pretty(&status)?);
+    Ok(())
+}
+
+fn open_competition_readiness_cli(
+    api_base_url: String,
+    network: String,
+    bounty_contract: String,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let bounty_contract = normalize_evm_address(&bounty_contract)?;
+    let api = normalize_base_url(&api_base_url);
+    let report = get_json(&format!(
+        "{api}/v1/base/open-competition-v1/readiness?network={network}&bounty_contract={bounty_contract}"
+    ))?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn open_competition_action_cli(
+    api_base_url: String,
+    network: String,
+    bounty_contract: String,
+    operation: String,
+    arguments_json: String,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let bounty_contract = normalize_evm_address(&bounty_contract)?;
+    let path = match operation.as_str() {
+        "prepare_open_competition_commit" => "commit-preparation",
+        "prepare_open_competition_reveal" => "reveal-preparation",
+        "get_open_competition_status" => "status",
+        "withdraw_open_competition_bond" => "bond-withdrawal-preparation",
+        _ => bail!("unknown Open Competition V1 operation"),
+    };
+    let arguments: serde_json::Value =
+        serde_json::from_str(&arguments_json).context("arguments_json must be valid JSON")?;
+    require(
+        arguments.is_object(),
+        "arguments_json must contain one JSON object",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let plan = post_json(
+        &format!("{api}/v1/base/open-competition-v1/{path}"),
+        serde_json::json!({
+            "network": network,
+            "bounty_contract": bounty_contract,
+            "arguments": arguments
+        }),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
     Ok(())
 }
 

@@ -39,6 +39,7 @@ cargo test -p db tests::claim_funnel_counts_direct_and_atomic_sponsored_confirma
 cargo test -p db tests::opportunity_lifecycle_query_executes_against_migrated_postgres -- --ignored --exact --nocapture
 cargo test -p db tests::site_analytics_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
 cargo test -p db tests::social_mention_ingestion_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
+cargo test -p db tests::competitor_intelligence_migration_executes_against_migrated_postgres -- --ignored --exact --nocapture
 cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
 cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
 cargo test -p api tests::github_issue_api_sync_postgres_rejects_stale_cross_process_activity -- --ignored --exact --nocapture

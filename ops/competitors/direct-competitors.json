@@ -1,0 +1,101 @@
+{
+  "schema_version": "agent-bounties/direct-competitor-registry-v1",
+  "inclusion_rule": "Include only an active or monitored platform that lets a poster offer a reward for externally completed work and lets another participant claim or submit that work. Exclude grant allocators, wallets, infrastructure, generic job boards, bounty aggregators, and specialist security-only programs unless they operate a broad bounty marketplace.",
+  "competitors": [
+    {
+      "slug": "agent-bounty",
+      "brand_name": "Agent Bounty",
+      "canonical_url": "https://agentbounty.org/",
+      "market_type": "agent_bounty",
+      "status": "active",
+      "direct_competitor_reason": "Markets AI-agent development bounties with posting, submission, and payout claims.",
+      "inclusion_evidence_url": "https://agentbounty.org/",
+      "links": {"website": ["https://agentbounty.org/"]},
+      "capabilities": [
+        {"key": "agent_bounty_marketplace", "description": "Lists AI-agent development bounties and lets sponsors post bounties.", "evidence_url": "https://agentbounty.org/"},
+        {"key": "leaderboard", "description": "Publishes bounty-hunter earnings and completed-bounty counts.", "evidence_url": "https://agentbounty.org/leaderboard"}
+      ],
+      "sources": [{"key": "marketplace", "url": "https://agentbounty.org/", "metrics": []}]
+    },
+    {
+      "slug": "algora",
+      "brand_name": "Algora",
+      "canonical_url": "https://algora.io/",
+      "market_type": "github_bounty",
+      "status": "active",
+      "direct_competitor_reason": "Creates and manages paid open-source bounties, claims, and solver rewards around GitHub work.",
+      "inclusion_evidence_url": "https://docs.algora.io/",
+      "links": {"website": ["https://algora.io/"], "repository": ["https://github.com/algora-io/algora"]},
+      "capabilities": [
+        {"key": "github_bounties", "description": "Offers bounty creation and lifecycle management for open-source contributors.", "evidence_url": "https://docs.algora.io/"},
+        {"key": "solver_claims", "description": "Exposes solver claim management and rewards.", "evidence_url": "https://docs.algora.io/"}
+      ],
+      "sources": [
+        {"key": "documentation", "url": "https://docs.algora.io/", "metrics": []},
+        {"key": "repository", "url": "https://api.github.com/repos/algora-io/algora", "metrics": ["github_stars", "github_forks", "github_open_issues", "github_pushed_at"]}
+      ]
+    },
+    {
+      "slug": "opire",
+      "brand_name": "Opire",
+      "canonical_url": "https://app.opire.dev/home",
+      "market_type": "github_bounty",
+      "status": "active",
+      "direct_competitor_reason": "Lets users create and fund rewards for open-source repository issues that developers solve.",
+      "inclusion_evidence_url": "https://app.opire.dev/home",
+      "links": {"website": ["https://app.opire.dev/home"], "repository": ["https://github.com/opire/website"], "x": ["https://x.com/opire_dev"], "discord": ["https://discord.gg/jWwwsHRbnJ"]},
+      "capabilities": [
+        {"key": "issue_rewards", "description": "Lists available and paid issue rewards with reward value and solver participation.", "evidence_url": "https://app.opire.dev/home"},
+        {"key": "pooled_funding", "description": "Allows more than one party to increase an issue reward pool.", "evidence_url": "https://github.com/opire"}
+      ],
+      "sources": [
+        {"key": "marketplace", "url": "https://app.opire.dev/home", "metrics": ["bounties_paid", "bounties_available", "paid_out_usd", "open_value_usd"]},
+        {"key": "repository", "url": "https://api.github.com/repos/opire/website", "metrics": ["github_stars", "github_forks", "github_open_issues", "github_pushed_at"]}
+      ]
+    },
+    {
+      "slug": "bountycaster",
+      "brand_name": "Bountycaster",
+      "canonical_url": "https://www.bountycaster.xyz/",
+      "market_type": "social_bounty",
+      "status": "active",
+      "direct_competitor_reason": "Indexes social bounty posts, lets participants submit work, and supports bounty completion and payment coordination.",
+      "inclusion_evidence_url": "https://www.bountycaster.xyz/faq",
+      "links": {"website": ["https://www.bountycaster.xyz/"], "farcaster": ["https://farcaster.xyz/bountybot"]},
+      "capabilities": [
+        {"key": "social_bounty_ingestion", "description": "Indexes bounty posts from Farcaster and X/Twitter.", "evidence_url": "https://www.bountycaster.xyz/faq"},
+        {"key": "bounty_management", "description": "Lets posters manage status, amount, deadline, and reviewed submissions.", "evidence_url": "https://www.bountycaster.xyz/faq"}
+      ],
+      "sources": [{"key": "marketplace", "url": "https://www.bountycaster.xyz/", "metrics": ["bounties_posted", "bounties_posted_usd"]}, {"key": "faq", "url": "https://www.bountycaster.xyz/faq", "metrics": []}]
+    },
+    {
+      "slug": "pump-go",
+      "brand_name": "Pump Go.fun",
+      "canonical_url": "https://pump.fun/go/bounties",
+      "market_type": "general_bounty",
+      "status": "active",
+      "direct_competitor_reason": "Provides user-posted, funded bounties and grants with submissions and payout handling.",
+      "inclusion_evidence_url": "https://pump.fun/docs/go-fun-terms",
+      "links": {"website": ["https://pump.fun/go/bounties"]},
+      "capabilities": [
+        {"key": "funded_bounties", "description": "Provides tools to post, fund, review, and participate in bounties.", "evidence_url": "https://pump.fun/docs/go-fun-terms"},
+        {"key": "solana_settlement", "description": "Describes bounty and grant transfers through Solana smart contracts.", "evidence_url": "https://pump.fun/docs/go-fun-terms"}
+      ],
+      "sources": [{"key": "terms", "url": "https://pump.fun/docs/go-fun-terms", "metrics": []}, {"key": "marketplace", "url": "https://pump.fun/go/bounties", "metrics": []}]
+    },
+    {
+      "slug": "clawtasks",
+      "brand_name": "ClawTasks",
+      "canonical_url": "https://clawtasks.com/",
+      "market_type": "agent_bounty",
+      "status": "monitoring",
+      "direct_competitor_reason": "Agent-oriented task market with task discovery, claiming, and bounty-payment framing; monitoring reflects its published wind-down messaging.",
+      "inclusion_evidence_url": "https://clawtasks.com/",
+      "links": {"website": ["https://clawtasks.com/"]},
+      "capabilities": [
+        {"key": "agent_task_marketplace", "description": "Provides agent-oriented task discovery and claiming guidance.", "evidence_url": "https://clawtasks.com/"}
+      ],
+      "sources": [{"key": "marketplace", "url": "https://clawtasks.com/", "metrics": []}]
+    }
+  ]
+}

@@ -1,10 +1,10 @@
 use app::{
-    build_live_money_readiness_report, AddFundingContributionRequest, ApproveRiskBountyRequest,
-    ApproveRiskPayoutRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
-    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanStripeTransferRequest,
-    PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest,
-    RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
+    build_live_money_readiness_report, build_objective_canonical_evidence,
+    AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
+    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, LiveMoneyReadinessConfig, OpenPooledBountyRequest,
+    PlanStripeTransferRequest, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
+    RejectRiskEventRequest, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
     extract::State,
@@ -34,8 +34,9 @@ use chrono::Utc;
 use db::PostgresStore;
 use domain::{
     Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass,
-    DiscoverySubscriptionFilters, EvalRun, HelpRequest, Money, PaymentRail, PayoutStatus,
-    PrivacyLevel,
+    DiscoverySubscriptionFilters, EvalRun, HelpRequest, Id, Money, Objective, ObjectiveAction,
+    ObjectiveCanonicalEvidence, ObjectiveCreationDraft, PaymentRail, PayoutStatus, PrivacyLevel,
+    SignedObjectiveAction, SignedObjectiveCreation,
 };
 use github_app::{
     bounty_check_output, claim_comment_plan, create_comment_plan, funding_comment_plan,
@@ -57,6 +58,7 @@ use service_runtime::{
 use service_runtime::{
     eval_run_from_loop_suite, eval_run_from_suite, LiveMoneyRuntimeSettings, PlannerAddressError,
 };
+use std::collections::BTreeSet;
 use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
@@ -217,6 +219,56 @@ tool_args! {
             "privacy": privacy_property()
         }),
         &["goal", "context", "budget_minor", "currency", "privacy"],
+    );
+}
+
+tool_args! {
+    struct PlanObjectiveCreationArgs {
+        draft: ObjectiveCreationDraft,
+    }
+    schema object_tool_schema(
+        json!({
+            "draft": object_property("Complete objective-v1 declaration with explicit participants, authority, beneficiaries, affected parties, resources, access, rights, privacy boundary, and requested verification policy.")
+        }),
+        &["draft"],
+    );
+}
+
+tool_args! {
+    struct ObjectiveIdArgs {
+        objective_id: Id,
+    }
+    schema object_tool_schema(
+        json!({"objective_id": uuid_property("Objective UUID.")}),
+        &["objective_id"],
+    );
+}
+
+tool_args! {
+    struct PlanObjectiveActionArgs {
+        objective_id: Id,
+        action: ObjectiveAction,
+    }
+    schema object_tool_schema(
+        json!({
+            "objective_id": uuid_property("Objective UUID."),
+            "action": object_property("Tagged objective-v1 action such as add_provider_proposal, accept_provider_proposal, offer_contribution, select_contribution_offer, submit_contribution, verify_contribution, submit_final_outcome, or verify_final_outcome.")
+        }),
+        &["objective_id", "action"],
+    );
+}
+
+tool_args! {
+    struct ApplyObjectiveActionArgs {
+        objective_id: Id,
+        signed_action: SignedObjectiveAction,
+    }
+    schema object_tool_schema(
+        json!({
+            "objective_id": uuid_property("Objective UUID."),
+            "signed_action": object_property("Exact action plan plus its EIP-191 wallet approvals.")
+        }),
+        &["objective_id", "signed_action"],
     );
 }
 
@@ -445,6 +497,41 @@ tool_args! {
             "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet.")
         }),
         &[],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct OpenCompetitionReadinessArgs {
+        network: Option<String>,
+        bounty_contract: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet."),
+            "bounty_contract": string_property("Canonical open-competition bounty address.")
+        }),
+        &["bounty_contract"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionActionArgs {
+        network: Option<String>,
+        bounty_contract: String,
+        #[serde(default)]
+        arguments: Value,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the competition."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "arguments": {
+                "type": "object",
+                "description": "Public commitment or reveal arguments only. Keep the reveal salt private until reveal; never include wallet secrets."
+            }
+        }),
+        &["bounty_contract", "arguments"],
     );
 }
 
@@ -1237,6 +1324,19 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/tools", get(tools))
         .route("/tools/route_blocked_goal", post(route_blocked_goal))
+        .route(
+            "/tools/plan_objective_creation",
+            post(plan_objective_creation),
+        )
+        .route("/tools/create_objective", post(create_objective))
+        .route("/tools/list_objectives", get(list_objectives))
+        .route("/tools/get_objective", post(get_objective))
+        .route("/tools/plan_objective_action", post(plan_objective_action))
+        .route(
+            "/tools/apply_objective_action",
+            post(apply_objective_action),
+        )
+        .route("/tools/reconcile_objective", post(reconcile_objective))
         .route("/tools/prepare_bounty_post", post(prepare_bounty_post))
         .route(
             "/tools/publish_unfunded_bounty",
@@ -1383,6 +1483,26 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/fund_bounty_with_x402", post(fund_bounty_with_x402))
         .route("/tools/get_x402_relay_status", post(get_x402_relay_status))
         .route("/tools/prepare_agent_to_earn", post(prepare_agent_to_earn))
+        .route(
+            "/tools/get_open_competition_readiness",
+            post(get_open_competition_readiness),
+        )
+        .route(
+            "/tools/prepare_open_competition_commit",
+            post(prepare_open_competition_commit),
+        )
+        .route(
+            "/tools/prepare_open_competition_reveal",
+            post(prepare_open_competition_reveal),
+        )
+        .route(
+            "/tools/get_open_competition_status",
+            post(get_open_competition_status),
+        )
+        .route(
+            "/tools/withdraw_open_competition_bond",
+            post(withdraw_open_competition_bond),
+        )
         .route(
             "/tools/get_standing_meta_v4_readiness",
             post(get_standing_meta_v4_readiness),
@@ -1592,6 +1712,47 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "route_blocked_goal",
             "Route a blocked agent goal into a template, quote, bounty, or verification step.",
             RouteBlockedGoalArgs::input_schema(),
+        ),
+        tool(
+            "plan_objective_creation",
+            "Validate an objective declaration and return the exact EIP-191 commitment the requesting party must sign. This plans no payment and creates no state.",
+            PlanObjectiveCreationArgs::input_schema(),
+        ),
+        tool(
+            "create_objective",
+            "Create one objective from an unchanged creation plan and a valid requesting-party wallet signature.",
+            object_tool_schema(
+                json!({
+                    "plan": object_property("Exact plan returned by plan_objective_creation."),
+                    "approvals": array_property(object_property("EIP-191 wallet approval with participant_id and signature."), "Requesting-party approvals.")
+                }),
+                &["plan", "approvals"],
+            ),
+        ),
+        tool(
+            "list_objectives",
+            "List coordinated objectives with explicit role records, dependency graphs, exact readiness blockers, and canonical payment evidence boundaries.",
+            empty_tool_schema(),
+        ),
+        tool(
+            "get_objective",
+            "Get one objective, its immutable accepted value bundle, contribution states, dependency graph, and next actions.",
+            ObjectiveIdArgs::input_schema(),
+        ),
+        tool(
+            "plan_objective_action",
+            "Validate one objective transition and return the revision-bound EIP-191 commitment and exact signer threshold. Actions keep offers, selection, submission, verification, in-kind value, and payment distinct.",
+            PlanObjectiveActionArgs::input_schema(),
+        ),
+        tool(
+            "apply_objective_action",
+            "Apply an unchanged revision-bound objective action after recovering the precommitted participant, authority, provider, contributor, or verifier wallet threshold.",
+            ApplyObjectiveActionArgs::input_schema(),
+        ),
+        tool(
+            "reconcile_objective",
+            "Permissionlessly refresh paid contribution and final completion states from indexed canonical BountySettled events. Plans, signatures, submissions, hosted rows, and raw verifier responses cannot prove payment.",
+            ObjectiveIdArgs::input_schema(),
         ),
         tool(
             "prepare_bounty_post",
@@ -2142,6 +2303,31 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &["network", "wallet_address", "bounty_contract", "signing_capabilities", "policy"],
             ),
+        ),
+        tool(
+            "get_open_competition_readiness",
+            "Fail closed unless canonical runtime, terms, funding, deterministic verification, timing, entry capacity, sponsorship, relay support, R4 evidence, and monitoring all pass.",
+            OpenCompetitionReadinessArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_commit",
+            "Prepare a commitment-bound entry bond. Generic agent_native_claim is forbidden because open competition has no exclusive claim.",
+            OpenCompetitionActionArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_reveal",
+            "Prepare the same wallet's later-block reveal. The first passing onchain reveal sequence wins; verifier response time does not order competitors.",
+            OpenCompetitionActionArgs::input_schema(),
+        ),
+        tool(
+            "get_open_competition_status",
+            "Read canonical competition, entry, reveal-sequence, winner, and settlement state.",
+            OpenCompetitionActionArgs::input_schema(),
+        ),
+        tool(
+            "withdraw_open_competition_bond",
+            "Prepare a pull withdrawal for a still-committed losing entry after canonical settlement.",
+            OpenCompetitionActionArgs::input_schema(),
         ),
         tool(
             "get_standing_meta_v4_readiness",
@@ -2778,6 +2964,149 @@ async fn route_blocked_goal(
         .collect::<Vec<_>>();
     let decision = BountyRouter::default().route_blocked_goal(&request, &capabilities);
     mcp_json(decision)
+}
+
+async fn plan_objective_creation(
+    Json(args): Json<PlanObjectiveCreationArgs>,
+) -> Json<serde_json::Value> {
+    match Objective::plan_creation(args.draft) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn create_objective(
+    State(state): State<SharedState>,
+    Json(args): Json<SignedObjectiveCreation>,
+) -> Json<serde_json::Value> {
+    let now = Utc::now();
+    let objective = match Objective::create(args, now) {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    if let Err(error) = persist_new_objective(&state, &objective).await {
+        return mcp_error(error);
+    }
+    match objective.view(&ObjectiveCanonicalEvidence::default(), now) {
+        Ok(view) => mcp_json(view),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn list_objectives(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let objectives = match load_objectives(&state).await {
+        Ok(objectives) => objectives,
+        Err(error) => return mcp_error(error),
+    };
+    let evidence = match load_objective_canonical_evidence(&state, &objectives).await {
+        Ok(evidence) => evidence,
+        Err(error) => return mcp_error(error),
+    };
+    let now = Utc::now();
+    let views = match objectives
+        .iter()
+        .map(|objective| objective.view(&evidence, now))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(views) => views,
+        Err(error) => return mcp_error(error),
+    };
+    mcp_json(views)
+}
+
+async fn get_objective(
+    State(state): State<SharedState>,
+    Json(args): Json<ObjectiveIdArgs>,
+) -> Json<serde_json::Value> {
+    let objective = match load_objective(&state, args.objective_id).await {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    let evidence =
+        match load_objective_canonical_evidence(&state, std::slice::from_ref(&objective)).await {
+            Ok(evidence) => evidence,
+            Err(error) => return mcp_error(error),
+        };
+    match objective.view(&evidence, Utc::now()) {
+        Ok(view) => mcp_json(view),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_objective_action(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanObjectiveActionArgs>,
+) -> Json<serde_json::Value> {
+    let objective = match load_objective(&state, args.objective_id).await {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    match objective.plan_action(args.action, Utc::now()) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn apply_objective_action(
+    State(state): State<SharedState>,
+    Json(args): Json<ApplyObjectiveActionArgs>,
+) -> Json<serde_json::Value> {
+    if args.signed_action.plan.objective_id != args.objective_id {
+        return mcp_error("signed action objective_id does not match the requested objective");
+    }
+    let mut objective = match load_objective(&state, args.objective_id).await {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    let expected_revision = objective.revision;
+    let evidence =
+        match load_objective_canonical_evidence(&state, std::slice::from_ref(&objective)).await {
+            Ok(evidence) => evidence,
+            Err(error) => return mcp_error(error),
+        };
+    let now = Utc::now();
+    if let Err(error) = objective.apply_action(args.signed_action, now, &evidence) {
+        return mcp_error(error);
+    }
+    if let Err(error) = persist_objective_replacement(&state, &objective, expected_revision).await {
+        return mcp_error(error);
+    }
+    match objective.view(&evidence, now) {
+        Ok(view) => mcp_json(view),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn reconcile_objective(
+    State(state): State<SharedState>,
+    Json(args): Json<ObjectiveIdArgs>,
+) -> Json<serde_json::Value> {
+    let mut objective = match load_objective(&state, args.objective_id).await {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    let expected_revision = objective.revision;
+    let evidence =
+        match load_objective_canonical_evidence(&state, std::slice::from_ref(&objective)).await {
+            Ok(evidence) => evidence,
+            Err(error) => return mcp_error(error),
+        };
+    let now = Utc::now();
+    match objective.reconcile_canonical_evidence(&evidence, now) {
+        Ok(true) => {
+            if let Err(error) =
+                persist_objective_replacement(&state, &objective, expected_revision).await
+            {
+                return mcp_error(error);
+            }
+        }
+        Ok(false) => {}
+        Err(error) => return mcp_error(error),
+    }
+    match objective.view(&evidence, now) {
+        Ok(view) => mcp_json(view),
+        Err(error) => mcp_error(error),
+    }
 }
 
 async fn prepare_bounty_post(Json(args): Json<PrepareBountyPostArgs>) -> Json<serde_json::Value> {
@@ -4037,6 +4366,66 @@ async fn prepare_agent_to_earn(
     .await
 }
 
+async fn get_open_competition_readiness(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionReadinessArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let url = format!(
+        "{}/v1/base/open-competition-v1/readiness?network={network}&bounty_contract={}",
+        public_base_url_from_env().trim_end_matches('/'),
+        args.bounty_contract
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().get(url),
+        "open-competition readiness API",
+    )
+    .await
+}
+
+async fn prepare_open_competition_commit(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("commit-preparation", args).await
+}
+
+async fn prepare_open_competition_reveal(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("reveal-preparation", args).await
+}
+
+async fn get_open_competition_status(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("status", args).await
+}
+
+async fn withdraw_open_competition_bond(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("bond-withdrawal-preparation", args).await
+}
+
+async fn proxy_open_competition_action(
+    path: &str,
+    args: OpenCompetitionActionArgs,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/open-competition-v1/{path}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().post(url).json(&args),
+        "open-competition action API",
+    )
+    .await
+}
+
 async fn get_standing_meta_v4_readiness(
     State(_state): State<SharedState>,
     Json(args): Json<StandingMetaV4ReadinessArgs>,
@@ -5087,7 +5476,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 101);
+        assert_eq!(descriptors.len(), 113);
         assert_eq!(
             descriptors
                 .iter()
@@ -5115,6 +5504,22 @@ mod tests {
                 "{} missing required array",
                 descriptor.name
             );
+        }
+
+        for objective_tool in [
+            "plan_objective_creation",
+            "create_objective",
+            "list_objectives",
+            "get_objective",
+            "plan_objective_action",
+            "apply_objective_action",
+            "reconcile_objective",
+        ] {
+            let descriptor = descriptors
+                .iter()
+                .find(|descriptor| descriptor.name == objective_tool)
+                .unwrap_or_else(|| panic!("{objective_tool} descriptor exists"));
+            assert!(descriptor.authorization.is_none());
         }
 
         let route = descriptors
@@ -6248,6 +6653,152 @@ mod tests {
 
 async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork> {
     service_runtime::hydrate_bounty_network(store).await
+}
+
+async fn load_objective(state: &SharedState, id: Id) -> Result<Objective, String> {
+    if let Some(store) = &state.store {
+        return store
+            .get_objective(id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("objective {id} was not found"));
+    }
+    state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("objective {id} was not found"))
+}
+
+async fn load_objectives(state: &SharedState) -> Result<Vec<Objective>, String> {
+    if let Some(store) = &state.store {
+        return store
+            .list_objectives()
+            .await
+            .map_err(|error| error.to_string());
+    }
+    let mut objectives = state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    objectives.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(objectives)
+}
+
+async fn persist_new_objective(state: &SharedState, objective: &Objective) -> Result<(), String> {
+    if let Some(store) = &state.store {
+        store
+            .create_objective(objective)
+            .await
+            .map_err(|error| error.to_string())?;
+    } else {
+        let mut network = state.network.lock().expect("state poisoned");
+        if network.objectives.contains_key(&objective.id) {
+            return Err(format!("objective {} already exists", objective.id));
+        }
+        network.objectives.insert(objective.id, objective.clone());
+        return Ok(());
+    }
+    state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .insert(objective.id, objective.clone());
+    Ok(())
+}
+
+async fn persist_objective_replacement(
+    state: &SharedState,
+    objective: &Objective,
+    expected_revision: u64,
+) -> Result<(), String> {
+    if let Some(store) = &state.store {
+        store
+            .replace_objective(objective, expected_revision)
+            .await
+            .map_err(|error| error.to_string())?;
+    } else {
+        let mut network = state.network.lock().expect("state poisoned");
+        let current_revision = network
+            .objectives
+            .get(&objective.id)
+            .map(|current| current.revision)
+            .ok_or_else(|| format!("objective {} was not found", objective.id))?;
+        if current_revision != expected_revision {
+            return Err(format!(
+                "objective {} revision conflict: expected {expected_revision}",
+                objective.id
+            ));
+        }
+        network.objectives.insert(objective.id, objective.clone());
+        return Ok(());
+    }
+    state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .insert(objective.id, objective.clone());
+    Ok(())
+}
+
+async fn load_objective_canonical_evidence(
+    state: &SharedState,
+    objectives: &[Objective],
+) -> Result<ObjectiveCanonicalEvidence, String> {
+    let Some(store) = &state.store else {
+        return Ok(ObjectiveCanonicalEvidence::default());
+    };
+    let mut networks = BTreeSet::new();
+    for objective in objectives {
+        let Some(bundle) = objective.accepted_value_bundle.as_ref() else {
+            continue;
+        };
+        if let Some(payment) = &bundle.monetary_payment {
+            networks.insert(payment.bounty.network.clone());
+        }
+        for need in &bundle.contribution_needs {
+            if let domain::ContributionCompensation::Paid { payment } = &need.compensation {
+                networks.insert(payment.bounty.network.clone());
+            }
+        }
+    }
+    if networks.is_empty() {
+        return Ok(ObjectiveCanonicalEvidence::default());
+    }
+    let terms = store
+        .list_autonomous_bounty_terms()
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut evidence = ObjectiveCanonicalEvidence::default();
+    for network in networks {
+        let events = store
+            .list_autonomous_bounty_events(&network)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
+            .map_err(|error| error.to_string())?;
+        state.recovery_reservations.apply(&mut feed, false);
+        let mut network_evidence = build_objective_canonical_evidence(&network, &feed);
+        evidence.funding.append(&mut network_evidence.funding);
+        evidence
+            .settlements
+            .append(&mut network_evidence.settlements);
+    }
+    Ok(evidence)
 }
 
 async fn persist_ledger_entries(

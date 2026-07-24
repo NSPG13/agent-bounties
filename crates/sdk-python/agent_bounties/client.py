@@ -306,6 +306,61 @@ class AgentBountiesClient:
             params={"network": network},
         )
 
+    def get_open_competition_readiness(
+        self, bounty_contract: str, network: str = "base-mainnet"
+    ):
+        """Return fail-closed first-valid competition readiness."""
+        return self._request(
+            "GET",
+            "/v1/base/open-competition-v1/readiness",
+            params={"network": network, "bounty_contract": bounty_contract},
+        )
+
+    def _open_competition_action(
+        self,
+        path: str,
+        bounty_contract: str,
+        arguments: dict,
+        network: str,
+    ):
+        return self._request(
+            "POST",
+            f"/v1/base/open-competition-v1/{path}",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "arguments": arguments,
+            },
+        )
+
+    def prepare_open_competition_commit(
+        self, bounty_contract: str, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._open_competition_action(
+            "commit-preparation", bounty_contract, arguments, network
+        )
+
+    def prepare_open_competition_reveal(
+        self, bounty_contract: str, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._open_competition_action(
+            "reveal-preparation", bounty_contract, arguments, network
+        )
+
+    def get_open_competition_status(
+        self, bounty_contract: str, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._open_competition_action(
+            "status", bounty_contract, arguments, network
+        )
+
+    def withdraw_open_competition_bond(
+        self, bounty_contract: str, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._open_competition_action(
+            "bond-withdrawal-preparation", bounty_contract, arguments, network
+        )
+
     def _standing_meta_v4_action(
         self,
         path: str,

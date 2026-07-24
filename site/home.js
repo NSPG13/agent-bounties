@@ -85,6 +85,9 @@
   }
 
   function actionLabel(item) {
+    if (item.competition_mode === "first_valid_submission" && item.work_state === "claimable") {
+      return "Inspect and compete";
+    }
     if (item.source_type === "canonical_base" && item.work_state === "claimable") {
       return "Inspect and claim";
     }
@@ -126,7 +129,8 @@
 
     const method = document.createElement("p");
     method.className = "fine opportunity-method";
-    method.textContent = `${item.verification_method} · next: ${item.next_action.action}`;
+    const competitionMode = item.competition_mode || "exclusive_claim";
+    method.textContent = `${competitionMode} · ${item.verification_method} · next: ${item.next_action.action}`;
 
     article.append(state, title, economics, goal, method);
 
@@ -145,7 +149,7 @@
       const margin = v4.economics?.successful_settlement_margin
         ? formatAmount(v4.economics.successful_settlement_margin)
         : "unknown margin";
-      meta.textContent = `Standing Meta V4: ${margin} successful-settlement onchain margin · claim-restricted V4 child · ${candidateCount} frozen anonymous candidates · immediate active-pool VRF draw · symmetric appeal with immediate waiver. Wallets may share an owner. Only BountySettled proves payment.`;
+      meta.textContent = `Standing Meta V4: ${margin} successful-settlement onchain margin · vrf_assigned_child mode, not an open race · claim-restricted V4 child · ${candidateCount} frozen anonymous candidates · immediate active-pool VRF draw · symmetric appeal with immediate waiver. An open parent race would make losing entrants pay the child outlay without a parent reward. Wallets may share an owner. Only BountySettled proves payment.`;
       article.append(meta);
     }
 
