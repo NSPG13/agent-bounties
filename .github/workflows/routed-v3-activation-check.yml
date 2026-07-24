@@ -37,6 +37,7 @@ jobs:
 
       - name: Router runtime exists
         run: |
+          mkdir -p target
           code="$(cast code "$ROUTER" --rpc-url "$BASE_MAINNET_RPC_URL")"
           test "$code" != "0x"
           test "$code" != "0x0"
