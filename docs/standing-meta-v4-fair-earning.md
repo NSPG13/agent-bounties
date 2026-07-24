@@ -82,7 +82,7 @@ Direct generic `agent_native_claim` must refuse a V4 parent and point to the ato
 Release work uses Foundry and JSON-RPC rather than a browser:
 
 ```text
-python scripts/standing_meta_v4_deploy.py plan --network base-sepolia --output target/v4-sepolia-plan.json
+python scripts/standing_meta_v4_deploy.py plan --network base-sepolia --require-clean --output target/v4-sepolia-plan.json
 python scripts/standing_meta_v4_deploy.py deploy --network base-sepolia --output target/v4-sepolia-deployment.json
 python scripts/standing_meta_v4_deploy.py verify --network base-sepolia --deployment target/v4-sepolia-deployment.json --output target/v4-sepolia-rpc.json
 ```

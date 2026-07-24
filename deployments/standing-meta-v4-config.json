@@ -91,6 +91,13 @@
   "r4_evidence": {
     "threat_model": "docs/security/standing-meta-v4-threat-model.md",
     "independent_review_complete": false,
+    "independent_review_evidence": {
+      "source_commit": null,
+      "reviewer_identity": null,
+      "review_url": null,
+      "report_sha256": null,
+      "findings_resolved_or_accepted": false
+    },
     "base_sepolia_rehearsal_complete": false,
     "base_mainnet_fork_test_complete": true,
     "exact_bytecode_evidence_complete": false,

@@ -61,7 +61,16 @@ def manifest() -> dict:
         "configuration": dict(MODULE.LATENCY_POLICY),
         "monitoring_policy": dict(MODULE.MONITORING_POLICY),
         "required_components": list(MODULE.EXPECTED_CANONICAL_COMPONENTS),
-        "r4_evidence": {name: False for name in MODULE.REQUIRED_R4_GATES},
+        "r4_evidence": {
+            **{name: False for name in MODULE.REQUIRED_R4_GATES},
+            "independent_review_evidence": {
+                "source_commit": None,
+                "reviewer_identity": None,
+                "review_url": None,
+                "report_sha256": None,
+                "findings_resolved_or_accepted": False,
+            },
+        },
         "networks": {"base-sepolia": dict(network), "base-mainnet": dict(network)},
     }
 
@@ -99,6 +108,26 @@ class StandingMetaV4ReleaseAuditTests(unittest.TestCase):
         self.assertEqual(result["latency_policy_mismatches"], {})
         self.assertIn("R4 gate incomplete: independent_review_complete", result["blockers"])
         self.assertIn("base-mainnet incomplete: subscription_id", result["blockers"])
+
+    def test_manifest_requires_commit_bound_independent_review_evidence(self) -> None:
+        value = manifest()
+        value["r4_evidence"]["independent_review_complete"] = True
+        result = MODULE.audit_manifest(value, None)
+        self.assertFalse(result["independent_review_evidence"]["complete"])
+        self.assertIn(
+            "independent review evidence incomplete: source_commit",
+            result["blockers"],
+        )
+
+        value["r4_evidence"]["independent_review_evidence"] = {
+            "source_commit": "12" * 20,
+            "reviewer_identity": "External Security Reviewer",
+            "review_url": "https://example.test/review/v4",
+            "report_sha256": "34" * 32,
+            "findings_resolved_or_accepted": True,
+        }
+        result = MODULE.audit_manifest(value, None)
+        self.assertTrue(result["independent_review_evidence"]["complete"])
 
     def test_manifest_audit_requires_exact_named_component_addresses(self) -> None:
         value = manifest()

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,8 @@ EIP3860_INITCODE_LIMIT = 49_152
 SUBSCRIPTION_CREATED_EVENT = "SubscriptionCreated(uint256,address)"
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
+GIT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 CAST_UINT_RE = re.compile(r"^(0x[0-9a-fA-F]+|[0-9]+)(?:\s|$)")
 CREATE_JSON_RE = re.compile(r"\{\s*\"deployer\".*?\}\s*$", re.DOTALL)
 
@@ -88,6 +91,13 @@ EXPECTED_LATENCY_POLICY_STATUS = "review_frozen"
 EXPECTED_LATENCY_POLICY_DECISION = (
     "maximum_response_and_failure_bounds_with_immediate_success_paths_and_symmetric_human_appeals"
 )
+EXPECTED_COMPILER_CONFIGURATION: dict[str, Any] = {
+    "solc_version": "0.8.26+commit.8a97fa7a",
+    "optimizer_enabled": True,
+    "optimizer_runs": 200,
+    "evm_version": "cancun",
+    "bytecode_hash": "ipfs",
+}
 EXPECTED_MONITORING_POLICY: dict[str, Any] = {
     "maximum_snapshot_age_seconds": 300,
     "maximum_rpc_head_difference_blocks": 5,
@@ -163,6 +173,15 @@ def parse_bool(value: object, label: str) -> bool:
     raise DeploymentError(f"{label} is not a boolean")
 
 
+def compiled_bytecode(value: object, label: str) -> str:
+    if not isinstance(value, dict):
+        raise DeploymentError(f"{label} is missing")
+    raw = str(value.get("object", "")).strip().removeprefix("0x")
+    if not raw or len(raw) % 2 or re.fullmatch(r"[0-9a-fA-F]+", raw) is None:
+        raise DeploymentError(f"{label} is not concrete even-length bytecode")
+    return "0x" + raw.lower()
+
+
 def load_object(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -173,6 +192,80 @@ def load_object(path: Path) -> dict[str, Any]:
 def write_object(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def content_sha256(value: Mapping[str, Any]) -> str:
+    canonical = dict(value)
+    canonical.pop("content_sha256", None)
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def source_revision_evidence(repo: Path, git: str) -> dict[str, Any]:
+    commit = run([git, "rev-parse", "HEAD"], cwd=repo).strip().lower()
+    if not GIT_COMMIT_RE.fullmatch(commit):
+        raise DeploymentError("git did not return an exact 40-character source commit")
+    status = run(
+        [git, "status", "--porcelain=v1", "--untracked-files=normal"],
+        cwd=repo,
+    )
+    return {"commit": commit, "clean": not bool(status.strip())}
+
+
+def readiness_manifest_evidence(
+    path: Path,
+    readiness: Mapping[str, Any],
+    repo: Path,
+) -> dict[str, Any]:
+    try:
+        repository_path = path.resolve().relative_to(repo.resolve()).as_posix()
+    except ValueError as error:
+        raise DeploymentError("readiness manifest must be inside the repository") from error
+    return {
+        "repository_path": repository_path,
+        "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "schema": readiness["schema"],
+        "latency_policy_status": readiness["latency_policy_status"],
+        "latency_policy_decision": readiness["latency_policy_decision"],
+        "configuration": dict(readiness["configuration"]),
+        "monitoring_policy": dict(readiness["monitoring_policy"]),
+    }
+
+
+def validated_independent_review_evidence(
+    readiness: Mapping[str, Any],
+    source_commit: str | None = None,
+) -> dict[str, Any]:
+    r4 = readiness.get("r4_evidence")
+    if not isinstance(r4, dict):
+        raise DeploymentError("standing-meta-v4 R4 evidence is missing")
+    evidence = r4.get("independent_review_evidence")
+    if not isinstance(evidence, dict):
+        raise DeploymentError("independent review evidence is missing")
+    reviewed_commit = str(evidence.get("source_commit") or "").lower()
+    reviewer_identity = str(evidence.get("reviewer_identity") or "").strip()
+    review_url = str(evidence.get("review_url") or "").strip()
+    report_sha256 = str(evidence.get("report_sha256") or "").lower()
+    findings_resolved = evidence.get("findings_resolved_or_accepted") is True
+    if not GIT_COMMIT_RE.fullmatch(reviewed_commit):
+        raise DeploymentError("independent review source commit is missing or invalid")
+    if not reviewer_identity or reviewer_identity.casefold() == "nspg13":
+        raise DeploymentError("independent reviewer identity is missing or is the maintainer")
+    if not review_url.startswith("https://"):
+        raise DeploymentError("independent review URL must use HTTPS")
+    if not SHA256_RE.fullmatch(report_sha256):
+        raise DeploymentError("independent review report SHA-256 is missing or invalid")
+    if not findings_resolved:
+        raise DeploymentError("independent review findings are not resolved or explicitly accepted")
+    if source_commit is not None and reviewed_commit != source_commit.lower():
+        raise DeploymentError("current source commit differs from the independently reviewed commit")
+    return {
+        "source_commit": reviewed_commit,
+        "reviewer_identity": reviewer_identity,
+        "review_url": review_url,
+        "report_sha256": report_sha256,
+        "findings_resolved_or_accepted": True,
+    }
 
 
 def validate_readiness_manifest(path: Path) -> dict[str, Any]:
@@ -242,6 +335,7 @@ class Foundry:
         self.rpc_url = rpc_url
         self.forge = forge
         self.cast = cast
+        self._artifacts_built = False
 
     def command(self, *args: str, timeout: int = 300) -> str:
         return run([self.cast, *args], cwd=self.repo, timeout=timeout)
@@ -406,6 +500,60 @@ class Foundry:
         creation = run([self.forge, "inspect", source, "bytecode"], cwd=self.contracts).strip()
         return self.keccak_text(creation)
 
+    def build_artifacts(self) -> None:
+        if self._artifacts_built:
+            return
+        run([self.forge, "build"], cwd=self.contracts, timeout=600)
+        self._artifacts_built = True
+
+    def artifact(self, source: str) -> dict[str, Any]:
+        source_path, separator, contract = source.partition(":")
+        if not separator or not source_path or not contract:
+            raise DeploymentError(f"invalid Foundry source identifier: {source}")
+        path = self.contracts / "out" / Path(source_path).name / f"{contract}.json"
+        if not path.is_file():
+            raise DeploymentError(f"compiled artifact is missing: {path}")
+        value = load_object(path)
+        return value
+
+    def compiler_evidence(self) -> dict[str, Any]:
+        self.build_artifacts()
+        metadata = self.artifact(COMPONENT_SPECS[0][1]).get("metadata")
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError as error:
+                raise DeploymentError("compiled artifact metadata is not JSON") from error
+        if not isinstance(metadata, dict):
+            raise DeploymentError("compiled artifact metadata is missing")
+        compiler = metadata.get("compiler")
+        settings = metadata.get("settings")
+        if not isinstance(compiler, dict) or not isinstance(settings, dict):
+            raise DeploymentError("compiler metadata is missing compiler or settings")
+        optimizer = settings.get("optimizer")
+        metadata_settings = settings.get("metadata")
+        if not isinstance(optimizer, dict) or not isinstance(metadata_settings, dict):
+            raise DeploymentError("compiler metadata is missing optimizer or metadata settings")
+        forge_version_lines = run([self.forge, "--version"], cwd=self.contracts).splitlines()
+        if not forge_version_lines or not forge_version_lines[0].strip():
+            raise DeploymentError("forge did not return a version")
+        evidence = {
+            "solc_version": compiler.get("version"),
+            "optimizer_enabled": optimizer.get("enabled"),
+            "optimizer_runs": optimizer.get("runs"),
+            "evm_version": settings.get("evmVersion"),
+            "bytecode_hash": metadata_settings.get("bytecodeHash"),
+            "forge_version": forge_version_lines[0].strip(),
+        }
+        mismatches = [
+            name
+            for name, expected in EXPECTED_COMPILER_CONFIGURATION.items()
+            if evidence.get(name) != expected
+        ]
+        if mismatches:
+            raise DeploymentError(f"standing-meta-v4 compiler configuration drift: {', '.join(mismatches)}")
+        return evidence
+
 
 def wait_for_code(foundry: Foundry, address: str, label: str, timeout_seconds: float = 90) -> None:
     deadline = time.monotonic() + timeout_seconds
@@ -455,11 +603,18 @@ def parse_subscription(foundry: Foundry, coordinator: str, subscription_id: int)
     }
 
 
-def coordinator_configuration(foundry: Foundry, coordinator: str, key_hash: str) -> dict[str, Any]:
-    output = foundry.call(
-        coordinator,
-        "s_config()(uint16,uint32,bool,uint32,uint32,uint32,uint32,uint8,uint8)",
-    )
+def coordinator_configuration(
+    foundry: Foundry,
+    coordinator: str,
+    key_hash: str,
+    block_number: int | None = None,
+) -> dict[str, Any]:
+    def read(signature: str, *args: str) -> str:
+        if block_number is None:
+            return foundry.call(coordinator, signature, *args)
+        return foundry.call_at(coordinator, signature, block_number, *args)
+
+    output = read("s_config()(uint16,uint32,bool,uint32,uint32,uint32,uint32,uint8,uint8)")
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     if len(lines) != 9:
         raise DeploymentError("VRF coordinator configuration returned an unexpected shape")
@@ -475,7 +630,7 @@ def coordinator_configuration(foundry: Foundry, coordinator: str, key_hash: str)
         "link_premium_percentage": parse_uint(lines[8], "coordinator LINK premium"),
     }
     proving_key_marker = normalize_address(
-        foundry.call(coordinator, "s_provingKeys(bytes32)(address)", key_hash),
+        read("s_provingKeys(bytes32)(address)", key_hash),
         "coordinator proving-key marker",
     )
     if config["reentrancy_lock"]:
@@ -497,6 +652,7 @@ def coordinator_configuration(foundry: Foundry, coordinator: str, key_hash: str)
 
 def artifact_evidence(foundry: Foundry) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
+    foundry.build_artifacts()
     specs = dict(COMPONENT_SPECS)
     specs.update(
         {
@@ -508,8 +664,13 @@ def artifact_evidence(foundry: Foundry) -> dict[str, Any]:
         }
     )
     for name, source in specs.items():
-        size = foundry.runtime_size(source)
-        creation_size = foundry.creation_size(source)
+        artifact = foundry.artifact(source)
+        creation = compiled_bytecode(artifact.get("bytecode"), f"{name} creation bytecode")
+        runtime = compiled_bytecode(
+            artifact.get("deployedBytecode"), f"{name} runtime bytecode"
+        )
+        size = (len(runtime) - 2) // 2
+        creation_size = (len(creation) - 2) // 2
         if size > EIP170_RUNTIME_LIMIT:
             raise DeploymentError(f"{name} runtime exceeds EIP-170: {size}")
         if creation_size > EIP3860_INITCODE_LIMIT:
@@ -517,16 +678,16 @@ def artifact_evidence(foundry: Foundry) -> dict[str, Any]:
         evidence[name] = {
             "source": source,
             "creation_size_bytes": creation_size,
-            "compiled_creation_hash": foundry.creation_hash(source),
+            "compiled_creation_hash": foundry.keccak_text(creation),
             "runtime_size_bytes": size,
             "runtime_margin_bytes": EIP170_RUNTIME_LIMIT - size,
             "initcode_margin_bytes": EIP3860_INITCODE_LIMIT - creation_size,
-            "compiled_runtime_hash": foundry.runtime_hash(source),
+            "compiled_runtime_hash": foundry.keccak_text(runtime),
         }
     return evidence
 
 
-def build_plan(foundry: Foundry, readiness_path: Path) -> dict[str, Any]:
+def build_plan(foundry: Foundry, readiness_path: Path, git: str = "git") -> dict[str, Any]:
     chain_id = foundry.chain_id()
     config = network_config(chain_id)
     for label in ("settlement_token", "vrf_coordinator"):
@@ -535,26 +696,47 @@ def build_plan(foundry: Foundry, readiness_path: Path) -> dict[str, Any]:
     if config["base_child_factory"] and foundry.code(config["base_child_factory"]) in {"0x", "0x0"}:
         raise DeploymentError("canonical mainnet child factory has no runtime code")
     readiness = validate_readiness_manifest(readiness_path)
+    source_revision = source_revision_evidence(foundry.repo, git)
+    compiler = foundry.compiler_evidence()
+    observation_block = foundry.block_number()
     r4 = readiness.get("r4_evidence", {})
     r4_complete = all(r4.get(item) is True for item in REQUIRED_R4_GATES)
-    return {
+    plan = {
         "schema": "agent-bounties/standing-meta-v4-deployment-plan-v1",
         **config,
+        "source_revision": source_revision,
+        "compiler": compiler,
+        "readiness_manifest": readiness_manifest_evidence(
+            readiness_path, readiness, foundry.repo
+        ),
+        "observed_block": observation_block,
+        "observed_block_timestamp": foundry.block_timestamp(observation_block),
         "expected_keeper": EXPECTED_KEEPER,
-        "keeper_native_balance_wei": foundry.balance(EXPECTED_KEEPER),
+        "keeper_native_balance_wei": foundry.balance_at(EXPECTED_KEEPER, observation_block),
         "bounded_wallet": BOUNDED_WALLET,
         "bounded_wallet_source_usdc_cap": MAINNET_SOURCE_USDC_CAP,
         "coordinator_configuration": coordinator_configuration(
-            foundry, config["vrf_coordinator"], config["key_hash"]
+            foundry, config["vrf_coordinator"], config["key_hash"], observation_block
         ),
         "r4_gates": {item: r4.get(item) is True for item in REQUIRED_R4_GATES},
-        "mainnet_deploy_allowed": chain_id != BASE_MAINNET_CHAIN_ID or r4_complete,
+        "release_candidate_clean": source_revision["clean"],
+        "selected_network_deploy_allowed": source_revision["clean"]
+        and (chain_id != BASE_MAINNET_CHAIN_ID or r4_complete),
+        "mainnet_deploy_allowed": chain_id == BASE_MAINNET_CHAIN_ID
+        and r4_complete
+        and source_revision["clean"],
         "artifacts": artifact_evidence(foundry),
         "evidence_boundary": "Read-only compiler and RPC evidence; not deployment, funding, rehearsal, readiness, or payment proof.",
     }
+    plan["content_sha256"] = content_sha256(plan)
+    return plan
 
 
-def checkpoint_base(config: Mapping[str, Any], deployer: str) -> dict[str, Any]:
+def checkpoint_base(
+    config: Mapping[str, Any],
+    deployer: str,
+    release_candidate: Mapping[str, Any],
+) -> dict[str, Any]:
     return {
         "schema": "agent-bounties/standing-meta-v4-deployment-v1",
         "network": config["network"],
@@ -563,6 +745,7 @@ def checkpoint_base(config: Mapping[str, Any], deployer: str) -> dict[str, Any]:
         "settlement_token": config["settlement_token"],
         "vrf_coordinator": config["vrf_coordinator"],
         "key_hash": config["key_hash"],
+        "release_candidate": dict(release_candidate),
         "subscription_id": None,
         "components": {},
         "transactions": [],
@@ -573,12 +756,14 @@ def checkpoint_base(config: Mapping[str, Any], deployer: str) -> dict[str, Any]:
 def require_mainnet_release_gate(readiness_path: Path, acknowledged: bool) -> None:
     if not acknowledged:
         raise DeploymentError("mainnet deployment requires --acknowledge-r4-release-gate")
-    r4 = validate_readiness_manifest(readiness_path).get("r4_evidence", {})
+    readiness = validate_readiness_manifest(readiness_path)
+    r4 = readiness.get("r4_evidence", {})
     gate_names = set(REQUIRED_R4_GATES)
     gate_names.update(name for name in r4 if name.endswith("_complete"))
     incomplete = [name for name in sorted(gate_names) if r4.get(name) is not True]
     if incomplete:
         raise DeploymentError(f"mainnet R4 gates are incomplete: {', '.join(incomplete)}")
+    validated_independent_review_evidence(readiness)
 
 
 def component_args(name: str, report: Mapping[str, Any]) -> list[str]:
@@ -628,11 +813,23 @@ def deploy(
     output: Path,
     readiness_path: Path,
     acknowledge_mainnet: bool,
+    git: str = "git",
 ) -> dict[str, Any]:
     config = network_config(foundry.chain_id())
-    validate_readiness_manifest(readiness_path)
+    readiness = validate_readiness_manifest(readiness_path)
+    source_revision = source_revision_evidence(foundry.repo, git)
+    if not source_revision["clean"]:
+        raise DeploymentError("deployment requires an exact clean source commit")
+    release_candidate = {
+        "source_revision": source_revision,
+        "compiler": foundry.compiler_evidence(),
+        "readiness_manifest": readiness_manifest_evidence(
+            readiness_path, readiness, foundry.repo
+        ),
+    }
     if config["chain_id"] == BASE_MAINNET_CHAIN_ID:
         require_mainnet_release_gate(readiness_path, acknowledge_mainnet)
+        validated_independent_review_evidence(readiness, source_revision["commit"])
     private_key = os.environ.get("BASE_KEEPER_PRIVATE_KEY", "").strip()
     if not private_key:
         raise DeploymentError("BASE_KEEPER_PRIVATE_KEY is required for deployment")
@@ -640,9 +837,15 @@ def deploy(
     if deployer != EXPECTED_KEEPER:
         raise DeploymentError(f"signer resolves to {deployer}, expected keeper {EXPECTED_KEEPER}")
 
-    report = load_object(output) if output.exists() else checkpoint_base(config, deployer)
+    report = (
+        load_object(output)
+        if output.exists()
+        else checkpoint_base(config, deployer, release_candidate)
+    )
     if report.get("chain_id") != config["chain_id"] or report.get("deployer") != deployer:
         raise DeploymentError("deployment checkpoint belongs to another network or deployer")
+    if report.get("release_candidate") != release_candidate:
+        raise DeploymentError("deployment checkpoint release candidate differs from the current source")
     components = report["components"]
 
     if config["base_child_factory"]:
@@ -1049,10 +1252,12 @@ def main() -> int:
     parser.add_argument("--rpc-url")
     parser.add_argument("--forge", default=os.environ.get("FORGE_BIN", "forge"))
     parser.add_argument("--cast", default=os.environ.get("CAST_BIN", "cast"))
+    parser.add_argument("--git", default=os.environ.get("GIT_BIN", "git"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--deployment", type=Path)
     parser.add_argument("--readiness", type=Path, default=Path("deployments/standing-meta-v4-config.json"))
     parser.add_argument("--acknowledge-r4-release-gate", action="store_true")
+    parser.add_argument("--require-clean", action="store_true")
     parser.add_argument("--source-usdc-base-units", type=int)
     args = parser.parse_args()
 
@@ -1065,10 +1270,18 @@ def main() -> int:
         raise DeploymentError("selected network does not match RPC chain id")
 
     if args.mode == "plan":
-        result = build_plan(foundry, readiness)
+        result = build_plan(foundry, readiness, args.git)
+        if args.require_clean and not result["release_candidate_clean"]:
+            raise DeploymentError("release plan requires an exact clean source commit")
         write_object(args.output, result)
     elif args.mode == "deploy":
-        result = deploy(foundry, args.output, readiness, args.acknowledge_r4_release_gate)
+        result = deploy(
+            foundry,
+            args.output,
+            readiness,
+            args.acknowledge_r4_release_gate,
+            args.git,
+        )
     elif args.mode == "verify":
         if args.deployment is None:
             raise DeploymentError("--deployment is required for verify mode")

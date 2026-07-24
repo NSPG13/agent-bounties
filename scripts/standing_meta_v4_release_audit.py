@@ -18,6 +18,8 @@ SCHEMA = "agent-bounties/standing-meta-v4-release-audit-v1"
 ENVIRONMENT_SCHEMA = "agent-bounties/standing-meta-v4-environment-evidence-v1"
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+GIT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 EXPECTED_REPOSITORY = "NSPG13/agent-bounties"
 READY_STATUS = "ready_to_earn"
 EXPECTED_LATENCY_POLICY_STATUS = "review_frozen"
@@ -95,6 +97,33 @@ def write_object(path: Path, value: Mapping[str, Any]) -> None:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def independent_review_status(r4: Mapping[str, Any]) -> dict[str, Any]:
+    evidence = r4.get("independent_review_evidence")
+    if not isinstance(evidence, Mapping):
+        evidence = {}
+    source_commit = str(evidence.get("source_commit") or "").lower()
+    reviewer_identity = str(evidence.get("reviewer_identity") or "").strip()
+    review_url = str(evidence.get("review_url") or "").strip()
+    report_sha256 = str(evidence.get("report_sha256") or "").lower()
+    checks = {
+        "gate_complete": r4.get("independent_review_complete") is True,
+        "source_commit": GIT_COMMIT_RE.fullmatch(source_commit) is not None,
+        "independent_reviewer_identity": bool(reviewer_identity)
+        and reviewer_identity.casefold() != "nspg13",
+        "https_review_url": review_url.startswith("https://"),
+        "report_sha256": SHA256_RE.fullmatch(report_sha256) is not None,
+        "findings_resolved_or_accepted": evidence.get("findings_resolved_or_accepted") is True,
+    }
+    return {
+        "complete": all(checks.values()),
+        "checks": checks,
+        "source_commit": source_commit or None,
+        "reviewer_identity": reviewer_identity or None,
+        "review_url": review_url or None,
+        "report_sha256": report_sha256 or None,
+    }
 
 
 def api_get(repository: str, path: str, token: str) -> Any:
@@ -243,6 +272,7 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
     if not isinstance(r4, dict):
         raise AuditError("manifest r4_evidence is missing")
     r4_gates = {name: r4.get(name) is True for name in REQUIRED_R4_GATES}
+    review_status = independent_review_status(r4)
     networks = manifest.get("networks")
     if not isinstance(networks, dict):
         raise AuditError("manifest networks are missing")
@@ -316,6 +346,11 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
     if not monitoring_policy_valid:
         blockers.append("monitoring policy drift")
     blockers.extend(f"R4 gate incomplete: {name}" for name, passed in r4_gates.items() if not passed)
+    blockers.extend(
+        f"independent review evidence incomplete: {name}"
+        for name, passed in review_status["checks"].items()
+        if not passed
+    )
     if not environment_complete:
         blockers.append("live protected-environment evidence is missing or incomplete")
     for network, value in network_checks.items():
@@ -331,6 +366,7 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
         and not latency_mismatches
         and monitoring_policy_valid
         and all(r4_gates.values())
+        and review_status["complete"]
         and environment_complete
         and network_checks["base-sepolia"]["complete"]
         and network_checks["base-mainnet"]["complete"]
@@ -352,6 +388,7 @@ def audit_manifest(manifest: Mapping[str, Any], environment_evidence: Mapping[st
         "monitoring_policy": MONITORING_POLICY,
         "monitoring_policy_valid": monitoring_policy_valid,
         "r4_gates": r4_gates,
+        "independent_review_evidence": review_status,
         "environment_evidence_complete": environment_complete,
         "network_readiness": network_checks,
         "ready_for_mainnet": ready_for_mainnet,

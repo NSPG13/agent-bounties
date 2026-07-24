@@ -72,6 +72,7 @@ and the evidence receives review.
 
    ```powershell
    python scripts/standing_meta_v4_deploy.py plan --network base-sepolia `
+     --require-clean `
      --output target/standing-meta-v4-base-sepolia-plan.json
    ```
 
@@ -79,7 +80,10 @@ and the evidence receives review.
    `s_provingKeys` entry. It fails before deployment when the coordinator's
    minimum confirmations exceed three, its callback-gas ceiling is below
    150,000, its reentrancy lock is active, or the pinned key hash is not
-   registered. An address and runtime-code check alone is insufficient.
+   registered. It also records the exact clean Git commit, solc and Forge
+   versions, optimizer/EVM/metadata settings, readiness-manifest SHA-256,
+   observation block, contract creation/runtime hashes, and a content hash over
+   the plan. An address and runtime-code check alone is insufficient.
 
 2. Fund the keeper with faucet Base Sepolia ETH from an option in the
    [official Base faucet directory](https://docs.base.org/base-chain/network-information/network-faucets).
@@ -158,6 +162,12 @@ VRF frozen sets and no-reroll behavior, the two-minute wake-up risk, primary and
 appeal timing, immutable wiring, consumer authorization, bytecode-size margins,
 the owner withdrawal cap, and incident containment. Resolve findings or record
 an explicit risk acceptance before setting `independent_review_complete=true`.
+The same manifest change must populate `independent_review_evidence` with the
+exact 40-character source commit, a non-maintainer reviewer identity, an HTTPS
+report URL, the report's SHA-256, and
+`findings_resolved_or_accepted=true`. A bare completion boolean fails the
+release audit. Mainnet deployment independently rejects a clean commit that is
+different from the recorded reviewed commit.
 
 Re-run the exact Base-mainnet fork at the reviewed commit. Record compiler
 version/settings, source hashes, creation/runtime bytecode hashes, constructor
@@ -171,7 +181,10 @@ invalidates this evidence.
 2. Deploy the reviewed component graph from protected `main`, then verify it
    through an independent RPC pass. The second pass must repeat the live
    coordinator-configuration and proving-key checks; a previously valid plan
-   cannot authorize deployment after coordinator drift.
+   cannot authorize deployment after coordinator drift. The deployment command
+   refuses a dirty checkout and stores the same commit/compiler/manifest tuple
+   in its checkpoint. A resume under any different tuple fails closed before
+   another transaction is sent.
 3. Generate an unsigned, live-RPC-validated withdrawal request without loading
    the owner key:
 
