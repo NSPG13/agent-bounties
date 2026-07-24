@@ -42,10 +42,10 @@ pub const SITE_ANALYTICS_MIGRATION: &str =
     include_str!("../../../migrations/0010_site_analytics.sql");
 pub const SOCIAL_MENTION_INGESTION_MIGRATION: &str =
     include_str!("../../../migrations/0011_social_mention_ingestion.sql");
-pub const COMPETITOR_INTELLIGENCE_MIGRATION: &str =
-    include_str!("../../../migrations/0012_competitor_intelligence.sql");
 pub const OBJECTIVE_COORDINATION_MIGRATION: &str =
     include_str!("../../../migrations/0013_objective_coordination.sql");
+pub const PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION: &str =
+    include_str!("../../../migrations/0014_remove_public_competitor_intelligence.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -723,8 +723,8 @@ impl PostgresStore {
                 LEGAL_ACCEPTANCES_MIGRATION,
                 SITE_ANALYTICS_MIGRATION,
                 SOCIAL_MENTION_INGESTION_MIGRATION,
-                COMPETITOR_INTELLIGENCE_MIGRATION,
                 OBJECTIVE_COORDINATION_MIGRATION,
+                PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -6299,8 +6299,8 @@ mod tests {
     }
 
     #[test]
-    fn competitor_intelligence_migration_is_evidence_bound_and_additive() {
-        for invariant in [
+    fn public_competitor_intelligence_cleanup_drops_only_retired_tables() {
+        for table in [
             "competitors",
             "competitor_links",
             "competitor_capabilities",
@@ -6308,29 +6308,17 @@ mod tests {
             "competitor_source_observations",
             "competitor_metric_observations",
             "competitor_intelligence_changes",
-            "content_sha256",
-            "source_changed",
-            "source_failed",
-            "CREATE TABLE IF NOT EXISTS",
         ] {
             assert!(
-                COMPETITOR_INTELLIGENCE_MIGRATION.contains(invariant),
-                "missing competitor intelligence invariant {invariant}"
+                PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION
+                    .contains(&format!("DROP TABLE IF EXISTS {table}")),
+                "cleanup must retire {table}"
             );
         }
-        for forbidden in [
-            "cookie TEXT",
-            "authorization TEXT",
-            "password TEXT",
-            "private_key TEXT",
-        ] {
-            assert!(
-                !COMPETITOR_INTELLIGENCE_MIGRATION
-                    .to_ascii_lowercase()
-                    .contains(forbidden),
-                "competitor intelligence must not persist {forbidden}"
-            );
-        }
+        assert!(
+            !PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION.contains("bounties"),
+            "cleanup must not affect platform bounty data"
+        );
     }
 
     #[test]
@@ -6568,21 +6556,6 @@ mod tests {
             .channels
             .iter()
             .any(|channel| channel.source == "postgres-test"));
-    }
-
-    #[tokio::test]
-    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
-    async fn competitor_intelligence_migration_executes_against_migrated_postgres() {
-        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
-        let store = PostgresStore::connect(&database_url).await.unwrap();
-        store.migrate().await.unwrap();
-        let table: Option<String> = sqlx::query_scalar(
-            "SELECT to_regclass('public.competitor_intelligence_changes')::text",
-        )
-        .fetch_one(&store.pool)
-        .await
-        .unwrap();
-        assert_eq!(table.as_deref(), Some("competitor_intelligence_changes"));
     }
 
     #[tokio::test]
