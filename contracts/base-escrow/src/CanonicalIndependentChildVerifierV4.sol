@@ -89,7 +89,7 @@ contract CanonicalIndependentChildVerifierV4 is IAgentBountyVerifier {
     uint256 public constant CHILD_SOLVER_REWARD = 990_000;
     uint256 public constant CHILD_VERIFIER_REWARD = 10_000;
     uint64 public constant CHILD_WORK_WINDOW = 7 days;
-    uint64 public constant CHILD_VERIFICATION_WINDOW = 96 hours;
+    uint64 public constant CHILD_VERIFICATION_WINDOW = 24 hours;
     uint8 public constant DETERMINISTIC_MODE = 0;
     uint8 public constant PARENT_SUBMITTED_STATUS = 3;
     uint8 public constant CHILD_SETTLED_STATUS = 4;

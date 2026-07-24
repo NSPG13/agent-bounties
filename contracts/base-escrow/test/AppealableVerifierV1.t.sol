@@ -162,7 +162,7 @@ contract AppealableVerifierV1Test {
         (bool early,) = address(bounty).call(abi.encodeCall(bounty.verifyAndSettle, (abi.encode(caseId))));
         require(!early, "bounty settled before appeal window");
 
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + verifier.APPEAL_WINDOW() + 1);
         verifier.finalizeUnappealed(caseId);
         bounty.verifyAndSettle(abi.encode(caseId));
         require(bounty.bountyStatus() == AgentBounty.BountyStatus.Settled, "bounty not settled");
@@ -265,7 +265,7 @@ contract AppealableVerifierV1Test {
     function testPrimaryAndAppealTimeoutsFailClosedAndUnlockRemainingStake() public {
         (AgentBounty bounty, bytes32 caseId) = _prepareCase(808);
         address firstPrimary = _primary(caseId);
-        vm.warp(block.timestamp + 4 hours + 1);
+        vm.warp(block.timestamp + verifier.RESPONSE_WINDOW() + 1);
         verifier.promotePrimary(caseId);
         address backup = _primary(caseId);
         require(backup != firstPrimary, "backup not promoted");
@@ -274,7 +274,7 @@ contract AppealableVerifierV1Test {
 
         AppealVerifierActor(backup).verdict(verifier, caseId, false, keccak256("backup-reject"));
         _openSolverAppeal(caseId, 909);
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + verifier.VOTING_WINDOW() + 1);
         verifier.finalizeAppeal(caseId);
         require(verifier.caseState(caseId) == AppealableVerifierV1.CaseState.TimedOut, "case did not time out");
         require(verifier.credits(address(solver)) == 100_000, "timed-out appeal bond not refunded");
@@ -325,7 +325,7 @@ contract AppealableVerifierV1Test {
             evidenceSchemaHash: keccak256("appealable-evidence-schema"),
             fundingDeadline: uint64(block.timestamp + 7 days),
             claimWindowSeconds: 14 days,
-            verificationWindowSeconds: 96 hours,
+            verificationWindowSeconds: verifier.REQUIRED_BOUNTY_VERIFICATION_WINDOW(),
             verificationMode: AgentBounty.VerificationMode.DeterministicModule,
             verifierModule: address(verifier),
             verifierRewardRecipient: address(verifier),

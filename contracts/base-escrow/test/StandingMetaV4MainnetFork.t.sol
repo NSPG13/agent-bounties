@@ -78,6 +78,11 @@ contract StandingMetaV4MainnetForkTest {
             address(parentFactory)
         );
         require(address(bundle.controller()) == address(controller), "bundle controller drift");
+        require(parentFactory.ASSIGNMENT_WINDOW() == 2 minutes, "assignment window drift");
+        require(parentFactory.CHILD_VERIFICATION_WINDOW() == 24 hours, "verification window drift");
+        require(appeal.RESPONSE_WINDOW() == 30 minutes, "response window drift");
+        require(appeal.APPEAL_WINDOW() == 4 hours, "appeal window drift");
+        require(appeal.VOTING_WINDOW() == 2 hours, "voting window drift");
 
         vrf.addConsumer(subscriptionId, address(verifierSortition));
         vrf.addConsumer(subscriptionId, address(solverSortition));

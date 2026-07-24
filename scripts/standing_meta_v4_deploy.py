@@ -53,6 +53,22 @@ REQUIRED_R4_GATES = (
     "bounded_wallet_policy_review_complete",
     "repository_environment_protection_complete",
 )
+EXPECTED_CONFIGURATION: dict[str, Any] = {
+    "minimum_request_confirmations": 3,
+    "random_words": 1,
+    "payment": "native",
+    "fulfillment_deadline_seconds": 7_200,
+    "solver_assignment_seconds": 120,
+    "per_bounty_solver_enrollment_seconds": 0,
+    "stake_activation_seconds": 604_800,
+    "stake_unbonding_seconds": 604_800,
+    "primary_response_seconds": 1_800,
+    "primary_ranked_backups": 3,
+    "appeal_filing_seconds": 14_400,
+    "appeal_voting_seconds": 7_200,
+    "bounty_verification_seconds": 86_400,
+    "fast_path": "immediate_after_vrf_or_waiver_or_decisive_majority",
+}
 
 
 class DeploymentError(RuntimeError):
@@ -118,6 +134,29 @@ def load_object(path: Path) -> dict[str, Any]:
 def write_object(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def validate_readiness_manifest(path: Path) -> dict[str, Any]:
+    readiness = load_object(path)
+    if readiness.get("schema") != "agent-bounties/standing-meta-v4-deployment-readiness-v1":
+        raise DeploymentError("standing-meta-v4 readiness schema mismatch")
+    if readiness.get("protocol_version") != "standing-meta-v4":
+        raise DeploymentError("standing-meta-v4 protocol version mismatch")
+    configuration = readiness.get("configuration")
+    if not isinstance(configuration, dict):
+        raise DeploymentError("standing-meta-v4 readiness configuration missing")
+    mismatches = [
+        name
+        for name, expected in EXPECTED_CONFIGURATION.items()
+        if configuration.get(name) != expected
+    ]
+    if mismatches:
+        raise DeploymentError(f"standing-meta-v4 latency configuration drift: {', '.join(mismatches)}")
+    mainnet = readiness.get("networks", {}).get("base-mainnet", {})
+    source_cap = mainnet.get("sponsorship_intent", {}).get("maximum_source_amount_base_units")
+    if source_cap != MAINNET_SOURCE_USDC_CAP:
+        raise DeploymentError("standing-meta-v4 mainnet source cap drift")
+    return readiness
 
 
 def network_config(chain_id: int) -> dict[str, Any]:
@@ -356,7 +395,7 @@ def build_plan(foundry: Foundry, readiness_path: Path) -> dict[str, Any]:
             raise DeploymentError(f"{label} has no runtime code at {config[label]}")
     if config["base_child_factory"] and foundry.code(config["base_child_factory"]) in {"0x", "0x0"}:
         raise DeploymentError("canonical mainnet child factory has no runtime code")
-    readiness = load_object(readiness_path)
+    readiness = validate_readiness_manifest(readiness_path)
     r4 = readiness.get("r4_evidence", {})
     r4_complete = all(r4.get(item) is True for item in REQUIRED_R4_GATES)
     return {
@@ -392,7 +431,7 @@ def checkpoint_base(config: Mapping[str, Any], deployer: str) -> dict[str, Any]:
 def require_mainnet_release_gate(readiness_path: Path, acknowledged: bool) -> None:
     if not acknowledged:
         raise DeploymentError("mainnet deployment requires --acknowledge-r4-release-gate")
-    r4 = load_object(readiness_path).get("r4_evidence", {})
+    r4 = validate_readiness_manifest(readiness_path).get("r4_evidence", {})
     gate_names = set(REQUIRED_R4_GATES)
     gate_names.update(name for name in r4 if name.endswith("_complete"))
     incomplete = [name for name in sorted(gate_names) if r4.get(name) is not True]
@@ -449,6 +488,7 @@ def deploy(
     acknowledge_mainnet: bool,
 ) -> dict[str, Any]:
     config = network_config(foundry.chain_id())
+    validate_readiness_manifest(readiness_path)
     if config["chain_id"] == BASE_MAINNET_CHAIN_ID:
         require_mainnet_release_gate(readiness_path, acknowledge_mainnet)
     private_key = os.environ.get("BASE_KEEPER_PRIVATE_KEY", "").strip()
@@ -565,6 +605,12 @@ def assert_call(foundry: Foundry, address: str, signature: str, expected: str, *
         raise DeploymentError(f"{address} {signature} mismatch: expected {expected}, got {observed}")
 
 
+def assert_uint_call(foundry: Foundry, address: str, signature: str, expected: int) -> None:
+    observed = parse_uint(foundry.call(address, signature), signature)
+    if observed != expected:
+        raise DeploymentError(f"{address} {signature} mismatch: expected {expected}, got {observed}")
+
+
 def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, Any]:
     components = report.get("components")
     if not isinstance(components, dict):
@@ -597,23 +643,39 @@ def verify_deployment(foundry: Foundry, report: Mapping[str, Any]) -> dict[str, 
     assert_call(foundry, controller, "standingMetaParentFactory()(address)", parent_factory)
     assert_call(foundry, pool, "settlementToken()(address)", token)
     assert_call(foundry, pool, "controller()(address)", controller)
+    assert_uint_call(foundry, pool, "ACTIVATION_DELAY()(uint64)", 604_800)
+    assert_uint_call(foundry, pool, "UNBONDING_DELAY()(uint64)", 604_800)
     for sortition in (verifier_sortition, solver_sortition):
         assert_call(foundry, sortition, "vrfCoordinator()(address)", report["vrf_coordinator"])
         assert_call(foundry, sortition, "controller()(address)", controller)
         if parse_uint(foundry.call(sortition, "subscriptionId()(uint256)"), "sortition subscription") != sub_id:
             raise DeploymentError("sortition subscription id drift")
         assert_call(foundry, sortition, "keyHash()(bytes32)", report["key_hash"])
+        assert_uint_call(foundry, sortition, "REQUEST_CONFIRMATIONS()(uint16)", 3)
+        assert_uint_call(foundry, sortition, "NUM_WORDS()(uint32)", 1)
+        assert_uint_call(foundry, sortition, "FULFILLMENT_DEADLINE()(uint64)", 7_200)
     assert_call(foundry, appeal, "settlementToken()(address)", token)
     assert_call(foundry, appeal, "controller()(address)", controller)
     assert_call(foundry, appeal, "sortition()(address)", verifier_sortition)
+    assert_uint_call(foundry, appeal, "RESPONSE_WINDOW()(uint64)", 1_800)
+    assert_uint_call(foundry, appeal, "APPEAL_WINDOW()(uint64)", 14_400)
+    assert_uint_call(foundry, appeal, "VOTING_WINDOW()(uint64)", 7_200)
+    assert_uint_call(foundry, appeal, "REQUIRED_BOUNTY_VERIFICATION_WINDOW()(uint64)", 86_400)
     assert_call(foundry, child_factory, "configured()(bool)", "true")
     assert_call(foundry, child_factory, "baseChildFactory()(address)", base_factory)
     assert_call(foundry, child_factory, "appealableVerifier()(address)", appeal)
     assert_call(foundry, child_factory, "parentFactory()(address)", parent_factory)
+    assert_uint_call(foundry, child_factory, "CHILD_VERIFICATION_WINDOW()(uint64)", 86_400)
     assert_call(foundry, parent_factory, "childFactory()(address)", base_factory)
     assert_call(foundry, parent_factory, "standingMetaChildFactory()(address)", child_factory)
     assert_call(foundry, parent_factory, "controller()(address)", controller)
     assert_call(foundry, parent_factory, "appealableVerifier()(address)", appeal)
+    assert_uint_call(foundry, parent_factory, "ASSIGNMENT_WINDOW()(uint64)", 120)
+    assert_uint_call(foundry, parent_factory, "CHILD_VERIFICATION_WINDOW()(uint64)", 86_400)
+    verifier_module = normalize_address(
+        foundry.call(parent_factory, "verifierModule()(address)"), "canonical independent child verifier"
+    )
+    assert_uint_call(foundry, verifier_module, "CHILD_VERIFICATION_WINDOW()(uint64)", 86_400)
     assert_call(foundry, bundle, "controller()(address)", controller)
 
     subscription = parse_subscription(foundry, report["vrf_coordinator"], sub_id)

@@ -1,0 +1,200 @@
+# Standing Meta V4 release and incident runbook
+
+This runbook covers the R4 path from reviewed source to one Base Sepolia
+rehearsal, one Base mainnet canary, and bounded expansion. It never treats a
+plan, source commit, workflow, signature, or transaction hash as deployment,
+funding, settlement, or payment evidence.
+
+## Immutable latency policy
+
+Successful paths proceed as soon as their prerequisite transaction is
+confirmed:
+
+| Control | Bound | Why it remains |
+| --- | ---: | --- |
+| Per-bounty solver enrollment | 0 | Active global tickets are snapshotted atomically |
+| Selected solver response | 2 minutes | Fast agent wake-up with bounded promotion |
+| VRF confirmations | 3 | Randomness security floor |
+| VRF failure deadline | 2 hours | Outage bound; successful fulfillment never waits |
+| Primary or backup response | 30 minutes each | Four ranked chances without a reroll |
+| Appeal filing | 4 hours | Symmetric solver/creator challenge opportunity |
+| Appeal voting | 2 hours | Three matching votes may finalize earlier |
+| Verification envelope | 24 hours | Covers the 12h10m worst-case case budget with margin |
+| Stake activation/unbonding | 7 days | One-time flash-ticket and exit control |
+
+The only eligible appellant can waive immediately. Three matching appellate
+votes are immediately decisive. Work windows are maxima; an early submission
+does not wait for them to expire.
+
+## Release authority
+
+- The keeper may deploy reviewed components and fund the exact existing VRF
+  subscription. It cannot withdraw the bounded wallet's USDC.
+- The bounded-wallet owner signs the exact capped `withdrawToken` call from the
+  manifest without exporting a private key.
+- Chainlink selects wallets from frozen sets. It does not judge work or
+  authorize payment.
+- The primary and appellate wallets judge the committed submission policy.
+- `AgentBounty` alone settles or rejects after the final verifier state.
+- Only confirmed canonical `BountySettled` proves solver payment.
+
+## Repository environment gate
+
+Both `standing-meta-v4-sepolia` and `standing-meta-v4-mainnet` must have:
+
+- exactly one deployment branch policy: `main`;
+- administrator bypass disabled;
+- at least one required user reviewer other than the maintainer author; and
+- self-review prevention enabled.
+
+Generate the read-back evidence with an admin-scoped token kept outside source:
+
+```powershell
+$env:GH_TOKEN = gh auth token
+python scripts/standing_meta_v4_release_audit.py github-environments `
+  --output target/standing-meta-v4-environments.json `
+  --require-complete
+Remove-Item Env:GH_TOKEN
+```
+
+The audit fails while an independent reviewer is absent. Do not set
+`repository_environment_protection_complete=true` until this read-back passes
+and the evidence receives review.
+
+## Base Sepolia rehearsal
+
+1. Run the deterministic plans and record the exact revision:
+
+   ```powershell
+   python scripts/standing_meta_v4_deploy.py plan --network base-sepolia `
+     --output target/standing-meta-v4-base-sepolia-plan.json
+   ```
+
+2. Fund the keeper with faucet Base Sepolia ETH from an option in the
+   [official Base faucet directory](https://docs.base.org/base-chain/network-information/network-faucets).
+   The Coinbase Developer Platform option supports agent-native SDK claims when
+   an operator has configured its API credentials. Record the faucet source,
+   transaction, confirmed balance, and observation block. Faucet ETH is test
+   value and never mainnet sponsorship evidence.
+3. Acquire canonical Base Sepolia test USDC for at least eight verifier stakes,
+   three solver stakes, canary escrows, claim bonds, and appeal bonds. The role
+   stake floor alone is 55 test USDC. Record the source and balances.
+4. Dispatch `deploy-consumers` from `main` through the protected Sepolia
+   environment. The deployment creates one subscription and authorizes the two
+   distinct sortition consumers, but does not fund it.
+5. Read the deployment artifact and independently run `verify` through a second
+   RPC endpoint. Confirm code hashes, constructor arguments, immutable getters,
+   controller one-time configuration, subscription owner, and the exact two
+   consumers.
+6. Dispatch `fund-subscription` with `source_usdc_base_units=0` and the exact
+   faucet ETH allocation. Confirm the native subscription balance delta through
+   RPC.
+7. Register eight verifier and three solver role tickets. Wait the immutable
+   seven-day activation once, activate them, and confirm availability.
+8. Execute and record: immediate waiver, upheld appeal, overturned appeal,
+   primary timeout/promotion, appeal timeout, cancellation, contributor pull
+   refund, child settlement, parent settlement, and first-valid open competition
+   settlement. Testnet events are rehearsal evidence only.
+
+The rehearsal is complete only when a content-addressed evidence bundle maps
+every path to confirmed receipts, code/runtime hashes, configuration reads,
+balances, and canonical events.
+
+The deployment manifest may use intermediate descriptive states while evidence
+is being assembled. Set its exact status to `ready_to_earn` only after both
+network evidence sections contain the exact required component set, every
+address and reserve has been read back, and all R4 gates are complete. The
+release audit rejects any other status.
+
+## Independent review and mainnet authorization
+
+The independent reviewer examines USDC conservation, stake locking/slashing,
+VRF frozen sets and no-reroll behavior, the two-minute wake-up risk, primary and
+appeal timing, immutable wiring, consumer authorization, bytecode-size margins,
+the owner withdrawal cap, and incident containment. Resolve findings or record
+an explicit risk acceptance before setting `independent_review_complete=true`.
+
+Re-run the exact Base-mainnet fork at the reviewed commit. Record compiler
+version/settings, source hashes, creation/runtime bytecode hashes, constructor
+arguments, and expected immutable getter values. A later source change
+invalidates this evidence.
+
+## Mainnet funding and deployment
+
+1. Confirm every R4 evidence flag and environment read-back. The release
+   acknowledgement does not replace those facts.
+2. Deploy the reviewed component graph from protected `main`, then verify it
+   through an independent RPC pass.
+3. The bounded-wallet owner reviews and signs only the manifest's exact
+   `withdrawToken(nativeUSDC, keeper, amount)` calldata. The amount must be
+   positive and no more than 7,000,000 micro-USDC. Confirm `TokenWithdrawn`, the
+   native-USDC `Transfer`, the wallet debit, and the keeper credit.
+4. Convert no more than that received amount through a separately reviewed
+   Base swap route with explicit minimum ETH output, deadline, recipient,
+   allowance, and slippage cap. Confirm the USDC debit and ETH credit. Revoke a
+   residual allowance when the route requires approval.
+5. Create the mainnet subscription, authorize exactly the verifier and solver
+   sortition consumers, and fund the exact native ETH amount. Confirm owner,
+   native balance, request count, and consumer set through RPC.
+6. Record positive minimum subscription and keeper gas reserves in the manifest.
+   A boolean without an explicit positive reserve threshold is not readiness.
+
+No private key, recovery phrase, raw signature, private RPC credential, or
+swap-session secret belongs in an artifact, issue, workflow log, or prompt.
+
+## Canary and expansion
+
+Deploy one low-value standing-meta V4 parent and one low-value Open Competition
+V1 bounty. Keep both out of ready-to-earn until runtime, terms, funding, timing,
+pool, sponsorship, VRF, appeal, and monitoring checks pass.
+
+For the V4 canary, prove child assignment, child claim, primary verdict, optional
+appeal, child `BountySettled`, deterministic parent predicate, and parent
+`BountySettled`. Verify the exact 1 USDC successful-settlement onchain margin;
+do not call it net profit. For open competition, prove the one-block
+commit/reveal separation, first passing reveal sequence, losing-bond withdrawal,
+and canonical settlement.
+
+Expand only after the canary settles. Legacy V2 cancellation/refund remains a
+separate owner action; confirm `BountyCancelled` and each `RefundWithdrawn`
+before repointing public issues to funded, claimable replacements.
+
+## Monitoring and stop conditions
+
+Suppress new earning immediately when any of these is false or stale:
+
+- exact runtime hashes and immutable wiring;
+- VRF subscription owner, exact two consumers, and native balance at or above
+  the configured minimum;
+- keeper gas reserve at or above the configured minimum;
+- eight available verifier tickets and three eligible solver tickets after
+  exclusions;
+- callback latency below the two-hour failure deadline;
+- an executable primary, appeal, timeout, and stake-unlock path;
+- valid terms, funded canary economics, safe work/verification timing, and
+  canonical indexer freshness.
+
+Track assignment response time, rank promotions, primary responses, appeals,
+overturns, timeouts, slashes, settlement margin, failed reveals, competition
+capacity, and canonical settlement events. Never auto-top-up, withdraw, swap,
+deploy, judge, settle, cancel, or refund in response to an alert.
+
+## Incident and forward repair
+
+1. Suppress affected opportunities from earning and verification jobs while
+   retaining their canonical history.
+2. Capture the safe block, runtime hashes, subscription state, pool counts,
+   request/case IDs, deadlines, and redacted logs.
+3. Classify false funding/payment, unexpected value movement, signer exposure,
+   runtime mismatch, or canonical-event corruption as SEV0.
+4. Do not reroll failed VRF requests or substitute platform randomness. Let the
+   affected round fail closed and refund/unlock according to the contracts.
+5. Immutable defects use cancellation where authorized, contributor pull
+   refunds, and migration to a separately reviewed version. Application code
+   may roll back; chain history cannot.
+6. Add a deterministic regression fixture and update the threat model/runbook
+   before resuming earning.
+
+An incident is closed only after the triggering invariant is restored, all
+canonical balances/events reconcile, monitoring is green for the canary, and
+the same review class authorizes removal of containment.

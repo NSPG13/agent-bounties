@@ -282,7 +282,7 @@ contract StandingMetaV4Test {
         child;
         address[] memory ranking = parentFactory.solverRanking(address(parent), parent.round());
         uint256 requestId = vrf.nextRequestId() - 1;
-        vm.warp(block.timestamp + 10 minutes + 1);
+        vm.warp(block.timestamp + parentFactory.ASSIGNMENT_WINDOW() + 1);
         parentFactory.promoteNonresponsiveChildSolver(address(parent));
         address[] memory promotedRanking = parentFactory.solverRanking(address(parent), parent.round());
         (,, uint8 rank,) = parentFactory.roundTiming(address(parent), parent.round());
@@ -308,6 +308,11 @@ contract StandingMetaV4Test {
         );
         require(address(bundle.parentFactory().termsRegistry()) != address(0), "terms registry missing");
         require(bundle.stakePool().MINIMUM_VERIFIER_TICKETS() == 8, "pool minimum drift");
+        require(bundle.parentFactory().ASSIGNMENT_WINDOW() == 2 minutes, "assignment window drift");
+        require(bundle.parentFactory().CHILD_VERIFICATION_WINDOW() == 24 hours, "child verification window drift");
+        require(appealableVerifier.RESPONSE_WINDOW() == 30 minutes, "primary response window drift");
+        require(appealableVerifier.APPEAL_WINDOW() == 4 hours, "appeal filing window drift");
+        require(appealableVerifier.VOTING_WINDOW() == 2 hours, "appeal voting window drift");
     }
 
     function testRejectedChildPromotesNextRankWithoutRerollOrEscrowLoss() public {
@@ -386,7 +391,7 @@ contract StandingMetaV4Test {
             evidenceSchemaHash: CHILD_EVIDENCE_SCHEMA_HASH,
             fundingDeadline: uint64(block.timestamp + 7 days),
             claimWindowSeconds: 7 days,
-            verificationWindowSeconds: 96 hours,
+            verificationWindowSeconds: parentFactory.CHILD_VERIFICATION_WINDOW(),
             verificationMode: AgentBounty.VerificationMode.DeterministicModule,
             verifierModule: address(appealableVerifier),
             verifierRewardRecipient: address(appealableVerifier),
@@ -429,7 +434,7 @@ contract StandingMetaV4Test {
             appealPolicyHash: appealableVerifier.appealPolicyHash(),
             selectionRequestedAt: selectionRequestedAt,
             childClaimWindowSeconds: 7 days,
-            childVerificationWindowSeconds: 96 hours,
+            childVerificationWindowSeconds: parentFactory.CHILD_VERIFICATION_WINDOW(),
             childFundingTarget: 1_000_000,
             childSolverReward: 990_000,
             childVerifierReward: 10_000

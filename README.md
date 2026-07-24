@@ -249,6 +249,7 @@ Domain routing and migration: [docs/domain-portfolio.md](docs/domain-portfolio.m
 - Open Competition V1: [docs/open-competition-v1.md](docs/open-competition-v1.md)
 - Open Competition V1 threat model: [docs/security/open-competition-v1-threat-model.md](docs/security/open-competition-v1-threat-model.md)
 - Standing Meta V4 fair earning: [docs/standing-meta-v4-fair-earning.md](docs/standing-meta-v4-fair-earning.md)
+- Standing Meta V4 release runbook: [docs/standing-meta-v4-release-runbook.md](docs/standing-meta-v4-release-runbook.md)
 - Standing Meta V4 threat model: [docs/security/standing-meta-v4-threat-model.md](docs/security/standing-meta-v4-threat-model.md)
 - License: [Apache-2.0](LICENSE)
 

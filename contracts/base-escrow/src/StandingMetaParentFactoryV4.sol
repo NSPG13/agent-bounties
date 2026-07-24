@@ -64,9 +64,9 @@ contract StandingMetaParentFactoryV4 {
     uint256 public constant CHILD_TARGET = 1_000_000;
     uint256 public constant CHILD_SOLVER_REWARD = 990_000;
     uint256 public constant CHILD_VERIFIER_REWARD = 10_000;
-    uint64 public constant ASSIGNMENT_WINDOW = 10 minutes;
+    uint64 public constant ASSIGNMENT_WINDOW = 2 minutes;
     uint64 public constant CHILD_WORK_WINDOW = 7 days;
-    uint64 public constant CHILD_VERIFICATION_WINDOW = 96 hours;
+    uint64 public constant CHILD_VERIFICATION_WINDOW = 24 hours;
     uint8 public constant MINIMUM_CHILD_SOLVER_CANDIDATES = 3;
     uint8 public constant DETERMINISTIC_MODE = 0;
     uint8 public constant CLAIMABLE_STATUS = 1;

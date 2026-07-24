@@ -22,6 +22,21 @@ class FakeSubscriptionFoundry:
 
 
 class StandingMetaV4DeployTests(unittest.TestCase):
+    def readiness(self, r4_evidence: dict[str, bool]) -> dict:
+        return {
+            "schema": "agent-bounties/standing-meta-v4-deployment-readiness-v1",
+            "protocol_version": "standing-meta-v4",
+            "configuration": dict(MODULE.EXPECTED_CONFIGURATION),
+            "networks": {
+                "base-mainnet": {
+                    "sponsorship_intent": {
+                        "maximum_source_amount_base_units": MODULE.MAINNET_SOURCE_USDC_CAP
+                    }
+                }
+            },
+            "r4_evidence": r4_evidence,
+        }
+
     def test_release_errors_redact_signer_and_rpc_credentials(self) -> None:
         rendered = MODULE.redacted_command(
             [
@@ -53,6 +68,16 @@ class StandingMetaV4DeployTests(unittest.TestCase):
         self.assertEqual(MODULE.EIP3860_INITCODE_LIMIT, 49_152)
         self.assertEqual(MODULE.BOUNDED_WALLET, "0x1eaa1c68772cf76bc5f4e4174766076e33ace662")
 
+    def test_latency_policy_is_fast_and_fail_closed(self) -> None:
+        self.assertEqual(MODULE.EXPECTED_CONFIGURATION["per_bounty_solver_enrollment_seconds"], 0)
+        self.assertEqual(MODULE.EXPECTED_CONFIGURATION["solver_assignment_seconds"], 120)
+        self.assertEqual(MODULE.EXPECTED_CONFIGURATION["primary_response_seconds"], 1_800)
+        self.assertEqual(MODULE.EXPECTED_CONFIGURATION["appeal_filing_seconds"], 14_400)
+        self.assertEqual(MODULE.EXPECTED_CONFIGURATION["appeal_voting_seconds"], 7_200)
+        self.assertEqual(MODULE.EXPECTED_CONFIGURATION["bounty_verification_seconds"], 86_400)
+        self.assertEqual(MODULE.EXPECTED_CONFIGURATION["minimum_request_confirmations"], 3)
+        self.assertEqual(MODULE.EXPECTED_CONFIGURATION["fulfillment_deadline_seconds"], 7_200)
+
     def test_subscription_event_parser_requires_one_matching_log(self) -> None:
         foundry = FakeSubscriptionFoundry()
         coordinator = MODULE.BASE_MAINNET_VRF
@@ -74,13 +99,13 @@ class StandingMetaV4DeployTests(unittest.TestCase):
             path = Path(directory) / "readiness.json"
             MODULE.write_object(
                 path,
-                {
-                    "r4_evidence": {
+                self.readiness(
+                    {
                         "independent_review_complete": False,
                         "base_sepolia_rehearsal_complete": False,
                         "base_mainnet_fork_test_complete": True,
                     }
-                },
+                ),
             )
             with self.assertRaises(MODULE.DeploymentError):
                 MODULE.require_mainnet_release_gate(path, True)
@@ -89,13 +114,13 @@ class StandingMetaV4DeployTests(unittest.TestCase):
 
             MODULE.write_object(
                 path,
-                {
-                    "r4_evidence": {
+                self.readiness(
+                    {
                         name: True
                         for name in MODULE.REQUIRED_R4_GATES
                         if name != "repository_environment_protection_complete"
                     }
-                },
+                ),
             )
             with self.assertRaisesRegex(MODULE.DeploymentError, "repository_environment_protection_complete"):
                 MODULE.require_mainnet_release_gate(path, True)

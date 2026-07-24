@@ -88,10 +88,10 @@ contract AppealableVerifierV1 is IAgentBountyVerifier {
     uint256 public constant APPEAL_BOND = 100_000;
     uint256 public constant PRIMARY_SLASH_LOCK = 100_000;
     uint256 public constant AVAILABILITY_SLASH = 10_000;
-    uint64 public constant RESPONSE_WINDOW = 4 hours;
-    uint64 public constant APPEAL_WINDOW = 24 hours;
-    uint64 public constant VOTING_WINDOW = 24 hours;
-    uint64 public constant REQUIRED_BOUNTY_VERIFICATION_WINDOW = 96 hours;
+    uint64 public constant RESPONSE_WINDOW = 30 minutes;
+    uint64 public constant APPEAL_WINDOW = 4 hours;
+    uint64 public constant VOTING_WINDOW = 2 hours;
+    uint64 public constant REQUIRED_BOUNTY_VERIFICATION_WINDOW = 24 hours;
     uint64 public constant VRF_FULFILLMENT_WINDOW = 2 hours;
     uint64 public constant CASE_COMPLETION_BUFFER = 10 minutes;
     uint64 public constant MINIMUM_CASE_REMAINING = VRF_FULFILLMENT_WINDOW + uint64(PRIMARY_RANKING_SIZE)

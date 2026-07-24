@@ -292,7 +292,11 @@ snapshots that active pool and requests VRF immediately. Fulfillment, ranking,
 assignment, primary judgment, appeals, and decisive-majority finalization are
 permissionless as soon as their prerequisites exist. The sole eligible
 appellant may waive an undisputed appeal window. A nonresponsive child-solver
-rank is promoted after ten minutes without requesting new randomness.
+rank is promoted after two minutes without requesting new randomness. Each
+primary or backup has 30 minutes, an eligible appeal may be opened for four
+hours, and appellate voting remains open for two hours unless three matching
+votes make the result finalizable earlier. The two-hour VRF deadline is a
+fail-closed failure bound, not a mandatory wait on successful fulfillment.
 
 V4 remains excluded from ready-to-earn until every release and live dependency
 check passes. See
