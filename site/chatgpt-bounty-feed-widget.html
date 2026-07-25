@@ -1,0 +1,1563 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="Browse and act on live Agent Bounties inside ChatGPT.">
+    <title>Agent Bounties live quest feed</title>
+    <style>
+      :root {
+        --night: #020b08;
+        --night-soft: #07140f;
+        --panel: #091710;
+        --panel-raised: #102219;
+        --line: rgba(185, 239, 55, .24);
+        --line-strong: rgba(206, 255, 72, .58);
+        --lime: #b9ef37;
+        --lime-bright: #ceff48;
+        --mint: #18d9ac;
+        --gold: #e8bd26;
+        --text: #f6f7ef;
+        --muted: #b9c0b8;
+        --danger: #ff756f;
+        --shadow: 0 22px 60px rgba(0, 0, 0, .34);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; background: transparent; color: var(--text); }
+      body {
+        padding: 12px;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      button, input, textarea, select { font: inherit; }
+      button, a { -webkit-tap-highlight-color: transparent; }
+      button { cursor: pointer; }
+      button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+        outline: 2px solid var(--lime-bright);
+        outline-offset: 2px;
+      }
+      [hidden] { display: none !important; }
+
+      .shell {
+        position: relative;
+        overflow: hidden;
+        max-width: 920px;
+        margin: 0 auto;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background:
+          radial-gradient(circle at 86% -8%, rgba(24, 217, 172, .14), transparent 34%),
+          radial-gradient(circle at 8% 8%, rgba(185, 239, 55, .1), transparent 30%),
+          linear-gradient(180deg, rgba(9, 23, 16, .98), rgba(2, 11, 8, .99));
+        box-shadow: var(--shadow);
+      }
+      .shell::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        opacity: .18;
+        background-image:
+          linear-gradient(rgba(206, 255, 72, .05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(206, 255, 72, .05) 1px, transparent 1px);
+        background-size: 32px 32px;
+        mask-image: linear-gradient(to bottom, black, transparent 45%);
+      }
+      .topbar {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 19px 20px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+      .brand { display: flex; gap: 11px; align-items: center; min-width: 0; }
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        flex: 0 0 38px;
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        color: var(--night);
+        background: linear-gradient(145deg, var(--lime-bright), var(--mint));
+        box-shadow: 0 0 28px rgba(185, 239, 55, .16);
+        font-weight: 950;
+      }
+      .eyebrow {
+        margin: 0 0 2px;
+        color: var(--mint);
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: .13em;
+        text-transform: uppercase;
+      }
+      h1 { margin: 0; font-size: clamp(19px, 4vw, 27px); line-height: 1; letter-spacing: -.035em; }
+      .live {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        white-space: nowrap;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: .05em;
+        text-transform: uppercase;
+      }
+      .live::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--mint);
+        box-shadow: 0 0 0 5px rgba(24, 217, 172, .12);
+        animation: pulse 2.2s ease-in-out infinite;
+      }
+      .live.sandbox { color: var(--gold); }
+      .live.sandbox::before {
+        background: var(--gold);
+        box-shadow: 0 0 0 5px rgba(232, 189, 38, .13);
+      }
+
+      .toolbar {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 11px 14px;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--line);
+        scrollbar-width: none;
+      }
+      .toolbar::-webkit-scrollbar { display: none; }
+      .chip-button, .quiet-button, .primary-button, .social-button {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--text);
+        background: rgba(255, 255, 255, .025);
+        transition: transform .16s ease, border-color .16s ease, background .16s ease;
+      }
+      .chip-button { padding: 7px 10px; white-space: nowrap; font-size: 10px; font-weight: 850; }
+      .chip-button:hover, .quiet-button:hover, .social-button:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+      .chip-button.active { color: var(--night); border-color: var(--lime); background: var(--lime); }
+      .toolbar-spacer { flex: 1 0 12px; }
+      .primary-button {
+        border-color: var(--lime);
+        padding: 8px 12px;
+        color: var(--night);
+        background: linear-gradient(135deg, var(--lime-bright), var(--lime));
+        font-size: 10px;
+        font-weight: 950;
+        box-shadow: 0 8px 24px rgba(185, 239, 55, .12);
+      }
+      .primary-button:hover { transform: translateY(-1px); box-shadow: 0 11px 28px rgba(185, 239, 55, .2); }
+      .primary-button:disabled, .quiet-button:disabled { cursor: wait; opacity: .55; transform: none; }
+      .quiet-button, .social-button { padding: 8px 11px; font-size: 10px; font-weight: 850; }
+      .danger-button { border-color: rgba(255, 117, 111, .4); color: #ffd3d0; }
+
+      .statusline {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 34px;
+        padding: 9px 18px 8px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .notice { color: var(--mint); text-align: right; }
+
+      .composer {
+        position: relative;
+        z-index: 2;
+        margin: 0 14px 14px;
+        padding: 15px;
+        border: 1px solid var(--line-strong);
+        border-radius: 17px;
+        background: linear-gradient(145deg, rgba(16, 34, 25, .98), rgba(5, 17, 11, .98));
+        box-shadow: 0 18px 48px rgba(0, 0, 0, .28);
+        animation: rise .22s ease both;
+      }
+      .composer-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+      .composer h2 { margin: 0 0 4px; font-size: 16px; }
+      .composer p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+      .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .full { grid-column: 1 / -1; }
+      label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 800; }
+      input, textarea, select {
+        width: 100%;
+        min-width: 0;
+        border: 1px solid rgba(185, 239, 55, .2);
+        border-radius: 10px;
+        padding: 9px 10px;
+        color: var(--text);
+        background: rgba(0, 0, 0, .23);
+      }
+      textarea { min-height: 84px; resize: vertical; line-height: 1.4; }
+      .form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; margin-top: 11px; }
+
+      .feed {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 15px;
+        padding: 0 14px 17px;
+      }
+      .empty {
+        padding: 45px 20px;
+        border: 1px dashed var(--line);
+        border-radius: 17px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .bounty-card {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid rgba(232, 189, 38, .48);
+        border-radius: 21px;
+        background:
+          linear-gradient(145deg, rgba(19, 39, 28, .98), rgba(6, 19, 13, .99) 58%),
+          var(--panel);
+        box-shadow: 0 18px 45px rgba(0, 0, 0, .3);
+        animation: rise .34s ease both;
+      }
+      .bounty-card::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        border-radius: inherit;
+        box-shadow: inset 0 0 0 3px rgba(232, 189, 38, .06);
+      }
+      .card-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 14px;
+        border-bottom: 1px solid rgba(232, 189, 38, .18);
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: .09em;
+        text-transform: uppercase;
+      }
+      .rarity { color: var(--gold); }
+      .state-pill { color: var(--mint); }
+      .state-pill.warn { color: #ffda63; }
+
+      .card-main {
+        display: grid;
+        grid-template-columns: minmax(220px, .82fr) minmax(0, 1.18fr);
+        gap: 16px;
+        padding: 14px;
+      }
+      .art-frame {
+        position: relative;
+        min-height: 268px;
+        overflow: hidden;
+        border: 4px solid var(--gold);
+        border-radius: 15px;
+        background: var(--night);
+        box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .14);
+      }
+      .art-frame img { width: 100%; height: 100%; min-height: 268px; object-fit: cover; display: block; filter: saturate(.94) contrast(1.04); }
+      .art-frame::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(115deg, transparent 18%, rgba(255, 255, 255, .12) 31%, transparent 44%),
+          linear-gradient(to top, rgba(2, 11, 8, .76), transparent 42%);
+        background-size: 220% 100%, 100% 100%;
+        animation: foil 7s ease-in-out infinite;
+      }
+      .art-caption {
+        position: absolute;
+        z-index: 1;
+        inset: auto 9px 9px;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--text);
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+      .copy { min-width: 0; padding: 2px 0; }
+      .copy h2 { margin: 0 0 8px; font-size: clamp(20px, 4.2vw, 31px); line-height: 1.02; letter-spacing: -.045em; }
+      .goal { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.52; }
+      .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 13px; }
+      .tag {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 5px 8px;
+        color: #dbf8a4;
+        background: rgba(185, 239, 55, .06);
+        font-size: 9px;
+        font-weight: 850;
+      }
+      .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 12px; }
+      .metric {
+        min-width: 0;
+        padding: 9px;
+        border-left: 2px solid var(--mint);
+        background: rgba(255, 255, 255, .025);
+      }
+      .metric small { display: block; margin-bottom: 3px; color: var(--muted); font-size: 8px; font-weight: 900; letter-spacing: .08em; }
+      .metric strong { display: block; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .funding { margin: 0 0 12px; }
+      .funding-label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 5px; color: var(--muted); font-size: 9px; }
+      .track { height: 7px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, .08); }
+      .track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--mint), var(--lime-bright)); box-shadow: 0 0 16px rgba(24, 217, 172, .4); }
+      .questline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+      .quest-step {
+        padding: 6px 2px;
+        border-top: 2px solid rgba(185, 239, 55, .14);
+        color: #718077;
+        font-size: 8px;
+        font-weight: 900;
+        text-align: center;
+        text-transform: uppercase;
+      }
+      .quest-step.done { border-color: var(--lime); color: var(--lime); }
+      .evidence {
+        margin: 0 14px 12px;
+        padding: 9px 11px;
+        border-left: 2px solid var(--gold);
+        color: var(--muted);
+        background: rgba(232, 189, 38, .055);
+        font-size: 10px;
+        line-height: 1.42;
+      }
+      .card-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        padding: 0 14px 14px;
+      }
+      .card-actions .primary-button { margin-left: auto; }
+
+      .subpanel {
+        margin: 0 14px 14px;
+        padding: 13px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(0, 0, 0, .2);
+        animation: rise .2s ease both;
+      }
+      .subpanel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+      .subpanel h3 { margin: 0 0 3px; font-size: 13px; }
+      .subpanel p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+      .result {
+        margin-top: 10px;
+        padding: 10px;
+        overflow: auto;
+        border: 1px solid rgba(24, 217, 172, .22);
+        border-radius: 10px;
+        color: #d9fbe9;
+        background: rgba(24, 217, 172, .045);
+        font: 9px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .result.error { border-color: rgba(255, 117, 111, .32); color: #ffd3d0; background: rgba(255, 117, 111, .05); }
+      .comments-list { display: grid; gap: 8px; margin-bottom: 10px; }
+      .comment { display: grid; grid-template-columns: 28px 1fr; gap: 8px; align-items: start; }
+      .avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--night); background: var(--mint); font-size: 10px; font-weight: 950; }
+      .comment-copy { color: var(--muted); font-size: 10px; line-height: 1.45; }
+      .comment-copy b { color: var(--text); margin-right: 5px; }
+      .comment-form { display: flex; gap: 7px; }
+      .comment-form input { flex: 1; }
+      .share-grid { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: center; }
+      .share-thumb { width: 96px; aspect-ratio: 4 / 5; object-fit: cover; border: 2px solid var(--gold); border-radius: 10px; }
+      .share-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+      .fine { color: var(--muted); font-size: 9px; line-height: 1.45; }
+      footer { position: relative; z-index: 1; padding: 12px 17px 15px; border-top: 1px solid var(--line); color: #8e998f; font-size: 9px; line-height: 1.45; }
+
+      @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+      @keyframes foil { 0%, 22% { background-position: 160% 0, 0 0; } 55%, 100% { background-position: -80% 0, 0 0; } }
+      @keyframes pulse { 50% { opacity: .55; transform: scale(.86); } }
+
+      @media (max-width: 680px) {
+        body { padding: 0; }
+        .shell { border-radius: 18px; }
+        .topbar { padding: 16px 15px 12px; }
+        .live { display: none; }
+        .card-main { grid-template-columns: 1fr; }
+        .art-frame, .art-frame img { min-height: 310px; }
+        .form-grid { grid-template-columns: 1fr; }
+        .full { grid-column: auto; }
+        .card-actions .primary-button { margin-left: 0; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">AB</div>
+          <div>
+            <p class="eyebrow">Agent Bounties · Base USDC</p>
+            <h1>Live quest feed</h1>
+          </div>
+        </div>
+        <span id="feed-mode" class="live">Protocol feed</span>
+      </header>
+
+      <nav class="toolbar" aria-label="Feed controls">
+        <button class="chip-button active" data-filter="recent" type="button">Recent</button>
+        <button class="chip-button" data-filter="seeking_funding" type="button">Needs funding</button>
+        <button class="chip-button" data-filter="ready_to_earn" type="button">Ready to earn</button>
+        <span class="toolbar-spacer"></span>
+        <button class="quiet-button" data-action="refresh" type="button">Refresh</button>
+        <button class="quiet-button" data-action="breakdown" type="button">Break down</button>
+        <button class="primary-button" data-action="post" type="button">Post bounty</button>
+      </nav>
+
+      <div class="statusline">
+        <span id="feed-count">Loading live opportunities…</span>
+        <span id="feed-notice" class="notice"></span>
+      </div>
+
+      <section id="composer" class="composer" hidden aria-live="polite"></section>
+      <section id="feed" class="feed" role="feed" aria-busy="true"></section>
+
+      <footer>
+        Public projection only. Wallet and verifier steps remain explicit, approval-gated handoffs. A plan, signature, broadcast, comment, or AI output is not funding or settlement evidence; only confirmed canonical events change those states.
+      </footer>
+    </main>
+
+    <script>
+      (() => {
+        "use strict";
+
+        const CARD_ART = "__BOUNTY_CARD_ART_DATA_URI__";
+        const state = {
+          projection: null,
+          items: [],
+          filter: "recent",
+          commentsOpen: {},
+          panel: null,
+          share: null,
+          composer: null,
+          preview: false,
+          notice: "",
+          mockActions: {},
+        };
+        const pending = new Map();
+        let nextRequestId = 1;
+        let latestToolInput = null;
+        let latestToolOutput = null;
+
+        const $ = (selector, root = document) => root.querySelector(selector);
+        const openai = () => window.openai;
+        const idOf = (item) => String(item?.opportunity_id || item?.source_id || "unknown");
+        const contractOf = (item) => String(item?.source_id || "");
+        const networkOf = () => state.projection?.network || "base-mainnet";
+        const outputOf = (result) => {
+          if (!result) return result;
+          if (result.structuredContent !== undefined) return result.structuredContent;
+          if (result.result?.structuredContent !== undefined) return result.result.structuredContent;
+          if (result.content?.[0]?.json !== undefined) return result.content[0].json;
+          return result;
+        };
+        const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;"
+        })[character]);
+        const short = (value, max = 72) => {
+          const text = String(value ?? "");
+          return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+        };
+        const randomUuid = () => {
+          if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+            return crypto.randomUUID();
+          }
+          const bytes = new Uint8Array(16);
+          if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+            crypto.getRandomValues(bytes);
+          } else {
+            for (let index = 0; index < bytes.length; index += 1) {
+              bytes[index] = Math.floor(Math.random() * 256);
+            }
+          }
+          bytes[6] = (bytes[6] & 0x0f) | 0x40;
+          bytes[8] = (bytes[8] & 0x3f) | 0x80;
+          const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+          return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+        };
+        const uniqueId = (prefix) => `${prefix}-${randomUuid()}`;
+
+        function bridgeRequest(method, params) {
+          if (window.parent === window) return Promise.reject(new Error("MCP Apps host is unavailable"));
+          const id = nextRequestId++;
+          window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              pending.delete(id);
+              reject(new Error(`${method} timed out`));
+            }, 60000);
+            pending.set(id, {
+              resolve: (value) => { clearTimeout(timer); resolve(value); },
+              reject: (error) => { clearTimeout(timer); reject(error); },
+            });
+          });
+        }
+
+        window.addEventListener("message", (event) => {
+          if (event.source !== window.parent) return;
+          const message = event.data;
+          if (!message || message.jsonrpc !== "2.0") return;
+          if (message.id !== undefined && pending.has(message.id)) {
+            const request = pending.get(message.id);
+            pending.delete(message.id);
+            if (message.error) request.reject(new Error(message.error.message || "Host tool call failed"));
+            else request.resolve(message.result);
+            return;
+          }
+          if (message.method === "ui/notifications/tool-input") latestToolInput = message.params;
+          if (message.method === "ui/notifications/tool-result") {
+            latestToolOutput = message.params?.structuredContent;
+            if (latestToolOutput?.items) applyProjection(latestToolOutput);
+          }
+        }, { passive: true });
+
+        async function callTool(name, args) {
+          let bridgeError;
+          try {
+            return await bridgeRequest("tools/call", { name, arguments: args });
+          } catch (error) {
+            bridgeError = error;
+          }
+          if (openai()?.callTool) return openai().callTool(name, args);
+          if (window.parent === window) return mockTool(name, args);
+          throw bridgeError || new Error("Tool bridge unavailable");
+        }
+
+        function persist() {
+          openai()?.setWidgetState?.({
+            filter: state.filter,
+            commentsOpen: state.commentsOpen,
+            openPanel: state.panel ? { id: state.panel.id, kind: state.panel.kind } : null,
+          });
+          queueMicrotask(() => openai()?.notifyIntrinsicHeight?.());
+        }
+
+        function setNotice(message) {
+          state.notice = message || "";
+          const element = $("#feed-notice");
+          if (element) element.textContent = state.notice;
+        }
+
+        function amount(money) {
+          if (!money) return "—";
+          const raw = Number(money.amount || 0);
+          const decimals = Number(money.decimals || 0);
+          if (!Number.isFinite(raw)) return "—";
+          return `${(raw / (10 ** decimals)).toLocaleString(undefined, { maximumFractionDigits: 6 })} ${money.currency || ""}`.trim();
+        }
+
+        function usdcToBaseUnits(value) {
+          const text = String(value || "").trim();
+          if (!/^\d+(\.\d{1,6})?$/.test(text)) throw new Error("Enter a USDC amount with at most 6 decimals");
+          const [whole, fraction = ""] = text.split(".");
+          const amount = (BigInt(whole) * 1000000n) + BigInt(fraction.padEnd(6, "0"));
+          if (amount <= 0n || amount > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Funding amount is outside the supported range");
+          return Number(amount);
+        }
+
+        function remainingFunding(item) {
+          const target = BigInt(item?.funding_target?.amount || "0");
+          const funded = BigInt(item?.funded_amount?.amount || "0");
+          return target > funded ? target - funded : 0n;
+        }
+
+        function remainingUsdc(item) {
+          const base = remainingFunding(item);
+          const whole = base / 1000000n;
+          const fraction = String(base % 1000000n).padStart(6, "0").replace(/0+$/, "");
+          return fraction ? `${whole}.${fraction}` : String(whole || 1n);
+        }
+
+        function fundingProgress(item) {
+          const target = Number(item?.funding_target?.amount || 0);
+          const funded = Number(item?.funded_amount?.amount || 0);
+          if (!target) return item?.payment_committed ? 100 : 0;
+          return Math.max(0, Math.min(100, Math.round((funded / target) * 100)));
+        }
+
+        function statusLabel(item) {
+          if (item.payment_state === "paid") return "canonically paid";
+          if (item.work_state === "completed") return "settled";
+          if (item.work_state === "submitted") return "awaiting verification";
+          if (item.work_state === "in_progress") return "in progress";
+          if (item.work_state === "claimable") return "ready to compete";
+          if (item.payment_state === "seeking_funding") return "seeking funding";
+          return item.work_state || "open";
+        }
+
+        function primaryAction(item) {
+          if (item.source_type === "unfunded_offchain") return { kind: "inspect", label: "View request" };
+          if (item.source_type !== "canonical_base") return { kind: "inspect", label: "Refresh status" };
+          if (item.payment_state === "seeking_funding") return { kind: "fund", label: "Fund" };
+          if (item.work_state === "claimable") return { kind: "compete", label: "Compete" };
+          if (item.work_state === "in_progress") return { kind: "complete", label: "Complete" };
+          if (item.work_state === "submitted") return { kind: "verify", label: "Verify" };
+          return { kind: "proof", label: "View proof" };
+        }
+
+        function questSteps(item) {
+          const ranks = { open: 0, claimable: 1, in_progress: 2, submitted: 3, completed: 4 };
+          const rank = ranks[item.work_state] ?? 0;
+          return ["post", "fund", "compete", "complete", "verify"]
+            .map((label, index) => `<span class="quest-step${index <= rank ? " done" : ""}">${label}</span>`)
+            .join("");
+        }
+
+        function cardTags(item) {
+          const tags = [...(item.categories || []), ...(item.skills || [])].slice(0, 6);
+          return tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join("");
+        }
+
+        function renderCard(item, index) {
+          const id = idOf(item);
+          const action = primaryAction(item);
+          const comments = Array.isArray(item.comments) ? item.comments : [];
+          const warn = item.payment_state === "seeking_funding" ? " warn" : "";
+          return `
+            <article class="bounty-card" data-card="${esc(id)}" style="animation-delay:${Math.min(index * 45, 220)}ms">
+              <div class="card-top">
+                <span class="rarity">${esc((item.categories?.[0] || "open").toUpperCase())} QUEST · ${esc(short(id, 26))}</span>
+                <span class="state-pill${warn}">${esc(statusLabel(item))}</span>
+              </div>
+              <div class="card-main">
+                <div class="art-frame">
+                  <img src="${CARD_ART}" alt="Original Agent Bounties quest-agent illustration">
+                  <div class="art-caption"><span>Guild companion</span><span>${esc(item.source_type || "public")}</span></div>
+                </div>
+                <div class="copy">
+                  <h2>${esc(item.title)}</h2>
+                  <p class="goal">${esc(item.goal || "A public digital-work opportunity with an explicit evidence boundary.")}</p>
+                  <div class="tags">${cardTags(item)}</div>
+                  <div class="metrics">
+                    <div class="metric"><small>REWARD</small><strong>${esc(amount(item.reward))}</strong></div>
+                    <div class="metric"><small>CLAIM BOND</small><strong>${esc(amount(item.bond))}</strong></div>
+                    <div class="metric"><small>VERIFY</small><strong>${esc(short(item.verification_method || "review", 22))}</strong></div>
+                  </div>
+                  <div class="funding">
+                    <div class="funding-label"><span>${item.payment_committed ? "Canonical funding observed" : "Funding target"}</span><span>${fundingProgress(item)}%</span></div>
+                    <div class="track"><i style="width:${fundingProgress(item)}%"></i></div>
+                  </div>
+                  <div class="questline">${questSteps(item)}</div>
+                </div>
+              </div>
+              <div class="evidence">${esc(item.evidence_boundary || "Inspect the authoritative source before acting.")}</div>
+              <div class="card-actions">
+                <button class="quiet-button" data-action="comment" data-id="${esc(id)}" type="button">Comment${comments.length ? ` · ${comments.length}` : ""}</button>
+                <button class="quiet-button" data-action="share" data-id="${esc(id)}" type="button">Share</button>
+                <button class="primary-button" data-action="lifecycle" data-kind="${action.kind}" data-id="${esc(id)}" type="button">${esc(action.label)}</button>
+              </div>
+              ${renderShare(item)}
+              ${renderComments(item)}
+              ${renderActionPanel(item)}
+            </article>
+          `;
+        }
+
+        function renderComments(item) {
+          const id = idOf(item);
+          if (!state.commentsOpen[id]) return "";
+          const comments = Array.isArray(item.comments) ? item.comments : [];
+          const content = comments.length
+            ? comments.slice(-6).map((comment) => `
+              <div class="comment">
+                <span class="avatar">${esc(String(comment.author || "?").slice(0, 1).toUpperCase())}</span>
+                <div class="comment-copy"><b>${esc(comment.author || "guest")}</b>${esc(comment.body || "")}</div>
+              </div>`).join("")
+            : `<p class="fine">Be the first person to add useful public context.</p>`;
+          return `
+            <section class="subpanel">
+              <div class="subpanel-head"><div><h3>Quest comments</h3><p>Public conversation only; comments never change funding or verification.</p></div></div>
+              <div class="comments-list">${content}</div>
+              <form class="comment-form" data-comment-form="${esc(id)}">
+                <input name="body" maxlength="500" required placeholder="Add a useful comment…" aria-label="Comment">
+                <button class="primary-button" type="submit">Post</button>
+              </form>
+            </section>`;
+        }
+
+        function renderShare(item) {
+          const id = idOf(item);
+          if (state.share?.id !== id) return "";
+          const bundle = state.share.bundle || {};
+          return `
+            <section class="subpanel">
+              <div class="share-grid">
+                <img class="share-thumb" src="${CARD_ART}" alt="">
+                <div>
+                  <h3>Share this quest step</h3>
+                  <p>${esc(bundle.caption || "Invite the next contributor with a factual status update.")}</p>
+                  <p class="fine">${esc(bundle.evidence_boundary || "Sharing does not change canonical state.")}</p>
+                </div>
+              </div>
+              <div class="share-actions">
+                <button class="social-button" data-action="copy-caption" data-id="${esc(id)}" type="button">Copy caption</button>
+                <button class="social-button" data-action="download-card" data-id="${esc(id)}" type="button">Download card</button>
+                <button class="social-button" data-action="social-x" data-id="${esc(id)}" type="button">X</button>
+                <button class="social-button" data-action="social-linkedin" data-id="${esc(id)}" type="button">LinkedIn</button>
+                <button class="social-button" data-action="social-instagram" data-id="${esc(id)}" type="button">Instagram</button>
+                <button class="quiet-button" data-action="close-share" type="button">Close</button>
+              </div>
+            </section>`;
+        }
+
+        function renderLooseShare() {
+          const item = state.share?.item;
+          if (!item || state.items.some((candidate) => idOf(candidate) === idOf(item))) return "";
+          return renderShare(item);
+        }
+
+        function panelResult(panel) {
+          if (!panel?.result && !panel?.error) return "";
+          const value = panel.error ? panel.error : JSON.stringify(panel.result, null, 2).slice(0, 6000);
+          return `<pre class="result${panel.error ? " error" : ""}">${esc(value)}</pre>`;
+        }
+
+        function renderActionPanel(item) {
+          const id = idOf(item);
+          const panel = state.panel;
+          if (!panel || panel.id !== id) return "";
+          const head = `
+            <div class="subpanel-head">
+              <div><h3>${esc(panelTitle(panel.kind))}</h3><p>${esc(panelDescription(panel.kind))}</p></div>
+              <button class="quiet-button" data-action="close-panel" type="button">Close</button>
+            </div>`;
+          let form = "";
+          if (panel.intent) {
+            const intent = panel.intent;
+            const sandbox = Boolean(intent.sandbox);
+            const status = String(intent.status || "review_required").replaceAll("_", " ");
+            form = `
+              <div class="result">
+                <b>Hosted action: ${esc(status)}</b>
+                <div>${esc((intent.expected_canonical_events || []).join(" or "))}</div>
+                <div>${esc(intent.next_action || "")}</div>
+                <div class="fine">${esc(intent.evidence_boundary || "")}</div>
+              </div>
+              <div class="form-actions">
+                ${intent.status === "review_required" && !sandbox
+                  ? `<button class="primary-button" data-action="open-authorization" data-id="${esc(id)}" type="button">Review &amp; authorize securely</button>`
+                  : ""}
+                <button class="${sandbox ? "primary-button" : "quiet-button"}" data-action="check-action" data-id="${esc(id)}" type="button">${sandbox ? "Simulate hosted return" : "Refresh canonical status"}</button>
+              </div>`;
+          } else if (panel.kind === "fund") {
+            form = `
+              <form data-flow="fund" data-id="${esc(id)}">
+                <div class="form-grid">
+                  <label>Amount, USDC<input name="amount" value="${esc(panel.amount || remainingUsdc(item))}" required></label>
+                </div>
+                <p class="fine">Wallet approval happens only on agentbounties.app. ChatGPT never receives the payment authorization.</p>
+                <div class="form-actions"><button class="primary-button" type="submit">Prepare secure funding review</button></div>
+              </form>`;
+          } else if (panel.kind === "compete") {
+            form = `
+              <form data-flow="compete" data-id="${esc(id)}">
+                <p>Prepare a first-party claim review for this funded, verification-ready bounty.</p>
+                <p class="fine">Connect the intended solver wallet on agentbounties.app. Start only after canonical BountyClaimed.</p>
+                <div class="form-actions"><button class="primary-button" type="submit">Prepare secure claim review</button></div>
+              </form>`;
+          } else if (panel.kind === "complete") {
+            form = `
+              <form data-flow="complete" data-id="${esc(id)}">
+                <div class="form-grid">
+                  <label>Public artifact reference<input name="artifact" maxlength="2000" value="${esc(panel.artifact || "")}" required placeholder="https://github.com/owner/repo/commit/sha"></label>
+                  <label class="full">Public evidence JSON<textarea name="evidence" maxlength="12000" required placeholder='{"source_snapshot_digest":"sha256:..."}'>${esc(panel.evidenceText || "{}")}</textarea></label>
+                </div>
+                <p class="fine">Only public evidence belongs here. Wallet approval and canonical submission happen on the first-party site.</p>
+                <div class="form-actions"><button class="primary-button" type="submit">Prepare secure completion review</button></div>
+              </form>`;
+          } else if (panel.kind === "verify") {
+            form = `
+              <form data-flow="verify" data-id="${esc(id)}">
+                <p>Open the committed verification policy and current submission evidence on the first-party site.</p>
+                <p class="fine">Never paste verifier signatures into ChatGPT. Only indexed BountySettled proves solver payment.</p>
+                <div class="form-actions"><button class="primary-button" type="submit">Prepare secure verification review</button></div>
+              </form>`;
+          } else if (panel.kind === "solve") {
+            form = `
+              <form data-flow="solve" data-id="${esc(id)}">
+                <div class="form-grid">
+                  <label>Registered agent UUID<input name="agent_id" value="${esc(panel.agentId || "")}" required></label>
+                  <label>Summary<input name="summary" value="${esc(panel.summary || "")}" maxlength="1000" required></label>
+                  <label class="full">Deliverable<textarea name="deliverable" maxlength="40000" required></textarea></label>
+                  <label class="full">Evidence JSON<textarea name="evidence" required>{}</textarea></label>
+                </div>
+                <div class="form-actions"><button class="primary-button" type="submit">Submit public solution</button></div>
+              </form>`;
+          } else {
+            form = `<div class="form-actions"><button class="primary-button" data-action="refresh-one" data-id="${esc(id)}" type="button">Refresh authoritative projection</button></div>`;
+          }
+          return `<section class="subpanel">${head}${form}${panelResult(panel)}</section>`;
+        }
+
+        function panelTitle(kind) {
+          return ({
+            fund: "Fund this quest",
+            compete: "Compete to solve",
+            complete: "Prepare completion",
+            verify: "Verify submitted work",
+            solve: "Submit an unfunded solution",
+            proof: "Inspect canonical proof",
+            inspect: "Refresh status",
+          })[kind] || "Quest action";
+        }
+
+        function panelDescription(kind) {
+          return ({
+            fund: "Prepare one amount-bound first-party wallet review. Funding changes only after confirmed FundingAdded.",
+            compete: "Prepare one first-party claim review. ChatGPT never receives the wallet signature.",
+            complete: "Bind a public artifact and evidence package to one first-party submission review.",
+            verify: "Review the committed policy and sign or relay only on the first-party verification page.",
+            solve: "This publishes a public solution to an explicitly unfunded request and creates no payment claim.",
+            proof: "Refresh the event-derived projection and share only the state it proves.",
+            inspect: "Refresh this source without navigating away from ChatGPT.",
+          })[kind] || "";
+        }
+
+        function render() {
+          const sandbox = Boolean(state.projection?.sandbox);
+          $("#feed-mode").textContent = sandbox ? "Sandbox · no writes" : "Protocol feed";
+          $("#feed-mode").classList.toggle("sandbox", sandbox);
+          $("#feed-count").textContent = `${state.items.length} public quest${state.items.length === 1 ? "" : "s"}${sandbox ? " · safe fixture data" : state.preview ? " · preview data" : ""}`;
+          $("#feed-notice").textContent = state.notice;
+          $("#feed").setAttribute("aria-busy", "false");
+          $("#feed").innerHTML = state.items.length
+            ? state.items.map(renderCard).join("")
+            : `<div class="empty">No quests match this view. Try Recent or refresh the protocol feed.</div>`;
+          renderComposer();
+          persist();
+        }
+
+        function renderComposer() {
+          const composer = $("#composer");
+          if (!state.composer) {
+            composer.hidden = true;
+            composer.innerHTML = "";
+            return;
+          }
+          composer.hidden = false;
+          if (state.composer.kind === "post") {
+            const intent = state.composer.intent;
+            const result = intent
+              ? `<div class="result"><b>Hosted post: ${esc(String(intent.status || "review_required").replaceAll("_", " "))}</b><div>${esc(intent.next_action || "")}</div><div class="fine">${esc(intent.evidence_boundary || "")}</div></div>
+                 <div class="form-actions">
+                   ${intent.status === "review_required" && !intent.sandbox ? `<button class="primary-button" data-action="open-composer-authorization" type="button">Review &amp; authorize securely</button>` : ""}
+                   <button class="${intent.sandbox ? "primary-button" : "quiet-button"}" data-action="check-composer-action" type="button">${intent.sandbox ? "Simulate hosted return" : "Refresh canonical status"}</button>
+                 </div>`
+              : state.composer.result ? `<pre class="result">${esc(JSON.stringify(state.composer.result, null, 2).slice(0, 6000))}</pre>` : "";
+            composer.innerHTML = `
+              <div class="composer-head"><div><h2>Post a bounty in chat</h2><p>Draft the public terms here, then approve creation and optional initial funding on the first-party site.</p></div><button class="quiet-button" data-action="close-composer" type="button">Close</button></div>
+              <form id="post-form">
+                <div class="form-grid">
+                  <label>Funding<select name="crowdfund"><option value="true">Post first, invite funders</option><option value="false">Fund target during creation</option></select></label>
+                  <label>Title<input name="title" maxlength="200" required placeholder="Name the outcome"></label>
+                  <label class="full">Goal<textarea name="goal" maxlength="4000" required></textarea></label>
+                  <label class="full">Acceptance criteria, one per line<textarea name="criteria" maxlength="8000" required></textarea></label>
+                  <label>Solver reward, USDC<input name="solver" value="2.00" required></label>
+                  <label>Verifier reward, USDC<input name="verifier" value="0.10" required></label>
+                </div>
+                <div class="form-actions"><button class="primary-button" type="submit">Prepare secure post review</button></div>
+              </form>${result}${renderLooseShare()}`;
+          } else {
+            const tasks = state.composer.tasks || [];
+            const result = tasks.length
+              ? `<div class="result">${tasks.map((task, index) => `${index + 1}. ${esc(task.title || task.objective || "Child bounty")}`).join("\n")}</div>`
+              : state.composer.result ? `<pre class="result">${esc(JSON.stringify(state.composer.result, null, 2).slice(0, 6000))}</pre>` : "";
+            composer.innerHTML = `
+              <div class="composer-head"><div><h2>Break down a large objective</h2><p>Compile a bounded graph of smaller, independently reviewable bounty drafts.</p></div><button class="quiet-button" data-action="close-composer" type="button">Close</button></div>
+              <form id="breakdown-form">
+                <div class="form-grid">
+                  <label class="full">Objective<textarea name="objective" maxlength="4000" required></textarea></label>
+                  <label>Maximum child bounties<input name="max_tasks" type="number" min="2" max="8" value="5"></label>
+                  <label>Solver budget, USDC (optional)<input name="budget" placeholder="10.00"></label>
+                </div>
+                <div class="form-actions"><button class="primary-button" type="submit">Compile child bounties</button></div>
+              </form>${result}${renderLooseShare()}`;
+          }
+        }
+
+        function applyProjection(projection) {
+          state.projection = projection;
+          state.items = Array.isArray(projection?.items) ? projection.items : [];
+          state.preview = false;
+          render();
+        }
+
+        function feedArgs() {
+          return {
+            view: state.filter === "recent" ? "recent" : state.filter === "ready_to_earn" ? "ready_to_earn" : null,
+            payment_state: state.filter === "seeking_funding" ? "seeking_funding" : null,
+            limit: 30,
+          };
+        }
+
+        async function refreshFeed() {
+          setNotice("Refreshing…");
+          try {
+            const result = await callTool("get_bounty_feed", feedArgs());
+            const value = outputOf(result);
+            if (value?.items) applyProjection(value);
+            setNotice("");
+          } catch (error) {
+            if (!state.items.length) {
+              state.preview = true;
+              state.projection = previewProjection();
+              state.items = state.projection.items;
+            }
+            setNotice(`Feed unavailable · ${error.message || "try again"}`);
+            render();
+          }
+        }
+
+        function openPanel(item, kind) {
+          state.share = null;
+          state.panel = {
+            id: idOf(item),
+            kind,
+            idempotencyKey: uniqueId("chatgpt-claim"),
+            result: null,
+            error: null,
+            phase: null,
+          };
+          render();
+        }
+
+        async function openShare(item, stage) {
+          try {
+            const result = await callTool("create_share_bundle", {
+              bounty_id: idOf(item),
+              title: item.title,
+              stage,
+              bounty_url: item.public_url || "https://agentbounties.app/earn.html",
+              status: statusLabel(item),
+              reward: amount(item.reward),
+              payment_state: item.payment_state || "not stated",
+            });
+            state.share = { id: idOf(item), item, bundle: outputOf(result) || fallbackShare(item, stage) };
+          } catch (_) {
+            state.share = { id: idOf(item), item, bundle: fallbackShare(item, stage) };
+          }
+          render();
+        }
+
+        function fallbackShare(item, stage) {
+          const url = item.public_url || "https://agentbounties.app/earn.html";
+          const caption = `${stage}: ${item.title}. Status: ${statusLabel(item)}. Explore the quest: ${url} #AgentBounties`;
+          return {
+            caption,
+            instagram_caption: caption,
+            evidence_boundary: "This describes the selected step only; sharing does not change canonical state.",
+            intents: {
+              x: `https://x.com/intent/post?text=${encodeURIComponent(caption)}`,
+              linkedin: `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(url)}`,
+              instagram: "https://www.instagram.com/",
+            },
+          };
+        }
+
+        async function submitFlow(form) {
+          const id = form.dataset.id;
+          const item = state.items.find((candidate) => idOf(candidate) === id);
+          if (!item || !state.panel) return;
+          const panel = state.panel;
+          const data = new FormData(form);
+          panel.error = null;
+          const submit = form.querySelector("button[type=submit]");
+          if (submit) submit.disabled = true;
+          try {
+            if (form.dataset.flow === "fund") {
+              panel.amount = String(data.get("amount") || "");
+              const result = await callTool("prepare_bounty_action", {
+                idempotency_key: panel.idempotencyKey,
+                action: "fund",
+                network: networkOf(),
+                opportunity_id: idOf(item),
+                bounty_contract: contractOf(item),
+                bounty_id: null,
+                actor_wallet: null,
+                amount_base_units: usdcToBaseUnits(panel.amount),
+                details: { title: item.title, public_url: item.public_url || null },
+              });
+              panel.intent = outputOf(result);
+              panel.result = null;
+              await openShare(item, "secure funding authorization prepared");
+              state.panel = panel;
+            } else if (form.dataset.flow === "compete") {
+              const result = await callTool("prepare_bounty_action", {
+                idempotency_key: panel.idempotencyKey,
+                action: "compete",
+                network: networkOf(),
+                opportunity_id: idOf(item),
+                bounty_contract: contractOf(item),
+                bounty_id: null,
+                actor_wallet: null,
+                amount_base_units: null,
+                details: {
+                  title: item.title,
+                  claim_bond_base_units: item?.bond?.amount || null,
+                  verification_ready: Boolean(item.verification_ready),
+                },
+              });
+              panel.intent = outputOf(result);
+              panel.result = null;
+              await openShare(item, "secure claim authorization prepared");
+              state.panel = panel;
+            } else if (form.dataset.flow === "complete") {
+              panel.artifact = String(data.get("artifact") || "").trim();
+              panel.evidenceText = String(data.get("evidence") || "{}");
+              const evidence = JSON.parse(panel.evidenceText);
+              const result = await callTool("prepare_bounty_action", {
+                idempotency_key: panel.idempotencyKey,
+                action: "complete",
+                network: networkOf(),
+                opportunity_id: idOf(item),
+                bounty_contract: contractOf(item),
+                bounty_id: null,
+                actor_wallet: null,
+                amount_base_units: null,
+                details: { artifact_reference: panel.artifact, evidence },
+              });
+              panel.intent = outputOf(result);
+              panel.result = null;
+              await openShare(item, "secure completion authorization prepared");
+              state.panel = panel;
+            } else if (form.dataset.flow === "verify") {
+              const result = await callTool("prepare_bounty_action", {
+                idempotency_key: panel.idempotencyKey,
+                action: "verify",
+                network: networkOf(),
+                opportunity_id: idOf(item),
+                bounty_contract: contractOf(item),
+                bounty_id: null,
+                actor_wallet: null,
+                amount_base_units: null,
+                details: { title: item.title, verification_method: item.verification_method || null },
+              });
+              panel.intent = outputOf(result);
+              panel.result = null;
+              await openShare(item, "secure verification authorization prepared");
+              state.panel = panel;
+            }
+          } catch (error) {
+            panel.error = error.message || "Action failed";
+            state.panel = panel;
+            render();
+          } finally {
+            if (submit) submit.disabled = false;
+          }
+        }
+
+        async function refreshOne(item) {
+          try {
+            const result = await callTool("get_bounty_feed", { ...feedArgs(), limit: 30 });
+            const projection = outputOf(result);
+            if (projection?.items) applyProjection(projection);
+            const refreshed = state.items.find((candidate) => idOf(candidate) === idOf(item)) || item;
+            await openShare(refreshed, refreshed.payment_state === "paid" ? "canonical settlement proof inspected" : "authoritative status refreshed");
+          } catch (error) {
+            setNotice(error.message || "Status refresh failed");
+          }
+        }
+
+        async function submitPost(form) {
+          const data = new FormData(form);
+          const criteria = String(data.get("criteria") || "").split("\n").map((value) => value.trim()).filter(Boolean);
+          const common = {
+            title: String(data.get("title") || "").trim(),
+            goal: String(data.get("goal") || "").trim(),
+            acceptance_criteria: criteria,
+          };
+          try {
+            const result = await callTool("prepare_bounty_action", {
+              idempotency_key: uniqueId("chatgpt-post"),
+              action: "post",
+              network: networkOf(),
+              opportunity_id: null,
+              bounty_contract: null,
+              bounty_id: null,
+              actor_wallet: null,
+              amount_base_units: null,
+              details: {
+                draft: {
+                  ...common,
+                  solver_reward_usdc: String(data.get("solver") || ""),
+                  verifier_reward_usdc: String(data.get("verifier") || ""),
+                  source_url: null,
+                  crowdfund: data.get("crowdfund") === "true",
+                  discovery_source: "ChatGPT live quest feed",
+                },
+              },
+            });
+            const value = outputOf(result);
+            state.composer = { ...state.composer, result: null, intent: value, title: common.title };
+            const shareItem = {
+              opportunity_id: value?.intent_id || uniqueId("draft"),
+              title: common.title,
+              public_url: "https://agentbounties.app/earn.html",
+              work_state: "open",
+              payment_state: "seeking_funding",
+            };
+            await openShare(shareItem, "secure post authorization prepared · not published");
+            render();
+          } catch (error) {
+            state.composer.result = { error: error.message || "Posting failed" };
+            render();
+          }
+        }
+
+        async function submitBreakdown(form) {
+          const data = new FormData(form);
+          try {
+            const result = await callTool("compile_objective_with_cloud_agent", {
+              objective: String(data.get("objective") || "").trim(),
+              context: null,
+              constraints: [],
+              max_tasks: Number(data.get("max_tasks") || 5),
+              solver_budget_usdc: String(data.get("budget") || "").trim() || null,
+              source_url: null,
+              idempotency_key: uniqueId("chatgpt-breakdown"),
+            });
+            const value = outputOf(result);
+            const tasks = value?.tasks || value?.bounties || value?.children || value?.graph?.tasks || [];
+            state.composer = { ...state.composer, result: value, tasks };
+            const shareItem = {
+              opportunity_id: uniqueId("breakdown"),
+              title: short(String(data.get("objective") || "Objective breakdown"), 120),
+              public_url: "https://agentbounties.app/objective.html",
+              work_state: "open",
+              payment_state: "none",
+            };
+            await openShare(shareItem, `${tasks.length || "bounded"} child bounty drafts compiled`);
+            render();
+          } catch (error) {
+            state.composer.result = { error: error.message || "Breakdown failed" };
+            render();
+          }
+        }
+
+        async function copyText(text) {
+          try {
+            if (navigator.clipboard?.writeText) {
+              await navigator.clipboard.writeText(text);
+              return;
+            }
+          } catch (clipboardError) {
+            // Sandboxed ChatGPT widgets may expose Clipboard but deny direct writes.
+          }
+          const area = document.createElement("textarea");
+          area.value = text;
+          area.setAttribute("readonly", "");
+          area.style.position = "fixed";
+          area.style.opacity = "0";
+          document.body.appendChild(area);
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+        }
+
+        function openExternal(href) {
+          if (!href) return;
+          const url = new URL(href);
+          const allowed = new Set([
+            "agentbounties.app",
+            "x.com",
+            "www.linkedin.com",
+            "www.instagram.com",
+          ]);
+          if (url.protocol !== "https:" || !allowed.has(url.hostname.toLowerCase())) {
+            throw new Error("External destination is not allowlisted.");
+          }
+          if (openai()?.openExternal) return openai().openExternal({ href: url.toString() });
+          window.open(url.toString(), "_blank", "noopener,noreferrer");
+        }
+
+        async function downloadCard(item) {
+          const canvas = document.createElement("canvas");
+          canvas.width = 1080;
+          canvas.height = 1350;
+          const context = canvas.getContext("2d");
+          const image = new Image();
+          image.src = CARD_ART;
+          await image.decode();
+          context.fillStyle = "#020b08";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          const gradient = context.createLinearGradient(0, 0, 1080, 1350);
+          gradient.addColorStop(0, "#102219");
+          gradient.addColorStop(1, "#020b08");
+          context.fillStyle = gradient;
+          roundRect(context, 45, 45, 990, 1260, 44);
+          context.fill();
+          context.strokeStyle = "#e8bd26";
+          context.lineWidth = 10;
+          context.stroke();
+          context.save();
+          roundRect(context, 85, 110, 910, 620, 28);
+          context.clip();
+          const scale = Math.max(910 / image.width, 620 / image.height);
+          const width = image.width * scale;
+          const height = image.height * scale;
+          context.drawImage(image, 85 + ((910 - width) / 2), 110 + ((620 - height) / 2), width, height);
+          context.restore();
+          context.fillStyle = "#18d9ac";
+          context.font = "800 28px system-ui";
+          context.fillText("AGENT BOUNTIES · LIVE QUEST", 86, 85);
+          context.fillStyle = "#f6f7ef";
+          context.font = "900 58px system-ui";
+          const titleBottom = wrapCanvasText(context, item.title, 86, 810, 890, 65, 3);
+          context.fillStyle = "#b9c0b8";
+          context.font = "500 30px system-ui";
+          const goalBottom = wrapCanvasText(context, item.goal || "A public digital-work opportunity.", 86, titleBottom + 26, 890, 42, 4);
+          context.fillStyle = "#b9ef37";
+          context.font = "900 36px system-ui";
+          context.fillText(amount(item.reward), 86, Math.min(goalBottom + 75, 1180));
+          context.fillStyle = "#e8bd26";
+          context.textAlign = "right";
+          context.fillText(statusLabel(item).toUpperCase(), 994, Math.min(goalBottom + 75, 1180));
+          context.textAlign = "left";
+          context.fillStyle = "#8e998f";
+          context.font = "600 22px system-ui";
+          context.fillText("Canonical events remain the payment evidence boundary.", 86, 1255);
+          const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `agent-bounty-${idOf(item).replace(/[^a-z0-9_-]+/gi, "-").slice(0, 48)}.png`;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        function roundRect(context, x, y, width, height, radius) {
+          context.beginPath();
+          context.roundRect(x, y, width, height, radius);
+        }
+
+        function wrapCanvasText(context, text, x, y, maxWidth, lineHeight, maxLines) {
+          const words = String(text || "").split(/\s+/);
+          let line = "";
+          let lineNumber = 0;
+          for (let index = 0; index < words.length; index += 1) {
+            const candidate = line ? `${line} ${words[index]}` : words[index];
+            if (context.measureText(candidate).width > maxWidth && line) {
+              context.fillText(line, x, y + (lineNumber * lineHeight));
+              lineNumber += 1;
+              line = words[index];
+              if (lineNumber >= maxLines - 1) {
+                const rest = [line, ...words.slice(index + 1)].join(" ");
+                let clipped = rest;
+                while (context.measureText(`${clipped}…`).width > maxWidth && clipped.length > 1) clipped = clipped.slice(0, -1);
+                context.fillText(`${clipped}…`, x, y + (lineNumber * lineHeight));
+                return y + ((lineNumber + 1) * lineHeight);
+              }
+            } else {
+              line = candidate;
+            }
+          }
+          if (line) context.fillText(line, x, y + (lineNumber * lineHeight));
+          return y + ((lineNumber + 1) * lineHeight);
+        }
+
+        document.addEventListener("click", async (event) => {
+          const target = event.target.closest("[data-action], [data-filter]");
+          if (!target) return;
+          if (target.dataset.filter) {
+            state.filter = target.dataset.filter;
+            document.querySelectorAll("[data-filter]").forEach((button) => button.classList.toggle("active", button.dataset.filter === state.filter));
+            await refreshFeed();
+            return;
+          }
+          const action = target.dataset.action;
+          if (action === "refresh") return refreshFeed();
+          if (action === "post" || action === "breakdown") {
+            state.composer = { kind: action, result: null };
+            state.panel = null;
+            state.share = null;
+            render();
+            $("#composer")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            return;
+          }
+          if (action === "close-composer") { state.composer = null; render(); return; }
+          if (action === "close-panel") { state.panel = null; render(); return; }
+          if (action === "close-share") { state.share = null; render(); return; }
+          if (action === "open-composer-authorization") {
+            return openExternal(state.composer?.intent?.authorization_url || "");
+          }
+          if (action === "check-composer-action" && state.composer?.intent?.intent_id) {
+            try {
+              const result = await callTool("get_bounty_action_status", {
+                intent_id: state.composer.intent.intent_id,
+              });
+              state.composer.intent = outputOf(result);
+              if (state.composer.intent?.status === "confirmed") {
+                await openShare({
+                  opportunity_id: state.composer.intent.intent_id,
+                  title: state.composer.title || "New bounty",
+                  public_url: state.composer.intent.authorization_url,
+                  work_state: "open",
+                  payment_state: "seeking_funding",
+                }, state.composer.intent.sandbox ? "sandbox post flow confirmed" : "canonical bounty creation confirmed");
+              }
+              render();
+            } catch (error) {
+              setNotice(error.message || "Action status unavailable");
+            }
+            return;
+          }
+          const item = state.items.find((candidate) => idOf(candidate) === target.dataset.id)
+            || (state.share?.id === target.dataset.id ? state.share.item : null);
+          if (action === "comment" && item) {
+            state.commentsOpen[idOf(item)] = !state.commentsOpen[idOf(item)];
+            render();
+            return;
+          }
+          if (action === "share" && item) return openShare(item, statusLabel(item));
+          if (action === "lifecycle" && item) return openPanel(item, target.dataset.kind);
+          if (action === "open-authorization" && item) {
+            return openExternal(state.panel?.intent?.authorization_url || "");
+          }
+          if (action === "check-action" && item && state.panel?.intent?.intent_id) {
+            try {
+              const result = await callTool("get_bounty_action_status", {
+                intent_id: state.panel.intent.intent_id,
+              });
+              state.panel.intent = outputOf(result);
+              state.panel.error = null;
+              const confirmed = state.panel.intent?.status === "confirmed";
+              await openShare(
+                item,
+                confirmed
+                  ? `${state.panel.intent.sandbox ? "sandbox " : "canonical "}${state.panel.kind} confirmed`
+                  : `${state.panel.kind} awaiting canonical confirmation`,
+              );
+              render();
+            } catch (error) {
+              state.panel.error = error.message || "Action status unavailable";
+              render();
+            }
+            return;
+          }
+          if (action === "refresh-one" && item) return refreshOne(item);
+          if (action === "copy-caption") {
+            await copyText(state.share?.bundle?.caption || "");
+            return setNotice("Share caption copied");
+          }
+          if (action === "download-card" && item) {
+            await downloadCard(item);
+            return setNotice("Card image downloaded");
+          }
+          if (action?.startsWith("social-") && item) {
+            const platform = action.replace("social-", "");
+            if (platform === "instagram") await copyText(state.share?.bundle?.instagram_caption || state.share?.bundle?.caption || "");
+            openExternal(state.share?.bundle?.intents?.[platform] || (platform === "instagram" ? "https://www.instagram.com/" : ""));
+          }
+        });
+
+        document.addEventListener("submit", async (event) => {
+          const form = event.target;
+          if (form.matches("#post-form")) {
+            event.preventDefault();
+            await submitPost(form);
+            return;
+          }
+          if (form.matches("#breakdown-form")) {
+            event.preventDefault();
+            await submitBreakdown(form);
+            return;
+          }
+          if (form.matches("[data-comment-form]")) {
+            event.preventDefault();
+            const id = form.dataset.commentForm;
+            const item = state.items.find((candidate) => idOf(candidate) === id);
+            const body = String(new FormData(form).get("body") || "").trim();
+            if (!item || !body) return;
+            try {
+              const result = await callTool("add_bounty_comment", {
+                bounty_id: id,
+                body,
+                author: "you",
+                comment_id: randomUuid(),
+              });
+              const value = outputOf(result);
+              if (Array.isArray(value?.comments)) item.comments = value.comments;
+              state.commentsOpen[id] = true;
+              await openShare(item, "public comment added");
+              render();
+            } catch (error) {
+              setNotice(error.message || "Comment failed");
+            }
+            return;
+          }
+          if (form.matches("[data-flow]")) {
+            event.preventDefault();
+            await submitFlow(form);
+          }
+        });
+
+        async function mockTool(name, args) {
+          await new Promise((resolve) => setTimeout(resolve, 70));
+          if (name === "get_bounty_feed" || name === "render_bounty_feed") return { structuredContent: previewProjection() };
+          if (name === "create_share_bundle") {
+            const item = state.items.find((candidate) => idOf(candidate) === args.bounty_id) || { title: args.title, public_url: args.bounty_url, work_state: "open", payment_state: args.payment_state };
+            return { structuredContent: fallbackShare(item, args.stage) };
+          }
+          if (name === "add_bounty_comment") {
+            const item = state.items.find((candidate) => idOf(candidate) === args.bounty_id);
+            const comments = [...(item?.comments || []), { author: args.author || "you", body: args.body }];
+            return { structuredContent: { comments, comment_count: comments.length } };
+          }
+          if (name === "compile_objective_with_cloud_agent") return { structuredContent: { tasks: [{ title: "Specify the public contract" }, { title: "Implement the smallest working slice" }, { title: "Verify and publish evidence" }] } };
+          if (name === "prepare_bounty_action") {
+            const intentId = randomUuid();
+            const expected = {
+              post: ["canonical_bounty_created"],
+              fund: ["funding_added"],
+              compete: ["bounty_claimed"],
+              complete: ["submission_added"],
+              verify: ["bounty_settled", "submission_rejected"],
+            }[args.action] || [];
+            const value = {
+              schema_version: "agent-bounties/chatgpt-action-intent-v1",
+              intent_id: intentId,
+              action: args.action,
+              status: "review_required",
+              network: args.network || "base-mainnet",
+              opportunity_id: args.opportunity_id || null,
+              bounty_contract: args.bounty_contract || null,
+              bounty_id: args.bounty_id || null,
+              amount_base_units: args.amount_base_units || null,
+              details: args.details || {},
+              authorization_url: `https://agentbounties.app/authorize.html?sandbox=1&intent=${intentId}`,
+              expected_canonical_events: expected,
+              paid: false,
+              expires_at: new Date(Date.now() + 3600000).toISOString(),
+              share_after: true,
+              next_action: "Standalone preview: simulate the hosted return without opening a wallet.",
+              sandbox: true,
+              evidence_boundary: "Preview fixture only. No hosted record, wallet request, signature, transaction, canonical event, settlement, or payment exists.",
+            };
+            state.mockActions[intentId] = value;
+            return { structuredContent: value };
+          }
+          if (name === "get_bounty_action_status") {
+            const value = state.mockActions[args.intent_id];
+            if (!value) throw new Error("Unknown preview action intent");
+            return {
+              structuredContent: {
+                ...value,
+                status: "confirmed",
+                canonical_event_kind: value.expected_canonical_events[0],
+                next_action: "Standalone preview flow complete. Share only as a preview test.",
+              },
+            };
+          }
+          throw new Error(`Standalone preview does not implement ${name}`);
+        }
+
+        function previewProjection() {
+          const money = (amount) => ({ amount: String(amount), currency: "USDC", unit: "base_units", decimals: 6 });
+          return {
+            schema_version: "agent-bounties/opportunity-projection-v1",
+            generated_at: new Date().toISOString(),
+            network: "base-mainnet",
+            degraded: false,
+            evidence_boundary: "Preview data for component testing only.",
+            items: [
+              {
+                opportunity_id: "canonical_base:base-mainnet:0xabc1000000000000000000000000000000000001",
+                source_id: "0xabc1000000000000000000000000000000000001",
+                source_type: "canonical_base",
+                title: "Ship the in-chat bounty feed",
+                goal: "Make every bounty lifecycle action work through the MCP Apps bridge and preserve canonical evidence boundaries.",
+                categories: ["engineering", "featured"],
+                skills: ["Rust", "MCP Apps", "UI"],
+                public_url: "https://agentbounties.app/earn.html",
+                work_state: "claimable",
+                payment_state: "escrowed",
+                payment_committed: true,
+                reward: money(3500000),
+                funded_amount: money(4000000),
+                funding_target: money(4000000),
+                bond: money(500000),
+                verification_method: "signed quorum",
+                verification_ready: true,
+                evidence_boundary: "Preview only. In production, BountyClaimed, SubmissionAdded, and BountySettled remain the authoritative events.",
+                comments: [{ author: "maya", body: "The card makes the state and reward easy to scan." }],
+              },
+              {
+                opportunity_id: "canonical_base:base-mainnet:0xabc2000000000000000000000000000000000002",
+                source_id: "0xabc2000000000000000000000000000000000002",
+                source_type: "canonical_base",
+                title: "Fund a deterministic documentation fix",
+                goal: "Fund a small, verifier-ready documentation task and invite a specialist to complete it.",
+                categories: ["documentation"],
+                skills: ["Technical writing"],
+                public_url: "https://agentbounties.app/earn.html",
+                work_state: "open",
+                payment_state: "seeking_funding",
+                payment_committed: false,
+                reward: money(2000000),
+                funded_amount: money(400000),
+                funding_target: money(2200000),
+                bond: money(200000),
+                verification_method: "deterministic module",
+                verification_ready: true,
+                evidence_boundary: "Preview only. A challenge, wallet signature, or transaction hash is not FundingAdded.",
+                comments: [],
+              },
+              {
+                opportunity_id: "canonical_base:base-mainnet:0xabc3000000000000000000000000000000000003",
+                source_id: "0xabc3000000000000000000000000000000000003",
+                source_type: "canonical_base",
+                title: "Verify the submitted accessibility audit",
+                goal: "Evaluate the exact public evidence against the immutable signed-quorum policy.",
+                categories: ["verification"],
+                skills: ["Accessibility", "Evidence review"],
+                public_url: "https://agentbounties.app/earn.html",
+                work_state: "submitted",
+                payment_state: "escrowed",
+                payment_committed: true,
+                reward: money(5000000),
+                funded_amount: money(5500000),
+                funding_target: money(5500000),
+                bond: money(500000),
+                verification_method: "signed quorum",
+                verification_ready: true,
+                evidence_boundary: "Preview only. A verdict or signature cannot prove settlement; only BountySettled does.",
+                comments: [],
+              },
+            ],
+          };
+        }
+
+        const saved = openai()?.widgetState;
+        if (saved?.filter) state.filter = saved.filter;
+        if (saved?.commentsOpen) state.commentsOpen = saved.commentsOpen;
+        document.querySelectorAll("[data-filter]").forEach((button) => button.classList.toggle("active", button.dataset.filter === state.filter));
+        const initial = outputOf(openai()?.toolOutput) || latestToolOutput;
+        if (initial?.items) applyProjection(initial);
+        else refreshFeed();
+      })();
+    </script>
+  </body>
+</html>
