@@ -1,0 +1,69 @@
+name: Apply MoonPay integration
+
+on:
+  push:
+    branches: [codex/moonpay-base-onramp]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-moonpay-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Materialize reviewed integration payload
+        run: python scripts/bootstrap-moonpay-integration.py
+
+      - name: Apply bounded integration seams
+        run: python scripts/apply-moonpay-integration.py
+
+      - name: Format and test MoonPay backend
+        run: |
+          cargo fmt --all
+          cargo clippy -p mcp-server -- -D warnings
+          cargo test -p mcp-server moonpay -- --nocapture
+
+      - name: Verify browser handoff and repository contracts
+        run: |
+          python scripts/check-moonpay-onramp.py
+          python scripts/check-site.py
+          python scripts/check-render-blueprint.py
+          git diff --check
+
+      - name: Commit verified generated changes
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          rm -rf scripts/.moonpay-payload
+          rm -f scripts/bootstrap-moonpay-integration.py
+          rm -f .github/workflows/apply-moonpay-integration.yml
+          rm -f scripts/apply-moonpay-integration.py
+          git config user.name "agent-bounties-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add MoonPay Base wallet on-ramp"
+          git push origin "HEAD:${BRANCH}"
