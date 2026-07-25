@@ -1,0 +1,1 @@
+Trigger the one-use MoonPay integration verifier after the workflow definition is present on this branch.
