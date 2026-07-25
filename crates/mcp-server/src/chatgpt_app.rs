@@ -1401,16 +1401,16 @@ fn sandbox_bounty_feed(args: ChatgptFeedArgs, opportunity_ids: &[String]) -> Res
                 .get("opportunity_id")
                 .and_then(Value::as_str)
                 .is_some_and(|id| opportunity_ids.iter().any(|selected| selected == id));
-        let source_matches = args.source_type.as_deref().map_or(true, |expected| {
+        let source_matches = args.source_type.as_deref().is_none_or(|expected| {
             item.get("source_type").and_then(Value::as_str) == Some(expected)
         });
-        let work_matches = args.work_state.as_deref().map_or(true, |expected| {
+        let work_matches = args.work_state.as_deref().is_none_or(|expected| {
             item.get("work_state").and_then(Value::as_str) == Some(expected)
         });
-        let payment_matches = args.payment_state.as_deref().map_or(true, |expected| {
+        let payment_matches = args.payment_state.as_deref().is_none_or(|expected| {
             item.get("payment_state").and_then(Value::as_str) == Some(expected)
         });
-        let network_matches = args.network.as_deref().map_or(true, |expected| {
+        let network_matches = args.network.as_deref().is_none_or(|expected| {
             value_network(item).map_or(expected == "base-mainnet", |actual| actual == expected)
         });
         let view_matches = match args.view.as_deref() {
