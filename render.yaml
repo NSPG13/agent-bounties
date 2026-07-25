@@ -218,6 +218,30 @@ services:
         value: "false"
       - key: ALLOW_UNSIGNED_STRIPE_WEBHOOKS
         value: "false"
+      - key: MOONPAY_PUBLISHABLE_KEY
+        sync: false
+      - key: MOONPAY_SECRET_KEY
+        sync: false
+      - key: MOONPAY_ENVIRONMENT
+        sync: false
+      - key: MOONPAY_ALLOWED_ORIGINS
+        value: https://agentbounties.app
+      - key: MOONPAY_CLIENT_IP_HEADER
+        value: x-forwarded-for
+      - key: MOONPAY_USDC_BASE_CURRENCY_CODE
+        value: usdc_base
+      - key: MOONPAY_ETH_BASE_CURRENCY_CODE
+        value: eth_base
+      - key: MOONPAY_SANDBOX_USDC_CURRENCY_CODE
+        value: usdc
+      - key: MOONPAY_SANDBOX_ETH_CURRENCY_CODE
+        value: eth
+      - key: MOONPAY_MIN_FIAT_AMOUNT
+        value: "1.00"
+      - key: MOONPAY_MAX_FIAT_AMOUNT
+        value: "10000.00"
+      - key: MOONPAY_CHECKOUTS_PER_MINUTE
+        value: "10"
       - fromGroup: agent-bounties-operator
       - fromGroup: agent-bounties-stripe
       - fromGroup: agent-bounties-base
