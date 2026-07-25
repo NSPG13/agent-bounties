@@ -34,7 +34,7 @@ The fiat amount is only a starting value. MoonPay remains authoritative for its 
 - Browser page: `site/onramp.html`
 - Browser controller: `site/moonpay-onramp.js`
 - Funding-form handoff: `site/moonpay-link.js`
-- Server route: `POST /v1/onramps/moonpay/checkout`
+- Server route: the MoonPay checkout endpoint on the configured MCP origin; its exact registered path is asserted by `scripts/check-moonpay-onramp.py`
 - Server implementation: `crates/mcp-server/src/moonpay.rs`
 - Static and evidence-boundary gate: `scripts/check-moonpay-onramp.py`
 
