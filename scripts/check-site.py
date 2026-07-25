@@ -16,6 +16,10 @@ REQUIRED_FILES = [
     "earn.html",
     "post.html",
     "funding.html",
+    "onramp.html",
+    "onramp.css",
+    "moonpay-onramp.js",
+    "moonpay-link.js",
     "objective.html",
     "objective.css",
     "objective.js",
@@ -77,6 +81,7 @@ INTERNAL_NOINDEX_PAGES = {
     "cancel.html",
     "chatgpt-post-widget.html",
     "operator.html",
+    "onramp.html",
     "recovery.html",
     "success.html",
 }

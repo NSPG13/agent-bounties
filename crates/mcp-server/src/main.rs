@@ -65,6 +65,7 @@ use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 mod chatgpt_app;
+mod moonpay;
 
 #[derive(Debug)]
 struct AppState {
@@ -1321,6 +1322,10 @@ async fn main() -> anyhow::Result<()> {
             get(chatgpt_app::mcp_get)
                 .post(chatgpt_app::mcp_post)
                 .delete(chatgpt_app::mcp_delete),
+        )
+        .route(
+            "/v1/onramps/moonpay/checkout",
+            post(moonpay::prepare_checkout),
         )
         .route("/tools", get(tools))
         .route("/tools/route_blocked_goal", post(route_blocked_goal))
