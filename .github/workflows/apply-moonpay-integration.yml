@@ -42,20 +42,40 @@ jobs:
         run: python scripts/bootstrap-moonpay-integration.py
 
       - name: Apply bounded integration seams
-        run: python scripts/apply-moonpay-integration.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/apply-moonpay-integration.py 2>&1 | tee moonpay-apply.log
 
       - name: Format and test MoonPay backend
+        shell: bash
         run: |
-          cargo fmt --all
-          cargo clippy -p mcp-server -- -D warnings
-          cargo test -p mcp-server moonpay -- --nocapture
+          set -o pipefail
+          {
+            cargo fmt --all
+            cargo clippy -p mcp-server -- -D warnings
+            cargo test -p mcp-server moonpay -- --nocapture
+          } 2>&1 | tee moonpay-rust.log
 
       - name: Verify browser handoff and repository contracts
+        shell: bash
         run: |
-          python scripts/check-moonpay-onramp.py
-          python scripts/check-site.py
-          python scripts/check-render-blueprint.py
-          git diff --check
+          set -o pipefail
+          {
+            python scripts/check-moonpay-onramp.py
+            python scripts/check-site.py
+            python scripts/check-render-blueprint.py
+            git diff --check
+          } 2>&1 | tee moonpay-site.log
+
+      - name: Upload verifier diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonpay-verifier-${{ github.run_id }}
+          path: moonpay-*.log
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Commit verified generated changes
         env:
@@ -65,6 +85,7 @@ jobs:
           rm -f scripts/bootstrap-moonpay-integration.py
           rm -f .github/workflows/apply-moonpay-integration.yml
           rm -f scripts/apply-moonpay-integration.py
+          rm -f moonpay-*.log
           git config user.name "agent-bounties-ci"
           git config user.email "actions@users.noreply.github.com"
           git add -A
