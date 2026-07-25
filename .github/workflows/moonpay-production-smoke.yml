@@ -1,0 +1,97 @@
+name: MoonPay Production Smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/moonpay-production-smoke.yml"
+      - "scripts/check-moonpay-production.py"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moonpay-production-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify deployed MoonPay assets and fail-closed route
+        run: |
+          python scripts/check-moonpay-production.py \
+            --output target/operations/moonpay-production-route.json
+
+      - name: Require a server-signed MoonPay checkout plan
+        id: activation
+        continue-on-error: true
+        run: |
+          python scripts/check-moonpay-production.py \
+            --require-checkout \
+            --output target/operations/moonpay-production-activation.json
+
+      - name: Publish redacted verification summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          activation_path = Path("target/operations/moonpay-production-activation.json")
+          route_path = Path("target/operations/moonpay-production-route.json")
+          path = activation_path if activation_path.exists() else route_path
+          if not path.exists():
+              summary.write_text(
+                  "# MoonPay production smoke\n\nNo verification report was produced. Inspect the failed network step.\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(0)
+          report = json.loads(path.read_text(encoding="utf-8"))
+          endpoint = report.get("endpoint") or {}
+          static = report.get("static") or []
+          lines = [
+              "# MoonPay production smoke",
+              "",
+              f"- Static assets verified: `{len(static)}/3`",
+              f"- Endpoint HTTP status: `{endpoint.get('status', 'unavailable')}`",
+              f"- Activation state: `{endpoint.get('activation_state', 'unavailable')}`",
+              f"- Provider code: `{endpoint.get('code') or 'none'}`",
+              f"- Bounty funded by this check: `{str(endpoint.get('bounty_funded')).lower()}`",
+              f"- Canonical funding event: `{endpoint.get('canonical_funding_event') or 'none'}`",
+              "",
+              "This canary creates at most a short-lived checkout plan. It never opens checkout, makes a purchase, signs a wallet transaction, or funds a bounty.",
+          ]
+          if report.get("error"):
+              lines.extend(["", f"Failure: `{report['error']}`"])
+          if report.get("failure"):
+              lines.extend(["", f"Activation blocker: `{report['failure']}`"])
+          summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload redacted MoonPay production evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonpay-production-${{ github.run_id }}
+          path: target/operations/moonpay-production-*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce active checkout creation
+        if: always() && steps.activation.outcome != 'success'
+        run: |
+          echo "The MoonPay surface or partner activation is not fully working in production." >&2
+          exit 1
