@@ -20,7 +20,7 @@
     sourceRevision: "dc05b4e01474f09f02bb1bbb69651e4ce4deb338",
     bountyFactory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     settlementToken: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    deterministicVerifier: "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+    deterministicVerifier: "0x380c1af742593dd88b6f20387e9ee693a0536731",
     signedQuorumVerifierSetHash: "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
     deterministicDeployer: "0x4e59b44847b379578588920ca78fbf26c0b4956c",
     deterministicDeployerHash: "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989",
