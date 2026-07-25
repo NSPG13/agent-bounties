@@ -22,6 +22,32 @@ ALLOWED_PREFIXES = (
 )
 
 
+def tighten_internal_page_anchor() -> None:
+    script = ROOT / "scripts/apply-moonpay-integration.py"
+    text = script.read_text(encoding="utf-8")
+    old = '''        ''' + "'''" + '''    "operator.html",
+    "recovery.html",
+''',
+        ''' + "'''" + '''    "operator.html",
+    "onramp.html",
+    "recovery.html",
+''',
+'''
+    new = '''        ''' + "'''" + '''    "chatgpt-post-widget.html",
+    "operator.html",
+    "recovery.html",
+''',
+        ''' + "'''" + '''    "chatgpt-post-widget.html",
+    "operator.html",
+    "onramp.html",
+    "recovery.html",
+''',
+'''
+    if text.count(old) != 1:
+        raise SystemExit("MoonPay seam fix anchor changed")
+    script.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
 def main() -> int:
     parts = sorted(PARTS.glob("part-*.txt"))
     if not parts:
@@ -38,6 +64,7 @@ def main() -> int:
             if path.is_absolute() or ".." in path.parts or not member.isfile():
                 raise SystemExit(f"Unsafe MoonPay payload member: {member.name}")
         bundle.extractall(ROOT, filter="data")
+    tighten_internal_page_anchor()
     print(f"Materialized {len(members)} reviewed MoonPay integration files")
     return 0
 
