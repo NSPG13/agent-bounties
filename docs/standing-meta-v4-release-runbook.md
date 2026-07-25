@@ -72,6 +72,7 @@ and the evidence receives review.
 
    ```powershell
    python scripts/standing_meta_v4_deploy.py plan --network base-sepolia `
+     --require-clean `
      --output target/standing-meta-v4-base-sepolia-plan.json
    ```
 
@@ -79,7 +80,11 @@ and the evidence receives review.
    `s_provingKeys` entry. It fails before deployment when the coordinator's
    minimum confirmations exceed three, its callback-gas ceiling is below
    150,000, its reentrancy lock is active, or the pinned key hash is not
-   registered. An address and runtime-code check alone is insufficient.
+   registered. It also records the exact clean Git commit and tree, solc and
+   Forge versions, optimizer/EVM/metadata settings, canonical-JSON
+   readiness-manifest SHA-256,
+   observation block, contract creation/runtime hashes, and a content hash over
+   the plan. An address and runtime-code check alone is insufficient.
 
 2. Fund the keeper with faucet Base Sepolia ETH from an option in the
    [official Base faucet directory](https://docs.base.org/base-chain/network-information/network-faucets).
@@ -158,6 +163,13 @@ VRF frozen sets and no-reroll behavior, the two-minute wake-up risk, primary and
 appeal timing, immutable wiring, consumer authorization, bytecode-size margins,
 the owner withdrawal cap, and incident containment. Resolve findings or record
 an explicit risk acceptance before setting `independent_review_complete=true`.
+The same manifest change must populate `independent_review_evidence` with the
+exact 40-character source commit and tree, a non-maintainer reviewer identity,
+an HTTPS report URL, the report's SHA-256, and
+`findings_resolved_or_accepted=true`. A bare completion boolean fails the
+release audit. Mainnet deployment accepts the reviewed commit or a later squash
+commit only when its complete Git tree is identical; any different tree fails
+closed.
 
 Re-run the exact Base-mainnet fork at the reviewed commit. Record compiler
 version/settings, source hashes, creation/runtime bytecode hashes, constructor
@@ -171,7 +183,10 @@ invalidates this evidence.
 2. Deploy the reviewed component graph from protected `main`, then verify it
    through an independent RPC pass. The second pass must repeat the live
    coordinator-configuration and proving-key checks; a previously valid plan
-   cannot authorize deployment after coordinator drift.
+   cannot authorize deployment after coordinator drift. The deployment command
+   refuses a dirty checkout and stores the same commit/compiler/manifest tuple
+   in its checkpoint. A resume under any different tuple fails closed before
+   another transaction is sent.
 3. Generate an unsigned, live-RPC-validated withdrawal request without loading
    the owner key:
 
@@ -220,6 +235,37 @@ separate owner action; confirm `BountyCancelled` and each `RefundWithdrawn`
 before repointing public issues to funded, claimable replacements.
 
 ## Monitoring and stop conditions
+
+Create a non-secret activity file using schema
+`agent-bounties/standing-meta-v4-monitor-activity-v1`. It pins the first block
+to scan, the canonical Open Competition factory, and the exact standing-meta
+and Open Competition canary addresses. Generate a snapshot against two
+independent RPC providers:
+
+```powershell
+python scripts/standing_meta_v4_monitor.py `
+  --network base-mainnet `
+  --deployment target/standing-meta-v4-base-mainnet-deployment.json `
+  --activity target/standing-meta-v4-mainnet-monitor-activity.json `
+  --rpc-url $env:BASE_MAINNET_RPC_URL `
+  --secondary-rpc-url $env:BASE_MAINNET_SECONDARY_RPC_URL `
+  --output target/standing-meta-v4-mainnet-monitor.json `
+  --require-healthy
+```
+
+The monitor independently revalidates immutable wiring, subscription authority
+and reserve, keeper gas, available stake pools, every observed VRF request,
+open verification cases, canonical canary provenance and settlement events,
+the actual standing-meta margin, and competition activity. It emits a SHA-256
+commitment and `earning_suppressed=true` on any failure. It never performs a
+top-up, reroll, deployment, judgment, settlement, cancellation, refund, swap,
+withdrawal, or other governance/value mutation.
+
+Agent-native readiness may set `*_MONITORING_ACTIVE=true` only while the most
+recent successful snapshot's `observed_at_unix` is also supplied as
+`*_MONITORING_OBSERVED_AT_UNIX`. The API fails closed when that timestamp is
+missing, in the future, or more than 300 seconds old. A boolean flag alone is
+not monitoring evidence.
 
 Suppress new earning immediately when any of these is false or stale:
 

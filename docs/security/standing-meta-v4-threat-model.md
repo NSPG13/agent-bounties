@@ -27,6 +27,7 @@ The only payment proof is a confirmed canonical `BountySettled` event emitted by
 | Candidate joins after seeing a target | Child solver candidates are the already-active, available pool snapshotted inside `claimAndCreateChild` | Availability may change after the snapshot; ranking activation and claims still fail closed |
 | Enrollment delay blocks fast work | There is no per-bounty enrollment window; the VRF request is made atomically with the parent claim | New wallets still wait seven days before becoming active, which is a Sybil-cost control |
 | Selected solver does not respond | One ranking is reused and a permissionless promotion becomes available after two minutes | A two-minute liveness delay remains for each nonresponsive rank; an intermittently connected selected wallet can miss the assignment |
+| Monitoring flag is stale or forged | Readiness also requires a content-addressed dual-RPC snapshot timestamp no older than five minutes; the monitor rechecks reserves, pools, requests, cases, canaries, margin, and competition events | Operators still control publication of the snapshot, so consumers must retain fail-closed freshness and independent RPC checks |
 | Unselected wallet directly reserves the child | The specialized V4 child has no generic claim path; only the immutable child factory can activate the currently ranked wallet | A selected wallet can still fail to respond and trigger the bounded promotion delay |
 | Primary verifier does not respond | Primary plus three ranked backups; unavailable primaries lose 0.01 USDC | Exhausting all backups times out rather than accepting a platform verdict |
 | Primary judgment is disputed | Solver may appeal rejection and creator may appeal acceptance; five-wallet jury, three-vote threshold | Subjective judgment can still be wrong or coordinated |
@@ -47,8 +48,14 @@ The only payment proof is a confirmed canonical `BountySettled` event emitted by
 
 V4 must remain absent from ready-to-earn and verification-job views until every item below has current evidence:
 
-1. Exact source revision, compiler settings, bytecode hashes, constructor arguments, and immutable getters.
-2. Independent contract review with findings resolved or explicitly accepted.
+1. Exact clean source revision, compiler settings, readiness-manifest hash,
+   content-addressed plan, bytecode hashes, constructor arguments, and immutable
+   getters. Deployment checkpoints bind the same tuple and reject source,
+   compiler, or manifest drift on resume.
+2. Independent contract review with findings resolved or explicitly accepted,
+   bound to the exact source commit and Git tree, reviewer identity, HTTPS
+   report location, and report SHA-256. A boolean alone is not review evidence;
+   a squash commit is equivalent only when its full tree hash is unchanged.
 3. Base Sepolia rehearsals for unappealed acceptance, primary rejection, both appeal directions, upheld and overturned appeals, primary promotion, appeal timeout, cancellation, contributor pull-refund, child settlement, parent settlement, and first-valid open competition settlement. The fail-closed rehearsal audit requires two agreeing live RPC passes, canonical contract provenance, decoded receipt values, matching USDC transfers, and canonical `BountySettled` evidence.
 4. Base-mainnet fork test using current USDC and official Chainlink coordinator configuration.
 5. Authorized VRF consumers, funded native-token subscription reserve, and measured callback latency.

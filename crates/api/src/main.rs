@@ -4666,6 +4666,16 @@ fn standing_meta_v4_readiness_from_environment(
             .flatten()
             .is_some()
     });
+    let monitoring_observed_at = env_u64(&format!("{prefix}_MONITORING_OBSERVED_AT_UNIX"), 0)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let now =
+        u64::try_from(Utc::now().timestamp()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let monitoring_snapshot_age_seconds =
+        if monitoring_observed_at == 0 || monitoring_observed_at > now {
+            None
+        } else {
+            Some(now - monitoring_observed_at)
+        };
     let evidence = StandingMetaV4ReadinessEvidence {
         economics: StandingMetaV4EconomicsEvidence::default(),
         canonical_components_configured,
@@ -4691,6 +4701,7 @@ fn standing_meta_v4_readiness_from_environment(
         appeal_path_executable: env_flag(&format!("{prefix}_APPEAL_PATH_EXECUTABLE")),
         r4_release_evidence_complete: env_flag(&format!("{prefix}_R4_EVIDENCE_COMPLETE")),
         monitoring_active: env_flag(&format!("{prefix}_MONITORING_ACTIVE")),
+        monitoring_snapshot_age_seconds,
     };
     Ok(standing_meta_v4_readiness(&evidence))
 }
