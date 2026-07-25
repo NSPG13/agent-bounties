@@ -25,24 +25,24 @@ ALLOWED_PREFIXES = (
 def tighten_internal_page_anchor() -> None:
     script = ROOT / "scripts/apply-moonpay-integration.py"
     text = script.read_text(encoding="utf-8")
-    old = '''        ''' + "'''" + '''    "operator.html",
-    "recovery.html",
+    old = """        '''    \"operator.html\",
+    \"recovery.html\",
 ''',
-        ''' + "'''" + '''    "operator.html",
-    "onramp.html",
-    "recovery.html",
+        '''    \"operator.html\",
+    \"onramp.html\",
+    \"recovery.html\",
 ''',
-'''
-    new = '''        ''' + "'''" + '''    "chatgpt-post-widget.html",
-    "operator.html",
-    "recovery.html",
+"""
+    new = """        '''    \"chatgpt-post-widget.html\",
+    \"operator.html\",
+    \"recovery.html\",
 ''',
-        ''' + "'''" + '''    "chatgpt-post-widget.html",
-    "operator.html",
-    "onramp.html",
-    "recovery.html",
+        '''    \"chatgpt-post-widget.html\",
+    \"operator.html\",
+    \"onramp.html\",
+    \"recovery.html\",
 ''',
-'''
+"""
     if text.count(old) != 1:
         raise SystemExit("MoonPay seam fix anchor changed")
     script.write_text(text.replace(old, new, 1), encoding="utf-8")
