@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#07110c">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <title>New bounty | Agent Bounties</title>
-    <meta name="description" content="Use your own ChatGPT, Claude, or Gemini account to prepare a clear bounty draft, then review it and connect a wallet.">
+    <meta name="description" content="Use your own ChatGPT, Claude, or Gemini account to prepare a clear bounty draft, then review it and create or connect a wallet.">
     <link rel="canonical" href="https://agentbounties.app/objective.html">
     <meta property="og:title" content="New bounty | Agent Bounties">
     <meta property="og:description" content="Prepare a bounty with the AI account that already knows you, then review and post it on Agent Bounties.">
@@ -17,8 +17,9 @@
     <link rel="stylesheet" href="bounty-chat.css?v=4">
     <link rel="stylesheet" href="bounty-chat-controls.css?v=1">
     <link rel="stylesheet" href="ai-bounty-handoff.css?v=2">
+    <link rel="stylesheet" href="wallet-adapters.css?v=1">
   </head>
-  <body class="composer-page chat-app-page">
+  <body class="composer-page chat-app-page" data-wallet-build="20260726-coinbase-1">
     <header class="chat-app-header">
       <a class="chat-app-brand" href="index.html" aria-label="Agent Bounties home">
         <span aria-hidden="true">A</span>
@@ -75,7 +76,7 @@
                   <button class="button secondary" type="button" data-revise-card>Edit in chat</button>
                   <button type="button" data-share-card hidden>Share draft</button>
                   <button class="button secondary" type="button" data-approve-card data-approved="false">Approve</button>
-                  <button class="button primary" type="button" data-open-funding disabled>Connect wallet</button>
+                  <button class="button primary" type="button" data-open-funding disabled>Create or connect wallet</button>
                 </div>
               </div>
             </article>
@@ -132,7 +133,7 @@
               <output data-ai-import-status aria-live="polite"></output>
             </div>
 
-            <p class="ai-safety-note">Nothing is posted, funded, or signed until you review the card and explicitly approve the wallet transaction.</p>
+            <p class="ai-safety-note">Nothing is posted, funded, or signed until you review the card and explicitly approve the wallet action.</p>
           </section>
         </div>
 
@@ -168,8 +169,8 @@
         <div class="payment-dialog-inner">
           <div class="payment-dialog-head">
             <div>
-              <h2 id="funding-dialog-title">Connect wallet</h2>
-              <p>Connecting does not post or fund anything.</p>
+              <h2 id="funding-dialog-title">Create or connect wallet</h2>
+              <p>Use email, SMS, social login, or an existing wallet. Connecting does not post or fund anything.</p>
             </div>
             <button class="dialog-close" type="button" data-close-funding aria-label="Close wallet window">×</button>
           </div>
@@ -177,7 +178,7 @@
           <button type="button" data-payment-method="crypto" hidden>Crypto Wallet</button>
 
           <section class="wallet-picker-panel" data-wallet-panel hidden>
-            <p data-wallet-message>Looking for wallets…</p>
+            <p data-wallet-message>Looking for embedded and existing wallets…</p>
             <div class="wallet-options" data-wallet-options></div>
           </section>
 
@@ -186,12 +187,13 @@
               <div><span>Wallet</span><strong data-wallet-account>—</strong></div>
               <div><span>Required</span><strong data-wallet-required>—</strong></div>
               <div><span>Base USDC</span><strong data-wallet-usdc>—</strong></div>
-              <div><span>Base ETH</span><strong data-wallet-eth>—</strong></div>
+              <div><span>Transaction gas</span><strong data-wallet-eth>Sponsored</strong></div>
             </div>
 
             <div class="funding-help" data-funding-help hidden>
-              <p>This wallet needs <strong data-missing-usdc>—</strong> and a small amount of Base ETH.</p>
+              <p>This wallet needs <strong data-missing-usdc>—</strong>. Agent Bounties sponsors the transaction gas.</p>
               <p>Never enter a recovery phrase or private key here.</p>
+              <a class="button secondary" href="onramp.html?return=objective.html%23post">Buy Base USDC with MoonPay</a>
             </div>
 
             <div class="wallet-tools">
@@ -204,7 +206,7 @@
             <button class="button primary" type="button" data-fund-now disabled>Review and post</button>
           </section>
 
-          <output class="payment-status" data-payment-status aria-live="polite">Approve the draft before connecting a wallet.</output>
+          <output class="payment-status" data-payment-status aria-live="polite">Approve the draft before creating or connecting a wallet.</output>
         </div>
       </dialog>
 
@@ -217,11 +219,14 @@
 
     <script src="analytics-config.js"></script>
     <script src="analytics.js"></script>
+    <script src="wallet-runtime-config.js?v=1"></script>
+    <script src="wallet-adapters.js?v=1"></script>
+    <script src="coinbase-embedded-wallet.bundle.js?v=1"></script>
     <script src="legal-consent.js"></script>
     <script src="evm.js"></script>
     <script src="bounty-entry.js?v=1"></script>
     <script src="ai-bounty-handoff.js?v=5"></script>
-    <script src="bounty-composer-v2.js?v=2"></script>
+    <script src="bounty-composer-v2.js?v=3"></script>
     <script src="bounty-chat-ui.js?v=4"></script>
   </body>
 </html>
