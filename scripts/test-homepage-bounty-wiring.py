@@ -62,11 +62,14 @@ for marker in (
     'src="bounty-chat-ui.js?v=4"',
     'data-ai-handoff',
     'data-ai-draft-import',
-    'data-wallet-provider',
+    'data-wallet-options',
     'data-wallet-required',
     'data-objective-onramp-link',
 ):
     require("objective chat", objective_html, marker)
+
+if 'data-wallet-provider' in objective_html:
+    raise SystemExit("objective chat still exposes the legacy single-provider wallet selector")
 
 ordered_scripts = (
     'src="wallet-runtime-config.js?v=1"',
@@ -168,4 +171,4 @@ for key, expected in expected_endpoints.items():
     if discovery.get("endpoints", {}).get(key) != expected:
         raise SystemExit(f"discovery endpoint {key} does not route to {expected}")
 
-print("homepage bounty entry, embedded-wallet, and agent-mode wiring are valid")
+print("homepage bounty entry, provider-neutral embedded-wallet, and agent-mode wiring are valid")
