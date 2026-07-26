@@ -12,14 +12,16 @@ nramp-callout">
     path.write_text(source.replace("Detecting browser wallets", "Detecting wallets"), encoding="utf-8")
     replace_once(
         path,
-        '''              <select data-wallet-provider aria-label="Wallet provider">
-                <option>Detecting wallets</option>
-              </select>
+        '''                <select data-wallet-provider aria-label="Wallet provider">
+                  <option>Detecting wallets</option>
+                </select>
+              </label>
               <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
 ''',
-        '''              <select data-wallet-provider data-wallet-requires="direct-transactions" aria-label="Wallet provider">
-                <option>Detecting wallets</option>
-              </select>
+        '''                <select data-wallet-provider data-wallet-requires="direct-transactions" aria-label="Wallet provider">
+                  <option>Detecting wallets</option>
+                </select>
+              </label>
               <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
 ''',
     )
@@ -144,6 +146,4 @@ def patch_autonomous() -> None:
         `Contribution: ${form.elements.amount.value} USDC`,
         contractAccount
           ? "This wallet account will review its supported call path."
-          : "Your wallet signs exact Base USDC authorization; the Agent Bounties relayer pays ETH gas.",
-      ]);
-      let txHash = null;
+          : "Your wallet signs exact Base USDC authorization; the Agent Bounties 
