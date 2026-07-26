@@ -17,9 +17,57 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Reject newly introduced vulnerable dependencies
+      - name: Review newly introduced dependencies
+        id: review
+        continue-on-error: true
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: moderate
           comment-summary-in-pr: on-failure
           show-patched-versions: true
+
+      - name: Preserve machine-readable dependency findings
+        if: always()
+        env:
+          DEPENDENCY_CHANGES: ${{ steps.review.outputs.dependency-changes }}
+          VULNERABLE_CHANGES: ${{ steps.review.outputs.vulnerable-changes }}
+          INVALID_LICENSE_CHANGES: ${{ steps.review.outputs.invalid-license-changes }}
+          DENIED_CHANGES: ${{ steps.review.outputs.denied-changes }}
+        shell: bash
+        run: |
+          mkdir -p target/dependency-review
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          output = Path("target/dependency-review")
+          for name in (
+              "DEPENDENCY_CHANGES",
+              "VULNERABLE_CHANGES",
+              "INVALID_LICENSE_CHANGES",
+              "DENIED_CHANGES",
+          ):
+              raw = os.environ.get(name, "")
+              path = output / f"{name.lower().replace('_', '-')}.json"
+              try:
+                  value = json.loads(raw) if raw else []
+              except json.JSONDecodeError:
+                  value = {"unparsed": raw}
+              path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload dependency-review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-review-${{ github.run_id }}
+          path: target/dependency-review/*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce dependency review
+        if: always() && steps.review.outcome != 'success'
+        run: |
+          echo "Dependency review rejected one or more newly introduced packages. Inspect the PR comment and uploaded JSON evidence." >&2
+          exit 1
