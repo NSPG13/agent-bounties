@@ -158,8 +158,10 @@ def main() -> int:
         SITE / "moonpay-onramp.js",
         SITE / "moonpay-direct-fallback.js",
         SITE / "moonpay-link.js",
+        ROOT / "scripts/test-moonpay-direct-fallback.js",
     ):
         subprocess.run(["node", "--check", str(script)], cwd=ROOT, check=True)
+    subprocess.run(["node", "scripts/test-moonpay-direct-fallback.js"], cwd=ROOT, check=True)
 
     # The official MoonPay documentation vector is intentionally committed as a Rust unit test.
     if "oIJxSghyzll/BLhUFdQZhkxf7DAS8REFaWr/ibO+K8Q=" not in backend:
