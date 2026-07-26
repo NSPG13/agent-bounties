@@ -100,7 +100,6 @@ for (const retired of [
   "/v1/base/release-plan",
   "settlement signer",
   "/v1/base/autonomous-bounties/authorized-contribution-plan",
-  "sendTransaction(authorized.relay_transaction",
 ]) {
   assert(!source.includes(retired), `autonomous wallet flow contains retired behavior: ${retired}`);
 }
@@ -153,6 +152,18 @@ assert(source.includes('params.get("bountyContract")'));
 assert(source.includes("Sign once to claim"));
 assert(source.includes("Sponsored refundable bond"));
 assert(!source.includes("/v1/base/autonomous-bounties/authorized-claim-plan"));
+const fundingStart = source.indexOf("async function fundBounty(event)");
+const submissionStart = source.indexOf("async function submitBounty(event)", fundingStart);
+assert(fundingStart >= 0 && submissionStart > fundingStart, "funding function boundaries are missing");
+const fundingBody = source.slice(fundingStart, submissionStart);
+assert(
+  !fundingBody.includes("/v1/base/autonomous-bounties/authorized-contribution-plan"),
+  "EOA funding must not call the retired user-gas authorized-contribution planner",
+);
+assert(
+  !fundingBody.includes("sendTransaction(authorized.relay_transaction"),
+  "EOA funding must not broadcast a relayer transaction from the user's wallet",
+);
 
 for (const page of ["index.html", "post.html", "funding.html", "earn.html", "operator.html", "recovery.html"]) {
   const html = fs.readFileSync(path.join(repoRoot, "site", page), "utf8");
