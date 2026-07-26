@@ -1,169 +1,120 @@
-name: Bootstrap Coinbase embedded wallet
+name: Audit Coinbase embedded wallet
 
 on:
-  push:
-    branches:
-      - maintainer/coinbase-embedded-wallet
   pull_request:
     branches:
       - main
     paths:
       - ".github/workflows/coinbase-embedded-wallet-bootstrap.yml"
-      - "scripts/bootstrap-coinbase-embedded-wallet.py.part-*"
+      - "tools/coinbase-embedded-wallet/**"
+      - "site/coinbase-embedded-wallet.bundle.*"
 
 permissions:
   contents: read
   issues: write
 
 concurrency:
-  group: coinbase-wallet-bootstrap-${{ github.ref }}
-  cancel-in-progress: false
+  group: coinbase-wallet-audit-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  generate-and-verify:
-    if: github.actor != 'github-actions[bot]'
+  audit-and-reproduce:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           ref: maintainer/coinbase-embedded-wallet
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Reassemble and apply fail-closed repository patch
-        id: apply
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          cat scripts/bootstrap-coinbase-embedded-wallet.py.part-* > scripts/bootstrap-coinbase-embedded-wallet.py
-          python scripts/bootstrap-coinbase-embedded-wallet.py 2>&1 | tee /tmp/coinbase-bootstrap.log
-
-      - name: Publish exact bootstrap failure
-        if: steps.apply.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          {
-            echo '❌ **Coinbase embedded-wallet bootstrap failed before dependency resolution**'
-            echo
-            echo '```text'
-            tail -n 80 /tmp/coinbase-bootstrap.log
-            echo '```'
-            echo
-            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          } > /tmp/coinbase-bootstrap-failure.md
-          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-bootstrap-failure.md
-
-      - name: Enforce successful repository patch
-        if: steps.apply.outcome == 'failure'
-        run: exit 1
-
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: "npm"
-          cache-dependency-path: tools/coinbase-embedded-wallet/package.json
+          cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
 
-      - name: Resolve and lock exact dependencies
-        run: npm install --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+      - name: Install exact lockfile
+        run: npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
 
       - name: Prepare reviewed esbuild binary
         run: npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
 
-      - name: Compile browser adapter
-        run: npm run build --prefix tools/coinbase-embedded-wallet
-
-      - name: Verify adapter, linking UI, x402 relay, and site
+      - name: Reproduce committed bundle and tests
         run: |
+          cp site/coinbase-embedded-wallet.bundle.js /tmp/coinbase-wallet.js
+          cp site/coinbase-embedded-wallet.bundle.css /tmp/coinbase-wallet.css
+          npm run build --prefix tools/coinbase-embedded-wallet
+          cmp /tmp/coinbase-wallet.js site/coinbase-embedded-wallet.bundle.js
+          cmp /tmp/coinbase-wallet.css site/coinbase-embedded-wallet.bundle.css
           python scripts/check-coinbase-embedded-wallet.py
           python scripts/check-site.py
           node scripts/test-wallet-adapter-registry.js
           node scripts/test-x402-browser.js
 
-      - name: Normalize and verify generated text
+      - name: Resolve npm advisories for production dependencies
+        id: audit
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          rm -f scripts/bootstrap-coinbase-embedded-wallet.py
-          git restore .github/workflows/pages.yml
-          git add -A
-          git diff --cached --name-only -z | while IFS= read -r -d '' file; do
-            if [[ -f "$file" ]] && grep -Iq . "$file"; then
-              sed -i 's/[[:blank:]]\+$//' "$file"
-            fi
-          done
-          git add -A
-          git diff --cached --check
+          set -o pipefail
+          npm audit --prefix tools/coinbase-embedded-wallet --omit=dev --json > /tmp/coinbase-npm-audit.json
 
-      - name: Record dependency and bundle evidence
-        id: evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          lock_sha="$(sha256sum tools/coinbase-embedded-wallet/package-lock.json | awk '{print $1}')"
-          js_sha="$(sha256sum site/coinbase-embedded-wallet.bundle.js | awk '{print $1}')"
-          css_sha="$(sha256sum site/coinbase-embedded-wallet.bundle.css | awk '{print $1}')"
-          js_bytes="$(wc -c < site/coinbase-embedded-wallet.bundle.js | tr -d ' ')"
-          css_bytes="$(wc -c < site/coinbase-embedded-wallet.bundle.css | tr -d ' ')"
-          {
-            echo "lock_sha=${lock_sha}"
-            echo "js_sha=${js_sha}"
-            echo "css_sha=${css_sha}"
-            echo "js_bytes=${js_bytes}"
-            echo "css_bytes=${css_bytes}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Stage generated maintainer artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf target/coinbase-wallet-generated
-          mkdir -p target/coinbase-wallet-generated
-          while IFS= read -r -d '' file; do
-            [[ -f "$file" ]] || continue
-            mkdir -p "target/coinbase-wallet-generated/$(dirname "$file")"
-            cp "$file" "target/coinbase-wallet-generated/$file"
-          done < <(git diff --cached --name-only -z)
-          find target/coinbase-wallet-generated -type f -print0 | sort -z | xargs -0 sha256sum > target/coinbase-wallet-generated/SHA256SUMS
-
-      - name: Upload generated lockfile, bundle, source, and tests
-        uses: actions/upload-artifact@v4
-        with:
-          name: coinbase-embedded-wallet-generated-${{ github.run_id }}
-          path: target/coinbase-wallet-generated
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Publish build evidence on the maintainer notice
+      - name: Publish bounded advisory report
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-          LOCK_SHA: ${{ steps.evidence.outputs.lock_sha }}
-          JS_SHA: ${{ steps.evidence.outputs.js_sha }}
-          CSS_SHA: ${{ steps.evidence.outputs.css_sha }}
-          JS_BYTES: ${{ steps.evidence.outputs.js_bytes }}
-          CSS_BYTES: ${{ steps.evidence.outputs.css_bytes }}
         shell: bash
         run: |
-          cat > /tmp/coinbase-wallet-evidence.md <<EOF
-          ✅ **Coinbase embedded-wallet source, dependency lock, and browser bundle generated**
+          python - <<'PY'
+          import json
+          from pathlib import Path
 
-          - Node: 22
-          - Coinbase SDK packages: exact 0.0.118 pins
-          - Explicit authentication-method linking: compiled with Coinbase \`LinkAuth\`
-          - Existing wallet choices: retained behind EIP-1193/EIP-6963
-          - EOA funding path: exact EIP-3009 signature, x402 gas-only relay, canonical \`FundingAdded\`
-          - User gas transaction in EOA funding path: none
-          - package-lock SHA-256: \`${LOCK_SHA}\`
-          - JS bundle: \`${JS_BYTES}\` bytes, SHA-256 \`${JS_SHA}\`
-          - CSS bundle: \`${CSS_BYTES}\` bytes, SHA-256 \`${CSS_SHA}\`
-          - Generated artifact: \`coinbase-embedded-wallet-generated-${GITHUB_RUN_ID}\`
+          source = Path('/tmp/coinbase-npm-audit.json')
+          if source.exists():
+              try:
+                  report = json.loads(source.read_text(encoding='utf-8'))
+              except Exception as error:
+                  report = {'error': f'invalid npm audit JSON: {error}'}
+          else:
+              report = {'error': 'npm audit did not produce a report'}
+          metadata = report.get('metadata') or {}
+          vulnerabilities = report.get('vulnerabilities') or {}
+          lines = [
+              '## Coinbase embedded-wallet dependency audit',
+              '',
+              f"Production totals: `{json.dumps(metadata.get('vulnerabilities') or {}, sort_keys=True)}`",
+              '',
+          ]
+          if report.get('error'):
+              lines.append(f"Audit error: `{report['error']}`")
+          elif not vulnerabilities:
+              lines.append('No production dependency advisory was reported by npm audit.')
+          else:
+              for name in sorted(vulnerabilities):
+                  item = vulnerabilities[name] or {}
+                  via = item.get('via') or []
+                  advisory_names = []
+                  for entry in via:
+                      if isinstance(entry, str):
+                          advisory_names.append(entry)
+                      elif isinstance(entry, dict):
+                          advisory_names.append(str(entry.get('title') or entry.get('name') or entry.get('url') or 'advisory'))
+                  lines.extend([
+                      f"- **{name}** — severity `{item.get('severity')}`; direct `{item.get('isDirect')}`; range `{item.get('range')}`; fix `{json.dumps(item.get('fixAvailable'))}`",
+                      f"  - via: {', '.join(advisory_names[:8]) or 'not supplied'}",
+                      f"  - effects: {', '.join(item.get('effects') or []) or 'none supplied'}",
+                  ])
+          lines.extend([
+              '',
+              'The report contains package names and advisory metadata only; no credentials or wallet data are involved.',
+          ])
+          Path('/tmp/coinbase-npm-audit.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-npm-audit.md
 
-          Deterministic adapter, x402, site, syntax, generated-bundle, and staged-whitespace checks passed. The generated files are ready for maintainer-admin application; the reviewed Pages workflow remains a separate maintainer change. CDP project creation, production-domain allowlisting, and live authentication require an authenticated CDP Portal session and are not represented by this build proof.
-          EOF
-          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-wallet-evidence.md
+      - name: Enforce moderate-or-higher production audit gate
+        if: steps.audit.outcome == 'failure'
+        run: exit 1
