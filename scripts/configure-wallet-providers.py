@@ -9,13 +9,24 @@ import re
 from pathlib import Path
 
 PLACEHOLDER = "__COINBASE_CDP_PROJECT_ID__"
+CANONICAL_REPOSITORY = "NSPG13/agent-bounties"
+CANONICAL_PROJECT_ID = "9dfed88a-0b37-47e8-b867-96f1dfd0d4ee"
 PROJECT_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
+
+def configured_default() -> str:
+    supplied = os.getenv("COINBASE_CDP_PROJECT_ID", "").strip()
+    if supplied:
+        return supplied
+    if os.getenv("GITHUB_ACTIONS", "").lower() == "true" and os.getenv("GITHUB_REPOSITORY") == CANONICAL_REPOSITORY:
+        return CANONICAL_PROJECT_ID
+    return ""
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--site-root", default="site")
-    parser.add_argument("--coinbase-project-id", default=os.getenv("COINBASE_CDP_PROJECT_ID", ""))
+    parser.add_argument("--coinbase-project-id", default=configured_default())
     parser.add_argument("--allow-disabled", action="store_true")
     return parser.parse_args()
 
