@@ -1,0 +1,73 @@
+name: Bootstrap Coinbase Production
+
+on:
+  push:
+    branches: [maintainer/coinbase-embedded-wallet]
+    paths:
+      - ".github/workflows/bootstrap-coinbase-production.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: bootstrap-coinbase-production
+  cancel-in-progress: false
+
+jobs:
+  configure-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COINBASE_CDP_PROJECT_ID: 9dfed88a-0b37-47e8-b867-96f1dfd0d4ee
+      PRODUCTION_ORIGIN: https://agentbounties.app
+    steps:
+      - name: Create or update the public repository project variable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          endpoint="repos/${GITHUB_REPOSITORY}/actions/variables/COINBASE_CDP_PROJECT_ID"
+          if gh api "${endpoint}" >/dev/null 2>&1; then
+            gh api --method PATCH "${endpoint}" \
+              --raw-field name=COINBASE_CDP_PROJECT_ID \
+              --raw-field value="${COINBASE_CDP_PROJECT_ID}" >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/variables" \
+              --raw-field name=COINBASE_CDP_PROJECT_ID \
+              --raw-field value="${COINBASE_CDP_PROJECT_ID}" >/dev/null
+          fi
+          observed="$(gh api "${endpoint}" --jq .value)"
+          test "${observed}" = "${COINBASE_CDP_PROJECT_ID}"
+          echo "Configured public Coinbase project ID ${observed:0:4}…${observed: -4}."
+
+      - name: Verify Coinbase accepts the production web origin
+        run: |
+          set -euo pipefail
+          endpoint="https://api.cdp.coinbase.com/embedded-wallet-api/projects/${COINBASE_CDP_PROJECT_ID}"
+          status="$(curl --silent --show-error \
+            --output /tmp/cdp-preflight-body \
+            --dump-header /tmp/cdp-preflight-headers \
+            --write-out '%{http_code}' \
+            --request OPTIONS "${endpoint}" \
+            --header "Origin: ${PRODUCTION_ORIGIN}" \
+            --header 'Access-Control-Request-Method: POST' \
+            --header 'Access-Control-Request-Headers: content-type' \
+            --max-time 30)"
+          echo "Coinbase preflight HTTP ${status}"
+          tr -d '\r' < /tmp/cdp-preflight-headers \
+            | grep -i '^access-control-allow-origin:' \
+            | sed 's/:.*/: [verified production origin]/'
+          test "${status}" -ge 200
+          test "${status}" -lt 300
+          tr -d '\r' < /tmp/cdp-preflight-headers \
+            | grep -Eiq '^access-control-allow-origin:[[:space:]]*https://agentbounties\.app[[:space:]]*$'
+
+      - name: Record the external configuration boundary
+        run: |
+          cat <<'EOF'
+          Coinbase project identity is public client configuration.
+          No Coinbase API key, API secret, OTP, OAuth credential, wallet secret,
+          private key, or seed phrase was written to GitHub or the browser bundle.
+          EOF
