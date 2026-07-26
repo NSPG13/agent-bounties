@@ -16,6 +16,10 @@ REQUIRED_FILES = [
     "earn.html",
     "post.html",
     "funding.html",
+    "onramp.html",
+    "onramp.css",
+    "moonpay-onramp.js",
+    "moonpay-link.js",
     "objective.html",
     "objective.css",
     "objective.js",
@@ -77,6 +81,7 @@ INTERNAL_NOINDEX_PAGES = {
     "cancel.html",
     "chatgpt-post-widget.html",
     "operator.html",
+    "onramp.html",
     "recovery.html",
     "success.html",
 }
@@ -1149,7 +1154,7 @@ def main() -> int:
         fail("standing-meta-v2 deployment manifest requires a successful receipt")
     standing_components = standing_meta_deployment.get("components", {})
     if standing_components.get("verifier_module") != "0xe573cb4f471d38b5bf10ce82237251ac902c9867":
-        fail("standing-meta-v2 deployment manifest has the wrong historical verifier")
+        fail("historical standing-meta-v2 deployment manifest has the wrong verifier")
     if bounded_deployment["canonical"]["deterministic_verifier"] != "0x380c1af742593dd88b6f20387e9ee693a0536731":
         fail("bounded wallet manifest does not trust the durable verifier router")
     if standing_components.get("verifier_set_hash") != bounded_deployment["canonical"]["signed_quorum_verifier_set_hash"]:

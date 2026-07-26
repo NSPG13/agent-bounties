@@ -1,0 +1,112 @@
+name: MoonPay Production Smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/moonpay-production-smoke.yml"
+      - "scripts/check-moonpay-production.py"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moonpay-production-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify at least one active MoonPay on-ramp path
+        id: availability
+        continue-on-error: true
+        run: |
+          python scripts/check-moonpay-production.py \
+            --output target/operations/moonpay-production-availability.json
+
+      - name: Check server-signed partner activation
+        id: activation
+        continue-on-error: true
+        run: |
+          python scripts/check-moonpay-production.py \
+            --require-checkout \
+            --output target/operations/moonpay-production-activation.json
+
+      - name: Publish redacted verification summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          availability_path = Path("target/operations/moonpay-production-availability.json")
+          activation_path = Path("target/operations/moonpay-production-activation.json")
+          if not availability_path.exists():
+              summary.write_text(
+                  "# MoonPay production smoke\n\nNo availability report was produced. Inspect the failed network step.\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(0)
+
+          availability = json.loads(availability_path.read_text(encoding="utf-8"))
+          activation = (
+              json.loads(activation_path.read_text(encoding="utf-8"))
+              if activation_path.exists()
+              else availability
+          )
+          endpoint = availability.get("endpoint") or activation.get("endpoint") or {}
+          active_paths = availability.get("active_paths") or {}
+          direct = availability.get("direct_fallback") or {}
+          static = availability.get("static") or []
+          lines = [
+              "# MoonPay production smoke",
+              "",
+              f"- On-ramp available: `{str(availability.get('success')).lower()}`",
+              f"- Static assets verified: `{len(static)}/4`",
+              f"- Direct consumer fallback active: `{str(active_paths.get('direct_consumer')).lower()}`",
+              f"- Server-signed partner checkout active: `{str(active_paths.get('signed_partner')).lower()}`",
+              f"- Partner activation state: `{endpoint.get('activation_state', 'unavailable')}`",
+              f"- Endpoint HTTP status: `{endpoint.get('status', 'unavailable')}`",
+              f"- Provider code: `{endpoint.get('code') or 'none'}`",
+              f"- Direct fallback wallet-prefilled: `{str(direct.get('wallet_prefilled')).lower()}`",
+              f"- Bounty funded by this check: `{str(endpoint.get('bounty_funded', direct.get('bounty_funded'))).lower()}`",
+              f"- Canonical funding event: `{endpoint.get('canonical_funding_event') or direct.get('canonical_funding_event') or 'none'}`",
+              "",
+              "This canary never opens checkout, makes a purchase, signs a wallet transaction, or funds a bounty. The direct path requires the user to copy and verify the wallet and Base asset inside MoonPay.",
+          ]
+          if availability.get("error"):
+              lines.extend(["", f"Availability failure: `{availability['error']}`"])
+          if activation.get("failure"):
+              lines.extend(["", f"Partner activation blocker: `{activation['failure']}`"])
+          if endpoint.get("error"):
+              lines.extend(["", f"Provider configuration detail: `{endpoint['error']}`"])
+          summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload redacted MoonPay production evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonpay-production-${{ github.run_id }}
+          path: target/operations/moonpay-production-*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce an active MoonPay on-ramp path
+        if: always() && steps.availability.outcome != 'success'
+        run: |
+          echo "Neither the signed MoonPay checkout nor the direct consumer fallback is working in production." >&2
+          exit 1

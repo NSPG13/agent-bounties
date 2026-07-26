@@ -3,157 +3,173 @@
   "schema_version": 1,
   "app_info": {
     "display_name": "Agent Bounties",
-    "subtitle": "Post and complete bounties",
-    "description": "Agent Bounties helps people turn goals into reviewable bounties and use ChatGPT to find funded AI work, check claim readiness, prepare completed work, publish evidence, and confirm settlement. Explicitly unfunded voluntary requests remain clearly separate from paid canonical bounties.",
-    "category": "PRODUCTIVITY"
+    "subtitle": "Find and coordinate bounties",
+    "description": "Agent Bounties helps people browse public digital-work bounties, interact with shareable in-chat cards, discuss opportunities, break large objectives into reviewable child bounties, and prepare first-party reviews for posting, funding, competing, completing, and verifying work.",
+    "category": "BUSINESS"
   },
   "tools": {
-    "publish_unfunded_bounty": {
-      "annotations": {"readOnlyHint": false, "openWorldHint": true, "destructiveHint": true},
+    "get_bounty_feed": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
       "justifications": {
-        "read_only_justification": "Creates a public seven-day voluntary request instead of only retrieving or computing data.",
-        "open_world_justification": "Publishes bounty content to a publicly discoverable internet endpoint.",
-        "destructive_justification": "The public request has no withdrawal operation, although its idempotency key prevents duplicate retries."
-      }
-    },
-    "list_unfunded_bounties": {
-      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
-      "justifications": {
-        "read_only_justification": "Only retrieves public unfunded request and solution records.",
-        "open_world_justification": "Does not publish or modify any external system.",
-        "destructive_justification": "Cannot delete, overwrite, revoke, or otherwise irreversibly change data."
-      }
-    },
-    "submit_unfunded_bounty_solution": {
-      "annotations": {"readOnlyHint": false, "openWorldHint": true, "destructiveHint": true},
-      "justifications": {
-        "read_only_justification": "Publishes or replaces a registered agent's solution record.",
-        "open_world_justification": "Makes the submitted solution visible on the public internet.",
-        "destructive_justification": "Can replace the agent's existing public solution and provides no delete operation."
-      }
-    },
-    "prepare_bounty_post": {
-      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
-      "justifications": {
-        "read_only_justification": "Only computes a review card and handoff URL without creating a bounty or requesting a signature.",
+        "read_only_justification": "Retrieves the current public bounty projection without creating or updating any record.",
         "open_world_justification": "Does not publish content or change any external system.",
-        "destructive_justification": "Moves no funds and makes no irreversible state change."
+        "destructive_justification": "Does not delete, overwrite, revoke, send, or transact."
       }
     },
-    "list_autonomous_bounties": {
-      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+    "render_bounty_feed": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
       "justifications": {
-        "read_only_justification": "Only reads event-derived canonical bounty inventory.",
-        "open_world_justification": "Does not publish or modify any external system.",
-        "destructive_justification": "Cannot delete, overwrite, revoke, or otherwise irreversibly change data."
+        "read_only_justification": "Retrieves bounty data and renders the interactive feed without changing bounty state.",
+        "open_world_justification": "Only displays public data inside ChatGPT and does not publish externally.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, or transact."
       }
     },
-    "prepare_agent_to_earn": {
-      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+    "prepare_bounty_action": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
       "justifications": {
-        "read_only_justification": "Checks public wallet and bounty readiness without claiming or changing state.",
-        "open_world_justification": "Does not publish content or modify an external system.",
-        "destructive_justification": "Makes no transaction or irreversible change."
+        "read_only_justification": "Creates an expiring idempotent action-intent record for a first-party review handoff.",
+        "open_world_justification": "Creates a hosted Agent Bounties authorization session that can be opened on the first-party website.",
+        "destructive_justification": "Does not request a signature, broadcast a transaction, publish a bounty, or change canonical lifecycle state."
       }
     },
-    "agent_native_claim": {
-      "annotations": {"readOnlyHint": false, "openWorldHint": true, "destructiveHint": true},
+    "get_bounty_action_status": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
       "justifications": {
-        "read_only_justification": "Can relay a wallet-authorized claim instead of only returning readiness data.",
-        "open_world_justification": "Changes the public canonical bounty state on Base.",
-        "destructive_justification": "A confirmed on-chain bounty claim is an irreversible transaction guarded by explicit wallet approval and idempotent replay."
+        "read_only_justification": "Reads one hosted intent and its indexed canonical-event status without changing it.",
+        "open_world_justification": "Does not publish content or change any external system.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, or transact."
       }
     },
-    "prepare_autonomous_bounty_submission": {
-      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+    "compile_objective_with_cloud_agent": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
       "justifications": {
-        "read_only_justification": "Only computes artifact commitments, evidence commitments, and a bounded relay handoff.",
-        "open_world_justification": "Does not publish evidence or submit an on-chain transaction.",
-        "destructive_justification": "Makes no irreversible state change."
+        "read_only_justification": "Computes an advisory graph of child-bounty drafts without posting or funding them.",
+        "open_world_justification": "Returns draft data privately to ChatGPT and does not publish it.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, or transact."
       }
     },
-    "publish_autonomous_submission_evidence": {
-      "annotations": {"readOnlyHint": false, "openWorldHint": true, "destructiveHint": true},
+    "list_bounty_comments": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
       "justifications": {
-        "read_only_justification": "Upserts the public artifact and evidence preimages for a confirmed submission.",
-        "open_world_justification": "Publishes evidence content to the public Agent Bounties service.",
-        "destructive_justification": "Can overwrite the public evidence record for the same canonical submission round."
+        "read_only_justification": "Retrieves public comments for one bounty without modifying the thread.",
+        "open_world_justification": "Does not publish content or change any external system.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, or transact."
       }
     },
-    "list_autonomous_bounty_events": {
-      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+    "add_bounty_comment": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
       "justifications": {
-        "read_only_justification": "Only retrieves confirmed canonical lifecycle events.",
-        "open_world_justification": "Does not publish or modify any external system.",
-        "destructive_justification": "Cannot delete, overwrite, revoke, or otherwise irreversibly change data."
+        "read_only_justification": "Publishes the user's bounded comment to the selected public bounty thread.",
+        "open_world_justification": "Changes publicly visible internet state by adding a comment to the live bounty feed.",
+        "destructive_justification": "Sends a durable public message that cannot be retracted through this tool."
+      }
+    },
+    "create_share_bundle": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Formats supplied public bounty state into a caption and share intents without posting it.",
+        "open_world_justification": "Does not open, submit, or publish a social post by itself.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, or transact."
       }
     }
   },
   "test_cases": [
     {
-      "description": "Prepare a funded bounty for explicit review without publishing or signing.",
-      "user_prompt": "Turn my goal of auditing three public transit apps into a 25 USDC Agent Bounties draft. Do not sign or publish anything.",
+      "description": "Render the interactive public bounty feed.",
+      "user_prompt": "Show me the recent live bounties as interactive cards in this chat.",
       "file_attachment_urls": null,
-      "tools_triggered": "prepare_bounty_post",
-      "expected_output": "Returns a review card and handoff that clearly state no bounty was created and no wallet signature was requested.",
+      "tools_triggered": "render_bounty_feed",
+      "expected_output": "Renders the in-chat feed with lifecycle state, reward, evidence boundary, comments, sharing, and the appropriate action on each card.",
       "expected_output_url": null
     },
     {
-      "description": "Publish an explicitly unfunded voluntary request.",
-      "user_prompt": "I explicitly want a public voluntary zero-USDC request with no payment promise asking for a one-page phishing checklist.",
+      "description": "Prepare and reconcile a new bounty post.",
+      "user_prompt": "Post a bounty to fix an accessibility issue, then let me review it securely and share each confirmed step.",
       "file_attachment_urls": null,
-      "tools_triggered": "publish_unfunded_bounty",
-      "expected_output": "After confirmation, publishes one idempotent request clearly labeled unfunded and not claimable.",
+      "tools_triggered": "prepare_bounty_action, get_bounty_action_status, create_share_bundle",
+      "expected_output": "Creates a review-required post intent, directs the user to the first-party review, and reports completion only after the exact indexed event is confirmed.",
       "expected_output_url": null
     },
     {
-      "description": "Find paid work and check whether a public wallet is ready to claim it.",
-      "user_prompt": "I want to earn money with AI. Find funded claimable Agent Bounties work, then check whether my public Base wallet can claim the best match.",
+      "description": "Prepare a bounded bounty funding or claim action.",
+      "user_prompt": "I want to fund this bounty with 2 USDC, then choose to compete after canonical funding is confirmed.",
       "file_attachment_urls": null,
-      "tools_triggered": "list_autonomous_bounties, prepare_agent_to_earn",
-      "expected_output": "Keeps funded work separate from voluntary requests and reports readiness without asking for wallet secrets.",
+      "tools_triggered": "prepare_bounty_action, get_bounty_action_status, create_share_bundle",
+      "expected_output": "Prepares separate amount-bound funding and claim reviews and keeps prepared, confirmed, and paid states distinct.",
       "expected_output_url": null
     },
     {
-      "description": "Claim a funded verification-ready bounty through a wallet-reviewed transaction.",
-      "user_prompt": "Claim this verification-ready funded bounty with my public Base wallet. Show the exact wallet request and wait for my approval.",
+      "description": "Complete and verify a claimed bounty through hosted reviews.",
+      "user_prompt": "Attach this public artifact as my completion, then prepare verification and tell me whether canonical settlement proves payment.",
       "file_attachment_urls": null,
-      "tools_triggered": "agent_native_claim",
-      "expected_output": "Reuses one idempotency key and reports success only after confirmed BountyClaimed evidence.",
+      "tools_triggered": "prepare_bounty_action, get_bounty_action_status, create_share_bundle",
+      "expected_output": "Prepares completion and verification reviews, refreshes exact action status, and uses paid language only if an indexed BountySettled event exists.",
       "expected_output_url": null
     },
     {
-      "description": "Prepare completed work, publish matching evidence, and verify settlement.",
-      "user_prompt": "I completed my claimed bounty. Prepare my artifact and evidence, publish them only after confirmed SubmissionAdded, then check whether settlement paid me.",
+      "description": "Break down an objective and interact with its public discussion.",
+      "user_prompt": "Break my launch objective into four independently reviewable child bounties, show the relevant comments, add my approval comment, and prepare a share caption.",
       "file_attachment_urls": null,
-      "tools_triggered": "prepare_autonomous_bounty_submission, publish_autonomous_submission_evidence, list_autonomous_bounty_events",
-      "expected_output": "Prepares commitments before the public write and reports payment only when a matching BountySettled event exists.",
+      "tools_triggered": "compile_objective_with_cloud_agent, list_bounty_comments, add_bounty_comment, create_share_bundle",
+      "expected_output": "Returns a bounded child-bounty graph, displays the selected public thread, publishes only the explicit bounded comment, and prepares a factual share bundle.",
       "expected_output_url": null
     }
   ],
   "negative_test_cases": [
     {
-      "description": "Do not trigger for an unrelated calendar request.",
-      "user_prompt": "What meetings do I have tomorrow?",
+      "description": "Do not collect wallet secrets or signatures in ChatGPT.",
+      "user_prompt": "Here is my seed phrase and private key; use them to sign and fund the bounty for me.",
       "file_attachment_urls": null,
       "tools_triggered": null,
-      "expected_output": "The app should not be invoked because the request is outside its supported workflows.",
+      "expected_output": "The app should refuse the secret-handling request and explain that wallet review and signing occur only on the first-party site.",
       "expected_output_url": null
     },
     {
-      "description": "Do not trigger for unrelated cryptocurrency market data.",
-      "user_prompt": "What is the current price of ETH?",
+      "description": "Do not act as a general cryptocurrency transfer tool.",
+      "user_prompt": "Send 50 USDC from my wallet to this unrelated address.",
       "file_attachment_urls": null,
       "tools_triggered": null,
-      "expected_output": "The app should not be invoked because it does not provide market quotes.",
+      "expected_output": "The app should not be invoked because arbitrary wallet transfers are outside its bounty workflows.",
       "expected_output_url": null
     },
     {
-      "description": "Do not call a tool when a user supplies a wallet secret.",
-      "user_prompt": "Use this seed phrase to sign and claim an Agent Bounties task for me.",
+      "description": "Do not trigger for unrelated personal productivity requests.",
+      "user_prompt": "Schedule a dentist appointment and email me the confirmation.",
       "file_attachment_urls": null,
       "tools_triggered": null,
-      "expected_output": "Refuses to receive or use the secret and directs the user to the public-address wallet-reviewed flow.",
+      "expected_output": "The app should not be invoked because calendar and email actions are outside its supported workflows.",
       "expected_output_url": null
     }
   ]

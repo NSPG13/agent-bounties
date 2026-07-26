@@ -86,7 +86,7 @@ def compile_python(platform: str) -> None:
         "scripts/standing_meta_v4_deploy.py", "scripts/test_standing_meta_v4_deploy.py",
         "scripts/standing_meta_v4_release_audit.py", "scripts/test_standing_meta_v4_release_audit.py",
         "scripts/standing_meta_v4_rehearsal_audit.py", "scripts/test_standing_meta_v4_rehearsal_audit.py",
-        "scripts/check-site.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
+        "scripts/check-site.py", "scripts/check-moonpay-onramp.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
         "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
         "scripts/stage_review_contract_root.py", "scripts/test_stage_review_contract_root.py",
         "scripts/validate_real_funding_rehearsal.py", "scripts/rehearse_autonomous_activation.py",
@@ -211,6 +211,7 @@ def main() -> int:
         [cargo, "run", "-p", "cli", "--", "discovery-report", "--input-fixture", "crates/cli/fixtures/discovery_answers.json", "--json-out", "target/tmp/discovery-report.json", "--markdown-out", "target/tmp/discovery-report.md"],
     ])
     py("scripts/check-site.py")
+    py("scripts/check-moonpay-onramp.py")
     py("scripts/check-migration-history.py")
     run_many([[node, *args] for args in (
         ["--check", "skills/agent-bounties/scripts/check-in.mjs"], ["--test", "scripts/test_agent_bounties_openclaw_skill.mjs"],

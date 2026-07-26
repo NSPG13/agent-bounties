@@ -67,12 +67,14 @@ use cloud_agent::{
     CloudObjectiveVerifierDraft, CloudUnfundedBountyRequest,
 };
 use db::{
+    ChatgptActionIntent as DbChatgptActionIntent, ChatgptActionObservation,
     ClaimCandidateReservation, ClaimFunnelStats, DbError, GitHubIssueSyncBountyUpsert,
-    NewBondSponsorship, NewClaimCandidate, NewDiscoveryWebhookSubscription, NewLegalAcceptance,
-    NewSiteAnalyticsEvent, NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution,
-    NewX402RelayAttempt, OpportunityLifecycleStats, PostgresStore, SiteAnalyticsStats,
-    SocialMentionIngestion, TrialBounty, UnfundedBountySolution, WebhookSubscription,
-    X402RelayAttempt, X402RelayStatus,
+    NewBondSponsorship, NewChatgptActionIntent, NewClaimCandidate, NewDiscoveryWebhookSubscription,
+    NewLegalAcceptance, NewOpportunityComment, NewSiteAnalyticsEvent, NewSocialMentionIngestion,
+    NewTrialBounty, NewUnfundedBountySolution, NewX402RelayAttempt,
+    OpportunityComment as DbOpportunityComment, OpportunityLifecycleStats, PostgresStore,
+    SiteAnalyticsStats, SocialMentionIngestion, TrialBounty, UnfundedBountySolution,
+    WebhookSubscription, X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -160,6 +162,11 @@ use worker::{
         draft_bounty_with_cloud_agent,
         analyze_bounty_fit,
         list_opportunities,
+        list_opportunity_comments,
+        create_opportunity_comment,
+        create_chatgpt_action_intent,
+        get_chatgpt_action_intent,
+        observe_chatgpt_action_transaction,
         opportunity_feed_rss,
         opportunity_feed_atom,
         opportunity_feed_json,
@@ -365,6 +372,13 @@ use worker::{
         ,opportunities::OpportunityStandingMetaV4Coordination
         ,opportunities::OpportunityStandingMetaV4
         ,OpportunitySourceStatus
+        ,OpportunityCommentsResponse
+        ,OpportunityCommentResponse
+        ,CreateOpportunityCommentRequest
+        ,ChatgptActionKind
+        ,CreateChatgptActionIntentRequest
+        ,ObserveChatgptActionTransactionRequest
+        ,ChatgptActionIntentResponse
         ,DiscoverySubscriptionFilters
         ,domain::DiscoveryRewardFilter
         ,CreateDiscoverySubscriptionRequest
@@ -751,6 +765,7 @@ const LEGAL_ACTIONS: &[&str] = &[
     "fund_bounty",
     "claim_bounty",
     "submit_result",
+    "verify_submission",
     "recover_funds",
     "activate_agent_budget",
     "update_agent_policy",
@@ -1704,6 +1719,22 @@ async fn main() -> anyhow::Result<()> {
             get(analyze_bounty_fit),
         )
         .route("/v1/opportunities", get(list_opportunities))
+        .route(
+            "/v1/opportunities/:opportunity_id/comments",
+            get(list_opportunity_comments).post(create_opportunity_comment),
+        )
+        .route(
+            "/v1/chatgpt/action-intents",
+            post(create_chatgpt_action_intent),
+        )
+        .route(
+            "/v1/chatgpt/action-intents/:intent_id",
+            get(get_chatgpt_action_intent),
+        )
+        .route(
+            "/v1/chatgpt/action-intents/:intent_id/observations",
+            post(observe_chatgpt_action_transaction),
+        )
         .route("/v1/opportunities/feed.rss", get(opportunity_feed_rss))
         .route("/v1/opportunities/feed.atom", get(opportunity_feed_atom))
         .route("/v1/opportunities/feed.json", get(opportunity_feed_json))
@@ -2500,6 +2531,633 @@ async fn list_opportunities(
     Query(query): Query<OpportunityQuery>,
 ) -> Result<Json<OpportunityProjectionResponse>, StatusCode> {
     build_opportunity_projection(&state, query).await.map(Json)
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct OpportunityCommentResponse {
+    id: Uuid,
+    opportunity_id: String,
+    author: String,
+    body: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct OpportunityCommentsResponse {
+    schema_version: String,
+    opportunity_id: String,
+    comments: Vec<OpportunityCommentResponse>,
+    comment_count: usize,
+    evidence_boundary: String,
+    share_after: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+struct CreateOpportunityCommentRequest {
+    id: Uuid,
+    author: String,
+    body: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OpportunityCommentsQuery {
+    limit: Option<u32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/opportunities/{opportunity_id}/comments",
+    params(
+        ("opportunity_id" = String, Path, description = "Public opportunity identifier"),
+        ("limit" = Option<u32>, Query, description = "Maximum comments returned; clamped to 1..100")
+    ),
+    responses(
+        (status = 200, body = OpportunityCommentsResponse),
+        (status = 400, description = "Invalid opportunity identifier"),
+        (status = 503, description = "Durable comment store unavailable")
+    )
+)]
+async fn list_opportunity_comments(
+    State(state): State<SharedState>,
+    Path(opportunity_id): Path<String>,
+    Query(query): Query<OpportunityCommentsQuery>,
+) -> Result<Json<OpportunityCommentsResponse>, StatusCode> {
+    let opportunity_id = normalize_opportunity_comment_id(&opportunity_id)?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let comments = store
+        .list_opportunity_comments(&opportunity_id, query.limit.unwrap_or(100))
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(opportunity_comments_response(
+        opportunity_id,
+        comments,
+    )))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/opportunities/{opportunity_id}/comments",
+    params(
+        ("opportunity_id" = String, Path, description = "Public opportunity identifier")
+    ),
+    request_body = CreateOpportunityCommentRequest,
+    responses(
+        (status = 200, body = OpportunityCommentsResponse),
+        (status = 400, description = "Invalid bounded comment payload"),
+        (status = 409, description = "Comment UUID was reused for different content"),
+        (status = 503, description = "Durable comment store unavailable")
+    )
+)]
+async fn create_opportunity_comment(
+    State(state): State<SharedState>,
+    Path(opportunity_id): Path<String>,
+    Json(request): Json<CreateOpportunityCommentRequest>,
+) -> Result<Json<OpportunityCommentsResponse>, StatusCode> {
+    let opportunity_id = normalize_opportunity_comment_id(&opportunity_id)?;
+    let author = bounded_public_text(&request.author, 60)?;
+    let body = bounded_public_text(&request.body, 500)?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    store
+        .create_or_get_opportunity_comment(&NewOpportunityComment {
+            id: request.id,
+            opportunity_id: opportunity_id.clone(),
+            author,
+            body,
+        })
+        .await
+        .map_err(|error| match error {
+            DbError::OpportunityCommentConflict => StatusCode::CONFLICT,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        })?;
+    let comments = store
+        .list_opportunity_comments(&opportunity_id, 100)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(opportunity_comments_response(
+        opportunity_id,
+        comments,
+    )))
+}
+
+fn normalize_opportunity_comment_id(value: &str) -> Result<String, StatusCode> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > 200
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+        })
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(value.to_string())
+}
+
+fn opportunity_comments_response(
+    opportunity_id: String,
+    comments: Vec<DbOpportunityComment>,
+) -> OpportunityCommentsResponse {
+    let mut comments = comments;
+    comments.reverse();
+    let comments = comments
+        .into_iter()
+        .map(|comment| OpportunityCommentResponse {
+            id: comment.id,
+            opportunity_id: comment.opportunity_id,
+            author: comment.author,
+            body: comment.body,
+            created_at: comment.created_at.to_rfc3339(),
+        })
+        .collect::<Vec<_>>();
+    OpportunityCommentsResponse {
+        schema_version: "agent-bounties/opportunity-comments-v1".to_string(),
+        opportunity_id,
+        comment_count: comments.len(),
+        comments,
+        evidence_boundary: "Comments are public conversation context only. They do not prove funding, claimability, verification, settlement, or payment.".to_string(),
+        share_after: true,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum ChatgptActionKind {
+    Post,
+    Fund,
+    Compete,
+    Complete,
+    Verify,
+}
+
+impl ChatgptActionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Post => "post",
+            Self::Fund => "fund",
+            Self::Compete => "compete",
+            Self::Complete => "complete",
+            Self::Verify => "verify",
+        }
+    }
+
+    fn expected_canonical_events(self) -> Vec<String> {
+        match self {
+            Self::Post => vec!["canonical_bounty_created".to_string()],
+            Self::Fund => vec!["funding_added".to_string()],
+            Self::Compete => vec!["bounty_claimed".to_string()],
+            Self::Complete => vec!["submission_added".to_string()],
+            Self::Verify => vec![
+                "bounty_settled".to_string(),
+                "submission_rejected".to_string(),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct CreateChatgptActionIntentRequest {
+    idempotency_key: String,
+    action: ChatgptActionKind,
+    network: Option<String>,
+    opportunity_id: Option<String>,
+    bounty_contract: Option<String>,
+    bounty_id: Option<String>,
+    actor_wallet: Option<String>,
+    amount_base_units: Option<u64>,
+    #[serde(default = "empty_json_object")]
+    details: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct ObserveChatgptActionTransactionRequest {
+    transaction_hash: String,
+    bounty_contract: Option<String>,
+    bounty_id: Option<String>,
+    actor_wallet: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct ChatgptActionIntentResponse {
+    schema_version: String,
+    intent_id: Uuid,
+    action: ChatgptActionKind,
+    status: String,
+    network: String,
+    opportunity_id: Option<String>,
+    bounty_contract: Option<String>,
+    bounty_id: Option<String>,
+    actor_wallet: Option<String>,
+    amount_base_units: Option<u64>,
+    details: serde_json::Value,
+    authorization_url: String,
+    expected_canonical_events: Vec<String>,
+    transaction_hash: Option<String>,
+    canonical_event_id: Option<Uuid>,
+    canonical_event_kind: Option<String>,
+    confirmed_block: Option<u64>,
+    paid: bool,
+    expires_at: String,
+    share_after: bool,
+    next_action: String,
+    evidence_boundary: String,
+}
+
+fn empty_json_object() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/chatgpt/action-intents",
+    request_body = CreateChatgptActionIntentRequest,
+    responses(
+        (status = 201, body = ChatgptActionIntentResponse),
+        (status = 400, description = "Invalid or incomplete action request"),
+        (status = 409, description = "Idempotency key already belongs to another action"),
+        (status = 503, description = "Durable action coordination is unavailable")
+    )
+)]
+async fn create_chatgpt_action_intent(
+    State(state): State<SharedState>,
+    Json(request): Json<CreateChatgptActionIntentRequest>,
+) -> Result<(StatusCode, Json<ChatgptActionIntentResponse>), StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let normalized = normalize_chatgpt_action_request(request)?;
+    let fingerprint_value = serde_json::json!({
+        "action": normalized.action,
+        "network": normalized.network,
+        "opportunity_id": normalized.opportunity_id,
+        "bounty_contract": normalized.bounty_contract,
+        "bounty_id": normalized.bounty_id,
+        "actor_wallet": normalized.actor_wallet,
+        "amount_base_units": normalized.amount_base_units,
+        "details": normalized.details,
+    });
+    let request_fingerprint = hex::encode(Sha256::digest(
+        serde_json::to_vec(&fingerprint_value).map_err(|_| StatusCode::BAD_REQUEST)?,
+    ));
+    let intent = store
+        .reserve_chatgpt_action_intent(&NewChatgptActionIntent {
+            id: Uuid::new_v4(),
+            idempotency_key: normalized.idempotency_key,
+            action: normalized.action.as_str().to_string(),
+            network: normalized.network.ok_or(StatusCode::BAD_REQUEST)?,
+            opportunity_id: normalized.opportunity_id,
+            bounty_contract: normalized.bounty_contract,
+            bounty_id: normalized.bounty_id,
+            actor_wallet: normalized.actor_wallet,
+            amount_base_units: normalized.amount_base_units,
+            details: normalized.details,
+            request_fingerprint,
+            expires_at: Utc::now() + ChronoDuration::hours(1),
+        })
+        .await
+        .map_err(map_chatgpt_action_db_error)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(chatgpt_action_intent_response(&state, intent)?),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/chatgpt/action-intents/{intent_id}",
+    params(("intent_id" = Uuid, Path, description = "Opaque hosted action intent identifier")),
+    responses(
+        (status = 200, body = ChatgptActionIntentResponse),
+        (status = 404, description = "Unknown action intent"),
+        (status = 503, description = "Canonical status is unavailable")
+    )
+)]
+async fn get_chatgpt_action_intent(
+    State(state): State<SharedState>,
+    Path(intent_id): Path<Uuid>,
+) -> Result<Json<ChatgptActionIntentResponse>, StatusCode> {
+    let intent = reconcile_chatgpt_action_intent(&state, intent_id).await?;
+    Ok(Json(chatgpt_action_intent_response(&state, intent)?))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/chatgpt/action-intents/{intent_id}/observations",
+    params(("intent_id" = Uuid, Path, description = "Opaque hosted action intent identifier")),
+    request_body = ObserveChatgptActionTransactionRequest,
+    responses(
+        (status = 200, body = ChatgptActionIntentResponse),
+        (status = 400, description = "Malformed transaction observation"),
+        (status = 404, description = "Unknown or expired action intent"),
+        (status = 409, description = "Observation conflicts with the prepared action"),
+        (status = 503, description = "Canonical status is unavailable")
+    )
+)]
+async fn observe_chatgpt_action_transaction(
+    State(state): State<SharedState>,
+    Path(intent_id): Path<Uuid>,
+    Json(request): Json<ObserveChatgptActionTransactionRequest>,
+) -> Result<Json<ChatgptActionIntentResponse>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let observation = ChatgptActionObservation {
+        transaction_hash: normalize_fixed_hex(&request.transaction_hash, 32)?,
+        bounty_contract: request
+            .bounty_contract
+            .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
+            .transpose()
+            .map_err(|_| StatusCode::BAD_REQUEST)?,
+        bounty_id: request
+            .bounty_id
+            .map(|value| normalize_fixed_hex(&value, 32))
+            .transpose()?,
+        actor_wallet: request
+            .actor_wallet
+            .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
+            .transpose()
+            .map_err(|_| StatusCode::BAD_REQUEST)?,
+    };
+    store
+        .observe_chatgpt_action_transaction(intent_id, &observation)
+        .await
+        .map_err(map_chatgpt_action_db_error)?;
+    let intent = reconcile_chatgpt_action_intent(&state, intent_id).await?;
+    Ok(Json(chatgpt_action_intent_response(&state, intent)?))
+}
+
+fn normalize_chatgpt_action_request(
+    mut request: CreateChatgptActionIntentRequest,
+) -> Result<CreateChatgptActionIntentRequest, StatusCode> {
+    request.idempotency_key = normalize_public_identifier(&request.idempotency_key, 8, 200)?;
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let descriptor = base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    request.network = Some(
+        canonical_base_network_key(descriptor.chain_id)
+            .ok_or(StatusCode::BAD_REQUEST)?
+            .to_string(),
+    );
+    request.opportunity_id = request
+        .opportunity_id
+        .map(|value| normalize_opportunity_comment_id(&value))
+        .transpose()?;
+    request.bounty_contract = request
+        .bounty_contract
+        .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
+        .transpose()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    request.bounty_id = request
+        .bounty_id
+        .map(|value| normalize_fixed_hex(&value, 32))
+        .transpose()?;
+    request.actor_wallet = request
+        .actor_wallet
+        .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
+        .transpose()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if !request.details.is_object()
+        || serde_json::to_vec(&request.details)
+            .map_err(|_| StatusCode::BAD_REQUEST)?
+            .len()
+            > 16_000
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    match request.action {
+        ChatgptActionKind::Post => {}
+        ChatgptActionKind::Fund => {
+            if request.bounty_contract.is_none()
+                || request.amount_base_units.is_none_or(|amount| amount == 0)
+            {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+        ChatgptActionKind::Compete | ChatgptActionKind::Complete | ChatgptActionKind::Verify => {
+            if request.bounty_contract.is_none() || request.amount_base_units.is_some() {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+    Ok(CreateChatgptActionIntentRequest {
+        network: request.network,
+        ..request
+    })
+}
+
+fn normalize_public_identifier(
+    value: &str,
+    minimum: usize,
+    maximum: usize,
+) -> Result<String, StatusCode> {
+    let value = value.trim();
+    if value.chars().count() < minimum
+        || value.chars().count() > maximum
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+        })
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(value.to_string())
+}
+
+fn normalize_fixed_hex(value: &str, bytes: usize) -> Result<String, StatusCode> {
+    let value = value.trim();
+    if value.len() != 2 + bytes * 2
+        || !value.starts_with("0x")
+        || !value[2..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn map_chatgpt_action_db_error(error: DbError) -> StatusCode {
+    match error {
+        DbError::ChatgptActionIntentConflict(_) => StatusCode::CONFLICT,
+        DbError::ChatgptActionIntentUnavailable => StatusCode::NOT_FOUND,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+async fn reconcile_chatgpt_action_intent(
+    state: &SharedState,
+    intent_id: Uuid,
+) -> Result<DbChatgptActionIntent, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut intent = store
+        .get_chatgpt_action_intent(intent_id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if intent.status == "confirmed" {
+        return Ok(intent);
+    }
+    if let Some(transaction_hash) = intent.transaction_hash.as_deref() {
+        let events = store
+            .list_autonomous_bounty_events_by_transaction(&intent.network, transaction_hash)
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        if let Some(event) = events
+            .iter()
+            .find(|event| canonical_event_matches_chatgpt_intent(&intent, event))
+        {
+            intent = store
+                .confirm_chatgpt_action_intent(intent.id, event)
+                .await
+                .map_err(map_chatgpt_action_db_error)?;
+            return Ok(intent);
+        }
+    }
+    if intent.expires_at <= Utc::now() {
+        if let Some(expired) = store
+            .expire_chatgpt_action_intent(intent.id)
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        {
+            intent = expired;
+        }
+    }
+    Ok(intent)
+}
+
+fn canonical_event_matches_chatgpt_intent(
+    intent: &DbChatgptActionIntent,
+    event: &AutonomousBountyEvent,
+) -> bool {
+    if intent
+        .transaction_hash
+        .as_deref()
+        .is_none_or(|hash| !hash.eq_ignore_ascii_case(&event.tx_hash))
+        || event.occurred_at < intent.created_at
+    {
+        return false;
+    }
+    let kind_matches = match intent.action.as_str() {
+        "post" => event.kind == AutonomousBountyEventKind::CanonicalBountyCreated,
+        "fund" => event.kind == AutonomousBountyEventKind::FundingAdded,
+        "compete" => event.kind == AutonomousBountyEventKind::BountyClaimed,
+        "complete" => event.kind == AutonomousBountyEventKind::SubmissionAdded,
+        "verify" => matches!(
+            event.kind,
+            AutonomousBountyEventKind::BountySettled
+                | AutonomousBountyEventKind::SubmissionRejected
+        ),
+        _ => false,
+    };
+    if !kind_matches {
+        return false;
+    }
+    if intent
+        .bounty_id
+        .as_deref()
+        .is_some_and(|bounty_id| !bounty_id.eq_ignore_ascii_case(&event.bounty_id))
+    {
+        return false;
+    }
+    let event_bounty_contract = if intent.action == "post" {
+        event.data["bounty_contract"].as_str()
+    } else {
+        Some(event.contract_address.as_str())
+    };
+    if intent.bounty_contract.as_deref().is_some_and(|contract| {
+        event_bounty_contract
+            .is_none_or(|event_contract| !contract.eq_ignore_ascii_case(event_contract))
+    }) {
+        return false;
+    }
+    if let Some(actor_wallet) = intent.actor_wallet.as_deref() {
+        let actor_field = match intent.action.as_str() {
+            "post" => Some("creator"),
+            "fund" => Some("contributor"),
+            "compete" | "complete" => Some("solver"),
+            "verify" => None,
+            _ => return false,
+        };
+        if actor_field.is_some_and(|field| {
+            event.data[field]
+                .as_str()
+                .is_none_or(|actor| !actor.eq_ignore_ascii_case(actor_wallet))
+        }) {
+            return false;
+        }
+    }
+    if intent.action == "fund"
+        && intent
+            .amount_base_units
+            .is_some_and(|amount| json_u128(&event.data["amount"]) != Some(u128::from(amount)))
+    {
+        return false;
+    }
+    true
+}
+
+fn chatgpt_action_intent_response(
+    state: &SharedState,
+    intent: DbChatgptActionIntent,
+) -> Result<ChatgptActionIntentResponse, StatusCode> {
+    let action = match intent.action.as_str() {
+        "post" => ChatgptActionKind::Post,
+        "fund" => ChatgptActionKind::Fund,
+        "compete" => ChatgptActionKind::Compete,
+        "complete" => ChatgptActionKind::Complete,
+        "verify" => ChatgptActionKind::Verify,
+        _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    let website_base_url =
+        legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);
+    let next_action = match intent.status.as_str() {
+        "review_required" => {
+            "Open the authorization URL, review the exact action, and approve it in your wallet."
+        }
+        "pending_confirmation" => {
+            "Wait for the matching canonical event; a transaction hash is not completion evidence."
+        }
+        "confirmed" => "Share the canonical result or continue to the next bounty step.",
+        "expired" => "Prepare a new action intent before signing anything.",
+        "failed" => "Review the hosted error and prepare a new action only if it is safe to retry.",
+        _ => "Refresh canonical status before taking another action.",
+    }
+    .to_string();
+    Ok(ChatgptActionIntentResponse {
+        schema_version: "agent-bounties/chatgpt-action-intent-v1".to_string(),
+        intent_id: intent.id,
+        action,
+        status: intent.status,
+        network: intent.network,
+        opportunity_id: intent.opportunity_id,
+        bounty_contract: intent.bounty_contract,
+        bounty_id: intent.bounty_id,
+        actor_wallet: intent.actor_wallet,
+        amount_base_units: intent.amount_base_units,
+        details: intent.details,
+        authorization_url: format!(
+            "{}/authorize.html?intent={}",
+            website_base_url.trim_end_matches('/'),
+            intent.id
+        ),
+        expected_canonical_events: action.expected_canonical_events(),
+        transaction_hash: intent.transaction_hash,
+        canonical_event_id: intent.canonical_event_id,
+        paid: intent.canonical_event_kind.as_deref() == Some("bounty_settled"),
+        canonical_event_kind: intent.canonical_event_kind,
+        confirmed_block: intent.confirmed_block,
+        expires_at: intent.expires_at.to_rfc3339(),
+        share_after: true,
+        next_action,
+        evidence_boundary: "This hosted intent coordinates one bounded wallet action. Preparing it, opening the authorization page, signing, broadcasting, or observing a transaction hash does not prove funding, claim, completion, verification, settlement, or payment. Confirmed status requires the exact indexed canonical event; only BountySettled proves solver payment.".to_string(),
+    })
 }
 
 #[utoipa::path(
@@ -12360,6 +13018,148 @@ mod tests {
         );
     }
 
+    fn test_chatgpt_action_intent(action: &str) -> DbChatgptActionIntent {
+        DbChatgptActionIntent {
+            id: Uuid::new_v4(),
+            idempotency_key: format!("chatgpt-test-{}", Uuid::new_v4()),
+            action: action.to_string(),
+            network: "base-mainnet".to_string(),
+            opportunity_id: Some(
+                "canonical_base:base-mainnet:0x1111111111111111111111111111111111111111"
+                    .to_string(),
+            ),
+            bounty_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+            bounty_id: Some(format!("0x{}", "22".repeat(32))),
+            actor_wallet: Some("0x3333333333333333333333333333333333333333".to_string()),
+            amount_base_units: (action == "fund").then_some(1_000_000),
+            details: serde_json::json!({}),
+            request_fingerprint: "44".repeat(32),
+            status: "pending_confirmation".to_string(),
+            transaction_hash: Some(format!("0x{}", "55".repeat(32))),
+            canonical_event_id: None,
+            canonical_event_kind: None,
+            confirmed_block: None,
+            expires_at: Utc::now() + ChronoDuration::hours(1),
+            created_at: Utc::now() - ChronoDuration::seconds(10),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn chatgpt_action_request_requires_action_specific_fields() {
+        let valid_fund = normalize_chatgpt_action_request(CreateChatgptActionIntentRequest {
+            idempotency_key: "chatgpt-fund-123".to_string(),
+            action: ChatgptActionKind::Fund,
+            network: Some("base-mainnet".to_string()),
+            opportunity_id: Some("canonical_base:base-mainnet:0xabc".to_string()),
+            bounty_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
+            bounty_id: None,
+            actor_wallet: None,
+            amount_base_units: Some(1_000_000),
+            details: serde_json::json!({"title": "Fund test"}),
+        })
+        .unwrap();
+        assert_eq!(valid_fund.network.as_deref(), Some("base-mainnet"));
+        assert_eq!(
+            valid_fund.bounty_contract.as_deref(),
+            Some("0x1111111111111111111111111111111111111111")
+        );
+
+        let missing_amount = normalize_chatgpt_action_request(CreateChatgptActionIntentRequest {
+            amount_base_units: None,
+            ..valid_fund.clone()
+        });
+        assert_eq!(missing_amount.unwrap_err(), StatusCode::BAD_REQUEST);
+
+        let amount_on_completion =
+            normalize_chatgpt_action_request(CreateChatgptActionIntentRequest {
+                action: ChatgptActionKind::Complete,
+                amount_base_units: Some(1),
+                ..valid_fund
+            });
+        assert_eq!(amount_on_completion.unwrap_err(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn chatgpt_action_confirmation_requires_exact_transaction_actor_amount_and_time() {
+        let intent = test_chatgpt_action_intent("fund");
+        let matching = AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: "base-mainnet:101:0".to_string(),
+            tx_hash: intent.transaction_hash.clone().unwrap(),
+            block_number: 101,
+            log_index: 0,
+            contract_address: intent.bounty_contract.clone().unwrap(),
+            bounty_id: intent.bounty_id.clone().unwrap(),
+            kind: AutonomousBountyEventKind::FundingAdded,
+            data: serde_json::json!({
+                "contributor": intent.actor_wallet.clone().unwrap(),
+                "amount": 1_000_000
+            }),
+            occurred_at: Utc::now(),
+        };
+        assert!(canonical_event_matches_chatgpt_intent(&intent, &matching));
+
+        let mut wrong_transaction = matching.clone();
+        wrong_transaction.tx_hash = format!("0x{}", "66".repeat(32));
+        assert!(!canonical_event_matches_chatgpt_intent(
+            &intent,
+            &wrong_transaction
+        ));
+
+        let mut wrong_actor = matching.clone();
+        wrong_actor.data["contributor"] =
+            serde_json::json!("0x7777777777777777777777777777777777777777");
+        assert!(!canonical_event_matches_chatgpt_intent(
+            &intent,
+            &wrong_actor
+        ));
+
+        let mut wrong_amount = matching.clone();
+        wrong_amount.data["amount"] = serde_json::json!(999_999);
+        assert!(!canonical_event_matches_chatgpt_intent(
+            &intent,
+            &wrong_amount
+        ));
+
+        let mut historical_replay = matching;
+        historical_replay.occurred_at = intent.created_at - ChronoDuration::seconds(1);
+        assert!(!canonical_event_matches_chatgpt_intent(
+            &intent,
+            &historical_replay
+        ));
+    }
+
+    #[test]
+    fn verify_action_accepts_only_canonical_settlement_or_rejection() {
+        let mut intent = test_chatgpt_action_intent("verify");
+        intent.amount_base_units = None;
+        let event = |kind| AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: format!("base-mainnet:{}:0", Uuid::new_v4()),
+            tx_hash: intent.transaction_hash.clone().unwrap(),
+            block_number: 102,
+            log_index: 0,
+            contract_address: intent.bounty_contract.clone().unwrap(),
+            bounty_id: intent.bounty_id.clone().unwrap(),
+            kind,
+            data: serde_json::json!({}),
+            occurred_at: Utc::now(),
+        };
+        assert!(canonical_event_matches_chatgpt_intent(
+            &intent,
+            &event(AutonomousBountyEventKind::BountySettled)
+        ));
+        assert!(canonical_event_matches_chatgpt_intent(
+            &intent,
+            &event(AutonomousBountyEventKind::SubmissionRejected)
+        ));
+        assert!(!canonical_event_matches_chatgpt_intent(
+            &intent,
+            &event(AutonomousBountyEventKind::SubmissionAdded)
+        ));
+    }
+
     #[test]
     fn cloud_agent_errors_are_machine_readable_and_provider_safe() {
         let (status, Json(error)) = cloud_agent_api_error(CloudAgentError::InvalidResponse(
@@ -14869,6 +15669,30 @@ mod tests {
         .is_ok());
     }
 
+    #[test]
+    fn opportunity_comment_identifier_validation_is_bounded() {
+        assert_eq!(
+            normalize_opportunity_comment_id("canonical:base-mainnet:0xabc").unwrap(),
+            "canonical:base-mainnet:0xabc"
+        );
+        assert_eq!(
+            normalize_opportunity_comment_id("bad/id"),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            normalize_opportunity_comment_id(""),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            bounded_public_text("  useful context  ", 60).unwrap(),
+            "useful context"
+        );
+        assert_eq!(
+            bounded_public_text(&"x".repeat(501), 500),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
     #[tokio::test]
     async fn openapi_json_endpoint_contains_agent_router_path() {
         let document = openapi_json().await.0;
@@ -14904,10 +15728,14 @@ mod tests {
         assert!(paths.contains_key("/v1/objectives/{id}/actions"));
         assert!(paths.contains_key("/v1/objectives/{id}/reconcile"));
         assert!(paths.contains_key("/v1/opportunities"));
+        assert!(paths.contains_key("/v1/opportunities/{opportunity_id}/comments"));
         assert!(paths.contains_key("/v1/opportunities/feed.rss"));
         assert!(paths.contains_key("/v1/opportunities/feed.atom"));
         assert!(paths.contains_key("/v1/opportunities/feed.json"));
         assert!(paths.contains_key("/v1/opportunities/conversion-funnel"));
+        assert!(paths.contains_key("/v1/chatgpt/action-intents"));
+        assert!(paths.contains_key("/v1/chatgpt/action-intents/{intent_id}"));
+        assert!(paths.contains_key("/v1/chatgpt/action-intents/{intent_id}/observations"));
         assert!(paths.contains_key("/v1/analytics/events"));
         assert!(paths.contains_key("/v1/analytics/site"));
         assert!(paths.contains_key("/v1/discovery/subscriptions"));

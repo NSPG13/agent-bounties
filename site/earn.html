@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="styles.css?v=20260722-1">
     <link rel="stylesheet" href="guild-pages.css?v=20260722-1">
     <link rel="stylesheet" href="simple-ux.css?v=1">
+    <link rel="stylesheet" href="onramp.css?v=1">
   </head>
   <body class="guild-interior" data-guild-build="20260722-2" data-public-ux="simplified-v1">
     <header class="topbar">
@@ -84,6 +85,12 @@
               Amount to add, USDC
               <input name="amount" type="number" min="0.01" step="0.01" value="1.00" required>
             </label>
+            <div class="onramp-callout">
+              <strong>Need Base USDC or gas?</strong>
+              <p>MoonPay can add Base USDC or Base ETH to your connected wallet. Buying crypto does not fund this bounty; return here and separately approve the exact canonical contribution.</p>
+              <a class="button secondary" href="onramp.html" data-moonpay-onramp-link>Buy Base USDC or gas with MoonPay</a>
+              <output class="fine" data-moonpay-link-output aria-live="polite">MoonPay is an optional wallet top-up provider.</output>
+            </div>
             <div data-legal-consent data-consent-actions="fund_bounty"></div>
             <div class="actions">
               <label class="wallet-picker">
@@ -187,6 +194,7 @@
     <script src="analytics.js"></script>
     <script src="legal-consent.js"></script>
     <script src="evm.js"></script>
+    <script src="moonpay-link.js?v=1"></script>
     <script src="autonomous.js"></script>
     <script src="bounty-board.js?v=1"></script>
   </body>

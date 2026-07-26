@@ -46,6 +46,10 @@ pub const OBJECTIVE_COORDINATION_MIGRATION: &str =
     include_str!("../../../migrations/0013_objective_coordination.sql");
 pub const PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION: &str =
     include_str!("../../../migrations/0014_remove_public_competitor_intelligence.sql");
+pub const OPPORTUNITY_COMMENTS_MIGRATION: &str =
+    include_str!("../../../migrations/0015_opportunity_comments.sql");
+pub const CHATGPT_ACTION_INTENTS_MIGRATION: &str =
+    include_str!("../../../migrations/0016_chatgpt_action_intents.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -167,6 +171,12 @@ pub enum DbError {
     BondSponsorshipQuotaExceeded(String),
     #[error("opportunity conversion correlation conflict: {0}")]
     OpportunityConversionConflict(String),
+    #[error("opportunity comment idempotency conflict")]
+    OpportunityCommentConflict,
+    #[error("ChatGPT action intent conflict: {0}")]
+    ChatgptActionIntentConflict(String),
+    #[error("ChatGPT action intent is unavailable")]
+    ChatgptActionIntentUnavailable,
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -225,6 +235,70 @@ pub struct TrialBounty {
     pub demo_agent_solution: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewOpportunityComment {
+    pub id: Uuid,
+    pub opportunity_id: String,
+    pub author: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpportunityComment {
+    pub id: Uuid,
+    pub opportunity_id: String,
+    pub author: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewChatgptActionIntent {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub action: String,
+    pub network: String,
+    pub opportunity_id: Option<String>,
+    pub bounty_contract: Option<String>,
+    pub bounty_id: Option<String>,
+    pub actor_wallet: Option<String>,
+    pub amount_base_units: Option<u64>,
+    pub details: serde_json::Value,
+    pub request_fingerprint: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatgptActionIntent {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub action: String,
+    pub network: String,
+    pub opportunity_id: Option<String>,
+    pub bounty_contract: Option<String>,
+    pub bounty_id: Option<String>,
+    pub actor_wallet: Option<String>,
+    pub amount_base_units: Option<u64>,
+    pub details: serde_json::Value,
+    pub request_fingerprint: String,
+    pub status: String,
+    pub transaction_hash: Option<String>,
+    pub canonical_event_id: Option<Uuid>,
+    pub canonical_event_kind: Option<String>,
+    pub confirmed_block: Option<u64>,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatgptActionObservation {
+    pub transaction_hash: String,
+    pub bounty_contract: Option<String>,
+    pub bounty_id: Option<String>,
+    pub actor_wallet: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -725,6 +799,8 @@ impl PostgresStore {
                 SOCIAL_MENTION_INGESTION_MIGRATION,
                 OBJECTIVE_COORDINATION_MIGRATION,
                 PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION,
+                OPPORTUNITY_COMMENTS_MIGRATION,
+                CHATGPT_ACTION_INTENTS_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1706,6 +1782,294 @@ impl PostgresStore {
         .into_iter()
         .map(trial_bounty_from_row)
         .collect()
+    }
+
+    pub async fn create_or_get_opportunity_comment(
+        &self,
+        comment: &NewOpportunityComment,
+    ) -> DbResult<OpportunityComment> {
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO opportunity_comments (id, opportunity_id, author, body)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (id) DO NOTHING
+            RETURNING id, opportunity_id, author, body, created_at
+            "#,
+        )
+        .bind(comment.id)
+        .bind(&comment.opportunity_id)
+        .bind(&comment.author)
+        .bind(&comment.body)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let row = match inserted {
+            Some(row) => row,
+            None => {
+                sqlx::query(
+                    r#"
+                    SELECT id, opportunity_id, author, body, created_at
+                    FROM opportunity_comments
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(comment.id)
+                .fetch_one(&self.pool)
+                .await?
+            }
+        };
+        let persisted = opportunity_comment_from_row(row)?;
+        if persisted.opportunity_id != comment.opportunity_id
+            || persisted.author != comment.author
+            || persisted.body != comment.body
+        {
+            return Err(DbError::OpportunityCommentConflict);
+        }
+        Ok(persisted)
+    }
+
+    pub async fn list_opportunity_comments(
+        &self,
+        opportunity_id: &str,
+        limit: u32,
+    ) -> DbResult<Vec<OpportunityComment>> {
+        let limit = i64::from(limit.clamp(1, 100));
+        sqlx::query(
+            r#"
+            SELECT id, opportunity_id, author, body, created_at
+            FROM opportunity_comments
+            WHERE opportunity_id = $1
+            ORDER BY created_at DESC, id DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(opportunity_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(opportunity_comment_from_row)
+        .collect()
+    }
+
+    pub async fn reserve_chatgpt_action_intent(
+        &self,
+        intent: &NewChatgptActionIntent,
+    ) -> DbResult<ChatgptActionIntent> {
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO chatgpt_action_intents
+              (id, idempotency_key, action, network, opportunity_id,
+               bounty_contract, bounty_id, actor_wallet, amount_base_units,
+               details, request_fingerprint, expires_at)
+            VALUES (
+              $1, $2, $3, $4, $5, lower($6), lower($7), lower($8), $9,
+              $10, $11, $12
+            )
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING id, idempotency_key, action, network, opportunity_id,
+                      bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                      details, request_fingerprint, status, transaction_hash,
+                      canonical_event_id, canonical_event_kind, confirmed_block,
+                      expires_at, created_at, updated_at
+            "#,
+        )
+        .bind(intent.id)
+        .bind(&intent.idempotency_key)
+        .bind(&intent.action)
+        .bind(&intent.network)
+        .bind(&intent.opportunity_id)
+        .bind(&intent.bounty_contract)
+        .bind(&intent.bounty_id)
+        .bind(&intent.actor_wallet)
+        .bind(intent.amount_base_units.map(i64_from_u64).transpose()?)
+        .bind(&intent.details)
+        .bind(&intent.request_fingerprint)
+        .bind(intent.expires_at)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let row = match inserted {
+            Some(row) => row,
+            None => {
+                sqlx::query(
+                    r#"
+                    SELECT id, idempotency_key, action, network, opportunity_id,
+                           bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                           details, request_fingerprint, status, transaction_hash,
+                           canonical_event_id, canonical_event_kind, confirmed_block,
+                           expires_at, created_at, updated_at
+                    FROM chatgpt_action_intents
+                    WHERE idempotency_key = $1
+                    "#,
+                )
+                .bind(&intent.idempotency_key)
+                .fetch_one(&self.pool)
+                .await?
+            }
+        };
+        let persisted = chatgpt_action_intent_from_row(row)?;
+        if persisted.request_fingerprint != intent.request_fingerprint {
+            return Err(DbError::ChatgptActionIntentConflict(
+                "idempotency key is already bound to a different action".to_string(),
+            ));
+        }
+        Ok(persisted)
+    }
+
+    pub async fn get_chatgpt_action_intent(
+        &self,
+        id: Uuid,
+    ) -> DbResult<Option<ChatgptActionIntent>> {
+        sqlx::query(
+            r#"
+            SELECT id, idempotency_key, action, network, opportunity_id,
+                   bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                   details, request_fingerprint, status, transaction_hash,
+                   canonical_event_id, canonical_event_kind, confirmed_block,
+                   expires_at, created_at, updated_at
+            FROM chatgpt_action_intents
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(chatgpt_action_intent_from_row)
+        .transpose()
+    }
+
+    pub async fn observe_chatgpt_action_transaction(
+        &self,
+        id: Uuid,
+        observation: &ChatgptActionObservation,
+    ) -> DbResult<ChatgptActionIntent> {
+        let row = sqlx::query(
+            r#"
+            UPDATE chatgpt_action_intents
+            SET transaction_hash = lower($2),
+                bounty_contract = COALESCE(bounty_contract, lower($3)),
+                bounty_id = COALESCE(bounty_id, lower($4)),
+                actor_wallet = COALESCE(actor_wallet, lower($5)),
+                status = 'pending_confirmation',
+                updated_at = now()
+            WHERE id = $1
+              AND status IN ('review_required', 'pending_confirmation')
+              AND expires_at > now()
+              AND (
+                transaction_hash IS NULL
+                OR transaction_hash = lower($2)
+              )
+              AND (
+                bounty_contract IS NULL
+                OR $3 IS NULL
+                OR bounty_contract = lower($3)
+              )
+              AND (
+                bounty_id IS NULL
+                OR $4 IS NULL
+                OR bounty_id = lower($4)
+              )
+              AND (
+                actor_wallet IS NULL
+                OR $5 IS NULL
+                OR actor_wallet = lower($5)
+              )
+            RETURNING id, idempotency_key, action, network, opportunity_id,
+                      bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                      details, request_fingerprint, status, transaction_hash,
+                      canonical_event_id, canonical_event_kind, confirmed_block,
+                      expires_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(&observation.transaction_hash)
+        .bind(&observation.bounty_contract)
+        .bind(&observation.bounty_id)
+        .bind(&observation.actor_wallet)
+        .fetch_optional(&self.pool)
+        .await?;
+        if let Some(row) = row {
+            return chatgpt_action_intent_from_row(row);
+        }
+        match self.get_chatgpt_action_intent(id).await? {
+            None => Err(DbError::ChatgptActionIntentUnavailable),
+            Some(intent) if intent.status == "confirmed" => Ok(intent),
+            Some(intent) if intent.expires_at <= Utc::now() => {
+                Err(DbError::ChatgptActionIntentUnavailable)
+            }
+            Some(_) => Err(DbError::ChatgptActionIntentConflict(
+                "transaction observation does not match the original action".to_string(),
+            )),
+        }
+    }
+
+    pub async fn confirm_chatgpt_action_intent(
+        &self,
+        id: Uuid,
+        event: &AutonomousBountyEvent,
+    ) -> DbResult<ChatgptActionIntent> {
+        sqlx::query(
+            r#"
+            UPDATE chatgpt_action_intents
+            SET status = 'confirmed',
+                canonical_event_id = $2,
+                canonical_event_kind = $3,
+                confirmed_block = $4,
+                updated_at = now()
+            WHERE id = $1
+              AND status IN ('review_required', 'pending_confirmation', 'confirmed')
+              AND transaction_hash = lower($5)
+              AND (
+                canonical_event_id IS NULL
+                OR canonical_event_id = $2
+              )
+            RETURNING id, idempotency_key, action, network, opportunity_id,
+                      bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                      details, request_fingerprint, status, transaction_hash,
+                      canonical_event_id, canonical_event_kind, confirmed_block,
+                      expires_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(event.id)
+        .bind(autonomous_event_kind_storage_name(event.kind))
+        .bind(i64_from_u64(event.block_number)?)
+        .bind(&event.tx_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(chatgpt_action_intent_from_row)
+        .transpose()?
+        .ok_or_else(|| {
+            DbError::ChatgptActionIntentConflict(
+                "canonical event does not match the observed transaction".to_string(),
+            )
+        })
+    }
+
+    pub async fn expire_chatgpt_action_intent(
+        &self,
+        id: Uuid,
+    ) -> DbResult<Option<ChatgptActionIntent>> {
+        sqlx::query(
+            r#"
+            UPDATE chatgpt_action_intents
+            SET status = 'expired', updated_at = now()
+            WHERE id = $1
+              AND status IN ('review_required', 'pending_confirmation')
+              AND expires_at <= now()
+            RETURNING id, idempotency_key, action, network, opportunity_id,
+                      bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                      details, request_fingerprint, status, transaction_hash,
+                      canonical_event_id, canonical_event_kind, confirmed_block,
+                      expires_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(chatgpt_action_intent_from_row)
+        .transpose()
     }
 
     pub async fn upsert_unfunded_bounty_solution(
@@ -4287,6 +4651,27 @@ impl PostgresStore {
         rows.into_iter().map(autonomous_event_from_row).collect()
     }
 
+    pub async fn list_autonomous_bounty_events_by_transaction(
+        &self,
+        network: &str,
+        transaction_hash: &str,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, log_key, tx_hash, block_number, log_index, contract_address,
+                   bounty_id, kind, data, occurred_at
+            FROM autonomous_bounty_events
+            WHERE network = $1 AND tx_hash = lower($2)
+            ORDER BY block_number, log_index
+            "#,
+        )
+        .bind(network)
+        .bind(transaction_hash)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(autonomous_event_from_row).collect()
+    }
+
     pub async fn list_unverified_autonomous_event_blocks(
         &self,
         network: &str,
@@ -5347,6 +5732,46 @@ fn trial_bounty_from_row(row: PgRow) -> DbResult<TrialBounty> {
     })
 }
 
+fn opportunity_comment_from_row(row: PgRow) -> DbResult<OpportunityComment> {
+    Ok(OpportunityComment {
+        id: row.try_get("id")?,
+        opportunity_id: row.try_get("opportunity_id")?,
+        author: row.try_get("author")?,
+        body: row.try_get("body")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn chatgpt_action_intent_from_row(row: PgRow) -> DbResult<ChatgptActionIntent> {
+    Ok(ChatgptActionIntent {
+        id: row.try_get("id")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        action: row.try_get("action")?,
+        network: row.try_get("network")?,
+        opportunity_id: row.try_get("opportunity_id")?,
+        bounty_contract: row.try_get("bounty_contract")?,
+        bounty_id: row.try_get("bounty_id")?,
+        actor_wallet: row.try_get("actor_wallet")?,
+        amount_base_units: row
+            .try_get::<Option<i64>, _>("amount_base_units")?
+            .map(u64_from_i64)
+            .transpose()?,
+        details: row.try_get("details")?,
+        request_fingerprint: row.try_get("request_fingerprint")?,
+        status: row.try_get("status")?,
+        transaction_hash: row.try_get("transaction_hash")?,
+        canonical_event_id: row.try_get("canonical_event_id")?,
+        canonical_event_kind: row.try_get("canonical_event_kind")?,
+        confirmed_block: row
+            .try_get::<Option<i64>, _>("confirmed_block")?
+            .map(u64_from_i64)
+            .transpose()?,
+        expires_at: row.try_get("expires_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
 fn unfunded_bounty_solution_from_row(row: PgRow) -> DbResult<UnfundedBountySolution> {
     Ok(UnfundedBountySolution {
         id: row.try_get("id")?,
@@ -5880,6 +6305,32 @@ fn autonomous_event_from_row(row: PgRow) -> DbResult<AutonomousBountyEvent> {
     })
 }
 
+fn autonomous_event_kind_storage_name(kind: AutonomousBountyEventKind) -> &'static str {
+    match kind {
+        AutonomousBountyEventKind::CanonicalBountyCreated => "canonical_bounty_created",
+        AutonomousBountyEventKind::CanonicalBountyTermsCommitted => {
+            "canonical_bounty_terms_committed"
+        }
+        AutonomousBountyEventKind::CanonicalBountyEconomicsConfigured => {
+            "canonical_bounty_economics_configured"
+        }
+        AutonomousBountyEventKind::CanonicalBountyVerificationConfigured => {
+            "canonical_bounty_verification_configured"
+        }
+        AutonomousBountyEventKind::ExternalBountySubmitted => "external_bounty_submitted",
+        AutonomousBountyEventKind::FundingAdded => "funding_added",
+        AutonomousBountyEventKind::BountyBecameClaimable => "bounty_became_claimable",
+        AutonomousBountyEventKind::BountyClaimed => "bounty_claimed",
+        AutonomousBountyEventKind::SubmissionAdded => "submission_added",
+        AutonomousBountyEventKind::SubmissionRejected => "submission_rejected",
+        AutonomousBountyEventKind::BountySettled => "bounty_settled",
+        AutonomousBountyEventKind::ClaimExpired => "claim_expired",
+        AutonomousBountyEventKind::SubmissionExpired => "submission_expired",
+        AutonomousBountyEventKind::BountyCancelled => "bounty_cancelled",
+        AutonomousBountyEventKind::RefundWithdrawn => "refund_withdrawn",
+    }
+}
+
 fn autonomous_terms_from_row(row: PgRow) -> DbResult<AutonomousBountyTermsRecord> {
     let document: serde_json::Value = row.try_get("document")?;
     Ok(AutonomousBountyTermsRecord {
@@ -6339,6 +6790,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn opportunity_comments_migration_is_public_bounded_and_idempotent() {
+        for invariant in [
+            "opportunity_comments",
+            "id UUID PRIMARY KEY",
+            "opportunity_id TEXT NOT NULL",
+            "author TEXT NOT NULL",
+            "body TEXT NOT NULL",
+            "opportunity_comments_recent_idx",
+            "opportunity_id ~ '^[A-Za-z0-9:._-]+$'",
+            "length(body) BETWEEN 1 AND 500",
+        ] {
+            assert!(
+                OPPORTUNITY_COMMENTS_MIGRATION.contains(invariant),
+                "missing opportunity comment invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn chatgpt_action_intents_are_bounded_idempotent_and_canonical_event_backed() {
+        for invariant in [
+            "chatgpt_action_intents",
+            "idempotency_key TEXT NOT NULL UNIQUE",
+            "action IN ('post', 'fund', 'compete', 'complete', 'verify')",
+            "status = 'confirmed'",
+            "transaction_hash IS NOT NULL",
+            "canonical_event_id IS NOT NULL",
+            "confirmed_block IS NOT NULL",
+            "pg_column_size(details) <= 16384",
+            "chatgpt_action_intents_transaction_idx",
+        ] {
+            assert!(
+                CHATGPT_ACTION_INTENTS_MIGRATION.contains(invariant),
+                "missing ChatGPT action intent invariant {invariant}"
+            );
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn objective_aggregate_compare_and_swap_is_durable() {
@@ -6440,13 +6930,145 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn chatgpt_action_intent_replays_and_confirms_only_observed_transaction() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let intent_id = Uuid::new_v4();
+        let contract = "0x1111111111111111111111111111111111111111";
+        let actor = "0x2222222222222222222222222222222222222222";
+        let transaction_hash = format!("0x{}", "33".repeat(32));
+        let bounty_id = format!("0x{}", "44".repeat(32));
+        let request = NewChatgptActionIntent {
+            id: intent_id,
+            idempotency_key: format!("chatgpt-action-{intent_id}"),
+            action: "fund".to_string(),
+            network: "base-mainnet".to_string(),
+            opportunity_id: Some(format!("canonical_base:base-mainnet:{contract}")),
+            bounty_contract: Some(contract.to_string()),
+            bounty_id: Some(bounty_id.clone()),
+            actor_wallet: None,
+            amount_base_units: Some(1_000_000),
+            details: serde_json::json!({"title": "Durable action test"}),
+            request_fingerprint: "55".repeat(32),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+        };
+        let created = store.reserve_chatgpt_action_intent(&request).await.unwrap();
+        let replay = store.reserve_chatgpt_action_intent(&request).await.unwrap();
+        assert_eq!(created, replay);
+        assert_eq!(created.status, "review_required");
+
+        let observed = store
+            .observe_chatgpt_action_transaction(
+                intent_id,
+                &ChatgptActionObservation {
+                    transaction_hash: transaction_hash.clone(),
+                    bounty_contract: Some(contract.to_string()),
+                    bounty_id: Some(bounty_id.clone()),
+                    actor_wallet: Some(actor.to_string()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(observed.status, "pending_confirmation");
+
+        let wrong_event = AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: format!("base-mainnet:{}:0", Uuid::new_v4()),
+            tx_hash: format!("0x{}", "66".repeat(32)),
+            block_number: 100,
+            log_index: 0,
+            contract_address: contract.to_string(),
+            bounty_id: bounty_id.clone(),
+            kind: AutonomousBountyEventKind::FundingAdded,
+            data: serde_json::json!({"contributor": actor, "amount": 1_000_000}),
+            occurred_at: Utc::now(),
+        };
+        store
+            .upsert_autonomous_bounty_event("base-mainnet", &wrong_event)
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .confirm_chatgpt_action_intent(intent_id, &wrong_event)
+                .await,
+            Err(DbError::ChatgptActionIntentConflict(_))
+        ));
+
+        let matching_event = AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: format!("base-mainnet:{}:0", Uuid::new_v4()),
+            tx_hash: transaction_hash,
+            block_number: 101,
+            log_index: 0,
+            contract_address: contract.to_string(),
+            bounty_id,
+            kind: AutonomousBountyEventKind::FundingAdded,
+            data: serde_json::json!({"contributor": actor, "amount": 1_000_000}),
+            occurred_at: Utc::now(),
+        };
+        store
+            .upsert_autonomous_bounty_event("base-mainnet", &matching_event)
+            .await
+            .unwrap();
+        let confirmed = store
+            .confirm_chatgpt_action_intent(intent_id, &matching_event)
+            .await
+            .unwrap();
+        assert_eq!(confirmed.status, "confirmed");
+        assert_eq!(confirmed.canonical_event_id, Some(matching_event.id));
+        assert_eq!(
+            confirmed.canonical_event_kind.as_deref(),
+            Some("funding_added")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn opportunity_comment_round_trip_is_durable_and_idempotent() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let id = Uuid::new_v4();
+        let comment = NewOpportunityComment {
+            id,
+            opportunity_id: "canonical:base-mainnet:0xabc".to_string(),
+            author: "Ada".to_string(),
+            body: "The acceptance criteria are clear.".to_string(),
+        };
+        let created = store
+            .create_or_get_opportunity_comment(&comment)
+            .await
+            .unwrap();
+        let replay = store
+            .create_or_get_opportunity_comment(&comment)
+            .await
+            .unwrap();
+        assert_eq!(created, replay);
+        let conflict = store
+            .create_or_get_opportunity_comment(&NewOpportunityComment {
+                body: "different content".to_string(),
+                ..comment.clone()
+            })
+            .await;
+        assert!(matches!(conflict, Err(DbError::OpportunityCommentConflict)));
+        let comments = store
+            .list_opportunity_comments(&comment.opportunity_id, 100)
+            .await
+            .unwrap();
+        assert!(comments.iter().any(|item| item.id == id));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn social_mention_ingestion_round_trip_executes_against_migrated_postgres() {
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
 
         let id = Uuid::new_v4();
-        let mention_id = format!("0x{}", "42".repeat(20));
+        let mention_seed = id.simple().to_string();
+        let mention_id = format!("0x{}{}", mention_seed, &mention_seed[..8]);
         let new_ingestion = NewSocialMentionIngestion {
             id,
             provider: "neynar".to_string(),
