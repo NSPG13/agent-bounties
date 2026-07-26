@@ -43,7 +43,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify-adapter:
@@ -51,6 +51,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:
@@ -79,6 +82,31 @@ jobs:
             if [[ ${code} -ne 0 ]]; then status=${code}; fi
           done
           exit ${status}
+
+      - name: Commit materialized source to the same-repository PR
+        if: >-
+          steps.materialize.outcome == 'success'
+          && github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            site/bounty-composer-v2.js
+            crates/mcp-server/src/moonpay.rs
+            site/objective.html
+            site/earn.html
+            site/onramp.html
+          )
+          if git diff --quiet -- "${files[@]}"; then
+            echo "Materialized source is already committed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${files[@]}"
+          git commit -m "fix: materialize embedded-wallet source boundaries"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
 
       - name: Verify fail-closed source state
         if: steps.materialize.outcome == 'success'
