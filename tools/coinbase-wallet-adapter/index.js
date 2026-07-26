@@ -1,22 +1,33 @@
 import {
   createCDPEmbeddedWallet,
+  createEvmEip7702Delegation,
   getCurrentUser,
+  getUserOperation,
   initialize,
+  sendUserOperation,
   signInWithEmail,
   signInWithOAuth,
   signInWithSms,
   signOut,
   verifyEmailOTP,
   verifySmsOTP,
+  waitForEvmEip7702Delegation,
 } from "@coinbase/cdp-core";
 import { http } from "viem";
 import { base } from "viem/chains";
 import { accountFromUser, createAuthenticatedProvider, userRejected } from "./provider.js";
+import {
+  delegatedCode,
+  transactionToCalls,
+  waitForUserOperationTransaction,
+  walletRequestToCalls,
+} from "./sponsorship.js";
 
 const runtime = window.AgentBountiesWalletRuntime;
 const adapterConfig = runtime?.adapters?.coinbaseEmbedded;
 const registry = window.AgentBountiesWalletAdapters;
 const ADAPTER_ID = "coinbase-embedded";
+const NETWORK = "base";
 const INFO = Object.freeze({
   uuid: crypto.randomUUID(),
   name: "Email or social wallet (Coinbase)",
@@ -43,7 +54,10 @@ function assertConfiguration() {
     throw new Error("Coinbase embedded wallet activation is incomplete.");
   }
   if (adapterConfig.accountType !== "eoa") {
-    throw new Error("Coinbase embedded wallets must use an EOA until Agent Bounties supports contract signatures.");
+    throw new Error("Coinbase embedded wallets must begin as an EOA so existing Agent Bounties signature routes remain compatible.");
+  }
+  if (adapterConfig.gasSponsorshipMode !== "eip7702-cdp-paymaster") {
+    throw new Error("Coinbase embedded wallet gas sponsorship must use the reviewed EIP-7702 CDP Paymaster mode.");
   }
   if (runtime.network?.chainId !== base.id || runtime.network?.chainIdHex !== "0x2105") {
     throw new Error("Coinbase embedded wallet configuration must target Base mainnet.");
@@ -51,11 +65,13 @@ function assertConfiguration() {
 }
 
 let sdkPromise = null;
-let cdpProvider = null;
+let rawProvider = null;
+let sponsoredProvider = null;
 let authPromise = null;
 let authDeferred = null;
 let dialog = null;
 let currentFlow = null;
+const delegationPromises = new Map();
 
 async function initializeSdk() {
   assertConfiguration();
@@ -65,7 +81,11 @@ async function initializeSdk() {
       disableAnalytics: adapterConfig.disableAnalytics !== false,
       ethereum: { createOnLogin: "eoa" },
     }).then(() => {
-      publishStatus("ready", { accountType: "eoa", network: "base-mainnet" });
+      publishStatus("ready", {
+        accountType: "eoa",
+        network: "base-mainnet",
+        gasSponsorship: "eip7702-cdp-paymaster",
+      });
     }).catch((error) => {
       sdkPromise = null;
       publishStatus("error", { message: humanError(error) });
@@ -75,17 +95,17 @@ async function initializeSdk() {
   await sdkPromise;
 }
 
-async function loadProvider() {
+async function loadRawProvider() {
   await initializeSdk();
-  if (!cdpProvider) {
+  if (!rawProvider) {
     const wallet = createCDPEmbeddedWallet({
       chains: [base],
       transports: { [base.id]: http(runtime.network.rpcUrl) },
       announceProvider: false,
     });
-    cdpProvider = wallet.provider;
+    rawProvider = wallet.provider;
   }
-  return cdpProvider;
+  return rawProvider;
 }
 
 async function currentUser() {
@@ -99,6 +119,133 @@ async function currentUser() {
 
 async function authenticated() {
   return Boolean(accountFromUser(await currentUser()));
+}
+
+function delegationIdempotencyKey(account) {
+  const key = `agentbounties:cdp-eip7702:${String(account).toLowerCase()}`;
+  let value = sessionStorage.getItem(key);
+  if (!value) {
+    value = crypto.randomUUID();
+    sessionStorage.setItem(key, value);
+  }
+  return value;
+}
+
+async function accountIsDelegated(account) {
+  const provider = await loadRawProvider();
+  const code = await provider.request({ method: "eth_getCode", params: [account, "latest"] });
+  return delegatedCode(code);
+}
+
+async function ensureDelegatedAccount(account) {
+  const normalized = String(account).toLowerCase();
+  if (delegationPromises.has(normalized)) return delegationPromises.get(normalized);
+  const promise = (async () => {
+    if (await accountIsDelegated(normalized)) return normalized;
+    publishStatus("enabling_gas_sponsorship", {
+      account: normalized,
+      message: "Enabling sponsored Base transactions at the same wallet address.",
+    });
+    const { delegationOperationId } = await createEvmEip7702Delegation({
+      address: normalized,
+      network: NETWORK,
+      enableSpendPermissions: false,
+      idempotencyKey: delegationIdempotencyKey(normalized),
+    });
+    const operation = await waitForEvmEip7702Delegation({
+      delegationOperationId,
+      intervalMs: 1_500,
+      timeoutMs: 150_000,
+    });
+    if (!operation || String(operation.status || "").toUpperCase() !== "COMPLETED") {
+      throw new Error("Coinbase gas-sponsorship activation is still pending. Reopen this wallet before retrying the bounty action.");
+    }
+    if (!(await accountIsDelegated(normalized))) {
+      throw new Error("The delegation completed but Base has not exposed the upgraded account yet. Check the same wallet before retrying.");
+    }
+    publishStatus("gas_sponsorship_ready", {
+      account: normalized,
+      delegationTransactionHash: operation.transactionHash || null,
+    });
+    return normalized;
+  })();
+  delegationPromises.set(normalized, promise);
+  try {
+    return await promise;
+  } catch (error) {
+    delegationPromises.delete(normalized);
+    throw error;
+  }
+}
+
+async function authenticatedAccount() {
+  const account = accountFromUser(await currentUser());
+  if (!account) throw userRejected("Sign in before approving this wallet action.");
+  return account;
+}
+
+async function sendSponsoredCalls(calls) {
+  const account = await authenticatedAccount();
+  await ensureDelegatedAccount(account);
+  publishStatus("sponsored_transaction_review", {
+    account,
+    callCount: calls.length,
+    message: "Reviewing the exact Base calls. Agent Bounties is sponsoring gas, not the USDC amount.",
+  });
+  const { userOperationHash } = await sendUserOperation({
+    evmSmartAccount: account,
+    network: NETWORK,
+    calls,
+    useCdpPaymaster: true,
+  });
+  const transactionHash = await waitForUserOperationTransaction({
+    userOperationHash,
+    account,
+    getOperation: getUserOperation,
+  });
+  publishStatus("sponsored_transaction_confirmed", {
+    account,
+    userOperationHash,
+    transactionHash,
+  });
+  return transactionHash;
+}
+
+async function loadProvider() {
+  if (sponsoredProvider) return sponsoredProvider;
+  const provider = await loadRawProvider();
+  sponsoredProvider = {
+    async request(request = {}) {
+      const method = String(request.method || "");
+      if (method === "eth_sendTransaction") {
+        const account = await authenticatedAccount();
+        const transaction = request.params?.[0];
+        return sendSponsoredCalls(transactionToCalls(transaction, account));
+      }
+      if (method === "wallet_sendCalls") {
+        const account = await authenticatedAccount();
+        return sendSponsoredCalls(walletRequestToCalls(request, account, runtime.network.chainIdHex));
+      }
+      return provider.request(request);
+    },
+    on(event, handler) {
+      provider.on?.(event, handler);
+      return sponsoredProvider;
+    },
+    removeListener(event, handler) {
+      provider.removeListener?.(event, handler);
+      return sponsoredProvider;
+    },
+    async disconnect() {
+      return provider.disconnect?.();
+    },
+  };
+  Object.defineProperties(sponsoredProvider, {
+    agentBountiesGasSponsored: { value: true, enumerable: true },
+    agentBountiesWalletAdapter: { value: ADAPTER_ID, enumerable: true },
+    agentBountiesAccountType: { value: "eoa-eip7702", enumerable: true },
+  });
+  return sponsoredProvider;
 }
 
 function buildDialog() {
@@ -120,7 +267,7 @@ function buildDialog() {
       <dl class="embedded-wallet-assurance">
         <div><dt>Custody</dt><dd>You control the wallet</dd></div>
         <div><dt>Network</dt><dd>Base mainnet</dd></div>
-        <div><dt>Gas</dt><dd>Sponsored by Agent Bounties</dd></div>
+        <div><dt>Gas</dt><dd>Sponsored through a paymaster</dd></div>
       </dl>
 
       <div class="embedded-wallet-tabs" role="tablist" aria-label="Wallet sign-in method">
@@ -158,7 +305,7 @@ function buildDialog() {
       </section>
 
       <output class="embedded-wallet-status" aria-live="polite" data-wallet-auth-status>No wallet has been created or connected yet.</output>
-      <p class="embedded-wallet-fine">Coinbase supplies the wallet infrastructure. Agent Bounties never receives a private key, seed phrase, email code, or SMS code.</p>
+      <p class="embedded-wallet-fine">Coinbase supplies the wallet infrastructure. Agent Bounties never receives a private key, seed phrase, email code, or SMS code. Creating a wallet does not post, fund, claim, or settle a bounty.</p>
     </form>`;
   document.body.append(dialog);
 
@@ -184,7 +331,7 @@ function buildDialog() {
       panel.hidden = panel.dataset.walletAuthPanel !== name;
     });
     currentFlow = null;
-    setStatus("Choose a sign-in method. Nothing is posted, funded, or claimed by signing in.");
+    setStatus("Choose a sign-in method. Nothing is posted, funded, claimed, or settled by signing in.");
   }
 
   async function completeAuthentication(label) {
@@ -266,7 +413,6 @@ function buildDialog() {
       if (await authenticated()) return completeAuthentication("Welcome back.");
       const provider = button.dataset.walletOauth;
       if (!["google", "apple", "x"].includes(provider)) throw new Error("Unsupported social provider.");
-      sessionStorage.setItem("agentbounties:embedded-wallet-return", location.href);
       setStatus(`Opening ${provider === "x" ? "X" : provider[0].toUpperCase() + provider.slice(1)}. You will return to this page.`, "success");
       await signInWithOAuth(provider);
     }));
@@ -303,6 +449,7 @@ async function openAuthentication() {
 async function signOutEmbeddedWallet() {
   await initializeSdk();
   await signOut();
+  delegationPromises.clear();
   publishStatus("signed_out");
 }
 
@@ -336,12 +483,14 @@ if (!registry) {
     capabilities: {
       embedded: true,
       nonCustodial: true,
-      accountType: "eoa",
+      accountType: "eoa-eip7702",
       network: "base-mainnet",
       authMethods: [...adapterConfig.authMethods],
       gasSponsored: runtime.gasSponsored === true,
+      gasSponsorshipMode: adapterConfig.gasSponsorshipMode,
       requiresBrowserExtension: false,
       requiresSeedPhrase: false,
+      spendPermissionsEnabled: false,
     },
     open: openAuthentication,
   });
@@ -353,6 +502,7 @@ if (!registry) {
     open: openAuthentication,
     signOut: signOutEmbeddedWallet,
     currentUser,
+    ensureGasSponsorship: ensureDelegatedAccount,
   });
 
   void initializeSdk().then(async () => {
