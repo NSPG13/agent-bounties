@@ -115,8 +115,14 @@ jobs:
             git restore .github/workflows/pages.yml
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git status --short
             git add -A
+            git diff --cached --name-only -z | while IFS= read -r -d '' file; do
+              if [[ -f "$file" ]] && grep -Iq . "$file"; then
+                sed -i 's/[[:blank:]]\+$//' "$file"
+              fi
+            done
+            git add -A
+            git status --short
             git diff --cached --stat
             git diff --cached --check
             git commit -m "[coinbase-bootstrap] Add embedded wallet adapter and locked bundle"
@@ -167,6 +173,6 @@ jobs:
           - JS bundle: \`${JS_BYTES}\` bytes, SHA-256 \`${JS_SHA}\`
           - CSS bundle: \`${CSS_BYTES}\` bytes, SHA-256 \`${CSS_SHA}\`
 
-          Deterministic adapter, x402, site, syntax, and generated-bundle checks passed. The reviewed Pages workflow still needs to be applied through the maintainer connection. CDP project creation, production-domain allowlisting, and live authentication require an authenticated CDP Portal session and are not represented by this build proof.
+          Deterministic adapter, x402, site, syntax, generated-bundle, and staged-whitespace checks passed. The reviewed Pages workflow still needs to be applied through the maintainer connection. CDP project creation, production-domain allowlisting, and live authentication require an authenticated CDP Portal session and are not represented by this build proof.
           EOF
           gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-wallet-evidence.md
