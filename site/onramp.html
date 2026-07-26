@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#020b08">
     <meta name="robots" content="noindex">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://mcp.agentbounties.app; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://mcp.agentbounties.app https://api.cdp.coinbase.com https://mainnet.base.org; frame-src https://secure-wallet.cdp.coinbase.com; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <title>Add Base Crypto With MoonPay | Agent Bounties</title>
     <meta name="description" content="Add Base USDC or Base ETH to your own wallet with MoonPay, then return and separately approve an exact Agent Bounties contribution.">
@@ -14,6 +14,8 @@
     <link rel="stylesheet" href="guild-pages.css?v=20260722-1">
     <link rel="stylesheet" href="simple-ux.css?v=1">
     <link rel="stylesheet" href="onramp.css?v=1">
+    <link rel="stylesheet" href="wallet-adapters.css?v=1">
+    <link rel="stylesheet" href="coinbase-embedded-wallet.bundle.css?v=1">
   </head>
   <body class="guild-interior" data-guild-build="20260725-moonpay-2" data-public-ux="simplified-v1">
     <header class="topbar">
@@ -61,7 +63,6 @@
             What do you need?
             <select data-onramp-asset>
               <option value="usdc">Base USDC for the bounty</option>
-              <option value="eth">Base ETH for transaction gas</option>
             </select>
           </label>
           <p class="fine" data-asset-help>Buy USDC into your wallet, then return to approve the contribution.</p>
@@ -79,7 +80,7 @@
           <label class="wallet-picker">
             Wallet
             <select data-wallet-provider aria-label="Wallet provider">
-              <option>Detecting browser wallets</option>
+              <option>Detecting wallets</option>
             </select>
           </label>
           <div class="actions">
@@ -93,7 +94,7 @@
             <div><dt>Base USDC balance</dt><dd><strong data-usdc-balance>—</strong></dd></div>
             <div><dt>Base ETH balance</dt><dd><strong data-eth-balance>—</strong></dd></div>
           </dl>
-          <p class="fine" data-balance-guidance>Base ETH may be required for wallet transaction gas unless the final wallet path sponsors it.</p>
+          <p class="fine" data-balance-guidance>Agent Bounties sponsors gas for existing-bounty funding and claims. Buy only Base USDC for these supported actions; no ETH purchase is required.</p>
         </article>
       </section>
 
@@ -155,6 +156,9 @@
       <a href="https://github.com/NSPG13/agent-bounties/issues">Support</a>
     </footer>
     <script src="guild-shell.js?v=2"></script>
+    <script src="wallet-config.js?v=1"></script>
+    <script src="wallet-adapter-registry.js?v=1"></script>
+    <script src="coinbase-embedded-wallet.bundle.js?v=1"></script>
     <script src="moonpay-onramp.js?v=1"></script>
     <script src="moonpay-direct-fallback.js?v=1"></script>
   </body>
