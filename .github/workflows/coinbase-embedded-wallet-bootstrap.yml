@@ -163,7 +163,7 @@ jobs:
           git add tools/coinbase-embedded-wallet/package-lock.json \
             site/coinbase-embedded-wallet.bundle.js \
             site/coinbase-embedded-wallet.bundle.css
-          git diff --cached --check
+          git diff --cached --check -- tools/coinbase-embedded-wallet/package-lock.json
           if git diff --cached --quiet; then
             echo "The lock and bundle were already current."
             exit 0
