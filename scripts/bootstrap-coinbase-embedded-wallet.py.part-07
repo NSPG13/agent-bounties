@@ -1,4 +1,4 @@
-{missing}")
+    raise SystemExit(f"repository checkout is incomplete: {missing}")
     install_new_files()
     patch_gitignore()
     patch_earn()
