@@ -1,0 +1,74 @@
+name: One-time Coinbase branch cleanup
+
+on:
+  push:
+    branches:
+      - feat/coinbase-embedded-wallet-adapter
+    paths:
+      - ".github/workflows/coinbase-branch-cleanup.yml"
+      - "scripts/cleanup-coinbase-embedded-wallet-branch.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: coinbase-branch-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/coinbase-embedded-wallet-adapter
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Apply the reviewed one-time cleanup
+        run: python scripts/cleanup-coinbase-embedded-wallet-branch.py
+
+      - name: Remove all branch-repair machinery, including this workflow
+        run: |
+          git rm --ignore-unmatch \
+            .github/workflows/apply-sponsored-gas-wallet-patch.yml \
+            .github/workflows/coinbase-branch-cleanup.yml \
+            scripts/apply-sponsored-gas-wallet-patch.py \
+            scripts/apply-generic-moonpay-wallet-patch.py \
+            scripts/apply-embedded-wallet-ui-patch.py \
+            scripts/cleanup-coinbase-embedded-wallet-branch.py
+
+      - name: Verify the cleaned source before committing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/coinbase-wallet-adapter/index.js
+          python scripts/check-coinbase-embedded-wallet.py
+          ! grep -R -n -E 'apply-(sponsored-gas-wallet|generic-moonpay-wallet|embedded-wallet-ui)-patch' \
+            .github/workflows scripts --exclude-dir=__pycache__
+          ! grep -q 'Materialize reviewed wallet source boundaries' .github/workflows/pages.yml
+          grep -q 'npm ci --ignore-scripts --no-audit --no-fund' .github/workflows/pages.yml
+          grep -q 'scripts/check-coinbase-browser-bundle.py' .github/workflows/pages.yml
+          grep -q 'SIM-swap' tools/coinbase-wallet-adapter/index.js
+          grep -q 'unlinked methods can create separate Coinbase identities and wallets' tools/coinbase-wallet-adapter/index.js
+          grep -q 'does not send authentication codes to its servers' tools/coinbase-wallet-adapter/index.js
+          grep -q 'No ETH purchase is required for the embedded-wallet path' site/onramp.html
+
+      - name: Commit the cleaned, non-self-modifying branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "Cleanup is already committed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: finalize provider-neutral embedded wallet adapter"
+          git push origin HEAD:feat/coinbase-embedded-wallet-adapter
