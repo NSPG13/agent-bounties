@@ -110,14 +110,18 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          rm -f scripts/bootstrap-coinbase-embedded-wallet.py
-          git restore .github/workflows/pages.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "[coinbase-bootstrap] Add embedded wallet adapter and locked bundle"
-          git push origin HEAD:maintainer/coinbase-embedded-wallet 2>&1 | tee /tmp/coinbase-commit.log
+          {
+            rm -f scripts/bootstrap-coinbase-embedded-wallet.py
+            git restore .github/workflows/pages.yml
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git status --short
+            git add -A
+            git diff --cached --stat
+            git diff --cached --check
+            git commit -m "[coinbase-bootstrap] Add embedded wallet adapter and locked bundle"
+            git push origin HEAD:maintainer/coinbase-embedded-wallet
+          } 2>&1 | tee /tmp/coinbase-commit.log
 
       - name: Publish exact repository-write failure
         if: steps.commit.outcome == 'failure'
@@ -129,7 +133,7 @@ jobs:
             echo '❌ **Coinbase embedded-wallet generation passed, but repository write failed**'
             echo
             echo '```text'
-            tail -n 100 /tmp/coinbase-commit.log 2>/dev/null || true
+            tail -n 120 /tmp/coinbase-commit.log 2>/dev/null || true
             echo '```'
             echo
             echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
