@@ -9,7 +9,6 @@ on:
       - main
     paths:
       - ".github/workflows/coinbase-embedded-wallet-bootstrap.yml"
-      - ".github/workflows/moonpay-production-smoke.yml"
       - "scripts/bootstrap-coinbase-embedded-wallet.py.part-*"
 
 permissions:
@@ -36,11 +35,34 @@ jobs:
           python-version: "3.12"
 
       - name: Reassemble and apply fail-closed repository patch
+        id: apply
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           cat scripts/bootstrap-coinbase-embedded-wallet.py.part-* > scripts/bootstrap-coinbase-embedded-wallet.py
-          python scripts/bootstrap-coinbase-embedded-wallet.py
+          python scripts/bootstrap-coinbase-embedded-wallet.py 2>&1 | tee /tmp/coinbase-bootstrap.log
+
+      - name: Publish exact bootstrap failure
+        if: steps.apply.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          {
+            echo '❌ **Coinbase embedded-wallet bootstrap failed before dependency resolution**'
+            echo
+            echo '```text'
+            tail -n 80 /tmp/coinbase-bootstrap.log
+            echo '```'
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > /tmp/coinbase-bootstrap-failure.md
+          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-bootstrap-failure.md
+
+      - name: Enforce successful repository patch
+        if: steps.apply.outcome == 'failure'
+        run: exit 1
 
       - uses: actions/setup-node@v6
         with:
