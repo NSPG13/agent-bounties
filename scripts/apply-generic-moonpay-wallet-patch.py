@@ -137,6 +137,11 @@ NEW_TEST = '''    #[test]
     #[test]
     fn sandbox_checkout_is_test_only_and_supports_gas_asset() {'''
 
+UNFORMATTED_ONBOARDING_PLAN = '''        let plan = build_checkout_plan(&config(MoonpayEnvironment::Sandbox), onboarding, None)
+            .unwrap();'''
+FORMATTED_ONBOARDING_PLAN = '''        let plan =
+            build_checkout_plan(&config(MoonpayEnvironment::Sandbox), onboarding, None).unwrap();'''
+
 
 def replace_exact(source: str, old: str, new: str, label: str) -> str:
     old_count = source.count(old)
@@ -153,6 +158,12 @@ def main() -> int:
     for old, new, label in REPLACEMENTS:
         source = replace_exact(source, old, new, label)
     source = replace_exact(source, NEW_TEST_ANCHOR, NEW_TEST, "wallet onboarding test")
+    source = replace_exact(
+        source,
+        UNFORMATTED_ONBOARDING_PLAN,
+        FORMATTED_ONBOARDING_PLAN,
+        "wallet onboarding rustfmt",
+    )
 
     for required in (
         "bounty_contract: Option<String>",
