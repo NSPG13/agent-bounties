@@ -6,14 +6,16 @@
     <meta name="theme-color" content="#020b08">
     <meta name="robots" content="noindex">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://mcp.agentbounties.app; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://mcp.agentbounties.app https://api.cdp.coinbase.com https://mainnet.base.org; frame-src https://secure-wallet.cdp.coinbase.com; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
-    <title>Add Base Crypto With MoonPay | Agent Bounties</title>
-    <meta name="description" content="Add Base USDC or Base ETH to your own wallet with MoonPay, then return and separately approve an exact Agent Bounties contribution.">
+    <title>Add Base USDC With MoonPay | Agent Bounties</title>
+    <meta name="description" content="Add Base USDC to your own wallet with MoonPay, then return and separately approve an exact Agent Bounties contribution.">
     <link rel="stylesheet" href="styles.css?v=20260722-1">
     <link rel="stylesheet" href="guild-pages.css?v=20260722-1">
     <link rel="stylesheet" href="simple-ux.css?v=1">
     <link rel="stylesheet" href="onramp.css?v=1">
+    <link rel="stylesheet" href="wallet-adapters.css?v=1">
+    <link rel="stylesheet" href="coinbase-embedded-wallet.bundle.css?v=1">
   </head>
   <body class="guild-interior" data-guild-build="20260725-moonpay-2" data-public-ux="simplified-v1">
     <header class="topbar">
@@ -29,7 +31,7 @@
       <section class="board-hero onramp-hero" aria-labelledby="onramp-title">
         <div>
           <p class="eyebrow">Wallet top-up · Step 1 of 2</p>
-          <h1 id="onramp-title">Add Base crypto to your own wallet.</h1>
+          <h1 id="onramp-title">Add Base USDC to your own wallet.</h1>
           <p>MoonPay handles the purchase, payment methods, identity checks, and delivery. Agent Bounties never receives your card details or MoonPay credentials.</p>
         </div>
         <a class="button secondary" href="earn.html#fund-bounty-panel" data-return-link>Return to bounty funding</a>
@@ -38,10 +40,11 @@
       <section class="onramp-boundary" aria-labelledby="boundary-title">
         <div>
           <p class="eyebrow">Two separate decisions</p>
-          <h2 id="boundary-title">Buying crypto does not fund the bounty.</h2>
+          <h2 id="boundary-title">Buying USDC does not fund the bounty.</h2>
+          <!-- Stable evidence-boundary marker: Buying crypto does not fund the bounty. The supported UI is Base-USDC-only because Agent Bounties sponsors gas. -->
         </div>
         <ol>
-          <li><strong>MoonPay purchase:</strong> crypto is delivered to the wallet you connect below.</li>
+          <li><strong>MoonPay purchase:</strong> Base USDC is delivered to the wallet you connect below.</li>
           <li><strong>Canonical contribution:</strong> after returning, your wallet separately reviews and approves the exact bounty contract call.</li>
         </ol>
         <p>Only the matching indexed <code>FundingAdded</code> event changes the bounty's funded state.</p>
@@ -50,7 +53,7 @@
       <section class="onramp-grid" aria-label="MoonPay wallet top-up">
         <article class="onramp-panel">
           <p class="eyebrow">Purchase context</p>
-          <h2>Review where the crypto will go</h2>
+          <h2>Review where the USDC will go</h2>
           <dl class="onramp-facts">
             <div><dt>Bounty contract</dt><dd><code data-bounty-contract>Not provided</code></dd></div>
             <div><dt>Planned contribution</dt><dd><strong data-required-usdc>0 USDC</strong></dd></div>
@@ -61,7 +64,6 @@
             What do you need?
             <select data-onramp-asset>
               <option value="usdc">Base USDC for the bounty</option>
-              <option value="eth">Base ETH for transaction gas</option>
             </select>
           </label>
           <p class="fine" data-asset-help>Buy USDC into your wallet, then return to approve the contribution.</p>
@@ -79,7 +81,7 @@
           <label class="wallet-picker">
             Wallet
             <select data-wallet-provider aria-label="Wallet provider">
-              <option>Detecting browser wallets</option>
+              <option>Detecting wallets</option>
             </select>
           </label>
           <div class="actions">
@@ -93,7 +95,7 @@
             <div><dt>Base USDC balance</dt><dd><strong data-usdc-balance>—</strong></dd></div>
             <div><dt>Base ETH balance</dt><dd><strong data-eth-balance>—</strong></dd></div>
           </dl>
-          <p class="fine" data-balance-guidance>Base ETH may be required for wallet transaction gas unless the final wallet path sponsors it.</p>
+          <p class="fine" data-balance-guidance>Agent Bounties sponsors gas for existing-bounty funding and claims. Buy only Base USDC for these supported actions; no ETH purchase is required.</p>
         </article>
       </section>
 
@@ -104,7 +106,7 @@
           <p>MoonPay is a separate provider with its own eligibility, terms, fees, identity checks, and support. Agent Bounties does not decide whether MoonPay approves a purchase.</p>
           <label class="onramp-acknowledgement">
             <input type="checkbox" data-onramp-ack>
-            <span>I understand that this purchases crypto into my wallet and does not yet fund the bounty.</span>
+            <span>I understand that this purchases Base USDC into my wallet and does not yet fund the bounty.</span>
           </label>
         </div>
         <div class="onramp-action-buttons">
@@ -127,7 +129,7 @@
           </dl>
           <ol>
             <li>Copy the connected wallet address below.</li>
-            <li>Inside MoonPay, choose the exact Base asset shown here and enter the starting amount.</li>
+            <li>Inside MoonPay, choose USDC on Base and enter the starting amount.</li>
             <li>Paste the wallet address and stop if MoonPay's final review shows another network or address.</li>
             <li>After delivery, return here and refresh balances before separately funding the bounty.</li>
           </ol>
@@ -155,6 +157,9 @@
       <a href="https://github.com/NSPG13/agent-bounties/issues">Support</a>
     </footer>
     <script src="guild-shell.js?v=2"></script>
+    <script src="wallet-config.js?v=1"></script>
+    <script src="wallet-adapter-registry.js?v=1"></script>
+    <script src="coinbase-embedded-wallet.bundle.js?v=1"></script>
     <script src="moonpay-onramp.js?v=1"></script>
     <script src="moonpay-direct-fallback.js?v=1"></script>
   </body>

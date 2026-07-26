@@ -72,17 +72,27 @@
   function populateProviderSelectors() {
     document.querySelectorAll("[data-wallet-provider]").forEach((selector) => {
       const selectedProvider = state.provider;
-      selector.replaceChildren(...state.providers.map((item, index) => {
+      const required = selector.dataset.walletRequires || "";
+      const visible = state.providers
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => {
+          if (required !== "direct-transactions") return true;
+          const capabilities = window.AgentBountiesWalletAdapters?.capabilitiesFor?.(item.provider);
+          return capabilities?.directTransactions !== false;
+        });
+      selector.replaceChildren(...visible.map(({ item, index }) => {
         const option = document.createElement("option");
         option.value = String(index);
         option.textContent = providerName(item.provider, item.info);
         option.selected = item.provider === selectedProvider;
         return option;
       }));
-      selector.disabled = state.providers.length === 0;
-      if (state.providers.length === 0) {
+      selector.disabled = visible.length === 0;
+      if (visible.length === 0) {
         const option = document.createElement("option");
-        option.textContent = "No browser wallet detected";
+        option.textContent = required === "direct-transactions"
+          ? "No compatible transaction wallet available"
+          : "No wallet provider is available";
         selector.append(option);
       }
     });
@@ -109,7 +119,7 @@
     const selector = (context.querySelector && context.querySelector("[data-wallet-provider]"))
       || document.querySelector("[data-wallet-provider]");
     const item = state.providers[Number.parseInt(selector && selector.value, 10)];
-    if (!item) throw new Error("Unlock a browser wallet, reload, and select it here.");
+    if (!item) throw new Error("Select a wallet provider. You can create an embedded wallet without installing an extension.");
     state.provider = item.provider;
     const index = String(state.providers.findIndex((provider) => provider.provider === item.provider));
     document.querySelectorAll("[data-wallet-provider]").forEach((candidate) => {
@@ -1227,28 +1237,38 @@
         authorization_nonce: randomBytes32(),
         authorization_valid_before: Math.floor(Date.now() / 1000) + 3_600,
       };
-      const plan = await requestJson(`${api}/v1/base/autonomous-bounties/contribution-plan`, {
-        method: "POST",
-        body: JSON.stringify({ network: "base-mainnet", contribution }),
-      });
-      output(result, ["Wallet confirmation required.", `Contribution: ${form.elements.amount.value} USDC`]);
+      const contractAccount = await isContractAccount(account);
+      output(result, [
+        contractAccount ? "Wallet confirmation required." : "Gas-sponsored authorization required.",
+        `Contribution: ${form.elements.amount.value} USDC`,
+        contractAccount
+          ? "This wallet account will review its supported call path."
+          : "Your wallet signs exact Base USDC authorization; the Agent Bounties relayer pays ETH gas.",
+      ]);
       let txHash = null;
-      if (!(await isContractAccount(account)) && plan.eip3009_authorization) {
-        const signature = await signTypedData(account, plan.eip3009_authorization);
-        const authorized = await requestJson(
-          `${api}/v1/base/autonomous-bounties/authorized-contribution-plan`,
-          {
-            method: "POST",
-            body: JSON.stringify({ network: "base-mainnet", contribution, signature, relayer: account }),
-          },
-        );
-        txHash = await sendTransaction(authorized.relay_transaction, account);
-        await waitReceipt(txHash);
+      let fundingEvent = null;
+      if (!contractAccount) {
+        if (!window.AgentBountiesX402 || typeof window.AgentBountiesX402.fund !== "function") {
+          throw new Error("The gas-sponsored funding client is unavailable. Reload before authorizing USDC.");
+        }
+        const x402Result = await window.AgentBountiesX402.fund({
+          apiBase: api,
+          provider: state.provider,
+          account,
+          bountyContract: bounty.bounty_contract,
+          amountBaseUnits: String(contribution.amount.amount),
+          usdcAddress: protocol.native_usdc,
+        });
+        txHash = x402Result.transactionHash;
+        fundingEvent = { tx_hash: txHash, source: "x402-hosted-relay" };
       } else {
+        const plan = await requestJson(`${api}/v1/base/autonomous-bounties/contribution-plan`, {
+          method: "POST",
+          body: JSON.stringify({ network: "base-mainnet", contribution }),
+        });
         const sent = await sendWalletCalls(plan.wallet_calls, account, protocol);
         if (sent.kind === "transactions") txHash = sent.hashes[sent.hashes.length - 1];
       }
-      let fundingEvent = null;
       if (hostedActionIntentId() && txHash) {
         await observeHostedAction({
           transactionHash: txHash,

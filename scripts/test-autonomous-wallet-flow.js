@@ -7,12 +7,20 @@ const { webcrypto } = require("crypto");
 const repoRoot = path.resolve(__dirname, "..");
 const evmSource = fs.readFileSync(path.join(repoRoot, "site", "evm.js"), "utf8");
 const source = fs.readFileSync(path.join(repoRoot, "site", "autonomous.js"), "utf8");
+const x402Source = fs.readFileSync(path.join(repoRoot, "site", "x402-browser.js"), "utf8");
+const registrySource = fs.readFileSync(path.join(repoRoot, "site", "wallet-adapter-registry.js"), "utf8");
+const embeddedAdapterSource = fs.readFileSync(
+  path.join(repoRoot, "tools", "coinbase-embedded-wallet", "src", "index.js"),
+  "utf8",
+);
 const protocol = JSON.parse(
   fs.readFileSync(path.join(repoRoot, "site", "protocol.json"), "utf8"),
 );
 
 new vm.Script(evmSource, { filename: "site/evm.js" });
 new vm.Script(source, { filename: "site/autonomous.js" });
+new vm.Script(x402Source, { filename: "site/x402-browser.js" });
+new vm.Script(registrySource, { filename: "site/wallet-adapter-registry.js" });
 
 for (const required of [
   "eth_signTypedData_v4",
@@ -24,7 +32,9 @@ for (const required of [
   "/v1/base/autonomous-bounties/creation-plan",
   "/v1/base/autonomous-bounties/authorized-creation-plan",
   "/v1/base/autonomous-bounties/contribution-plan",
-  "/v1/base/autonomous-bounties/authorized-contribution-plan",
+  "window.AgentBountiesX402",
+  "x402-hosted-relay",
+  "Your wallet signs exact Base USDC authorization",
   "/v1/base/autonomous-bounties/claims",
   "request_bond_sponsorship",
   "wallet_signature",
@@ -49,6 +59,37 @@ for (const required of [
   assert(source.includes(required), `autonomous wallet flow missing ${required}`);
 }
 
+for (const required of [
+  "agent-bounty-fund",
+  "payment-required",
+  "payment-signature",
+  "payment-response",
+  "eth_signTypedData_v4",
+  "FundingAdded",
+  "/v1/x402/base/bounties/",
+  "/v1/x402/base/relays/",
+]) {
+  assert(x402Source.includes(required), `x402 browser flow missing ${required}`);
+}
+assert(!x402Source.includes("eth_sendTransaction"), "x402 browser flow must not request a user gas transaction");
+
+for (const required of [
+  "register",
+  "capabilitiesFor",
+  "eip6963:announceProvider",
+]) {
+  assert(registrySource.includes(required), `wallet adapter registry missing ${required}`);
+}
+
+for (const required of [
+  "directTransactions: false",
+  "gasSponsoredOnSupportedRelays: true",
+  "authMethodLinking: true",
+  "Link another sign-in method",
+]) {
+  assert(embeddedAdapterSource.includes(required), `Coinbase embedded adapter missing ${required}`);
+}
+
 for (const retired of [
   "import wallet",
   "seed phrase",
@@ -58,6 +99,7 @@ for (const retired of [
   "/v1/base/funding-plan",
   "/v1/base/release-plan",
   "settlement signer",
+  "/v1/base/autonomous-bounties/authorized-contribution-plan",
 ]) {
   assert(!source.includes(retired), `autonomous wallet flow contains retired behavior: ${retired}`);
 }
@@ -98,10 +140,30 @@ assert(postHtml.includes('name="verifierReward" type="number" min="0.01" step="0
 
 const earnHtml = fs.readFileSync(path.join(repoRoot, "site", "earn.html"), "utf8");
 assert(earnHtml.includes("Sign once. Start after BountyClaimed"));
+assert(earnHtml.includes("Gas is sponsored for this funding action"));
+assert(earnHtml.includes('data-wallet-requires="direct-transactions"'));
+assert(earnHtml.includes('src="wallet-adapter-registry.js?v=1"'));
+assert(earnHtml.includes('src="x402-browser.js?v=1"'));
+assert(
+  earnHtml.indexOf('src="x402-browser.js?v=1"') < earnHtml.indexOf('src="autonomous.js"'),
+  "the sponsored x402 client must load before the autonomous funding flow",
+);
 assert(source.includes('params.get("bountyContract")'));
 assert(source.includes("Sign once to claim"));
 assert(source.includes("Sponsored refundable bond"));
 assert(!source.includes("/v1/base/autonomous-bounties/authorized-claim-plan"));
+const fundingStart = source.indexOf("async function fundBounty(event)");
+const submissionStart = source.indexOf("async function submitBounty(event)", fundingStart);
+assert(fundingStart >= 0 && submissionStart > fundingStart, "funding function boundaries are missing");
+const fundingBody = source.slice(fundingStart, submissionStart);
+assert(
+  !fundingBody.includes("/v1/base/autonomous-bounties/authorized-contribution-plan"),
+  "EOA funding must not call the retired user-gas authorized-contribution planner",
+);
+assert(
+  !fundingBody.includes("sendTransaction(authorized.relay_transaction"),
+  "EOA funding must not broadcast a relayer transaction from the user's wallet",
+);
 
 for (const page of ["index.html", "post.html", "funding.html", "earn.html", "operator.html", "recovery.html"]) {
   const html = fs.readFileSync(path.join(repoRoot, "site", page), "utf8");

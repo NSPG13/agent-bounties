@@ -6,7 +6,12 @@ on:
       - ".github/workflows/pages.yml"
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
+      - "tools/coinbase-embedded-wallet/**"
       - "scripts/check-site.py"
+      - "scripts/check-coinbase-embedded-wallet.py"
+      - "scripts/configure-wallet-providers.py"
+      - "scripts/test-wallet-adapter-registry.js"
+      - "scripts/test-x402-browser.js"
       - "scripts/test-homepage-bounty-wiring.py"
       - "scripts/test-homepage-bounty-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
@@ -16,7 +21,12 @@ on:
       - ".github/workflows/pages.yml"
       - "deployments/bounded-agent-wallet-base-mainnet.json"
       - "site/**"
+      - "tools/coinbase-embedded-wallet/**"
       - "scripts/check-site.py"
+      - "scripts/check-coinbase-embedded-wallet.py"
+      - "scripts/configure-wallet-providers.py"
+      - "scripts/test-wallet-adapter-registry.js"
+      - "scripts/test-x402-browser.js"
       - "scripts/test-homepage-bounty-wiring.py"
       - "scripts/test-homepage-bounty-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
@@ -43,6 +53,20 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
+          cache: "npm"
+          cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
+      - name: Install locked Coinbase wallet dependencies
+        run: npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+      - name: Prepare reviewed esbuild binary
+        run: npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
+      - name: Verify committed Coinbase wallet bundle is reproducible
+        run: |
+          cp site/coinbase-embedded-wallet.bundle.js /tmp/coinbase-wallet.js
+          cp site/coinbase-embedded-wallet.bundle.css /tmp/coinbase-wallet.css
+          npm run build --prefix tools/coinbase-embedded-wallet
+          cmp /tmp/coinbase-wallet.js site/coinbase-embedded-wallet.bundle.js
+          cmp /tmp/coinbase-wallet.css site/coinbase-embedded-wallet.bundle.css
+      - run: python scripts/check-coinbase-embedded-wallet.py
       - run: python scripts/check-site.py
       - run: python scripts/test-homepage-bounty-wiring.py
       - run: node scripts/test-homepage-bounty-flow.js
@@ -56,6 +80,10 @@ jobs:
           node --check site/bounty-chat-ui.js
           node --check site/simple-home.js
           node --check site/guild-shell.js
+          node --check site/wallet-adapter-registry.js
+          node --check site/x402-browser.js
+          node scripts/test-wallet-adapter-registry.js
+          node scripts/test-x402-browser.js
           grep -q 'data-primary-bounty-cta>Post a bounty</a>' site/index.html
           grep -q 'class="mode-switch"' site/index.html
           grep -q 'action="objective.html"' site/index.html
@@ -67,6 +95,8 @@ jobs:
           grep -q '"agent_mode": "https://agentbounties.app/agent/"' site/.well-known/agent-bounties.json
           grep -q 'data-board-search' site/earn.html
           grep -q 'id="fund-bounty-panel"' site/earn.html
+          grep -q 'Gas is sponsored for this funding action' site/earn.html
+          grep -q 'data-wallet-requires="direct-transactions"' site/earn.html
           grep -q 'class="composer-page chat-app-page"' site/objective.html
           grep -q 'class="chat-app-header"' site/objective.html
           grep -q 'id="bounty-composer-form"' site/objective.html
@@ -132,6 +162,21 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
+      - name: Build Coinbase embedded-wallet adapter from lockfile
+        run: |
+          npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+          npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
+          npm run build --prefix tools/coinbase-embedded-wallet
+      - name: Configure public wallet providers
+        env:
+          COINBASE_CDP_PROJECT_ID: ${{ vars.COINBASE_CDP_PROJECT_ID }}
+        run: python scripts/configure-wallet-providers.py
+      - run: python scripts/check-coinbase-embedded-wallet.py
       - uses: actions/configure-pages@v6
       - name: Configure optional Google Analytics without removing the public shell
         env:
@@ -172,7 +217,7 @@ jobs:
           include-hidden-files: true
       - id: deployment
         uses: actions/deploy-pages@v5
-      - name: Verify the normal chatbot experience
+      - name: Verify the normal chatbot and embedded-wallet experience
         env:
           GH_TOKEN: ${{ github.token }}
           LIVE_CANARY_ISSUE: "499"
@@ -203,7 +248,10 @@ jobs:
               && curl "${common_curl[@]}" "https://agentbounties.app/bounty-entry.js?verify=${nonce}" -o /tmp/live-entry.js \
               && curl "${common_curl[@]}" "https://agentbounties.app/how-it-works.html?verify=${nonce}" -o /tmp/live-how.html \
               && curl "${common_curl[@]}" "https://agentbounties.app/analytics-config.js?verify=${nonce}" -o /tmp/live-analytics.js \
-              && curl "${common_curl[@]}" "https://agentbounties.app/simple-home.js?verify=${nonce}" -o /tmp/live-simple-home.js; then
+              && curl "${common_curl[@]}" "https://agentbounties.app/simple-home.js?verify=${nonce}" -o /tmp/live-simple-home.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/wallet-config.js?verify=${nonce}" -o /tmp/live-wallet-config.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/coinbase-embedded-wallet.bundle.js?verify=${nonce}" -o /tmp/live-coinbase-wallet.js \
+              && curl "${common_curl[@]}" "https://agentbounties.app/x402-browser.js?verify=${nonce}" -o /tmp/live-x402-browser.js; then
               actual_build="$(head -n 1 /tmp/live-canary.txt | tr -d '\r\n')"
               if [[ "${actual_build}" == "${expected_build}" ]] \
                 && grep -q 'data-primary-bounty-cta>Post a bounty</a>' /tmp/live-index.html \
@@ -217,6 +265,7 @@ jobs:
                 && grep -q 'data-public-ux="simplified-v1"' /tmp/live-earn.html \
                 && grep -q 'data-board-search' /tmp/live-earn.html \
                 && grep -q 'id="fund-bounty-panel"' /tmp/live-earn.html \
+                && grep -q 'Gas is sponsored for this funding action' /tmp/live-earn.html \
                 && grep -q 'class="composer-page chat-app-page"' /tmp/live-objective.html \
                 && grep -q 'class="chat-app-header"' /tmp/live-objective.html \
                 && grep -q 'id="bounty-composer-form"' /tmp/live-objective.html \
@@ -247,12 +296,17 @@ jobs:
                 && grep -q 'simple-home.js' /tmp/live-analytics.js \
                 && grep -q '\["earn.html", "Bounty Board"\]' /tmp/live-simple-home.js \
                 && grep -q '\["how-it-works.html", "How It Works"\]' /tmp/live-simple-home.js \
-                && ! grep -q 'Open Source' /tmp/live-simple-home.js; then
+                && ! grep -q 'Open Source' /tmp/live-simple-home.js \
+                && grep -q 'coinbaseEmbedded' /tmp/live-wallet-config.js \
+                && ! grep -q '__COINBASE_CDP_PROJECT_ID__' /tmp/live-wallet-config.js \
+                && grep -q 'coinbase-embedded' /tmp/live-coinbase-wallet.js \
+                && grep -q 'Link another sign-in method' /tmp/live-coinbase-wallet.js \
+                && grep -q 'agent-bounty-fund' /tmp/live-x402-browser.js; then
                 success=true
                 failure_detail=""
                 break
               fi
-              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or minimal chatbot markers were missing"
+              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or chatbot/embedded-wallet markers were missing"
             else
               failure_detail="one or more live URLs returned a non-success response"
             fi
@@ -263,7 +317,7 @@ jobs:
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           if [[ "${success}" == "true" ]]; then
             cat > /tmp/live-proof.md <<EOF
-          ✅ **User-owned AI bounty composer canary passed**
+          ✅ **User-owned AI bounty composer and Coinbase adapter canary passed**
 
           - Commit: \`${GITHUB_SHA}\`
           - Expected and live build: \`${expected_build}\`
@@ -271,11 +325,12 @@ jobs:
           - Verified at: ${verified_at}
           - Live bounty creation hands the original idea to ChatGPT, Claude, Gemini, or another MCP-capable user account without calling a platform model key.
           - The portable JSON return path renders the standardized draft inline and retains review, approval, and wallet gates.
+          - The Coinbase adapter is configured without a placeholder, includes explicit auth-method linking, and routes supported EOA funding through the gas-sponsored x402 path.
           - Workflow: ${run_url}
           EOF
           else
             cat > /tmp/live-proof.md <<EOF
-          ❌ **User-owned AI bounty composer canary failed**
+          ❌ **User-owned AI bounty composer or Coinbase adapter canary failed**
 
           - Commit: \`${GITHUB_SHA}\`
           - Expected build: \`${expected_build}\`

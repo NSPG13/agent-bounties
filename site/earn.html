@@ -12,6 +12,8 @@
     <link rel="stylesheet" href="guild-pages.css?v=20260722-1">
     <link rel="stylesheet" href="simple-ux.css?v=1">
     <link rel="stylesheet" href="onramp.css?v=1">
+    <link rel="stylesheet" href="wallet-adapters.css?v=1">
+    <link rel="stylesheet" href="coinbase-embedded-wallet.bundle.css?v=1">
   </head>
   <body class="guild-interior" data-guild-build="20260722-2" data-public-ux="simplified-v1">
     <header class="topbar">
@@ -86,17 +88,17 @@
               <input name="amount" type="number" min="0.01" step="0.01" value="1.00" required>
             </label>
             <div class="onramp-callout">
-              <strong>Need Base USDC or gas?</strong>
-              <p>MoonPay can add Base USDC or Base ETH to your connected wallet. Buying crypto does not fund this bounty; return here and separately approve the exact canonical contribution.</p>
-              <a class="button secondary" href="onramp.html" data-moonpay-onramp-link>Buy Base USDC or gas with MoonPay</a>
-              <output class="fine" data-moonpay-link-output aria-live="polite">MoonPay is an optional wallet top-up provider.</output>
+              <strong>Need Base USDC?</strong>
+              <p>Gas is sponsored for this funding action. Create or connect a wallet, buy Base USDC with MoonPay when needed, then separately authorize the exact canonical contribution.</p>
+              <a class="button secondary" href="onramp.html" data-moonpay-onramp-link>Get Base USDC with MoonPay</a>
+              <output class="fine" data-moonpay-link-output aria-live="polite">MoonPay is optional. Buying USDC does not fund this bounty.</output>
             </div>
             <div data-legal-consent data-consent-actions="fund_bounty"></div>
             <div class="actions">
               <label class="wallet-picker">
                 Wallet
                 <select data-wallet-provider aria-label="Wallet provider">
-                  <option>Detecting browser wallets</option>
+                  <option>Detecting wallets</option>
                 </select>
               </label>
               <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-fund-output">Connect wallet</button>
@@ -116,7 +118,7 @@
             <label class="wallet-picker">
               Wallet
               <select data-wallet-provider aria-label="Wallet provider">
-                <option>Detecting browser wallets</option>
+                <option>Detecting wallets</option>
               </select>
             </label>
             <button class="button secondary" type="button" data-connect-wallet data-output="claim-feed-output">Connect wallet</button>
@@ -147,8 +149,8 @@
             <div class="actions">
               <label class="wallet-picker">
                 Wallet
-                <select data-wallet-provider aria-label="Wallet provider">
-                  <option>Detecting browser wallets</option>
+                <select data-wallet-provider data-wallet-requires="direct-transactions" aria-label="Wallet provider">
+                  <option>Detecting wallets</option>
                 </select>
               </label>
               <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
@@ -195,6 +197,10 @@
     <script src="legal-consent.js"></script>
     <script src="evm.js"></script>
     <script src="moonpay-link.js?v=1"></script>
+    <script src="wallet-config.js?v=1"></script>
+    <script src="wallet-adapter-registry.js?v=1"></script>
+    <script src="coinbase-embedded-wallet.bundle.js?v=1"></script>
+    <script src="x402-browser.js?v=1"></script>
     <script src="autonomous.js"></script>
     <script src="bounty-board.js?v=1"></script>
   </body>
