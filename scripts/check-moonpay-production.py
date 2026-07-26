@@ -7,6 +7,7 @@ import argparse
 import json
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,11 +16,16 @@ from typing import Any
 
 DEFAULT_SITE_BASE = "https://agentbounties.app"
 DEFAULT_MCP_BASE = "https://mcp.agentbounties.app"
-SCHEMA_VERSION = "agent-bounties/moonpay-production-smoke-v1"
+SCHEMA_VERSION = "agent-bounties/moonpay-production-smoke-v2"
 CHECKOUT_SCHEMA = "agent-bounties/moonpay-onramp-checkout-v1"
 CANARY_WALLET = "0x1111111111111111111111111111111111111111"
 CANARY_BOUNTY = "0x2222222222222222222222222222222222222222"
 CHECKOUT_HOSTS = {"buy.moonpay.com", "buy-sandbox.moonpay.com"}
+DIRECT_CHECKOUT_URLS = {
+    "usdc": "https://www.moonpay.com/buy/usdc",
+    "eth": "https://www.moonpay.com/buy/eth",
+}
+RETRYABLE_ENDPOINT_STATUSES = {404, 502, 504}
 
 
 class SmokeFailure(RuntimeError):
@@ -33,7 +39,7 @@ def fetch_text(url: str, *, timeout: float) -> tuple[int, str, dict[str, str]]:
             "Accept": "text/html,application/javascript,text/plain;q=0.9,*/*;q=0.8",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
-            "User-Agent": "agent-bounties-moonpay-production-smoke/1",
+            "User-Agent": "agent-bounties-moonpay-production-smoke/2",
         },
         method="GET",
     )
@@ -57,7 +63,7 @@ def post_json(
             "Content-Type": "application/json",
             "Origin": origin,
             "Pragma": "no-cache",
-            "User-Agent": "agent-bounties-moonpay-production-smoke/1",
+            "User-Agent": "agent-bounties-moonpay-production-smoke/2",
         },
         method="POST",
     )
@@ -85,16 +91,18 @@ def require_tokens(name: str, body: str, required: tuple[str, ...]) -> None:
         raise SmokeFailure(f"{name} is missing deployed MoonPay markers: {missing}")
 
 
-def verify_static(site_base: str, timeout: float) -> list[dict[str, Any]]:
+def verify_static(site_base: str, timeout: float) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     targets = [
         (
             "onramp.html",
             f"{site_base}/onramp.html",
             (
-                "MoonPay wallet top-up",
                 "Step 1 of 2",
                 "Buying crypto does not fund the bounty",
+                "Direct MoonPay fallback",
+                "cannot prefill or cryptographically bind your wallet",
                 "moonpay-onramp.js",
+                "moonpay-direct-fallback.js",
             ),
         ),
         (
@@ -117,13 +125,29 @@ def verify_static(site_base: str, timeout: float) -> list[dict[str, Any]]:
                 "return",
             ),
         ),
+        (
+            "moonpay-direct-fallback.js",
+            f"{site_base}/moonpay-direct-fallback.js",
+            (
+                DIRECT_CHECKOUT_URLS["usdc"],
+                DIRECT_CHECKOUT_URLS["eth"],
+                "USDC on Base (USDC_BASE)",
+                "ETH on Base (ETH_BASE)",
+                "navigator.clipboard.writeText",
+                'setAttribute("aria-disabled"',
+                "stop if the final screen shows another network or address",
+            ),
+        ),
     ]
     results: list[dict[str, Any]] = []
+    direct_body = ""
     for name, url, tokens in targets:
         status, body, headers = fetch_text(url, timeout=timeout)
         if status != 200:
             raise SmokeFailure(f"{name} returned HTTP {status}")
         require_tokens(name, body, tokens)
+        if name == "moonpay-direct-fallback.js":
+            direct_body = body
         results.append(
             {
                 "name": name,
@@ -134,7 +158,23 @@ def verify_static(site_base: str, timeout: float) -> list[dict[str, Any]]:
                 "verified_markers": list(tokens),
             }
         )
-    return results
+
+    forbidden = [term for term in ("apiKey=", "walletAddress=", "signature=") if term in direct_body]
+    if forbidden:
+        raise SmokeFailure(f"direct MoonPay fallback imitates a signed or wallet-prefilled URL: {forbidden}")
+    direct = {
+        "active": True,
+        "provider": "moonpay",
+        "mode": "direct_consumer_checkout",
+        "checkout_urls": DIRECT_CHECKOUT_URLS,
+        "wallet_prefilled": False,
+        "context_cryptographically_bound": False,
+        "explicit_wallet_copy_required": True,
+        "base_asset_review_required": True,
+        "bounty_funded": False,
+        "canonical_funding_event": None,
+    }
+    return results, direct
 
 
 def verify_common_response(status: int, body: dict[str, Any]) -> None:
@@ -150,25 +190,25 @@ def verify_common_response(status: int, body: dict[str, Any]) -> None:
 
 def verify_checkout_plan(body: dict[str, Any]) -> dict[str, Any]:
     if body.get("provider") != "moonpay":
-        raise SmokeFailure("Configured checkout response did not identify provider=moonpay")
+        raise SmokeFailure("configured checkout response did not identify provider=moonpay")
     if str(body.get("destination_wallet", "")).lower() != CANARY_WALLET:
-        raise SmokeFailure("Configured checkout response changed the reviewed destination wallet")
+        raise SmokeFailure("configured checkout response changed the reviewed destination wallet")
     if str(body.get("bounty_contract", "")).lower() != CANARY_BOUNTY:
-        raise SmokeFailure("Configured checkout response changed the reviewed bounty contract")
+        raise SmokeFailure("configured checkout response changed the reviewed bounty contract")
     checkout_url = str(body.get("checkout_url") or "")
     parsed = urllib.parse.urlparse(checkout_url)
     if parsed.scheme != "https" or parsed.hostname not in CHECKOUT_HOSTS:
-        raise SmokeFailure(f"Configured checkout returned an unapproved host: {parsed.hostname!r}")
+        raise SmokeFailure(f"configured checkout returned an unapproved host: {parsed.hostname!r}")
     pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
     if not pairs or pairs[-1][0] != "signature" or not pairs[-1][1]:
-        raise SmokeFailure("Configured checkout URL does not append a non-empty signature last")
+        raise SmokeFailure("configured checkout URL does not append a non-empty signature last")
     query = dict(pairs)
     if query.get("walletAddress", "").lower() != CANARY_WALLET:
-        raise SmokeFailure("Signed checkout URL changed the destination wallet")
+        raise SmokeFailure("signed checkout URL changed the destination wallet")
     if not query.get("apiKey") or not query.get("currencyCode"):
-        raise SmokeFailure("Signed checkout URL is missing its publishable key or currency code")
+        raise SmokeFailure("signed checkout URL is missing its publishable key or currency code")
     if "secret" in checkout_url.lower() or "sk_live_" in checkout_url or "sk_test_" in checkout_url:
-        raise SmokeFailure("Signed checkout URL appears to expose a secret key")
+        raise SmokeFailure("signed checkout URL appears to expose a secret key")
     return {
         "environment": body.get("environment"),
         "checkout_host": parsed.hostname,
@@ -190,11 +230,22 @@ def verify_endpoint(mcp_base: str, site_base: str, timeout: float) -> dict[str, 
         "intent_id": None,
         "bounty_contract": CANARY_BOUNTY,
     }
-    status, body, headers = post_json(endpoint, payload, origin=site_base, timeout=timeout)
+
+    status = 0
+    body: dict[str, Any] = {}
+    headers: dict[str, str] = {}
+    attempts = 0
+    for attempts in range(1, 5):
+        status, body, headers = post_json(endpoint, payload, origin=site_base, timeout=timeout)
+        if status not in RETRYABLE_ENDPOINT_STATUSES or attempts == 4:
+            break
+        time.sleep(float(attempts))
+
     verify_common_response(status, body)
     result: dict[str, Any] = {
         "url": endpoint,
         "status": status,
+        "attempts": attempts,
         "content_type": headers.get("Content-Type") or headers.get("content-type"),
         "code": body.get("code"),
         "bounty_funded": body.get("bounty_funded"),
@@ -202,10 +253,18 @@ def verify_endpoint(mcp_base: str, site_base: str, timeout: float) -> dict[str, 
     }
     if status == 200:
         result["activation_state"] = "configured"
+        result["route_healthy"] = True
         result["checkout"] = verify_checkout_plan(body)
         return result
     if status == 503 and str(body.get("code") or "").startswith("moonpay_"):
         result["activation_state"] = "not_configured"
+        result["route_healthy"] = True
+        result["error"] = body.get("error")
+        result["next_action"] = body.get("next_action")
+        return result
+    if status == 429 and body.get("code") == "moonpay_checkout_rate_limited":
+        result["activation_state"] = "rate_limited"
+        result["route_healthy"] = True
         result["error"] = body.get("error")
         result["next_action"] = body.get("next_action")
         return result
@@ -236,19 +295,31 @@ def main() -> int:
     try:
         site_base = normalized_base(args.site_base, "--site-base")
         mcp_base = normalized_base(args.mcp_base, "--mcp-base")
-        static = verify_static(site_base, args.timeout)
+        static, direct = verify_static(site_base, args.timeout)
         endpoint = verify_endpoint(mcp_base, site_base, args.timeout)
+        active_paths = {
+            "direct_consumer": direct["active"],
+            "signed_partner": endpoint["activation_state"] == "configured",
+        }
+        success = any(active_paths.values()) and endpoint["route_healthy"]
+        if args.require_checkout:
+            success = success and active_paths["signed_partner"]
         report = {
             "schema_version": SCHEMA_VERSION,
-            "success": endpoint["activation_state"] == "configured" or not args.require_checkout,
+            "success": success,
             "checkout_required": args.require_checkout,
             "site_base": site_base,
             "mcp_base": mcp_base,
             "static": static,
+            "direct_fallback": direct,
             "endpoint": endpoint,
+            "active_paths": active_paths,
         }
-        if args.require_checkout and endpoint["activation_state"] != "configured":
-            report["failure"] = "MoonPay endpoint is deployed but partner credentials are not active."
+        if args.require_checkout and not active_paths["signed_partner"]:
+            report["failure"] = (
+                "The MoonPay on-ramp is available through the direct consumer fallback, "
+                "but the server-signed partner checkout is not active."
+            )
         rendered = json.dumps(report, indent=2, sort_keys=True)
         print(rendered)
         if args.output:
