@@ -109,30 +109,36 @@ jobs:
           git push origin "HEAD:${GITHUB_HEAD_REF}"
 
       - name: Verify fail-closed source state
+        id: source_check
         if: steps.materialize.outcome == 'success'
-        run: python scripts/check-coinbase-embedded-wallet.py
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/check-coinbase-embedded-wallet.py 2>&1 \
+            | tee target/coinbase-embedded-wallet/source-check.log
 
       - name: Install pinned adapter dependencies
-        if: steps.materialize.outcome == 'success'
+        if: steps.materialize.outcome == 'success' && steps.source_check.outcome == 'success'
         working-directory: tools/coinbase-wallet-adapter
         run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: Run wallet adapter tests
-        if: steps.materialize.outcome == 'success'
+        if: steps.materialize.outcome == 'success' && steps.source_check.outcome == 'success'
         working-directory: tools/coinbase-wallet-adapter
         run: npm test
 
       - name: Build browser bundle
-        if: steps.materialize.outcome == 'success'
+        if: steps.materialize.outcome == 'success' && steps.source_check.outcome == 'success'
         working-directory: tools/coinbase-wallet-adapter
         run: npm run build
 
       - name: Verify generated production bundle
-        if: steps.materialize.outcome == 'success'
+        if: steps.materialize.outcome == 'success' && steps.source_check.outcome == 'success'
         run: python scripts/check-coinbase-embedded-wallet.py --require-built-bundle
 
       - name: Test generic MoonPay wallet onboarding
-        if: steps.materialize.outcome == 'success'
+        if: steps.materialize.outcome == 'success' && steps.source_check.outcome == 'success'
         run: cargo test -p mcp-server moonpay
 
       - name: Upload reproducible source, build, and debug evidence
@@ -141,7 +147,7 @@ jobs:
         with:
           name: coinbase-embedded-wallet-${{ github.run_id }}
           path: |
-            target/coinbase-embedded-wallet/materialize.log
+            target/coinbase-embedded-wallet/*.log
             site/bounty-composer-v2.js
             crates/mcp-server/src/moonpay.rs
             site/objective.html
@@ -152,8 +158,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Enforce source materialization
-        if: always() && steps.materialize.outcome != 'success'
+      - name: Enforce materialization and source checks
+        if: >-
+          always()
+          && (steps.materialize.outcome != 'success' || steps.source_check.outcome != 'success')
         run: |
-          echo "Embedded-wallet source materialization failed. Inspect the uploaded log." >&2
+          echo "Embedded-wallet source preparation or safety verification failed. Inspect the uploaded logs." >&2
           exit 1
