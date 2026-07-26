@@ -59,7 +59,7 @@ jobs:
             echo "header_ok=${header_ok}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Publish machine-searchable redacted evidence
+      - name: Publish durable redacted verdict
         env:
           GH_TOKEN: ${{ github.token }}
           STATUS: ${{ steps.preflight.outputs.http_status }}
@@ -71,13 +71,9 @@ jobs:
           METHOD_OK: ${{ steps.preflight.outputs.method_ok }}
           HEADER_OK: ${{ steps.preflight.outputs.header_ok }}
         run: |
-          cat > /tmp/comment.md <<EOF
-          ## Coinbase production allowlist verification v2
-
-          COINBASE_ALLOWLIST_V2_HTTP=${HTTP_OK}
-          COINBASE_ALLOWLIST_V2_ORIGIN=${ORIGIN_OK}
-          COINBASE_ALLOWLIST_V2_POST=${METHOD_OK}
-          COINBASE_ALLOWLIST_V2_CONTENT_TYPE=${HEADER_OK}
+          title="Coinbase allowlist verdict H-${HTTP_OK} O-${ORIGIN_OK} P-${METHOD_OK} C-${HEADER_OK}"
+          cat > /tmp/verdict.md <<EOF
+          One-shot exact-origin Coinbase Embedded Wallet CORS verdict.
 
           - HTTP: \`${STATUS:-unavailable}\`
           - Access-Control-Allow-Origin: \`${ALLOW_ORIGIN:-missing}\`
@@ -89,7 +85,8 @@ jobs:
 
           No Coinbase secret, OTP, OAuth credential, wallet key, or seed phrase was used.
           EOF
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/604/comments" --raw-field body="$(cat /tmp/comment.md)" >/dev/null
+          url="$(gh issue create --title "${title}" --body-file /tmp/verdict.md)"
+          gh issue close "${url##*/}" --reason completed >/dev/null
 
       - name: Enforce complete browser authorization
         env:
