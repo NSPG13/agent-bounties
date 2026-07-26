@@ -15,6 +15,7 @@
         enabled: false,
         projectId: "",
         accountType: "eoa",
+        gasSponsorshipMode: "eip7702-cdp-paymaster",
         disableAnalytics: true,
         authMethods: Object.freeze(["email", "sms", "oauth:google", "oauth:apple", "oauth:x"]),
       }),
