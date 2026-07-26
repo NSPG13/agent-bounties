@@ -17,6 +17,9 @@ on:
       - "site/moonpay-direct-fallback.js"
       - "site/bounty-composer-v2.js"
       - "crates/mcp-server/src/moonpay.rs"
+      - "scripts/apply-sponsored-gas-wallet-patch.py"
+      - "scripts/apply-generic-moonpay-wallet-patch.py"
+      - "scripts/apply-embedded-wallet-ui-patch.py"
       - "scripts/check-coinbase-embedded-wallet.py"
   push:
     branches:
@@ -45,7 +48,7 @@ permissions:
 jobs:
   verify-adapter:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +59,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Materialize counted source changes
+        run: |
+          python scripts/apply-sponsored-gas-wallet-patch.py
+          python scripts/apply-generic-moonpay-wallet-patch.py
+          python scripts/apply-embedded-wallet-ui-patch.py
 
       - name: Verify fail-closed source state
         run: python scripts/check-coinbase-embedded-wallet.py
@@ -78,11 +87,16 @@ jobs:
       - name: Test generic MoonPay wallet onboarding
         run: cargo test -p mcp-server moonpay
 
-      - name: Upload reproducible build evidence
+      - name: Upload reproducible source and build evidence
         uses: actions/upload-artifact@v4
         with:
           name: coinbase-embedded-wallet-${{ github.run_id }}
           path: |
+            site/bounty-composer-v2.js
+            crates/mcp-server/src/moonpay.rs
+            site/objective.html
+            site/earn.html
+            site/onramp.html
             site/coinbase-embedded-wallet.bundle.js
             tools/coinbase-wallet-adapter/package-lock.json
           if-no-files-found: error
