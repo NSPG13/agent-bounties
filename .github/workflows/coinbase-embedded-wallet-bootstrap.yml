@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - maintainer/coinbase-embedded-wallet
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/coinbase-embedded-wallet-bootstrap.yml"
+      - ".github/workflows/moonpay-production-smoke.yml"
+      - "scripts/bootstrap-coinbase-embedded-wallet.py.part-*"
 
 permissions:
   contents: write
