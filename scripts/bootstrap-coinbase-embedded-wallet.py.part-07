@@ -1,0 +1,16 @@
+{missing}")
+    install_new_files()
+    patch_gitignore()
+    patch_earn()
+    patch_onramp()
+    patch_autonomous()
+    patch_check_site()
+    patch_check_py()
+    patch_pages()
+    (ROOT / "site/live-guild-build.txt").write_text("20260726-coinbase-wallet-1\n", encoding="utf-8")
+    print("Applied vendor-neutral Coinbase embedded-wallet and x402 funding integration")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
