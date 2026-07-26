@@ -33,21 +33,44 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Prepare diagnostic directory
+        run: mkdir -p target/coinbase-embedded-wallet
+
       - name: Regenerate the lockfile with the verification npm version
         working-directory: tools/coinbase-wallet-adapter
-        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+        shell: bash
+        run: |
+          set -o pipefail
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund 2>&1 \
+            | tee ../../target/coinbase-embedded-wallet/lock-refresh.log
 
       - name: Prove a clean install, tests, and vanilla browser build
         working-directory: tools/coinbase-wallet-adapter
+        shell: bash
         run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm test
-          npm run build
+          set -o pipefail
+          npm ci --ignore-scripts --no-audit --no-fund 2>&1 \
+            | tee ../../target/coinbase-embedded-wallet/install.log
+          npm test 2>&1 | tee ../../target/coinbase-embedded-wallet/tests.log
+          npm run build 2>&1 | tee ../../target/coinbase-embedded-wallet/build.log
 
-      - name: Verify generated browser and custody boundaries
+      - name: Verify generated adapter behavior and custody boundaries
+        id: embedded_check
+        continue-on-error: true
+        shell: bash
         run: |
-          python scripts/check-coinbase-embedded-wallet.py --require-built-bundle
-          python scripts/check-coinbase-browser-bundle.py
+          set -o pipefail
+          python scripts/check-coinbase-embedded-wallet.py --require-built-bundle 2>&1 \
+            | tee target/coinbase-embedded-wallet/embedded-check.log
+
+      - name: Verify vanilla bundle and dependency pins
+        id: bundle_check
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/check-coinbase-browser-bundle.py 2>&1 \
+            | tee target/coinbase-embedded-wallet/bundle-check.log
           git diff --exit-code -- tools/coinbase-wallet-adapter/package.json
 
       - name: Commit only the regenerated lockfile
@@ -63,3 +86,22 @@ jobs:
           git add tools/coinbase-wallet-adapter/package-lock.json
           git commit -m "build: regenerate the Coinbase adapter lockfile"
           git push origin HEAD:feat/coinbase-embedded-wallet-adapter
+
+      - name: Upload regenerated lock, bundle, and checker diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coinbase-lock-refresh-${{ github.run_id }}
+          path: |
+            target/coinbase-embedded-wallet/*.log
+            tools/coinbase-wallet-adapter/package.json
+            tools/coinbase-wallet-adapter/package-lock.json
+            site/coinbase-embedded-wallet.bundle.js
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce both generated-bundle checks
+        if: always() && (steps.embedded_check.outcome != 'success' || steps.bundle_check.outcome != 'success')
+        run: |
+          echo "One or more generated Coinbase bundle checks failed; inspect the uploaded diagnostics." >&2
+          exit 1
