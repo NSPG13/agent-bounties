@@ -39,6 +39,15 @@ def canonical_production_build() -> bool:
     )
 
 
+def comma_header_values(value: str | None, *, uppercase: bool) -> set[str]:
+    values = {
+        item.strip()
+        for item in (value or "").split(",")
+        if item.strip()
+    }
+    return {item.upper() if uppercase else item.lower() for item in values}
+
+
 def verify_production_origin(project_id: str, origin: str, timeout_seconds: float = 20.0) -> None:
     endpoint = f"{COINBASE_EMBEDDED_WALLET_API}/{urllib.parse.quote(project_id, safe='')}"
     request = urllib.request.Request(
@@ -67,15 +76,31 @@ def verify_production_origin(project_id: str, origin: str, timeout_seconds: floa
         ) from error
 
     allowed_origin = headers.get("Access-Control-Allow-Origin") if headers is not None else None
-    if not 200 <= status < 300 or allowed_origin != origin:
-        observed = allowed_origin or "missing"
+    allowed_methods = comma_header_values(
+        headers.get("Access-Control-Allow-Methods") if headers is not None else None,
+        uppercase=True,
+    )
+    allowed_headers = comma_header_values(
+        headers.get("Access-Control-Allow-Headers") if headers is not None else None,
+        uppercase=False,
+    )
+    if (
+        not 200 <= status < 300
+        or allowed_origin != origin
+        or "POST" not in allowed_methods
+        or "content-type" not in allowed_headers
+    ):
+        observed_origin = allowed_origin or "missing"
+        observed_methods = ",".join(sorted(allowed_methods)) or "missing"
+        observed_headers = ",".join(sorted(allowed_headers)) or "missing"
         raise SystemExit(
-            "Coinbase has not authorized the exact production origin. "
-            f"Expected Access-Control-Allow-Origin {origin!r}; observed HTTP {status} and {observed!r}. "
+            "Coinbase has not authorized the exact production browser request. "
+            f"Expected origin {origin!r}, method POST, and header content-type; observed HTTP {status}, "
+            f"origin {observed_origin!r}, methods {observed_methods!r}, and headers {observed_headers!r}. "
             "In CDP Portal, open the project Security/Domains configuration, add the exact origin, "
             "save it, and rerun deployment."
         )
-    print(f"Verified Coinbase Embedded Wallet origin authorization for {origin}")
+    print(f"Verified Coinbase Embedded Wallet browser authorization for {origin}")
 
 
 def normalized_https_origin(value: str) -> str:
