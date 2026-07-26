@@ -45,7 +45,7 @@
           <li><strong>MoonPay purchase:</strong> Base USDC is delivered to the wallet you connect below.</li>
           <li><strong>Canonical action:</strong> after returning, your wallet separately reviews and approves the exact Agent Bounties action.</li>
         </ol>
-        <p>The embedded-wallet adapter sponsors gas for supported Agent Bounties transactions. Existing wallets retain their normal Base gas behavior. Only the matching indexed canonical event changes protocol state.</p>
+        <p>No ETH purchase is required for the embedded-wallet path. Direct embedded-wallet calls use the configured CDP paymaster; existing wallets retain their configured sponsor or normal Base gas path. Only the matching indexed canonical event changes protocol state.</p>
       </section>
 
       <section class="onramp-grid" aria-label="MoonPay Base USDC top-up">
@@ -56,7 +56,7 @@
             <div><dt>Bounty contract</dt><dd><code data-bounty-contract>Not provided</code></dd></div>
             <div><dt>Planned USDC amount</dt><dd><strong data-required-usdc>0 USDC</strong></dd></div>
             <div><dt>Destination asset</dt><dd><strong>USDC on Base</strong></dd></div>
-            <div><dt>Transaction gas</dt><dd><strong>Sponsored for embedded wallet</strong></dd></div>
+            <div><dt>Transaction gas</dt><dd><strong>Sponsored on embedded path</strong></dd></div>
           </dl>
 
           <input data-onramp-asset type="hidden" value="usdc">
@@ -89,7 +89,7 @@
             <div><dt>Base USDC balance</dt><dd><strong data-usdc-balance>—</strong></dd></div>
             <div hidden><dt>Base ETH balance</dt><dd><strong data-eth-balance>Sponsored</strong></dd></div>
           </dl>
-          <p class="fine" data-balance-guidance>Only Base USDC is needed for the bounty amount. The embedded-wallet adapter sponsors gas for its supported action path.</p>
+          <p class="fine" data-balance-guidance>Only Base USDC is needed for the bounty amount. No ETH purchase is required for the embedded-wallet path.</p>
         </article>
       </section>
 

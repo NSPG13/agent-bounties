@@ -190,7 +190,7 @@ async function sendSponsoredCalls(calls) {
   publishStatus("sponsored_transaction_review", {
     account,
     callCount: calls.length,
-    message: "Reviewing the exact Base calls. Agent Bounties is sponsoring gas, not the USDC amount.",
+    message: "Reviewing the exact Base calls. The configured CDP paymaster sponsors this direct transaction. Gas sponsorship never authorizes Agent Bounties to move your USDC.",
   });
   const { userOperationHash } = await sendUserOperation({
     evmSmartAccount: account,
@@ -292,7 +292,7 @@ function buildDialog() {
           <button class="embedded-wallet-action" type="button" data-wallet-sms-verify>Verify and create wallet</button>
         </div>
         <label>Six-digit code<input type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" data-wallet-sms-otp></label>
-        <p class="embedded-wallet-fine">SMS availability depends on Coinbase's supported countries and carriers. Email remains available when SMS is not.</p>
+        <p class="embedded-wallet-fine">SMS availability depends on Coinbase's supported countries and carriers. SMS is also more exposed to SIM-swap attacks; prefer email or social login for meaningful balances.</p>
       </section>
 
       <section class="embedded-wallet-panel" role="tabpanel" data-wallet-auth-panel="social" hidden>
@@ -301,11 +301,11 @@ function buildDialog() {
           <button type="button" data-wallet-oauth="apple">Continue with Apple</button>
           <button type="button" data-wallet-oauth="x">Continue with X</button>
         </div>
-        <p class="embedded-wallet-fine">Coinbase handles authentication and returns you to this exact Agent Bounties page. Your bounty action remains a separate approval.</p>
+        <p class="embedded-wallet-fine">Coinbase handles authentication and returns you to this exact Agent Bounties page. Your bounty action remains a separate approval. Use the same sign-in method each time unless you later link methods; unlinked methods can create separate Coinbase identities and wallets.</p>
       </section>
 
       <output class="embedded-wallet-status" aria-live="polite" data-wallet-auth-status>No wallet has been created or connected yet.</output>
-      <p class="embedded-wallet-fine">Coinbase supplies the wallet infrastructure. Agent Bounties never receives a private key, seed phrase, email code, or SMS code. Creating a wallet does not post, fund, claim, or settle a bounty.</p>
+      <p class="embedded-wallet-fine">Coinbase supplies the wallet infrastructure. Agent Bounties does not receive wallet keys or seed phrases and does not send authentication codes to its servers; this browser passes the code to Coinbase for verification. Creating a wallet does not post, fund, claim, or settle a bounty.</p>
     </form>`;
   document.body.append(dialog);
 

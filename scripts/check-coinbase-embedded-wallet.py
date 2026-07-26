@@ -87,6 +87,10 @@ def main() -> int:
             'adapterConfig.gasSponsorshipMode !== "eip7702-cdp-paymaster"',
             "gasSponsorshipMode: adapterConfig.gasSponsorshipMode",
             "agentBountiesGasSponsored",
+            "Gas sponsorship never authorizes Agent Bounties to move your USDC",
+            "does not send authentication codes to its servers",
+            "unlinked methods can create separate Coinbase identities and wallets",
+            "SIM-swap",
             "Creating a wallet does not post, fund, claim, or settle a bounty",
         ),
     )
@@ -188,6 +192,8 @@ def main() -> int:
             "do not complete any Agent Bounties action",
         ),
     )
+    if moonpay_backend.count("fn wallet_onboarding_checkout_does_not_require_an_existing_bounty()") != 1:
+        fail("the pre-bounty MoonPay onboarding test must exist exactly once")
     if "enableSpendPermissions: true" in moonpay_backend:
         fail("MoonPay backend must not grant wallet spend permissions")
 

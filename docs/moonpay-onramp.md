@@ -27,7 +27,7 @@ The destination is the user's wallet, never a bounty contract. A plain ERC-20 tr
 9. The user separately reviews and approves the exact original bounty action.
 10. Agent Bounties waits for the matching canonical protocol event before reporting that action complete.
 
-The embedded-wallet adapter sponsors the supported Base transaction through its paymaster path. The MoonPay onboarding interface therefore does not ask an embedded-wallet user to buy ETH. Existing external wallets retain their own configured gas behavior.
+No ETH purchase is required for the embedded-wallet path. Direct embedded-wallet calls use the configured CDP paymaster, hosted Agent Bounties routes retain their existing gas sponsorship, and external wallets retain their configured sponsor or normal Base gas behavior.
 
 The fiat amount is only a starting value. MoonPay remains authoritative for its final quote, fees, payment methods, purchase limits, eligibility, and received crypto amount.
 
