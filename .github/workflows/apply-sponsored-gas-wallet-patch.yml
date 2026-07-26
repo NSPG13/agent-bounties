@@ -8,6 +8,7 @@ on:
       - ".github/workflows/apply-sponsored-gas-wallet-patch.yml"
       - "scripts/apply-sponsored-gas-wallet-patch.py"
       - "scripts/apply-generic-moonpay-wallet-patch.py"
+      - "scripts/apply-embedded-wallet-ui-patch.py"
       - "tools/coinbase-wallet-adapter/**"
 
 permissions:
@@ -30,13 +31,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: tools/coinbase-wallet-adapter/package-lock.json
 
       - name: Apply counted source replacements
         run: |
           python scripts/apply-sponsored-gas-wallet-patch.py
           python scripts/apply-generic-moonpay-wallet-patch.py
+          python scripts/apply-embedded-wallet-ui-patch.py
 
       - name: Install, test, and bundle Coinbase adapter
         working-directory: tools/coinbase-wallet-adapter
@@ -53,6 +53,9 @@ jobs:
           files=(
             site/bounty-composer-v2.js
             crates/mcp-server/src/moonpay.rs
+            site/objective.html
+            site/earn.html
+            site/onramp.html
             tools/coinbase-wallet-adapter/package-lock.json
             site/coinbase-embedded-wallet.bundle.js
           )
