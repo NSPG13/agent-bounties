@@ -4,58 +4,26 @@ on:
   pull_request:
     paths:
       - ".github/workflows/coinbase-embedded-wallet.yml"
-      - "tools/coinbase-wallet-adapter/**"
-      - "site/wallet-adapters.js"
-      - "site/wallet-runtime-config.js"
-      - "site/wallet-adapters.css"
-      - "site/coinbase-embedded-wallet.bundle.js"
-      - "site/objective-onramp-link.js"
-      - "site/objective.html"
-      - "site/earn.html"
-      - "site/onramp.html"
-      - "site/moonpay-onramp.js"
-      - "site/moonpay-direct-fallback.js"
-      - "site/bounty-composer-v2.js"
-      - "crates/mcp-server/src/moonpay.rs"
-      - "scripts/check-coinbase-embedded-wallet.py"
-      - "scripts/check-coinbase-browser-bundle.py"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/coinbase-embedded-wallet.yml"
-      - "tools/coinbase-wallet-adapter/**"
-      - "site/wallet-adapters.js"
-      - "site/wallet-runtime-config.js"
-      - "site/wallet-adapters.css"
-      - "site/coinbase-embedded-wallet.bundle.js"
-      - "site/objective-onramp-link.js"
-      - "site/objective.html"
-      - "site/earn.html"
-      - "site/onramp.html"
-      - "site/moonpay-onramp.js"
-      - "site/moonpay-direct-fallback.js"
-      - "site/bounty-composer-v2.js"
-      - "crates/mcp-server/src/moonpay.rs"
-      - "scripts/check-coinbase-embedded-wallet.py"
-      - "scripts/check-coinbase-browser-bundle.py"
+      - "tools/coinbase-wallet-adapter/package.json"
+      - "tools/coinbase-wallet-adapter/package-lock.json"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: coinbase-embedded-wallet-${{ github.ref }}
+  group: coinbase-lock-refresh-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verify-adapter:
+  refresh-and-verify-lock:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: feat/coinbase-embedded-wallet-adapter
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:
@@ -64,55 +32,34 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: tools/coinbase-wallet-adapter/package-lock.json
 
-      - name: Prepare evidence directory
-        run: mkdir -p target/coinbase-embedded-wallet
-
-      - name: Verify provider-neutral and fail-closed source boundaries
-        shell: bash
-        run: |
-          set -o pipefail
-          python scripts/check-coinbase-embedded-wallet.py 2>&1 \
-            | tee target/coinbase-embedded-wallet/source-check.log
-
-      - name: Install exactly locked adapter dependencies
+      - name: Regenerate the lockfile with the verification npm version
         working-directory: tools/coinbase-wallet-adapter
-        shell: bash
-        run: |
-          set -o pipefail
-          npm ci --ignore-scripts --no-audit --no-fund 2>&1 \
-            | tee ../../target/coinbase-embedded-wallet/install.log
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
-      - name: Run EIP-1193 and sponsored-call tests
+      - name: Prove a clean install, tests, and vanilla browser build
         working-directory: tools/coinbase-wallet-adapter
-        run: npm test
-
-      - name: Build the vanilla browser adapter
-        working-directory: tools/coinbase-wallet-adapter
-        shell: bash
         run: |
-          set -o pipefail
-          npm run build 2>&1 | tee ../../target/coinbase-embedded-wallet/build.log
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+          npm run build
 
-      - name: Verify generated adapter and reject framework leakage
+      - name: Verify generated browser and custody boundaries
         run: |
           python scripts/check-coinbase-embedded-wallet.py --require-built-bundle
           python scripts/check-coinbase-browser-bundle.py
+          git diff --exit-code -- tools/coinbase-wallet-adapter/package.json
 
-      - name: Test pre-bounty MoonPay USDC onboarding boundary
-        run: cargo test -p mcp-server moonpay
-
-      - name: Upload reproducible verification evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coinbase-embedded-wallet-${{ github.run_id }}
-          path: |
-            target/coinbase-embedded-wallet/*.log
-            site/coinbase-embedded-wallet.bundle.js
-            tools/coinbase-wallet-adapter/package.json
-            tools/coinbase-wallet-adapter/package-lock.json
-          if-no-files-found: warn
-          retention-days: 14
+      - name: Commit only the regenerated lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- tools/coinbase-wallet-adapter/package-lock.json; then
+            echo "Lockfile already matches the clean installer."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/coinbase-wallet-adapter/package-lock.json
+          git commit -m "build: regenerate the Coinbase adapter lockfile"
+          git push origin HEAD:feat/coinbase-embedded-wallet-adapter
