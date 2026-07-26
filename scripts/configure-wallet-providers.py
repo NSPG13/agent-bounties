@@ -78,6 +78,26 @@ def verify_production_origin(project_id: str, origin: str, timeout_seconds: floa
     print(f"Verified Coinbase Embedded Wallet origin authorization for {origin}")
 
 
+def normalized_https_origin(value: str) -> str:
+    parsed = urllib.parse.urlparse(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise SystemExit("--verify-origin must be an HTTPS origin without credentials, path, query, or fragment")
+    try:
+        _ = parsed.port
+    except ValueError as error:
+        raise SystemExit("--verify-origin contains an invalid port") from error
+    return f"https://{parsed.netloc}"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--site-root", default="site")
@@ -115,10 +135,7 @@ def main() -> int:
     if canonical_production_build() and not args.skip_canonical_origin_check:
         origin = origin or CANONICAL_ORIGIN
     if origin:
-        parsed = urllib.parse.urlparse(origin)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/"):
-            raise SystemExit("--verify-origin must be an HTTPS origin without a path, query, or fragment")
-        verify_production_origin(project_id, f"https://{parsed.netloc}")
+        verify_production_origin(project_id, normalized_https_origin(origin))
 
     source = config_path.read_text(encoding="utf-8")
     occurrences = source.count(PLACEHOLDER)
