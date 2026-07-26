@@ -2,6 +2,7 @@
   "use strict";
 
   const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+  const MIN_FIAT_USD = 20;
   const DIRECT_BUY_URLS = Object.freeze({
     usdc: "https://www.moonpay.com/buy/usdc",
     eth: "https://www.moonpay.com/buy/eth",
@@ -22,9 +23,23 @@
     return asset === "eth" ? "ETH on Base (ETH_BASE)" : "USDC on Base (USDC_BASE)";
   }
 
-  function startingAmount() {
+  function fiatAmount() {
     const value = String(select("[data-fiat-amount]")?.value || "").trim();
-    return /^\d+(?:\.\d{1,2})?$/.test(value) && Number(value) > 0 ? `$${value} USD` : "Set above";
+    if (!/^\d+(?:\.\d{1,2})?$/.test(value)) return null;
+    const amount = Number(value);
+    return Number.isFinite(amount) && amount > 0 ? amount : null;
+  }
+
+  function amountReady() {
+    const amount = fiatAmount();
+    return amount !== null && amount >= MIN_FIAT_USD;
+  }
+
+  function startingAmount() {
+    const amount = fiatAmount();
+    if (amount === null) return `Enter at least $${MIN_FIAT_USD.toFixed(2)} USD`;
+    const suffix = amount < MIN_FIAT_USD ? " (below MoonPay minimum)" : "";
+    return `$${amount.toFixed(2)} USD${suffix}`;
   }
 
   function setDirectOutput(message, tone = "") {
@@ -34,10 +49,22 @@
     output.dataset.tone = tone;
   }
 
+  function setPartnerOutput(message, tone = "") {
+    const output = select("[data-onramp-output]");
+    if (!output) return;
+    output.textContent = message;
+    output.dataset.tone = tone;
+  }
+
+  function minimumMessage() {
+    return `Enter at least $${MIN_FIAT_USD.toFixed(2)} USD. MoonPay may apply a higher minimum based on asset, region, payment method, and network conditions.`;
+  }
+
   function renderDirectFallback() {
     const asset = selectedAsset();
     const wallet = connectedWallet();
     const acknowledged = Boolean(select("[data-onramp-ack]")?.checked);
+    const hasValidAmount = amountReady();
     const link = select("[data-direct-moonpay]");
     const copy = select("[data-copy-direct-wallet]");
 
@@ -47,13 +74,15 @@
 
     link.href = DIRECT_BUY_URLS[asset];
     link.dataset.asset = asset;
-    link.setAttribute("aria-disabled", String(!(wallet && acknowledged)));
+    link.setAttribute("aria-disabled", String(!(wallet && acknowledged && hasValidAmount)));
     copy.disabled = !wallet;
 
     if (!wallet) {
       setDirectOutput("Connect the destination wallet before opening the manual MoonPay fallback.");
     } else if (!acknowledged) {
       setDirectOutput("Acknowledge that buying crypto and funding the bounty are separate actions.");
+    } else if (!hasValidAmount) {
+      setDirectOutput(minimumMessage(), "error");
     } else {
       setDirectOutput(
         `Ready for manual MoonPay checkout. Select ${assetLabel(asset)}, paste ${wallet}, and verify Base on the final review screen.`,
@@ -85,12 +114,15 @@
     renderDirectFallback();
     const wallet = connectedWallet();
     const acknowledged = Boolean(select("[data-onramp-ack]")?.checked);
-    if (!wallet || !acknowledged) {
+    const hasValidAmount = amountReady();
+    if (!wallet || !acknowledged || !hasValidAmount) {
       event.preventDefault();
       setDirectOutput(
         !wallet
           ? "Connect the destination wallet before opening MoonPay."
-          : "Acknowledge the purchase and funding boundary before opening MoonPay.",
+          : (!acknowledged
+            ? "Acknowledge the purchase and funding boundary before opening MoonPay."
+            : minimumMessage()),
         "error",
       );
       return;
@@ -102,15 +134,28 @@
     );
   }
 
+  function enforceMinimumForPartnerCheckout(event) {
+    if (amountReady()) return;
+    event.preventDefault();
+    event.stopImmediatePropagation?.();
+    const message = minimumMessage();
+    setPartnerOutput(message, "error");
+    setDirectOutput(message, "error");
+  }
+
   function initialize() {
     const link = select("[data-direct-moonpay]");
     const copy = select("[data-copy-direct-wallet]");
     if (!link || !copy) return;
 
+    const amountInput = select("[data-fiat-amount]");
+    if (amountInput) amountInput.min = String(MIN_FIAT_USD);
+
     link.addEventListener("click", openDirectCheckout);
     copy.addEventListener("click", copyWallet);
+    select("[data-start-moonpay]")?.addEventListener("click", enforceMinimumForPartnerCheckout, true);
     select("[data-onramp-asset]")?.addEventListener("change", renderDirectFallback);
-    select("[data-fiat-amount]")?.addEventListener("input", renderDirectFallback);
+    amountInput?.addEventListener("input", renderDirectFallback);
     select("[data-onramp-ack]")?.addEventListener("change", renderDirectFallback);
     select("[data-connect-wallet]")?.addEventListener("click", () => setTimeout(renderDirectFallback, 0));
     select("[data-wallet-provider]")?.addEventListener("change", renderDirectFallback);
