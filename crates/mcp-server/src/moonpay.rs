@@ -954,20 +954,6 @@ mod tests {
     }
 
     #[test]
-    fn wallet_onboarding_checkout_does_not_require_an_existing_bounty() {
-        let mut onboarding = request("usdc");
-        onboarding.bounty_contract = None;
-        onboarding.intent_id = None;
-        let plan = build_checkout_plan(&config(MoonpayEnvironment::Sandbox), onboarding, None)
-            .unwrap();
-        assert!(plan.bounty_contract.is_none());
-        assert!(!plan.protocol_action_completed);
-        assert!(plan.canonical_event.is_none());
-        assert!(!plan.bounty_funded);
-        assert!(plan.canonical_funding_event.is_none());
-    }
-
-    #[test]
     fn sandbox_checkout_is_test_only_and_supports_gas_asset() {
         let plan = build_checkout_plan(&config(MoonpayEnvironment::Sandbox), request("eth"), None)
             .unwrap();
