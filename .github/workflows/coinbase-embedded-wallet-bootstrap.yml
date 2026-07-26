@@ -104,17 +104,41 @@ jobs:
             echo "css_bytes=${css_bytes}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Commit generated lockfile, bundle, and integration
+      - name: Commit generated lockfile, bundle, source, and tests
+        id: commit
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           rm -f scripts/bootstrap-coinbase-embedded-wallet.py
+          git restore .github/workflows/pages.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
           git commit -m "[coinbase-bootstrap] Add embedded wallet adapter and locked bundle"
-          git push origin HEAD:maintainer/coinbase-embedded-wallet
+          git push origin HEAD:maintainer/coinbase-embedded-wallet 2>&1 | tee /tmp/coinbase-commit.log
+
+      - name: Publish exact repository-write failure
+        if: steps.commit.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          {
+            echo '❌ **Coinbase embedded-wallet generation passed, but repository write failed**'
+            echo
+            echo '```text'
+            tail -n 100 /tmp/coinbase-commit.log 2>/dev/null || true
+            echo '```'
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > /tmp/coinbase-commit-failure.md
+          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-commit-failure.md
+
+      - name: Enforce successful repository write
+        if: steps.commit.outcome == 'failure'
+        run: exit 1
 
       - name: Publish build evidence on the maintainer notice
         env:
@@ -139,6 +163,6 @@ jobs:
           - JS bundle: \`${JS_BYTES}\` bytes, SHA-256 \`${JS_SHA}\`
           - CSS bundle: \`${CSS_BYTES}\` bytes, SHA-256 \`${CSS_SHA}\`
 
-          Deterministic adapter, x402, site, syntax, and generated-bundle checks passed. CDP project creation, production-domain allowlisting, and live authentication still require an authenticated CDP Portal session and are not represented by this build proof.
+          Deterministic adapter, x402, site, syntax, and generated-bundle checks passed. The reviewed Pages workflow still needs to be applied through the maintainer connection. CDP project creation, production-domain allowlisting, and live authentication require an authenticated CDP Portal session and are not represented by this build proof.
           EOF
           gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-wallet-evidence.md
