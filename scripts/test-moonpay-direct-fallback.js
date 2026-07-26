@@ -42,7 +42,6 @@ async function main() {
   const wallet = "0x1234567890abcdef1234567890abcdef12345678";
   const nodes = new Map([
     ["[data-wallet-address]", element({ textContent: "Not connected" })],
-    ["[data-onramp-asset]", element({ value: "usdc" })],
     ["[data-fiat-amount]", element({ value: "42.50" })],
     ["[data-onramp-ack]", element({ checked: true })],
     ["[data-start-moonpay]", element()],
@@ -104,6 +103,9 @@ async function main() {
   if (link.href !== "https://www.moonpay.com/buy/usdc") {
     throw new Error(`USDC fallback URL mismatch: ${link.href}`);
   }
+  if (nodes.get("[data-direct-asset]").textContent !== "USDC on Base (USDC_BASE)") {
+    throw new Error("Base USDC review label was not rendered");
+  }
   if (link.getAttribute("aria-disabled") !== "true" || copy.disabled !== true) {
     throw new Error("fallback opened before a valid destination wallet was present");
   }
@@ -118,6 +120,9 @@ async function main() {
   }
   if (link.href.includes(wallet) || link.href.includes("walletAddress")) {
     throw new Error("manual fallback leaked the wallet into MoonPay's public URL");
+  }
+  if (source.includes("www.moonpay.com/buy/eth") || source.includes("ETH_BASE")) {
+    throw new Error("the embedded-wallet onboarding fallback must remain Base-USDC-only");
   }
 
   amount.value = "19.99";
@@ -147,15 +152,6 @@ async function main() {
   link.dispatch("click", { preventDefault() { prevented = true; } });
   if (prevented) throw new Error("ready direct checkout was unexpectedly blocked");
 
-  nodes.get("[data-onramp-asset]").value = "eth";
-  nodes.get("[data-onramp-asset]").dispatch("change");
-  if (link.href !== "https://www.moonpay.com/buy/eth") {
-    throw new Error(`ETH fallback URL mismatch: ${link.href}`);
-  }
-  if (nodes.get("[data-direct-asset]").textContent !== "ETH on Base (ETH_BASE)") {
-    throw new Error("ETH Base review label was not rendered");
-  }
-
   await copy.dispatch("click");
   if (copied !== wallet) throw new Error(`copied wallet mismatch: ${copied}`);
 
@@ -167,7 +163,7 @@ async function main() {
     throw new Error("manual checkout was not blocked after acknowledgement was withdrawn");
   }
 
-  console.log("MoonPay direct fallback preserves minimum, wallet, Base asset, and funding boundaries");
+  console.log("MoonPay direct fallback preserves minimum, wallet, Base USDC, and protocol-action boundaries");
 }
 
 main().catch((error) => {
