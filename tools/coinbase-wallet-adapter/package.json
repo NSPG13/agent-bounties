@@ -1,0 +1,17 @@
+{
+  "name": "agent-bounties-coinbase-wallet-adapter",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild index.js --bundle --minify --format=iife --platform=browser --target=es2022 --legal-comments=inline --outfile=../../site/coinbase-embedded-wallet.bundle.js",
+    "test": "node test-provider.js"
+  },
+  "dependencies": {
+    "@coinbase/cdp-core": "0.0.117",
+    "viem": "2.55.8"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1"
+  }
+}
