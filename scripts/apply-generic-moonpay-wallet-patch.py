@@ -118,9 +118,25 @@ REPLACEMENTS = (
     ),
 )
 
-NEW_TEST_ANCHOR = '''    #[test]
+TEST_SIGNATURE = "fn wallet_onboarding_checkout_does_not_require_an_existing_bounty()"
+TEST_ANCHOR = '''    #[test]
     fn sandbox_checkout_is_test_only_and_supports_gas_asset() {'''
-NEW_TEST = '''    #[test]
+FORMATTED_TEST_BLOCK = '''    #[test]
+    fn wallet_onboarding_checkout_does_not_require_an_existing_bounty() {
+        let mut onboarding = request("usdc");
+        onboarding.bounty_contract = None;
+        onboarding.intent_id = None;
+        let plan =
+            build_checkout_plan(&config(MoonpayEnvironment::Sandbox), onboarding, None).unwrap();
+        assert!(plan.bounty_contract.is_none());
+        assert!(!plan.protocol_action_completed);
+        assert!(plan.canonical_event.is_none());
+        assert!(!plan.bounty_funded);
+        assert!(plan.canonical_funding_event.is_none());
+    }
+
+'''
+UNFORMATTED_TEST_BLOCK = '''    #[test]
     fn wallet_onboarding_checkout_does_not_require_an_existing_bounty() {
         let mut onboarding = request("usdc");
         onboarding.bounty_contract = None;
@@ -134,13 +150,7 @@ NEW_TEST = '''    #[test]
         assert!(plan.canonical_funding_event.is_none());
     }
 
-    #[test]
-    fn sandbox_checkout_is_test_only_and_supports_gas_asset() {'''
-
-UNFORMATTED_ONBOARDING_PLAN = '''        let plan = build_checkout_plan(&config(MoonpayEnvironment::Sandbox), onboarding, None)
-            .unwrap();'''
-FORMATTED_ONBOARDING_PLAN = '''        let plan =
-            build_checkout_plan(&config(MoonpayEnvironment::Sandbox), onboarding, None).unwrap();'''
+'''
 
 
 def replace_exact(source: str, old: str, new: str, label: str) -> str:
@@ -153,23 +163,35 @@ def replace_exact(source: str, old: str, new: str, label: str) -> str:
     raise SystemExit(f"{label}: old={old_count}, new={new_count}; inspect moonpay.rs drift")
 
 
+def ensure_wallet_onboarding_test(source: str) -> str:
+    count = source.count(TEST_SIGNATURE)
+    if count == 0:
+        if source.count(TEST_ANCHOR) != 1:
+            raise SystemExit("wallet onboarding test anchor drifted")
+        source = source.replace(TEST_ANCHOR, FORMATTED_TEST_BLOCK + TEST_ANCHOR, 1)
+    elif count > 1:
+        while source.count(TEST_SIGNATURE) > 1 and UNFORMATTED_TEST_BLOCK in source:
+            source = source.replace(UNFORMATTED_TEST_BLOCK, "", 1)
+    if source.count(TEST_SIGNATURE) != 1:
+        raise SystemExit(
+            f"wallet onboarding test must exist exactly once; found {source.count(TEST_SIGNATURE)}"
+        )
+    if UNFORMATTED_TEST_BLOCK in source:
+        source = source.replace(UNFORMATTED_TEST_BLOCK, FORMATTED_TEST_BLOCK, 1)
+    return source
+
+
 def main() -> int:
     source = PATH.read_text(encoding="utf-8")
     for old, new, label in REPLACEMENTS:
         source = replace_exact(source, old, new, label)
-    source = replace_exact(source, NEW_TEST_ANCHOR, NEW_TEST, "wallet onboarding test")
-    source = replace_exact(
-        source,
-        UNFORMATTED_ONBOARDING_PLAN,
-        FORMATTED_ONBOARDING_PLAN,
-        "wallet onboarding rustfmt",
-    )
+    source = ensure_wallet_onboarding_test(source)
 
     for required in (
         "bounty_contract: Option<String>",
         "protocol_action_completed: bool",
         "canonical_event: Option<String>",
-        "wallet_onboarding_checkout_does_not_require_an_existing_bounty",
+        TEST_SIGNATURE,
         "do not complete any Agent Bounties action",
     ):
         if required not in source:
