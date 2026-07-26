@@ -1,0 +1,175 @@
+name: Temporary inspect locked CDP SDK
+
+on:
+  push:
+    branches: [ops/inspect-locked-cdp-sdk]
+    paths:
+      - ".github/workflows/temp-inspect-locked-cdp-sdk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PROJECT_ID: 9dfed88a-0b37-47e8-b867-96f1dfd0d4ee
+      ORIGIN: https://agentbounties.app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
+
+      - name: Install exact reviewed dependencies
+        run: npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+
+      - name: Extract locked SDK URLs and route fragments
+        run: |
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          root = Path("tools/coinbase-embedded-wallet/node_modules/@coinbase")
+          terms = (
+              "embedded-wallet-api",
+              "api.cdp.coinbase.com",
+              "projectId",
+              "project_id",
+              "allowed origin",
+              "allowlist",
+          )
+          url_re = re.compile(r"https://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%{}-]+")
+          results = []
+          urls = set()
+          for path in root.rglob("*"):
+              if not path.is_file() or path.stat().st_size > 10_000_000:
+                  continue
+              text = path.read_text(encoding="utf-8", errors="ignore")
+              for url in url_re.findall(text):
+                  clean = url.rstrip("'\"`),.;")
+                  if "coinbase" in clean.lower() or "cdp" in clean.lower():
+                      urls.add(clean)
+              lower = text.lower()
+              for term in terms:
+                  start = 0
+                  needle = term.lower()
+                  while True:
+                      index = lower.find(needle, start)
+                      if index < 0:
+                          break
+                      snippet = " ".join(text[max(0, index - 180):index + 360].split())
+                      results.append({
+                          "file": str(path.relative_to(root)),
+                          "term": term,
+                          "snippet": snippet[:700],
+                      })
+                      start = index + len(needle)
+                      if len(results) >= 200:
+                          break
+                  if len(results) >= 200:
+                      break
+              if len(results) >= 200:
+                  break
+          report = {
+              "schema_version": "agent-bounties/locked-cdp-sdk-trace-v1",
+              "urls": sorted(urls),
+              "matches": results,
+          }
+          Path("/tmp/cdp-sdk-trace.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Compare safe OPTIONS path variants
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          project = "9dfed88a-0b37-47e8-b867-96f1dfd0d4ee"
+          origin = "https://agentbounties.app"
+          paths = [
+              f"/embedded-wallet-api/projects/{project}",
+              f"/embedded-wallet-api/projects/{project}/",
+          ]
+          results = []
+          for path in paths:
+              request = urllib.request.Request(
+                  f"https://api.cdp.coinbase.com{path}",
+                  method="OPTIONS",
+                  headers={
+                      "Origin": origin,
+                      "Access-Control-Request-Method": "POST",
+                      "Access-Control-Request-Headers": "content-type",
+                      "User-Agent": "agent-bounties-locked-sdk-diagnostic/1",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      status = response.status
+                      headers = dict(response.headers.items())
+              except urllib.error.HTTPError as error:
+                  status = error.code
+                  headers = dict(error.headers.items())
+              results.append({
+                  "path": path.replace(project, "<project>"),
+                  "status": status,
+                  "allow_origin": headers.get("Access-Control-Allow-Origin"),
+                  "allow_methods": headers.get("Access-Control-Allow-Methods"),
+                  "allow_headers": headers.get("Access-Control-Allow-Headers"),
+              })
+          Path("/tmp/cdp-options.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+          print(json.dumps(results, indent=2))
+          PY
+
+      - name: Publish durable redacted SDK diagnostic
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          trace = json.loads(Path("/tmp/cdp-sdk-trace.json").read_text(encoding="utf-8"))
+          options = json.loads(Path("/tmp/cdp-options.json").read_text(encoding="utf-8"))
+          urls = trace.get("urls", [])[:60]
+          matches = trace.get("matches", [])[:60]
+          lines = [
+              "Locked Coinbase SDK endpoint trace for `@coinbase/cdp-*` version `0.0.118`.",
+              "",
+              "## Literal URLs",
+              *(f"- `{value}`" for value in urls),
+              "",
+              "## Relevant source fragments",
+          ]
+          if not matches:
+              lines.append("- No matching route literal was found; the SDK may compose it at runtime.")
+          else:
+              for match in matches:
+                  snippet = match["snippet"].replace("9dfed88a-0b37-47e8-b867-96f1dfd0d4ee", "<project>")
+                  lines.append(f"- `{match['file']}` · `{match['term']}` · `{snippet}`")
+          lines.extend(["", "## Exact-origin OPTIONS results"])
+          for item in options:
+              lines.append(
+                  f"- `{item['path']}` → HTTP `{item['status']}`, origin `{item['allow_origin'] or 'missing'}`, "
+                  f"methods `{item['allow_methods'] or 'missing'}`, headers `{item['allow_headers'] or 'missing'}`"
+              )
+          lines.extend([
+              "",
+              "No Coinbase API key, secret, OTP, OAuth credential, wallet key, transaction, or seed phrase was used.",
+          ])
+          Path("/tmp/diagnostic.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          url="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
+            --title 'Locked CDP SDK 0.0.118 endpoint diagnostic' \
+            --body-file /tmp/diagnostic.md)"
+          gh issue close --repo "${GITHUB_REPOSITORY}" "${url##*/}" --reason completed >/dev/null
