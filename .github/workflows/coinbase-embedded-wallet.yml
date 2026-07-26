@@ -131,7 +131,11 @@ jobs:
       - name: Build browser bundle
         if: steps.materialize.outcome == 'success' && steps.source_check.outcome == 'success'
         working-directory: tools/coinbase-wallet-adapter
-        run: npm run build
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ../../target/coinbase-embedded-wallet
+          npm run build 2>&1 | tee ../../target/coinbase-embedded-wallet/build.log
 
       - name: Verify generated production bundle
         if: steps.materialize.outcome == 'success' && steps.source_check.outcome == 'success'
