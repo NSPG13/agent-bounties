@@ -2,7 +2,7 @@
   "use strict";
 
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  const link = document.querySelector("[data-objective-onramp-link]");
+  const link = document.querySelector("[data-objective-onramp-link], [data-funding-help] a[href^='onramp.html']");
   const required = document.querySelector("[data-wallet-required]");
   if (!link || !required) return;
 
