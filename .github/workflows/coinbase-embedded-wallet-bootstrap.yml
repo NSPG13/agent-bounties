@@ -1,0 +1,114 @@
+name: Bootstrap Coinbase embedded wallet
+
+on:
+  push:
+    branches:
+      - maintainer/coinbase-embedded-wallet
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: coinbase-wallet-bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generate-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: maintainer/coinbase-embedded-wallet
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Reassemble and apply fail-closed repository patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat scripts/bootstrap-coinbase-embedded-wallet.py.part-* > /tmp/bootstrap-coinbase-embedded-wallet.py
+          python /tmp/bootstrap-coinbase-embedded-wallet.py
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: tools/coinbase-embedded-wallet/package.json
+
+      - name: Resolve and lock exact dependencies
+        run: npm install --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+
+      - name: Prepare reviewed esbuild binary
+        run: npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
+
+      - name: Compile browser adapter
+        run: npm run build --prefix tools/coinbase-embedded-wallet
+
+      - name: Verify adapter, linking UI, x402 relay, and site
+        run: |
+          python scripts/check-coinbase-embedded-wallet.py
+          python scripts/check-site.py
+          node scripts/test-wallet-adapter-registry.js
+          node scripts/test-x402-browser.js
+
+      - name: Record dependency and bundle evidence
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock_sha="$(sha256sum tools/coinbase-embedded-wallet/package-lock.json | awk '{print $1}')"
+          js_sha="$(sha256sum site/coinbase-embedded-wallet.bundle.js | awk '{print $1}')"
+          css_sha="$(sha256sum site/coinbase-embedded-wallet.bundle.css | awk '{print $1}')"
+          js_bytes="$(wc -c < site/coinbase-embedded-wallet.bundle.js | tr -d ' ')"
+          css_bytes="$(wc -c < site/coinbase-embedded-wallet.bundle.css | tr -d ' ')"
+          {
+            echo "lock_sha=${lock_sha}"
+            echo "js_sha=${js_sha}"
+            echo "css_sha=${css_sha}"
+            echo "js_bytes=${js_bytes}"
+            echo "css_bytes=${css_bytes}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit generated lockfile, bundle, and integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "[coinbase-bootstrap] Add embedded wallet adapter and locked bundle"
+          git push origin HEAD:maintainer/coinbase-embedded-wallet
+
+      - name: Publish build evidence on the maintainer notice
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCK_SHA: ${{ steps.evidence.outputs.lock_sha }}
+          JS_SHA: ${{ steps.evidence.outputs.js_sha }}
+          CSS_SHA: ${{ steps.evidence.outputs.css_sha }}
+          JS_BYTES: ${{ steps.evidence.outputs.js_bytes }}
+          CSS_BYTES: ${{ steps.evidence.outputs.css_bytes }}
+        shell: bash
+        run: |
+          cat > /tmp/coinbase-wallet-evidence.md <<EOF
+          ✅ **Coinbase embedded-wallet source, dependency lock, and browser bundle generated**
+
+          - Node: 22
+          - Coinbase SDK packages: exact 0.0.118 pins
+          - Explicit authentication-method linking: compiled with Coinbase \`LinkAuth\`
+          - Existing wallet choices: retained behind EIP-1193/EIP-6963
+          - EOA funding path: exact EIP-3009 signature, x402 gas-only relay, canonical \`FundingAdded\`
+          - User gas transaction in EOA funding path: none
+          - package-lock SHA-256: \`${LOCK_SHA}\`
+          - JS bundle: \`${JS_BYTES}\` bytes, SHA-256 \`${JS_SHA}\`
+          - CSS bundle: \`${CSS_BYTES}\` bytes, SHA-256 \`${CSS_SHA}\`
+
+          Deterministic adapter, x402, site, syntax, and generated-bundle checks passed. CDP project creation, production-domain allowlisting, and live authentication still require an authenticated CDP Portal session and are not represented by this build proof.
+          EOF
+          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-wallet-evidence.md
