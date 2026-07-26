@@ -4,19 +4,22 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Callable
 
 PLACEHOLDER = "__COINBASE_CDP_PROJECT_ID__"
 CANONICAL_REPOSITORY = "NSPG13/agent-bounties"
 CANONICAL_PROJECT_ID = "9dfed88a-0b37-47e8-b867-96f1dfd0d4ee"
 CANONICAL_ORIGIN = "https://agentbounties.app"
-COINBASE_EMBEDDED_WALLET_API = "https://api.cdp.coinbase.com/embedded-wallet-api/projects"
+COINBASE_API_BASE = "https://api.cdp.coinbase.com/platform"
 PROJECT_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+OpenUrl = Callable[..., object]
 
 
 def configured_default() -> str:
@@ -39,68 +42,169 @@ def canonical_production_build() -> bool:
     )
 
 
+def normalized_headers(headers: object) -> dict[str, str]:
+    items = headers.items() if hasattr(headers, "items") else []
+    return {str(key).lower(): str(value).strip() for key, value in items}
+
+
 def comma_header_values(value: str | None, *, uppercase: bool) -> set[str]:
-    values = {
-        item.strip()
-        for item in (value or "").split(",")
-        if item.strip()
-    }
+    values = {item.strip() for item in (value or "").split(",") if item.strip()}
     return {item.upper() if uppercase else item.lower() for item in values}
 
 
-def verify_production_origin(project_id: str, origin: str, timeout_seconds: float = 20.0) -> None:
-    endpoint = f"{COINBASE_EMBEDDED_WALLET_API}/{urllib.parse.quote(project_id, safe='')}"
-    request = urllib.request.Request(
-        endpoint,
-        method="OPTIONS",
-        headers={
-            "Origin": origin,
-            "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "content-type",
-            "User-Agent": "agent-bounties-coinbase-origin-check/1",
-        },
-    )
-    status = 0
-    headers = None
+def request_evidence(
+    request: urllib.request.Request,
+    *,
+    timeout_seconds: float,
+    opener: OpenUrl,
+) -> tuple[int, dict[str, str], bytes]:
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            status = response.status
-            headers = response.headers
+        with opener(request, timeout=timeout_seconds) as response:
+            return (
+                int(response.status),
+                normalized_headers(response.headers),
+                response.read(),
+            )
     except urllib.error.HTTPError as error:
-        status = error.code
-        headers = error.headers
+        return int(error.code), normalized_headers(error.headers), error.read()
     except urllib.error.URLError as error:
         raise SystemExit(
             "Coinbase production-origin verification could not reach the Embedded Wallet API; "
             "deployment stopped before publishing the wallet integration."
         ) from error
 
-    allowed_origin = headers.get("Access-Control-Allow-Origin") if headers is not None else None
-    allowed_methods = comma_header_values(
-        headers.get("Access-Control-Allow-Methods") if headers is not None else None,
-        uppercase=True,
-    )
-    allowed_headers = comma_header_values(
-        headers.get("Access-Control-Allow-Headers") if headers is not None else None,
-        uppercase=False,
-    )
-    if (
-        not 200 <= status < 300
-        or allowed_origin != origin
-        or "POST" not in allowed_methods
-        or "content-type" not in allowed_headers
-    ):
-        observed_origin = allowed_origin or "missing"
-        observed_methods = ",".join(sorted(allowed_methods)) or "missing"
-        observed_headers = ",".join(sorted(allowed_headers)) or "missing"
+
+def require_credentialed_origin(
+    *,
+    label: str,
+    status: int,
+    headers: dict[str, str],
+    origin: str,
+) -> None:
+    observed_origin = headers.get("access-control-allow-origin")
+    credentials = headers.get("access-control-allow-credentials", "").lower()
+    if not 200 <= status < 300 or observed_origin != origin or credentials != "true":
         raise SystemExit(
-            "Coinbase has not authorized the exact production browser request. "
-            f"Expected origin {origin!r}, method POST, and header content-type; observed HTTP {status}, "
-            f"origin {observed_origin!r}, methods {observed_methods!r}, and headers {observed_headers!r}. "
-            "In CDP Portal, open the project Security/Domains configuration, add the exact origin, "
+            f"Coinbase rejected the {label} browser-origin check: HTTP {status}, "
+            f"origin {observed_origin or 'missing'!r}, credentials {credentials or 'missing'!r}. "
+            "Open the CDP Portal Embedded Wallets domain allowlist, add the exact HTTPS origin, "
             "save it, and rerun deployment."
         )
+
+
+def require_preflight(
+    *,
+    label: str,
+    status: int,
+    headers: dict[str, str],
+    origin: str,
+    required_headers: set[str],
+) -> None:
+    require_credentialed_origin(
+        label=label,
+        status=status,
+        headers=headers,
+        origin=origin,
+    )
+    methods = comma_header_values(headers.get("access-control-allow-methods"), uppercase=True)
+    allowed_headers = comma_header_values(
+        headers.get("access-control-allow-headers"),
+        uppercase=False,
+    )
+    missing = sorted(required_headers - allowed_headers)
+    if "POST" not in methods or missing:
+        raise SystemExit(
+            f"Coinbase rejected the {label} preflight: methods {sorted(methods) or ['missing']}, "
+            f"allowed headers {sorted(allowed_headers) or ['missing']}, missing {missing}. "
+            "Do not publish the wallet integration until the exact SDK request is accepted."
+        )
+
+
+def verify_production_origin(
+    project_id: str,
+    origin: str,
+    timeout_seconds: float = 20.0,
+    *,
+    opener: OpenUrl = urllib.request.urlopen,
+) -> dict[str, object]:
+    quoted_project = urllib.parse.quote(project_id, safe="")
+    project_root = f"{COINBASE_API_BASE}/v2/embedded-wallet-api/projects/{quoted_project}"
+
+    config_request = urllib.request.Request(
+        f"{project_root}/config",
+        method="GET",
+        headers={
+            "Origin": origin,
+            "Accept": "application/json",
+            "User-Agent": "agent-bounties-coinbase-origin-check/2",
+        },
+    )
+    config_status, config_headers, config_body = request_evidence(
+        config_request,
+        timeout_seconds=timeout_seconds,
+        opener=opener,
+    )
+    require_credentialed_origin(
+        label="project configuration",
+        status=config_status,
+        headers=config_headers,
+        origin=origin,
+    )
+    try:
+        config_json = json.loads(config_body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit("Coinbase project configuration did not return valid JSON.") from error
+    if not isinstance(config_json, dict):
+        raise SystemExit("Coinbase project configuration must be a JSON object.")
+
+    preflights = (
+        (
+            "authentication initialization",
+            {"content-type", "x-idempotency-key"},
+        ),
+        (
+            "authenticated method linking",
+            {"content-type", "x-wallet-auth"},
+        ),
+    )
+    preflight_results: list[dict[str, object]] = []
+    for label, requested_headers in preflights:
+        request = urllib.request.Request(
+            f"{project_root}/auth/init",
+            method="OPTIONS",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": ",".join(sorted(requested_headers)),
+                "User-Agent": "agent-bounties-coinbase-origin-check/2",
+            },
+        )
+        status, headers, _ = request_evidence(
+            request,
+            timeout_seconds=timeout_seconds,
+            opener=opener,
+        )
+        require_preflight(
+            label=label,
+            status=status,
+            headers=headers,
+            origin=origin,
+            required_headers=requested_headers,
+        )
+        preflight_results.append(
+            {
+                "label": label,
+                "status": status,
+                "requested_headers": sorted(requested_headers),
+            }
+        )
+
     print(f"Verified Coinbase Embedded Wallet browser authorization for {origin}")
+    return {
+        "project_config_status": config_status,
+        "project_config_json": True,
+        "preflights": preflight_results,
+    }
 
 
 def normalized_https_origin(value: str) -> str:
@@ -115,7 +219,9 @@ def normalized_https_origin(value: str) -> str:
         or parsed.query
         or parsed.fragment
     ):
-        raise SystemExit("--verify-origin must be an HTTPS origin without credentials, path, query, or fragment")
+        raise SystemExit(
+            "--verify-origin must be an HTTPS origin without credentials, path, query, or fragment"
+        )
     try:
         _ = parsed.port
     except ValueError as error:
@@ -130,7 +236,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-disabled", action="store_true")
     parser.add_argument(
         "--verify-origin",
-        help="Require Coinbase CORS authorization for this exact HTTPS origin.",
+        help="Require Coinbase browser authorization for this exact HTTPS origin.",
     )
     parser.add_argument(
         "--skip-canonical-origin-check",
