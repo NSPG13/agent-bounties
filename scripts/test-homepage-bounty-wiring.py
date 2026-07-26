@@ -11,6 +11,8 @@ ai_handoff = (site_dir / "ai-bounty-handoff.js").read_text(encoding="utf-8")
 composer = (site_dir / "bounty-composer-v2.js").read_text(encoding="utf-8")
 entry_js = (site_dir / "bounty-entry.js").read_text(encoding="utf-8")
 guild_home_js = (site_dir / "guild-home.js").read_text(encoding="utf-8")
+wallet_registry = (site_dir / "wallet-adapters.js").read_text(encoding="utf-8")
+wallet_runtime = (site_dir / "wallet-runtime-config.js").read_text(encoding="utf-8")
 agent_html = (site_dir / "agent" / "index.html").read_text(encoding="utf-8")
 agent_markdown = (site_dir / "agent" / "index.md").read_text(encoding="utf-8")
 discovery = json.loads(
@@ -50,22 +52,51 @@ if index_html.index('src="bounty-entry.js?v=1"') > index_html.index('src="guild-
     raise SystemExit("homepage bounty entry helper must load before the form controller")
 
 for marker in (
+    'src="wallet-runtime-config.js?v=1"',
+    'src="wallet-adapters.js?v=1"',
+    'src="coinbase-embedded-wallet.bundle.js?v=1"',
     'src="bounty-entry.js?v=1"',
     'src="ai-bounty-handoff.js?v=5"',
-    'src="bounty-composer-v2.js?v=2"',
+    'src="bounty-composer-v2.js?v=3"',
+    'src="objective-onramp-link.js?v=1"',
     'src="bounty-chat-ui.js?v=4"',
     'data-ai-handoff',
     'data-ai-draft-import',
+    'data-wallet-provider',
+    'data-wallet-required',
+    'data-objective-onramp-link',
 ):
     require("objective chat", objective_html, marker)
 
-if not (
-    objective_html.index('src="bounty-entry.js?v=1"')
-    < objective_html.index('src="ai-bounty-handoff.js?v=5"')
-    < objective_html.index('src="bounty-composer-v2.js?v=2"')
-    < objective_html.index('src="bounty-chat-ui.js?v=4"')
+ordered_scripts = (
+    'src="wallet-runtime-config.js?v=1"',
+    'src="wallet-adapters.js?v=1"',
+    'src="coinbase-embedded-wallet.bundle.js?v=1"',
+    'src="bounty-entry.js?v=1"',
+    'src="ai-bounty-handoff.js?v=5"',
+    'src="bounty-composer-v2.js?v=3"',
+    'src="objective-onramp-link.js?v=1"',
+    'src="bounty-chat-ui.js?v=4"',
+)
+positions = [objective_html.index(marker) for marker in ordered_scripts]
+if positions != sorted(positions):
+    raise SystemExit("objective chat scripts are not loaded in wallet/entry/AI/composer/on-ramp/UI order")
+
+for marker in (
+    "agent-bounties/wallet-adapter-registry-v1",
+    "eip6963:announceProvider",
+    "eip6963:requestProvider",
 ):
-    raise SystemExit("objective chat scripts are not loaded in entry/AI handoff/composer/UI order")
+    require("wallet adapter registry", wallet_registry, marker)
+if "coinbase" in wallet_registry.lower():
+    raise SystemExit("the vendor-neutral wallet registry must not hard-code Coinbase")
+
+for marker in (
+    "agent-bounties/wallet-runtime-v1",
+    'accountType: "eoa"',
+    'gasSponsorshipMode: "eip7702-cdp-paymaster"',
+):
+    require("wallet runtime", wallet_runtime, marker)
 
 for marker in (
     "agent-bounties:homepage-bounty-intent",
@@ -137,4 +168,4 @@ for key, expected in expected_endpoints.items():
     if discovery.get("endpoints", {}).get(key) != expected:
         raise SystemExit(f"discovery endpoint {key} does not route to {expected}")
 
-print("homepage bounty entry and agent-mode wiring are valid")
+print("homepage bounty entry, embedded-wallet, and agent-mode wiring are valid")
