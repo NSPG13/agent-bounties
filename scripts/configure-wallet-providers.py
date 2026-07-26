@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Inject public wallet-provider deployment configuration into static browser assets."""
+"""Inject and verify public wallet-provider deployment configuration."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 PLACEHOLDER = "__COINBASE_CDP_PROJECT_ID__"
 CANONICAL_REPOSITORY = "NSPG13/agent-bounties"
 CANONICAL_PROJECT_ID = "9dfed88a-0b37-47e8-b867-96f1dfd0d4ee"
+CANONICAL_ORIGIN = "https://agentbounties.app"
+COINBASE_EMBEDDED_WALLET_API = "https://api.cdp.coinbase.com/embedded-wallet-api/projects"
 PROJECT_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
@@ -18,9 +23,59 @@ def configured_default() -> str:
     supplied = os.getenv("COINBASE_CDP_PROJECT_ID", "").strip()
     if supplied:
         return supplied
-    if os.getenv("GITHUB_ACTIONS", "").lower() == "true" and os.getenv("GITHUB_REPOSITORY") == CANONICAL_REPOSITORY:
+    if (
+        os.getenv("GITHUB_ACTIONS", "").lower() == "true"
+        and os.getenv("GITHUB_REPOSITORY") == CANONICAL_REPOSITORY
+    ):
         return CANONICAL_PROJECT_ID
     return ""
+
+
+def canonical_production_build() -> bool:
+    return (
+        os.getenv("GITHUB_ACTIONS", "").lower() == "true"
+        and os.getenv("GITHUB_REPOSITORY") == CANONICAL_REPOSITORY
+        and os.getenv("GITHUB_REF_NAME") == "main"
+    )
+
+
+def verify_production_origin(project_id: str, origin: str, timeout_seconds: float = 20.0) -> None:
+    endpoint = f"{COINBASE_EMBEDDED_WALLET_API}/{urllib.parse.quote(project_id, safe='')}"
+    request = urllib.request.Request(
+        endpoint,
+        method="OPTIONS",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+            "User-Agent": "agent-bounties-coinbase-origin-check/1",
+        },
+    )
+    status = 0
+    headers = None
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            status = response.status
+            headers = response.headers
+    except urllib.error.HTTPError as error:
+        status = error.code
+        headers = error.headers
+    except urllib.error.URLError as error:
+        raise SystemExit(
+            "Coinbase production-origin verification could not reach the Embedded Wallet API; "
+            "deployment stopped before publishing the wallet integration."
+        ) from error
+
+    allowed_origin = headers.get("Access-Control-Allow-Origin") if headers is not None else None
+    if not 200 <= status < 300 or allowed_origin != origin:
+        observed = allowed_origin or "missing"
+        raise SystemExit(
+            "Coinbase has not authorized the exact production origin. "
+            f"Expected Access-Control-Allow-Origin {origin!r}; observed HTTP {status} and {observed!r}. "
+            "In CDP Portal, open the project Security/Domains configuration, add the exact origin, "
+            "save it, and rerun deployment."
+        )
+    print(f"Verified Coinbase Embedded Wallet origin authorization for {origin}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,6 +83,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--site-root", default="site")
     parser.add_argument("--coinbase-project-id", default=configured_default())
     parser.add_argument("--allow-disabled", action="store_true")
+    parser.add_argument(
+        "--verify-origin",
+        help="Require Coinbase CORS authorization for this exact HTTPS origin.",
+    )
+    parser.add_argument(
+        "--skip-canonical-origin-check",
+        action="store_true",
+        help="Skip the automatic production check; intended only for deterministic offline tests.",
+    )
     return parser.parse_args()
 
 
@@ -46,6 +110,15 @@ def main() -> int:
         raise SystemExit("COINBASE_CDP_PROJECT_ID is required for a production wallet build")
     if not PROJECT_ID.fullmatch(project_id):
         raise SystemExit("COINBASE_CDP_PROJECT_ID contains unsupported characters or length")
+
+    origin = args.verify_origin
+    if canonical_production_build() and not args.skip_canonical_origin_check:
+        origin = origin or CANONICAL_ORIGIN
+    if origin:
+        parsed = urllib.parse.urlparse(origin)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/"):
+            raise SystemExit("--verify-origin must be an HTTPS origin without a path, query, or fragment")
+        verify_production_origin(project_id, f"https://{parsed.netloc}")
 
     source = config_path.read_text(encoding="utf-8")
     occurrences = source.count(PLACEHOLDER)
