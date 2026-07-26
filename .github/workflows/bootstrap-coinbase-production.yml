@@ -34,18 +34,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           endpoint="repos/${GITHUB_REPOSITORY}/actions/variables/COINBASE_CDP_PROJECT_ID"
+          : > /tmp/coinbase-variable-error
           if gh api "${endpoint}" >/dev/null 2>&1; then
             gh api --method PATCH "${endpoint}" \
               --raw-field name=COINBASE_CDP_PROJECT_ID \
-              --raw-field value="${COINBASE_CDP_PROJECT_ID}" >/dev/null
+              --raw-field value="${COINBASE_CDP_PROJECT_ID}" >/dev/null 2>/tmp/coinbase-variable-error
           else
             gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/variables" \
               --raw-field name=COINBASE_CDP_PROJECT_ID \
-              --raw-field value="${COINBASE_CDP_PROJECT_ID}" >/dev/null
+              --raw-field value="${COINBASE_CDP_PROJECT_ID}" >/dev/null 2>/tmp/coinbase-variable-error
           fi
-          observed="$(gh api "${endpoint}" --jq .value)"
+          write_status=$?
+          if [[ "${write_status}" -ne 0 ]]; then
+            sed -E 's/(token|secret|authorization)[^ ]*/[redacted]/Ig' /tmp/coinbase-variable-error >&2
+            exit "${write_status}"
+          fi
+          observed="$(gh api "${endpoint}" --jq .value 2>/tmp/coinbase-variable-error)"
           test "${observed}" = "${COINBASE_CDP_PROJECT_ID}"
           echo "Configured public Coinbase project ID ${observed:0:4}…${observed: -4}."
 
@@ -53,8 +59,10 @@ jobs:
         id: domain_allowlist
         continue-on-error: true
         run: |
-          set -euo pipefail
+          set -uo pipefail
           endpoint="https://api.cdp.coinbase.com/embedded-wallet-api/projects/${COINBASE_CDP_PROJECT_ID}"
+          : > /tmp/cdp-preflight-headers
+          : > /tmp/cdp-preflight-body
           status="$(curl --silent --show-error \
             --output /tmp/cdp-preflight-body \
             --dump-header /tmp/cdp-preflight-headers \
@@ -64,12 +72,15 @@ jobs:
             --header 'Access-Control-Request-Method: POST' \
             --header 'Access-Control-Request-Headers: content-type' \
             --max-time 30)"
-          echo "Coinbase preflight HTTP ${status}"
+          curl_status=$?
+          allow_origin="$(tr -d '\r' < /tmp/cdp-preflight-headers | sed -nE 's/^access-control-allow-origin:[[:space:]]*(.*)$/\1/Ip' | tail -n 1)"
+          echo "http_status=${status:-curl-${curl_status}}" >> "${GITHUB_OUTPUT}"
+          echo "allow_origin=${allow_origin:-missing}" >> "${GITHUB_OUTPUT}"
+          echo "Coinbase preflight HTTP ${status:-curl-${curl_status}}; allow-origin ${allow_origin:-missing}."
+          test "${curl_status}" -eq 0
           test "${status}" -ge 200
           test "${status}" -lt 300
-          tr -d '\r' < /tmp/cdp-preflight-headers \
-            | grep -Eiq '^access-control-allow-origin:[[:space:]]*https://agentbounties\.app[[:space:]]*$'
-          echo "Coinbase returned the exact production Access-Control-Allow-Origin header."
+          test "${allow_origin}" = "${PRODUCTION_ORIGIN}"
 
       - name: Publish redacted bootstrap evidence
         if: always()
@@ -77,27 +88,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VARIABLE_OUTCOME: ${{ steps.repository_variable.outcome }}
           DOMAIN_OUTCOME: ${{ steps.domain_allowlist.outcome }}
+          DOMAIN_HTTP_STATUS: ${{ steps.domain_allowlist.outputs.http_status }}
+          DOMAIN_ALLOW_ORIGIN: ${{ steps.domain_allowlist.outputs.allow_origin }}
         run: |
           set -euo pipefail
+          variable_detail="not available"
+          if [[ -s /tmp/coinbase-variable-error ]]; then
+            variable_detail="$(head -c 240 /tmp/coinbase-variable-error | tr '\n' ' ' | sed -E 's/(token|secret|authorization)[^ ]*/[redacted]/Ig')"
+          fi
           cat > /tmp/coinbase-bootstrap.md <<EOF
           ## Coinbase production bootstrap
 
           - Public project configuration: \`${VARIABLE_OUTCOME}\`
+          - Variable diagnostic: \`${variable_detail}\`
           - Exact production-origin CORS probe: \`${DOMAIN_OUTCOME}\`
+          - Coinbase preflight HTTP: \`${DOMAIN_HTTP_STATUS:-unavailable}\`
+          - Access-Control-Allow-Origin: \`${DOMAIN_ALLOW_ORIGIN:-missing}\`
           - Project: \`9dfe…d4ee\`
           - Origin: \`${PRODUCTION_ORIGIN}\`
           - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          The canonical production build also contains a public project-ID fallback, so repository-variable administration is not a deployment blocker. The CORS result remains authoritative for Coinbase domain allowlisting.
 
           No Coinbase API key, API secret, OTP, OAuth credential, wallet secret, private key, or seed phrase was written to GitHub or the browser bundle.
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${MAINTAINER_NOTICE}/comments" \
             --raw-field body="$(cat /tmp/coinbase-bootstrap.md)" >/dev/null
 
-      - name: Enforce production configuration
+      - name: Enforce Coinbase production origin
         if: always()
         env:
-          VARIABLE_OUTCOME: ${{ steps.repository_variable.outcome }}
           DOMAIN_OUTCOME: ${{ steps.domain_allowlist.outcome }}
-        run: |
-          test "${VARIABLE_OUTCOME}" = "success"
-          test "${DOMAIN_OUTCOME}" = "success"
+        run: test "${DOMAIN_OUTCOME}" = "success"
