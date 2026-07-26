@@ -1,6 +1,9 @@
 name: Bootstrap Coinbase Production
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/bootstrap-coinbase-production.yml"
   push:
     branches: [maintainer/coinbase-embedded-wallet]
     paths:
@@ -12,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: bootstrap-coinbase-production
+  group: bootstrap-coinbase-production-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
