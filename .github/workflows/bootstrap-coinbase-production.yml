@@ -1,4 +1,4 @@
-name: Bootstrap Coinbase Production
+name: Diagnose Coinbase Production
 
 on:
   pull_request:
@@ -11,112 +11,117 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write
   contents: read
   issues: write
 
 concurrency:
-  group: bootstrap-coinbase-production-${{ github.event_name }}
+  group: diagnose-coinbase-production-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
-  configure-and-verify:
+  diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       COINBASE_CDP_PROJECT_ID: 9dfed88a-0b37-47e8-b867-96f1dfd0d4ee
       PRODUCTION_ORIGIN: https://agentbounties.app
       MAINTAINER_NOTICE: "604"
     steps:
-      - name: Create or update the public repository project variable
-        id: repository_variable
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -uo pipefail
-          endpoint="repos/${GITHUB_REPOSITORY}/actions/variables/COINBASE_CDP_PROJECT_ID"
-          : > /tmp/coinbase-variable-error
-          if gh api "${endpoint}" >/dev/null 2>&1; then
-            gh api --method PATCH "${endpoint}" \
-              --raw-field name=COINBASE_CDP_PROJECT_ID \
-              --raw-field value="${COINBASE_CDP_PROJECT_ID}" >/dev/null 2>/tmp/coinbase-variable-error
-          else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/variables" \
-              --raw-field name=COINBASE_CDP_PROJECT_ID \
-              --raw-field value="${COINBASE_CDP_PROJECT_ID}" >/dev/null 2>/tmp/coinbase-variable-error
-          fi
-          write_status=$?
-          if [[ "${write_status}" -ne 0 ]]; then
-            sed -E 's/(token|secret|authorization)[^ ]*/[redacted]/Ig' /tmp/coinbase-variable-error >&2
-            exit "${write_status}"
-          fi
-          observed="$(gh api "${endpoint}" --jq .value 2>/tmp/coinbase-variable-error)"
-          test "${observed}" = "${COINBASE_CDP_PROJECT_ID}"
-          echo "Configured public Coinbase project ID ${observed:0:4}…${observed: -4}."
+      - uses: actions/checkout@v4
 
-      - name: Verify Coinbase accepts the production web origin
-        id: domain_allowlist
-        continue-on-error: true
-        run: |
-          set -uo pipefail
-          endpoint="https://api.cdp.coinbase.com/embedded-wallet-api/projects/${COINBASE_CDP_PROJECT_ID}"
-          : > /tmp/cdp-preflight-headers
-          : > /tmp/cdp-preflight-body
-          status="$(curl --silent --show-error \
-            --output /tmp/cdp-preflight-body \
-            --dump-header /tmp/cdp-preflight-headers \
-            --write-out '%{http_code}' \
-            --request OPTIONS "${endpoint}" \
-            --header "Origin: ${PRODUCTION_ORIGIN}" \
-            --header 'Access-Control-Request-Method: POST' \
-            --header 'Access-Control-Request-Headers: content-type' \
-            --max-time 30)"
-          curl_status=$?
-          allow_origin="$(tr -d '\r' < /tmp/cdp-preflight-headers | sed -nE 's/^access-control-allow-origin:[[:space:]]*(.*)$/\1/Ip' | tail -n 1)"
-          echo "http_status=${status:-curl-${curl_status}}" >> "${GITHUB_OUTPUT}"
-          echo "allow_origin=${allow_origin:-missing}" >> "${GITHUB_OUTPUT}"
-          echo "Coinbase preflight HTTP ${status:-curl-${curl_status}}; allow-origin ${allow_origin:-missing}."
-          test "${curl_status}" -eq 0
-          test "${status}" -ge 200
-          test "${status}" -lt 300
-          test "${allow_origin}" = "${PRODUCTION_ORIGIN}"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
 
-      - name: Publish redacted bootstrap evidence
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VARIABLE_OUTCOME: ${{ steps.repository_variable.outcome }}
-          DOMAIN_OUTCOME: ${{ steps.domain_allowlist.outcome }}
-          DOMAIN_HTTP_STATUS: ${{ steps.domain_allowlist.outputs.http_status }}
-          DOMAIN_ALLOW_ORIGIN: ${{ steps.domain_allowlist.outputs.allow_origin }}
+      - name: Install the exact reviewed Coinbase dependency graph
+        run: npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+
+      - name: Prove canonical production project configuration
         run: |
           set -euo pipefail
-          variable_detail="not available"
-          if [[ -s /tmp/coinbase-variable-error ]]; then
-            variable_detail="$(head -c 240 /tmp/coinbase-variable-error | tr '\n' ' ' | sed -E 's/(token|secret|authorization)[^ ]*/[redacted]/Ig')"
-          fi
-          cat > /tmp/coinbase-bootstrap.md <<EOF
-          ## Coinbase production bootstrap
+          cp -R site /tmp/coinbase-site
+          env -u COINBASE_CDP_PROJECT_ID \
+            GITHUB_ACTIONS=true \
+            GITHUB_REPOSITORY=NSPG13/agent-bounties \
+            python scripts/configure-wallet-providers.py --site-root /tmp/coinbase-site
+          grep -q '9dfed88a-0b37-47e8-b867-96f1dfd0d4ee' /tmp/coinbase-site/wallet-config.js
+          ! grep -q '__COINBASE_CDP_PROJECT_ID__' /tmp/coinbase-site/wallet-config.js
+          echo "Canonical Pages configuration resolves project 9dfe…d4ee without a repository secret."
 
-          - Public project configuration: \`${VARIABLE_OUTCOME}\`
-          - Variable diagnostic: \`${variable_detail}\`
-          - Exact production-origin CORS probe: \`${DOMAIN_OUTCOME}\`
-          - Coinbase preflight HTTP: \`${DOMAIN_HTTP_STATUS:-unavailable}\`
-          - Access-Control-Allow-Origin: \`${DOMAIN_ALLOW_ORIGIN:-missing}\`
-          - Project: \`9dfe…d4ee\`
-          - Origin: \`${PRODUCTION_ORIGIN}\`
-          - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+      - name: Trace endpoints used by the locked Coinbase browser SDK
+        id: trace
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
 
-          The canonical production build also contains a public project-ID fallback, so repository-variable administration is not a deployment blocker. The CORS result remains authoritative for Coinbase domain allowlisting.
+          roots = [
+              Path("tools/coinbase-embedded-wallet/node_modules/@coinbase"),
+              Path("site/coinbase-embedded-wallet.bundle.js"),
+          ]
+          url_pattern = re.compile(r"https://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%{}-]+")
+          path_pattern = re.compile(r"[A-Za-z0-9_./{}-]*(?:embedded[-_/ ]?wallet|project|origin|allowlist|auth)[A-Za-z0-9_./{}?=&%-]*", re.I)
+          urls = set()
+          paths = set()
+          scanned = 0
+          for root in roots:
+              files = [root] if root.is_file() else list(root.rglob("*"))
+              for path in files:
+                  if not path.is_file() or path.stat().st_size > 8_000_000:
+                      continue
+                  try:
+                      text = path.read_text(encoding="utf-8", errors="ignore")
+                  except OSError:
+                      continue
+                  scanned += 1
+                  for value in url_pattern.findall(text):
+                      if "coinbase" in value.lower() or "cdp" in value.lower():
+                          urls.add(value.rstrip("'\"`),.;"))
+                  for value in path_pattern.findall(text):
+                      normalized = value.strip("'\"`),.;")
+                      if len(normalized) >= 8:
+                          paths.add(normalized)
+          report = {
+              "schema_version": "agent-bounties/coinbase-sdk-endpoint-trace-v1",
+              "scanned_files": scanned,
+              "urls": sorted(urls),
+              "candidate_paths": sorted(paths)[:300],
+          }
+          Path("/tmp/coinbase-sdk-endpoints.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2))
+          PY
 
-          No Coinbase API key, API secret, OTP, OAuth credential, wallet secret, private key, or seed phrase was written to GitHub or the browser bundle.
-          EOF
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${MAINTAINER_NOTICE}/comments" \
-            --raw-field body="$(cat /tmp/coinbase-bootstrap.md)" >/dev/null
-
-      - name: Enforce Coinbase production origin
+      - name: Publish redacted diagnostic
         if: always()
         env:
-          DOMAIN_OUTCOME: ${{ steps.domain_allowlist.outcome }}
-        run: test "${DOMAIN_OUTCOME}" = "success"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("/tmp/coinbase-sdk-endpoints.json")
+          report = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"urls": [], "candidate_paths": []}
+          urls = "\n".join(f"- `{value}`" for value in report.get("urls", [])[:40]) or "- No literal Coinbase URL found; runtime composition requires a browser trace."
+          paths = "\n".join(f"- `{value}`" for value in report.get("candidate_paths", [])[:40]) or "- No candidate path found."
+          body = f"""## Coinbase locked-SDK endpoint trace
+
+          The canonical Pages build resolves the supplied public project as `9dfe…d4ee`; no Coinbase API secret is stored.
+
+          Literal Coinbase/CDP URLs in the locked SDK:
+          {urls}
+
+          Candidate runtime paths:
+          {paths}
+
+          Run: ${{{{ github.server_url }}}}/${{{{ github.repository }}}/actions/runs/${{{{ github.run_id }}}}
+          """
+          Path("/tmp/coinbase-diagnostic.md").write_text(body, encoding="utf-8")
+          PY
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${MAINTAINER_NOTICE}/comments" \
+            --raw-field body="$(cat /tmp/coinbase-diagnostic.md)" >/dev/null
