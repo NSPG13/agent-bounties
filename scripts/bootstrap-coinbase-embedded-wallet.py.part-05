@@ -1,0 +1,149 @@
+nramp-callout">
+              <strong>Need Base USDC?</strong>
+              <p>Gas is sponsored for this funding action. Create or connect a wallet, buy Base USDC with MoonPay when needed, then separately authorize the exact canonical contribution.</p>
+              <a class="button secondary" href="onramp.html" data-moonpay-onramp-link>Get Base USDC with MoonPay</a>
+              <output class="fine" data-moonpay-link-output aria-live="polite">MoonPay is optional. Buying USDC does not fund this bounty.</output>
+            </div>
+""",
+    )
+    source = path.read_text(encoding="utf-8")
+    if source.count("Detecting browser wallets") != 3:
+        raise SystemExit("site/earn.html: expected three legacy wallet placeholders")
+    path.write_text(source.replace("Detecting browser wallets", "Detecting wallets"), encoding="utf-8")
+    replace_once(
+        path,
+        '''              <select data-wallet-provider aria-label="Wallet provider">
+                <option>Detecting wallets</option>
+              </select>
+              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
+''',
+        '''              <select data-wallet-provider data-wallet-requires="direct-transactions" aria-label="Wallet provider">
+                <option>Detecting wallets</option>
+              </select>
+              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
+''',
+    )
+    replace_once(
+        path,
+        '    <script src="moonpay-link.js?v=1"></script>\n    <script src="autonomous.js"></script>\n',
+        '    <script src="moonpay-link.js?v=1"></script>\n'
+        '    <script src="wallet-config.js?v=1"></script>\n'
+        '    <script src="wallet-adapter-registry.js?v=1"></script>\n'
+        '    <script src="coinbase-embedded-wallet.bundle.js?v=1"></script>\n'
+        '    <script src="x402-browser.js?v=1"></script>\n'
+        '    <script src="autonomous.js"></script>\n',
+    )
+
+
+def patch_onramp() -> None:
+    path = ROOT / "site/onramp.html"
+    replace_once(
+        path,
+        "connect-src 'self' https://mcp.agentbounties.app;",
+        "connect-src 'self' https://mcp.agentbounties.app https://api.cdp.coinbase.com https://mainnet.base.org; frame-src https://secure-wallet.cdp.coinbase.com;",
+    )
+    replace_once(
+        path,
+        '    <link rel="stylesheet" href="onramp.css?v=1">\n',
+        '    <link rel="stylesheet" href="onramp.css?v=1">\n'
+        '    <link rel="stylesheet" href="wallet-adapters.css?v=1">\n'
+        '    <link rel="stylesheet" href="coinbase-embedded-wallet.bundle.css?v=1">\n',
+    )
+    replace_once(path, '              <option value="eth">Base ETH for transaction gas</option>\n', "")
+    replace_once(path, '<option>Detecting browser wallets</option>', '<option>Detecting wallets</option>')
+    replace_once(
+        path,
+        '<p class="fine" data-balance-guidance>Base ETH may be required for wallet transaction gas unless the final wallet path sponsors it.</p>',
+        '<p class="fine" data-balance-guidance>Agent Bounties sponsors gas for existing-bounty funding and claims. Buy only Base USDC for these supported actions; no ETH purchase is required.</p>',
+    )
+    replace_once(
+        path,
+        '    <script src="guild-shell.js?v=2"></script>\n    <script src="moonpay-onramp.js?v=1"></script>\n',
+        '    <script src="guild-shell.js?v=2"></script>\n'
+        '    <script src="wallet-config.js?v=1"></script>\n'
+        '    <script src="wallet-adapter-registry.js?v=1"></script>\n'
+        '    <script src="coinbase-embedded-wallet.bundle.js?v=1"></script>\n'
+        '    <script src="moonpay-onramp.js?v=1"></script>\n',
+    )
+
+
+def patch_autonomous() -> None:
+    path = ROOT / "site/autonomous.js"
+    old_provider_list = '''    document.querySelectorAll("[data-wallet-provider]").forEach((selector) => {
+      const selectedProvider = state.provider;
+      selector.replaceChildren(...state.providers.map((item, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = providerName(item.provider, item.info);
+        option.selected = item.provider === selectedProvider;
+        return option;
+      }));
+      selector.disabled = state.providers.length === 0;
+      if (state.providers.length === 0) {
+        const option = document.createElement("option");
+        option.textContent = "No browser wallet detected";
+        selector.append(option);
+      }
+    });
+'''
+    new_provider_list = '''    document.querySelectorAll("[data-wallet-provider]").forEach((selector) => {
+      const selectedProvider = state.provider;
+      const required = selector.dataset.walletRequires || "";
+      const visible = state.providers
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => {
+          if (required !== "direct-transactions") return true;
+          const capabilities = window.AgentBountiesWalletAdapters?.capabilitiesFor?.(item.provider);
+          return capabilities?.directTransactions !== false;
+        });
+      selector.replaceChildren(...visible.map(({ item, index }) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = providerName(item.provider, item.info);
+        option.selected = item.provider === selectedProvider;
+        return option;
+      }));
+      selector.disabled = visible.length === 0;
+      if (visible.length === 0) {
+        const option = document.createElement("option");
+        option.textContent = required === "direct-transactions"
+          ? "No compatible transaction wallet available"
+          : "No wallet provider is available";
+        selector.append(option);
+      }
+    });
+'''
+    replace_once(path, old_provider_list, new_provider_list)
+    replace_once(path, 'throw new Error("Unlock a browser wallet, reload, and select it here.");', 'throw new Error("Select a wallet provider. You can create an embedded wallet without installing an extension.");')
+    old = """      const plan = await requestJson(`${api}/v1/base/autonomous-bounties/contribution-plan`, {
+        method: "POST",
+        body: JSON.stringify({ network: "base-mainnet", contribution }),
+      });
+      output(result, ["Wallet confirmation required.", `Contribution: ${form.elements.amount.value} USDC`]);
+      let txHash = null;
+      if (!(await isContractAccount(account)) && plan.eip3009_authorization) {
+        const signature = await signTypedData(account, plan.eip3009_authorization);
+        const authorized = await requestJson(
+          `${api}/v1/base/autonomous-bounties/authorized-contribution-plan`,
+          {
+            method: "POST",
+            body: JSON.stringify({ network: "base-mainnet", contribution, signature, relayer: account }),
+          },
+        );
+        txHash = await sendTransaction(authorized.relay_transaction, account);
+        await waitReceipt(txHash);
+      } else {
+        const sent = await sendWalletCalls(plan.wallet_calls, account, protocol);
+        if (sent.kind === "transactions") txHash = sent.hashes[sent.hashes.length - 1];
+      }
+      let fundingEvent = null;
+"""
+    new = """      const contractAccount = await isContractAccount(account);
+      output(result, [
+        contractAccount ? "Wallet confirmation required." : "Gas-sponsored authorization required.",
+        `Contribution: ${form.elements.amount.value} USDC`,
+        contractAccount
+          ? "This wallet account will review its supported call path."
+          : "Your wallet signs exact Base USDC authorization; the Agent Bounties relayer pays ETH gas.",
+      ]);
+      let txHash = null;
