@@ -8,7 +8,7 @@
     "test": "node test-provider.js"
   },
   "dependencies": {
-    "@coinbase/cdp-core": "0.0.117",
+    "@coinbase/cdp-core": "0.0.118",
     "viem": "2.55.8"
   },
   "devDependencies": {
