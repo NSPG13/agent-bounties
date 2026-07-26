@@ -37,7 +37,33 @@ jobs:
           cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
 
       - name: Install exact lockfile
-        run: npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+        id: install
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund --loglevel verbose 2>&1 | tee /tmp/coinbase-npm-ci.log
+
+      - name: Publish exact lockfile failure
+        if: steps.install.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          {
+            echo '## Coinbase embedded-wallet lockfile reproduction failure'
+            echo
+            echo '```text'
+            tail -n 120 /tmp/coinbase-npm-ci.log
+            echo '```'
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > /tmp/coinbase-npm-ci.md
+          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-npm-ci.md
+
+      - name: Enforce lockfile reproduction
+        if: steps.install.outcome == 'failure'
+        run: exit 1
 
       - name: Prepare reviewed esbuild binary
         run: npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
@@ -63,7 +89,7 @@ jobs:
           npm audit --prefix tools/coinbase-embedded-wallet --omit=dev --json > /tmp/coinbase-npm-audit.json
 
       - name: Publish bounded advisory report
-        if: always()
+        if: always() && steps.install.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
