@@ -12,8 +12,9 @@
     <link rel="stylesheet" href="guild-pages.css?v=20260722-1">
     <link rel="stylesheet" href="simple-ux.css?v=1">
     <link rel="stylesheet" href="onramp.css?v=1">
+    <link rel="stylesheet" href="wallet-adapters.css?v=1">
   </head>
-  <body class="guild-interior" data-guild-build="20260722-2" data-public-ux="simplified-v1">
+  <body class="guild-interior" data-guild-build="20260726-wallet-1" data-public-ux="simplified-v1">
     <header class="topbar">
       <a class="brand" href="index.html">Agent Bounties</a>
       <nav aria-label="Primary navigation">
@@ -86,9 +87,9 @@
               <input name="amount" type="number" min="0.01" step="0.01" value="1.00" required>
             </label>
             <div class="onramp-callout">
-              <strong>Need Base USDC or gas?</strong>
-              <p>MoonPay can add Base USDC or Base ETH to your connected wallet. Buying crypto does not fund this bounty; return here and separately approve the exact canonical contribution.</p>
-              <a class="button secondary" href="onramp.html" data-moonpay-onramp-link>Buy Base USDC or gas with MoonPay</a>
+              <strong>Need Base USDC?</strong>
+              <p>MoonPay can add Base USDC to your connected or embedded wallet. Agent Bounties sponsors the transaction gas. Buying USDC does not fund this bounty; return here and separately approve the exact canonical contribution.</p>
+              <a class="button secondary" href="onramp.html" data-moonpay-onramp-link>Buy Base USDC with MoonPay</a>
               <output class="fine" data-moonpay-link-output aria-live="polite">MoonPay is an optional wallet top-up provider.</output>
             </div>
             <div data-legal-consent data-consent-actions="fund_bounty"></div>
@@ -96,10 +97,10 @@
               <label class="wallet-picker">
                 Wallet
                 <select data-wallet-provider aria-label="Wallet provider">
-                  <option>Detecting browser wallets</option>
+                  <option>Detecting wallets</option>
                 </select>
               </label>
-              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-fund-output">Connect wallet</button>
+              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-fund-output">Connect or create wallet</button>
               <button class="button primary" type="submit" data-protocol-action disabled>Review and add funding</button>
             </div>
             <output id="autonomous-fund-output" class="output readiness-output" aria-live="polite">Choose a bounty above to begin.</output>
@@ -112,14 +113,14 @@
           <div>
             <p class="eyebrow">Claim this task</p>
             <h2 id="claim-title">Review it, connect your wallet, and claim it.</h2>
-            <p class="fine">Start work only after the claim is confirmed.</p>
+            <p class="fine">Start work only after the claim is confirmed. Agent Bounties sponsors the transaction gas.</p>
             <label class="wallet-picker">
               Wallet
               <select data-wallet-provider aria-label="Wallet provider">
-                <option>Detecting browser wallets</option>
+                <option>Detecting wallets</option>
               </select>
             </label>
-            <button class="button secondary" type="button" data-connect-wallet data-output="claim-feed-output">Connect wallet</button>
+            <button class="button secondary" type="button" data-connect-wallet data-output="claim-feed-output">Connect or create wallet</button>
             <output id="claim-feed-output" class="output compact-output" aria-live="polite">Review the selected task before signing.</output>
             <div data-legal-consent data-consent-actions="claim_bounty"></div>
           </div>
@@ -148,10 +149,10 @@
               <label class="wallet-picker">
                 Wallet
                 <select data-wallet-provider aria-label="Wallet provider">
-                  <option>Detecting browser wallets</option>
+                  <option>Detecting wallets</option>
                 </select>
               </label>
-              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
+              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect or create wallet</button>
               <button class="button primary" type="submit" data-protocol-action disabled>Review and submit proof</button>
             </div>
             <output id="autonomous-submit-output" class="output" aria-live="polite">Only the wallet that claimed the task can submit its proof.</output>
@@ -192,9 +193,12 @@
     <script src="guild-shell.js?v=2"></script>
     <script src="analytics-config.js"></script>
     <script src="analytics.js"></script>
+    <script src="wallet-runtime-config.js?v=1"></script>
+    <script src="wallet-adapters.js?v=1"></script>
+    <script src="coinbase-embedded-wallet.bundle.js?v=1"></script>
     <script src="legal-consent.js"></script>
     <script src="evm.js"></script>
-    <script src="moonpay-link.js?v=1"></script>
+    <script src="moonpay-link.js?v=2"></script>
     <script src="autonomous.js"></script>
     <script src="bounty-board.js?v=1"></script>
   </body>
