@@ -1,0 +1,104 @@
+name: Temporary Coinbase production diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/temp-coinbase-production-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  inspect-locked-sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: maintainer/coinbase-embedded-wallet
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
+
+      - name: Install exact locked dependencies
+        run: npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+
+      - name: Inspect public Coinbase SDK endpoints
+        run: |
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          roots = [
+              Path("tools/coinbase-embedded-wallet/node_modules/@coinbase"),
+              Path("site/coinbase-embedded-wallet.bundle.js"),
+          ]
+          url_pattern = re.compile(r"https://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%{}-]+")
+          interesting_pattern = re.compile(
+              r"[A-Za-z0-9_./{}?=&%-]{0,120}(?:embedded[-_/ ]?wallet|allowlist|origin|projectId|secure-wallet|auth)[A-Za-z0-9_./{}?=&%-]{0,180}",
+              re.I,
+          )
+          urls = set()
+          fragments = set()
+          scanned = 0
+          for root in roots:
+              files = [root] if root.is_file() else list(root.rglob("*"))
+              for path in files:
+                  if not path.is_file() or path.stat().st_size > 8_000_000:
+                      continue
+                  text = path.read_text(encoding="utf-8", errors="ignore")
+                  scanned += 1
+                  for value in url_pattern.findall(text):
+                      clean = value.rstrip("'\"`),.;")
+                      if "coinbase" in clean.lower() or "cdp" in clean.lower():
+                          urls.add(clean)
+                  for value in interesting_pattern.findall(text):
+                      clean = " ".join(value.strip("'\"`),.;").split())
+                      if 8 <= len(clean) <= 320:
+                          fragments.add(clean)
+          report = {
+              "schema_version": "agent-bounties/coinbase-sdk-endpoint-trace-v1",
+              "scanned_files": scanned,
+              "urls": sorted(urls),
+              "fragments": sorted(fragments)[:400],
+          }
+          Path("/tmp/coinbase-sdk-endpoints.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Post redacted diagnostic
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("/tmp/coinbase-sdk-endpoints.json")
+          report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {"urls": [], "fragments": []}
+          urls = "\n".join(f"- `{value}`" for value in report.get("urls", [])[:60]) or "- No literal URL found; the endpoint is composed at runtime."
+          fragments = "\n".join(f"- `{value}`" for value in report.get("fragments", [])[:80]) or "- No candidate path found."
+          body = f"""## Temporary locked Coinbase SDK endpoint diagnostic
+
+          Scanned files: `{report.get('scanned_files', 0)}`
+
+          Coinbase/CDP URLs:
+          {urls}
+
+          Candidate runtime fragments:
+          {fragments}
+
+          This inspected only public dependency and browser-bundle content. No API key, OTP, OAuth credential, wallet secret, private key, or seed phrase was used.
+          """
+          Path("/tmp/coinbase-diagnostic.md").write_text(body, encoding="utf-8")
+          PY
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/604/comments" \
+            --raw-field body="$(cat /tmp/coinbase-diagnostic.md)" >/dev/null
