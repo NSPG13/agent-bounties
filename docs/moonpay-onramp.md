@@ -29,10 +29,28 @@ The destination is the user's wallet, never the bounty contract. A plain ERC-20 
 
 The fiat amount is only a starting value. MoonPay remains authoritative for its final quote, fees, supported payment methods, purchase limits, eligibility, and received crypto amount.
 
+## Direct consumer fallback
+
+The on-ramp page also exposes a bounded manual fallback through MoonPay's public consumer pages:
+
+- `https://www.moonpay.com/buy/usdc`
+- `https://www.moonpay.com/buy/eth`
+
+This keeps Base wallet top-up available when Agent Bounties' MoonPay partner credentials are not yet active or the signed checkout service is unavailable. It is deliberately less seamless than the partner checkout:
+
+1. Agent Bounties does not append the wallet, asset, network, amount, API key, or signature to the public URL.
+2. The user must explicitly copy the connected wallet address.
+3. Inside MoonPay, the user must select `USDC_BASE` or `ETH_BASE`, verify the Base network, paste the exact address, and review the final amount and fees.
+4. The user is told to stop if MoonPay shows another network or wallet address.
+5. After delivery, the user returns to Agent Bounties, refreshes the wallet balances, and separately authorizes canonical bounty funding.
+
+The fallback is not equivalent to the signed integration. It cannot cryptographically bind the reviewed wallet or context to MoonPay's checkout, and it should disappear as the primary path once approved partner credentials are active. It exists so an account-level credential dependency does not make the user-facing on-ramp unusable.
+
 ## Architecture
 
 - Browser page: `site/onramp.html`
-- Browser controller: `site/moonpay-onramp.js`
+- Signed-checkout browser controller: `site/moonpay-onramp.js`
+- Direct consumer fallback controller: `site/moonpay-direct-fallback.js`
 - Funding-form handoff: `site/moonpay-link.js`
 - Server route: the MoonPay checkout endpoint on the configured MCP origin; its exact registered path is asserted by `scripts/check-moonpay-onramp.py`
 - Server implementation: `crates/mcp-server/src/moonpay.rs`
@@ -44,9 +62,9 @@ MoonPay remains outside `chatgpt_app.rs`. The existing hosted plugin continues t
 
 ## Required environment variables
 
-Set these on the hosted MCP service:
+Set these on the hosted MCP service to activate the prefilled, server-signed partner checkout. The direct consumer fallback does not require these credentials.
 
-| Variable | Required | Example / purpose |
+| Variable | Required for partner checkout | Example / purpose |
 | --- | --- | --- |
 | `MOONPAY_PUBLISHABLE_KEY` | Yes | `pk_test_...` in sandbox or `pk_live_...` in production |
 | `MOONPAY_SECRET_KEY` | Yes | `sk_test_...` in sandbox or `sk_live_...` in production; server only |
@@ -88,6 +106,8 @@ Activation sequence:
 9. Return to the same bounty and complete the separate canonical contribution.
 10. Confirm the matching indexed `FundingAdded` event before describing the bounty as funded.
 
+Until this sequence is complete, the direct consumer fallback remains available but must not be described as wallet-prefilled, signed, or partner-activated.
+
 ## Verification
 
 Run:
@@ -100,6 +120,8 @@ python scripts/check-site.py
 
 The Rust tests include MoonPay's published URL-signing test vector, verify that live URLs are IP-bound and signed with `signature` appended last, verify that the secret never appears in the checkout URL, and assert that every checkout plan reports `bounty_funded: false` with no canonical event.
 
+The static gate also verifies that the direct fallback uses only MoonPay's public consumer URLs, opens with `noopener noreferrer`, does not imitate a signed or wallet-prefilled URL, and keeps the same canonical funding boundary.
+
 ## Deliberate limitations
 
 - No card, bank, PayPal, identity, or KYC data is collected by Agent Bounties.
@@ -108,4 +130,5 @@ The Rust tests include MoonPay's published URL-signing test vector, verify that 
 - No checkout URL is persisted in browser storage.
 - No email or other personal identifier is sent to MoonPay from Agent Bounties.
 - No affiliate fee is added in this version. This keeps the first implementation focused on reducing entry friction rather than creating an incentive to encourage unnecessary purchases.
+- The direct consumer fallback cannot prefill or bind the user's wallet, Base network, asset, or amount; the user must verify all four inside MoonPay.
 - The in-memory rate limit is appropriate for the current single-service deployment. A horizontally scaled deployment should replace it with a shared rate limiter before increasing traffic.
