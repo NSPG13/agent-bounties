@@ -20,154 +20,130 @@ jobs:
       ORIGIN: https://agentbounties.app
       API_BASE: https://api.cdp.coinbase.com/platform
     steps:
-      - name: Probe the exact public project-config request used by CDP 0.0.118
-        id: config
-        shell: bash
+      - name: Probe exact auth CORS header combinations
         run: |
-          set -u
-          endpoint="${API_BASE}/v2/embedded-wallet-api/projects/${PROJECT_ID}/config"
-          status="$(curl --silent --show-error \
-            --output /tmp/config-body \
-            --dump-header /tmp/config-headers \
-            --write-out '%{http_code}' \
-            --request GET "${endpoint}" \
-            --header "Origin: ${ORIGIN}" \
-            --header 'Accept: application/json' \
-            --max-time 30)"
-          curl_status=$?
-          allow_origin="$(tr -d '\r' < /tmp/config-headers | sed -nE 's/^access-control-allow-origin:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
-          allow_credentials="$(tr -d '\r' < /tmp/config-headers | sed -nE 's/^access-control-allow-credentials:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
-          content_type="$(tr -d '\r' < /tmp/config-headers | sed -nE 's/^content-type:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
-          json_ok=false
-          python -m json.tool /tmp/config-body >/dev/null 2>&1 && json_ok=true
-          http_ok=false
-          origin_ok=false
-          credentials_ok=false
-          [[ "${curl_status}" -eq 0 && "${status}" -ge 200 && "${status}" -lt 300 ]] && http_ok=true
-          [[ "${allow_origin}" = "${ORIGIN}" ]] && origin_ok=true
-          [[ "${allow_credentials,,}" = "true" ]] && credentials_ok=true
-          {
-            echo "http_status=${status:-curl-${curl_status}}"
-            echo "allow_origin=${allow_origin:-missing}"
-            echo "allow_credentials=${allow_credentials:-missing}"
-            echo "content_type=${content_type:-missing}"
-            echo "http_ok=${http_ok}"
-            echo "origin_ok=${origin_ok}"
-            echo "credentials_ok=${credentials_ok}"
-            echo "json_ok=${json_ok}"
-          } >> "${GITHUB_OUTPUT}"
+          python - <<'PY'
+          import json
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
 
-      - name: Probe the exact auth-init browser preflight used by CDP 0.0.118
-        id: auth
-        shell: bash
-        run: |
-          set -u
-          endpoint="${API_BASE}/v2/embedded-wallet-api/projects/${PROJECT_ID}/auth/init"
-          requested_headers='content-type,x-idempotency-key,authorization,x-wallet-auth'
-          status="$(curl --silent --show-error \
-            --output /tmp/auth-body \
-            --dump-header /tmp/auth-headers \
-            --write-out '%{http_code}' \
-            --request OPTIONS "${endpoint}" \
-            --header "Origin: ${ORIGIN}" \
-            --header 'Access-Control-Request-Method: POST' \
-            --header "Access-Control-Request-Headers: ${requested_headers}" \
-            --max-time 30)"
-          curl_status=$?
-          allow_origin="$(tr -d '\r' < /tmp/auth-headers | sed -nE 's/^access-control-allow-origin:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
-          allow_credentials="$(tr -d '\r' < /tmp/auth-headers | sed -nE 's/^access-control-allow-credentials:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
-          methods="$(tr -d '\r' < /tmp/auth-headers | sed -nE 's/^access-control-allow-methods:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
-          allowed_headers="$(tr -d '\r' < /tmp/auth-headers | sed -nE 's/^access-control-allow-headers:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
-          http_ok=false
-          origin_ok=false
-          credentials_ok=false
-          method_ok=false
-          headers_ok=true
-          [[ "${curl_status}" -eq 0 && "${status}" -ge 200 && "${status}" -lt 300 ]] && http_ok=true
-          [[ "${allow_origin}" = "${ORIGIN}" ]] && origin_ok=true
-          [[ "${allow_credentials,,}" = "true" ]] && credentials_ok=true
-          printf '%s' "${methods}" | grep -Eiq '(^|,[[:space:]]*)POST([[:space:]]*,|$)' && method_ok=true
-          for required in content-type x-idempotency-key authorization x-wallet-auth; do
-            printf '%s' "${allowed_headers}" | tr '[:upper:]' '[:lower:]' | grep -Eiq "(^|,[[:space:]]*)${required}([[:space:]]*,|$)" || headers_ok=false
-          done
-          {
-            echo "http_status=${status:-curl-${curl_status}}"
-            echo "allow_origin=${allow_origin:-missing}"
-            echo "allow_credentials=${allow_credentials:-missing}"
-            echo "allow_methods=${methods:-missing}"
-            echo "allow_headers=${allowed_headers:-missing}"
-            echo "http_ok=${http_ok}"
-            echo "origin_ok=${origin_ok}"
-            echo "credentials_ok=${credentials_ok}"
-            echo "method_ok=${method_ok}"
-            echo "headers_ok=${headers_ok}"
-          } >> "${GITHUB_OUTPUT}"
+          project = "9dfed88a-0b37-47e8-b867-96f1dfd0d4ee"
+          origin = "https://agentbounties.app"
+          base = "https://api.cdp.coinbase.com/platform"
+          endpoint = f"{base}/v2/embedded-wallet-api/projects/{project}/auth/init"
+          variants = [
+              ("no-requested-headers", None),
+              ("content-type", "content-type"),
+              ("content-type-idempotency", "content-type,x-idempotency-key"),
+              ("content-type-authorization", "content-type,authorization"),
+              ("content-type-wallet-auth", "content-type,x-wallet-auth"),
+              ("all-sdk-headers", "content-type,x-idempotency-key,authorization,x-wallet-auth"),
+          ]
 
-      - name: Publish durable redacted real-route verdict
+          def cors_headers(headers):
+              return {
+                  "allow_origin": headers.get("Access-Control-Allow-Origin"),
+                  "allow_credentials": headers.get("Access-Control-Allow-Credentials"),
+                  "allow_methods": headers.get("Access-Control-Allow-Methods"),
+                  "allow_headers": headers.get("Access-Control-Allow-Headers"),
+                  "vary": headers.get("Vary"),
+              }
+
+          results = []
+          for name, requested in variants:
+              headers = {
+                  "Origin": origin,
+                  "Access-Control-Request-Method": "POST",
+                  "User-Agent": "agent-bounties-cdp-cors-matrix/1",
+              }
+              if requested:
+                  headers["Access-Control-Request-Headers"] = requested
+              request = urllib.request.Request(endpoint, method="OPTIONS", headers=headers)
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      status, response_headers = response.status, response.headers
+              except urllib.error.HTTPError as error:
+                  status, response_headers = error.code, error.headers
+              results.append({
+                  "name": name,
+                  "requested_headers": requested,
+                  "status": status,
+                  **cors_headers(response_headers),
+              })
+
+          actual = urllib.request.Request(
+              endpoint,
+              method="POST",
+              data=b"{}",
+              headers={
+                  "Origin": origin,
+                  "Content-Type": "application/json",
+                  "Accept": "application/json",
+                  "User-Agent": "agent-bounties-cdp-cors-matrix/1",
+              },
+          )
+          try:
+              with urllib.request.urlopen(actual, timeout=30) as response:
+                  actual_status, actual_headers = response.status, response.headers
+                  actual_body = response.read(4096).decode("utf-8", errors="replace")
+          except urllib.error.HTTPError as error:
+              actual_status, actual_headers = error.code, error.headers
+              actual_body = error.read(4096).decode("utf-8", errors="replace")
+          results.append({
+              "name": "actual-empty-json-post",
+              "status": actual_status,
+              **cors_headers(actual_headers),
+              "body_is_json": False,
+          })
+          try:
+              json.loads(actual_body)
+              results[-1]["body_is_json"] = True
+          except json.JSONDecodeError:
+              pass
+
+          Path("/tmp/cdp-auth-cors-matrix.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+          print(json.dumps(results, indent=2))
+          PY
+
+      - name: Publish durable redacted CORS matrix
         env:
           GH_TOKEN: ${{ github.token }}
-          CONFIG_HTTP: ${{ steps.config.outputs.http_ok }}
-          CONFIG_ORIGIN: ${{ steps.config.outputs.origin_ok }}
-          CONFIG_CREDENTIALS: ${{ steps.config.outputs.credentials_ok }}
-          CONFIG_JSON: ${{ steps.config.outputs.json_ok }}
-          CONFIG_STATUS: ${{ steps.config.outputs.http_status }}
-          CONFIG_CONTENT_TYPE: ${{ steps.config.outputs.content_type }}
-          AUTH_HTTP: ${{ steps.auth.outputs.http_ok }}
-          AUTH_ORIGIN: ${{ steps.auth.outputs.origin_ok }}
-          AUTH_CREDENTIALS: ${{ steps.auth.outputs.credentials_ok }}
-          AUTH_POST: ${{ steps.auth.outputs.method_ok }}
-          AUTH_HEADERS: ${{ steps.auth.outputs.headers_ok }}
-          AUTH_STATUS: ${{ steps.auth.outputs.http_status }}
-          AUTH_METHODS: ${{ steps.auth.outputs.allow_methods }}
-          AUTH_ALLOWED_HEADERS: ${{ steps.auth.outputs.allow_headers }}
         run: |
-          title="Coinbase real-route verdict config-${CONFIG_HTTP}-${CONFIG_ORIGIN} auth-${AUTH_HTTP}-${AUTH_ORIGIN}-${AUTH_POST}"
-          cat > /tmp/verdict.md <<EOF
-          Exact browser-origin verification against the routes used by \`@coinbase/cdp-api-client@0.0.118\`.
+          python - <<'PY'
+          import json
+          from pathlib import Path
 
-          ## Project config GET
-          - HTTP: \`${CONFIG_STATUS:-unavailable}\` / valid: \`${CONFIG_HTTP}\`
-          - Exact origin authorized: \`${CONFIG_ORIGIN}\`
-          - Credentials allowed: \`${CONFIG_CREDENTIALS}\`
-          - JSON body valid: \`${CONFIG_JSON}\`
-          - Content-Type: \`${CONFIG_CONTENT_TYPE:-missing}\`
-
-          ## Authentication POST preflight
-          - HTTP: \`${AUTH_STATUS:-unavailable}\` / valid: \`${AUTH_HTTP}\`
-          - Exact origin authorized: \`${AUTH_ORIGIN}\`
-          - Credentials allowed: \`${AUTH_CREDENTIALS}\`
-          - POST allowed: \`${AUTH_POST}\`
-          - Required SDK headers allowed: \`${AUTH_HEADERS}\`
-          - Methods: \`${AUTH_METHODS:-missing}\`
-          - Headers: \`${AUTH_ALLOWED_HEADERS:-missing}\`
-
-          Project: \`9dfe…d4ee\`  
-          Origin: \`https://agentbounties.app\`  
-          Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-
-          No Coinbase API key, secret, OTP, OAuth credential, wallet key, transaction, or seed phrase was used.
-          EOF
-          url="$(gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body-file /tmp/verdict.md)"
+          results = json.loads(Path("/tmp/cdp-auth-cors-matrix.json").read_text(encoding="utf-8"))
+          lines = [
+              "Exact CORS matrix for the locked CDP `0.0.118` auth-init route.",
+              "",
+              "| Variant | HTTP | Requested headers | Allow origin | Credentials | Methods | Allowed headers |",
+              "|---|---:|---|---|---|---|---|",
+          ]
+          for item in results:
+              lines.append(
+                  "| {name} | {status} | `{requested}` | `{origin}` | `{credentials}` | `{methods}` | `{headers}` |".format(
+                      name=item["name"],
+                      status=item["status"],
+                      requested=item.get("requested_headers") or "none",
+                      origin=item.get("allow_origin") or "missing",
+                      credentials=item.get("allow_credentials") or "missing",
+                      methods=item.get("allow_methods") or "missing",
+                      headers=item.get("allow_headers") or "missing",
+                  )
+              )
+          actual = next(item for item in results if item["name"] == "actual-empty-json-post")
+          lines.extend([
+              "",
+              f"The safe empty-JSON POST returned HTTP `{actual['status']}` and a JSON error body: `{str(actual['body_is_json']).lower()}`.",
+              "It did not contain an email, phone number, OAuth code, OTP, wallet action, transaction, or funds.",
+              "",
+              "No Coinbase API key, secret, OTP, OAuth credential, wallet key, transaction, or seed phrase was used.",
+          ])
+          Path("/tmp/cdp-auth-cors-matrix.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          url="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
+            --title 'CDP 0.0.118 auth CORS matrix' \
+            --body-file /tmp/cdp-auth-cors-matrix.md)"
           gh issue close --repo "${GITHUB_REPOSITORY}" "${url##*/}" --reason completed >/dev/null
-
-      - name: Enforce actual SDK browser authorization
-        env:
-          CONFIG_HTTP: ${{ steps.config.outputs.http_ok }}
-          CONFIG_ORIGIN: ${{ steps.config.outputs.origin_ok }}
-          CONFIG_CREDENTIALS: ${{ steps.config.outputs.credentials_ok }}
-          CONFIG_JSON: ${{ steps.config.outputs.json_ok }}
-          AUTH_HTTP: ${{ steps.auth.outputs.http_ok }}
-          AUTH_ORIGIN: ${{ steps.auth.outputs.origin_ok }}
-          AUTH_CREDENTIALS: ${{ steps.auth.outputs.credentials_ok }}
-          AUTH_POST: ${{ steps.auth.outputs.method_ok }}
-          AUTH_HEADERS: ${{ steps.auth.outputs.headers_ok }}
-        run: |
-          test "${CONFIG_HTTP}" = true
-          test "${CONFIG_ORIGIN}" = true
-          test "${CONFIG_CREDENTIALS}" = true
-          test "${CONFIG_JSON}" = true
-          test "${AUTH_HTTP}" = true
-          test "${AUTH_ORIGIN}" = true
-          test "${AUTH_CREDENTIALS}" = true
-          test "${AUTH_POST}" = true
-          test "${AUTH_HEADERS}" = true
