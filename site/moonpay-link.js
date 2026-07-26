@@ -17,6 +17,7 @@
     const target = new URL("onramp.html", location.href);
     target.searchParams.set("bountyContract", bountyContract);
     target.searchParams.set("amount", amount);
+    target.searchParams.set("asset", "usdc");
     const intent = new URLSearchParams(location.search).get("intent");
     if (UUID.test(intent || "")) target.searchParams.set("intent", intent);
 
@@ -43,7 +44,7 @@
       try {
         const target = onrampUrl(form);
         output(
-          "Opening a separate wallet top-up step. Buying crypto will not fund the bounty until you return and approve the canonical contribution.",
+          "Opening a separate Base USDC top-up step. Agent Bounties sponsors gas. Buying USDC will not fund the bounty until you return and approve the canonical contribution.",
           "pending",
         );
         location.assign(target.href);
