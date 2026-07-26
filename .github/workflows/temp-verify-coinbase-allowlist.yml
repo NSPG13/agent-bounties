@@ -1,0 +1,74 @@
+name: Temporary verify Coinbase allowlist
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/temp-verify-coinbase-allowlist.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PROJECT_ID: 9dfed88a-0b37-47e8-b867-96f1dfd0d4ee
+      ORIGIN: https://agentbounties.app
+    steps:
+      - name: Verify exact Coinbase Embedded Wallet browser preflight
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://api.cdp.coinbase.com/embedded-wallet-api/projects/${PROJECT_ID}"
+          status="$(curl --silent --show-error \
+            --output /tmp/body \
+            --dump-header /tmp/headers \
+            --write-out '%{http_code}' \
+            --request OPTIONS "${endpoint}" \
+            --header "Origin: ${ORIGIN}" \
+            --header 'Access-Control-Request-Method: POST' \
+            --header 'Access-Control-Request-Headers: content-type' \
+            --max-time 30)"
+          origin="$(tr -d '\r' < /tmp/headers | sed -nE 's/^access-control-allow-origin:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
+          methods="$(tr -d '\r' < /tmp/headers | sed -nE 's/^access-control-allow-methods:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
+          allowed_headers="$(tr -d '\r' < /tmp/headers | sed -nE 's/^access-control-allow-headers:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
+          echo "http_status=${status}" >> "${GITHUB_OUTPUT}"
+          echo "allow_origin=${origin:-missing}" >> "${GITHUB_OUTPUT}"
+          echo "allow_methods=${methods:-missing}" >> "${GITHUB_OUTPUT}"
+          echo "allow_headers=${allowed_headers:-missing}" >> "${GITHUB_OUTPUT}"
+          test "${status}" -ge 200
+          test "${status}" -lt 300
+          test "${origin}" = "${ORIGIN}"
+          printf '%s' "${methods}" | grep -Eiq '(^|,[[:space:]]*)POST([[:space:]]*,|$)'
+          printf '%s' "${allowed_headers}" | grep -Eiq '(^|,[[:space:]]*)content-type([[:space:]]*,|$)'
+
+      - name: Publish redacted maintainer evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.preflight.outcome }}
+          STATUS: ${{ steps.preflight.outputs.http_status }}
+          ALLOW_ORIGIN: ${{ steps.preflight.outputs.allow_origin }}
+          ALLOW_METHODS: ${{ steps.preflight.outputs.allow_methods }}
+          ALLOW_HEADERS: ${{ steps.preflight.outputs.allow_headers }}
+        run: |
+          cat > /tmp/comment.md <<EOF
+          ## Coinbase production allowlist verification
+
+          - Result: \`${OUTCOME}\`
+          - HTTP: \`${STATUS:-unavailable}\`
+          - Access-Control-Allow-Origin: \`${ALLOW_ORIGIN:-missing}\`
+          - Access-Control-Allow-Methods: \`${ALLOW_METHODS:-missing}\`
+          - Access-Control-Allow-Headers: \`${ALLOW_HEADERS:-missing}\`
+          - Project: \`9dfe…d4ee\`
+          - Requested origin: \`https://agentbounties.app\`
+          - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          No Coinbase secret, OTP, OAuth credential, wallet key, or seed phrase was used.
+          EOF
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/604/comments" --raw-field body="$(cat /tmp/comment.md)" >/dev/null
