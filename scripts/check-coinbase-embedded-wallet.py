@@ -84,7 +84,8 @@ def main() -> int:
             "getUserOperation",
             "enableSpendPermissions: false",
             "useCdpPaymaster: true",
-            'gasSponsorshipMode: "eip7702-cdp-paymaster"',
+            'adapterConfig.gasSponsorshipMode !== "eip7702-cdp-paymaster"',
+            "gasSponsorshipMode: adapterConfig.gasSponsorshipMode",
             "agentBountiesGasSponsored",
             "Creating a wallet does not post, fund, claim, or settle a bounty",
         ),
@@ -123,7 +124,10 @@ def main() -> int:
         fail("esbuild must remain exactly pinned")
 
     pages = {
-        name: require(SITE / name, ("wallet-runtime-config.js", "wallet-adapters.js", "coinbase-embedded-wallet.bundle.js"))
+        name: require(
+            SITE / name,
+            ("wallet-runtime-config.js", "wallet-adapters.js", "coinbase-embedded-wallet.bundle.js"),
+        )
         for name in ("earn.html", "objective.html", "onramp.html")
     }
     for name, page in pages.items():
@@ -137,12 +141,12 @@ def main() -> int:
 
     objective = pages["objective.html"]
     for marker in (
-        "Create or access your wallet",
+        "Create or connect wallet",
         "data-wallet-required",
         "Buy Base USDC with MoonPay",
         "objective-onramp-link.js",
     ):
-        if marker not in objective and marker != "Create or access your wallet":
+        if marker not in objective:
             fail(f"objective.html missing onboarding marker: {marker}")
     require(
         SITE / "objective-onramp-link.js",
@@ -153,10 +157,9 @@ def main() -> int:
     for marker in (
         'data-onramp-asset type="hidden" value="usdc"',
         "Buying USDC does not fund, claim, or post a bounty",
-        "Not created yet",
         "Base USDC",
     ):
-        if marker not in onramp and marker != "Not created yet":
+        if marker not in onramp:
             fail(f"onramp.html missing USDC-only marker: {marker}")
     if '<option value="eth">' in onramp or "Buy Base ETH" in onramp:
         fail("the public embedded-wallet onboarding flow must not require an ETH purchase")
