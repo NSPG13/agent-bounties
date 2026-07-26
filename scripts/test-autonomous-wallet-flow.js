@@ -9,6 +9,10 @@ const evmSource = fs.readFileSync(path.join(repoRoot, "site", "evm.js"), "utf8")
 const source = fs.readFileSync(path.join(repoRoot, "site", "autonomous.js"), "utf8");
 const x402Source = fs.readFileSync(path.join(repoRoot, "site", "x402-browser.js"), "utf8");
 const registrySource = fs.readFileSync(path.join(repoRoot, "site", "wallet-adapter-registry.js"), "utf8");
+const embeddedAdapterSource = fs.readFileSync(
+  path.join(repoRoot, "tools", "coinbase-embedded-wallet", "src", "index.js"),
+  "utf8",
+);
 const protocol = JSON.parse(
   fs.readFileSync(path.join(repoRoot, "site", "protocol.json"), "utf8"),
 );
@@ -73,9 +77,17 @@ for (const required of [
   "register",
   "capabilitiesFor",
   "eip6963:announceProvider",
-  "directTransactions",
 ]) {
   assert(registrySource.includes(required), `wallet adapter registry missing ${required}`);
+}
+
+for (const required of [
+  "directTransactions: false",
+  "gasSponsoredOnSupportedRelays: true",
+  "authMethodLinking: true",
+  "Link another sign-in method",
+]) {
+  assert(embeddedAdapterSource.includes(required), `Coinbase embedded adapter missing ${required}`);
 }
 
 for (const retired of [
