@@ -13,6 +13,7 @@ on:
 permissions:
   actions: write
   contents: read
+  issues: write
 
 concurrency:
   group: bootstrap-coinbase-production-${{ github.event_name }}
@@ -25,8 +26,11 @@ jobs:
     env:
       COINBASE_CDP_PROJECT_ID: 9dfed88a-0b37-47e8-b867-96f1dfd0d4ee
       PRODUCTION_ORIGIN: https://agentbounties.app
+      MAINTAINER_NOTICE: "604"
     steps:
       - name: Create or update the public repository project variable
+        id: repository_variable
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -46,6 +50,8 @@ jobs:
           echo "Configured public Coinbase project ID ${observed:0:4}…${observed: -4}."
 
       - name: Verify Coinbase accepts the production web origin
+        id: domain_allowlist
+        continue-on-error: true
         run: |
           set -euo pipefail
           endpoint="https://api.cdp.coinbase.com/embedded-wallet-api/projects/${COINBASE_CDP_PROJECT_ID}"
@@ -59,18 +65,39 @@ jobs:
             --header 'Access-Control-Request-Headers: content-type' \
             --max-time 30)"
           echo "Coinbase preflight HTTP ${status}"
-          tr -d '\r' < /tmp/cdp-preflight-headers \
-            | grep -i '^access-control-allow-origin:' \
-            | sed 's/:.*/: [verified production origin]/'
           test "${status}" -ge 200
           test "${status}" -lt 300
           tr -d '\r' < /tmp/cdp-preflight-headers \
             | grep -Eiq '^access-control-allow-origin:[[:space:]]*https://agentbounties\.app[[:space:]]*$'
+          echo "Coinbase returned the exact production Access-Control-Allow-Origin header."
 
-      - name: Record the external configuration boundary
+      - name: Publish redacted bootstrap evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VARIABLE_OUTCOME: ${{ steps.repository_variable.outcome }}
+          DOMAIN_OUTCOME: ${{ steps.domain_allowlist.outcome }}
         run: |
-          cat <<'EOF'
-          Coinbase project identity is public client configuration.
-          No Coinbase API key, API secret, OTP, OAuth credential, wallet secret,
-          private key, or seed phrase was written to GitHub or the browser bundle.
+          set -euo pipefail
+          cat > /tmp/coinbase-bootstrap.md <<EOF
+          ## Coinbase production bootstrap
+
+          - Public project configuration: \`${VARIABLE_OUTCOME}\`
+          - Exact production-origin CORS probe: \`${DOMAIN_OUTCOME}\`
+          - Project: \`9dfe…d4ee\`
+          - Origin: \`${PRODUCTION_ORIGIN}\`
+          - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          No Coinbase API key, API secret, OTP, OAuth credential, wallet secret, private key, or seed phrase was written to GitHub or the browser bundle.
           EOF
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${MAINTAINER_NOTICE}/comments" \
+            --raw-field body="$(cat /tmp/coinbase-bootstrap.md)" >/dev/null
+
+      - name: Enforce production configuration
+        if: always()
+        env:
+          VARIABLE_OUTCOME: ${{ steps.repository_variable.outcome }}
+          DOMAIN_OUTCOME: ${{ steps.domain_allowlist.outcome }}
+        run: |
+          test "${VARIABLE_OUTCOME}" = "success"
+          test "${DOMAIN_OUTCOME}" = "success"
