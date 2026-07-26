@@ -45,9 +45,9 @@ The Coinbase implementation lives in:
 - generated `site/coinbase-embedded-wallet.bundle.js`
 - generated `site/coinbase-embedded-wallet.bundle.css`
 
-The public runtime configuration lives in `site/wallet-config.js`. The CDP Project ID is public client configuration, not a server secret. GitHub Pages injects it from the repository variable `COINBASE_CDP_PROJECT_ID` immediately before publishing the site artifact. Production deployment fails closed when the variable is absent; the wallet must never appear enabled only in copy while its runtime remains unconfigured.
+The public runtime configuration lives in `site/wallet-config.js`. The CDP Project ID is public client configuration, not a server secret. Canonical GitHub Pages builds use the reviewed production project ID and permit `COINBASE_CDP_PROJECT_ID` as an explicit repository-variable override. Before publishing from `main`, the deployment script verifies the real CDP project-config GET and the exact browser preflights used by the locked SDK. The wallet is not published when Coinbase does not authorize `https://agentbounties.app` for those requests.
 
-Server-side CDP API secrets, wallet secrets, private keys, and seed phrases must never enter the bundle or GitHub Pages configuration. The noindex MoonPay page pins the SDK secure iframe to `https://secure-wallet.cdp.coinbase.com` and permits only that frame origin plus the documented CDP API and Base RPC connections.
+Server-side CDP API secrets, wallet secrets, private keys, and seed phrases must never enter the bundle or GitHub Pages configuration. The public site pins the SDK secure iframe to `https://secure-wallet.cdp.coinbase.com` and permits only that frame origin plus the documented CDP API and Base RPC connections.
 
 ## Authentication and account continuity
 
@@ -111,7 +111,15 @@ The Coinbase adapter therefore rejects direct transaction methods for now instea
 
 ## Browser CORS boundary
 
-The funding website and API are on different origins. The existing API uses Tower HTTP's `CorsLayer::permissive()`, which permits browser request headers and exposes response headers, including x402's `payment-required` and `payment-response`. No new backend wallet endpoint or Coinbase-specific server code is required for this adapter. A production browser canary must still verify that the deployed proxy preserves those headers.
+Two cross-origin boundaries are verified separately:
+
+1. The Agent Bounties API uses Tower HTTP's `CorsLayer::permissive()`, permitting the website to issue x402 requests and read `payment-required` and `payment-response`.
+2. Coinbase must authorize the exact production origin for its locked SDK routes. The production build checks:
+   - `GET https://api.cdp.coinbase.com/platform/v2/embedded-wallet-api/projects/{project}/config`;
+   - unauthenticated `POST` preflight for `content-type` and `x-idempotency-key`; and
+   - signed-in linking preflight for `content-type` and `x-wallet-auth`.
+
+The gate requires HTTP success, exact `Access-Control-Allow-Origin: https://agentbounties.app`, credentialed CORS, `POST`, and each requested header. It deliberately does not demand an `Authorization` header on unauthenticated `auth/init`, because the locked SDK does not send one there.
 
 ## x402 funding evidence boundary
 
@@ -135,22 +143,21 @@ A challenge, signature, relay ID, transaction hash, token balance, MoonPay retur
 - Agent Bounties never exports a private key into its JavaScript context.
 - The user should eventually receive a clearly exposed secure key-export path supplied by Coinbase so provider choice does not become practical lock-in.
 
-## Activation
+## Activation and verification
 
-1. Create a CDP project in Coinbase Developer Platform.
-2. Enable embedded user wallets.
-3. Allowlist:
-   - `https://agentbounties.app`
-   - the exact local staging origin used for testing.
-4. Enable the approved email, SMS, and OAuth methods.
-5. Enable Google/Apple auto-linking only after reviewing Coinbase's verified-domain limitations; explicit `LinkAuth` remains available regardless.
-6. Set the GitHub repository variable:
+The production project and exact `https://agentbounties.app` domain are configured and verified. For another deployment or replacement CDP project:
+
+1. Create a CDP project and enable embedded user wallets.
+2. Allowlist the exact HTTPS production and staging origins.
+3. Enable the approved email, SMS, and OAuth methods.
+4. Enable Google/Apple auto-linking only after reviewing Coinbase's verified-domain limitations; explicit `LinkAuth` remains available regardless.
+5. Optionally set the public GitHub repository variable:
 
 ```text
 COINBASE_CDP_PROJECT_ID=<public project id>
 ```
 
-7. Build the browser bundle from the committed lock:
+6. Build the browser bundle from the committed lock:
 
 ```bash
 # Node.js 22 or newer
@@ -159,18 +166,19 @@ npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
 npm run build --prefix tools/coinbase-embedded-wallet
 ```
 
-8. Run:
+7. Run:
 
 ```bash
+python scripts/test_configure_wallet_providers.py
 python scripts/check-coinbase-embedded-wallet.py
 python scripts/check-site.py
 ```
 
-9. Deploy to staging and test one new user for every enabled authentication method.
-10. Verify that each method restores the expected wallet and that unlinked methods are clearly distinguished.
-11. Buy a bounded amount of Base USDC through MoonPay to the embedded EOA.
-12. Fund an existing bounty through the gas-only x402 relay.
-13. Confirm the matching indexed `FundingAdded` before calling the bounty funded.
+8. Deploy and let the permanent live canary verify public project configuration, SDK initialization, adapter registration, and Coinbase's maintained sign-in UI without submitting identity data.
+9. Human-test one account for every enabled authentication method. Verify that each intended linked method restores the same wallet and that unlinked methods are clearly distinguished.
+10. Buy a bounded amount of Base USDC through MoonPay to the embedded EOA.
+11. Fund an existing bounty through the gas-only x402 relay.
+12. Confirm the matching indexed `FundingAdded` before calling the bounty funded.
 
 ## Provider incentives and portability
 
