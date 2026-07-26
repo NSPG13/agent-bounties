@@ -19,11 +19,11 @@ jobs:
       PROJECT_ID: 9dfed88a-0b37-47e8-b867-96f1dfd0d4ee
       ORIGIN: https://agentbounties.app
     steps:
-      - name: Verify exact Coinbase Embedded Wallet browser preflight
+      - name: Probe exact Coinbase Embedded Wallet browser preflight
         id: preflight
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
           endpoint="https://api.cdp.coinbase.com/embedded-wallet-api/projects/${PROJECT_ID}"
           status="$(curl --silent --show-error \
             --output /tmp/body \
@@ -34,33 +34,51 @@ jobs:
             --header 'Access-Control-Request-Method: POST' \
             --header 'Access-Control-Request-Headers: content-type' \
             --max-time 30)"
+          curl_status=$?
           origin="$(tr -d '\r' < /tmp/headers | sed -nE 's/^access-control-allow-origin:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
           methods="$(tr -d '\r' < /tmp/headers | sed -nE 's/^access-control-allow-methods:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
           allowed_headers="$(tr -d '\r' < /tmp/headers | sed -nE 's/^access-control-allow-headers:[[:space:]]*(.*)$/\1/Ip' | tail -n1)"
-          echo "http_status=${status}" >> "${GITHUB_OUTPUT}"
-          echo "allow_origin=${origin:-missing}" >> "${GITHUB_OUTPUT}"
-          echo "allow_methods=${methods:-missing}" >> "${GITHUB_OUTPUT}"
-          echo "allow_headers=${allowed_headers:-missing}" >> "${GITHUB_OUTPUT}"
-          test "${status}" -ge 200
-          test "${status}" -lt 300
-          test "${origin}" = "${ORIGIN}"
-          printf '%s' "${methods}" | grep -Eiq '(^|,[[:space:]]*)POST([[:space:]]*,|$)'
-          printf '%s' "${allowed_headers}" | grep -Eiq '(^|,[[:space:]]*)content-type([[:space:]]*,|$)'
 
-      - name: Publish redacted maintainer evidence
-        if: always()
+          http_ok=false
+          origin_ok=false
+          method_ok=false
+          header_ok=false
+          [[ "${curl_status}" -eq 0 && "${status}" -ge 200 && "${status}" -lt 300 ]] && http_ok=true
+          [[ "${origin}" = "${ORIGIN}" ]] && origin_ok=true
+          printf '%s' "${methods}" | grep -Eiq '(^|,[[:space:]]*)POST([[:space:]]*,|$)' && method_ok=true
+          printf '%s' "${allowed_headers}" | grep -Eiq '(^|,[[:space:]]*)content-type([[:space:]]*,|$)' && header_ok=true
+
+          {
+            echo "http_status=${status:-curl-${curl_status}}"
+            echo "allow_origin=${origin:-missing}"
+            echo "allow_methods=${methods:-missing}"
+            echo "allow_headers=${allowed_headers:-missing}"
+            echo "http_ok=${http_ok}"
+            echo "origin_ok=${origin_ok}"
+            echo "method_ok=${method_ok}"
+            echo "header_ok=${header_ok}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Publish machine-searchable redacted evidence
         env:
           GH_TOKEN: ${{ github.token }}
-          OUTCOME: ${{ steps.preflight.outcome }}
           STATUS: ${{ steps.preflight.outputs.http_status }}
           ALLOW_ORIGIN: ${{ steps.preflight.outputs.allow_origin }}
           ALLOW_METHODS: ${{ steps.preflight.outputs.allow_methods }}
           ALLOW_HEADERS: ${{ steps.preflight.outputs.allow_headers }}
+          HTTP_OK: ${{ steps.preflight.outputs.http_ok }}
+          ORIGIN_OK: ${{ steps.preflight.outputs.origin_ok }}
+          METHOD_OK: ${{ steps.preflight.outputs.method_ok }}
+          HEADER_OK: ${{ steps.preflight.outputs.header_ok }}
         run: |
           cat > /tmp/comment.md <<EOF
-          ## Coinbase production allowlist verification
+          ## Coinbase production allowlist verification v2
 
-          - Result: \`${OUTCOME}\`
+          COINBASE_ALLOWLIST_V2_HTTP=${HTTP_OK}
+          COINBASE_ALLOWLIST_V2_ORIGIN=${ORIGIN_OK}
+          COINBASE_ALLOWLIST_V2_POST=${METHOD_OK}
+          COINBASE_ALLOWLIST_V2_CONTENT_TYPE=${HEADER_OK}
+
           - HTTP: \`${STATUS:-unavailable}\`
           - Access-Control-Allow-Origin: \`${ALLOW_ORIGIN:-missing}\`
           - Access-Control-Allow-Methods: \`${ALLOW_METHODS:-missing}\`
@@ -72,3 +90,15 @@ jobs:
           No Coinbase secret, OTP, OAuth credential, wallet key, or seed phrase was used.
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/604/comments" --raw-field body="$(cat /tmp/comment.md)" >/dev/null
+
+      - name: Enforce complete browser authorization
+        env:
+          HTTP_OK: ${{ steps.preflight.outputs.http_ok }}
+          ORIGIN_OK: ${{ steps.preflight.outputs.origin_ok }}
+          METHOD_OK: ${{ steps.preflight.outputs.method_ok }}
+          HEADER_OK: ${{ steps.preflight.outputs.header_ok }}
+        run: |
+          test "${HTTP_OK}" = true
+          test "${ORIGIN_OK}" = true
+          test "${METHOD_OK}" = true
+          test "${HEADER_OK}" = true
