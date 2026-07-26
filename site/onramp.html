@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="simple-ux.css?v=1">
     <link rel="stylesheet" href="onramp.css?v=1">
   </head>
-  <body class="guild-interior" data-guild-build="20260725-moonpay-1" data-public-ux="simplified-v1">
+  <body class="guild-interior" data-guild-build="20260725-moonpay-2" data-public-ux="simplified-v1">
     <header class="topbar">
       <a class="brand" href="index.html">Agent Bounties</a>
       <nav aria-label="Primary navigation">
@@ -99,7 +99,7 @@
 
       <section class="onramp-action" aria-labelledby="moonpay-action-title">
         <div>
-          <p class="eyebrow">MoonPay checkout</p>
+          <p class="eyebrow">MoonPay partner checkout</p>
           <h2 id="moonpay-action-title">Continue only after checking the wallet and amount.</h2>
           <p>MoonPay is a separate provider with its own eligibility, terms, fees, identity checks, and support. Agent Bounties does not decide whether MoonPay approves a purchase.</p>
           <label class="onramp-acknowledgement">
@@ -112,6 +112,31 @@
           <a class="button secondary" href="earn.html#fund-bounty-panel" data-return-link>Skip purchase and return</a>
         </div>
         <output class="output" data-onramp-output aria-live="polite">No checkout has been created.</output>
+      </section>
+
+      <section class="onramp-action" aria-labelledby="direct-moonpay-title" data-direct-moonpay-fallback>
+        <div>
+          <p class="eyebrow">Direct MoonPay fallback</p>
+          <h2 id="direct-moonpay-title">Top up even before partner credentials are activated.</h2>
+          <p>This opens MoonPay's public consumer checkout in a new tab. It cannot prefill or cryptographically bind your wallet, asset, network, or amount, so verify each one yourself before paying.</p>
+          <dl class="onramp-facts">
+            <div><dt>Asset to select</dt><dd><strong data-direct-asset>USDC on Base (USDC_BASE)</strong></dd></div>
+            <div><dt>Network to verify</dt><dd><strong>Base</strong></dd></div>
+            <div><dt>Starting amount</dt><dd><strong data-direct-amount>Set above</strong></dd></div>
+            <div><dt>Wallet to paste</dt><dd><code data-direct-wallet>Connect a Base wallet above</code></dd></div>
+          </dl>
+          <ol>
+            <li>Copy the connected wallet address below.</li>
+            <li>Inside MoonPay, choose the exact Base asset shown here and enter the starting amount.</li>
+            <li>Paste the wallet address and stop if MoonPay's final review shows another network or address.</li>
+            <li>After delivery, return here and refresh balances before separately funding the bounty.</li>
+          </ol>
+        </div>
+        <div class="onramp-action-buttons">
+          <button class="button secondary" type="button" data-copy-direct-wallet disabled>Copy wallet address</button>
+          <a class="button primary" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true" data-direct-moonpay>Open MoonPay direct checkout</a>
+        </div>
+        <output class="output" data-direct-moonpay-output aria-live="polite">Connect the destination wallet before opening the manual MoonPay fallback.</output>
       </section>
 
       <section class="onramp-return-status" data-return-status hidden aria-labelledby="return-status-title">
@@ -131,5 +156,6 @@
     </footer>
     <script src="guild-shell.js?v=2"></script>
     <script src="moonpay-onramp.js?v=1"></script>
+    <script src="moonpay-direct-fallback.js?v=1"></script>
   </body>
 </html>

@@ -57,9 +57,15 @@ def main() -> int:
             '<meta name="referrer" content="no-referrer">',
             "Buying crypto does not fund the bounty.",
             "Only the matching indexed <code>FundingAdded</code> event",
+            "Direct MoonPay fallback",
+            "cannot prefill or cryptographically bind your wallet",
             'data-start-moonpay',
+            'data-direct-moonpay',
+            'data-copy-direct-wallet',
+            'rel="noopener noreferrer"',
             'data-return-link',
             'src="moonpay-onramp.js?v=1"',
+            'src="moonpay-direct-fallback.js?v=1"',
         ],
     )
     if any(term in onramp.lower() for term in ('name="card', 'name="cvv', 'name="cvc')):
@@ -90,6 +96,23 @@ def main() -> int:
             "wallet_switchEthereumChain",
         ],
     )
+    fallback = require(
+        SITE / "moonpay-direct-fallback.js",
+        [
+            "https://www.moonpay.com/buy/usdc",
+            "https://www.moonpay.com/buy/eth",
+            "USDC on Base (USDC_BASE)",
+            "ETH on Base (ETH_BASE)",
+            "navigator.clipboard.writeText",
+            'setAttribute("aria-disabled"',
+            "stop if the final screen shows another network or address",
+        ],
+    )
+    if any(term in fallback for term in ("apiKey=", "walletAddress=", "signature=")):
+        fail("The direct MoonPay fallback must not imitate a signed or wallet-prefilled partner URL")
+    if 'target="_blank"' not in onramp or 'rel="noopener noreferrer"' not in onramp:
+        fail("The direct MoonPay fallback must open with noopener and noreferrer")
+
     require(SITE / "moonpay-link.js", ["onramp.html", "bountyContract", "amount", "intent"])
     require(SITE / "onramp.css", [".onramp-page", ".onramp-action", "@media"])
     require(
@@ -101,6 +124,8 @@ def main() -> int:
             "FundingAdded",
             "Base ETH",
             "MoonPay sandbox",
+            "Direct consumer fallback",
+            "www.moonpay.com/buy/usdc",
         ],
     )
     render = require(
@@ -126,11 +151,17 @@ def main() -> int:
     if "moonpay" in chatgpt_app.lower():
         fail("MoonPay must remain a first-party web handoff, not expand the public ChatGPT tool surface")
 
-    if "localStorage" in browser:
+    if "localStorage" in browser or "localStorage" in fallback:
         fail("The MoonPay browser handoff must not persist checkout URLs or provider credentials")
 
-    for script in (SITE / "moonpay-onramp.js", SITE / "moonpay-link.js"):
+    for script in (
+        SITE / "moonpay-onramp.js",
+        SITE / "moonpay-direct-fallback.js",
+        SITE / "moonpay-link.js",
+        ROOT / "scripts/test-moonpay-direct-fallback.js",
+    ):
         subprocess.run(["node", "--check", str(script)], cwd=ROOT, check=True)
+    subprocess.run(["node", "scripts/test-moonpay-direct-fallback.js"], cwd=ROOT, check=True)
 
     # The official MoonPay documentation vector is intentionally committed as a Rust unit test.
     if "oIJxSghyzll/BLhUFdQZhkxf7DAS8REFaWr/ibO+K8Q=" not in backend:
