@@ -15,6 +15,7 @@ function element(properties = {}) {
   return {
     textContent: "",
     value: "",
+    min: "",
     checked: false,
     disabled: false,
     href: "#",
@@ -44,6 +45,8 @@ async function main() {
     ["[data-onramp-asset]", element({ value: "usdc" })],
     ["[data-fiat-amount]", element({ value: "42.50" })],
     ["[data-onramp-ack]", element({ checked: true })],
+    ["[data-start-moonpay]", element()],
+    ["[data-onramp-output]", element()],
     ["[data-direct-moonpay]", element()],
     ["[data-copy-direct-wallet]", element({ disabled: true })],
     ["[data-direct-asset]", element()],
@@ -93,6 +96,11 @@ async function main() {
 
   const link = nodes.get("[data-direct-moonpay]");
   const copy = nodes.get("[data-copy-direct-wallet]");
+  const amount = nodes.get("[data-fiat-amount]");
+  const partnerButton = nodes.get("[data-start-moonpay]");
+  if (amount.min !== "20") {
+    throw new Error(`MoonPay minimum was not applied to the amount input: ${amount.min}`);
+  }
   if (link.href !== "https://www.moonpay.com/buy/usdc") {
     throw new Error(`USDC fallback URL mismatch: ${link.href}`);
   }
@@ -103,7 +111,7 @@ async function main() {
   nodes.get("[data-wallet-address]").textContent = wallet;
   mutationCallback();
   if (link.getAttribute("aria-disabled") !== "false" || copy.disabled !== false) {
-    throw new Error("fallback did not enable after wallet connection and acknowledgement");
+    throw new Error("fallback did not enable after wallet connection, amount review, and acknowledgement");
   }
   if (nodes.get("[data-direct-wallet]").textContent !== wallet) {
     throw new Error("connected wallet was not presented for manual verification");
@@ -112,7 +120,30 @@ async function main() {
     throw new Error("manual fallback leaked the wallet into MoonPay's public URL");
   }
 
+  amount.value = "19.99";
+  amount.dispatch("input");
+  if (link.getAttribute("aria-disabled") !== "true") {
+    throw new Error("direct checkout remained enabled below MoonPay's minimum");
+  }
+  if (!nodes.get("[data-direct-amount]").textContent.includes("below MoonPay minimum")) {
+    throw new Error("the below-minimum amount was not made visible to the user");
+  }
   let prevented = false;
+  let propagationStopped = false;
+  partnerButton.dispatch("click", {
+    preventDefault() { prevented = true; },
+    stopImmediatePropagation() { propagationStopped = true; },
+  });
+  if (!prevented || !propagationStopped) {
+    throw new Error("signed partner checkout was not stopped below MoonPay's minimum");
+  }
+  if (!nodes.get("[data-onramp-output]").textContent.includes("at least $20.00")) {
+    throw new Error("the partner checkout did not explain MoonPay's minimum");
+  }
+
+  amount.value = "42.50";
+  amount.dispatch("input");
+  prevented = false;
   link.dispatch("click", { preventDefault() { prevented = true; } });
   if (prevented) throw new Error("ready direct checkout was unexpectedly blocked");
 
@@ -136,7 +167,7 @@ async function main() {
     throw new Error("manual checkout was not blocked after acknowledgement was withdrawn");
   }
 
-  console.log("MoonPay direct fallback preserves wallet, Base asset, and funding boundaries");
+  console.log("MoonPay direct fallback preserves minimum, wallet, Base asset, and funding boundaries");
 }
 
 main().catch((error) => {
