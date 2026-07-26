@@ -1,4 +1,4 @@
-name: Apply Embedded Wallet Source Patches
+name: Build Embedded Wallet Branch Artifacts
 
 on:
   push:
@@ -8,14 +8,15 @@ on:
       - ".github/workflows/apply-sponsored-gas-wallet-patch.yml"
       - "scripts/apply-sponsored-gas-wallet-patch.py"
       - "scripts/apply-generic-moonpay-wallet-patch.py"
+      - "tools/coinbase-wallet-adapter/**"
 
 permissions:
   contents: write
 
 jobs:
-  patch-source:
+  build-branch-artifacts:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,21 +27,41 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/coinbase-wallet-adapter/package-lock.json
+
       - name: Apply counted source replacements
         run: |
           python scripts/apply-sponsored-gas-wallet-patch.py
           python scripts/apply-generic-moonpay-wallet-patch.py
 
-      - name: Commit source updates when needed
+      - name: Install, test, and bundle Coinbase adapter
+        working-directory: tools/coinbase-wallet-adapter
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          npm run build
+          node --check ../../site/coinbase-embedded-wallet.bundle.js
+
+      - name: Commit generated and patched files when needed
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet -- site/bounty-composer-v2.js crates/mcp-server/src/moonpay.rs; then
-            echo "Embedded-wallet source was already current."
+          files=(
+            site/bounty-composer-v2.js
+            crates/mcp-server/src/moonpay.rs
+            tools/coinbase-wallet-adapter/package-lock.json
+            site/coinbase-embedded-wallet.bundle.js
+          )
+          if git diff --quiet -- "${files[@]}"; then
+            echo "Embedded-wallet branch artifacts are current."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add site/bounty-composer-v2.js crates/mcp-server/src/moonpay.rs
-          git commit -m "fix: complete embedded wallet onboarding source paths"
+          git add "${files[@]}"
+          git commit -m "build: generate embedded wallet integration artifacts"
           git push origin "HEAD:${GITHUB_REF_NAME}"
