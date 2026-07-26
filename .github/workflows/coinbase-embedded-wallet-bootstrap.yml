@@ -41,40 +41,6 @@ jobs:
         run: |
           set -o pipefail
           cat scripts/bootstrap-coinbase-embedded-wallet.py.part-* > scripts/bootstrap-coinbase-embedded-wallet.py
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("scripts/bootstrap-coinbase-embedded-wallet.py")
-          source = path.read_text(encoding="utf-8")
-          old = '''              <select data-wallet-provider aria-label="Wallet provider">
-                <option>Detecting wallets</option>
-              </select>
-              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
-'''
-          corrected = '''                <select data-wallet-provider aria-label="Wallet provider">
-                  <option>Detecting wallets</option>
-                </select>
-              </label>
-              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
-'''
-          replacement = '''              <select data-wallet-provider data-wallet-requires="direct-transactions" aria-label="Wallet provider">
-                <option>Detecting wallets</option>
-              </select>
-              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
-'''
-          corrected_replacement = '''                <select data-wallet-provider data-wallet-requires="direct-transactions" aria-label="Wallet provider">
-                  <option>Detecting wallets</option>
-                </select>
-              </label>
-              <button class="button secondary" type="button" data-connect-wallet data-output="autonomous-submit-output">Connect wallet</button>
-'''
-          if source.count(old) != 1 or source.count(replacement) != 1:
-              raise SystemExit("bootstrap source no longer contains the expected wallet-selector markers")
-          path.write_text(
-              source.replace(old, corrected, 1).replace(replacement, corrected_replacement, 1),
-              encoding="utf-8",
-          )
-          PY
           python scripts/bootstrap-coinbase-embedded-wallet.py 2>&1 | tee /tmp/coinbase-bootstrap.log
 
       - name: Publish exact bootstrap failure
