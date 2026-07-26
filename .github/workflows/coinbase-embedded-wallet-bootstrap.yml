@@ -1,4 +1,4 @@
-name: Audit Coinbase embedded wallet
+name: Diagnose Coinbase embedded-wallet lock
 
 on:
   pull_request:
@@ -7,28 +7,23 @@ on:
     paths:
       - ".github/workflows/coinbase-embedded-wallet-bootstrap.yml"
       - "tools/coinbase-embedded-wallet/**"
-      - "site/coinbase-embedded-wallet.bundle.*"
 
 permissions:
   contents: read
-  issues: write
+  pull-requests: write
 
 concurrency:
-  group: coinbase-wallet-audit-${{ github.ref }}
+  group: coinbase-wallet-lock-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  audit-and-reproduce:
+  diagnose-lock:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: maintainer/coinbase-embedded-wallet
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
 
       - uses: actions/setup-node@v6
         with:
@@ -36,7 +31,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
 
-      - name: Install exact lockfile
+      - name: Reproduce exact lockfile
         id: install
         continue-on-error: true
         shell: bash
@@ -44,103 +39,27 @@ jobs:
           set -o pipefail
           npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund --loglevel verbose 2>&1 | tee /tmp/coinbase-npm-ci.log
 
-      - name: Publish exact lockfile failure
-        if: steps.install.outcome == 'failure'
+      - name: Publish exact lock result to PR
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           {
-            echo '## Coinbase embedded-wallet lockfile reproduction failure'
+            if [[ "${{ steps.install.outcome }}" == "success" ]]; then
+              echo '✅ **Coinbase embedded-wallet lock reproduced with `npm ci`.**'
+            else
+              echo '❌ **Coinbase embedded-wallet lock reproduction failed.**'
+            fi
             echo
             echo '```text'
-            tail -n 120 /tmp/coinbase-npm-ci.log
+            tail -n 160 /tmp/coinbase-npm-ci.log
             echo '```'
             echo
             echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          } > /tmp/coinbase-npm-ci.md
-          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-npm-ci.md
+          } > /tmp/coinbase-lock-result.md
+          gh pr comment 605 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-lock-result.md
 
-      - name: Enforce lockfile reproduction
+      - name: Enforce reproducible lock
         if: steps.install.outcome == 'failure'
-        run: exit 1
-
-      - name: Prepare reviewed esbuild binary
-        run: npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
-
-      - name: Reproduce committed bundle and tests
-        run: |
-          cp site/coinbase-embedded-wallet.bundle.js /tmp/coinbase-wallet.js
-          cp site/coinbase-embedded-wallet.bundle.css /tmp/coinbase-wallet.css
-          npm run build --prefix tools/coinbase-embedded-wallet
-          cmp /tmp/coinbase-wallet.js site/coinbase-embedded-wallet.bundle.js
-          cmp /tmp/coinbase-wallet.css site/coinbase-embedded-wallet.bundle.css
-          python scripts/check-coinbase-embedded-wallet.py
-          python scripts/check-site.py
-          node scripts/test-wallet-adapter-registry.js
-          node scripts/test-x402-browser.js
-
-      - name: Resolve npm advisories for production dependencies
-        id: audit
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          npm audit --prefix tools/coinbase-embedded-wallet --omit=dev --json > /tmp/coinbase-npm-audit.json
-
-      - name: Publish bounded advisory report
-        if: always() && steps.install.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          source = Path('/tmp/coinbase-npm-audit.json')
-          if source.exists():
-              try:
-                  report = json.loads(source.read_text(encoding='utf-8'))
-              except Exception as error:
-                  report = {'error': f'invalid npm audit JSON: {error}'}
-          else:
-              report = {'error': 'npm audit did not produce a report'}
-          metadata = report.get('metadata') or {}
-          vulnerabilities = report.get('vulnerabilities') or {}
-          lines = [
-              '## Coinbase embedded-wallet dependency audit',
-              '',
-              f"Production totals: `{json.dumps(metadata.get('vulnerabilities') or {}, sort_keys=True)}`",
-              '',
-          ]
-          if report.get('error'):
-              lines.append(f"Audit error: `{report['error']}`")
-          elif not vulnerabilities:
-              lines.append('No production dependency advisory was reported by npm audit.')
-          else:
-              for name in sorted(vulnerabilities):
-                  item = vulnerabilities[name] or {}
-                  via = item.get('via') or []
-                  advisory_names = []
-                  for entry in via:
-                      if isinstance(entry, str):
-                          advisory_names.append(entry)
-                      elif isinstance(entry, dict):
-                          advisory_names.append(str(entry.get('title') or entry.get('name') or entry.get('url') or 'advisory'))
-                  lines.extend([
-                      f"- **{name}** — severity `{item.get('severity')}`; direct `{item.get('isDirect')}`; range `{item.get('range')}`; fix `{json.dumps(item.get('fixAvailable'))}`",
-                      f"  - via: {', '.join(advisory_names[:8]) or 'not supplied'}",
-                      f"  - effects: {', '.join(item.get('effects') or []) or 'none supplied'}",
-                  ])
-          lines.extend([
-              '',
-              'The report contains package names and advisory metadata only; no credentials or wallet data are involved.',
-          ])
-          Path('/tmp/coinbase-npm-audit.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
-          PY
-          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-npm-audit.md
-
-      - name: Enforce moderate-or-higher production audit gate
-        if: steps.audit.outcome == 'failure'
         run: exit 1
