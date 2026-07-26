@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generalize the MoonPay checkout context from existing bounty to wallet onboarding.
+"""Generalize the MoonPay checkout context from an existing bounty to wallet onboarding.
 
 A user must be able to acquire Base USDC before a bounty contract exists. The
-checkout therefore carries an optional bounty contract while preserving all legacy
-funding evidence fields and adding action-neutral evidence fields.
+checkout therefore carries an optional bounty contract while preserving legacy
+funding evidence fields and adding action-neutral evidence fields. The patch is
+idempotent even when a new replacement intentionally contains its old suffix.
 """
 
 from __future__ import annotations
@@ -140,10 +141,10 @@ NEW_TEST = '''    #[test]
 def replace_exact(source: str, old: str, new: str, label: str) -> str:
     old_count = source.count(old)
     new_count = source.count(new)
-    if old_count == 1 and new_count == 0:
-        return source.replace(old, new, 1)
-    if old_count == 0 and new_count == 1:
+    if new_count == 1:
         return source
+    if new_count == 0 and old_count == 1:
+        return source.replace(old, new, 1)
     raise SystemExit(f"{label}: old={old_count}, new={new_count}; inspect moonpay.rs drift")
 
 
