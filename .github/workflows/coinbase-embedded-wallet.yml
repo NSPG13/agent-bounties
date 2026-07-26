@@ -15,10 +15,17 @@ on:
       - "site/onramp.html"
       - "site/moonpay-onramp.js"
       - "site/moonpay-direct-fallback.js"
+      - "site/moonpay-link.js"
       - "site/bounty-composer-v2.js"
       - "crates/mcp-server/src/moonpay.rs"
       - "scripts/check-coinbase-embedded-wallet.py"
       - "scripts/check-coinbase-browser-bundle.py"
+      - "scripts/check-moonpay-onramp.py"
+      - "scripts/check-site.py"
+      - "scripts/test-homepage-bounty-wiring.py"
+      - "scripts/test-homepage-bounty-flow.js"
+      - "scripts/test-ai-bounty-handoff.js"
+      - "scripts/test-moonpay-direct-fallback.js"
   push:
     branches:
       - main
@@ -35,10 +42,17 @@ on:
       - "site/onramp.html"
       - "site/moonpay-onramp.js"
       - "site/moonpay-direct-fallback.js"
+      - "site/moonpay-link.js"
       - "site/bounty-composer-v2.js"
       - "crates/mcp-server/src/moonpay.rs"
       - "scripts/check-coinbase-embedded-wallet.py"
       - "scripts/check-coinbase-browser-bundle.py"
+      - "scripts/check-moonpay-onramp.py"
+      - "scripts/check-site.py"
+      - "scripts/test-homepage-bounty-wiring.py"
+      - "scripts/test-homepage-bounty-flow.js"
+      - "scripts/test-ai-bounty-handoff.js"
+      - "scripts/test-moonpay-direct-fallback.js"
   workflow_dispatch:
 
 permissions:
@@ -54,8 +68,6 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v6
         with:
@@ -87,7 +99,10 @@ jobs:
 
       - name: Run EIP-1193 and sponsored-call tests
         working-directory: tools/coinbase-wallet-adapter
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee ../../target/coinbase-embedded-wallet/adapter-tests.log
 
       - name: Build the vanilla browser adapter
         working-directory: tools/coinbase-wallet-adapter
@@ -97,12 +112,40 @@ jobs:
           npm run build 2>&1 | tee ../../target/coinbase-embedded-wallet/build.log
 
       - name: Verify generated adapter and reject framework leakage
+        shell: bash
         run: |
-          python scripts/check-coinbase-embedded-wallet.py --require-built-bundle
-          python scripts/check-coinbase-browser-bundle.py
+          set -o pipefail
+          python scripts/check-coinbase-embedded-wallet.py --require-built-bundle 2>&1 \
+            | tee target/coinbase-embedded-wallet/generated-check.log
+          python scripts/check-coinbase-browser-bundle.py 2>&1 \
+            | tee target/coinbase-embedded-wallet/bundle-check.log
+
+      - name: Verify MoonPay remains a USDC-only acquisition adapter
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/check-moonpay-onramp.py 2>&1 \
+            | tee target/coinbase-embedded-wallet/moonpay-check.log
+
+      - name: Verify integrated public-site onboarding and return context
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/check-site.py 2>&1 \
+            | tee target/coinbase-embedded-wallet/site-check.log
+          python scripts/test-homepage-bounty-wiring.py 2>&1 \
+            | tee target/coinbase-embedded-wallet/homepage-wiring.log
+          node scripts/test-homepage-bounty-flow.js 2>&1 \
+            | tee target/coinbase-embedded-wallet/homepage-flow.log
+          node scripts/test-ai-bounty-handoff.js 2>&1 \
+            | tee target/coinbase-embedded-wallet/ai-handoff.log
 
       - name: Test pre-bounty MoonPay USDC onboarding boundary
-        run: cargo test -p mcp-server moonpay
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p mcp-server moonpay 2>&1 \
+            | tee target/coinbase-embedded-wallet/moonpay-rust-tests.log
 
       - name: Upload reproducible verification evidence
         if: always()
