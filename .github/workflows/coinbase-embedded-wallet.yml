@@ -4,66 +4,115 @@ on:
   pull_request:
     paths:
       - ".github/workflows/coinbase-embedded-wallet.yml"
-      - "scripts/cleanup-coinbase-embedded-wallet-branch.py"
-      - "scripts/coinbase-embedded-wallet.final.yml"
+      - "tools/coinbase-wallet-adapter/**"
+      - "site/wallet-adapters.js"
+      - "site/wallet-runtime-config.js"
+      - "site/wallet-adapters.css"
+      - "site/coinbase-embedded-wallet.bundle.js"
+      - "site/objective-onramp-link.js"
+      - "site/objective.html"
+      - "site/earn.html"
+      - "site/onramp.html"
+      - "site/moonpay-onramp.js"
+      - "site/moonpay-direct-fallback.js"
+      - "site/bounty-composer-v2.js"
+      - "crates/mcp-server/src/moonpay.rs"
+      - "scripts/check-coinbase-embedded-wallet.py"
+      - "scripts/check-coinbase-browser-bundle.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/coinbase-embedded-wallet.yml"
+      - "tools/coinbase-wallet-adapter/**"
+      - "site/wallet-adapters.js"
+      - "site/wallet-runtime-config.js"
+      - "site/wallet-adapters.css"
+      - "site/coinbase-embedded-wallet.bundle.js"
+      - "site/objective-onramp-link.js"
+      - "site/objective.html"
+      - "site/earn.html"
+      - "site/onramp.html"
+      - "site/moonpay-onramp.js"
+      - "site/moonpay-direct-fallback.js"
+      - "site/bounty-composer-v2.js"
+      - "crates/mcp-server/src/moonpay.rs"
+      - "scripts/check-coinbase-embedded-wallet.py"
+      - "scripts/check-coinbase-browser-bundle.py"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: coinbase-embedded-wallet-finalize-${{ github.ref }}
+  group: coinbase-embedded-wallet-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  finalize-reviewed-source:
+  verify-adapter:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: feat/coinbase-embedded-wallet-adapter
-          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Materialize the final ordinary source files
-        run: |
-          python scripts/cleanup-coinbase-embedded-wallet-branch.py
-          cp .github/workflows/pages.yml scripts/pages.final.yml
-          git checkout -- .github/workflows
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/coinbase-wallet-adapter/package-lock.json
 
-      - name: Verify the materialized source and staged workflow
+      - name: Prepare evidence directory
+        run: mkdir -p target/coinbase-embedded-wallet
+
+      - name: Verify provider-neutral and fail-closed source boundaries
         shell: bash
         run: |
-          set -euo pipefail
-          node --check tools/coinbase-wallet-adapter/index.js
-          python scripts/check-coinbase-embedded-wallet.py
-          grep -q 'contents: read' scripts/coinbase-embedded-wallet.final.yml
-          grep -q 'npm ci --ignore-scripts --no-audit --no-fund' scripts/coinbase-embedded-wallet.final.yml
-          ! grep -q 'Materialize reviewed wallet source boundaries' scripts/pages.final.yml
-          grep -q 'npm ci --ignore-scripts --no-audit --no-fund' scripts/pages.final.yml
-          grep -q 'scripts/check-coinbase-browser-bundle.py' scripts/pages.final.yml
-          grep -q 'SIM-swap' tools/coinbase-wallet-adapter/index.js
-          grep -q 'unlinked methods can create separate Coinbase identities and wallets' tools/coinbase-wallet-adapter/index.js
-          grep -q 'does not send authentication codes to its servers' tools/coinbase-wallet-adapter/index.js
-          grep -q 'No ETH purchase is required for the embedded-wallet path' site/onramp.html
+          set -o pipefail
+          python scripts/check-coinbase-embedded-wallet.py 2>&1 \
+            | tee target/coinbase-embedded-wallet/source-check.log
 
-      - name: Commit source without modifying workflow paths
+      - name: Install exactly locked adapter dependencies
+        working-directory: tools/coinbase-wallet-adapter
         shell: bash
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            docs/moonpay-onramp.md \
-            scripts/check-coinbase-embedded-wallet.py \
-            scripts/pages.final.yml \
-            site/earn.html \
-            site/objective.html \
-            site/onramp.html \
-            tools/coinbase-wallet-adapter/index.js
-          git commit -m "refactor: finalize embedded wallet source boundaries"
-          git push origin HEAD:feat/coinbase-embedded-wallet-adapter
+          set -o pipefail
+          npm ci --ignore-scripts --no-audit --no-fund 2>&1 \
+            | tee ../../target/coinbase-embedded-wallet/install.log
+
+      - name: Run EIP-1193 and sponsored-call tests
+        working-directory: tools/coinbase-wallet-adapter
+        run: npm test
+
+      - name: Build the vanilla browser adapter
+        working-directory: tools/coinbase-wallet-adapter
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee ../../target/coinbase-embedded-wallet/build.log
+
+      - name: Verify generated adapter and reject framework leakage
+        run: |
+          python scripts/check-coinbase-embedded-wallet.py --require-built-bundle
+          python scripts/check-coinbase-browser-bundle.py
+
+      - name: Test pre-bounty MoonPay USDC onboarding boundary
+        run: cargo test -p mcp-server moonpay
+
+      - name: Upload reproducible verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coinbase-embedded-wallet-${{ github.run_id }}
+          path: |
+            target/coinbase-embedded-wallet/*.log
+            site/coinbase-embedded-wallet.bundle.js
+            tools/coinbase-wallet-adapter/package.json
+            tools/coinbase-wallet-adapter/package-lock.json
+          if-no-files-found: warn
+          retention-days: 14

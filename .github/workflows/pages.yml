@@ -10,10 +10,8 @@ on:
       - "scripts/check-site.py"
       - "scripts/check-moonpay-onramp.py"
       - "scripts/check-coinbase-embedded-wallet.py"
+      - "scripts/check-coinbase-browser-bundle.py"
       - "scripts/configure-wallet-runtime.py"
-      - "scripts/apply-sponsored-gas-wallet-patch.py"
-      - "scripts/apply-generic-moonpay-wallet-patch.py"
-      - "scripts/apply-embedded-wallet-ui-patch.py"
       - "scripts/test-homepage-bounty-wiring.py"
       - "scripts/test-homepage-bounty-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
@@ -28,10 +26,8 @@ on:
       - "scripts/check-site.py"
       - "scripts/check-moonpay-onramp.py"
       - "scripts/check-coinbase-embedded-wallet.py"
+      - "scripts/check-coinbase-browser-bundle.py"
       - "scripts/configure-wallet-runtime.py"
-      - "scripts/apply-sponsored-gas-wallet-patch.py"
-      - "scripts/apply-generic-moonpay-wallet-patch.py"
-      - "scripts/apply-embedded-wallet-ui-patch.py"
       - "scripts/test-homepage-bounty-wiring.py"
       - "scripts/test-homepage-bounty-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
@@ -62,19 +58,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-
-      - name: Materialize reviewed wallet source boundaries
-        run: |
-          python scripts/apply-sponsored-gas-wallet-patch.py
-          python scripts/apply-generic-moonpay-wallet-patch.py
-          python scripts/apply-embedded-wallet-ui-patch.py
+          cache: npm
+          cache-dependency-path: tools/coinbase-wallet-adapter/package-lock.json
 
       - name: Verify fail-closed wallet source
         run: python scripts/check-coinbase-embedded-wallet.py
 
       - name: Install pinned Coinbase adapter dependencies
         working-directory: tools/coinbase-wallet-adapter
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Test and build Coinbase wallet adapter
         working-directory: tools/coinbase-wallet-adapter
@@ -85,6 +77,7 @@ jobs:
       - name: Verify built adapter and wallet onboarding
         run: |
           python scripts/check-coinbase-embedded-wallet.py --require-built-bundle
+          python scripts/check-coinbase-browser-bundle.py
           python scripts/check-moonpay-onramp.py
           python scripts/check-site.py
           python scripts/test-homepage-bounty-wiring.py
@@ -218,17 +211,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-
-      - name: Materialize reviewed wallet source boundaries
-        run: |
-          python scripts/apply-sponsored-gas-wallet-patch.py
-          python scripts/apply-generic-moonpay-wallet-patch.py
-          python scripts/apply-embedded-wallet-ui-patch.py
+          cache: npm
+          cache-dependency-path: tools/coinbase-wallet-adapter/package-lock.json
 
       - name: Build the pinned Coinbase wallet adapter
         working-directory: tools/coinbase-wallet-adapter
         run: |
-          npm install --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
           npm test
           npm run build
 
@@ -284,16 +273,14 @@ jobs:
 
       - name: Verify the staged production wallet surface
         run: |
-          python scripts/check-coinbase-embedded-wallet.py --require-built-bundle || {
-            # The checker expects the source runtime to be fail-closed. The staged runtime may now be enabled,
-            # so perform the production-specific checks below instead of weakening the source invariant.
-            node --check site/coinbase-embedded-wallet.bundle.js
-            grep -q 'agent-bounties/coinbase-embedded-wallet-v1' site/coinbase-embedded-wallet.bundle.js
-            grep -q 'useCdpPaymaster' site/coinbase-embedded-wallet.bundle.js
-            grep -q 'enableSpendPermissions' site/coinbase-embedded-wallet.bundle.js
-            grep -q 'wallet-runtime-config.js?v=1' site/objective.html
-            grep -q 'coinbase-embedded-wallet.bundle.js?v=1' site/objective.html
-          }
+          python scripts/check-coinbase-browser-bundle.py
+          node --check site/wallet-runtime-config.js
+          node --check site/coinbase-embedded-wallet.bundle.js
+          grep -q 'agent-bounties/coinbase-embedded-wallet-v1' site/coinbase-embedded-wallet.bundle.js
+          grep -q 'useCdpPaymaster' site/coinbase-embedded-wallet.bundle.js
+          grep -q 'enableSpendPermissions' site/coinbase-embedded-wallet.bundle.js
+          grep -q 'wallet-runtime-config.js?v=1' site/objective.html
+          grep -q 'coinbase-embedded-wallet.bundle.js?v=1' site/objective.html
 
       - uses: actions/upload-pages-artifact@v5
         with:
