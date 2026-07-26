@@ -1,4 +1,6 @@
-
+relayer pays ETH gas.",
+      ]);
+      let txHash = null;
       let fundingEvent = null;
       if (!contractAccount) {
         if (!window.AgentBountiesX402 || typeof window.AgentBountiesX402.fund !== "function") {
@@ -151,4 +153,4 @@ def main() -> int:
     ]
     missing = [str(path) for path in required if not path.exists()]
     if missing:
-        raise SystemExit(f"repository checkout is incomplete: 
+    
