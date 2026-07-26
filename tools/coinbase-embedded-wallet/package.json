@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "check": "node --check src/index.js && node --check build.mjs"
+    "check": "node --check src/index.js && node --check build.mjs && node test-dependency-compat.mjs"
   },
   "dependencies": {
     "@coinbase/cdp-core": "0.0.118",
@@ -17,6 +17,11 @@
   },
   "devDependencies": {
     "esbuild": "0.28.1"
+  },
+  "overrides": {
+    "jayson": {
+      "uuid": "11.1.1"
+    }
   },
   "engines": {
     "node": ">=22"
