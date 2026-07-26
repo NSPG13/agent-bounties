@@ -215,7 +215,19 @@ def main() -> int:
     if args.require_built_bundle:
         if len(bundle.encode("utf-8")) < 20_000:
             fail("the Coinbase production bundle was not generated")
-        for marker in ("eip7702-cdp-paymaster", "useCdpPaymaster", "wallet_sendCalls", "signInWithEmail"):
+        # esbuild minifies imported SDK symbol names, so assert durable runtime and UI
+        # capabilities here. Exact CDP API calls remain asserted against adapter source above.
+        for marker in (
+            "eip7702-cdp-paymaster",
+            "useCdpPaymaster",
+            "wallet_sendCalls",
+            "data-wallet-auth-email",
+            "data-wallet-auth-phone",
+            'data-wallet-oauth="google"',
+            'data-wallet-oauth="apple"',
+            'data-wallet-oauth="x"',
+            "Verify and create wallet",
+        ):
             if marker not in bundle:
                 fail(f"generated Coinbase bundle missing marker: {marker}")
         if "generated during CI and GitHub Pages deployment" in bundle:
