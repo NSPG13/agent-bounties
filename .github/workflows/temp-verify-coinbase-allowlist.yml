@@ -85,8 +85,8 @@ jobs:
 
           No Coinbase secret, OTP, OAuth credential, wallet key, or seed phrase was used.
           EOF
-          url="$(gh issue create --title "${title}" --body-file /tmp/verdict.md)"
-          gh issue close "${url##*/}" --reason completed >/dev/null
+          url="$(gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body-file /tmp/verdict.md)"
+          gh issue close --repo "${GITHUB_REPOSITORY}" "${url##*/}" --reason completed >/dev/null
 
       - name: Enforce complete browser authorization
         env:
