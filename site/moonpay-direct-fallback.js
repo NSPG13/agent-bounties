@@ -3,24 +3,14 @@
 
   const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
   const MIN_FIAT_USD = 20;
-  const DIRECT_BUY_URLS = Object.freeze({
-    usdc: "https://www.moonpay.com/buy/usdc",
-    eth: "https://www.moonpay.com/buy/eth",
-  });
+  const DIRECT_BUY_URL = "https://www.moonpay.com/buy/usdc";
+  const ASSET_LABEL = "USDC on Base (USDC_BASE)";
 
   const select = (selector) => document.querySelector(selector);
 
   function connectedWallet() {
     const value = String(select("[data-wallet-address]")?.textContent || "").trim();
     return ADDRESS.test(value) ? value.toLowerCase() : "";
-  }
-
-  function selectedAsset() {
-    return select("[data-onramp-asset]")?.value === "eth" ? "eth" : "usdc";
-  }
-
-  function assetLabel(asset) {
-    return asset === "eth" ? "ETH on Base (ETH_BASE)" : "USDC on Base (USDC_BASE)";
   }
 
   function fiatAmount() {
@@ -57,35 +47,34 @@
   }
 
   function minimumMessage() {
-    return `Enter at least $${MIN_FIAT_USD.toFixed(2)} USD. MoonPay may apply a higher minimum based on asset, region, payment method, and network conditions.`;
+    return `Enter at least $${MIN_FIAT_USD.toFixed(2)} USD. MoonPay may apply a higher minimum based on region, payment method, and network conditions.`;
   }
 
   function renderDirectFallback() {
-    const asset = selectedAsset();
     const wallet = connectedWallet();
     const acknowledged = Boolean(select("[data-onramp-ack]")?.checked);
     const hasValidAmount = amountReady();
     const link = select("[data-direct-moonpay]");
     const copy = select("[data-copy-direct-wallet]");
 
-    select("[data-direct-asset]").textContent = assetLabel(asset);
+    select("[data-direct-asset]").textContent = ASSET_LABEL;
     select("[data-direct-amount]").textContent = startingAmount();
-    select("[data-direct-wallet]").textContent = wallet || "Connect a Base wallet above";
+    select("[data-direct-wallet]").textContent = wallet || "Create or connect a Base wallet above";
 
-    link.href = DIRECT_BUY_URLS[asset];
-    link.dataset.asset = asset;
+    link.href = DIRECT_BUY_URL;
+    link.dataset.asset = "usdc";
     link.setAttribute("aria-disabled", String(!(wallet && acknowledged && hasValidAmount)));
     copy.disabled = !wallet;
 
     if (!wallet) {
-      setDirectOutput("Connect the destination wallet before opening the manual MoonPay fallback.");
+      setDirectOutput("Create or connect the destination wallet before opening the manual MoonPay fallback.");
     } else if (!acknowledged) {
-      setDirectOutput("Acknowledge that buying crypto and funding the bounty are separate actions.");
+      setDirectOutput("Acknowledge that buying USDC and performing the bounty action are separate decisions.");
     } else if (!hasValidAmount) {
       setDirectOutput(minimumMessage(), "error");
     } else {
       setDirectOutput(
-        `Ready for manual MoonPay checkout. Select ${assetLabel(asset)}, paste ${wallet}, and verify Base on the final review screen.`,
+        `Ready for manual MoonPay checkout. Select ${ASSET_LABEL}, paste ${wallet}, and verify Base on the final review screen.`,
         "pending",
       );
     }
@@ -94,7 +83,7 @@
   async function copyWallet() {
     const wallet = connectedWallet();
     if (!wallet) {
-      setDirectOutput("Connect the destination wallet before copying its address.", "error");
+      setDirectOutput("Create or connect the destination wallet before copying its address.", "error");
       return;
     }
     try {
@@ -119,17 +108,16 @@
       event.preventDefault();
       setDirectOutput(
         !wallet
-          ? "Connect the destination wallet before opening MoonPay."
+          ? "Create or connect the destination wallet before opening MoonPay."
           : (!acknowledged
-            ? "Acknowledge the purchase and funding boundary before opening MoonPay."
+            ? "Acknowledge the purchase and bounty-action boundary before opening MoonPay."
             : minimumMessage()),
         "error",
       );
       return;
     }
-    const asset = selectedAsset();
     setDirectOutput(
-      `MoonPay is opening in a new tab. Choose ${assetLabel(asset)}, use the starting amount shown here, paste ${wallet}, and stop if the final screen shows another network or address.`,
+      `MoonPay is opening in a new tab. Choose ${ASSET_LABEL}, use the starting amount shown here, paste ${wallet}, and stop if the final screen shows another network or address.`,
       "pending",
     );
   }
@@ -154,7 +142,6 @@
     link.addEventListener("click", openDirectCheckout);
     copy.addEventListener("click", copyWallet);
     select("[data-start-moonpay]")?.addEventListener("click", enforceMinimumForPartnerCheckout, true);
-    select("[data-onramp-asset]")?.addEventListener("change", renderDirectFallback);
     amountInput?.addEventListener("input", renderDirectFallback);
     select("[data-onramp-ack]")?.addEventListener("change", renderDirectFallback);
     select("[data-connect-wallet]")?.addEventListener("click", () => setTimeout(renderDirectFallback, 0));
