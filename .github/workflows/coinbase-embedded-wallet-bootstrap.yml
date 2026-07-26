@@ -89,6 +89,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload generated lock and browser bundles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coinbase-embedded-wallet-generated-${{ github.run_id }}
+          path: |
+            tools/coinbase-embedded-wallet/package-lock.json
+            site/coinbase-embedded-wallet.bundle.js
+            site/coinbase-embedded-wallet.bundle.css
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Publish bounded audit result
         if: always()
         env:
