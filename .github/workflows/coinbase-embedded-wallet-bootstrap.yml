@@ -12,7 +12,7 @@ on:
       - "scripts/bootstrap-coinbase-embedded-wallet.py.part-*"
 
 permissions:
-  contents: write
+  contents: read
   issues: write
 
 concurrency:
@@ -86,6 +86,21 @@ jobs:
           node scripts/test-wallet-adapter-registry.js
           node scripts/test-x402-browser.js
 
+      - name: Normalize and verify generated text
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f scripts/bootstrap-coinbase-embedded-wallet.py
+          git restore .github/workflows/pages.yml
+          git add -A
+          git diff --cached --name-only -z | while IFS= read -r -d '' file; do
+            if [[ -f "$file" ]] && grep -Iq . "$file"; then
+              sed -i 's/[[:blank:]]\+$//' "$file"
+            fi
+          done
+          git add -A
+          git diff --cached --check
+
       - name: Record dependency and bundle evidence
         id: evidence
         shell: bash
@@ -104,51 +119,26 @@ jobs:
             echo "css_bytes=${css_bytes}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Commit generated lockfile, bundle, source, and tests
-        id: commit
-        continue-on-error: true
+      - name: Stage generated maintainer artifact
         shell: bash
         run: |
-          set -o pipefail
-          {
-            rm -f scripts/bootstrap-coinbase-embedded-wallet.py
-            git restore .github/workflows/pages.yml
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git diff --cached --name-only -z | while IFS= read -r -d '' file; do
-              if [[ -f "$file" ]] && grep -Iq . "$file"; then
-                sed -i 's/[[:blank:]]\+$//' "$file"
-              fi
-            done
-            git add -A
-            git status --short
-            git diff --cached --stat
-            git diff --cached --check
-            git commit -m "[coinbase-bootstrap] Add embedded wallet adapter and locked bundle"
-            git push origin HEAD:maintainer/coinbase-embedded-wallet
-          } 2>&1 | tee /tmp/coinbase-commit.log
+          set -euo pipefail
+          rm -rf target/coinbase-wallet-generated
+          mkdir -p target/coinbase-wallet-generated
+          while IFS= read -r -d '' file; do
+            [[ -f "$file" ]] || continue
+            mkdir -p "target/coinbase-wallet-generated/$(dirname "$file")"
+            cp "$file" "target/coinbase-wallet-generated/$file"
+          done < <(git diff --cached --name-only -z)
+          find target/coinbase-wallet-generated -type f -print0 | sort -z | xargs -0 sha256sum > target/coinbase-wallet-generated/SHA256SUMS
 
-      - name: Publish exact repository-write failure
-        if: steps.commit.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          {
-            echo '❌ **Coinbase embedded-wallet generation passed, but repository write failed**'
-            echo
-            echo '```text'
-            tail -n 120 /tmp/coinbase-commit.log 2>/dev/null || true
-            echo '```'
-            echo
-            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          } > /tmp/coinbase-commit-failure.md
-          gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-commit-failure.md
-
-      - name: Enforce successful repository write
-        if: steps.commit.outcome == 'failure'
-        run: exit 1
+      - name: Upload generated lockfile, bundle, source, and tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: coinbase-embedded-wallet-generated-${{ github.run_id }}
+          path: target/coinbase-wallet-generated
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Publish build evidence on the maintainer notice
         env:
@@ -172,7 +162,8 @@ jobs:
           - package-lock SHA-256: \`${LOCK_SHA}\`
           - JS bundle: \`${JS_BYTES}\` bytes, SHA-256 \`${JS_SHA}\`
           - CSS bundle: \`${CSS_BYTES}\` bytes, SHA-256 \`${CSS_SHA}\`
+          - Generated artifact: \`coinbase-embedded-wallet-generated-${GITHUB_RUN_ID}\`
 
-          Deterministic adapter, x402, site, syntax, generated-bundle, and staged-whitespace checks passed. The reviewed Pages workflow still needs to be applied through the maintainer connection. CDP project creation, production-domain allowlisting, and live authentication require an authenticated CDP Portal session and are not represented by this build proof.
+          Deterministic adapter, x402, site, syntax, generated-bundle, and staged-whitespace checks passed. The generated files are ready for maintainer-admin application; the reviewed Pages workflow remains a separate maintainer change. CDP project creation, production-domain allowlisting, and live authentication require an authenticated CDP Portal session and are not represented by this build proof.
           EOF
           gh issue comment 604 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-wallet-evidence.md
