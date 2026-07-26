@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "esbuild index.js --bundle --minify --format=iife --platform=browser --target=es2022 --legal-comments=inline --outfile=../../site/coinbase-embedded-wallet.bundle.js",
+    "build": "esbuild index.js --bundle --minify --format=iife --platform=browser --target=es2022 --external:react --legal-comments=inline --outfile=../../site/coinbase-embedded-wallet.bundle.js",
     "test": "node test-provider.js && node test-sponsorship.js"
   },
   "dependencies": {
