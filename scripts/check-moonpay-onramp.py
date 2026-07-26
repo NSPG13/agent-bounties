@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the bounded MoonPay wallet-top-up integration and its evidence boundary."""
+"""Verify the bounded Base-USDC MoonPay wallet-top-up integration."""
 
 from __future__ import annotations
 
@@ -31,8 +31,11 @@ def main() -> int:
             "agent-bounties/moonpay-onramp-checkout-v1",
             "allowedIpAddress",
             "signature",
+            "bounty_contract: Option<String>",
+            "protocol_action_completed: false",
+            "canonical_event: None",
             "bounty_funded: false",
-            "Only the matching indexed canonical FundingAdded event",
+            "wallet_onboarding_checkout_does_not_require_an_existing_bounty",
             "MOONPAY_SECRET_KEY",
             "MOONPAY_ALLOWED_ORIGINS",
             "MOONPAY_CLIENT_IP_HEADER",
@@ -55,32 +58,38 @@ def main() -> int:
         [
             '<meta name="robots" content="noindex">',
             '<meta name="referrer" content="no-referrer">',
-            "Buying crypto does not fund the bounty.",
-            "Only the matching indexed <code>FundingAdded</code> event",
+            "Buying USDC does not fund, claim, or post a bounty.",
+            "Only the matching indexed canonical event changes protocol state.",
             "Direct MoonPay fallback",
             "cannot prefill or cryptographically bind your wallet",
+            'data-onramp-asset type="hidden" value="usdc"',
             'data-start-moonpay',
             'data-direct-moonpay',
             'data-copy-direct-wallet',
             'rel="noopener noreferrer"',
             'data-return-link',
-            'src="moonpay-onramp.js?v=1"',
-            'src="moonpay-direct-fallback.js?v=1"',
+            'src="wallet-runtime-config.js?v=1"',
+            'src="wallet-adapters.js?v=1"',
+            'src="coinbase-embedded-wallet.bundle.js?v=1"',
+            'src="moonpay-onramp.js?v=2"',
+            'src="moonpay-direct-fallback.js?v=2"',
         ],
     )
     if any(term in onramp.lower() for term in ('name="card', 'name="cvv', 'name="cvc')):
         fail("Agent Bounties must not collect card data on the MoonPay handoff page")
+    if '<option value="eth">' in onramp or "Buy Base ETH" in onramp:
+        fail("the embedded-wallet on-ramp must not ask the user to buy ETH")
 
     earn = require(
         SITE / "earn.html",
         [
-            "Need Base USDC or gas?",
+            "Need Base USDC?",
             'data-moonpay-onramp-link',
-            'src="moonpay-link.js?v=1"',
-            "Buying crypto does not fund this bounty",
+            'src="moonpay-link.js?v=2"',
+            "Buying USDC does not fund this bounty",
         ],
     )
-    if earn.index('src="moonpay-link.js?v=1"') > earn.index('src="autonomous.js"'):
+    if earn.index('src="moonpay-link.js?v=2"') > earn.index('src="autonomous.js"'):
         fail("moonpay-link.js must load before autonomous.js initializes the funding form")
 
     browser = require(
@@ -89,31 +98,46 @@ def main() -> int:
             "buy.moonpay.com",
             "buy-sandbox.moonpay.com",
             "/v1/onramps/moonpay/checkout",
+            'asset: "usdc"',
+            "protocol_action_completed !== false",
+            "canonical_event !== null",
             "bounty_funded !== false",
             "canonical_funding_event !== null",
-            "eth_getBalance",
+            "bounty_contract: state.bountyContract",
+            "agentBountiesGasSponsored",
             "eth_call",
             "wallet_switchEthereumChain",
+            '"/objective.html"',
         ],
     )
+    if 'method: "eth_getBalance"' in browser:
+        fail("the Base-USDC onboarding page must not gate the embedded wallet on ETH")
+
     fallback = require(
         SITE / "moonpay-direct-fallback.js",
         [
             "https://www.moonpay.com/buy/usdc",
-            "https://www.moonpay.com/buy/eth",
             "USDC on Base (USDC_BASE)",
-            "ETH on Base (ETH_BASE)",
             "navigator.clipboard.writeText",
             'setAttribute("aria-disabled"',
             "stop if the final screen shows another network or address",
         ],
     )
+    if "www.moonpay.com/buy/eth" in fallback or "ETH_BASE" in fallback:
+        fail("the direct onboarding fallback must remain Base-USDC-only")
     if any(term in fallback for term in ("apiKey=", "walletAddress=", "signature=")):
-        fail("The direct MoonPay fallback must not imitate a signed or wallet-prefilled partner URL")
+        fail("the direct MoonPay fallback must not imitate a signed or wallet-prefilled partner URL")
     if 'target="_blank"' not in onramp or 'rel="noopener noreferrer"' not in onramp:
-        fail("The direct MoonPay fallback must open with noopener and noreferrer")
+        fail("the direct MoonPay fallback must open with noopener and noreferrer")
 
-    require(SITE / "moonpay-link.js", ["onramp.html", "bountyContract", "amount", "intent"])
+    require(
+        SITE / "moonpay-link.js",
+        ["onramp.html", "bountyContract", "amount", "intent", 'target.searchParams.set("asset", "usdc")'],
+    )
+    require(
+        SITE / "objective-onramp-link.js",
+        ["data-wallet-required", "amount", "return", "intent", "MutationObserver"],
+    )
     require(SITE / "onramp.css", [".onramp-page", ".onramp-action", "@media"])
     require(
         ROOT / "docs/moonpay-onramp.md",
@@ -121,8 +145,9 @@ def main() -> int:
             "MOONPAY_PUBLISHABLE_KEY",
             "MOONPAY_SECRET_KEY",
             "MOONPAY_ENVIRONMENT",
-            "FundingAdded",
-            "Base ETH",
+            "Base USDC",
+            "pre-bounty wallet onboarding",
+            "canonical protocol event",
             "MoonPay sandbox",
             "Direct consumer fallback",
             "www.moonpay.com/buy/usdc",
@@ -152,22 +177,22 @@ def main() -> int:
         fail("MoonPay must remain a first-party web handoff, not expand the public ChatGPT tool surface")
 
     if "localStorage" in browser or "localStorage" in fallback:
-        fail("The MoonPay browser handoff must not persist checkout URLs or provider credentials")
+        fail("the MoonPay browser handoff must not persist checkout URLs or provider credentials")
 
     for script in (
         SITE / "moonpay-onramp.js",
         SITE / "moonpay-direct-fallback.js",
         SITE / "moonpay-link.js",
+        SITE / "objective-onramp-link.js",
         ROOT / "scripts/test-moonpay-direct-fallback.js",
     ):
         subprocess.run(["node", "--check", str(script)], cwd=ROOT, check=True)
     subprocess.run(["node", "scripts/test-moonpay-direct-fallback.js"], cwd=ROOT, check=True)
 
-    # The official MoonPay documentation vector is intentionally committed as a Rust unit test.
     if "oIJxSghyzll/BLhUFdQZhkxf7DAS8REFaWr/ibO+K8Q=" not in backend:
         fail("MoonPay URL signing must retain the official documentation test vector")
 
-    print("MoonPay on-ramp integration checks passed")
+    print("Base-USDC MoonPay wallet-onboarding checks passed")
     return 0
 
 
