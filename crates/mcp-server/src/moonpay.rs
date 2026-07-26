@@ -944,8 +944,8 @@ mod tests {
         let mut onboarding = request("usdc");
         onboarding.bounty_contract = None;
         onboarding.intent_id = None;
-        let plan = build_checkout_plan(&config(MoonpayEnvironment::Sandbox), onboarding, None)
-            .unwrap();
+        let plan =
+            build_checkout_plan(&config(MoonpayEnvironment::Sandbox), onboarding, None).unwrap();
         assert!(plan.bounty_contract.is_none());
         assert!(!plan.protocol_action_completed);
         assert!(plan.canonical_event.is_none());
