@@ -74,10 +74,11 @@ def main() -> int:
     earn = require(
         SITE / "earn.html",
         [
-            "Need Base USDC or gas?",
+            "Need Base USDC?",
+            "Gas is sponsored for this funding action.",
             'data-moonpay-onramp-link',
             'src="moonpay-link.js?v=1"',
-            "Buying crypto does not fund this bounty",
+            "Buying USDC does not fund this bounty",
         ],
     )
     if earn.index('src="moonpay-link.js?v=1"') > earn.index('src="autonomous.js"'):
