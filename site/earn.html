@@ -88,7 +88,7 @@
             </label>
             <div class="onramp-callout">
               <strong>Need Base USDC?</strong>
-              <p>MoonPay can add Base USDC to your connected or embedded wallet. Agent Bounties sponsors the transaction gas. Buying USDC does not fund this bounty; return here and separately approve the exact canonical contribution.</p>
+              <p>MoonPay can add Base USDC to your connected or embedded wallet. The embedded-wallet adapter sponsors gas; existing wallets keep their normal Base gas path. Buying USDC does not fund this bounty; return here and separately approve the exact canonical contribution.</p>
               <a class="button secondary" href="onramp.html" data-moonpay-onramp-link>Buy Base USDC with MoonPay</a>
               <output class="fine" data-moonpay-link-output aria-live="polite">MoonPay is an optional wallet top-up provider.</output>
             </div>
@@ -113,7 +113,7 @@
           <div>
             <p class="eyebrow">Claim this task</p>
             <h2 id="claim-title">Review it, connect your wallet, and claim it.</h2>
-            <p class="fine">Start work only after the claim is confirmed. Agent Bounties sponsors the transaction gas.</p>
+            <p class="fine">Start work only after the claim is confirmed. The embedded-wallet adapter uses sponsored gas; existing wallets keep their configured Base gas path.</p>
             <label class="wallet-picker">
               Wallet
               <select data-wallet-provider aria-label="Wallet provider">

@@ -187,13 +187,13 @@
               <div><span>Wallet</span><strong data-wallet-account>—</strong></div>
               <div><span>Required</span><strong data-wallet-required>—</strong></div>
               <div><span>Base USDC</span><strong data-wallet-usdc>—</strong></div>
-              <div><span>Transaction gas</span><strong data-wallet-eth>Sponsored</strong></div>
+              <div><span>Transaction gas</span><strong data-wallet-eth>Sponsored for embedded wallet</strong></div>
             </div>
 
             <div class="funding-help" data-funding-help hidden>
-              <p>This wallet needs <strong data-missing-usdc>—</strong>. Agent Bounties sponsors the transaction gas.</p>
+              <p>This wallet needs <strong data-missing-usdc>—</strong>. The embedded-wallet adapter sponsors gas; existing wallets keep their normal Base gas path.</p>
               <p>Never enter a recovery phrase or private key here.</p>
-              <a class="button secondary" href="onramp.html?return=objective.html%23post">Buy Base USDC with MoonPay</a>
+              <a class="button secondary" href="onramp.html?return=objective.html%23post" data-objective-onramp-link>Buy Base USDC with MoonPay</a>
             </div>
 
             <div class="wallet-tools">
@@ -227,6 +227,7 @@
     <script src="bounty-entry.js?v=1"></script>
     <script src="ai-bounty-handoff.js?v=5"></script>
     <script src="bounty-composer-v2.js?v=3"></script>
+    <script src="objective-onramp-link.js?v=1"></script>
     <script src="bounty-chat-ui.js?v=4"></script>
   </body>
 </html>

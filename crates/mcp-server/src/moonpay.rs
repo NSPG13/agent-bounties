@@ -226,7 +226,8 @@ pub struct PrepareCheckoutRequest {
     return_url: String,
     #[serde(default)]
     intent_id: Option<Uuid>,
-    bounty_contract: String,
+    #[serde(default)]
+    bounty_contract: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -241,10 +242,12 @@ struct CheckoutPlan {
     destination_wallet: String,
     base_currency_code: String,
     base_currency_amount: String,
-    bounty_contract: String,
+    bounty_contract: Option<String>,
     intent_id: Option<Uuid>,
     external_transaction_id: String,
     checkout_url: String,
+    protocol_action_completed: bool,
+    canonical_event: Option<String>,
     bounty_funded: bool,
     canonical_funding_event: Option<String>,
     next_action: &'static str,
@@ -261,7 +264,7 @@ struct ValidatedCheckoutRequest {
     asset: OnrampAsset,
     return_url: String,
     intent_id: Option<Uuid>,
-    bounty_contract: String,
+    bounty_contract: Option<String>,
 }
 
 #[derive(Debug)]
@@ -321,6 +324,8 @@ impl ApiError {
                 "code": self.code,
                 "error": self.message,
                 "next_action": self.next_action,
+                "protocol_action_completed": false,
+                "canonical_event": null,
                 "bounty_funded": false,
                 "canonical_funding_event": null,
             }),
@@ -386,7 +391,11 @@ fn validate_request(
     request: PrepareCheckoutRequest,
 ) -> Result<ValidatedCheckoutRequest, ApiError> {
     let wallet_address = normalize_evm_address(&request.wallet_address, "wallet_address")?;
-    let bounty_contract = normalize_evm_address(&request.bounty_contract, "bounty_contract")?;
+    let bounty_contract = request
+        .bounty_contract
+        .as_deref()
+        .map(|value| normalize_evm_address(value, "bounty_contract"))
+        .transpose()?;
     let (amount_minor, base_currency_amount) = parse_fiat_amount(&request.base_currency_amount)?;
     if amount_minor < config.min_fiat_minor || amount_minor > config.max_fiat_minor {
         return Err(ApiError::bad_request(
@@ -501,10 +510,12 @@ fn build_checkout_plan(
         intent_id: request.intent_id,
         external_transaction_id,
         checkout_url: checkout.to_string(),
+        protocol_action_completed: false,
+        canonical_event: None,
         bounty_funded: false,
         canonical_funding_event: None,
-        next_action: "Complete the MoonPay checkout, return to Agent Bounties, verify the wallet balance on Base, and separately approve the exact canonical bounty contribution.",
-        evidence_boundary: "MoonPay checkout status and wallet top-up evidence are not bounty-funding evidence. Only the matching indexed canonical FundingAdded event changes the bounty's funded state.",
+        next_action: "Complete the MoonPay checkout, return to Agent Bounties, verify the Base USDC balance, and separately approve the exact original bounty action.",
+        evidence_boundary: "MoonPay checkout status and wallet top-up evidence do not complete any Agent Bounties action. Only the matching indexed canonical protocol event changes bounty state.",
         sandbox_notice: is_sandbox.then_some(
             "MoonPay sandbox uses simulated payments and test assets. It validates checkout integration but does not top up Base mainnet.",
         ),
@@ -892,7 +903,7 @@ mod tests {
             asset: OnrampAsset::parse(Some(asset)).unwrap(),
             return_url: "https://agentbounties.app/onramp.html?bountyContract=0x1111111111111111111111111111111111111111".to_string(),
             intent_id: Some(Uuid::parse_str("9e5c6d19-ae7a-4b4c-a49f-36f322fd4532").unwrap()),
-            bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            bounty_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
         }
     }
 
@@ -921,9 +932,25 @@ mod tests {
         assert!(query.contains("allowedIpAddress="));
         assert!(query.split('&').last().unwrap().starts_with("signature="));
         assert!(!plan.checkout_url.contains("sk_live_example"));
+        assert!(!plan.protocol_action_completed);
+        assert!(plan.canonical_event.is_none());
         assert!(!plan.bounty_funded);
         assert!(plan.canonical_funding_event.is_none());
         assert_eq!(plan.state, "checkout_ready_wallet_not_yet_topped_up");
+    }
+
+    #[test]
+    fn wallet_onboarding_checkout_does_not_require_an_existing_bounty() {
+        let mut onboarding = request("usdc");
+        onboarding.bounty_contract = None;
+        onboarding.intent_id = None;
+        let plan = build_checkout_plan(&config(MoonpayEnvironment::Sandbox), onboarding, None)
+            .unwrap();
+        assert!(plan.bounty_contract.is_none());
+        assert!(!plan.protocol_action_completed);
+        assert!(plan.canonical_event.is_none());
+        assert!(!plan.bounty_funded);
+        assert!(plan.canonical_funding_event.is_none());
     }
 
     #[test]
