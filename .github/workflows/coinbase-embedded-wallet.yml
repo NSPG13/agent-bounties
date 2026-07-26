@@ -1,0 +1,89 @@
+name: Coinbase Embedded Wallet
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/coinbase-embedded-wallet.yml"
+      - "tools/coinbase-wallet-adapter/**"
+      - "site/wallet-adapters.js"
+      - "site/wallet-runtime-config.js"
+      - "site/wallet-adapters.css"
+      - "site/coinbase-embedded-wallet.bundle.js"
+      - "site/objective-onramp-link.js"
+      - "site/objective.html"
+      - "site/earn.html"
+      - "site/onramp.html"
+      - "site/moonpay-onramp.js"
+      - "site/moonpay-direct-fallback.js"
+      - "site/bounty-composer-v2.js"
+      - "crates/mcp-server/src/moonpay.rs"
+      - "scripts/check-coinbase-embedded-wallet.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/coinbase-embedded-wallet.yml"
+      - "tools/coinbase-wallet-adapter/**"
+      - "site/wallet-adapters.js"
+      - "site/wallet-runtime-config.js"
+      - "site/wallet-adapters.css"
+      - "site/coinbase-embedded-wallet.bundle.js"
+      - "site/objective-onramp-link.js"
+      - "site/objective.html"
+      - "site/earn.html"
+      - "site/onramp.html"
+      - "site/moonpay-onramp.js"
+      - "site/moonpay-direct-fallback.js"
+      - "site/bounty-composer-v2.js"
+      - "crates/mcp-server/src/moonpay.rs"
+      - "scripts/check-coinbase-embedded-wallet.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-adapter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify fail-closed source state
+        run: python scripts/check-coinbase-embedded-wallet.py
+
+      - name: Install pinned adapter dependencies
+        working-directory: tools/coinbase-wallet-adapter
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Run wallet adapter tests
+        working-directory: tools/coinbase-wallet-adapter
+        run: npm test
+
+      - name: Build browser bundle
+        working-directory: tools/coinbase-wallet-adapter
+        run: npm run build
+
+      - name: Verify generated production bundle
+        run: python scripts/check-coinbase-embedded-wallet.py --require-built-bundle
+
+      - name: Test generic MoonPay wallet onboarding
+        run: cargo test -p mcp-server moonpay
+
+      - name: Upload reproducible build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: coinbase-embedded-wallet-${{ github.run_id }}
+          path: |
+            site/coinbase-embedded-wallet.bundle.js
+            tools/coinbase-wallet-adapter/package-lock.json
+          if-no-files-found: error
+          retention-days: 14
