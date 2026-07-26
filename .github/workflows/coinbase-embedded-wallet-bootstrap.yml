@@ -1,6 +1,13 @@
-name: Diagnose Coinbase embedded-wallet lock
+name: Regenerate Coinbase embedded-wallet lock
 
 on:
+  push:
+    branches:
+      - maintainer/coinbase-embedded-wallet
+    paths:
+      - ".github/workflows/coinbase-embedded-wallet-bootstrap.yml"
+      - "tools/coinbase-embedded-wallet/package.json"
+      - "tools/coinbase-embedded-wallet/package-lock.json"
   pull_request:
     branches:
       - main
@@ -9,21 +16,27 @@ on:
       - "tools/coinbase-embedded-wallet/**"
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 concurrency:
   group: coinbase-wallet-lock-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  diagnose-lock:
+  regenerate-lock:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           ref: maintainer/coinbase-embedded-wallet
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - uses: actions/setup-node@v6
         with:
@@ -31,35 +44,109 @@ jobs:
           cache: "npm"
           cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
 
-      - name: Reproduce exact lockfile
-        id: install
+      - name: Regenerate lockfile from exact direct pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+
+      - name: Prove clean lockfile reproduction
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf tools/coinbase-embedded-wallet/node_modules
+          npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+
+      - name: Prepare reviewed esbuild binary
+        run: npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
+
+      - name: Rebuild and test the adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run check --prefix tools/coinbase-embedded-wallet
+          npm run build --prefix tools/coinbase-embedded-wallet
+          python scripts/check-coinbase-embedded-wallet.py
+          python scripts/check-site.py
+          node scripts/test-wallet-adapter-registry.js
+          node scripts/test-x402-browser.js
+
+      - name: Audit complete locked dependency graph
+        id: audit
         continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
-          npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund --loglevel verbose 2>&1 | tee /tmp/coinbase-npm-ci.log
+          npm audit --prefix tools/coinbase-embedded-wallet --json > /tmp/coinbase-npm-audit.json
 
-      - name: Publish exact lock result to PR
+      - name: Publish bounded audit result
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          {
-            if [[ "${{ steps.install.outcome }}" == "success" ]]; then
-              echo '✅ **Coinbase embedded-wallet lock reproduced with `npm ci`.**'
-            else
-              echo '❌ **Coinbase embedded-wallet lock reproduction failed.**'
-            fi
-            echo
-            echo '```text'
-            tail -n 160 /tmp/coinbase-npm-ci.log
-            echo '```'
-            echo
-            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          } > /tmp/coinbase-lock-result.md
-          gh pr comment 605 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-lock-result.md
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
 
-      - name: Enforce reproducible lock
-        if: steps.install.outcome == 'failure'
+          source = Path('/tmp/coinbase-npm-audit.json')
+          try:
+              report = json.loads(source.read_text(encoding='utf-8')) if source.exists() else {}
+          except Exception as error:
+              report = {'error': f'invalid npm audit JSON: {error}'}
+          metadata = report.get('metadata') or {}
+          totals = metadata.get('vulnerabilities') or {}
+          vulnerabilities = report.get('vulnerabilities') or {}
+          lines = [
+              '## Coinbase embedded-wallet regenerated lock audit',
+              '',
+              f"Outcome: `{os.environ.get('AUDIT_OUTCOME', 'unknown')}`",
+              f"Totals: `{json.dumps(totals, sort_keys=True)}`",
+              '',
+          ]
+          if report.get('error'):
+              lines.append(f"Audit error: `{report['error']}`")
+          elif not vulnerabilities:
+              lines.append('No npm advisory is present in the complete locked dependency graph.')
+          else:
+              for name in sorted(vulnerabilities):
+                  item = vulnerabilities[name] or {}
+                  via = []
+                  for entry in item.get('via') or []:
+                      if isinstance(entry, str):
+                          via.append(entry)
+                      elif isinstance(entry, dict):
+                          via.append(str(entry.get('title') or entry.get('name') or entry.get('url') or 'advisory'))
+                  lines.extend([
+                      f"- **{name}** — severity `{item.get('severity')}`; direct `{item.get('isDirect')}`; range `{item.get('range')}`; fix `{json.dumps(item.get('fixAvailable'))}`",
+                      f"  - via: {', '.join(via[:8]) or 'not supplied'}",
+                      f"  - effects: {', '.join(item.get('effects') or []) or 'none supplied'}",
+                  ])
+          Path('/tmp/coinbase-audit-comment.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+          gh pr comment 605 --repo "$GITHUB_REPOSITORY" --body-file /tmp/coinbase-audit-comment.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
+
+      - name: Enforce clean advisory graph
+        if: steps.audit.outcome == 'failure'
         run: exit 1
+
+      - name: Commit regenerated lock and reproducible bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/coinbase-embedded-wallet/package-lock.json \
+            site/coinbase-embedded-wallet.bundle.js \
+            site/coinbase-embedded-wallet.bundle.css
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "The lock and bundle were already current."
+            exit 0
+          fi
+          git commit -m "[coinbase-lock] Regenerate reproducible embedded-wallet lock"
+          git push origin HEAD:maintainer/coinbase-embedded-wallet
