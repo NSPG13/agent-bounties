@@ -15,7 +15,7 @@ import activate_routed_v3_replacements as activation
 ROUTER = "0x380c1af742593dd88b6f20387e9ee693a0536731"
 EVENT_SIGNATURE = "PolicyBootstrapped(bytes32,address,bytes32)"
 ACTIVATION_DELAY = 604_800
-LOOKBACK_BLOCKS = 9_999
+BOOTSTRAP_BLOCK = 49_069_936
 
 
 def parse_bootstrap_logs(raw: str) -> dict[str, str | int]:
@@ -58,16 +58,14 @@ def discover_deployment(cast: activation.Cast) -> dict[str, Any]:
     if router_code in {"0x", "0x0"}:
         raise activation.ActivationError("durable verifier router runtime code is missing")
     log_cast = activation.Cast(cast.executable, activation.RPC_DEFAULT)
-    latest = activation.parse_uint(log_cast.rpc("block-number"), "latest block")
-    from_block = max(0, latest - LOOKBACK_BLOCKS)
     logs_raw = log_cast.rpc(
         "logs",
         "--address",
         ROUTER,
         "--from-block",
-        str(from_block),
+        str(BOOTSTRAP_BLOCK),
         "--to-block",
-        "latest",
+        str(BOOTSTRAP_BLOCK),
         EVENT_SIGNATURE,
         "--json",
     )
