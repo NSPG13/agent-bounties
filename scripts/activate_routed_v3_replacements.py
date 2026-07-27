@@ -334,9 +334,10 @@ def reconcile(api: str, contract: str, bounty_id: str, timeout_seconds: int = 18
                 ),
                 None,
             )
+            active_statuses = {"claimable", "claimed", "submitted", "verifying"}
             if (
                 item
-                and item.get("status") == "claimable"
+                and item.get("status") in active_statuses
                 and item.get("terms_valid") is True
                 and item.get("verification_ready") is True
             ):

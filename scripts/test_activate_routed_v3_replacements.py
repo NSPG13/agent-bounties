@@ -145,6 +145,10 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         planner_call = source.index('"scripts/plan_bounded_agent_action.py"', canonical_check)
         self.assertLess(canonical_check, planner_call)
 
+    def test_reconciliation_accepts_claimed_live_inventory(self) -> None:
+        source = (SCRIPTS / "activate_routed_v3_replacements.py").read_text(encoding="utf-8")
+        self.assertIn('{"claimable", "claimed", "submitted", "verifying"}', source)
+
 
 if __name__ == "__main__":
     unittest.main()
