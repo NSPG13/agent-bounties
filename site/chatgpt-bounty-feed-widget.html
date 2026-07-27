@@ -603,7 +603,7 @@
           if (item.work_state === "completed") return "settled";
           if (item.work_state === "submitted") return "awaiting verification";
           if (item.work_state === "in_progress") return "in progress";
-          if (item.work_state === "claimable") return "ready to compete";
+          if (item.work_state === "claimable") return "open for competition";
           if (item.payment_state === "seeking_funding") return "seeking funding";
           return item.work_state || "open";
         }
