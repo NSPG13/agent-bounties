@@ -59,13 +59,11 @@ jobs:
           LOG_RPC_URL: https://mainnet.base.org
         run: |
           mkdir -p target
-          latest="$(cast block-number --rpc-url "$LOG_RPC_URL")"
-          from=$((latest - 9999))
           cast logs \
             --rpc-url "$LOG_RPC_URL" \
             --address "$ROUTER" \
-            --from-block "$from" \
-            --to-block latest \
+            --from-block 49069936 \
+            --to-block 49069936 \
             "PolicyBootstrapped(bytes32,address,bytes32)" \
             --json > target/router-bootstrap.json
           python - <<'PY'
