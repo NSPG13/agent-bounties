@@ -8,6 +8,7 @@ on:
       - "scripts/configure-wallet-providers.py"
       - "scripts/test_configure_wallet_providers.py"
       - "scripts/test-live-coinbase-wallet.mjs"
+      - "scripts/test-live-coinbase-wallet.test.mjs"
       - "scripts/test-wallet-adapter-registry.js"
       - "scripts/test-x402-browser.js"
       - "site/wallet-adapter-registry.js"
@@ -27,6 +28,7 @@ on:
       - "scripts/configure-wallet-providers.py"
       - "scripts/test_configure_wallet_providers.py"
       - "scripts/test-live-coinbase-wallet.mjs"
+      - "scripts/test-live-coinbase-wallet.test.mjs"
       - "scripts/test-wallet-adapter-registry.js"
       - "scripts/test-x402-browser.js"
       - "site/wallet-adapter-registry.js"
@@ -90,7 +92,9 @@ jobs:
         run: python scripts/check-coinbase-embedded-wallet.py
 
       - name: Verify browser helper syntax
-        run: node --check scripts/test-live-coinbase-wallet.mjs
+        run: |
+          node --check scripts/test-live-coinbase-wallet.mjs
+          node --test scripts/test-live-coinbase-wallet.test.mjs
 
       - name: Audit locked production dependencies
         run: npm audit --prefix tools/coinbase-embedded-wallet --omit=dev --audit-level=high

@@ -6,6 +6,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_URL = "https://agentbounties.app/earn.html";
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -71,6 +72,35 @@ async function jsonFetch(url, options = {}) {
   const response = await fetch(url, options);
   if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}.`);
   return response.json();
+}
+
+function childExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForChildExit(child, timeoutMs) {
+  if (childExited(child)) return true;
+  return Promise.race([
+    new Promise((resolve) => child.once("exit", () => resolve(true))),
+    delay(timeoutMs).then(() => false),
+  ]);
+}
+
+async function stopChrome(chrome, { gracefulTimeoutMs = 2_000, forceTimeoutMs = 2_000 } = {}) {
+  if (childExited(chrome)) return;
+  chrome.kill("SIGTERM");
+  if (await waitForChildExit(chrome, gracefulTimeoutMs)) return;
+  chrome.kill("SIGKILL");
+  await waitForChildExit(chrome, forceTimeoutMs);
+}
+
+async function removeProfile(profile, remove = rm) {
+  await remove(profile, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
 }
 
 class CdpConnection {
@@ -307,13 +337,8 @@ async function runSmoke(args) {
     throw new Error(`${error.message || error}${stderr ? `\nChrome: ${stderr.slice(-2_000)}` : ""}`);
   } finally {
     cdp?.close();
-    chrome.kill("SIGTERM");
-    await Promise.race([
-      new Promise((resolve) => chrome.once("exit", resolve)),
-      delay(2_000),
-    ]);
-    if (!chrome.killed) chrome.kill("SIGKILL");
-    await rm(profile, { recursive: true, force: true });
+    await stopChrome(chrome);
+    await removeProfile(profile);
   }
 }
 
@@ -339,7 +364,11 @@ async function main() {
   if (!report.success) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+export { removeProfile, stopChrome };
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
