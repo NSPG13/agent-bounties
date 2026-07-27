@@ -139,6 +139,12 @@ class ActivateRoutedV3Tests(unittest.TestCase):
             self.assertIn("--from-block 49069936", workflow, name)
             self.assertIn("--to-block 49069936", workflow, name)
 
+    def test_resume_checks_canonical_state_before_transaction_planning(self) -> None:
+        source = (SCRIPTS / "activate_routed_v3_replacements.py").read_text(encoding="utf-8")
+        canonical_check = source.index('cast.call(FACTORY, "isCanonicalBounty(address)(bool)", predicted)')
+        planner_call = source.index('"scripts/plan_bounded_agent_action.py"', canonical_check)
+        self.assertLess(canonical_check, planner_call)
+
 
 if __name__ == "__main__":
     unittest.main()

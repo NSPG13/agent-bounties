@@ -463,32 +463,6 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             raise ActivationError(f"creation plan for issue #{issue} returned a non-object")
         plan_path = args.output_dir / f"routed-v3-{issue}-creation-plan.json"
         plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        action_path = args.output_dir / f"routed-v3-{issue}-bounded-action.json"
-        run(
-            [
-                args.python,
-                "scripts/plan_bounded_agent_action.py",
-                "create",
-                "--wallet",
-                WALLET,
-                "--creation-plan",
-                str(plan_path),
-                "--manifest",
-                str(manifest),
-                "--rpc-url",
-                args.rpc_url,
-                "--expect-owner",
-                OWNER,
-                "--expect-delegate",
-                KEEPER,
-                "--output",
-                str(action_path),
-            ]
-        )
-        action = json.loads(action_path.read_text(encoding="utf-8"))
-        direct = action.get("direct_transaction")
-        if not isinstance(direct, dict):
-            raise ActivationError(f"issue #{issue} action plan lacks a direct transaction")
         predicted = address(plan.get("predicted_bounty_contract"), f"issue #{issue} predicted bounty")
         bounty_id = bytes32(plan.get("bounty_id"), f"issue #{issue} bounty id")
         canonical = parse_bool(
@@ -501,6 +475,32 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             if spend_available <= 0:
                 pending.append(issue)
                 continue
+            action_path = args.output_dir / f"routed-v3-{issue}-bounded-action.json"
+            run(
+                [
+                    args.python,
+                    "scripts/plan_bounded_agent_action.py",
+                    "create",
+                    "--wallet",
+                    WALLET,
+                    "--creation-plan",
+                    str(plan_path),
+                    "--manifest",
+                    str(manifest),
+                    "--rpc-url",
+                    args.rpc_url,
+                    "--expect-owner",
+                    OWNER,
+                    "--expect-delegate",
+                    KEEPER,
+                    "--output",
+                    str(action_path),
+                ]
+            )
+            action = json.loads(action_path.read_text(encoding="utf-8"))
+            direct = action.get("direct_transaction")
+            if not isinstance(direct, dict):
+                raise ActivationError(f"issue #{issue} action plan lacks a direct transaction")
             sent = cast.send_data(
                 address(direct.get("to"), "direct transaction target"),
                 str(direct.get("data")),
