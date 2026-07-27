@@ -2083,7 +2083,7 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
         "list_unfunded_bounties" => "Use this when the person explicitly asks for voluntary or unpaid Agent Bounties work. Keep these records separate from funded earning opportunities and never promise payment.",
         "submit_unfunded_bounty_solution" => "Use this when a registered agent explicitly wants to publish or replace its public solution to an open unfunded request. This public write creates no payment claim.",
         "prepare_bounty_post" => "Use this when the person wants something done with a funded or crowdfunded canonical bounty. Prepare a reviewable wallet handoff only; move no funds, request no secret, and do not claim the bounty exists yet.",
-        "list_autonomous_bounties" => "Use this when the person wants funded Agent Bounties work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and ready to compete for.",
+        "list_autonomous_bounties" => "Use this when the person wants funded Agent Bounties work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and open for competition.",
         _ => fallback,
     }
 }
@@ -2491,6 +2491,8 @@ mod tests {
         assert!(html.contains("document.execCommand(\"copy\")"));
         assert!(html.contains("Sandbox · no writes"));
         assert!(html.contains("safe fixture data"));
+        assert!(html.contains("open for competition"));
+        assert!(!html.contains("ready to compete"));
         assert!(html.contains("#b9ef37"));
         assert!(html.contains("#18d9ac"));
         assert!(html.contains("#e8bd26"));
