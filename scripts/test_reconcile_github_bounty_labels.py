@@ -355,13 +355,33 @@ class GitHubBountyLabelReconciliationTests(unittest.TestCase):
         self.assertEqual(plan.desired_managed_labels, [])
         self.assertEqual(plan.remove_labels, ["claimable-live", "funded-live"])
 
-    def test_duplicate_issue_mapping_and_invalid_earning_record_are_rejected(self) -> None:
+    def test_replacement_source_collision_selects_unique_ready_record(self) -> None:
+        retired = feed_item(1, "claimable", ready=False)
+        replacement = feed_item(2, "claimable")
+        replacement["terms"]["document"]["source_url"] = retired["terms"]["document"][
+            "source_url"
+        ]
+        plan = build_plans(
+            [issue(1, "bounty", "verification-unavailable")],
+            [retired, replacement],
+            [dict(replacement)],
+            REPOSITORY,
+        )[0]
+        self.assertEqual(plan.bounty_contract, CONTRACTS[2])
+        self.assertEqual(
+            plan.desired_managed_labels, ["claimable-live", "funded-live"]
+        )
+        self.assertEqual(plan.remove_labels, ["verification-unavailable"])
+
+    def test_duplicate_ready_issue_mapping_and_invalid_earning_record_are_rejected(self) -> None:
         first = feed_item(1, "claimable")
         duplicate = feed_item(2, "claimable")
         duplicate["terms"]["document"]["source_url"] = first["terms"]["document"][
             "source_url"
         ]
-        with self.assertRaisesRegex(LabelReconciliationError, "multiple canonical"):
+        with self.assertRaisesRegex(
+            LabelReconciliationError, "without one unique verification-ready record"
+        ):
             build_plans([issue(1, "bounty")], [first, duplicate], [], REPOSITORY)
 
         invalid_earning = dict(first)

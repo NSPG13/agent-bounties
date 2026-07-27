@@ -1161,6 +1161,8 @@ def main() -> int:
     standing_components = standing_meta_deployment.get("components", {})
     if standing_components.get("verifier_module") != "0xe573cb4f471d38b5bf10ce82237251ac902c9867":
         fail("historical standing-meta-v2 deployment manifest has the wrong verifier")
+    if bounded_deployment["canonical"]["deterministic_verifier"] != "0x380c1af742593dd88b6f20387e9ee693a0536731":
+        fail("bounded wallet manifest does not trust the durable verifier router")
     if standing_components.get("verifier_set_hash") != bounded_deployment["canonical"]["signed_quorum_verifier_set_hash"]:
         fail("bounded wallet and standing-meta-v2 manifests disagree on the signed quorum")
     if standing_components.get("verifier_wallets") != [

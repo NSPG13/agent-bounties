@@ -455,7 +455,7 @@ def canonical_records(
     repository: str,
 ) -> tuple[dict[str, dict[str, Any]], set[tuple[str, str]]]:
     by_contract: dict[str, dict[str, Any]] = {}
-    by_issue_url: dict[str, dict[str, Any]] = {}
+    candidates_by_issue_url: dict[str, list[dict[str, Any]]] = {}
     for item in full_feed:
         contract = str(item.get("bounty_contract") or "").lower()
         status = str(item.get("status") or "").lower()
@@ -477,11 +477,25 @@ def canonical_records(
         normalized["_source_issue_url"] = source
         by_contract[contract] = normalized
         if source:
-            if source in by_issue_url:
-                raise LabelReconciliationError(
-                    f"multiple canonical contracts reference {source}"
-                )
-            by_issue_url[source] = normalized
+            candidates_by_issue_url.setdefault(source, []).append(normalized)
+
+    by_issue_url: dict[str, dict[str, Any]] = {}
+    for source, candidates in candidates_by_issue_url.items():
+        if len(candidates) == 1:
+            by_issue_url[source] = candidates[0]
+            continue
+        verification_ready = [
+            candidate
+            for candidate in candidates
+            if candidate.get("terms_valid") is True
+            and candidate.get("verification_ready") is True
+        ]
+        if len(verification_ready) != 1:
+            raise LabelReconciliationError(
+                "multiple canonical contracts reference "
+                f"{source} without one unique verification-ready record"
+            )
+        by_issue_url[source] = verification_ready[0]
 
     earning: set[tuple[str, str]] = set()
     for item in claimable_feed:
