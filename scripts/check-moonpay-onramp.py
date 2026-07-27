@@ -55,10 +55,11 @@ def main() -> int:
         [
             '<meta name="robots" content="noindex">',
             '<meta name="referrer" content="no-referrer">',
-            "Buying crypto does not fund the bounty.",
+            "Buying USDC does not fund the bounty.",
             "Only the matching indexed <code>FundingAdded</code> event",
             "Direct MoonPay fallback",
             "cannot prefill or cryptographically bind your wallet",
+            "Buy only Base USDC for these supported actions; no ETH purchase is required.",
             'data-start-moonpay',
             'data-direct-moonpay',
             'data-copy-direct-wallet',
@@ -68,16 +69,19 @@ def main() -> int:
             'src="moonpay-direct-fallback.js?v=1"',
         ],
     )
+    if '<option value="eth">' in onramp:
+        fail("the sponsored MoonPay onboarding page must not ask users to buy ETH")
     if any(term in onramp.lower() for term in ('name="card', 'name="cvv', 'name="cvc')):
         fail("Agent Bounties must not collect card data on the MoonPay handoff page")
 
     earn = require(
         SITE / "earn.html",
         [
-            "Need Base USDC or gas?",
+            "Need Base USDC?",
+            "Gas is sponsored for this funding action.",
             'data-moonpay-onramp-link',
             'src="moonpay-link.js?v=1"',
-            "Buying crypto does not fund this bounty",
+            "Buying USDC does not fund this bounty",
         ],
     )
     if earn.index('src="moonpay-link.js?v=1"') > earn.index('src="autonomous.js"'):

@@ -1,0 +1,175 @@
+name: Coinbase Embedded Wallet
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/coinbase-embedded-wallet.yml"
+      - "scripts/check-coinbase-embedded-wallet.py"
+      - "scripts/configure-wallet-providers.py"
+      - "scripts/test_configure_wallet_providers.py"
+      - "scripts/test-live-coinbase-wallet.mjs"
+      - "scripts/test-wallet-adapter-registry.js"
+      - "scripts/test-x402-browser.js"
+      - "site/wallet-adapter-registry.js"
+      - "site/wallet-config.js"
+      - "site/wallet-adapters.css"
+      - "site/x402-browser.js"
+      - "site/coinbase-embedded-wallet.bundle.js"
+      - "site/coinbase-embedded-wallet.bundle.css"
+      - "site/earn.html"
+      - "site/onramp.html"
+      - "tools/coinbase-embedded-wallet/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/coinbase-embedded-wallet.yml"
+      - "scripts/check-coinbase-embedded-wallet.py"
+      - "scripts/configure-wallet-providers.py"
+      - "scripts/test_configure_wallet_providers.py"
+      - "scripts/test-live-coinbase-wallet.mjs"
+      - "scripts/test-wallet-adapter-registry.js"
+      - "scripts/test-x402-browser.js"
+      - "site/wallet-adapter-registry.js"
+      - "site/wallet-config.js"
+      - "site/wallet-adapters.css"
+      - "site/x402-browser.js"
+      - "site/coinbase-embedded-wallet.bundle.js"
+      - "site/coinbase-embedded-wallet.bundle.css"
+      - "site/earn.html"
+      - "site/onramp.html"
+      - "tools/coinbase-embedded-wallet/**"
+  workflow_run:
+    workflows: ["Pages"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: coinbase-embedded-wallet-${{ github.event_name }}-${{ github.ref || github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
+
+      - name: Install exact reviewed Coinbase dependencies
+        run: npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+
+      - name: Prepare reviewed esbuild binary
+        run: npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
+
+      - name: Reproduce the committed browser bundle
+        run: |
+          cp site/coinbase-embedded-wallet.bundle.js /tmp/coinbase-wallet.js
+          cp site/coinbase-embedded-wallet.bundle.css /tmp/coinbase-wallet.css
+          npm run build --prefix tools/coinbase-embedded-wallet
+          cmp /tmp/coinbase-wallet.js site/coinbase-embedded-wallet.bundle.js
+          cmp /tmp/coinbase-wallet.css site/coinbase-embedded-wallet.bundle.css
+
+      - name: Verify project configuration and exact-origin policy
+        run: python scripts/test_configure_wallet_providers.py
+
+      - name: Verify adapter, auth linking, and sponsored funding boundaries
+        run: python scripts/check-coinbase-embedded-wallet.py
+
+      - name: Verify browser helper syntax
+        run: node --check scripts/test-live-coinbase-wallet.mjs
+
+      - name: Audit locked production dependencies
+        run: npm audit --prefix tools/coinbase-embedded-wallet --omit=dev --audit-level=high
+
+  live-production-smoke:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Verify live SDK initialization without submitting identity data
+        env:
+          SMOKE_URL: https://agentbounties.app/earn.html?coinbase-smoke=${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          mkdir -p target/operations
+          node scripts/test-live-coinbase-wallet.mjs \
+            --url "${SMOKE_URL}" \
+            --timeout-ms 90000 \
+            --output target/operations/coinbase-live-smoke.json
+
+      - name: Publish redacted live evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("target/operations/coinbase-live-smoke.json")
+          if path.exists():
+              report = json.loads(path.read_text(encoding="utf-8"))
+          else:
+              report = {"success": False, "error": "The live smoke did not produce a report."}
+          adapter = report.get("adapter") or {}
+          panel = report.get("signInPanel") or {}
+          project = report.get("projectConfig") or {}
+          lines = [
+              "## Coinbase embedded-wallet live smoke",
+              "",
+              f"- Result: `{str(report.get('success', False)).lower()}`",
+              f"- Adapter registered: `{str(adapter.get('adapterId') == 'coinbase-embedded').lower()}`",
+              f"- User custody: `{str(adapter.get('userCustody', False)).lower()}`",
+              f"- Auth-method linking enabled: `{str(adapter.get('authMethodLinking', False)).lower()}`",
+              f"- Supported-relay gas sponsorship: `{str(adapter.get('gasSponsoredOnSupportedRelays', False)).lower()}`",
+              f"- Direct gas-paying transactions enabled: `{str(adapter.get('directTransactions', False)).lower()}`",
+              f"- Coinbase sign-in UI rendered: `{str(panel.get('rendered', False)).lower()}`",
+              f"- Identity submitted by canary: `{str(panel.get('identitySubmitted', False)).lower()}`",
+              f"- Public project config HTTP: `{project.get('status', 'unavailable')}`",
+              f"- Browser errors observed: `{report.get('browserErrorCount', 'unavailable')}`",
+              f"- Commit: `{os.environ.get('GITHUB_SHA', 'unknown')}`",
+              f"- Run: {os.environ.get('GITHUB_SERVER_URL')}/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{os.environ.get('GITHUB_RUN_ID')}",
+              "",
+              report.get("evidenceBoundary", "No authentication or transaction was attempted."),
+          ]
+          if report.get("error"):
+              lines.extend(["", f"Failure: `{str(report['error'])[:1000]}`"])
+          Path("/tmp/coinbase-live-smoke.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/604/comments" \
+            --raw-field body="$(cat /tmp/coinbase-live-smoke.md)" >/dev/null
+
+      - name: Upload redacted live evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coinbase-live-smoke-${{ github.run_id }}
+          path: target/operations/coinbase-live-smoke.json
+          if-no-files-found: warn
+          retention-days: 14
