@@ -127,6 +127,7 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "plan_autonomous_module_settlement",
         "plan_autonomous_attestation_settlement",
         "plan_autonomous_cancel",
+        "delete_unclaimed_bounty",
         "plan_autonomous_refund_withdrawal",
     ):
         _require(callable(getattr(client, method, None)), f"Python SDK missing {method}")

@@ -31,6 +31,18 @@
   white-space: nowrap;
 }
 
+.cancel-hero {
+  padding-top: 44px;
+  padding-bottom: 26px;
+}
+
+body.guild-interior .cancel-hero h1 {
+  max-width: 680px;
+  margin-bottom: 10px;
+  font-size: 48px;
+  line-height: 1.05;
+}
+
 .board-workspace {
   max-width: 1180px;
   margin: 0 auto;
@@ -336,6 +348,10 @@
 @media (max-width: 620px) {
   .board-hero {
     padding-top: 48px;
+  }
+
+  body.guild-interior .cancel-hero h1 {
+    font-size: 36px;
   }
 
   .board-create-button,

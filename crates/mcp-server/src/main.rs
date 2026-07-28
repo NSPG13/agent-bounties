@@ -23,12 +23,13 @@ use chain_base::{
     fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     standing_meta_v2_parent_context, validate_attestation_request_against_feed,
-    validate_autonomous_creation_against_terms, AutonomousBountyAuthorizationSignature,
-    AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
-    AutonomousBountyRecoveryReservations, AutonomousBountySubmissionAuthorizationRequest,
-    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
-    AutonomousVerificationAttestationRequest, BaseRpcUrlConfig, CanonicalChildBountyTermsRequest,
-    EvmLog, PrepareAgentToEarnInput, StandingMetaV2ChildPreparationRequest,
+    validate_autonomous_cancel_authority, validate_autonomous_creation_against_terms,
+    AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
+    AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
+    AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
+    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseRpcUrlConfig,
+    CanonicalChildBountyTermsRequest, EvmLog, PrepareAgentToEarnInput,
+    StandingMetaV2ChildPreparationRequest,
 };
 use chrono::Utc;
 use db::PostgresStore;
@@ -1027,6 +1028,20 @@ tool_args! {
             "caller": nullable_string_property("Optional wallet that will send the transaction; refund withdrawal requires it.")
         }),
         &["bounty_contract"],
+    );
+}
+
+tool_args! {
+    struct PlanAutonomousCancelArgs {
+        network: Option<String>, bounty_contract: String, caller: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Open or claimable canonical bounty contract."),
+            "caller": string_property("Wallet sending the transaction. Before the funding deadline this must be the indexed creator.")
+        }),
+        &["bounty_contract", "caller"],
     );
 }
 
@@ -2441,8 +2456,8 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_cancel",
-            "Build cancellation for the creator or any caller after the immutable funding deadline. Contributors then withdraw their own refunds.",
-            PlanAutonomousLifecycleArgs::input_schema("Open or claimable canonical bounty contract."),
+            "Delete an unclaimed bounty from active inventory by cancelling it on-chain. The caller must be the creator before the immutable funding deadline; after the deadline any caller may clean it up. Claimed bounties fail closed. Each funder then withdraws its own refund.",
+            PlanAutonomousCancelArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_refund_withdrawal",
@@ -4936,7 +4951,7 @@ async fn plan_autonomous_expire_submission(
 
 async fn plan_autonomous_cancel(
     State(state): State<SharedState>,
-    Json(args): Json<PlanAutonomousLifecycleArgs>,
+    Json(args): Json<PlanAutonomousCancelArgs>,
 ) -> Json<serde_json::Value> {
     let network = args.network.as_deref().unwrap_or("base-mainnet");
     let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
@@ -4946,9 +4961,28 @@ async fn plan_autonomous_cancel(
     if !matches!(item.status.as_str(), "open" | "claimable") {
         return mcp_error("bounty is not cancellable");
     }
+    let caller = args.caller.as_str();
+    let funding_deadline = item
+        .terms
+        .as_ref()
+        .and_then(|terms| terms.document.contract_terms["funding_deadline"].as_u64());
+    let observed_at = match u64::try_from(Utc::now().timestamp()) {
+        Ok(value) => value,
+        Err(_) => return mcp_error("current time is unavailable"),
+    };
+    let caller = match validate_autonomous_cancel_authority(
+        &item.status,
+        &item.creator,
+        caller,
+        funding_deadline,
+        observed_at,
+    ) {
+        Ok(caller) => caller,
+        Err(error) => return mcp_error(error),
+    };
     match configured_autonomous_planner(network).and_then(|planner| {
         planner
-            .plan_cancel(&args.bounty_contract, args.caller.as_deref())
+            .plan_cancel(&args.bounty_contract, Some(&caller))
             .map_err(|error| error.to_string())
     }) {
         Ok(plan) => mcp_json(plan),

@@ -38,8 +38,9 @@ use chain_base::{
     plan_open_competition_action, plan_standing_meta_v4_action,
     prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
     standing_meta_v2_parent_context, standing_meta_v4_readiness,
-    validate_attestation_request_against_feed, validate_autonomous_creation_for_public_earning,
-    AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
+    validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
+    validate_autonomous_creation_for_public_earning, AgentWalletReadinessReport,
+    AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
     AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
     AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
     AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
@@ -771,6 +772,7 @@ const LEGAL_ACTIONS: &[&str] = &[
     "claim_bounty",
     "submit_result",
     "verify_submission",
+    "cancel_bounty",
     "recover_funds",
     "activate_agent_budget",
     "update_agent_policy",
@@ -10277,11 +10279,31 @@ async fn plan_autonomous_cancel(
 ) -> Result<Json<EvmTransactionIntent>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
     let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
-    if item.status != "open" && item.status != "claimable" {
-        return Err(StatusCode::CONFLICT);
-    }
+    let caller = request.caller.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
+    let funding_deadline = item
+        .terms
+        .as_ref()
+        .and_then(|terms| terms.document.contract_terms["funding_deadline"].as_u64());
+    let observed_at =
+        u64::try_from(Utc::now().timestamp()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let caller = validate_autonomous_cancel_authority(
+        &item.status,
+        &item.creator,
+        caller,
+        funding_deadline,
+        observed_at,
+    )
+    .map_err(|error| match error {
+        ChainBaseError::InvalidAddress(_) => StatusCode::BAD_REQUEST,
+        ChainBaseError::InvalidVerificationConfiguration(message)
+            if message.contains("cannot be cancelled") =>
+        {
+            StatusCode::CONFLICT
+        }
+        _ => StatusCode::FORBIDDEN,
+    })?;
     configured_autonomous_planner(network)?
-        .plan_cancel(&request.bounty_contract, request.caller.as_deref())
+        .plan_cancel(&request.bounty_contract, Some(&caller))
         .map(Json)
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
@@ -13347,6 +13369,10 @@ mod tests {
             .supported_actions
             .iter()
             .any(|action| action == "post_bounty"));
+        assert!(policy
+            .supported_actions
+            .iter()
+            .any(|action| action == "cancel_bounty"));
         assert_eq!(
             legal_website_base_url(None, "https://api.agentbounties.app/"),
             "https://agentbounties.app"
