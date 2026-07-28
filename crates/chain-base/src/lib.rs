@@ -3408,6 +3408,35 @@ pub struct AutonomousBountyFeedItem {
     pub events: Vec<AutonomousBountyEvent>,
 }
 
+pub fn validate_autonomous_cancel_authority(
+    status: &str,
+    creator: &str,
+    caller: &str,
+    funding_deadline: Option<u64>,
+    observed_at_unix: u64,
+) -> Result<String, ChainBaseError> {
+    if !matches!(status, "open" | "claimable") {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "claimed or finalized bounties cannot be cancelled".to_string(),
+        ));
+    }
+    let creator = normalize_address(creator)?;
+    let caller = normalize_address(caller)?;
+    if caller != creator {
+        let funding_deadline = funding_deadline.ok_or_else(|| {
+            ChainBaseError::InvalidVerificationConfiguration(
+                "funding deadline is unavailable for non-creator cancellation".to_string(),
+            )
+        })?;
+        if observed_at_unix <= funding_deadline {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "only the creator can cancel before the immutable funding deadline".to_string(),
+            ));
+        }
+    }
+    Ok(caller)
+}
+
 pub fn standing_meta_v2_parent_context(
     item: &AutonomousBountyFeedItem,
 ) -> Result<StandingMetaV2ParentContext, ChainBaseError> {
@@ -6554,6 +6583,45 @@ mod tests {
     use domain::Money;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn cancellation_authority_matches_contract_rules() {
+        let creator = "0x1111111111111111111111111111111111111111";
+        let outsider = "0x2222222222222222222222222222222222222222";
+
+        assert_eq!(
+            validate_autonomous_cancel_authority(
+                "claimable",
+                creator,
+                creator,
+                Some(2_000),
+                1_000,
+            )
+            .unwrap(),
+            creator
+        );
+        assert!(validate_autonomous_cancel_authority(
+            "claimable",
+            creator,
+            outsider,
+            Some(2_000),
+            2_000,
+        )
+        .is_err());
+        assert_eq!(
+            validate_autonomous_cancel_authority("open", creator, outsider, Some(2_000), 2_001,)
+                .unwrap(),
+            outsider
+        );
+        assert!(validate_autonomous_cancel_authority(
+            "claimed",
+            creator,
+            creator,
+            Some(2_000),
+            1_000,
+        )
+        .is_err());
+    }
 
     #[test]
     fn hosted_relayer_derives_public_address_and_redacts_private_key() {

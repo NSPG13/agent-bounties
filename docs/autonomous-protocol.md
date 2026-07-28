@@ -423,6 +423,15 @@ The principal lifecycle is:
 Rejection and expiry paths return to `Claimable`. `Open` or `Claimable` may move
 to `Cancelled`, after which contributors pull refunds.
 
+Creator cancellation is exposed as `plan_autonomous_cancel` and the
+`/v1/base/autonomous-bounties/cancel-plan` API. Both require an explicit caller
+and fail before producing calldata when the state is not `Open` or `Claimable`.
+Before the immutable funding deadline, the caller must equal the indexed
+creator; after that deadline any caller may perform protocol cleanup, matching
+the contract. Cancellation is a delist and custody transition, not deletion of
+chain history. Each contributor then calls `withdrawRefund()` from the wallet
+that funded the bounty.
+
 Important events include:
 
 - `FundingAdded`

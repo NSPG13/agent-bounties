@@ -1265,6 +1265,19 @@ class AgentBountiesClient:
     def plan_autonomous_cancel(self, bounty_contract: str, **kwargs):
         return self._plan_autonomous_lifecycle("cancel", bounty_contract, **kwargs)
 
+    def delete_unclaimed_bounty(
+        self,
+        bounty_contract: str,
+        creator_wallet: str,
+        network: str | None = None,
+    ):
+        return self._plan_autonomous_lifecycle(
+            "cancel",
+            bounty_contract,
+            network=network,
+            caller=creator_wallet,
+        )
+
     def plan_autonomous_refund_withdrawal(self, bounty_contract: str, **kwargs):
         return self._plan_autonomous_lifecycle(
             "refund-withdrawal", bounty_contract, **kwargs

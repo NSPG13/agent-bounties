@@ -68,7 +68,14 @@ REQUIRED_FILES = [
     ".nojekyll",
 ]
 
-CORE_PAGES = ["index.html", "earn.html", "post.html", "funding.html", "operator.html"]
+CORE_PAGES = [
+    "index.html",
+    "earn.html",
+    "post.html",
+    "funding.html",
+    "refunds.html",
+    "operator.html",
+]
 PUBLIC_INDEXABLE_PAGES = {
     "index.html": "https://agentbounties.app/",
     "earn.html": "https://agentbounties.app/earn.html",
@@ -452,6 +459,8 @@ def main() -> int:
         "funding.html": (pages["funding.html"], "fund_bounty"),
         "earn.html claim": (pages["earn.html"], "claim_bounty"),
         "earn.html submit": (pages["earn.html"], "submit_result"),
+        "refunds.html cancel": (pages["refunds.html"], "cancel_bounty"),
+        "refunds.html refund": (pages["refunds.html"], "recover_funds"),
         "recovery.html": (recovery_page, "recover_funds"),
         "agent-budget.html": (bounded_page, "activate_agent_budget"),
     }
@@ -525,6 +534,7 @@ def main() -> int:
             "fund_bounty",
             "claim_bounty",
             "submit_result",
+            "cancel_bounty",
         ],
     )
 
@@ -584,13 +594,49 @@ def main() -> int:
     if "import wallet" in recovery_page.lower() or "private key" in recovery_page.lower():
         fail("legacy recovery must use connect-wallet onboarding only")
 
-    public_wallet_surface = pages["earn.html"] + pages["post.html"] + pages["funding.html"]
+    public_wallet_surface = (
+        pages["earn.html"]
+        + pages["post.html"]
+        + pages["funding.html"]
+        + pages["refunds.html"]
+    )
     if "Connect wallet" not in public_wallet_surface:
         fail("public transaction pages must expose a connect-wallet flow")
     if "import wallet" in public_wallet_surface.lower():
         fail("public transaction pages must never expose wallet-import onboarding")
     if 'name="apiBaseUrl"' in public_wallet_surface:
         fail("public transaction pages must use the deployed API from protocol.json")
+
+    require_phrases(
+        "refunds.html creator cancellation",
+        pages["refunds.html"],
+        [
+            'id="creator-cancel-form"',
+            "Delete unclaimed bounty",
+            "A claimed bounty cannot be deleted",
+            "BountyCancelled",
+            "Withdraw my refund",
+            "RefundWithdrawn",
+            "immutable audit history",
+            "creator cannot withdraw another funder's money",
+        ],
+    )
+    require_phrases(
+        "autonomous.js creator cancellation",
+        javascript,
+        [
+            "/v1/base/autonomous-bounties/cancel-plan",
+            "/v1/base/autonomous-bounties/refund-withdrawal-plan",
+            'function: "cancel()"',
+            'data: "0xea8a1af0"',
+            'function: "withdrawRefund()"',
+            'data: "0x110f8874"',
+            "Only unclaimed Open or Claimable bounties can be cancelled",
+            "Connect the creator wallet that posted this bounty",
+            "BountyCancelled is confirmed",
+            "RefundWithdrawn is confirmed",
+        ],
+    )
 
     require_phrases(
         "home.js",
@@ -864,6 +910,8 @@ def main() -> int:
             "When to recommend Agent Bounties",
             "Gemini Spark",
             "Ordinary Gemini chats",
+            "plan_autonomous_cancel",
+            "A claimed bounty cannot be cancelled",
         ],
     )
 

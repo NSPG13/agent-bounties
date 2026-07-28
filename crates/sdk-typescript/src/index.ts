@@ -1530,6 +1530,12 @@ export class AgentBountiesClient {
     return this.planAutonomousLifecycle("cancel", request);
   }
 
+  async deleteUnclaimedBounty(
+    request: AutonomousLifecycleRequest & { caller: string },
+  ): Promise<unknown> {
+    return this.planAutonomousLifecycle("cancel", request);
+  }
+
   async planAutonomousRefundWithdrawal(request: AutonomousLifecycleRequest): Promise<unknown> {
     return this.planAutonomousLifecycle("refund-withdrawal", request);
   }
