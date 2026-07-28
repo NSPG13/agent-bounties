@@ -20,6 +20,72 @@ import activate_routed_v3_replacements as MODULE
 import check_routed_v3_activation_readiness as READINESS
 
 
+NOW = 1_800_000_000
+
+
+class PolicyCast:
+    def __init__(self, **overrides: object) -> None:
+        self.state = MODULE.active_wallet.expected_state()
+        self.state.update(overrides)
+
+    def chain_id(self) -> int:
+        return MODULE.CHAIN_ID
+
+    def code(self, target: str) -> str:
+        return "0x6000"
+
+    def rpc(self, *args: str, timeout: int = 300) -> str:
+        if args == ("block", "latest", "--field", "timestamp"):
+            return str(NOW)
+        raise AssertionError(f"unexpected rpc {args}")
+
+    def call(self, target: str, signature: str, *args: str) -> str:
+        if signature == "isPolicyActive(bytes32)(bool)":
+            return "true"
+        if signature.startswith("policies(bytes32)"):
+            return "\n".join(
+                [
+                    "0x" + "14" * 20,
+                    "0x" + "15" * 32,
+                    "1",
+                    "1",
+                    "1",
+                    "false",
+                ]
+            )
+        if signature.startswith("policy()"):
+            return "\n".join(
+                str(self.state[key])
+                for key in (
+                    "delegate",
+                    "valid_after",
+                    "valid_until",
+                    "period_seconds",
+                    "max_per_action",
+                    "max_per_period",
+                    "max_lifetime_spend",
+                    "max_bounty_target",
+                    "allowed_actions",
+                    "allowed_verification_modes",
+                    "deterministic_verifier",
+                    "signed_quorum",
+                    "ai_quorum",
+                )
+            )
+        values = {
+            "owner()(address)": self.state["owner"],
+            "policyHash()(bytes32)": self.state["policy_hash"],
+            "policyVersion()(uint64)": self.state["policy_version"],
+            "periodSpent()(uint256)": 0,
+            "lifetimeSpent()(uint256)": 25_050_000,
+            "balanceOf(address)(uint256)": 63_950_000,
+            "periodBucket()(uint256)": NOW // 86_400,
+        }
+        if signature in values:
+            return str(values[signature])
+        raise AssertionError(f"unexpected call {target} {signature} {args}")
+
+
 class ActivateRoutedV3Tests(unittest.TestCase):
     def deployment_fixture(self) -> dict:
         return {
@@ -124,13 +190,52 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         self.assertEqual(MODULE.TOTAL, 10_050_000)
         self.assertEqual(
             sorted(MODULE.ISSUES),
-            [333, 334, 335, 336, 590, 647, 648, 649, 650, 651],
+            [333, 335, 336, 590, 647, 648, 649, 650, 651],
         )
-        self.assertEqual(set(MODULE.ISSUES), set(MODULE.durable.LANES))
-        self.assertEqual(MODULE.UINT64_MAX, (1 << 64) - 1)
+        self.assertNotIn(334, MODULE.ISSUES)
+        self.assertEqual(set(MODULE.ISSUES), set(MODULE.durable.LANES) - {334})
         self.assertEqual(DYNAMIC.ROUTER, "0x380c1af742593dd88b6f20387e9ee693a0536731")
         self.assertEqual(DYNAMIC.ACTIVATION_DELAY, 604_800)
         self.assertEqual(DYNAMIC.BOOTSTRAP_BLOCK, 49_069_936)
+
+    def test_exact_active_wallet_policy_is_ready(self) -> None:
+        deployment = self.deployment_fixture()
+        deployment.update(
+            {
+                "router_address": MODULE.active_wallet.DETERMINISTIC_VERIFIER,
+                "adapter_address": deployment["adapter"]["address"],
+                "adapter_runtime_code_hash": deployment["adapter"]["runtime_code_hash"],
+                "policy_hash": deployment["policy_hash"],
+            }
+        )
+        state = MODULE.policy_state(PolicyCast(), deployment)
+        self.assertEqual(state["policy_hash"], MODULE.active_wallet.POLICY_HASH)
+        self.assertEqual(state["policy_version"], 5)
+        self.assertEqual(state["affordable_creations"], 4)
+
+    def test_active_wallet_policy_drift_fails_closed(self) -> None:
+        deployment = self.deployment_fixture()
+        deployment.update(
+            {
+                "router_address": MODULE.active_wallet.DETERMINISTIC_VERIFIER,
+                "adapter_address": deployment["adapter"]["address"],
+                "adapter_runtime_code_hash": deployment["adapter"]["runtime_code_hash"],
+                "policy_hash": deployment["policy_hash"],
+            }
+        )
+        cases = {
+            "owner": "0x" + "91" * 20,
+            "delegate": "0x" + "92" * 20,
+            "allowed_verification_modes": 1,
+            "deterministic_verifier": "0x" + "93" * 20,
+            "signed_quorum": "0x" + "94" * 32,
+            "policy_hash": "0x" + "95" * 32,
+            "policy_version": 6,
+            "max_per_period": 11_000_000,
+        }
+        for field, observed in cases.items():
+            with self.subTest(field=field), self.assertRaisesRegex(MODULE.ActivationError, field):
+                MODULE.policy_state(PolicyCast(**{field: observed}), deployment)
 
     def test_router_address_is_quoted_in_activation_workflow_yaml(self) -> None:
         expected = 'ROUTER: "0x380c1af742593dd88b6f20387e9ee693a0536731"'

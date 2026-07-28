@@ -10,36 +10,36 @@ contract wallet, and the agent receives only a dedicated delegate signing key.
 The contract enforces the limits even if the agent, its prompt, the hosted API,
 or a relayer is compromised.
 
-## Initial 89 USDC Policy
+## Active 89 USDC Policy
 
-The proposed first mainnet policy is:
+Base mainnet wallet
+`0x1eaa1c68772cf76bc5f4e4174766076e33ace662` currently uses policy
+version 5:
 
 | Boundary | Value |
 | --- | ---: |
 | Network and asset | Base mainnet native USDC |
-| Initial funding and lifetime gross spend | 89 USDC |
+| Lifetime gross spend | 89 USDC |
 | Maximum one action | 5 USDC |
 | Maximum each fixed 24-hour period | 10 USDC |
 | Maximum bounty target | 5 USDC |
-| Expiry | 30 days |
+| Delegate | `0xc26a630e85134ed30968735c8e7de4576cfa5dbc` |
+| Expiry | No automatic expiry; owner can revoke or replace |
 | Actions | create, fund, claim, submit |
-| Verification | historical standing-meta-v2 module plus exact sandboxed-regression signed quorum |
+| Deterministic verification | durable router `0x380c1af742593dd88b6f20387e9ee693a0536731` |
+| Signed verification | exact `sandboxed_regression_v1` threshold-two set |
 
-The first live policy allowed the permissionless proof-of-work module. Policy
-version two replaced that module with the standing-meta-v2 verifier. The
-reviewed version-three policy keeps that module and adds only verifier set
-`0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd`
-for `sandboxed_regression_v1`; arbitrary signed quorums and AI-judge actions
-remain disabled at the bounded-wallet layer. Until an on-chain inspection
-reports version three and its exact policy hash, version two remains active.
-The five funded standing-meta-v2 parents are now recovery-reserved and must not
-be selected for new delegated earning actions. Adding a future anonymous,
-appealable successor requires an explicit owner policy replacement after its
-deployment evidence is published; the existing policy does not authorize it.
-Returned
-claim bonds and bounty earnings increase the wallet balance but do not restore
-the gross lifetime budget. The owner must explicitly replace the policy to
-extend authority.
+The exact policy hash is
+`0xac8c86836e1cab2b4707420057d414b0dfa675006bda6584df7fb9118caabe88`.
+Owner transaction
+`0x7b6cce94eb19ecb60cbec268fe9fce33847190b2cb7f33af6802b1e223b89201`
+configured it at block `49211742`. Automation must pin all policy fields,
+version, and hash; accepting any live policy is unsafe.
+
+The five funded standing-meta-v2 parents are recovery-reserved and cannot be
+selected for new earning actions. Returned claim bonds and bounty earnings
+increase the wallet balance but do not restore gross lifetime authority. The
+owner must explicitly replace the policy to change that authority.
 
 ## Security Status
 
@@ -123,22 +123,21 @@ delegate actions immediately. The owner may then call
 `withdrawToken(nativeUsdc, owner, balance)` or install a reviewed replacement
 policy. Ownership transfer is two-step.
 
-An existing wallet may add the reviewed regression quorum with one zero-value
-`configurePolicy` transaction. Use a fresh delegate at the same time because
-local bindings are intentionally immutable. The activation page reads the
-complete live policy, accepts only known verifier authority, installs the exact
-dual-mode policy, simulates the call, and verifies the receipt, version, caps,
-balance, and lifetime spend. The deployed wallet starts a fresh policy-period
-counter on every policy replacement; the review page discloses the observed
-period spend before signing instead of claiming it is preserved.
+An existing wallet may replace its policy with one zero-value
+`configurePolicy` transaction. Use a fresh delegate when rotating a compromised
+signer. The activation page must read the complete live policy, accept only
+reviewed verifier authority, simulate the exact call, and verify the receipt,
+version, hash, caps, balance, and lifetime spend. Policy replacement starts a
+fresh policy-period counter; the review page must disclose that before signing.
 
 ## Activation State
 
-The deterministic mainnet manifest is
+The deterministic contract manifest is
 [`deployments/bounded-agent-wallet-base-mainnet.json`](../deployments/bounded-agent-wallet-base-mainnet.json).
-Until its factory address contains the exact reviewed runtime bytecode, it is a
-deployment plan, not a live wallet. Do not transfer USDC to a predicted address
-before deployment and inspection pass.
+The live policy constants and owner-transaction evidence are in
+[`scripts/bounded_wallet_policy.py`](../scripts/bounded_wallet_policy.py).
+Runtime inspection remains authoritative. Do not transfer USDC to a predicted
+wallet before deployment and inspection pass.
 
 The harness covers policy substitution, unauthorized modules and verifier
 sets, target and spend caps, replay, signature malleability, policy rotation,
