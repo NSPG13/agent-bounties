@@ -3767,6 +3767,29 @@ fn verifier_set_hash_from_policy(policy: &Value) -> Result<String, ChainBaseErro
     Ok(format!("0x{}", hex::encode(Keccak256::digest(encoded))))
 }
 
+fn is_supported_regression_quorum(
+    creation_data: &Value,
+    terms: Option<&AutonomousBountyTermsRecord>,
+) -> bool {
+    let Some(terms) = terms else {
+        return false;
+    };
+    let policy = &terms.document.verification_policy;
+    let benchmark = &terms.document.benchmark;
+    creation_data["verifier_set_hash"]
+        .as_str()
+        .is_some_and(|hash| {
+            hash.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH)
+        })
+        && creation_data["threshold"].as_u64()
+            == Some(BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() as u64)
+        && policy.get("mechanism").and_then(Value::as_str) == Some("signed_quorum")
+        && policy.get("engine").and_then(Value::as_str)
+            == Some(STANDING_META_V2_REGRESSION_ENGINE)
+        && benchmark.get("engine").and_then(Value::as_str)
+            == Some(STANDING_META_V2_REGRESSION_ENGINE)
+}
+
 pub fn validate_attestation_request_against_feed(
     item: &AutonomousBountyFeedItem,
     request: &AutonomousVerificationAttestationRequest,
@@ -4745,6 +4768,13 @@ pub fn build_autonomous_bounty_feed(
         let terms_valid = validation_errors.is_empty();
         let (verification_ready, verification_readiness_reason) = if !terms_valid {
             (false, "content-addressed terms are invalid or unavailable")
+        } else if verification_mode == "signed_quorum"
+            && is_supported_regression_quorum(&creation_data, terms_record.as_ref())
+        {
+            (
+                true,
+                "the exact built-in sandboxed-regression quorum is supported",
+            )
         } else if verification_mode != "deterministic_module" {
             (
                 false,
@@ -7359,6 +7389,29 @@ mod tests {
             record.creator_wallet,
             "0x3333333333333333333333333333333333333333"
         );
+        assert!(!is_supported_regression_quorum(
+            &json!({
+                "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+                "threshold": 2
+            }),
+            Some(&record)
+        ));
+        let mut supported_record = record.clone();
+        supported_record.document.benchmark =
+            json!({"engine": STANDING_META_V2_REGRESSION_ENGINE});
+        supported_record.document.verification_policy = json!({
+            "mechanism": "signed_quorum",
+            "engine": STANDING_META_V2_REGRESSION_ENGINE,
+            "threshold": 2,
+            "verifiers": BASE_MAINNET_STANDING_META_V2_VERIFIERS
+        });
+        assert!(is_supported_regression_quorum(
+            &json!({
+                "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+                "threshold": 2
+            }),
+            Some(&supported_record)
+        ));
         let mut create = AutonomousBountyCreate {
             creator: record.creator_wallet.clone(),
             solver_reward: Money::new(900_000, "usdc").unwrap(),
