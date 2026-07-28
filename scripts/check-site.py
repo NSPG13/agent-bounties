@@ -10,6 +10,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urldefrag, urlparse
 
+import yaml
+
 
 REQUIRED_FILES = [
     "index.html",
@@ -385,6 +387,11 @@ def main() -> int:
     bounty_entry_javascript = (site_dir / "bounty-entry.js").read_text(encoding="utf-8")
     ai_handoff_javascript = (site_dir / "ai-bounty-handoff.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
+    posting_guide = (repo_root / "docs" / "posting-a-usable-bounty.md").read_text(encoding="utf-8")
+    bounty_template = (repo_root / ".github" / "ISSUE_TEMPLATE" / "paid-bounty.yml").read_text(encoding="utf-8")
+    parsed_bounty_template = yaml.safe_load(bounty_template)
+    if not isinstance(parsed_bounty_template, dict) or parsed_bounty_template.get("name") != "Bounty draft":
+        fail("paid bounty issue template must be valid YAML with the expected form name")
     objective_page = (site_dir / "objective.html").read_text(encoding="utf-8")
     objective_javascript = (site_dir / "objective.js").read_text(encoding="utf-8")
     discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text(encoding="utf-8"))
@@ -595,6 +602,10 @@ def main() -> int:
             "/v1/opportunities",
             "/v1/opportunities/stream",
             "new EventSource",
+            "stream.onopen",
+            "stream.onerror",
+            "Live stream connected",
+            "Live stream reconnecting",
             "Ready to earn",
             "Open opportunities",
             "Seeking funding",
@@ -628,6 +639,10 @@ def main() -> int:
             "source_type=canonical_base",
             "/v1/opportunities/stream",
             "new EventSource",
+            "stream.onopen",
+            "stream.onerror",
+            "Live stream connected",
+            "Live stream reconnecting",
             "cache: \"no-store\"",
             "no stale bounty is shown",
             "window.setInterval",
@@ -635,6 +650,21 @@ def main() -> int:
             "claim.dataset.analyticsOpportunityId = item.opportunity_id",
             "claim.dataset.analyticsBountyContract = item.source_id",
             "source=bounty-board#claim-workflow",
+        ],
+    )
+    if "refreshes every 15 seconds" in bounty_board_javascript:
+        fail("the SSE inventory must not be described as a periodic refresh")
+    require_phrases(
+        "usable bounty publication contracts",
+        posting_guide + bounty_template,
+        [
+            "Positive solver net value",
+            "known-good and known-bad rehearsal",
+            "permissionless timeout",
+            "cancellation",
+            "contributor refund",
+            "one active canonical contract",
+            "remove this bounty from earning inventory immediately",
         ],
     )
     require_phrases(

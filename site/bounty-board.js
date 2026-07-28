@@ -8,6 +8,7 @@
     sort: "newest",
     refreshing: false,
     lastSync: 0,
+    streamConnected: false,
   };
   const REFRESH_MS = 15_000;
   const STREAM_STALE_MS = 35_000;
@@ -158,7 +159,10 @@
       count.textContent = `${items.length} funded ${items.length === 1 ? "bounty" : "bounties"} ready to claim`;
     }
     if (updated) {
-      updated.textContent = `Live sync ${new Date(state.lastSync).toLocaleTimeString()} - refreshes every 15 seconds`;
+      const timestamp = new Date(state.lastSync).toLocaleTimeString();
+      updated.textContent = state.streamConnected
+        ? `Live stream connected - updated ${timestamp}`
+        : `Live stream reconnecting - fallback updated ${timestamp}`;
     }
     if (!items.length) {
       const empty = document.createElement("p");
@@ -273,8 +277,13 @@
     const api = String(protocol.api_base_url || "").replace(/\/$/, "");
     const url = `${api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300&live=${Date.now()}`;
     const stream = new EventSource(url);
+    stream.onopen = () => {
+      state.streamConnected = true;
+      render();
+    };
     stream.addEventListener("inventory", (event) => {
       try {
+        state.streamConnected = true;
         applyProjection(JSON.parse(event.data));
       } catch (error) {
         showUnavailable(error);
@@ -284,8 +293,11 @@
       showUnavailable(new Error("Canonical inventory is unavailable."));
     });
     stream.onerror = () => {
+      state.streamConnected = false;
       if (Date.now() - state.lastSync >= STREAM_STALE_MS) {
         showUnavailable(new Error("Live inventory stream disconnected."));
+      } else {
+        render();
       }
     };
   }

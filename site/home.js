@@ -16,6 +16,7 @@
     refreshing: false,
     rendered: false,
     status: "connecting",
+    streamConnected: false,
   };
   const reduceMotion = window.matchMedia
     && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -482,10 +483,14 @@
       return;
     }
     if (marketState.refreshing) {
-      updated.textContent = `Refreshing · last sync ${formatElapsed(age)}`;
+      updated.textContent = marketState.streamConnected
+        ? `Refreshing supporting metrics - live inventory updated ${formatElapsed(age)}`
+        : `Live stream reconnecting - fallback sync ${formatElapsed(age)}`;
       return;
     }
-    updated.textContent = `Live sync ${formatElapsed(age)}`;
+    updated.textContent = marketState.streamConnected
+      ? `Live stream connected - updated ${formatElapsed(age)}`
+      : `Live stream reconnecting - fallback updated ${formatElapsed(age)}`;
   }
 
   function setMarketStatus(status) {
@@ -638,9 +643,14 @@
     const stream = new EventSource(
       `${api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300&live=${Date.now()}`,
     );
+    stream.onopen = () => {
+      marketState.streamConnected = true;
+      updateMarketClock();
+    };
     stream.addEventListener("inventory", (event) => {
       try {
         const readyProjection = JSON.parse(event.data);
+        marketState.streamConnected = true;
         marketState.readyProjection = readyProjection;
         if (!marketState.projection || !marketState.claim) {
           refreshMarket();
@@ -664,6 +674,14 @@
       document.getElementById("home-live-inventory").textContent =
         "Live earning inventory is unavailable. Retrying automatically; no stale bounty is shown.";
     });
+    stream.onerror = () => {
+      marketState.streamConnected = false;
+      if (!marketState.lastReceivedAt
+        || Date.now() - marketState.lastReceivedAt >= MARKET_STREAM_STALE_MS) {
+        setMarketStatus("delayed");
+      }
+      updateMarketClock();
+    };
   }
 
   function loadInventory() {

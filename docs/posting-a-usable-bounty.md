@@ -15,9 +15,11 @@ is not paid earning inventory.
 5. Calculate the solver's net economics.
 6. Publish immutable terms under one unique source URL.
 7. Simulate creation, claim, submission, verification, and settlement.
-8. Create and fully fund the bounty atomically.
-9. Confirm the canonical creation, funding, and claimability events.
-10. Confirm the exact contract appears in the ready-to-earn feed.
+8. Set live funding, claim, submission, verification, cancellation, and refund
+   deadlines.
+9. Create and fully fund the bounty atomically.
+10. Confirm the canonical creation, funding, and claimability events.
+11. Confirm the exact contract appears in the ready-to-earn feed.
 
 Do not skip steps.
 
@@ -72,6 +74,24 @@ meta-bounty is unusable even when its gross reward is positive.
 The initial funding must equal the complete solver and verifier obligation.
 Verifier rewards must divide exactly across the committed threshold.
 
+## Lifecycle And Replacement
+
+Every bounty must have a finite, executable exit from every nonterminal state.
+Before funding, prove that:
+
+- the funding deadline is still live;
+- the claim and verification windows are long enough to run the committed work
+  and verifier;
+- an expired claim or submission can be advanced permissionlessly;
+- cancellation and contributor refunds work for the exact contract;
+- monitoring removes the bounty from earning inventory as soon as claimability,
+  funding, verifier readiness, or dependency readiness fails.
+
+Do not repair immutable terms in place. Cancel and refund the unusable contract,
+preserve it only in audit history, and create a rehearsed replacement under a
+new source URL. A replacement is not public earning inventory until its own
+canonical events and ready-to-earn projection pass.
+
 ## Source And Publication
 
 Use one GitHub issue or other source URL for one active canonical contract.
@@ -122,6 +142,8 @@ window, recovery-reserved contract, or ambiguous replacement as ready to earn.
 - [ ] Every required child/dependency path rehearsed now
 - [ ] Positive solver net value
 - [ ] Full atomic initial funding
+- [ ] Live deadlines and permissionless timeout transitions
+- [ ] Cancellation and contributor refund path rehearsed
 - [ ] Unique source URL
 - [ ] Claim, submit, verify, and settle rehearsal passed
 - [ ] Three canonical publication events confirmed
