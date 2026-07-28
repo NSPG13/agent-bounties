@@ -7,6 +7,11 @@
   const MAX_TASK_DAYS = 30;
   const MIN_TOTAL_USDC = 0.02;
   const MAX_TOTAL_USDC = 9_000_000_000;
+  const REGRESSION_ENGINE = "sandboxed_regression_v1";
+  const REGRESSION_VERIFIERS = [
+    "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+    "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
+  ];
   const VISUAL_EXTENSION = "x-agent-bounties-draft-visual";
   const ALLOWED_SCENES = new Set([
     "infrastructure", "digital", "nature", "health", "research", "education", "coordination", "general",
@@ -176,7 +181,8 @@
     if (totalUnits < 20_000n) throw new Error("The current protocol requires at least 0.02 USDC in total.");
     const proportional = totalUnits / 50n;
     const verifier = proportional < 10_000n ? 10_000n : proportional;
-    const cappedVerifier = verifier > totalUnits / 5n ? totalUnits / 5n : verifier;
+    let cappedVerifier = verifier > totalUnits / 5n ? totalUnits / 5n : verifier;
+    if (cappedVerifier % 2n !== 0n) cappedVerifier -= 1n;
     const solver = totalUnits - cappedVerifier;
     if (solver < 10_000n) throw new Error("The solver reward must remain at least 0.01 USDC.");
     return { total: totalUnits, solver, verifier: cappedVerifier };
@@ -985,6 +991,47 @@
     return benchmark;
   }
 
+  function supportedVerificationPolicy() {
+    const benchmark = missionBenchmark(state.draft?.benchmark || {});
+    const source = benchmark.source;
+    const runner = benchmark.runner_manifest;
+    const sourceReady = source?.kind === "github_commit"
+      && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(source.repository || "")
+      && /^[0-9a-f]{40}$/.test(source.commit || "")
+      && typeof source.subdirectory === "string"
+      && source.subdirectory.length > 0
+      && source.subdirectory !== "."
+      && !source.subdirectory.startsWith("/")
+      && !source.subdirectory.includes("\\");
+    const runnerReady = runner?.schema_version === "agent-bounties/regression-sandbox-v1"
+      && typeof runner.image === "string"
+      && /@sha256:[0-9a-f]{64}$/.test(runner.image)
+      && Array.isArray(runner.command)
+      && runner.command.length > 0
+      && runner.workdir === "/workspace"
+      && /^sha256:[0-9a-f]{64}$/.test(runner.benchmark_digest || "");
+    if (benchmark.engine !== REGRESSION_ENGINE || !sourceReady || !runnerReady) {
+      throw new Error(
+        "This draft has no executable verifier, so it cannot be funded. Add the exact public benchmark source and complete sandbox runner manifest, then retry.",
+      );
+    }
+    return {
+      mechanism: "signed_quorum",
+      engine: REGRESSION_ENGINE,
+      verifier_module: null,
+      verifier_reward_recipient: null,
+      verifiers: REGRESSION_VERIFIERS,
+      threshold: REGRESSION_VERIFIERS.length,
+      ai_provider: null,
+      ai_model: null,
+      ai_model_version: null,
+      system_prompt: null,
+      rubric: "Both pinned verifier agents run the precommitted sandboxed regression and require every acceptance criterion to pass.",
+      decoding_parameters: {},
+      public_disclosure: "The platform's exact two-verifier sandboxed-regression policy decides pass or fail from the precommitted coding benchmark.",
+    };
+  }
+
   function wrapCanvasText(context, text, maxWidth, maxLines) {
     const words = String(text || "").split(/\s+/).filter(Boolean);
     const lines = [];
@@ -1116,9 +1163,9 @@
 
   function contractTerms(protocol,rewards){const now=Math.floor(Date.now()/1000);return{protocol_version:protocol.protocol_version,creator_wallet:state.account,network:protocol.network,settlement_token:protocol.native_usdc,solver_reward:{amount:Number(rewards.solver),currency:"usdc"},verifier_reward:{amount:Number(rewards.verifier),currency:"usdc"},claim_bond:{amount:Number(rewards.verifier),currency:"usdc"},initial_funding:{amount:Number(rewards.total),currency:"usdc"},funding_deadline:now+30*86400,claim_window_seconds:state.taskWindowDays*86400,verification_window_seconds:48*3600,creation_nonce:randomBytes32()};}
 
-  function termsDocument(committed){return{schema_version:"agent-bounties/terms-v1",contract_terms:committed,title:state.draft.title,goal:state.draft.goal,acceptance_criteria:state.draft.acceptance_criteria,benchmark:canonicalJsonValue(missionBenchmark(state.draft.benchmark||{type:"creator_review"})),evidence_schema:canonicalJsonValue(stripVisualExtension(state.draft.evidence_schema)),verification_policy:{mechanism:"signed_quorum",verifier_module:null,verifier_reward_recipient:null,verifiers:[state.account],threshold:1,ai_provider:null,ai_model:null,ai_model_version:null,system_prompt:null,rubric:null,decoding_parameters:{},public_disclosure:"The bounty creator is the single subjective verifier and decides pass or fail against the published acceptance criteria."},source_url:null,discovery_source:"web_ai_bounty_card_composer_v2"};}
+  function termsDocument(committed){return{schema_version:"agent-bounties/terms-v1",contract_terms:committed,title:state.draft.title,goal:state.draft.goal,acceptance_criteria:state.draft.acceptance_criteria,benchmark:canonicalJsonValue(missionBenchmark(state.draft.benchmark||{})),evidence_schema:canonicalJsonValue(stripVisualExtension(state.draft.evidence_schema)),verification_policy:supportedVerificationPolicy(),source_url:null,discovery_source:"web_ai_bounty_card_composer_v2"};}
 
-  function createPayload(terms,committed){return{creator:state.account,solver_reward:committed.solver_reward,verifier_reward:committed.verifier_reward,terms_hash:terms.terms_hash,policy_hash:terms.policy_hash,acceptance_criteria_hash:terms.acceptance_criteria_hash,benchmark_hash:terms.benchmark_hash,evidence_schema_hash:terms.evidence_schema_hash,funding_deadline:committed.funding_deadline,claim_window_seconds:committed.claim_window_seconds,verification_window_seconds:committed.verification_window_seconds,verification_mode:"signed_quorum",verifier_module:null,verifier_reward_recipient:null,verifiers:[state.account],threshold:1,initial_funding:committed.initial_funding,creation_nonce:committed.creation_nonce};}
+  function createPayload(terms,committed){return{creator:state.account,solver_reward:committed.solver_reward,verifier_reward:committed.verifier_reward,terms_hash:terms.terms_hash,policy_hash:terms.policy_hash,acceptance_criteria_hash:terms.acceptance_criteria_hash,benchmark_hash:terms.benchmark_hash,evidence_schema_hash:terms.evidence_schema_hash,funding_deadline:committed.funding_deadline,claim_window_seconds:committed.claim_window_seconds,verification_window_seconds:committed.verification_window_seconds,verification_mode:"signed_quorum",verifier_module:null,verifier_reward_recipient:null,verifiers:REGRESSION_VERIFIERS,threshold:REGRESSION_VERIFIERS.length,initial_funding:committed.initial_funding,creation_nonce:committed.creation_nonce};}
 
   function validateCreationPlan(plan,protocol,create){if(!plan||!/^0x[0-9a-fA-F]{40}$/.test(plan.predicted_bounty_contract||""))throw new Error("The creation plan did not return a valid bounty address.");if(Number(plan.network&&plan.network.chain_id)!==Number(protocol.chain_id))throw new Error("The creation plan targets the wrong network.");if(String(plan.factory_contract||"").toLowerCase()!==String(protocol.factory).toLowerCase())throw new Error("The creation plan does not use the canonical factory.");const target=Number(create.solver_reward.amount)+Number(create.verifier_reward.amount);if(Number(create.initial_funding.amount)!==target)throw new Error("The creation plan is not fully funded.");}
 
@@ -1187,7 +1234,15 @@
   ui.watchUsdc.addEventListener("click",watchUsdcAsset);
   ui.copyUsdc.addEventListener("click",copyUsdcAddress);
   ui.recheck.addEventListener("click",()=>refreshWalletReadiness().catch((error)=>setPaymentStatus(error.message||String(error),"error")));
-  ui.fundNow.addEventListener("click",fundApprovedBounty);
+  ui.fundNow.addEventListener("click",()=>{
+    try {
+      supportedVerificationPolicy();
+      fundApprovedBounty();
+    } catch (error) {
+      ui.fundNow.disabled = true;
+      setPaymentStatus(error.message || String(error), "error");
+    }
+  });
   ui.dialog.addEventListener("click",(event)=>{if(event.target===ui.dialog)ui.dialog.close();});
   window.addEventListener("agent-bounties:prepared-draft", (event) => {
     importPreparedDraft(event.detail).catch((error) => setStatus(error.message || String(error), "error"));

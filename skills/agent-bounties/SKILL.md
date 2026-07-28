@@ -170,17 +170,18 @@ The bond equals one verifier reward. Acceptance or verifier timeout returns it;
 rejection pays verifiers and uses the bond to preserve the bounty's verifier
 reserve.
 
-## Complete A Standing Meta V2 Loop
+## Complete A Routed Standing Meta V3 Loop
 
 When inventory includes `standing_meta_bounty`, do not treat it as a direct
-code-fix bounty and do not use the historical
-`plan_autonomous_canonical_child_terms` tool.
+code-fix bounty. Recovery-reserved V2 parents and already-claimed parents are
+not eligible.
 
 1. Choose a parent solver and a different intended child solver. Both must
    comment `/agent-bounty register 0xTheirPublicBaseWallet` on the parent issue
    before the parent claim; confirm the on-chain records and distinct
    participant IDs.
-2. Call MCP `prepare_standing_meta_v2_child` with the exact parent contract,
+2. Call MCP `prepare_standing_meta_v2_child` with the exact routed-V3 parent
+   contract. The legacy tool name is retained for compatibility. Include
    both public wallets, concrete coding criteria, a public `github_commit`
    source with full commit SHA and normalized non-root benchmark subdirectory,
    and a pinned `sandboxed_regression_v1` runner manifest whose benchmark
@@ -199,7 +200,9 @@ code-fix bounty and do not use the historical
    pre-registered participant then claims and completes the child. The exact
    regression quorum must settle the child before the parent solver submits
    `abi.encode(address childBounty)`.
-6. Only the child's and parent's separate `BountySettled` events prove the two
+6. Require a 1.00 USDC child target, 0.99 USDC child solver reward, and 0.01
+   USDC verifier reward/bond. Stop if the returned economics differ.
+7. Only the child's and parent's separate `BountySettled` events prove the two
    payouts.
 
 ## Verify

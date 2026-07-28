@@ -37,6 +37,11 @@ ISSUES = {
     335: {"lane": "MCP", "old": "0x43d42cb227d76588ab16693f14efd6cff851fa7a"},
     336: {"lane": "wallet UX", "old": "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b"},
     590: {"lane": "agent discovery", "old": None},
+    647: {"lane": "API reliability", "old": None},
+    648: {"lane": "MCP interoperability", "old": None},
+    649: {"lane": "agent wallet UX", "old": None},
+    650: {"lane": "verifier reliability", "old": None},
+    651: {"lane": "bounty distribution", "old": None},
 }
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")

@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("regression_verifier_pipeline.py")
@@ -136,6 +137,33 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
         job["terms"]["document"]["benchmark"]["source"]["branch"] = "main"
         with self.assertRaises(pipeline.PipelineError):
             pipeline.benchmark_source(job)
+
+    def test_runner_pulls_only_the_exact_committed_image(self) -> None:
+        manifest = {
+            "image": f"docker.io/library/python@sha256:{'a' * 64}",
+            "platform": "linux/amd64",
+        }
+        with mock.patch.object(pipeline, "run", return_value="") as run:
+            pipeline.pull_pinned_image(manifest, "docker")
+        run.assert_called_once_with(
+            [
+                "docker",
+                "pull",
+                "--platform",
+                "linux/amd64",
+                manifest["image"],
+            ]
+        )
+        for image in [
+            "docker.io/library/python:3.12",
+            f"DOCKER.IO/library/python@sha256:{'a' * 64}",
+            f"docker.io/library/python@sha256:{'g' * 64}",
+        ]:
+            with self.subTest(image=image), self.assertRaises(pipeline.PipelineError):
+                pipeline.pull_pinned_image(
+                    {"image": image, "platform": "linux/amd64"},
+                    "docker",
+                )
 
 
 if __name__ == "__main__":

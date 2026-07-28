@@ -156,13 +156,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Stop after completed migration
+      - name: Stop after replacement inventory is complete
         id: issue
         run: |
-          state="$(gh issue view 571 --json state --jq .state)"
+          state="$(gh issue view 652 --json state --jq .state)"
           echo "state=$state" >> "$GITHUB_OUTPUT"
           if [ "$state" = "CLOSED" ]; then
-            echo "Migration issue is closed; no action remains."
+            echo "Replacement inventory issue is closed; no action remains."
           fi
 
       - name: Read durable policy readiness
@@ -188,9 +188,11 @@ jobs:
       - name: Replace issue terms only after canonical reconciliation
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
         run: |
-          for issue in 333 334 335 336 590; do
+          for issue in 647 648 649 650 651; do
             test -f "target/routed-v3-activation/routed-v3-${issue}-issue.md" || continue
+            lane="$(jq -r --argjson issue "$issue" '.results[] | select(.issue == $issue) | .lane' target/routed-v3-activation.json)"
             gh issue edit "$issue" \
+              --title "[META] Earn 1 USDC margin with a ${lane} bounty" \
               --body-file "target/routed-v3-activation/routed-v3-${issue}-issue.md" \
               --add-label bounty \
               --add-label ai-agent-welcome \
@@ -201,14 +203,17 @@ jobs:
             gh issue edit "$issue" --remove-label verification-unavailable || true
           done
 
-      - name: Publish evidence and close migration
+      - name: Publish evidence and close completed replacement run
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
         run: |
-          gh issue comment 571 --body-file target/routed-v3-activation.md
+          new_spend="$(jq -r '.new_spend' target/routed-v3-activation.json)"
+          if [ "$new_spend" != "0" ]; then
+            gh issue comment 652 --body-file target/routed-v3-activation.md
+          fi
           complete="$(python -c 'import json; print(str(json.load(open("target/routed-v3-activation.json"))["complete"]).lower())')"
           if [ "$complete" = "true" ]; then
-            gh issue close 571 --reason completed --comment \
-              "The durable wallet policy and five routed bounties reconciled from canonical Base evidence. Only future BountySettled events prove solver payments."
+            gh issue close 652 --reason completed --comment \
+              "All five replacement bounties reconciled from canonical Base evidence and now expose the repaired routed-V3 child path. Only future BountySettled events prove solver payments."
           fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -19,7 +19,10 @@ class DurableVerifierRouterDeployTests(unittest.TestCase):
     def test_materialized_terms_share_router_policy_and_unique_nonces(self) -> None:
         router = "0x" + "12" * 20
         documents = MODULE.materialize_terms(Path(__file__).resolve().parents[1], router)
-        self.assertEqual(sorted(documents), [333, 334, 335, 336, 590])
+        self.assertEqual(
+            sorted(documents),
+            [333, 334, 335, 336, 590, 647, 648, 649, 650, 651],
+        )
         nonces = set()
         policies = []
         for issue, document in documents.items():
@@ -29,7 +32,7 @@ class DurableVerifierRouterDeployTests(unittest.TestCase):
             self.assertIn(str(issue), document["source_url"])
             nonces.add(document["contract_terms"]["creation_nonce"])
             policies.append(document["verification_policy"])
-        self.assertEqual(len(nonces), 5)
+        self.assertEqual(len(nonces), 10)
         self.assertTrue(all(policy == policies[0] for policy in policies))
 
     def test_create_payload_uses_published_commitments_and_router(self) -> None:

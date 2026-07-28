@@ -27,6 +27,7 @@ ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+PINNED_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._/:@-]{0,446}@sha256:[0-9a-f]{64}$")
 DEFAULT_API = "https://api.agentbounties.app"
 
 
@@ -245,6 +246,16 @@ def runner_manifest(job: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def pull_pinned_image(manifest: dict[str, Any], docker_binary: str) -> None:
+    image = str(manifest.get("image", ""))
+    platform = str(manifest.get("platform", ""))
+    if not PINNED_IMAGE.fullmatch(image):
+        raise PipelineError("runner image must be an immutable lowercase OCI digest")
+    if platform not in {"linux/amd64", "linux/arm64"}:
+        raise PipelineError("runner platform is unsupported")
+    run([docker_binary, "pull", "--platform", platform, image])
+
+
 def stage(
     worker: Path,
     kind: str,
@@ -275,6 +286,8 @@ def stage(
 
 def run_job(worker: Path, staging: Path, job: dict[str, Any], scratch: Path) -> dict[str, Any]:
     manifest = runner_manifest(job)
+    docker_binary = os.environ.get("REGRESSION_SANDBOX_DOCKER_BINARY", "docker")
+    pull_pinned_image(manifest, docker_binary)
     source_repo, source_commit = parse_github_commit_url(
         job.get("submission_evidence", {}).get("artifact_reference")
     )
@@ -327,7 +340,7 @@ def run_job(worker: Path, staging: Path, job: dict[str, Any], scratch: Path) -> 
     write_json(request, {"job": job})
     environment = dict(os.environ)
     environment["REGRESSION_SANDBOX_STAGING_ROOT"] = str(staging)
-    environment.setdefault("REGRESSION_SANDBOX_DOCKER_BINARY", "docker")
+    environment.setdefault("REGRESSION_SANDBOX_DOCKER_BINARY", docker_binary)
     outcome = json.loads(run([str(worker), "--run-regression", str(request)], env=environment))
     return {
         "schema": CANDIDATE_SCHEMA,
