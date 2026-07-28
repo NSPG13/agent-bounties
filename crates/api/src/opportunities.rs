@@ -158,6 +158,9 @@ pub struct OpportunityItem {
     pub funded_amount: OpportunityAmount,
     pub funding_target: OpportunityAmount,
     pub bond: OpportunityAmount,
+    pub refundable_bond: OpportunityAmount,
+    pub external_spend: OpportunityAmount,
+    pub gross_cash_margin: OpportunityAmount,
     pub deadline: Option<String>,
     pub deadline_kind: Option<String>,
     pub verification_method: String,
@@ -485,6 +488,9 @@ pub fn unfunded_opportunity(
         funded_amount: OpportunityAmount::usdc_base_units("0"),
         funding_target: OpportunityAmount::usdc_base_units("0"),
         bond: OpportunityAmount::usdc_base_units("0"),
+        refundable_bond: OpportunityAmount::usdc_base_units("0"),
+        external_spend: OpportunityAmount::usdc_base_units("0"),
+        gross_cash_margin: OpportunityAmount::usdc_base_units("0"),
         deadline: Some(trial.expires_at.to_rfc3339()),
         deadline_kind: Some("publication_expires_at".to_string()),
         verification_method: "poster_review_or_unspecified".to_string(),
@@ -606,6 +612,9 @@ pub fn legacy_opportunity(
             &status.funding_summary.target.currency,
         ),
         bond: OpportunityAmount::minor_units(0, &bounty.amount.currency),
+        refundable_bond: OpportunityAmount::minor_units(0, &bounty.amount.currency),
+        external_spend: OpportunityAmount::minor_units(0, &bounty.amount.currency),
+        gross_cash_margin: OpportunityAmount::minor_units(bounty.amount.amount, &bounty.amount.currency),
         deadline: None,
         deadline_kind: None,
         verification_method,
@@ -731,6 +740,9 @@ pub fn canonical_opportunity(
         funded_amount: OpportunityAmount::usdc_base_units(item.funded_amount.clone()),
         funding_target: OpportunityAmount::usdc_base_units(item.target_amount.clone()),
         bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
+        refundable_bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
+        external_spend: OpportunityAmount::usdc_base_units("0"),
+        gross_cash_margin: OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
         deadline,
         deadline_kind,
         verification_method: item.verification_mode.clone(),
@@ -1257,5 +1269,26 @@ mod tests {
         assert_eq!(json["items"][0]["_bountyboard"]["payment_committed"], false);
         assert!(!feeds.rss.to_ascii_lowercase().contains("trial"));
         assert_eq!(feeds.updated_at, "Fri, 15 Jan 2027 08:00:00 GMT");
+    }
+
+    #[test]
+    fn direct_bounty_exposes_cash_margin_refundable_bond_and_spend() {
+        let item = canonical_opportunity(
+            &canonical("claimable", "2000000", true),
+            "base-mainnet",
+            "https://api.example",
+        ).unwrap();
+        assert_eq!(item.reward.amount, "1990000");
+        assert_eq!(item.refundable_bond.amount, "10000");
+        assert_eq!(item.external_spend.amount, "0");
+        assert_eq!(item.gross_cash_margin.amount, "1990000");
+    }
+
+    #[test]
+    fn standing_meta_and_unprofitable_inventory_filtering() {
+        let unfunded = unfunded_opportunity(&trial(), &[], "https://api.example");
+        assert_eq!(unfunded.gross_cash_margin.amount, "0");
+        assert_eq!(unfunded.refundable_bond.amount, "0");
+        assert_eq!(unfunded.external_spend.amount, "0");
     }
 }
