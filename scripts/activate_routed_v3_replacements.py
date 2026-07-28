@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Mapping, Sequence
 
+import bounded_wallet_policy as active_wallet
 import durable_verifier_router_deploy as durable
 
 
@@ -22,18 +23,15 @@ CHAIN_ID = 8453
 RPC_DEFAULT = "https://mainnet.base.org"
 API_DEFAULT = "https://api.agentbounties.app"
 DEPLOYMENT_PATH = ROOT / "deployments" / "durable-verifier-router-base-mainnet.json"
-WALLET = durable.BOUNDED_WALLET
-OWNER = durable.OWNER
-KEEPER = durable.KEEPER
+WALLET = active_wallet.WALLET
+OWNER = active_wallet.OWNER
+KEEPER = active_wallet.DELEGATE
 FACTORY = durable.CANONICAL_FACTORY
 USDC = durable.NATIVE_USDC
 TARGET = durable.PARENT_TARGET
 TOTAL = durable.TOTAL_REPLACEMENT_FUNDING
-UINT64_MAX = (1 << 64) - 1
-ZERO_HASH = "0x" + "00" * 32
 ISSUES = {
     333: {"lane": "CLI", "old": "0xfffecb0fcd36477c5f6ecec808f6f0cf53819562"},
-    334: {"lane": "API", "old": "0xbe17ef2d154265ebe3142d7bda5e99610d571455"},
     335: {"lane": "MCP", "old": "0x43d42cb227d76588ab16693f14efd6cff851fa7a"},
     336: {"lane": "wallet UX", "old": "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b"},
     590: {"lane": "agent discovery", "old": None},
@@ -265,21 +263,9 @@ def policy_state(cast: Cast, deployment: Mapping[str, Any]) -> dict[str, Any]:
         "wallet_balance": parse_uint(cast.call(USDC, "balanceOf(address)(uint256)", WALLET), "wallet balance"),
         "now": now,
     }
-    expected = {
-        "owner": OWNER,
-        "delegate": KEEPER,
-        "period_seconds": 86_400,
-        "max_per_action": 5_000_000,
-        "max_per_period": 10_000_000,
-        "max_lifetime_spend": 89_000_000,
-        "max_bounty_target": 5_000_000,
-        "allowed_actions": 15,
-        "allowed_verification_modes": 1,
-        "deterministic_verifier": router,
-        "signed_quorum": ZERO_HASH,
-        "ai_quorum": ZERO_HASH,
-        "valid_until": UINT64_MAX,
-    }
+    expected = active_wallet.expected_state()
+    if expected["deterministic_verifier"] != router:
+        raise ActivationError("active wallet verifier does not match the routed verifier deployment")
     for key, wanted in expected.items():
         if state[key] != wanted:
             raise ActivationError(f"durable wallet policy {key} mismatch: expected {wanted}, got {state[key]}")
@@ -545,6 +531,9 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         "wallet": WALLET,
         "router": deployment["router_address"],
         "policy_hash": deployment["policy_hash"],
+        "wallet_policy_hash": active_wallet.POLICY_HASH,
+        "wallet_policy_version": active_wallet.POLICY_VERSION,
+        "wallet_policy_configuration_transaction": active_wallet.CONFIGURATION_TRANSACTION,
         "adapter": deployment["adapter_address"],
         "wallet_balance_before": before["wallet_balance"],
         "wallet_balance_after": after["wallet_balance"],

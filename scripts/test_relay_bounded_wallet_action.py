@@ -72,7 +72,7 @@ def envelope(**overrides: object) -> dict[str, object]:
         "issue_number": 249,
         "wallet": relay.WALLET,
         "policy_hash": relay.POLICY_HASH,
-        "policy_version": 2,
+        "policy_version": relay.POLICY_VERSION,
         "nonce": 0,
         "deadline": NOW + 600,
         "payload": "0x" + create_data()[10:],
@@ -104,11 +104,11 @@ def wallet_state(**overrides: object) -> relay.WalletState:
         "max_lifetime_spend": 89_000_000,
         "max_bounty_target": 5_000_000,
         "allowed_actions": 15,
-        "allowed_verification_modes": 1,
+        "allowed_verification_modes": 3,
         "deterministic_verifier": relay.VERIFIER,
-        "signed_quorum_verifier_set_hash": relay.ZERO_HASH,
+        "signed_quorum_verifier_set_hash": relay.SIGNED_QUORUM_VERIFIER_SET_HASH,
         "policy_hash": relay.POLICY_HASH,
-        "policy_version": 2,
+        "policy_version": relay.POLICY_VERSION,
         "delegate_nonce": 0,
         "period_bucket": NOW // 86_400,
         "period_spent": 0,
@@ -172,24 +172,24 @@ class RelayClient:
 
 
 class BoundedWalletRelayTests(unittest.TestCase):
-    def test_regression_policy_hash_matches_exact_owner_review(self) -> None:
+    def test_active_policy_hash_matches_exact_owner_review(self) -> None:
         policy = {
-            "delegate": relay.REGRESSION_DELEGATE,
-            "valid_after": 1784223027,
-            "valid_until": 1786815027,
-            "period_seconds": 86_400,
-            "max_per_action": 5_000_000,
-            "max_per_period": 10_000_000,
-            "max_lifetime_spend": 89_000_000,
-            "max_bounty_target": 5_000_000,
-            "allowed_actions": 15,
-            "allowed_verification_modes": 3,
+            "delegate": relay.DELEGATE,
+            "valid_after": relay.active_wallet.VALID_AFTER,
+            "valid_until": relay.active_wallet.VALID_UNTIL,
+            "period_seconds": relay.active_wallet.PERIOD_SECONDS,
+            "max_per_action": relay.active_wallet.MAX_PER_ACTION,
+            "max_per_period": relay.active_wallet.MAX_PER_PERIOD,
+            "max_lifetime_spend": relay.active_wallet.MAX_LIFETIME_SPEND,
+            "max_bounty_target": relay.active_wallet.MAX_BOUNTY_TARGET,
+            "allowed_actions": relay.active_wallet.ALLOWED_ACTIONS,
+            "allowed_verification_modes": relay.active_wallet.ALLOWED_VERIFICATION_MODES,
             "deterministic_verifier_module": relay.VERIFIER,
             "signed_quorum_verifier_set_hash": relay.SIGNED_QUORUM_VERIFIER_SET_HASH,
             "ai_judge_verifier_set_hash": relay.ZERO_HASH,
         }
         encoded = encode(f"f({POLICY_TYPE})", policy_tuple(policy))
-        self.assertEqual(keccak_hex(encoded), relay.REGRESSION_POLICY_HASH)
+        self.assertEqual(keccak_hex(encoded), relay.POLICY_HASH)
 
     def test_comment_requires_exact_command_and_schema(self) -> None:
         body = relay.COMMAND + "\n```json\n" + json.dumps(envelope()) + "\n```"
@@ -217,17 +217,9 @@ class BoundedWalletRelayTests(unittest.TestCase):
 
     def test_exact_regression_creation_passes_and_other_quorums_fail(self) -> None:
         signed_envelope = envelope(
-            policy_hash=relay.REGRESSION_POLICY_HASH,
-            policy_version=3,
             payload="0x" + signed_create_data()[10:],
         )
-        state = wallet_state(
-            delegate=relay.REGRESSION_DELEGATE,
-            allowed_verification_modes=3,
-            signed_quorum_verifier_set_hash=relay.SIGNED_QUORUM_VERIFIER_SET_HASH,
-            policy_hash=relay.REGRESSION_POLICY_HASH,
-            policy_version=3,
-        )
+        state = wallet_state()
         relay.validate_wallet(state, signed_envelope)
         prepared = relay.validate_signed_creation(ValidationClient(), signed_envelope, state)
         self.assertEqual(prepared["initial_funding"], 2_100_000)
