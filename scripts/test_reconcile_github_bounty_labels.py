@@ -373,6 +373,23 @@ class GitHubBountyLabelReconciliationTests(unittest.TestCase):
         )
         self.assertEqual(plan.remove_labels, ["verification-unavailable"])
 
+    def test_terminal_ready_history_does_not_hide_active_ready_replacement(self) -> None:
+        retired = feed_item(1, "cancelled")
+        replacement = feed_item(2, "claimable")
+        replacement["terms"]["document"]["source_url"] = retired["terms"]["document"][
+            "source_url"
+        ]
+        plan = build_plans(
+            [issue(1, "bounty")],
+            [retired, replacement],
+            [dict(replacement)],
+            REPOSITORY,
+        )[0]
+        self.assertEqual(plan.bounty_contract, CONTRACTS[2])
+        self.assertEqual(
+            plan.desired_managed_labels, ["claimable-live", "funded-live"]
+        )
+
     def test_duplicate_ready_issue_mapping_and_invalid_earning_record_are_rejected(self) -> None:
         first = feed_item(1, "claimable")
         duplicate = feed_item(2, "claimable")

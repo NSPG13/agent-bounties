@@ -65,7 +65,9 @@ def compile_python(platform: str) -> None:
     ]
     scripts = [
         "scripts/_shared/github_actions.py", "scripts/_shared/evm.py", "scripts/_shared/rpc.py",
-        "scripts/github_issue_plan_comment.py", "scripts/github_funding_comment.py",
+        "scripts/github_issue_plan_comment.py", "scripts/test_github_issue_plan_comment.py",
+        "scripts/github_pr_claim_guard.py", "scripts/test_github_pr_claim_guard.py",
+        "scripts/github_funding_comment.py",
         "scripts/github_claim_comment.py", "scripts/github_proof_comment.py",
         "scripts/sync_hosted_bounty_inventory.py", "scripts/test_sync_hosted_bounty_inventory.py",
         "scripts/reconcile_github_bounty_labels.py", "scripts/test_reconcile_github_bounty_labels.py",
@@ -112,7 +114,9 @@ scripts/activate_standing_meta_v3_replacements.py scripts/test_activate_standing
 scripts/standing_meta_v4_deploy.py scripts/test_standing_meta_v4_deploy.py
 scripts/standing_meta_v4_release_audit.py scripts/test_standing_meta_v4_release_audit.py
 scripts/standing_meta_v4_rehearsal_audit.py scripts/test_standing_meta_v4_rehearsal_audit.py
-scripts/github_issue_plan_comment.py scripts/github_funding_comment.py scripts/github_claim_comment.py
+scripts/github_issue_plan_comment.py scripts/test_github_issue_plan_comment.py
+scripts/github_pr_claim_guard.py scripts/test_github_pr_claim_guard.py
+scripts/github_funding_comment.py scripts/github_claim_comment.py
 scripts/github_proof_comment.py scripts/sync_hosted_bounty_inventory.py
 scripts/test_sync_hosted_bounty_inventory.py scripts/reconcile_github_bounty_labels.py
 scripts/test_reconcile_github_bounty_labels.py scripts/validate_real_funding_rehearsal.py
@@ -198,6 +202,7 @@ def main() -> int:
     run_many(commands)
     for name in ("github_issue_plan_comment", "github_create_comment", "github_funding_comment", "github_claim_comment", "github_proof_comment"):
         py(f"scripts/{name}.py", "--self-test")
+    py("scripts/test_github_pr_claim_guard.py", "-v")
     for name in ("sync_hosted_bounty_inventory", "reconcile_github_bounty_labels", "diagnose_hosted_api", "github_audience_audit", "ruleset_drift_check", "code_size_report", "mcp_tool_registry", "shared_rpc", "relay_autonomous_action", "relay_bounded_wallet_action", "bounded_agent_budget"):
         py(f"scripts/test_{name}.py", "-v")
     for name in ("standing_meta_v3_deploy", "activate_standing_meta_v3_replacements"):

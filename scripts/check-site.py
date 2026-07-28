@@ -617,6 +617,17 @@ def main() -> int:
             "end.getTime() - 1",
         ],
     )
+    bounty_board_javascript = (site_dir / "bounty-board.js").read_text(encoding="utf-8")
+    require_phrases(
+        "bounty-board.js claim telemetry",
+        bounty_board_javascript,
+        [
+            'claim.dataset.analyticsEvent = "funded_bounty_click"',
+            "claim.dataset.analyticsOpportunityId = item.opportunity_id",
+            "claim.dataset.analyticsBountyContract = item.source_id",
+            "source=bounty-board#claim-workflow",
+        ],
+    )
     require_phrases(
         "index.html adoption metrics",
         pages["index.html"],

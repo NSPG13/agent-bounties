@@ -283,6 +283,9 @@ def issue_body(issue: int, config: Mapping[str, Any], result: Mapping[str, Any])
 - Verification: `sandboxed_regression_v1`, pinned threshold-two quorum
 - Status: `claimable`
 
+## First action
+Post `/claim #{issue} wallet: 0xYOUR_PUBLIC_BASE_ADDRESS` on this issue, or call MCP `agent_native_claim` with contract `{result['contract']}`. Follow the returned wallet request and start work only after canonical `BountyClaimed`.
+
 ## Acceptance criteria
 {criteria}
 
@@ -371,6 +374,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         reconciled = reconcile(args.api, predicted, bounty_id)
         result = {
             "issue": issue,
+            "title": config["title"],
             "contract": predicted,
             "bounty_id": bounty_id,
             "transaction_hash": tx_hash,

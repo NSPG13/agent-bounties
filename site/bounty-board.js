@@ -161,11 +161,15 @@
     actions.className = "board-task-actions";
 
     if (item.source_type === "canonical_base" && item.boardState === "claimable") {
-      actions.append(buttonLink(
+      const claim = buttonLink(
         "Claim task",
-        `earn.html?bountyContract=${encodeURIComponent(item.source_id)}#claim-workflow`,
+        `earn.html?bountyContract=${encodeURIComponent(item.source_id)}&source=bounty-board#claim-workflow`,
         true,
-      ));
+      );
+      claim.dataset.analyticsEvent = "funded_bounty_click";
+      claim.dataset.analyticsOpportunityId = item.opportunity_id;
+      claim.dataset.analyticsBountyContract = item.source_id;
+      actions.append(claim);
     }
 
     if (item.source_type === "canonical_base" && item.boardState === "funding") {
