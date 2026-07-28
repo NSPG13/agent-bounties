@@ -870,7 +870,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 "name": "deterministic_module",
                 "default_for_new_bounties": true,
                 "default_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
-                "earning_inventory": "ready when terms are valid and a nonzero module is committed on-chain",
+                "earning_inventory": "ready only for a recognized exact deterministic module whose committed benchmark matches that module; unknown modules fail closed",
                 "settlement": "Any caller supplies proof to the immutable on-chain verifier module; pass settles and fail reopens atomically. The verifier receives the same committed reward for either verdict."
             }),
             serde_json::json!({
@@ -3708,6 +3708,10 @@ mod tests {
             deterministic["default_module"],
             "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e"
         );
+        assert!(deterministic["earning_inventory"]
+            .as_str()
+            .unwrap()
+            .contains("unknown modules fail closed"));
         assert_eq!(
             manifest.funding["default_verification"],
             "deterministic_module"
