@@ -1291,4 +1291,30 @@ mod tests {
         assert_eq!(unfunded.refundable_bond.amount, "0");
         assert_eq!(unfunded.external_spend.amount, "0");
     }
+
+    #[test]
+    fn end_to_end_profitable_inventory_contract_test_across_surfaces() {
+        let item = canonical_opportunity(
+            &canonical("claimable", "2000000", true),
+            "base-mainnet",
+            "https://api.example",
+        ).unwrap();
+        assert_eq!(item.work_state, "open");
+        assert_eq!(item.payment_state, "committed");
+        assert!(item.payment_committed);
+        assert!(item.verification_ready);
+        assert_eq!(item.reward.amount, "1990000");
+        assert_eq!(item.bond.amount, "10000");
+        assert_eq!(item.refundable_bond.amount, "10000");
+        assert_eq!(item.gross_cash_margin.amount, "1990000");
+        assert_eq!(item.funded_amount.amount, "2000000");
+
+        let claimed = canonical_opportunity(
+            &canonical("claimed", "2000000", true),
+            "base-mainnet",
+            "https://api.example",
+        ).unwrap();
+        assert_eq!(claimed.work_state, "claimed");
+        assert!(!claimed.payment_state.is_empty());
+    }
 }
