@@ -3784,8 +3784,7 @@ fn is_supported_regression_quorum(
         && creation_data["threshold"].as_u64()
             == Some(BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() as u64)
         && policy.get("mechanism").and_then(Value::as_str) == Some("signed_quorum")
-        && policy.get("engine").and_then(Value::as_str)
-            == Some(STANDING_META_V2_REGRESSION_ENGINE)
+        && policy.get("engine").and_then(Value::as_str) == Some(STANDING_META_V2_REGRESSION_ENGINE)
         && benchmark.get("engine").and_then(Value::as_str)
             == Some(STANDING_META_V2_REGRESSION_ENGINE)
 }
@@ -7397,8 +7396,7 @@ mod tests {
             Some(&record)
         ));
         let mut supported_record = record.clone();
-        supported_record.document.benchmark =
-            json!({"engine": STANDING_META_V2_REGRESSION_ENGINE});
+        supported_record.document.benchmark = json!({"engine": STANDING_META_V2_REGRESSION_ENGINE});
         supported_record.document.verification_policy = json!({
             "mechanism": "signed_quorum",
             "engine": STANDING_META_V2_REGRESSION_ENGINE,
