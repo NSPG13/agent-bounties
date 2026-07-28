@@ -1,0 +1,83 @@
+name: Synthetic paid-loop canary
+
+on:
+  push:
+    branches: [codex/synthetic-paid-loop-canary]
+    paths:
+      - ".github/workflows/synthetic-paid-loop-canary.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: synthetic-paid-loop-canary-mainnet
+  cancel-in-progress: false
+
+jobs:
+  create-claim-submit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+      KEEPER_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      FACTORY: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
+      WALLET: "0x1eaa1c68772cf76bc5f4e4174766076e33ace662"
+      CREATOR: "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
+      BOUNTY: "0x5dfcb9e153fb215f5f2c62269ee4888484107763"
+      NONCE: "0xab14bf71a6f14f339c0ff06f94bb3bcecd162f93e06e4704a9d684425d70abf7"
+      ARTIFACT_HASH: "0xbec9450ffe5d0d73921c2cc829b1bab222cd74df3f71d58f071e56e459e2a4f5"
+      EVIDENCE_HASH: "0x9cddbd37c25bf3ba80a2e4b82839e4b0bf2e974333f42f62abc918df0f634848"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - name: Validate fixed identities and unused address
+        run: |
+          set -euo pipefail
+          test "$(cast wallet address --private-key "$KEEPER_KEY" | tr '[:upper:]' '[:lower:]')" = "$CREATOR"
+          test "$(cast code "$BOUNTY" --rpc-url "$RPC_URL")" = "0x"
+          test "$(cast call "$WALLET" 'policy()(address,uint64,uint64,uint64,uint256,uint256,uint256,uint256,uint8,uint8,address,bytes32,bytes32)' --rpc-url "$RPC_URL" | head -1 | tr '[:upper:]' '[:lower:]')" = "$CREATOR"
+
+      - name: Create zero-funded canonical bounty
+        run: |
+          set -euo pipefail
+          params='(100000,10000,0x8a1e5ef80a8f99ae92f7e8fdc9495739d8e08a19c55dad985b76f5018210e34a,0x7b0960493231743c097b35c7def6d401fda9e96446f06d19318ecf6c1fe126b7,0x5f4adf4e1b5cbd8f1f2bf3ecaf8214ec3d0e7b3c4edcc8692604a8d1ea4ebe7f,0xdcf2d302c4a73b123fc3bb0b0ea40f7547e8febd20c5d4cc8c3998cfc684175e,0xc443416ed8eefd23018c58e526f7fcc0ab182b92e8c286bcc26b5f92ba093595,1800000000,86400,86400,1,0x0000000000000000000000000000000000000000,0x0000000000000000000000000000000000000000,2)'
+          verifiers='[0xbe6292b9e465f549e2363b918d6dd9187038431e,0xb7c2ce6430b66fb986e27b6140b29309550d487a]'
+          cast send "$FACTORY" \
+            'createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64,uint64,uint8,address,address,uint8),address[],uint256,bytes32)' \
+            "$params" "$verifiers" 0 "$NONCE" --private-key "$KEEPER_KEY" --rpc-url "$RPC_URL"
+          test "$(cast call "$FACTORY" 'isCanonicalBounty(address)(bool)' "$BOUNTY" --rpc-url "$RPC_URL")" = "true"
+
+      - name: Fund and claim through bounded solver wallet
+        run: |
+          set -euo pipefail
+          cast send "$WALLET" 'fundBounty(address,uint256)' "$BOUNTY" 110000 \
+            --private-key "$KEEPER_KEY" --rpc-url "$RPC_URL"
+          test "$(cast call "$BOUNTY" 'fundedAmount()(uint256)' --rpc-url "$RPC_URL" | awk '{print $1}')" = "110000"
+          cast send "$WALLET" 'claimBounty(address)' "$BOUNTY" \
+            --private-key "$KEEPER_KEY" --rpc-url "$RPC_URL"
+          test "$(cast call "$BOUNTY" 'solver()(address)' --rpc-url "$RPC_URL" | tr '[:upper:]' '[:lower:]')" = "$WALLET"
+
+      - name: Submit exact public artifact
+        run: |
+          set -euo pipefail
+          cast send "$WALLET" 'submitBounty(address,bytes32,bytes32)' \
+            "$BOUNTY" "$ARTIFACT_HASH" "$EVIDENCE_HASH" \
+            --private-key "$KEEPER_KEY" --rpc-url "$RPC_URL"
+          test "$(cast call "$BOUNTY" 'submissionHash()(bytes32)' --rpc-url "$RPC_URL")" = "$ARTIFACT_HASH"
+          test "$(cast call "$BOUNTY" 'evidenceHash()(bytes32)' --rpc-url "$RPC_URL")" = "$EVIDENCE_HASH"
+
+      - name: Record evidence boundary
+        run: |
+          {
+            echo "## Synthetic canary submitted"
+            echo
+            echo "- bounty: \`$BOUNTY\`"
+            echo "- creator: \`$CREATOR\`"
+            echo "- solver: \`$WALLET\`"
+            echo "- funded: 0.11 USDC"
+            echo "- solver reward: 0.10 USDC"
+            echo "- verifier reserve / returned bond: 0.01 USDC"
+            echo
+            echo "This is not payment evidence. Only a confirmed canonical BountySettled event proves payout."
+          } >> "$GITHUB_STEP_SUMMARY"
