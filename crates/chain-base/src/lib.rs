@@ -403,9 +403,12 @@ pub struct AutonomousBountyCreate {
 
 pub const CANONICAL_CHILD_PROTOCOL_VERSION: &str = "agent-bounties/canonical-child-v1";
 pub const STANDING_META_V2_PROTOCOL_VERSION: &str = "agent-bounties/independent-child-v2";
+pub const STANDING_META_V3_ROUTED_PROTOCOL_VERSION: &str =
+    "agent-bounties/independent-child-v3-routed";
 pub const STANDING_META_V2_REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIER: &str =
     "0xe573cb4f471d38b5bf10ce82237251ac902c9867";
+pub const BASE_MAINNET_STANDING_META_V3_ROUTER: &str = "0x380c1af742593dd88b6f20387e9ee693a0536731";
 pub const BASE_MAINNET_AUTONOMOUS_BOUNTY_FACTORY: &str =
     "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
 pub const BASE_MAINNET_AUTONOMOUS_BOUNTY_IMPLEMENTATION: &str =
@@ -416,6 +419,8 @@ pub const BASE_MAINNET_STANDING_META_V2_PARTICIPANT_REGISTRY: &str =
     "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294";
 pub const BASE_MAINNET_STANDING_META_V2_ACCEPTANCE_CRITERIA_HASH: &str =
     "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54";
+pub const BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH: &str =
+    "0xba3b04ab970dfd91f5ccf1b7eda6670b5a38a854bca16dc980ec8362ed2bcaf9";
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH: &str =
     "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd";
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIERS: [&str; 2] = [
@@ -423,6 +428,7 @@ pub const BASE_MAINNET_STANDING_META_V2_VERIFIERS: [&str; 2] = [
     "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
 ];
 pub const STANDING_META_V2_DEFAULT_VERIFIER_REWARD: i64 = 100_000;
+pub const STANDING_META_V3_DEFAULT_VERIFIER_REWARD: i64 = 10_000;
 pub const STANDING_META_V2_DEFAULT_WORK_WINDOW_SECONDS: u64 = 3 * 24 * 60 * 60;
 pub const STANDING_META_V2_MAX_ONCHAIN_TERMS_BYTES: usize = 32_768;
 pub const AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION: &str =
@@ -498,11 +504,13 @@ pub struct StandingMetaV2ChildPreparationRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StandingMetaV2ParentContext {
+    pub protocol_version: String,
     pub bounty_contract: String,
     pub bounty_id: String,
     pub creator: String,
     pub round: u64,
     pub solver_reward: Money,
+    pub child_target: Money,
     pub funding_deadline: u64,
 }
 
@@ -1058,7 +1066,7 @@ impl AutonomousBountyTxPlanner {
                 .eq_ignore_ascii_case(BASE_MAINNET_AUTONOMOUS_BOUNTY_IMPLEMENTATION)
         {
             return Err(ChainBaseError::InvalidVerificationConfiguration(
-                "standing-meta-v2 child preparation requires the canonical Base-mainnet factory"
+                "standing-meta child preparation requires the canonical Base-mainnet factory"
                     .to_string(),
             ));
         }
@@ -1095,9 +1103,16 @@ impl AutonomousBountyTxPlanner {
             ));
         }
 
-        let target = autonomous_money_to_uint256(&parent.solver_reward, false)?;
-        let default_verifier_reward = Money::new(STANDING_META_V2_DEFAULT_VERIFIER_REWARD, "usdc")
-            .map_err(|_| ChainBaseError::InvalidAmount)?;
+        let target = autonomous_money_to_uint256(&parent.child_target, false)?;
+        let default_verifier_reward = Money::new(
+            if parent.protocol_version == STANDING_META_V3_ROUTED_PROTOCOL_VERSION {
+                STANDING_META_V3_DEFAULT_VERIFIER_REWARD
+            } else {
+                STANDING_META_V2_DEFAULT_VERIFIER_REWARD
+            },
+            "usdc",
+        )
+        .map_err(|_| ChainBaseError::InvalidAmount)?;
         let verifier_reward = request
             .verifier_reward
             .as_ref()
@@ -1160,7 +1175,7 @@ impl AutonomousBountyTxPlanner {
         let creation_nonce = match request.creation_nonce.as_deref() {
             Some(value) => format!("0x{}", hex::encode(parse_bytes32(value)?)),
             None => keccak256_canonical_json(&json!({
-                "protocol": STANDING_META_V2_PROTOCOL_VERSION,
+                "protocol": parent.protocol_version.as_str(),
                 "parent_bounty_contract": parent_bounty_contract,
                 "parent_bounty_id": parent_bounty_id,
                 "parent_round": parent.round,
@@ -1177,7 +1192,7 @@ impl AutonomousBountyTxPlanner {
         let benchmark = json!({
             "engine": STANDING_META_V2_REGRESSION_ENGINE,
             "parent_binding": {
-                "protocol": STANDING_META_V2_PROTOCOL_VERSION,
+                "protocol": parent.protocol_version.as_str(),
                 "parent_bounty_contract": parent_bounty_contract,
                 "parent_bounty_id": parent_bounty_id,
                 "parent_round": parent.round,
@@ -1229,7 +1244,7 @@ impl AutonomousBountyTxPlanner {
             discovery_source: request
                 .discovery_source
                 .clone()
-                .or_else(|| Some("standing-meta-v2 child preparation".to_string())),
+                .or_else(|| Some("routed standing-meta child preparation".to_string())),
             agent_eligibility: None,
             claim_coordination: None,
         };
@@ -1262,7 +1277,7 @@ impl AutonomousBountyTxPlanner {
         pre_claim_wallet_calls.extend(child_creation.wallet_calls.clone());
 
         Ok(StandingMetaV2ChildPreparationPlan {
-            protocol_version: STANDING_META_V2_PROTOCOL_VERSION.to_string(),
+            protocol_version: parent.protocol_version.clone(),
             network,
             parent_bounty_contract,
             parent_bounty_id,
@@ -1298,8 +1313,8 @@ impl AutonomousBountyTxPlanner {
             child_creation,
             pre_claim_wallet_calls,
             supports_single_wallet_batch: true,
-            current_state: "child_terms_prepared_parent_unclaimed".to_string(),
-            next_action: "Confirm both distinct participant IDs were registered, then send pre_claim_wallet_calls in order from the parent solver wallet. After TermsPublished, CanonicalBountyCreated, FundingAdded, and BountyBecameClaimable are confirmed, wait for a Base block with a strictly later timestamp before claiming the parent; a same-timestamp claim cannot satisfy standing-meta-v2.".to_string(),
+            current_state: "routed_v3_child_terms_prepared_parent_unclaimed".to_string(),
+            next_action: "Confirm both distinct participant IDs were registered, then send pre_claim_wallet_calls in order from the parent solver wallet. After TermsPublished, CanonicalBountyCreated, FundingAdded, and BountyBecameClaimable are confirmed, wait for a Base block with a strictly later timestamp before claiming the parent; a same-timestamp claim cannot satisfy the routed standing-meta policy.".to_string(),
             required_canonical_events: vec![
                 "TermsPublished".to_string(),
                 "CanonicalBountyCreated".to_string(),
@@ -3398,25 +3413,18 @@ pub fn standing_meta_v2_parent_context(
 ) -> Result<StandingMetaV2ParentContext, ChainBaseError> {
     let terms = item.terms.as_ref().ok_or_else(|| {
         ChainBaseError::InvalidVerificationConfiguration(
-            "standing-meta-v2 parent terms are unavailable".to_string(),
+            "standing-meta parent terms are unavailable".to_string(),
         )
     })?;
     let benchmark = terms.document.benchmark.as_object().ok_or_else(|| {
         ChainBaseError::InvalidVerificationConfiguration(
-            "standing-meta-v2 parent benchmark is unavailable".to_string(),
+            "standing-meta parent benchmark is unavailable".to_string(),
         )
     })?;
-    let exact_parent = item.status == "claimable"
+    let common_parent = item.status == "claimable"
         && item.terms_valid
         && item.verification_ready
         && item.validation_errors.is_empty()
-        && item.verifier_module.as_deref().is_some_and(|module| {
-            module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER)
-        })
-        && terms
-            .acceptance_criteria_hash
-            .eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_ACCEPTANCE_CRITERIA_HASH)
-        && benchmark.get("engine").and_then(Value::as_str) == Some("standing_meta_v2_parent")
         && benchmark
             .get("required_child_engine")
             .and_then(Value::as_str)
@@ -3443,9 +3451,35 @@ pub fn standing_meta_v2_parent_context(
             .is_some_and(|address| {
                 address.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_TERMS_REGISTRY)
             });
-    if !exact_parent {
+    let exact_v2 = common_parent
+        && item.verifier_module.as_deref().is_some_and(|module| {
+            module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER)
+        })
+        && terms
+            .acceptance_criteria_hash
+            .eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_ACCEPTANCE_CRITERIA_HASH)
+        && benchmark.get("engine").and_then(Value::as_str) == Some("standing_meta_v2_parent");
+    let exact_v3 = common_parent
+        && item.verifier_module.as_deref().is_some_and(|module| {
+            module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ROUTER)
+        })
+        && terms
+            .acceptance_criteria_hash
+            .eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH)
+        && benchmark.get("engine").and_then(Value::as_str)
+            == Some("standing_meta_v3_routed_parent")
+        && benchmark
+            .get("minimum_child_target")
+            .and_then(Value::as_u64)
+            == Some(1_000_000)
+        && benchmark
+            .get("minimum_parent_gross_margin")
+            .and_then(Value::as_u64)
+            == Some(1_000_000);
+    if !exact_v2 && !exact_v3 {
         return Err(ChainBaseError::InvalidVerificationConfiguration(
-            "bounty is not an exact, valid, claimable standing-meta-v2 parent".to_string(),
+            "bounty is not an exact, valid, claimable standing-meta parent with an executable child path"
+                .to_string(),
         ));
     }
     let round = item
@@ -3457,28 +3491,40 @@ pub fn standing_meta_v2_parent_context(
         .checked_add(1)
         .ok_or_else(|| {
             ChainBaseError::InvalidVerificationConfiguration(
-                "standing-meta-v2 parent round overflow".to_string(),
+                "standing-meta parent round overflow".to_string(),
             )
         })?;
-    let reward = item
+    let solver_reward = item
         .solver_reward
         .parse::<i64>()
         .ok()
         .and_then(|amount| Money::new(amount, "usdc").ok())
         .ok_or(ChainBaseError::InvalidAmount)?;
+    let child_target = if exact_v3 {
+        Money::new(1_000_000, "usdc").map_err(|_| ChainBaseError::InvalidAmount)?
+    } else {
+        solver_reward.clone()
+    };
     let funding_deadline = terms.document.contract_terms["funding_deadline"]
         .as_u64()
         .ok_or_else(|| {
             ChainBaseError::InvalidVerificationConfiguration(
-                "standing-meta-v2 parent funding deadline is unavailable".to_string(),
+                "standing-meta parent funding deadline is unavailable".to_string(),
             )
         })?;
     Ok(StandingMetaV2ParentContext {
+        protocol_version: if exact_v3 {
+            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+        } else {
+            STANDING_META_V2_PROTOCOL_VERSION
+        }
+        .to_string(),
         bounty_contract: normalize_address(&item.bounty_contract)?,
         bounty_id: item.bounty_id.clone(),
         creator: normalize_address(&item.creator)?,
         round,
-        solver_reward: reward,
+        solver_reward,
+        child_target,
         funding_deadline,
     })
 }
@@ -3497,7 +3543,7 @@ pub const BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 5]
     "0x43b23888d90b36448ee4f4a1919f004c14b6bc53",
 ];
 
-pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 8] = [
+pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 14] = [
     "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8",
     "0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1",
     "0xb35b94e1225b66e50644a331feccdab0439e63d7",
@@ -3506,6 +3552,12 @@ pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 8] = [
     "0x43d42cb227d76588ab16693f14efd6cff851fa7a",
     "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b",
     "0x43b23888d90b36448ee4f4a1919f004c14b6bc53",
+    "0xc13ccf6c6a03b53f836d433c5e628f06bbc1dbf4",
+    "0xad4532e45d371ff5b5c40ebbf0c20687ed9e6fc4",
+    "0xf2e47a253988e98f535ab60f4b9bd7f8975c1263",
+    "0x2afb91d160200fac4b91e6134b2cc9d9bff86f42",
+    "0xc710d54d192ffb0b84cd6e051754ab70acf1130c",
+    "0xd15306a8cc4274ec46d913817ca4490c4fc41303",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3784,8 +3836,86 @@ fn is_supported_regression_quorum(
         && creation_data["threshold"].as_u64()
             == Some(BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() as u64)
         && policy.get("mechanism").and_then(Value::as_str) == Some("signed_quorum")
-        && benchmark.get("engine").and_then(Value::as_str)
+        && policy.get("engine").and_then(Value::as_str) == Some(STANDING_META_V2_REGRESSION_ENGINE)
+        && valid_regression_benchmark(benchmark)
+}
+
+fn valid_regression_benchmark(benchmark: &Value) -> bool {
+    if benchmark.get("engine").and_then(Value::as_str) != Some(STANDING_META_V2_REGRESSION_ENGINE) {
+        return false;
+    }
+    let Some(source) = benchmark.get("source").cloned() else {
+        return false;
+    };
+    let Ok(source) = serde_json::from_value::<StandingMetaV2BenchmarkSource>(source) else {
+        return false;
+    };
+    if standing_meta_v2_benchmark_source(&source).is_err() {
+        return false;
+    }
+    let Some(runner_manifest) = benchmark.get("runner_manifest").cloned() else {
+        return false;
+    };
+    serde_json::from_value::<RegressionSandboxPolicy>(runner_manifest)
+        .is_ok_and(|policy| policy.validate().is_ok())
+}
+
+fn is_supported_routed_v3_parent_terms(
+    verifier_module: Option<&str>,
+    solver_reward: u128,
+    terms: Option<&AutonomousBountyTermsRecord>,
+) -> bool {
+    let Some(terms) = terms else {
+        return false;
+    };
+    let policy = &terms.document.verification_policy;
+    let benchmark = &terms.document.benchmark;
+    verifier_module
+        .is_some_and(|module| module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ROUTER))
+        && solver_reward >= 2_000_000
+        && terms
+            .acceptance_criteria_hash
+            .eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH)
+        && policy.get("mechanism").and_then(Value::as_str) == Some("deterministic_module")
+        && policy
+            .get("verifier_module")
+            .and_then(Value::as_str)
+            .is_some_and(|module| module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ROUTER))
+        && benchmark.get("engine").and_then(Value::as_str) == Some("standing_meta_v3_routed_parent")
+        && benchmark
+            .get("required_child_engine")
+            .and_then(Value::as_str)
             == Some(STANDING_META_V2_REGRESSION_ENGINE)
+        && benchmark
+            .get("required_child_verifier_set_hash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| {
+                hash.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH)
+            })
+        && benchmark
+            .get("required_child_verifier_threshold")
+            .and_then(Value::as_u64)
+            == Some(2)
+        && benchmark
+            .get("participant_registry")
+            .and_then(Value::as_str)
+            .is_some_and(|address| {
+                address.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_PARTICIPANT_REGISTRY)
+            })
+        && benchmark
+            .get("terms_registry")
+            .and_then(Value::as_str)
+            .is_some_and(|address| {
+                address.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_TERMS_REGISTRY)
+            })
+        && benchmark
+            .get("minimum_child_target")
+            .and_then(Value::as_u64)
+            == Some(1_000_000)
+        && benchmark
+            .get("minimum_parent_gross_margin")
+            .and_then(Value::as_u64)
+            == Some(1_000_000)
 }
 
 pub fn validate_attestation_request_against_feed(
@@ -4778,10 +4908,27 @@ pub fn build_autonomous_bounty_feed(
                 false,
                 "quorum verifier service availability is not canonically attested",
             )
-        } else if verifier_module.is_none() {
-            (false, "deterministic verifier module is not configured")
+        } else if verifier_module.as_deref().is_some_and(|module| {
+            module.eq_ignore_ascii_case(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER)
+        }) {
+            (
+                true,
+                "the deployed leading-zero deterministic verifier is supported",
+            )
+        } else if is_supported_routed_v3_parent_terms(
+            verifier_module.as_deref(),
+            u128::from(solver_reward),
+            terms_record.as_ref(),
+        ) {
+            (
+                true,
+                "the routed-v3 verifier and profitable child dependency are supported",
+            )
         } else {
-            (true, "deterministic verifier module is committed on-chain")
+            (
+                false,
+                "deterministic verifier module is not in the live supported allowlist",
+            )
         };
         let item = AutonomousBountyFeedItem {
             bounty_id,
@@ -5847,6 +5994,76 @@ pub fn validate_autonomous_creation_against_terms(
     Ok(())
 }
 
+pub fn validate_autonomous_creation_for_public_earning(
+    network: &str,
+    create: &AutonomousBountyCreate,
+    terms: &AutonomousBountyTermsRecord,
+) -> Result<(), ChainBaseError> {
+    validate_autonomous_creation_against_terms(network, create, terms)?;
+
+    let solver_reward = autonomous_money_to_uint256(&create.solver_reward, false)?;
+    let verifier_reward = autonomous_money_to_uint256(&create.verifier_reward, true)?;
+    let initial_funding = autonomous_money_to_uint256(&create.initial_funding, true)?;
+    let target = solver_reward.checked_add(verifier_reward).ok_or_else(|| {
+        ChainBaseError::InvalidTermsDocument("bounty funding target overflowed".to_string())
+    })?;
+    if solver_reward == 0 || initial_funding != target {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "public earning inventory requires a positive solver reward and full atomic funding"
+                .to_string(),
+        ));
+    }
+
+    match create.verification_mode {
+        AutonomousVerificationMode::DeterministicModule => {
+            let supported_canary = create.verifier_module.as_deref().is_some_and(|module| {
+                module.eq_ignore_ascii_case(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER)
+            });
+            let supported_routed_v3 = is_supported_routed_v3_parent_terms(
+                create.verifier_module.as_deref(),
+                solver_reward,
+                Some(terms),
+            );
+            if !supported_canary && !supported_routed_v3 {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "public earning inventory permits only the deployed leading-zero verifier, the exact routed-v3 parent, or the live sandboxed-regression quorum; unknown modules must remain unfunded drafts"
+                        .to_string(),
+                ));
+            }
+        }
+        AutonomousVerificationMode::SignedQuorum => {
+            let exact_verifiers = create.verifiers.len()
+                == BASE_MAINNET_STANDING_META_V2_VERIFIERS.len()
+                && create
+                    .verifiers
+                    .iter()
+                    .zip(BASE_MAINNET_STANDING_META_V2_VERIFIERS.iter().copied())
+                    .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected));
+            let exact_policy = create.threshold
+                == BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() as u8
+                && terms
+                    .document
+                    .verification_policy
+                    .get("engine")
+                    .and_then(Value::as_str)
+                    == Some(STANDING_META_V2_REGRESSION_ENGINE)
+                && valid_regression_benchmark(&terms.document.benchmark);
+            if !exact_verifiers || !exact_policy {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "public earning inventory permits only the live sandboxed-regression signed quorum with an exact benchmark source and valid runner manifest; unsupported verifier policies must remain unfunded drafts"
+                        .to_string(),
+                ));
+            }
+        }
+        AutonomousVerificationMode::AiJudgeQuorum => {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "AI-judge verification is not enabled for public earning inventory".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn autonomous_bounty_create_from_terms(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<AutonomousBountyCreate, ChainBaseError> {
@@ -6609,12 +6826,14 @@ mod tests {
             discovery_source: None,
         };
         let parent = StandingMetaV2ParentContext {
+            protocol_version: STANDING_META_V2_PROTOCOL_VERSION.to_string(),
             bounty_contract: request.parent_bounty_contract.clone(),
             bounty_id: "0x12ad2fa99de272728311a3eb07c3c741048382260cb91ba1e8f001ed3b5759d0"
                 .to_string(),
             creator: "0x3333333333333333333333333333333333333333".to_string(),
             round: 1,
             solver_reward: Money::new(900_000, "usdc").unwrap(),
+            child_target: Money::new(900_000, "usdc").unwrap(),
             funding_deadline: 1_791_676_800,
         };
 
@@ -6663,6 +6882,28 @@ mod tests {
         assert!(plan.next_action.contains("strictly later timestamp"));
         assert!(plan.child_creation.supports_single_wallet_batch);
         assert!(!plan.hosted_terms_published);
+
+        let mut routed_v3_parent = parent.clone();
+        routed_v3_parent.protocol_version = STANDING_META_V3_ROUTED_PROTOCOL_VERSION.to_string();
+        routed_v3_parent.solver_reward = Money::new(2_000_000, "usdc").unwrap();
+        routed_v3_parent.child_target = Money::new(1_000_000, "usdc").unwrap();
+        let routed_v3_plan = planner
+            .plan_standing_meta_v2_child(&request, &routed_v3_parent, created_at)
+            .unwrap();
+        assert_eq!(
+            routed_v3_plan.protocol_version,
+            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+        );
+        assert_eq!(routed_v3_plan.child_create.solver_reward.amount, 990_000);
+        assert_eq!(routed_v3_plan.child_create.verifier_reward.amount, 10_000);
+        assert_eq!(
+            routed_v3_plan.child_create.initial_funding.amount,
+            1_000_000
+        );
+        assert_eq!(
+            routed_v3_plan.terms.document.benchmark["parent_binding"]["protocol"],
+            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+        );
     }
 
     #[test]
@@ -6719,11 +6960,13 @@ mod tests {
             discovery_source: None,
         };
         let parent = StandingMetaV2ParentContext {
+            protocol_version: STANDING_META_V2_PROTOCOL_VERSION.to_string(),
             bounty_contract: request.parent_bounty_contract.clone(),
             bounty_id: format!("0x{}", "a".repeat(64)),
             creator: "0x3333333333333333333333333333333333333333".to_string(),
             round: 1,
             solver_reward: Money::new(900_000, "usdc").unwrap(),
+            child_target: Money::new(900_000, "usdc").unwrap(),
             funding_deadline: 1_791_676_800,
         };
 
@@ -6817,7 +7060,44 @@ mod tests {
         let context = standing_meta_v2_parent_context(&item).unwrap();
         assert_eq!(context.round, 1);
         assert_eq!(context.solver_reward.amount, 900_000);
+        assert_eq!(context.child_target.amount, 900_000);
+        assert_eq!(context.protocol_version, STANDING_META_V2_PROTOCOL_VERSION);
         assert_eq!(context.funding_deadline, 1_791_676_800);
+
+        let mut routed_v3 = item.clone();
+        let routed_terms = routed_v3.terms.as_mut().unwrap();
+        routed_terms.acceptance_criteria_hash =
+            BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH.to_string();
+        routed_terms.document.benchmark = json!({
+            "engine": "standing_meta_v3_routed_parent",
+            "required_child_engine": STANDING_META_V2_REGRESSION_ENGINE,
+            "required_child_verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+            "required_child_verifier_threshold": 2,
+            "minimum_child_target": 1_000_000,
+            "minimum_parent_gross_margin": 1_000_000,
+            "participant_registry": BASE_MAINNET_STANDING_META_V2_PARTICIPANT_REGISTRY,
+            "terms_registry": BASE_MAINNET_STANDING_META_V2_TERMS_REGISTRY,
+        });
+        routed_terms.document.verification_policy["verifier_module"] =
+            json!(BASE_MAINNET_STANDING_META_V3_ROUTER);
+        routed_v3.verifier_module = Some(BASE_MAINNET_STANDING_META_V3_ROUTER.to_string());
+        routed_v3.solver_reward = "2000000".to_string();
+        routed_v3.verifier_reward = "10000".to_string();
+        routed_v3.claim_bond = "10000".to_string();
+        routed_v3.target_amount = "2010000".to_string();
+        routed_v3.funded_amount = "2010000".to_string();
+        assert!(is_supported_routed_v3_parent_terms(
+            routed_v3.verifier_module.as_deref(),
+            2_000_000,
+            routed_v3.terms.as_ref(),
+        ));
+        let routed_context = standing_meta_v2_parent_context(&routed_v3).unwrap();
+        assert_eq!(
+            routed_context.protocol_version,
+            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+        );
+        assert_eq!(routed_context.solver_reward.amount, 2_000_000);
+        assert_eq!(routed_context.child_target.amount, 1_000_000);
 
         item.verification_ready = false;
         assert!(standing_meta_v2_parent_context(&item)
@@ -7401,7 +7681,7 @@ mod tests {
             "threshold": 2,
             "verifiers": BASE_MAINNET_STANDING_META_V2_VERIFIERS
         });
-        assert!(is_supported_regression_quorum(
+        assert!(!is_supported_regression_quorum(
             &json!({
                 "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
                 "threshold": 2
@@ -7429,6 +7709,10 @@ mod tests {
             creation_nonce: format!("0x{}", "11".repeat(32)),
         };
         validate_autonomous_creation_against_terms("base-mainnet", &create, &record).unwrap();
+        assert!(
+            validate_autonomous_creation_for_public_earning("base-mainnet", &create, &record,)
+                .is_err()
+        );
         let derived = autonomous_bounty_create_from_terms(&record).unwrap();
         assert_eq!(derived.creator, create.creator);
         assert_eq!(derived.solver_reward, create.solver_reward);
@@ -7440,6 +7724,59 @@ mod tests {
         assert!(
             validate_autonomous_creation_against_terms("base-mainnet", &create, &record).is_err()
         );
+
+        let mut supported_document = record.document.clone();
+        supported_document.benchmark = json!({
+            "engine": STANDING_META_V2_REGRESSION_ENGINE,
+            "source": {
+                "kind": "github_commit",
+                "repository": "NSPG13/agent-bounties",
+                "commit": "a".repeat(40),
+                "subdirectory": "benchmarks/regression"
+            },
+            "runner_manifest": {
+                "schema_version": "agent-bounties/regression-sandbox-v1",
+                "image": format!("docker.io/library/alpine@sha256:{}", "b".repeat(64)),
+                "command": ["python", "/benchmark/check.py"],
+                "workdir": "/workspace",
+                "benchmark_digest": format!("sha256:{}", "c".repeat(64)),
+                "timeout_seconds": 60,
+                "cpu_millis": 1000,
+                "memory_bytes": 134217728,
+                "pids_limit": 64,
+                "max_output_bytes": 1048576,
+                "tmpfs_bytes": 67108864,
+                "max_source_bytes": 104857600,
+                "max_source_files": 10000,
+                "max_benchmark_bytes": 1048576,
+                "max_benchmark_files": 100,
+                "platform": "linux/amd64",
+                "test_seed": 1
+            }
+        });
+        supported_document.verification_policy = json!({
+            "mechanism": "signed_quorum",
+            "engine": STANDING_META_V2_REGRESSION_ENGINE,
+            "threshold": 2,
+            "verifiers": BASE_MAINNET_STANDING_META_V2_VERIFIERS
+        });
+        let supported_record =
+            build_autonomous_bounty_terms_record(&record.creator_wallet, supported_document, now)
+                .unwrap();
+        let mut supported_create = autonomous_bounty_create_from_terms(&supported_record).unwrap();
+        validate_autonomous_creation_for_public_earning(
+            "base-mainnet",
+            &supported_create,
+            &supported_record,
+        )
+        .unwrap();
+        supported_create.initial_funding = Money::new(999_999, "usdc").unwrap();
+        assert!(validate_autonomous_creation_for_public_earning(
+            "base-mainnet",
+            &supported_create,
+            &supported_record,
+        )
+        .is_err());
     }
 
     #[test]

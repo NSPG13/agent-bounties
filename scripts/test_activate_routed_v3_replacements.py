@@ -122,7 +122,11 @@ class ActivateRoutedV3Tests(unittest.TestCase):
     def test_economics_and_scope_are_exact(self) -> None:
         self.assertEqual(MODULE.TARGET, 2_010_000)
         self.assertEqual(MODULE.TOTAL, 10_050_000)
-        self.assertEqual(sorted(MODULE.ISSUES), [333, 334, 335, 336, 590])
+        self.assertEqual(
+            sorted(MODULE.ISSUES),
+            [333, 334, 335, 336, 590, 647, 648, 649, 650, 651],
+        )
+        self.assertEqual(set(MODULE.ISSUES), set(MODULE.durable.LANES))
         self.assertEqual(MODULE.UINT64_MAX, (1 << 64) - 1)
         self.assertEqual(DYNAMIC.ROUTER, "0x380c1af742593dd88b6f20387e9ee693a0536731")
         self.assertEqual(DYNAMIC.ACTIVATION_DELAY, 604_800)

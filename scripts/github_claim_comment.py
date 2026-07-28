@@ -43,6 +43,7 @@ CONTRIBUTOR_RE = re.compile(r"Contributor:\s*`?([^\s`]+)`?")
 DEFAULT_API_BASE_URL = "https://api.agentbounties.app"
 STATIC_EARN_PAGE_URL = "https://agentbounties.app/earn.html"
 EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+EVM_ADDRESS_SEARCH_RE = re.compile(r"(?<![0-9A-Za-z])0x[0-9a-fA-F]{40}(?![0-9A-Za-z])")
 
 
 class UserError(RuntimeError):
@@ -393,7 +394,16 @@ def apply_canonical_claim_state(
     plan: Dict[str, object],
 ) -> Dict[str, object]:
     signal = plan.get("signal") if isinstance(plan.get("signal"), dict) else None
-    if not signal or signal.get("decision") != "OnChainClaimRequired":
+    labels = {
+        str(label).strip().lower()
+        for label in meta.get("labels", [])
+        if str(label).strip()
+    }
+    expects_canonical = (
+        signal is not None
+        and signal.get("decision") == "OnChainClaimRequired"
+    ) or bool(labels & {"claimable-live", "funded-live", "claimed-live"})
+    if not expects_canonical:
         return plan
     try:
         api_base_url = normalize_api_base_url(
@@ -424,6 +434,43 @@ def apply_canonical_claim_state(
             reason="the full canonical feed has no exact source_url match",
             claim_recovery=claim_recovery,
         )
+    if signal is None or signal.get("decision") != "OnChainClaimRequired":
+        comment_body = str(meta.get("comment_body") or "")
+        wallet_match = EVM_ADDRESS_SEARCH_RE.search(comment_body)
+        solver_wallet = (
+            wallet_match.group(0).lower()
+            if wallet_match
+            else "0xYOUR_PUBLIC_BASE_WALLET"
+        )
+        reservation_id = (
+            f"github-claim-comment:{meta['repo']}:{issue_url}:"
+            f"comment:{meta['comment_id']}"
+        )
+        command_match = CLAIM_COMMAND_RE.search(comment_body)
+        signal = {
+            "issue_url": issue_url,
+            "contributor_login": str(meta.get("contributor_login") or "") or None,
+            "command": command_match.group(1).lower() if command_match else "claim",
+            "decision": "OnChainClaimRequired",
+            "reservation_id": reservation_id,
+            "reservation_window_minutes": 0,
+            "progress_required_within_minutes": 0,
+            "progress_signal_count": 0,
+            "has_progress_signal": False,
+            "settlement_authority": False,
+            "bounty_contract": None,
+            "claim_handoff_url": None,
+            "claim_plan_request": {
+                "body": {
+                    "idempotency_key": reservation_id,
+                    "solver_wallet": solver_wallet,
+                }
+            },
+            "operator_note": (
+                "The exact canonical source record supersedes legacy GitHub issue-form "
+                "parsing. Canonical state still controls whether a wallet request is safe."
+            ),
+        }
     contract = str(record.get("bounty_contract") or "").lower()
     status = str(record.get("status") or "unknown").lower()
     executable = (
@@ -1040,6 +1087,42 @@ def run_self_test() -> int:
             raise UserError(f"self-test canonical claim route missing: {required_text}")
     if "not published yet" in executable_comment:
         raise UserError("self-test canonical claim route retained stale issue guidance")
+
+    legacy_form_meta = {
+        **canonical_meta,
+        "labels": ["bounty", "funded-live", "claimable-live"],
+        "comment_body": (
+            "/claim #187 wallet: 0x2222222222222222222222222222222222222222"
+        ),
+    }
+    legacy_form_plan = {
+        "ready": False,
+        "signal": {
+            "decision": "NonBounty",
+            "operator_note": "legacy issue form did not expose a template field",
+        },
+        "check": {
+            "conclusion": "Neutral",
+            "title": "No bounty claim detected",
+            "summary": "Legacy issue parsing failed.",
+            "text": "Canonical state has not been checked.",
+        },
+    }
+    legacy_form_plan = apply_canonical_claim_state(
+        canonical_env,
+        legacy_form_meta,
+        legacy_form_plan,
+    )
+    legacy_form_comment = render_comment(legacy_form_meta, legacy_form_plan)
+    for required_text in [
+        "OnChainClaimRequired",
+        contract,
+        "0x2222222222222222222222222222222222222222",
+    ]:
+        if required_text not in legacy_form_comment:
+            raise UserError(
+                f"self-test legacy canonical claim route missing: {required_text}"
+            )
 
     missing_fixture = {
         "full_feed": [alternative_record],

@@ -2180,13 +2180,13 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_standing_meta_v2_child",
-            "Legacy standing-meta-v2 preparation endpoint. All five funded V2 parents are recovery-reserved, so canonical hosted calls fail closed before terms publication. V2 cannot produce positive gross margin and its project-governed two-key quorum does not prove organizational independence. Use full inventory only for historical inspection; do not claim, sign, bond, or verify a reserved V2 parent.",
+            "Prepare the exact fully funded 1 USDC regression child for a claimable routed-V3 parent. The legacy tool name is retained so existing agents do not break. It publishes immutable terms first and returns ordered wallet calls; recovery-reserved V2 and already-claimed parents fail closed.",
             object_tool_schema(
                 json!({
-                    "network": nullable_enum_property(&["base-mainnet"], "Optional network; standing-meta-v2 currently requires Base mainnet."),
-                    "parent_bounty_contract": string_property("Exact claimable standing-meta-v2 parent contract from canonical inventory."),
+                    "network": nullable_enum_property(&["base-mainnet"], "Optional network; routed standing-meta currently requires Base mainnet."),
+                    "parent_bounty_contract": string_property("Exact claimable routed-V3 parent contract from ready-to-earn inventory."),
                     "parent_solver": string_property("Registered wallet that will publish the child terms, create/fund the child, and claim the parent."),
-                    "intended_child_solver": string_property("Historical V2 field: a different pre-registered wallet whose participant ID also differs. Neither distinction proves unrelated ownership."),
+                    "intended_child_solver": string_property("Different pre-registered child-solver wallet whose participant ID also differs."),
                     "title": string_property("Concrete coding child title."),
                     "goal": string_property("Precise child outcome."),
                     "acceptance_criteria": {
@@ -4173,7 +4173,7 @@ async fn prepare_standing_meta_v2_child(
 ) -> Json<serde_json::Value> {
     let network = args.network.as_deref().unwrap_or("base-mainnet");
     if network != "base-mainnet" {
-        return mcp_error("standing-meta-v2 is deployed only on canonical Base mainnet");
+        return mcp_error("standing-meta child preparation is deployed only on Base mainnet");
     }
     let parent =
         match indexed_autonomous_bounty(&state, network, &args.parent_bounty_contract).await {
@@ -4206,7 +4206,7 @@ async fn prepare_standing_meta_v2_child(
         ));
     }
     plan.hosted_terms_published = true;
-    plan.current_state = "hosted_child_terms_published_parent_unclaimed".to_string();
+    plan.current_state = "hosted_routed_v3_child_terms_published_parent_unclaimed".to_string();
     mcp_json(plan)
 }
 

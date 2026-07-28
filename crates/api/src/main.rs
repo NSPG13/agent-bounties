@@ -18,7 +18,10 @@ use axum::{
     extract::{Path, Query, Request, State},
     http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode, Uri},
     middleware::{self, Next},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        Html, IntoResponse, Redirect, Response,
+    },
     routing::{get, post},
     Json, Router,
 };
@@ -35,7 +38,7 @@ use chain_base::{
     plan_open_competition_action, plan_standing_meta_v4_action,
     prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
     standing_meta_v2_parent_context, standing_meta_v4_readiness,
-    validate_attestation_request_against_feed, validate_autonomous_creation_against_terms,
+    validate_attestation_request_against_feed, validate_autonomous_creation_for_public_earning,
     AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
     AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
     AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
@@ -56,7 +59,6 @@ use chain_base::{
     StandingMetaV4ActionPlan, StandingMetaV4EconomicsEvidence, StandingMetaV4Operation,
     StandingMetaV4ReadinessEvidence, StandingMetaV4ReadinessReport,
     AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION, AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
-    BASE_MAINNET_STANDING_META_V2_VERIFIER,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use cloud_agent::{
@@ -132,9 +134,11 @@ use service_runtime::{
 };
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::env;
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration, Instant};
+use tokio_stream::{wrappers::IntervalStream, StreamExt};
 use tower_http::cors::CorsLayer;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 use utoipa::openapi::Components;
@@ -162,6 +166,7 @@ use worker::{
         draft_bounty_with_cloud_agent,
         analyze_bounty_fit,
         list_opportunities,
+        stream_opportunities,
         list_opportunity_comments,
         create_opportunity_comment,
         create_chatgpt_action_intent,
@@ -1719,6 +1724,7 @@ async fn main() -> anyhow::Result<()> {
             get(analyze_bounty_fit),
         )
         .route("/v1/opportunities", get(list_opportunities))
+        .route("/v1/opportunities/stream", get(stream_opportunities))
         .route(
             "/v1/opportunities/:opportunity_id/comments",
             get(list_opportunity_comments).post(create_opportunity_comment),
@@ -2533,6 +2539,70 @@ async fn list_opportunities(
     build_opportunity_projection(&state, query).await.map(Json)
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/opportunities/stream",
+    params(
+        ("network" = Option<String>, Query, description = "Canonical network key; defaults to base-mainnet"),
+        ("view" = Option<String>, Query, description = "Deterministic view; use ready_to_earn for earning inventory"),
+        ("source_type" = Option<String>, Query, description = "Filter by canonical_base for earning inventory"),
+        ("work_state" = Option<String>, Query, description = "Optional work-state filter"),
+        ("payment_state" = Option<String>, Query, description = "Optional payment-state filter"),
+        ("limit" = Option<u32>, Query, description = "Maximum results; clamped to 1..300")
+    ),
+    responses(
+        (status = 200, description = "Server-sent inventory snapshots; inventory events contain OpportunityProjectionResponse"),
+        (status = 400, description = "Unknown network, view, state, or source type")
+    )
+)]
+async fn stream_opportunities(
+    State(state): State<SharedState>,
+    Query(query): Query<OpportunityQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    build_opportunity_projection(&state, query.clone()).await?;
+    let mut interval = tokio::time::interval(Duration::from_secs(10));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let stream_state = state.clone();
+    let stream_query = query.clone();
+    let stream = IntervalStream::new(interval).then(move |_| {
+        let state = stream_state.clone();
+        let query = stream_query.clone();
+        async move {
+            let event = match build_opportunity_projection(&state, query).await {
+                Ok(projection) => Event::default()
+                    .event("inventory")
+                    .json_data(projection)
+                    .unwrap_or_else(|_| {
+                        Event::default()
+                            .event("projection_error")
+                            .data("inventory serialization failed")
+                    }),
+                Err(status) => Event::default()
+                    .event("projection_error")
+                    .data(format!("inventory unavailable: {}", status.as_u16())),
+            };
+            Ok::<Event, Infallible>(event)
+        }
+    });
+    Ok((
+        [
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+            ),
+            (
+                HeaderName::from_static("x-accel-buffering"),
+                HeaderValue::from_static("no"),
+            ),
+        ],
+        Sse::new(stream).keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("canonical inventory stream"),
+        ),
+    ))
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 struct OpportunityCommentResponse {
     id: Uuid,
@@ -3210,6 +3280,8 @@ async fn opportunity_feed_response(
     let projection = build_opportunity_projection(
         state,
         OpportunityQuery {
+            view: Some("ready_to_earn".to_string()),
+            source_type: Some("canonical_base".to_string()),
             limit: Some(300),
             ..OpportunityQuery::default()
         },
@@ -3228,7 +3300,7 @@ async fn opportunity_feed_response(
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     response.headers_mut().insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=60"),
+        HeaderValue::from_static("public, max-age=15, must-revalidate"),
     );
     response.headers_mut().insert(
         header::ETAG,
@@ -7395,7 +7467,7 @@ async fn plan_autonomous_canonical_child_terms(
         })
 }
 
-#[utoipa::path(post, path = "/v1/base/autonomous-bounties/standing-meta-v2-child-preparation", responses((status = 200, description = "Hosted terms publication plus exact ordered on-chain terms and fully funded child creation calls")))]
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/standing-meta-v2-child-preparation", responses((status = 200, description = "Hosted terms publication plus exact ordered on-chain terms and fully funded routed-V3 child creation calls; the legacy path is retained for agent compatibility")))]
 async fn prepare_standing_meta_v2_child(
     State(state): State<SharedState>,
     Json(request): Json<StandingMetaV2ChildPreparationRequest>,
@@ -7404,10 +7476,10 @@ async fn prepare_standing_meta_v2_child(
     if network != "base-mainnet" {
         return Err(agent_action_error(
             StatusCode::BAD_REQUEST,
-            "standing_meta_v2_network_unsupported",
-            "standing-meta-v2 is deployed only on canonical Base mainnet",
+            "standing_meta_network_unsupported",
+            "standing-meta child preparation is deployed only on canonical Base mainnet",
             false,
-            "Use network base-mainnet and an exact claimable standing-meta-v2 parent contract.",
+            "Use network base-mainnet and an exact claimable routed-V3 parent contract.",
         ));
     }
     let parent = indexed_autonomous_bounty(&state, network, &request.parent_bounty_contract)
@@ -7424,32 +7496,19 @@ async fn prepare_standing_meta_v2_child(
     let parent_context = standing_meta_v2_parent_context(&parent).map_err(|error| {
         agent_action_error(
             StatusCode::CONFLICT,
-            "standing_meta_v2_parent_invalid",
+            "standing_meta_parent_invalid",
             error.to_string(),
             false,
-            "Choose an exact claimable standing-meta-v2 parent. Do not reuse the historical canonical-child-v1 planner.",
+            "Choose an exact claimable routed-V3 parent. Recovery-reserved V2 and already-claimed parents cannot prepare a child.",
         )
     })?;
     if request.parent_solver.eq_ignore_ascii_case(&parent.creator) {
         return Err(agent_action_error(
             StatusCode::CONFLICT,
-            "standing_meta_v2_creator_cannot_claim",
+            "standing_meta_creator_cannot_claim",
             "the parent bounty creator cannot be its solver",
             false,
             "Use a different registered parent-solver wallet.",
-        ));
-    }
-    if !parent
-        .verifier_module
-        .as_deref()
-        .is_some_and(|module| module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER))
-    {
-        return Err(agent_action_error(
-            StatusCode::CONFLICT,
-            "standing_meta_v2_verifier_mismatch",
-            "the parent does not use the canonical standing-meta-v2 verifier",
-            false,
-            "Choose one of the verified standing-meta-v2 inventory entries.",
         ));
     }
     let planner = configured_autonomous_planner(network).map_err(|_| {
@@ -7466,10 +7525,10 @@ async fn prepare_standing_meta_v2_child(
         .map_err(|error| {
             agent_action_error(
                 StatusCode::BAD_REQUEST,
-                "standing_meta_v2_child_invalid",
+                "standing_meta_child_invalid",
                 error.to_string(),
                 false,
-                "Correct the task, immutable runner manifest, participants, or economics and request a new preparation. Do not sign a rejected plan.",
+                "Correct the task, immutable runner manifest, participants, or economics and retry the same routed-V3 preparation. Do not sign a rejected plan.",
             )
         })?;
     let store = state.store.as_ref().ok_or_else(|| {
@@ -7487,14 +7546,14 @@ async fn prepare_standing_meta_v2_child(
         .map_err(|error| {
             agent_action_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "standing_meta_v2_terms_store_failed",
+                "standing_meta_terms_store_failed",
                 error.to_string(),
                 true,
                 "Retry the identical request. Do not alter or send the returned on-chain terms until hosted publication succeeds.",
             )
-        })?;
+    })?;
     plan.hosted_terms_published = true;
-    plan.current_state = "hosted_child_terms_published_parent_unclaimed".to_string();
+    plan.current_state = "hosted_routed_v3_child_terms_published_parent_unclaimed".to_string();
     Ok(Json(plan))
 }
 
@@ -7544,7 +7603,7 @@ async fn require_autonomous_creation_terms(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    validate_autonomous_creation_against_terms(network, create, &terms)
+    validate_autonomous_creation_for_public_earning(network, create, &terms)
         .map_err(|_| StatusCode::CONFLICT)?;
     Ok(terms)
 }
@@ -15728,6 +15787,7 @@ mod tests {
         assert!(paths.contains_key("/v1/objectives/{id}/actions"));
         assert!(paths.contains_key("/v1/objectives/{id}/reconcile"));
         assert!(paths.contains_key("/v1/opportunities"));
+        assert!(paths.contains_key("/v1/opportunities/stream"));
         assert!(paths.contains_key("/v1/opportunities/{opportunity_id}/comments"));
         assert!(paths.contains_key("/v1/opportunities/feed.rss"));
         assert!(paths.contains_key("/v1/opportunities/feed.atom"));

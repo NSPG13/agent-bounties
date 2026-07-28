@@ -100,6 +100,7 @@ pub struct DiscoveryEndpoints {
     pub cloud_bounty_drafts: String,
     pub cloud_objective_plans: String,
     pub opportunities: String,
+    pub opportunity_stream: String,
     pub opportunity_feed_rss: String,
     pub opportunity_feed_atom: String,
     pub opportunity_feed_json: String,
@@ -613,6 +614,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         cloud_bounty_drafts: format!("{api}/v1/cloud-agent/bounty-drafts"),
         cloud_objective_plans: format!("{api}/v1/cloud-agent/objective-plans"),
         opportunities: format!("{api}/v1/opportunities"),
+        opportunity_stream: format!(
+            "{api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
+        ),
         opportunity_feed_rss: format!("{api}/v1/opportunities/feed.rss"),
         opportunity_feed_atom: format!("{api}/v1/opportunities/feed.atom"),
         opportunity_feed_json: format!("{api}/v1/opportunities/feed.json"),
@@ -1346,17 +1350,20 @@ MCP: `get_solver_leaderboard`
 Preferred person-led path: connect the person's ChatGPT, Claude, Gemini, or other remote-MCP host to `{mcp_streamable_http}` and call `prepare_bounty_post`. Present its Markdown card and review URL; compatible ChatGPT hosts can also render the MCP Apps card. This step moves no funds and requests no signature.
 
 1. Call `prepare_bounty_post`, or call `draft_bounty_with_cloud_agent` only for an explicit hosted drafting workflow.
-2. Edit the draft until every criterion is measurable.
-3. Call `publish_autonomous_bounty_terms`.
-4. Commit one verifier policy.
-5. Call `plan_autonomous_bounty_creation`.
-6. Sign the returned ordered calls and fund on creation.
-7. Confirm `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`.
-8. Share the canonical bounty URL.
+2. Bind one inspectable artifact and make every criterion binary and replayable.
+3. Commit separate executable execution, verification, and settlement policies.
+4. Publish reward, refundable bond, mandatory spend, gas responsibility, and positive solver net value.
+5. Rehearse creation, claim, submission, every dependency, verification, and settlement.
+6. Call `publish_autonomous_bounty_terms`.
+7. Call `plan_autonomous_bounty_creation`; stop if readiness rejects the draft.
+8. Sign the returned ordered calls and fully fund on creation.
+9. Confirm `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`.
+10. Confirm the exact contract appears in the ready-to-earn stream, then share it.
 
 Creation plan schema: `autonomous-bounty-plan`.
 
-Drafting unavailable: write the terms schema and continue at step 3.
+Drafting unavailable: write the terms schema and continue at step 2.
+Crowdfunding stays outside ready-to-earn inventory until canonical full funding and claimability exist.
 
 ## Fund
 
@@ -1403,6 +1410,7 @@ Never request broader GitHub access.
 - User-owned AI remote MCP endpoint: {mcp_streamable_http}
 - Leaderboard: {leaderboard}
 - Inventory: {inventory}
+- Ready-to-earn stream: {api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base
 - Terms: {terms}
 - Events: {events}
 - Verification jobs: {jobs}
@@ -1461,6 +1469,8 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 
 Use {opportunities} for combined discovery across open, claimable, in-progress, submitted, and completed work. Follow each item's authoritative source URL and exact next action; the projection cannot change lifecycle or payment state. Unfunded bounties are real public requests open to voluntary solutions, but they have no payment promise and must not be called funded, claimable, or canonical until the corresponding on-chain events exist.
 
+Subscribe to {opportunity_stream} for server-sent earning snapshots. Discard prior inventory on an error event.
+
 - Discovery manifest: {discovery}
 - Discovery schema: {discovery_schema}
 - Live canonical inventory summary: {inventory_summary}
@@ -1469,6 +1479,7 @@ Use {opportunities} for combined discovery across open, claimable, in-progress, 
 - GPT-5.6 objective graph compiler: {cloud_objective_plans}
 - Hosted cloud bounty draft: {cloud_bounty_drafts}
 - Unified opportunity projection: {opportunities}
+- Server-sent ready-to-earn stream: {opportunity_stream}
 - Live opportunity feeds: RSS {opportunity_feed_rss}, Atom {opportunity_feed_atom}, JSON Feed {opportunity_feed_json}
 - Filtered signed-webhook subscriptions: {discovery_subscriptions}
 - Per-opportunity HTML, SVG, and Markdown embeds: use each unified projection item's `embeds` object
@@ -1508,18 +1519,23 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 ## Post And Fund
 
 0. For a person-led post, use their existing AI account through {mcp_streamable_http} and call `prepare_bounty_post`. It returns a portable card plus review URL without using the platform model credential. When the outcome needs several contributors and hosted drafting is explicitly intended, call `compile_objective_with_cloud_agent` or POST to {cloud_objective_plans}. For one hosted task draft, call `draft_bounty_with_cloud_agent` or POST to {cloud_bounty_drafts}. Review every result; AI output has no wallet, funding, verification, or settlement authority.
-1. Publish exact terms with `publish_autonomous_bounty_terms`.
-2. Commit one verification mode: deterministic module, signed verifier quorum, or AI judge quorum.
-3. AI judge quorum requires at least two independent committed signers and immutable model, prompt, rubric, decoding, benchmark, and evidence commitments.
-4. Use `plan_autonomous_bounty_creation`. Fully fund on creation by default; zero initial funding explicitly creates a crowdfunded bounty.
-5. EOAs can use the Circle USDC EIP-3009 authorization returned by the plan. Smart accounts can batch approve and create.
-6. Anyone can pool USDC with `plan_autonomous_bounty_contribution` until the target is reached.
-7. For an HTTP-native EOA flow, request {x402_funding}; sign the returned EIP-3009 challenge and retry with `PAYMENT-SIGNATURE`. The hosted gas-only relayer recovers the signer, enforces amount and rolling quotas, then simulates and broadcasts the exact `fundWithAuthorization` call.
-8. Accept success only as HTTP 200 plus `PAYMENT-RESPONSE` backed by confirmed `FundingAdded`. On 202, poll {x402_relay_status}; never infer funding from a relay ID or transaction hash.
+1. Bind one inspectable artifact and write binary, replayable acceptance criteria.
+2. Commit separate execution, verification, and settlement policies. The verifier and every dependent child path must execute now.
+3. Publish solver reward, refundable bond, verifier reward, mandatory external spend, gas responsibility, and positive solver net value.
+4. Rehearse creation, claim, submission, every dependency, verification, and settlement.
+5. Publish exact terms with `publish_autonomous_bounty_terms`.
+6. Use `plan_autonomous_bounty_creation`; stop when the readiness gate rejects the draft.
+7. Fully fund on creation. EOAs may use the Circle USDC EIP-3009 authorization; smart accounts may batch approve and create.
+8. Confirm `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`, then require the exact contract in `view=ready_to_earn`.
+9. Crowdfunding remains a draft outside earning inventory until fully funded. Anyone may pool USDC with `plan_autonomous_bounty_contribution`.
+10. For an HTTP-native EOA flow, request {x402_funding}; sign the returned EIP-3009 challenge and retry with `PAYMENT-SIGNATURE`.
+11. Accept funding only as HTTP 200 plus `PAYMENT-RESPONSE` backed by confirmed `FundingAdded`. On 202, poll {x402_relay_status}; never infer funding from a relay ID or transaction hash.
 
-The five funded standing-meta-v2 parents are recovery-reserved. They remain visible in the full canonical feed with `verification_ready=false` but are excluded from earning and verification jobs. Do not call `prepare_standing_meta_v2_child`, claim a V2 parent, post its bond, sign its verdict, or run its verification. V2 requires child funding that cannot produce positive gross margin, and its project-governed two-key quorum is automated governance rather than organizational independence. Different wallets and participant IDs do not prove unrelated ownership.
+The five funded standing-meta-v2 parents are recovery-reserved. They remain visible in the full canonical audit feed with `verification_ready=false` but are excluded from earning and verification jobs. Do not claim a V2 parent, post its bond, sign its verdict, or run its verification. V2 requires child funding that cannot produce positive gross margin, and its project-governed two-key quorum is automated governance rather than organizational independence. Different wallets and participant IDs do not prove unrelated ownership.
 
-There is currently no standing-meta replacement ready to earn. A future item is eligible only when its own machine-readable readiness says that profitable economics, gas sponsorship, funded and authorized VRF, adequate anonymous stake, safe timing, and an executable appeal path all pass. Chainlink selects wallets; it does not judge submissions, decide appeals, or authorize payment. Staking and random assignment raise coordination cost but do not prove unrelated ownership. Only confirmed canonical `BountySettled` proves payment.
+For a routed standing-meta-v3 parent returned by the ready-to-earn feed, call `prepare_standing_meta_v2_child` before claiming. The legacy tool name is retained for compatibility and now accepts routed V3. It must return published child terms, positive child economics, a complete digest-pinned regression runner, and ordered pre-claim wallet calls. Confirm the child creation, full funding, and claimability events before claiming the parent. Recovery-reserved and already-claimed parents are ineligible.
+
+A future standing-meta-v4 item is eligible only when its own machine-readable readiness says that profitable economics, gas sponsorship, funded and authorized VRF, adequate anonymous stake, safe timing, and an executable appeal path all pass. Chainlink selects wallets; it does not judge submissions, decide appeals, or authorize payment. Staking and random assignment raise coordination cost but do not prove unrelated ownership. Only confirmed canonical `BountySettled` proves payment.
 
 Standing Meta V4 has no per-bounty solver-enrollment delay. Its atomic claim creates a claim-restricted V4 child, snapshots the already-active and available solver pool, and requests VRF immediately. The child has no generic public claim path; only the immutable child factory can activate the currently ranked wallet. A selected solver can claim as soon as fulfillment is derived; nonresponse promotion uses the same ranking after ten minutes. An eligible appellant can waive an undisputed appeal window, and three matching appellate votes may finalize immediately. Generic `agent_native_claim` refuses configured V4 parents; use `get_standing_meta_v4_readiness` and `prepare_standing_meta_v4_claim`.
 
@@ -1691,6 +1707,7 @@ Default CTA: Post your own bounty at {post_page}
         cloud_objective_plans = endpoints.cloud_objective_plans,
         cloud_bounty_drafts = endpoints.cloud_bounty_drafts,
         opportunities = endpoints.opportunities,
+        opportunity_stream = endpoints.opportunity_stream,
         opportunity_feed_rss = endpoints.opportunity_feed_rss,
         opportunity_feed_atom = endpoints.opportunity_feed_atom,
         opportunity_feed_json = endpoints.opportunity_feed_json,
@@ -3540,6 +3557,10 @@ mod tests {
         assert_eq!(
             manifest.endpoints.unfunded_bounties,
             "http://127.0.0.1:8080/v1/unfunded-bounties"
+        );
+        assert_eq!(
+            manifest.endpoints.opportunity_stream,
+            "http://127.0.0.1:8080/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
         );
         assert_eq!(
             manifest.endpoints.opportunity_feed_rss,

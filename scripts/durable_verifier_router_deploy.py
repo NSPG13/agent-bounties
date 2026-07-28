@@ -43,6 +43,11 @@ LANES: dict[int, tuple[str, str]] = {
     335: ("mcp", "MCP"),
     336: ("wallet_ux", "wallet UX"),
     590: ("agent_discovery", "agent discovery"),
+    647: ("api_reliability", "API reliability"),
+    648: ("mcp_interoperability", "MCP interoperability"),
+    649: ("agent_wallet_ux", "agent wallet UX"),
+    650: ("verifier_reliability", "verifier reliability"),
+    651: ("bounty_distribution", "bounty distribution"),
 }
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
