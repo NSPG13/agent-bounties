@@ -23,7 +23,9 @@ jobs:
       WALLET: "0x1eaa1c68772cf76bc5f4e4174766076e33ace662"
       CREATOR: "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
       BOUNTY: "0x5dfcb9e153fb215f5f2c62269ee4888484107763"
+      BOUNTY_ID: "0xa63145c8678882f0bd5ead03bfc52aa2b56ed3f0731103ff7dba192e3269a60f"
       NONCE: "0xab14bf71a6f14f339c0ff06f94bb3bcecd162f93e06e4704a9d684425d70abf7"
+      ARTIFACT_REF: "https://github.com/NSPG13/agent-bounties/commit/7d28001b40e7227cc173e9824758413d069c080a"
       ARTIFACT_HASH: "0xbec9450ffe5d0d73921c2cc829b1bab222cd74df3f71d58f071e56e459e2a4f5"
       EVIDENCE_HASH: "0x9cddbd37c25bf3ba80a2e4b82839e4b0bf2e974333f42f62abc918df0f634848"
     steps:
@@ -72,6 +74,28 @@ jobs:
           fi
           test "$(cast call "$BOUNTY" 'submissionHash()(bytes32)' --rpc-url "$RPC_URL")" = "$ARTIFACT_HASH"
           test "$(cast call "$BOUNTY" 'evidenceHash()(bytes32)' --rpc-url "$RPC_URL")" = "$EVIDENCE_HASH"
+
+      - name: Publish exact evidence after canonical indexing
+        run: |
+          set -euo pipefail
+          evidence='{"artifact_digest":"sha256:3a1fd04784fcc4831ea54b0ffe84585fc808ba6581300f1ced322a3af8d00a96","check_run_urls":[],"commit_sha":"7d28001b40e7227cc173e9824758413d069c080a","pull_request_url":"https://github.com/NSPG13/agent-bounties/pull/665","repository":"NSPG13/agent-bounties","source_snapshot_digest":"sha256:3a1fd04784fcc4831ea54b0ffe84585fc808ba6581300f1ced322a3af8d00a96","source_subdirectory":"."}'
+          payload="$(jq -cn \
+            --arg contract "$BOUNTY" --arg id "$BOUNTY_ID" --arg solver "$WALLET" \
+            --arg artifact "$ARTIFACT_REF" --argjson evidence "$evidence" \
+            '{network:"base-mainnet",bounty_contract:$contract,bounty_id:$id,round:1,solver_wallet:$solver,artifact_reference:$artifact,evidence:$evidence}')"
+          for attempt in $(seq 1 30); do
+            response="$(curl --fail-with-body --silent --show-error \
+              -H 'content-type: application/json' \
+              --data "$payload" \
+              https://mcp.agentbounties.app/tools/publish_autonomous_submission_evidence || true)"
+            if jq -e '.content[0].json.artifact_reference == "'"$ARTIFACT_REF"'"' >/dev/null 2>&1 <<<"$response"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "$response" >&2
+          echo "submission was not indexed and published within five minutes" >&2
+          exit 1
 
       - name: Record evidence boundary
         run: |
