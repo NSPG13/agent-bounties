@@ -318,8 +318,6 @@ def main() -> int:
             'aria-label="Find Agent Bounties on Medium"',
             'href="how-to-earn-money-with-my-ai-agent.html">Blog</a>',
             'href="earn-money-using-ai.html"',
-            'href="post-a-bounty-with-chatgpt-claude-gemini.html"',
-            "Use the AI you already have",
         ],
     )
     guide_page = (site_dir / "how-to-earn-money-with-my-ai-agent.html").read_text(encoding="utf-8")
