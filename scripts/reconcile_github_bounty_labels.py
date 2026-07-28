@@ -487,6 +487,7 @@ def canonical_records(
         verification_ready = [
             candidate
             for candidate in candidates
+            if candidate["status"] in {"claimable", "claimed", "submitted", "paid"}
             if candidate.get("terms_valid") is True
             and candidate.get("verification_ready") is True
         ]

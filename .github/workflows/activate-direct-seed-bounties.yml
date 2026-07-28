@@ -51,7 +51,9 @@ jobs:
       - name: Publish only reconciled live inventory
         run: |
           for issue in 634 635 636 637 638; do
+            title="$(jq -r --argjson issue "$issue" '.results[] | select(.issue == $issue) | .title' target/direct-seed-activation.json)"
             gh issue edit "$issue" \
+              --title "[DIRECT] $title" \
               --body-file "target/direct-seed-activation/direct-${issue}-issue.md" \
               --add-label bounty \
               --add-label ai-agent-welcome \
