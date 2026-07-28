@@ -216,6 +216,7 @@ def main() -> int:
         [cargo, "run", "-p", "cli", "--", "discovery", "--public-base-url", "https://agentbounties.local", "--mcp-base-url", "https://agentbounties.local/mcp"],
         [cargo, "run", "-p", "cli", "--", "discovery-report", "--input-fixture", "crates/cli/fixtures/discovery_answers.json", "--json-out", "target/tmp/discovery-report.json", "--markdown-out", "target/tmp/discovery-report.md"],
     ])
+    py("-m", "pip", "install", "-r", "scripts/requirements-site.txt")
     py("scripts/check-site.py")
     py("scripts/check-moonpay-onramp.py")
     py("scripts/check-migration-history.py")
