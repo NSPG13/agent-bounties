@@ -1523,4 +1523,105 @@ mod tests {
         assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
         assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
     }
+
+    fn portable_claim_fixture(
+        status: &str,
+        funded: &str,
+        verification_ready: bool,
+    ) -> AutonomousBountyFeedItem {
+        let mut item = canonical(status, funded, verification_ready);
+        item.creator = "0x1000000000000000000000000000000000000000".to_string();
+        item
+    }
+
+    #[test]
+    fn portable_claim_readiness_diagnostics_cover_healthy_recovery_unprofitable_and_non_creator() {
+        let api_base = "https://api.agentbounties.app";
+
+        let healthy = portable_claim_fixture("claimable", "1000000", true);
+
+        let mut recovery = portable_claim_fixture("claimable", "1000000", true);
+        recovery.verification_ready = false;
+        recovery.verification_readiness_reason =
+            "incident recovery reservation is active; do not claim, sign, or post a bond"
+                .to_string();
+
+        let mut unprofitable = portable_claim_fixture("claimable", "1000000", true);
+        unprofitable.required_external_spend = "950000".to_string();
+        unprofitable.gross_cash_margin = "-50000".to_string();
+
+        let non_creator_block = portable_claim_fixture("claimed", "1000000", true);
+
+        for (label, item, expect_action, expect_claimable) in [
+            (
+                "healthy",
+                &healthy,
+                "prepare_agent_to_earn",
+                true,
+            ),
+            (
+                "recovery-reserved",
+                &recovery,
+                "inspect_verification_readiness",
+                false,
+            ),
+            (
+                "unprofitable",
+                &unprofitable,
+                "prepare_agent_to_earn",
+                true,
+            ),
+            (
+                "non-creator-block",
+                &non_creator_block,
+                "active_solver_prepare_submission",
+                false,
+            ),
+        ] {
+            let proj = canonical_opportunity(item, "base-mainnet", api_base)
+                .unwrap_or_else(|| panic!("{label}: must project"));
+            let econ = proj.cash_economics.as_ref()
+                .unwrap_or_else(|| panic!("{label}: must expose cash economics"));
+
+            assert!(
+                econ.solver_reward.amount == "900000"
+                    || econ.solver_reward.amount == "0",
+                "{label}: solver_reward must be visible"
+            );
+            assert!(
+                econ.refundable_claim_bond.amount == "100000"
+                    || econ.refundable_claim_bond.amount == "0",
+                "{label}: claim bond must be visible"
+            );
+            assert!(!proj.evidence_boundary.is_empty());
+            assert!(!proj.evidence_boundary.contains("plan,"));
+            assert!(!proj.evidence_boundary.contains("signature"));
+            assert!(!proj.evidence_boundary.contains("transaction hash"));
+            assert!(!proj.evidence_boundary.contains("hosted row"));
+            assert!(
+                proj.next_action.instructions.contains("private key")
+                    || proj.next_action.instructions.contains("canonical")
+                    || proj.next_action.instructions.contains("Readiness")
+                    || proj.next_action.instructions.contains("on-chain"),
+                "{label}: next_action must never request secrets; got: {}",
+                proj.next_action.instructions
+            );
+            assert_eq!(proj.next_action.action, expect_action, "{label}");
+
+            if expect_claimable {
+                assert_eq!(proj.work_state, "claimable", "{label}");
+                assert_eq!(proj.next_action.method, "POST", "{label}");
+                assert!(proj.next_action.url.contains("readiness"), "{label}");
+                assert!(proj.next_action.instructions.contains("Do not provide a private key or seed phrase"), "{label}");
+            }
+
+            assert!(econ.scope_disclaimer.contains("not guaranteed net profit"),
+                "{label}: gross cash margin must be distinguished from net profit");
+            if label == "unprofitable" {
+                assert!(!econ.gross_cash_margin_positive, "unprofitable: must have negative gross cash margin");
+            } else if label == "healthy" || label == "recovery-reserved" {
+                assert!(econ.gross_cash_margin_positive, "{label}: must have positive gross cash margin");
+            }
+        }
+    }
 }
