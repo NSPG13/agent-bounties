@@ -41,6 +41,18 @@ EXACT_VERIFIER_SET_HASH = (
     "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
 )
 EXACT_REPOSITORY_CHECK = ["python", "scripts/check.py", "--platform", "posix"]
+ACCEPTANCE_ENV_EXCLUSIONS = frozenset(
+    {
+        "BASE_MAINNET_RPC_URL",
+        "BASE_KEEPER_PRIVATE_KEY",
+        "RECOVERY_VERIFIER_KEY",
+        "EXPECTED_SIGNER",
+        "REVISION",
+        "PULL_REQUEST_URL",
+        "CHECK_RUN_URL",
+        "GH_TOKEN",
+    }
+)
 EXACT_ISSUE_CHECKS = {
     634: [
         "cargo",
@@ -151,10 +163,12 @@ def run(
     *,
     cwd: Path = ROOT,
     timeout: int = 1_800,
+    env: Mapping[str, str] | None = None,
 ) -> str:
     completed = subprocess.run(
         list(command),
         cwd=cwd,
+        env=env,
         text=True,
         encoding="utf-8",
         errors="replace",
@@ -169,6 +183,14 @@ def run(
             f"{completed.stdout[-6_000:]}"
         )
     return completed.stdout.strip()
+
+
+def acceptance_environment() -> dict[str, str]:
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name not in ACCEPTANCE_ENV_EXCLUSIONS
+    }
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -447,10 +469,11 @@ def run_acceptance_checks(manifest: Mapping[str, Any]) -> dict[int, dict[str, An
     ]
     cache: dict[str, dict[str, Any]] = {}
     by_issue: dict[int, dict[str, Any]] = {}
+    check_env = acceptance_environment()
     for index, command in enumerate(commands):
         key = canonical_json(command)
         if key not in cache:
-            run(command)
+            run(command, env=check_env)
             cache[key] = {
                 "command": command,
                 "exit_code": 0,
