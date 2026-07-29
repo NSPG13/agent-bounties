@@ -16119,9 +16119,9 @@ mod tests {
         assert!(paths.contains_key("/v1/base/open-competition-v1/reveal-preparation"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/status"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/bond-withdrawal-preparation"));
-        assert!(paths.contains_key(
-            "/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan"
-        ));
+        assert!(
+            paths.contains_key("/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan")
+        );
         assert!(paths.contains_key("/v1/cloud-agent/objective-plans"));
         assert!(
             value["paths"]["/v1/cloud-agent/objective-plans"]["post"]["responses"]
