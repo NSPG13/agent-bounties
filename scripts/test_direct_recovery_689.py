@@ -142,6 +142,12 @@ class DirectRecovery689Tests(unittest.TestCase):
             with self.assertRaisesRegex(recovery.RecoveryError, "exact verifier set"):
                 recovery.load_attestations(paths[:1], self.manifest)
 
+    def test_transaction_jobs_install_full_rust_check_components(self) -> None:
+        workflow = (
+            SCRIPTS.parent / ".github" / "workflows" / "direct-recovery-689.yml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("components: rustfmt, clippy"), 4)
+
 
 if __name__ == "__main__":
     unittest.main()
