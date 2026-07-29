@@ -1,5 +1,5 @@
 use app::BountyStatusResponse;
-use chain_base::{standing_meta_v2_parent_context, AutonomousBountyFeedItem};
+use chain_base::AutonomousBountyFeedItem;
 use chrono::{DateTime, Utc};
 use db::{TrialBounty, UnfundedBountySolution};
 use domain::{BountyStatus, DiscoveryOpportunitySnapshot, DiscoveryRewardFilter, PrivacyLevel};
@@ -68,6 +68,16 @@ pub struct OpportunityEmbedLinks {
     pub svg: String,
     pub markdown: String,
     pub iframe: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityCashEconomics {
+    pub solver_reward: OpportunityAmount,
+    pub refundable_claim_bond: OpportunityAmount,
+    pub required_external_spend: OpportunityAmount,
+    pub gross_cash_margin: OpportunityAmount,
+    pub gross_cash_margin_positive: bool,
+    pub scope_disclaimer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
@@ -149,6 +159,8 @@ pub struct OpportunityItem {
     pub payment_committed: bool,
     pub competition_mode: String,
     pub standing_meta_bounty: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cash_economics: Option<OpportunityCashEconomics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub standing_meta_v4: Option<OpportunityStandingMetaV4>,
     pub decision_authority: String,
@@ -273,6 +285,7 @@ pub fn render_opportunity_feeds(
                 "payment_state": item.payment_state,
                 "payment_committed": item.payment_committed,
                 "reward": item.reward,
+                "cash_economics": item.cash_economics,
                 "verification_method": item.verification_method,
                 "verification_ready": item.verification_ready,
                 "terms_hash": item.terms_hash,
@@ -332,9 +345,23 @@ fn feed_summary(item: &OpportunityItem) -> String {
         .goal
         .as_deref()
         .unwrap_or("No additional goal text was supplied.");
+    let cash_economics = item.cash_economics.as_ref().map_or_else(String::new, |economics| {
+        format!(
+            " Solver reward: {} {} base units. Refundable claim bond: {} {} base units. Required external spend: {} {} base units. Gross cash margin (not net profit): {} {} base units. {}",
+            economics.solver_reward.amount,
+            economics.solver_reward.currency,
+            economics.refundable_claim_bond.amount,
+            economics.refundable_claim_bond.currency,
+            economics.required_external_spend.amount,
+            economics.required_external_spend.currency,
+            economics.gross_cash_margin.amount,
+            economics.gross_cash_margin.currency,
+            economics.scope_disclaimer,
+        )
+    });
     truncate_feed_text(
         &format!(
-            "{goal}\n\nWork state: {}. Payment state: {}. {reward} Verification: {}. Next action: {}",
+            "{goal}\n\nWork state: {}. Payment state: {}. {reward}{cash_economics} Verification: {}. Next action: {}",
             item.work_state,
             item.payment_state,
             item.verification_method,
@@ -477,6 +504,7 @@ pub fn unfunded_opportunity(
         payment_committed: false,
         competition_mode: "open_unfunded_submission".to_string(),
         standing_meta_bounty: false,
+        cash_economics: None,
         standing_meta_v4: None,
         decision_authority: "The poster reviews this offchain submission; no canonical verifier is configured.".to_string(),
         payment_authority: "None. This opportunity is unfunded and creates no payment promise.".to_string(),
@@ -592,6 +620,7 @@ pub fn legacy_opportunity(
         payment_committed,
         competition_mode: "exclusive_claim".to_string(),
         standing_meta_bounty: false,
+        cash_economics: None,
         standing_meta_v4: None,
         decision_authority: format!("Legacy configured verification path: {verification_method}."),
         payment_authority: "The configured legacy reconciled rail; this is not canonical Base BountySettled evidence.".to_string(),
@@ -699,6 +728,12 @@ pub fn canonical_opportunity(
         .into_iter()
         .collect();
     let opportunity_id = format!("canonical:{network}:{}", item.bounty_contract);
+    let benchmark = terms.map(|record| &record.document.benchmark);
+    let standing_meta_bounty = benchmark
+        .and_then(|value| value.get("engine"))
+        .and_then(Value::as_str)
+        .is_some_and(|engine| engine.starts_with("standing_meta_"));
+    let cash_economics = canonical_cash_economics(item, benchmark);
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "canonical_base".to_string(),
@@ -714,7 +749,8 @@ pub fn canonical_opportunity(
         payment_state: payment_state.to_string(),
         payment_committed,
         competition_mode: "exclusive_claim".to_string(),
-        standing_meta_bounty: standing_meta_v2_parent_context(item).is_ok(),
+        standing_meta_bounty,
+        cash_economics,
         standing_meta_v4: None,
         decision_authority: format!(
             "The immutable canonical verification mode/module configured on {} decides the submission result.",
@@ -818,15 +854,63 @@ fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<U
             let matches = item.work_state == "claimable"
                 && item.payment_state == "escrowed"
                 && item.payment_committed
-                && item.verification_ready;
+                && item.verification_ready
+                && (item.source_type != "canonical_base"
+                    || item
+                        .cash_economics
+                        .as_ref()
+                        .is_some_and(|economics| economics.gross_cash_margin_positive));
             if matches {
                 item.discovery_factors.push(
-                    "view:ready_to_earn;factors=claimable+escrowed+verification_ready".to_string(),
+                    "view:ready_to_earn;factors=claimable+escrowed+verification_ready+positive_gross_cash_margin".to_string(),
                 );
             }
             matches
         }
     }
+}
+
+fn canonical_cash_economics(
+    item: &AutonomousBountyFeedItem,
+    benchmark: Option<&Value>,
+) -> Option<OpportunityCashEconomics> {
+    let solver_reward = item.solver_reward.parse::<i128>().ok()?;
+    let claim_bond = item.claim_bond.parse::<i128>().ok()?;
+    if solver_reward < 0 || claim_bond < 0 {
+        return None;
+    }
+    let engine = benchmark
+        .and_then(|value| value.get("engine"))
+        .and_then(Value::as_str);
+    let required_external_spend = match engine {
+        Some("standing_meta_v2_parent") => solver_reward,
+        Some(engine) if engine.starts_with("standing_meta_") => benchmark
+            .and_then(|value| value.get("minimum_child_target"))
+            .and_then(json_integer)?,
+        _ => 0,
+    };
+    if required_external_spend < 0 {
+        return None;
+    }
+    let gross_cash_margin = solver_reward.checked_sub(required_external_spend)?;
+    Some(OpportunityCashEconomics {
+        solver_reward: OpportunityAmount::usdc_base_units(solver_reward.to_string()),
+        refundable_claim_bond: OpportunityAmount::usdc_base_units(claim_bond.to_string()),
+        required_external_spend: OpportunityAmount::usdc_base_units(
+            required_external_spend.to_string(),
+        ),
+        gross_cash_margin: OpportunityAmount::usdc_base_units(gross_cash_margin.to_string()),
+        gross_cash_margin_positive: gross_cash_margin > 0,
+        scope_disclaimer: "Gross cash margin is solver reward minus required external spend. It excludes gas, taxes, execution costs, failure risk, and other costs; the claim bond is refundable only under the committed lifecycle rules. It is not guaranteed net profit.".to_string(),
+    })
+}
+
+fn json_integer(value: &Value) -> Option<i128> {
+    value
+        .as_u64()
+        .map(i128::from)
+        .or_else(|| value.as_i64().map(i128::from))
+        .or_else(|| value.as_str().and_then(|value| value.parse::<i128>().ok()))
 }
 
 fn taxonomy_view(item: &mut OpportunityItem, view: &str) -> bool {
@@ -1202,6 +1286,78 @@ mod tests {
     }
 
     #[test]
+    fn direct_bounty_exposes_positive_cash_margin_and_refundable_bond() {
+        let item = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let economics = item.cash_economics.unwrap();
+        assert_eq!(economics.solver_reward.amount, "900000");
+        assert_eq!(economics.refundable_claim_bond.amount, "100000");
+        assert_eq!(economics.required_external_spend.amount, "0");
+        assert_eq!(economics.gross_cash_margin.amount, "900000");
+        assert!(economics.gross_cash_margin_positive);
+        assert!(economics
+            .scope_disclaimer
+            .contains("not guaranteed net profit"));
+    }
+
+    #[test]
+    fn standing_meta_bounty_subtracts_required_child_outlay() {
+        let mut source = canonical("claimable", "1000000", true);
+        source.terms.as_mut().unwrap().document.benchmark = json!({
+            "engine": "standing_meta_v3_parent",
+            "minimum_child_target": 500000
+        });
+        let item = canonical_opportunity(&source, "base-mainnet", "https://api.example").unwrap();
+        let economics = item.cash_economics.unwrap();
+        assert!(item.standing_meta_bounty);
+        assert_eq!(economics.required_external_spend.amount, "500000");
+        assert_eq!(economics.gross_cash_margin.amount, "400000");
+        assert!(economics.gross_cash_margin_positive);
+    }
+
+    #[test]
+    fn ready_to_earn_filters_unprofitable_standing_meta_inventory() {
+        let mut profitable = canonical("claimable", "1000000", true);
+        profitable.terms.as_mut().unwrap().document.benchmark = json!({
+            "engine": "standing_meta_v3_parent",
+            "minimum_child_target": 500000
+        });
+        let mut unprofitable = canonical("claimable", "1000000", true);
+        unprofitable.terms.as_mut().unwrap().document.benchmark = json!({
+            "engine": "standing_meta_v3_parent",
+            "minimum_child_target": 1000000
+        });
+        let unprofitable_item =
+            canonical_opportunity(&unprofitable, "base-mainnet", "https://api.example").unwrap();
+        let unprofitable_economics = unprofitable_item.cash_economics.as_ref().unwrap();
+        assert_eq!(unprofitable_economics.gross_cash_margin.amount, "-100000");
+        assert!(!unprofitable_economics.gross_cash_margin_positive);
+        let items = apply_query(
+            vec![
+                canonical_opportunity(&profitable, "base-mainnet", "https://api.example").unwrap(),
+                unprofitable_item,
+            ],
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]
+                .cash_economics
+                .as_ref()
+                .unwrap()
+                .gross_cash_margin
+                .amount,
+            "400000"
+        );
+    }
+
+    #[test]
     fn discovery_views_explain_deterministic_inclusion() {
         let item = canonical_opportunity(
             &canonical("claimable", "1000000", true),
@@ -1257,5 +1413,34 @@ mod tests {
         assert_eq!(json["items"][0]["_bountyboard"]["payment_committed"], false);
         assert!(!feeds.rss.to_ascii_lowercase().contains("trial"));
         assert_eq!(feeds.updated_at, "Fri, 15 Jan 2027 08:00:00 GMT");
+    }
+
+    #[test]
+    fn live_feed_exposes_cash_economics_without_profit_guarantee() {
+        let item = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let projection = OpportunityProjectionResponse {
+            schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
+            generated_at: "2027-01-15T08:01:00Z".to_string(),
+            network: "base-mainnet".to_string(),
+            applied_view: None,
+            degraded: false,
+            source_statuses: Vec::new(),
+            items: vec![item],
+            evidence_boundary: "Projection only".to_string(),
+        };
+        let feeds = render_opportunity_feeds(&projection, "https://api.example/");
+        let json: Value = serde_json::from_str(&feeds.json).unwrap();
+        let economics = &json["items"][0]["_bountyboard"]["cash_economics"];
+        assert_eq!(economics["solver_reward"]["amount"], "900000");
+        assert_eq!(economics["refundable_claim_bond"]["amount"], "100000");
+        assert_eq!(economics["required_external_spend"]["amount"], "0");
+        assert_eq!(economics["gross_cash_margin"]["amount"], "900000");
+        assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
+        assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
     }
 }

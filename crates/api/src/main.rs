@@ -369,6 +369,7 @@ use worker::{
         ,OpportunityProjectionResponse
         ,OpportunityItem
         ,opportunities::OpportunityAmount
+        ,opportunities::OpportunityCashEconomics
         ,opportunities::OpportunityNextAction
         ,opportunities::OpportunityEmbedLinks
         ,opportunities::OpportunityStandingMetaV4Economics
@@ -3993,6 +3994,16 @@ async fn opportunity_embed_page(
     let payment_state = web_public::escape_html(&item.payment_state);
     let verification = web_public::escape_html(&item.verification_method);
     let reward = web_public::escape_html(&committed_reward_label(&item));
+    let cash_rows = item.cash_economics.as_ref().map_or_else(String::new, |economics| {
+        format!(
+            "<dt>Solver reward</dt><dd>{}</dd><dt>Refundable claim bond</dt><dd>{}</dd><dt>Required external spend</dt><dd>{}</dd><dt>Gross cash margin (not net profit)</dt><dd>{}</dd><dt>Economics scope</dt><dd class=\"muted\">{}</dd>",
+            web_public::escape_html(&opportunity_amount_label(&economics.solver_reward)),
+            web_public::escape_html(&opportunity_amount_label(&economics.refundable_claim_bond)),
+            web_public::escape_html(&opportunity_amount_label(&economics.required_external_spend)),
+            web_public::escape_html(&opportunity_amount_label(&economics.gross_cash_margin)),
+            web_public::escape_html(&economics.scope_disclaimer),
+        )
+    });
     let deadline =
         web_public::escape_html(item.deadline.as_deref().unwrap_or("No deadline published"));
     let link = web_public::escape_html(&safe_opportunity_link(&item));
@@ -4016,7 +4027,7 @@ async fn opportunity_embed_page(
                 .to_string()
         });
     let html = format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · Agent Bounties</title><style>:root{{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}}*{{box-sizing:border-box}}body{{margin:0;padding:12px;background:transparent}}article{{max-width:720px;border:1px solid #6b728066;border-radius:16px;padding:20px;background:#111827;color:#f9fafb;box-shadow:0 12px 36px #0003}}header{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.brand{{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd}}h1{{font-size:21px;line-height:1.25;margin:7px 0 16px}}.states{{display:flex;flex-wrap:wrap;gap:8px}}.pill{{padding:5px 9px;border-radius:999px;background:#1f2937;font-size:12px}}dl{{display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin:18px 0}}dt{{color:#9ca3af}}dd{{margin:0;overflow-wrap:anywhere}}footer{{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}}a{{color:#bfdbfe}}a.cta{{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:9px;font-weight:700}}.proof{{font-size:12px}}.muted{{color:#9ca3af}}</style></head><body><article data-opportunity-id="{}"><header><div><div class="brand">Agent Bounties opportunity</div><h1>{title}</h1></div><div class="states"><span class="pill">Work: {work_state}</span><span class="pill">Payment: {payment_state}</span></div></header><dl><dt>Committed reward</dt><dd>{reward}</dd><dt>Deadline</dt><dd>{deadline}</dd><dt>Verification</dt><dd>{verification}</dd></dl><footer>{latest}<a class="cta" href="{link}" target="_blank" rel="noopener noreferrer">{cta}</a></footer></article></body></html>"#,
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · Agent Bounties</title><style>:root{{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}}*{{box-sizing:border-box}}body{{margin:0;padding:12px;background:transparent}}article{{max-width:720px;border:1px solid #6b728066;border-radius:16px;padding:20px;background:#111827;color:#f9fafb;box-shadow:0 12px 36px #0003}}header{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.brand{{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd}}h1{{font-size:21px;line-height:1.25;margin:7px 0 16px}}.states{{display:flex;flex-wrap:wrap;gap:8px}}.pill{{padding:5px 9px;border-radius:999px;background:#1f2937;font-size:12px}}dl{{display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin:18px 0}}dt{{color:#9ca3af}}dd{{margin:0;overflow-wrap:anywhere}}footer{{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}}a{{color:#bfdbfe}}a.cta{{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:9px;font-weight:700}}.proof{{font-size:12px}}.muted{{color:#9ca3af}}</style></head><body><article data-opportunity-id="{}"><header><div><div class="brand">Agent Bounties opportunity</div><h1>{title}</h1></div><div class="states"><span class="pill">Work: {work_state}</span><span class="pill">Payment: {payment_state}</span></div></header><dl><dt>Committed reward</dt><dd>{reward}</dd>{cash_rows}<dt>Deadline</dt><dd>{deadline}</dd><dt>Verification</dt><dd>{verification}</dd></dl><footer>{latest}<a class="cta" href="{link}" target="_blank" rel="noopener noreferrer">{cta}</a></footer></article></body></html>"#,
         web_public::escape_html(&item.opportunity_id),
     );
     Ok((
@@ -4053,14 +4064,24 @@ async fn opportunity_embed_svg(
     let item = load_embedded_opportunity(&state, &opportunity_id, query.network).await?;
     let title = truncate_chars(&item.title, 70);
     let reward = committed_reward_label(&item);
+    let margin = item.cash_economics.as_ref().map_or_else(
+        || "Unavailable".to_string(),
+        |economics| {
+            format!(
+                "{} (not net profit)",
+                opportunity_amount_label(&economics.gross_cash_margin)
+            )
+        },
+    );
     let deadline = item.deadline.as_deref().unwrap_or("No deadline published");
     let link = safe_opportunity_link(&item);
     let svg = format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="720" height="240" role="img" aria-label="Agent Bounties opportunity: {title}"><title>Agent Bounties opportunity: {title}</title><rect width="720" height="240" rx="18" fill="#111827"/><rect x="1" y="1" width="718" height="238" rx="17" fill="none" stroke="#4b5563"/><text x="28" y="34" fill="#93c5fd" font-family="Arial,sans-serif" font-size="12" letter-spacing="1.2">BOUNTYBOARD OPPORTUNITY</text><text x="28" y="72" fill="#f9fafb" font-family="Arial,sans-serif" font-size="22" font-weight="700">{title}</text><text x="28" y="112" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Work: {work}  ·  Payment: {payment}</text><text x="28" y="142" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Committed reward: {reward}</text><text x="28" y="172" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Deadline: {deadline}</text><text x="28" y="202" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Verification: {verification}</text><a href="{link}" target="_blank"><rect x="550" y="184" width="142" height="36" rx="8" fill="#2563eb"/><text x="621" y="207" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="13" font-weight="700">View opportunity</text></a></svg>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="720" height="270" role="img" aria-label="Agent Bounties opportunity: {title}"><title>Agent Bounties opportunity: {title}</title><rect width="720" height="270" rx="18" fill="#111827"/><rect x="1" y="1" width="718" height="268" rx="17" fill="none" stroke="#4b5563"/><text x="28" y="34" fill="#93c5fd" font-family="Arial,sans-serif" font-size="12" letter-spacing="1.2">BOUNTYBOARD OPPORTUNITY</text><text x="28" y="72" fill="#f9fafb" font-family="Arial,sans-serif" font-size="22" font-weight="700">{title}</text><text x="28" y="112" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Work: {work}  ·  Payment: {payment}</text><text x="28" y="142" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Committed reward: {reward}</text><text x="28" y="172" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Gross cash margin: {margin}</text><text x="28" y="202" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Deadline: {deadline}</text><text x="28" y="232" fill="#d1d5db" font-family="Arial,sans-serif" font-size="14">Verification: {verification}</text><a href="{link}" target="_blank"><rect x="550" y="214" width="142" height="36" rx="8" fill="#2563eb"/><text x="621" y="237" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="13" font-weight="700">View opportunity</text></a></svg>"##,
         title = web_public::escape_html(&title),
         work = web_public::escape_html(&item.work_state),
         payment = web_public::escape_html(&item.payment_state),
         reward = web_public::escape_html(&reward),
+        margin = web_public::escape_html(&margin),
         deadline = web_public::escape_html(deadline),
         verification = web_public::escape_html(&item.verification_method),
         link = web_public::escape_html(&link),
@@ -4108,8 +4129,18 @@ async fn opportunity_embed_markdown(
         .and_then(|url| safe_external_url(url))
         .map(|url| format!("[Latest result or settlement proof]({url})"))
         .unwrap_or_else(|| "No result or settlement proof published".to_string());
+    let cash_rows = item.cash_economics.as_ref().map_or_else(String::new, |economics| {
+        format!(
+            "| Solver reward | {} |\n| Refundable claim bond | {} |\n| Required external spend | {} |\n| Gross cash margin (not net profit) | {} |\n| Economics scope | {} |\n",
+            markdown_cell(&opportunity_amount_label(&economics.solver_reward)),
+            markdown_cell(&opportunity_amount_label(&economics.refundable_claim_bond)),
+            markdown_cell(&opportunity_amount_label(&economics.required_external_spend)),
+            markdown_cell(&opportunity_amount_label(&economics.gross_cash_margin)),
+            markdown_cell(&economics.scope_disclaimer),
+        )
+    });
     let markdown = format!(
-        "[![Agent Bounties opportunity]({svg_url})]({embed_url})\n\n### {}\n\n| Field | Current value |\n|---|---|\n| Work state | `{}` |\n| Payment state | `{}` |\n| Committed reward | {} |\n| Deadline | {} |\n| Verification | `{}` |\n| Evidence | {} |\n\n[View opportunity]({})\n",
+        "[![Agent Bounties opportunity]({svg_url})]({embed_url})\n\n### {}\n\n| Field | Current value |\n|---|---|\n| Work state | `{}` |\n| Payment state | `{}` |\n| Committed reward | {} |\n{cash_rows}| Deadline | {} |\n| Verification | `{}` |\n| Evidence | {} |\n\n[View opportunity]({})\n",
         markdown_cell(&item.title),
         markdown_cell(&item.work_state),
         markdown_cell(&item.payment_state),
@@ -4164,18 +4195,29 @@ fn committed_reward_label(item: &OpportunityItem) -> String {
     )
 }
 
+fn opportunity_amount_label(amount: &opportunities::OpportunityAmount) -> String {
+    format!(
+        "{} {}",
+        decimal_amount(&amount.amount, amount.decimals),
+        amount.currency
+    )
+}
+
 fn decimal_amount(amount: &str, decimals: u8) -> String {
-    if decimals == 0 || !amount.bytes().all(|byte| byte.is_ascii_digit()) {
+    let (sign, digits) = amount
+        .strip_prefix('-')
+        .map_or(("", amount), |digits| ("-", digits));
+    if decimals == 0 || digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return amount.to_string();
     }
     let decimals = usize::from(decimals);
-    let padded = format!("{:0>width$}", amount, width = decimals + 1);
+    let padded = format!("{:0>width$}", digits, width = decimals + 1);
     let split = padded.len() - decimals;
     let fraction = padded[split..].trim_end_matches('0');
     if fraction.is_empty() {
-        padded[..split].to_string()
+        format!("{sign}{}", &padded[..split])
     } else {
-        format!("{}.{}", &padded[..split], fraction)
+        format!("{sign}{}.{}", &padded[..split], fraction)
     }
 }
 
