@@ -160,6 +160,26 @@ class DirectRecovery689Tests(unittest.TestCase):
             environment = recovery.acceptance_environment()
         self.assertEqual(environment, {"PATH": "public-tool-path"})
 
+    def test_send_uses_one_explicit_sequential_nonce_cursor(self) -> None:
+        cast = recovery.Cast("cast", "https://rpc.example")
+        key = "secret"
+        cast._next_nonces[key] = 62
+        receipt = json.dumps({"transactionHash": "0x" + "11" * 32, "status": "0x1"})
+        with patch.object(cast, "rpc", return_value=receipt) as rpc:
+            cast.send(key, "0x" + "22" * 20, "claim()")
+            cast.send(key, "0x" + "33" * 20, "claim()")
+        self.assertEqual(rpc.call_args_list[0].args[4:6], ("--nonce", "62"))
+        self.assertEqual(rpc.call_args_list[1].args[4:6], ("--nonce", "63"))
+
+    def test_send_rejects_an_existing_pending_keeper_transaction(self) -> None:
+        cast = recovery.Cast("cast", "https://rpc.example")
+        with (
+            patch.object(cast, "wallet_address", return_value="0x" + "11" * 20),
+            patch.object(cast, "rpc", side_effect=["62", "63"]),
+            self.assertRaisesRegex(recovery.RecoveryError, "another pending transaction"),
+        ):
+            cast.next_nonce("secret")
+
 
 if __name__ == "__main__":
     unittest.main()
