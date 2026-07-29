@@ -146,6 +146,7 @@ class DirectRecovery689Tests(unittest.TestCase):
         workflow = (
             SCRIPTS.parent / ".github" / "workflows" / "direct-recovery-689.yml"
         ).read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("toolchain: 1.88.0"), 4)
         self.assertEqual(workflow.count("components: rustfmt, clippy"), 4)
 
 
