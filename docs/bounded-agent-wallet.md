@@ -5,6 +5,12 @@ create, fund, claim, and submit canonical bounties without asking the human to
 approve every transaction. The owner keeps revocation, policy replacement,
 withdrawal, and ownership control.
 
+`BoundedAgentWalletV2` also lets the owner cancel an unclaimed bounty created by
+that wallet and recover only the wallet's contribution in one transaction. If a
+third party already cancelled the expired bounty, the owner can pull the
+wallet's refund separately. V1 bytecode remains immutable and does not gain
+these V2 methods.
+
 This does not give an agent the owner's MetaMask key. USDC moves into a separate
 contract wallet, and the agent receives only a dedicated delegate signing key.
 The contract enforces the limits even if the agent, its prompt, the hosted API,
@@ -122,6 +128,23 @@ The plan includes exact calldata for `revokePolicy()`. Revocation stops new
 delegate actions immediately. The owner may then call
 `withdrawToken(nativeUsdc, owner, balance)` or install a reviewed replacement
 policy. Ownership transfer is two-step.
+
+V2 adds two owner-only bounty recovery methods:
+
+- `cancelAndWithdrawUnclaimedBounty(bounty)` requires a canonical bounty
+  created by that wallet, status `Open` or `Claimable`, no solver, no active
+  bond, no submission, and a positive wallet contribution. It atomically
+  cancels and pulls only the wallet's refund.
+- `withdrawCancelledBountyRefund(bounty)` handles an expired bounty already
+  cancelled by another caller. It pulls only the wallet's recorded
+  contribution and pro-rata timeout-bond bonus.
+
+Other contributors retain their own `withdrawRefund()` rights. Neither method
+can cancel claimed work, recover another creator's bounty, target a
+non-canonical contract, or move another contributor's principal. The API and
+MCP tool `plan_bounded_wallet_cancel_refund` choose the valid V2 action from
+canonical indexed state. The owner still reviews the exact zero-value Base
+transaction; no platform administrator can invoke it as the owner.
 
 An existing wallet may replace its policy with one zero-value
 `configurePolicy` transaction. Use a fresh delegate when rotating a compromised

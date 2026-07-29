@@ -28,7 +28,7 @@
         <div>
           <p class="eyebrow">Creator controls</p>
           <h1 id="cancel-title">Delete an unclaimed bounty.</h1>
-          <p>Connect the creator wallet, cancel the bounty, then withdraw your contribution.</p>
+          <p>Connect the creator wallet or bounded-wallet owner. Cancel before claim and recover only your contribution.</p>
         </div>
         <a class="button secondary" href="objective.html#post">Post your own bounty</a>
       </section>
@@ -37,15 +37,15 @@
         <form id="creator-cancel-form" class="funding-form protocol-form narrow-form">
           <ol>
             <li>Paste the canonical bounty contract.</li>
-            <li>Connect the wallet that posted it.</li>
-            <li>Review and sign the zero-value cancellation.</li>
-            <li>Withdraw your refund after <code>BountyCancelled</code> is confirmed.</li>
+            <li>Connect the creator wallet or its bounded-wallet owner.</li>
+            <li>Review the zero-value Base action.</li>
+            <li>Direct wallets cancel, then withdraw. BoundedAgentWalletV2 does both in one transaction.</li>
           </ol>
           <label>
             Bounty contract
             <input name="bountyContract" placeholder="0x..." pattern="^0x[0-9a-fA-F]{40}$" required>
           </label>
-          <p class="fine">Only <code>Open</code> or <code>Claimable</code> bounties can be cancelled. A claimed bounty cannot be deleted. Cancellation removes the bounty from active inventory but keeps its immutable audit history.</p>
+          <p class="fine">Only <code>Open</code> or <code>Claimable</code> bounties can be cancelled. A claimed bounty cannot be deleted. The immutable audit history remains. If an expired V2 bounty was already cancelled, its owner can still withdraw the bounded wallet's refund here.</p>
           <div data-legal-consent data-consent-actions="cancel_bounty recover_funds"></div>
           <div class="actions">
             <label class="wallet-picker">
@@ -65,6 +65,7 @@
       <section class="policy">
         <h2>How pooled refunds work</h2>
         <p>Each funder calls <code>withdrawRefund</code> from the wallet that contributed. The contract returns that wallet's principal plus its pro-rata share of any forfeited timeout-bond pool. The creator cannot withdraw another funder's money.</p>
+        <p><code>BoundedAgentWalletV2</code> lets its owner atomically cancel an unclaimed bounty and recover that wallet's share. It does not grant platform maintainers control over another user's wallet or pooled contributions.</p>
         <h2>What cannot be reversed</h2>
         <p>After a claim, cancellation is blocked. After <code>BountySettled</code>, the solver and verifier transfers are final under the contract; maintainers have no reversal or chargeback function.</p>
         <h2>Evidence</h2>

@@ -1970,6 +1970,42 @@ impl AutonomousBountyTxPlanner {
         self.plan_permissionless_call(bounty_contract, Some(contributor), "withdrawRefund()")
     }
 
+    pub fn plan_bounded_wallet_cancel_refund(
+        &self,
+        bounded_wallet: &str,
+        bounty_contract: &str,
+        owner: &str,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        Ok(EvmTransactionIntent {
+            from: Some(normalize_address(owner)?),
+            to: normalize_address(bounded_wallet)?,
+            value_wei: 0,
+            data: encode_call(
+                "cancelAndWithdrawUnclaimedBounty(address)",
+                vec![encode_address(bounty_contract)?],
+            ),
+            function: "cancelAndWithdrawUnclaimedBounty(address)".to_string(),
+        })
+    }
+
+    pub fn plan_bounded_wallet_refund(
+        &self,
+        bounded_wallet: &str,
+        bounty_contract: &str,
+        owner: &str,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        Ok(EvmTransactionIntent {
+            from: Some(normalize_address(owner)?),
+            to: normalize_address(bounded_wallet)?,
+            value_wei: 0,
+            data: encode_call(
+                "withdrawCancelledBountyRefund(address)",
+                vec![encode_address(bounty_contract)?],
+            ),
+            function: "withdrawCancelledBountyRefund(address)".to_string(),
+        })
+    }
+
     fn plan_permissionless_call(
         &self,
         bounty_contract: &str,
@@ -7649,6 +7685,63 @@ mod tests {
             planner.plan_expire_submission(bounty, None).unwrap().data,
             encode_call("expireSubmission()", vec![])
         );
+        let bounded_wallet = "0x2222222222222222222222222222222222222222";
+        let owner = "0x3333333333333333333333333333333333333333";
+        let cancel_refund = planner
+            .plan_bounded_wallet_cancel_refund(bounded_wallet, bounty, owner)
+            .unwrap();
+        assert_eq!(cancel_refund.from.as_deref(), Some(owner));
+        assert_eq!(cancel_refund.to, bounded_wallet);
+        assert_eq!(cancel_refund.value_wei, 0);
+        assert_eq!(
+            cancel_refund.data,
+            encode_call(
+                "cancelAndWithdrawUnclaimedBounty(address)",
+                vec![encode_address(bounty).unwrap()]
+            )
+        );
+        assert_eq!(
+            cancel_refund.function,
+            "cancelAndWithdrawUnclaimedBounty(address)"
+        );
+        let refund = planner
+            .plan_bounded_wallet_refund(bounded_wallet, bounty, owner)
+            .unwrap();
+        assert_eq!(refund.from.as_deref(), Some(owner));
+        assert_eq!(refund.to, bounded_wallet);
+        assert_eq!(
+            refund.data,
+            encode_call(
+                "withdrawCancelledBountyRefund(address)",
+                vec![encode_address(bounty).unwrap()]
+            )
+        );
+        assert_eq!(refund.function, "withdrawCancelledBountyRefund(address)");
+    }
+
+    #[test]
+    fn bounded_wallet_cancel_refund_plan_validates_every_address() {
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x1111111111111111111111111111111111111111",
+            "0x5555555555555555555555555555555555555555",
+        )
+        .unwrap();
+        let wallet = "0x2222222222222222222222222222222222222222";
+        let bounty = "0x4444444444444444444444444444444444444444";
+        let owner = "0x3333333333333333333333333333333333333333";
+
+        assert!(planner
+            .plan_bounded_wallet_cancel_refund("not-a-wallet", bounty, owner)
+            .is_err());
+        assert!(planner
+            .plan_bounded_wallet_cancel_refund(wallet, "not-a-bounty", owner)
+            .is_err());
+        assert!(planner
+            .plan_bounded_wallet_cancel_refund(wallet, bounty, "not-an-owner")
+            .is_err());
+        assert!(planner
+            .plan_bounded_wallet_refund(wallet, "not-a-bounty", owner)
+            .is_err());
     }
 
     #[test]

@@ -45,6 +45,7 @@ node skills/agent-bounties/scripts/check-in.mjs --solver-wallet 0xYourPublicBase
 - Earn: `list_autonomous_bounties` → `prepare_agent_to_earn` → `agent_native_claim` → solve → `prepare_autonomous_bounty_submission` → verify → confirm settlement.
 - Fund: read the canonical target → `fund_bounty_with_x402` → sign the exact challenge → confirm `FundingAdded`.
 - Verify: `list_autonomous_verification_jobs` → run the committed verifier → relay exact proof → confirm `BountySettled`.
+- Cancel before claim: direct creator uses `plan_autonomous_cancel` then `plan_autonomous_refund_withdrawal`; a `BoundedAgentWalletV2` owner uses `plan_bounded_wallet_cancel_refund` once and confirms `RefundWithdrawn`.
 
 ## Hard boundaries
 

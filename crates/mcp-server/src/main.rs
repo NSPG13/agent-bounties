@@ -1155,6 +1155,21 @@ tool_args! {
 }
 
 tool_args! {
+    struct PlanBoundedWalletCancelRefundArgs {
+        network: Option<String>, bounty_contract: String, bounded_wallet: String, caller: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Open or claimable canonical bounty created by the bounded wallet."),
+            "bounded_wallet": string_property("BoundedAgentWalletV2 contract that created and funded the bounty."),
+            "caller": string_property("Bounded wallet owner that will sign the transaction.")
+        }),
+        &["bounty_contract", "bounded_wallet", "caller"],
+    );
+}
+
+tool_args! {
     struct DecodeAutonomousBountyEventsArgs { logs: Vec<EvmLog> }
     schema object_tool_schema(
         json!({
@@ -1730,6 +1745,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_autonomous_refund_withdrawal",
             post(plan_autonomous_refund_withdrawal),
+        )
+        .route(
+            "/tools/plan_bounded_wallet_cancel_refund",
+            post(plan_bounded_wallet_cancel_refund),
         )
         .route(
             "/tools/decode_autonomous_bounty_events",
@@ -2611,6 +2630,11 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "plan_autonomous_refund_withdrawal",
             "Build a contributor's pull-refund transaction after cancellation.",
             PlanAutonomousLifecycleArgs::input_schema("Cancelled canonical bounty contract."),
+        ),
+        tool(
+            "plan_bounded_wallet_cancel_refund",
+            "Build one owner-signed BoundedAgentWalletV2 transaction that cancels an unclaimed canonical bounty and withdraws only that wallet's refund. Other contributors keep their independent refunds.",
+            PlanBoundedWalletCancelRefundArgs::input_schema(),
         ),
         tool(
             "decode_autonomous_bounty_events",
@@ -5166,6 +5190,43 @@ async fn plan_autonomous_refund_withdrawal(
     }
 }
 
+async fn plan_bounded_wallet_cancel_refund(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanBoundedWalletCancelRefundArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if !item.creator.eq_ignore_ascii_case(&args.bounded_wallet) {
+        return mcp_error("bounded wallet is not the indexed bounty creator");
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        match item.status.as_str() {
+            "open" | "claimable" => planner.plan_bounded_wallet_cancel_refund(
+                &args.bounded_wallet,
+                &args.bounty_contract,
+                &args.caller,
+            ),
+            "cancelled" => planner.plan_bounded_wallet_refund(
+                &args.bounded_wallet,
+                &args.bounty_contract,
+                &args.caller,
+            ),
+            _ => Err(
+                chain_base::ChainBaseError::InvalidVerificationConfiguration(
+                    "bounty is not cancellable or refundable".to_string(),
+                ),
+            ),
+        }
+        .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn plan_autonomous_lifecycle(
     state: SharedState,
     args: PlanAutonomousLifecycleArgs,
@@ -5705,7 +5766,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 113);
+        assert_eq!(descriptors.len(), 114);
         assert_eq!(
             descriptors
                 .iter()

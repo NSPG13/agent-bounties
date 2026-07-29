@@ -23,6 +23,16 @@
     withdrawRefund: Object.freeze({ function: "withdrawRefund()", data: "0x110f8874" }),
   });
 
+  const BOUNDED_WALLET_V2 = Object.freeze({
+    version: "0xbfa7c23ab51aed73d26d3a18212c525361df14b0d4d79efa3f9a229cebe161ec",
+    selectors: Object.freeze({
+      owner: "0x8da5cb5b",
+      walletVersion: "0x1127b57e",
+      cancelRefund: "0x683e2054",
+      withdrawRefund: "0x06536a56",
+    }),
+  });
+
   const LEGACY_RECOVERY = Object.freeze({
     creator: "0x884834e884d6e93462655a2820140ad03e6747bc",
     factory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
@@ -912,6 +922,19 @@
     return recoveryUint(word);
   }
 
+  async function boundedWalletV2Owner(walletAddress) {
+    try {
+      const [version, owner] = await Promise.all([
+        recoveryCall(walletAddress, BOUNDED_WALLET_V2.selectors.walletVersion),
+        recoveryCall(walletAddress, BOUNDED_WALLET_V2.selectors.owner),
+      ]);
+      if (version !== BOUNDED_WALLET_V2.version) return null;
+      return recoveryAddress(owner);
+    } catch (_error) {
+      return null;
+    }
+  }
+
   async function pollRefundEvent(api, bountyId, contributor, transactionHash, timeoutMs = 90_000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
@@ -943,10 +966,86 @@
         "Bounty contract",
       );
       const bounty = await canonicalBountyByContract(api, bountyContract);
-      if (bounty.status === "cancelled") {
-        if (String(bounty.creator).toLowerCase() !== account.toLowerCase()) {
-          throw new Error("Connect the creator wallet that posted this bounty.");
+      const creator = requiredAddress(bounty.creator, "Indexed creator");
+      const creatorIsAccount = creator.toLowerCase() === account.toLowerCase();
+      const boundedOwner = creatorIsAccount ? null : await boundedWalletV2Owner(creator);
+      const ownerControlsBoundedWallet =
+        boundedOwner && boundedOwner.toLowerCase() === account.toLowerCase();
+      if (!creatorIsAccount && !ownerControlsBoundedWallet) {
+        throw new Error("Connect the creator wallet or the owner of its BoundedAgentWalletV2.");
+      }
+      if (ownerControlsBoundedWallet) {
+        await acceptLegalAction(form, "recover_funds", account);
+        const contribution = await contributionBalance(bountyContract, creator);
+        if (contribution === 0n) {
+          throw new Error("This bounded wallet has no remaining contribution to withdraw.");
         }
+        const isCancelled = bounty.status === "cancelled";
+        if (!isCancelled && !matchesCancellableStatus(bounty.status)) {
+          throw new Error(`This bounty is ${bounty.status}. Claimed work cannot be cancelled.`);
+        }
+        const selector = isCancelled
+          ? BOUNDED_WALLET_V2.selectors.withdrawRefund
+          : BOUNDED_WALLET_V2.selectors.cancelRefund;
+        const expected = {
+          function: isCancelled
+            ? "withdrawCancelledBountyRefund(address)"
+            : "cancelAndWithdrawUnclaimedBounty(address)",
+          data: `${selector}${addressWord(bountyContract)}`,
+        };
+        output(result, [
+          "Review one zero-value Base transaction.",
+          isCancelled
+            ? "Action: withdraw the bounded wallet's existing refund."
+            : "Action: cancel the unclaimed bounty and refund the bounded wallet atomically.",
+          `Refund principal: ${(Number(contribution) / 1_000_000).toFixed(6)} USDC`,
+          "Other funders keep their independent refunds.",
+        ], "pending");
+        const plan = validateLifecyclePlan(
+          await requestJson(
+            `${api}/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                network: "base-mainnet",
+                bounty_contract: bountyContract,
+                bounded_wallet: creator,
+                caller: account,
+              }),
+            },
+          ),
+          creator,
+          account,
+          expected,
+        );
+        const transactionHash = await sendTransaction(plan, account);
+        await waitReceipt(transactionHash);
+        const cancelled = isCancelled
+          ? bounty
+          : await pollBountyStatus(api, bountyContract, "cancelled");
+        const refund = await pollRefundEvent(
+          api,
+          bounty.bounty_id,
+          creator,
+          transactionHash,
+        );
+        if (!cancelled || !refund) {
+          output(result, [
+            "Transaction confirmed; canonical cancellation/refund indexing is still pending.",
+            `${protocol.explorer_url}/tx/${transactionHash}`,
+          ], "pending");
+          return;
+        }
+        refundButton.hidden = true;
+        output(result, [
+          "RefundWithdrawn is confirmed.",
+          `${protocol.explorer_url}/tx/${transactionHash}`,
+          `Transferred to bounded wallet: ${(Number(refund.data?.amount || 0) / 1_000_000).toFixed(6)} USDC`,
+        ], "success");
+        track("bounded_wallet_cancel_refund_confirmed", { bounty_contract: bountyContract });
+        return;
+      }
+      if (bounty.status === "cancelled") {
         const contribution = await contributionBalance(bountyContract, account);
         refundButton.hidden = contribution === 0n;
         refundButton.disabled = contribution === 0n;
@@ -960,9 +1059,6 @@
       }
       if (!matchesCancellableStatus(bounty.status)) {
         throw new Error(`This bounty is ${bounty.status}. Only unclaimed Open or Claimable bounties can be cancelled.`);
-      }
-      if (String(bounty.creator).toLowerCase() !== account.toLowerCase()) {
-        throw new Error("Connect the creator wallet that posted this bounty.");
       }
       const contribution = await contributionBalance(bountyContract, account);
       output(result, [

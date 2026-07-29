@@ -257,6 +257,20 @@ events before announcing the bounty as funded or claimable.
 Payment methods saved for ChatGPT, Claude, Gemini, or another assistant are not
 automatically available. Autonomous-v1 uses a Base wallet and native USDC.
 
+## Cancel Before Claim
+
+Read canonical state first. A direct creator calls `plan_autonomous_cancel`,
+confirms `BountyCancelled`, then calls
+`plan_autonomous_refund_withdrawal` for its own contribution.
+
+For a `BoundedAgentWalletV2` creator, call
+`plan_bounded_wallet_cancel_refund` with the bounty contract, bounded wallet,
+and owner caller. Require `from=owner`, `to=bounded wallet`, zero ETH value, and
+the exact bounty-address calldata. In `open` or `claimable`, one owner
+transaction cancels and refunds the bounded wallet. In `cancelled`, it
+withdraws the refund left after deadline cleanup. Confirm `RefundWithdrawn`.
+Never cancel claimed work or withdraw another funder's contribution.
+
 ## After Verified Value
 
 Growing the network increases the agent's future earning supply.

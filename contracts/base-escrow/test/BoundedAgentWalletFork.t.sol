@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "../src/BoundedAgentWalletFactory.sol";
+import "../src/BoundedAgentWalletV2Factory.sol";
 import "../src/LeadingZeroWorkVerifier.sol";
 
 interface VmBoundedWalletFork {
@@ -78,6 +79,28 @@ contract BoundedAgentWalletForkTest {
         _runRehearsal(address(factory), SEPOLIA_USDC, address(module), SEPOLIA_FUNDING_SOURCE);
     }
 
+    function testMainnetV2OwnerCancelAndRefund() public {
+        if (!vm.envOr("RUN_MAINNET_FORK", false)) {
+            vm.skip(true);
+            return;
+        }
+        vm.createSelectFork(vm.envString("BASE_MAINNET_RPC_URL"), MAINNET_FORK_BLOCK);
+        require(block.chainid == 8453, "wrong chain");
+        _runV2RecoveryRehearsal(MAINNET_FACTORY, MAINNET_USDC, MAINNET_MODULE, MAINNET_FUNDING_SOURCE);
+    }
+
+    function testBaseSepoliaV2OwnerCancelAndRefund() public {
+        if (!vm.envOr("RUN_SEPOLIA_FORK", false)) {
+            vm.skip(true);
+            return;
+        }
+        vm.createSelectFork(vm.envString("BASE_SEPOLIA_RPC_URL"), SEPOLIA_FORK_BLOCK);
+        require(block.chainid == 84532, "wrong chain");
+        AgentBountyFactory factory = new AgentBountyFactory(SEPOLIA_USDC);
+        LeadingZeroWorkVerifier module = new LeadingZeroWorkVerifier(16);
+        _runV2RecoveryRehearsal(address(factory), SEPOLIA_USDC, address(module), SEPOLIA_FUNDING_SOURCE);
+    }
+
     function _runRehearsal(
         address bountyFactory,
         address settlementToken,
@@ -91,6 +114,32 @@ contract BoundedAgentWalletForkTest {
         (address walletAddress, address delegate) =
             _deployFundedWallet(walletFactory, usdc, verifierModule, fundingSource);
         _createFundedBounty(walletAddress, delegate, verifierModule);
+    }
+
+    function _runV2RecoveryRehearsal(
+        address bountyFactory,
+        address settlementToken,
+        address verifierModule,
+        address fundingSource
+    ) private {
+        BoundedWalletForkUsdc usdc = BoundedWalletForkUsdc(settlementToken);
+        BoundedAgentWalletV2Factory walletFactory = new BoundedAgentWalletV2Factory(bountyFactory);
+        address owner = vm.addr(OWNER_KEY);
+        address delegate = vm.addr(DELEGATE_KEY);
+        address walletAddress =
+            walletFactory.createWallet(owner, _policy(delegate, verifierModule), keccak256("bounded-wallet/fork/v2"));
+        vm.prank(fundingSource);
+        require(usdc.transfer(walletAddress, ONE_USDC), "wallet funding failed");
+        address bountyAddress = _createFundedBounty(walletAddress, delegate, verifierModule);
+
+        vm.prank(owner);
+        uint256 recovered = BoundedAgentWalletV2(payable(walletAddress)).cancelAndWithdrawUnclaimedBounty(bountyAddress);
+
+        require(recovered == ONE_USDC, "refund amount drift");
+        require(usdc.balanceOf(walletAddress) == ONE_USDC, "wallet refund missing");
+        require(
+            AgentBounty(bountyAddress).status() == uint8(AgentBounty.BountyStatus.Cancelled), "bounty not cancelled"
+        );
     }
 
     function _deployFundedWallet(
@@ -138,7 +187,10 @@ contract BoundedAgentWalletForkTest {
         require(usdc.balanceOf(walletAddress) == ONE_USDC, "wallet funding missing");
     }
 
-    function _createFundedBounty(address walletAddress, address delegate, address verifierModule) private {
+    function _createFundedBounty(address walletAddress, address delegate, address verifierModule)
+        private
+        returns (address bountyAddress)
+    {
         BoundedAgentWallet wallet = BoundedAgentWallet(payable(walletAddress));
         AgentBountyFactory.CreateBountyParams memory params = AgentBountyFactory.CreateBountyParams({
             solverReward: 990_000,
@@ -157,7 +209,7 @@ contract BoundedAgentWalletForkTest {
             threshold: 1
         });
         vm.prank(delegate);
-        (address bountyAddress,) =
+        (bountyAddress,) =
             wallet.createBounty(params, new address[](0), ONE_USDC, keccak256("bounded-wallet-fork-bounty"));
         AgentBounty bounty = AgentBounty(bountyAddress);
         require(bounty.creator() == walletAddress, "wallet not creator");
