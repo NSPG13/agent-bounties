@@ -1,0 +1,59 @@
+{
+  "schema_version": "agent-bounties/terms-v1",
+  "contract_terms": {
+    "protocol_version": "agent-bounties/autonomous-v1",
+    "creator_wallet": "0x71b7b3a8ceb534ca904b8513987aa1f3bd6c3d91",
+    "network": "base-mainnet",
+    "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "solver_reward": { "amount": 2000000, "currency": "usdc" },
+    "verifier_reward": { "amount": 10000, "currency": "usdc" },
+    "claim_bond": { "amount": 10000, "currency": "usdc" },
+    "initial_funding": { "amount": 2010000, "currency": "usdc" },
+    "funding_deadline": 1820000000,
+    "claim_window_seconds": 1209600,
+    "verification_window_seconds": 1209600,
+    "creation_nonce": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  "title": "API reliability child bounty task",
+  "goal": "Produce a concrete coding task that improves API reliability, exercises the sandboxed-regression signed verifier quorum, and pays the solver 1 USDC.",
+  "acceptance_criteria": [
+    "Publish the exact child terms on Base from the parent solver wallet before claiming.",
+    "Create and fully fund the parent-bound canonical child to at least 1.00 USDC.",
+    "Use the committed sandboxed-regression signed verifier quorum with threshold two.",
+    "Have a different registered participant complete the child and receive canonical settlement.",
+    "Submit the child bounty contract address and discovery feedback to the routed verifier."
+  ],
+  "benchmark": {
+    "engine": "standing_meta_v3_routed_parent",
+    "lane": "api_reliability",
+    "required_child_engine": "sandboxed_regression_v1",
+    "required_child_status": "settled",
+    "required_child_verifier_set_hash": "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+    "required_child_verifier_threshold": 2,
+    "minimum_child_target": 1000000,
+    "minimum_parent_gross_margin": 1000000,
+    "participant_registry": "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294",
+    "terms_registry": "0x35e5d49c12b75c119d33951c2c4f054c5732208c"
+  },
+  "evidence_schema": {
+    "type": "object",
+    "required": ["child_bounty_contract", "discovery_source", "participation_reason", "improvement_feedback"],
+    "properties": {
+      "child_bounty_contract": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+      "discovery_source": { "type": "string" },
+      "participation_reason": { "type": "string" },
+      "improvement_feedback": { "type": "string" }
+    },
+    "additionalProperties": true
+  },
+  "verification_policy": {
+    "mechanism": "deterministic_module",
+    "verifier_module": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+    "verifier_reward_recipient": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+    "commitment": "See canonical immutable benchmark criteria.",
+    "rejection_penalty": "A canonical rejection frees the child solver bond to a bonus pool but does not refund the parent solver."
+  },
+  "source_url": null,
+  "discovery_source": null,
+  "image": null
+}
