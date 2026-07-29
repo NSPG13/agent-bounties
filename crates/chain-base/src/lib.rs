@@ -9381,6 +9381,81 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn routed_v3_api_reliability_economics_produce_one_usdc_gross_margin() {
+        let created_at = DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap();
+        let document: AutonomousBountyTermsDocument =
+            serde_json::from_str(include_str!("../../../bounties/autonomous-v1/647.json"))
+                .unwrap();
+        let terms = build_autonomous_bounty_terms_record(
+            "0x71b7b3a8ceb534ca904b8513987aa1f3bd6c3d91",
+            document,
+            created_at,
+        )
+        .unwrap();
+
+        let item = AutonomousBountyFeedItem {
+            bounty_id: format!("0x{}", "ab".repeat(32)),
+            bounty_contract: "0x71b7b3a8ceb534ca904b8513987aa1f3bd6c3d91".to_string(),
+            creator: "0x71b7b3a8ceb534ca904b8513987aa1f3bd6c3d91".to_string(),
+            status: "claimable".to_string(),
+            solver_reward: "2000000".to_string(),
+            verifier_reward: "10000".to_string(),
+            claim_bond: "10000".to_string(),
+            timeout_bond_pool: "0".to_string(),
+            target_amount: "2010000".to_string(),
+            funded_amount: "2010000".to_string(),
+            required_external_spend: "1000000".to_string(),
+            gross_cash_margin: "1000000".to_string(),
+            terms_hash: terms.terms_hash.clone(),
+            terms: Some(terms),
+            terms_valid: true,
+            verification_mode: "deterministic_module".to_string(),
+            verifier_module: Some(BASE_MAINNET_STANDING_META_V3_ROUTER.to_string()),
+            verifier_set_hash: None,
+            verifier_threshold: None,
+            runner_identifier: Some("standing_meta_v3_routed_parent".to_string()),
+            verification_ready: true,
+            verification_readiness_reason:
+                "the routed-v3 verifier and profitable child dependency are supported"
+                    .to_string(),
+            validation_errors: Vec::new(),
+            events: Vec::new(),
+        };
+
+        assert!(is_supported_routed_v3_parent_terms(
+            item.verifier_module.as_deref(),
+            2_000_000,
+            item.terms.as_ref(),
+        ));
+
+        let context = standing_meta_v2_parent_context(&item).unwrap();
+        assert_eq!(context.solver_reward.amount, 2_000_000);
+        assert_eq!(context.child_target.amount, 1_000_000);
+        assert_eq!(
+            context.solver_reward.amount - context.child_target.amount,
+            1_000_000,
+            "parent gross margin must be exactly 1 USDC"
+        );
+        assert_eq!(
+            context.protocol_version,
+            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+        );
+
+        assert_eq!(
+            item.required_external_spend.parse::<u128>().unwrap(),
+            1_000_000,
+            "required external spend must match minimum_child_target"
+        );
+        assert_eq!(
+            item.gross_cash_margin.parse::<i128>().unwrap(),
+            1_000_000,
+            "gross cash margin must be exactly 1 USDC"
+        );
+        assert!(item.verification_ready);
+        assert!(item.verification_readiness_reason.contains("routed-v3"));
+    }
+
     struct MockTransport {
         seen_request: Arc<Mutex<Option<Value>>>,
         response: Value,
