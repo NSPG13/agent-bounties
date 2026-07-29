@@ -4470,3 +4470,4 @@ mod tests {
         assert_eq!(item["bond"]["amount"], "500000");
     }
 }
+
