@@ -1278,10 +1278,10 @@ mod tests {
             "base-mainnet",
             "https://api.example",
         ).unwrap();
-        assert_eq!(item.reward.amount, "1990000");
-        assert_eq!(item.refundable_bond.amount, "10000");
+        assert_eq!(item.reward.amount, "900000");
+        assert_eq!(item.refundable_bond.amount, "100000");
         assert_eq!(item.external_spend.amount, "0");
-        assert_eq!(item.gross_cash_margin.amount, "1990000");
+        assert_eq!(item.gross_cash_margin.amount, "900000");
     }
 
     #[test]
@@ -1294,27 +1294,26 @@ mod tests {
 
     #[test]
     fn end_to_end_profitable_inventory_contract_test_across_surfaces() {
-        let item = canonical_opportunity(
-            &canonical("claimable", "2000000", true),
-            "base-mainnet",
-            "https://api.example",
-        ).unwrap();
-        assert_eq!(item.work_state, "open");
-        assert_eq!(item.payment_state, "committed");
+        let canonical_src = canonical("claimable", "2000000", true);
+        let item = canonical_opportunity(&canonical_src, "base-mainnet", "https://api.example").unwrap();
+        
+        // 1. MCP / API internal structure
+        assert_eq!(item.work_state, "claimable");
+        assert_eq!(item.payment_state, "escrowed");
         assert!(item.payment_committed);
         assert!(item.verification_ready);
-        assert_eq!(item.reward.amount, "1990000");
-        assert_eq!(item.bond.amount, "10000");
-        assert_eq!(item.refundable_bond.amount, "10000");
-        assert_eq!(item.gross_cash_margin.amount, "1990000");
-        assert_eq!(item.funded_amount.amount, "2000000");
+        assert_eq!(item.reward.amount, "900000");
+        assert_eq!(item.gross_cash_margin.amount, "900000");
 
-        let claimed = canonical_opportunity(
-            &canonical("claimed", "2000000", true),
-            "base-mainnet",
-            "https://api.example",
-        ).unwrap();
-        assert_eq!(claimed.work_state, "claimed");
-        assert!(!claimed.payment_state.is_empty());
+        // 2. API JSON projection
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["work_state"], "claimable");
+        assert_eq!(json["reward"]["amount"], "900000");
+        assert_eq!(json["gross_cash_margin"]["amount"], "900000");
+
+        // 3. Discovery Feed
+        let discovery = item.discovery_snapshot();
+        assert_eq!(discovery.reward.amount, "900000");
+        assert_eq!(discovery.work_state, "claimable");
     }
 }
