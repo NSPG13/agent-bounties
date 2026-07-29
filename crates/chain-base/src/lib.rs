@@ -8,7 +8,7 @@ use alloy::{
 use chrono::{DateTime, Utc};
 use domain::{
     AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord,
-    Id, Money,
+    BountyImageReference, Id, Money,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1245,6 +1245,7 @@ impl AutonomousBountyTxPlanner {
                 .discovery_source
                 .clone()
                 .or_else(|| Some("routed standing-meta child preparation".to_string())),
+            image: None,
             agent_eligibility: None,
             claim_coordination: None,
         };
@@ -5059,6 +5060,9 @@ pub fn build_autonomous_bounty_terms_record(
                 .to_string(),
         ));
     }
+    if let Some(image) = &document.image {
+        validate_bounty_image_reference(image)?;
+    }
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
     validate_known_deterministic_module_semantics(&document)?;
     validate_claim_metadata(&mut document)?;
@@ -5083,6 +5087,33 @@ pub fn build_autonomous_bounty_terms_record(
         document,
         created_at,
     })
+}
+
+fn validate_bounty_image_reference(image: &BountyImageReference) -> Result<(), ChainBaseError> {
+    let valid_sha256 = image.sha256.len() == 64
+        && image
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if image.source != "chatgpt_user_generated"
+        || image.prompt.trim().is_empty()
+        || image.prompt.len() > 4_000
+        || image.alt_text.trim().is_empty()
+        || image.alt_text.len() > 500
+        || !image.asset_url.starts_with("https://")
+        || image.asset_url.len() > 2_048
+        || !valid_sha256
+        || !matches!(
+            image.mime_type.as_str(),
+            "image/png" | "image/jpeg" | "image/webp"
+        )
+    {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "image must be a bounded user-generated ChatGPT asset with an HTTPS URL, SHA-256 digest, supported MIME type, prompt, and alt text"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn leading_zero_work_v1_benchmark() -> Value {
@@ -7718,6 +7749,18 @@ mod tests {
             }),
             source_url: Some("https://github.com/NSPG13/agent-bounties/issues/1".to_string()),
             discovery_source: Some("MCP discovery".to_string()),
+            image: Some(BountyImageReference {
+                source: "chatgpt_user_generated".to_string(),
+                prompt: "Minimal editorial image of a deterministic test turning green."
+                    .to_string(),
+                alt_text: "A deterministic test changing from red to green.".to_string(),
+                asset_url: format!(
+                    "https://mcp.agentbounties.app/public/bounty-images/{}",
+                    "ab".repeat(32)
+                ),
+                sha256: "ab".repeat(32),
+                mime_type: "image/webp".to_string(),
+            }),
             agent_eligibility: None,
             claim_coordination: None,
         };
@@ -7755,6 +7798,21 @@ mod tests {
                 "threshold": 2
             }),
             Some(&supported_record)
+        ));
+        assert_eq!(
+            record.document.image.as_ref().unwrap().source,
+            "chatgpt_user_generated"
+        );
+        let mut invalid_image = record.document.clone();
+        invalid_image.image.as_mut().unwrap().sha256 = format!("0x{}", "ab".repeat(32));
+        assert!(matches!(
+            build_autonomous_bounty_terms_record(
+                "0x3333333333333333333333333333333333333333",
+                invalid_image,
+                now,
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("user-generated ChatGPT asset")
         ));
         let mut create = AutonomousBountyCreate {
             creator: record.creator_wallet.clone(),
@@ -8180,6 +8238,7 @@ mod tests {
                         "https://github.com/NSPG13/agent-bounties/issues/244".to_string(),
                     ),
                     discovery_source: Some("github-label:bounty".to_string()),
+                    image: None,
                     agent_eligibility: None,
                     claim_coordination: None,
                 },
@@ -8374,6 +8433,7 @@ mod tests {
                     }),
                     source_url: None,
                     discovery_source: None,
+                    image: None,
                     agent_eligibility: None,
                     claim_coordination: None,
                 },

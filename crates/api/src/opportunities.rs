@@ -71,6 +71,16 @@ pub struct OpportunityEmbedLinks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityImage {
+    pub source: String,
+    pub prompt: Option<String>,
+    pub alt_text: String,
+    pub asset_url: String,
+    pub sha256: Option<String>,
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct OpportunityStandingMetaV4Economics {
     pub parent_solver_reward: OpportunityAmount,
     pub parent_verifier_reward: OpportunityAmount,
@@ -167,6 +177,7 @@ pub struct OpportunityItem {
     pub proof_urls: Vec<String>,
     pub next_action: OpportunityNextAction,
     pub embeds: OpportunityEmbedLinks,
+    pub image: OpportunityImage,
     pub discovery_factors: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -263,6 +274,7 @@ pub fn render_opportunity_feeds(
             "id": item.opportunity_id,
             "url": item.public_url,
             "title": item.title,
+            "image": item.image.asset_url,
             "content_text": summary,
             "date_published": published,
             "date_modified": modified,
@@ -276,6 +288,7 @@ pub fn render_opportunity_feeds(
                 "verification_method": item.verification_method,
                 "verification_ready": item.verification_ready,
                 "terms_hash": item.terms_hash,
+                "image": item.image,
                 "next_action": item.next_action,
                 "evidence_boundary": item.evidence_boundary,
             }
@@ -461,6 +474,8 @@ pub fn unfunded_opportunity(
         Some(&trial.goal),
         &evidence_requirements,
     );
+    let embeds = opportunity_embed_links(api, &opportunity_id, None);
+    let image = fallback_opportunity_image(&embeds, &trial.title);
     OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "unfunded_offchain".to_string(),
@@ -504,7 +519,8 @@ pub fn unfunded_opportunity(
             })),
             instructions: "A registered agent may submit public work. No payment claim or promise is created.".to_string(),
         },
-        embeds: opportunity_embed_links(api, &opportunity_id, None),
+        embeds,
+        image,
         discovery_factors: base_factors(
             "unfunded_offchain",
             work_state,
@@ -576,6 +592,8 @@ pub fn legacy_opportunity(
     });
     let (categories, skills, keyword_matches) =
         web_public::discovery_taxonomy_with_matches(&bounty.title, None, &evidence_requirements);
+    let embeds = opportunity_embed_links(api, &opportunity_id, None);
+    let image = fallback_opportunity_image(&embeds, &bounty.title);
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "legacy_bounty".to_string(),
@@ -623,7 +641,8 @@ pub fn legacy_opportunity(
         terms_hash: bounty.terms_hash.clone(),
         proof_urls,
         next_action,
-        embeds: opportunity_embed_links(api, &opportunity_id, None),
+        embeds,
+        image,
         discovery_factors: base_factors(
             "legacy_bounty",
             work_state,
@@ -699,6 +718,18 @@ pub fn canonical_opportunity(
         .into_iter()
         .collect();
     let opportunity_id = format!("canonical:{network}:{}", item.bounty_contract);
+    let embeds = opportunity_embed_links(api, &opportunity_id, Some(network));
+    let image = terms
+        .and_then(|record| record.document.image.as_ref())
+        .map(|image| OpportunityImage {
+            source: image.source.clone(),
+            prompt: Some(image.prompt.clone()),
+            alt_text: image.alt_text.clone(),
+            asset_url: image.asset_url.clone(),
+            sha256: Some(image.sha256.clone()),
+            mime_type: image.mime_type.clone(),
+        })
+        .unwrap_or_else(|| fallback_opportunity_image(&embeds, &title));
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "canonical_base".to_string(),
@@ -739,7 +770,8 @@ pub fn canonical_opportunity(
         terms_hash: Some(item.terms_hash.clone()),
         proof_urls,
         next_action,
-        embeds: opportunity_embed_links(api, &opportunity_id, Some(network)),
+        embeds,
+        image,
         discovery_factors: base_factors(
             "canonical_base",
             work_state,
@@ -899,6 +931,17 @@ fn opportunity_embed_links(
             r#"<iframe src="{html}" title="Agent Bounties opportunity" width="720" height="264" loading="lazy"></iframe>"#
         ),
         html,
+    }
+}
+
+fn fallback_opportunity_image(embeds: &OpportunityEmbedLinks, title: &str) -> OpportunityImage {
+    OpportunityImage {
+        source: "content_derived_legacy_card".to_string(),
+        prompt: None,
+        alt_text: format!("Agent Bounties card for {title}"),
+        asset_url: embeds.svg.clone(),
+        sha256: None,
+        mime_type: "image/svg+xml".to_string(),
     }
 }
 
@@ -1070,7 +1113,9 @@ fn canonical_next_action(
 mod tests {
     use super::*;
     use chain_base::{AutonomousBountyEvent, AutonomousBountyEventKind};
-    use domain::{AutonomousBountyTermsDocument, AutonomousBountyTermsRecord};
+    use domain::{
+        AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, BountyImageReference,
+    };
     use uuid::Uuid;
 
     fn trial() -> TrialBounty {
@@ -1123,6 +1168,17 @@ mod tests {
                 verification_policy: json!({}),
                 source_url: None,
                 discovery_source: None,
+                image: Some(BountyImageReference {
+                    source: "chatgpt_user_generated".to_string(),
+                    prompt: "Minimal editorial illustration of a reliable API test.".to_string(),
+                    alt_text: "A clean API test report with a passing status.".to_string(),
+                    asset_url: format!(
+                        "https://mcp.agentbounties.app/public/bounty-images/{}",
+                        "ab".repeat(32)
+                    ),
+                    sha256: "ab".repeat(32),
+                    mime_type: "image/webp".to_string(),
+                }),
                 agent_eligibility: None,
                 claim_coordination: None,
             },
@@ -1159,6 +1215,8 @@ mod tests {
         assert!(!item.payment_committed);
         assert_eq!(item.reward.amount, "0");
         assert_eq!(item.next_action.action, "submit_unfunded_bounty_solution");
+        assert_eq!(item.image.source, "content_derived_legacy_card");
+        assert!(item.image.asset_url.ends_with("/embed.svg"));
         assert!(!serde_json::to_string(&item).unwrap().contains("trial"));
     }
 
@@ -1174,6 +1232,8 @@ mod tests {
         assert_eq!(ready.payment_state, "escrowed");
         assert!(ready.payment_committed);
         assert_eq!(ready.next_action.action, "prepare_agent_to_earn");
+        assert_eq!(ready.image.source, "chatgpt_user_generated");
+        assert_eq!(ready.image.sha256, Some("ab".repeat(32)));
 
         let unavailable = canonical_opportunity(
             &canonical("claimable", "1000000", false),

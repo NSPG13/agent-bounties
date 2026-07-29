@@ -2761,7 +2761,8 @@ fn opportunity_comments_response(
 enum ChatgptActionKind {
     Post,
     Fund,
-    Compete,
+    #[serde(alias = "compete")]
+    Solve,
     Complete,
     Verify,
 }
@@ -2771,7 +2772,7 @@ impl ChatgptActionKind {
         match self {
             Self::Post => "post",
             Self::Fund => "fund",
-            Self::Compete => "compete",
+            Self::Solve => "solve",
             Self::Complete => "complete",
             Self::Verify => "verify",
         }
@@ -2781,7 +2782,7 @@ impl ChatgptActionKind {
         match self {
             Self::Post => vec!["canonical_bounty_created".to_string()],
             Self::Fund => vec!["funding_added".to_string()],
-            Self::Compete => vec!["bounty_claimed".to_string()],
+            Self::Solve => vec!["bounty_claimed".to_string()],
             Self::Complete => vec!["submission_added".to_string()],
             Self::Verify => vec![
                 "bounty_settled".to_string(),
@@ -2862,6 +2863,10 @@ async fn create_chatgpt_action_intent(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    store
+        .delete_expired_chatgpt_action_intents_before(Utc::now() - ChronoDuration::hours(24))
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let normalized = normalize_chatgpt_action_request(request)?;
     let fingerprint_value = serde_json::json!({
         "action": normalized.action,
@@ -2993,14 +2998,7 @@ fn normalize_chatgpt_action_request(
         .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
         .transpose()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    if !request.details.is_object()
-        || serde_json::to_vec(&request.details)
-            .map_err(|_| StatusCode::BAD_REQUEST)?
-            .len()
-            > 16_000
-    {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+    validate_chatgpt_action_details(request.action, &request.details)?;
     match request.action {
         ChatgptActionKind::Post => {}
         ChatgptActionKind::Fund => {
@@ -3010,7 +3008,7 @@ fn normalize_chatgpt_action_request(
                 return Err(StatusCode::BAD_REQUEST);
             }
         }
-        ChatgptActionKind::Compete | ChatgptActionKind::Complete | ChatgptActionKind::Verify => {
+        ChatgptActionKind::Solve | ChatgptActionKind::Complete | ChatgptActionKind::Verify => {
             if request.bounty_contract.is_none() || request.amount_base_units.is_some() {
                 return Err(StatusCode::BAD_REQUEST);
             }
@@ -3020,6 +3018,129 @@ fn normalize_chatgpt_action_request(
         network: request.network,
         ..request
     })
+}
+
+fn validate_chatgpt_action_details(
+    action: ChatgptActionKind,
+    details: &serde_json::Value,
+) -> Result<(), StatusCode> {
+    let object = details.as_object().ok_or(StatusCode::BAD_REQUEST)?;
+    if serde_json::to_vec(details)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .len()
+        > 16_000
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let allowed = match action {
+        ChatgptActionKind::Post => &["draft"][..],
+        ChatgptActionKind::Fund => &["title", "public_url"][..],
+        ChatgptActionKind::Solve => &["title", "claim_bond_base_units", "verification_ready"][..],
+        ChatgptActionKind::Complete => &["artifact_reference", "evidence"][..],
+        ChatgptActionKind::Verify => &["title", "verification_method"][..],
+    };
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if action == ChatgptActionKind::Post {
+        if let Some(draft) = object.get("draft") {
+            let draft = draft.as_object().ok_or(StatusCode::BAD_REQUEST)?;
+            let allowed_draft = [
+                "title",
+                "goal",
+                "acceptance_criteria",
+                "solver_reward_usdc",
+                "verifier_reward_usdc",
+                "source_url",
+                "crowdfund",
+                "discovery_source",
+            ];
+            if draft
+                .keys()
+                .any(|key| !allowed_draft.contains(&key.as_str()))
+            {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+    let mut key_count = 0usize;
+    validate_chatgpt_detail_value(details, 0, &mut key_count)
+}
+
+fn validate_chatgpt_detail_value(
+    value: &serde_json::Value,
+    depth: usize,
+    key_count: &mut usize,
+) -> Result<(), StatusCode> {
+    if depth > 6 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    match value {
+        serde_json::Value::Object(object) => {
+            *key_count = key_count
+                .checked_add(object.len())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            if *key_count > 64 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            for (key, child) in object {
+                if key.is_empty()
+                    || key.len() > 80
+                    || key.chars().any(char::is_control)
+                    || chatgpt_detail_key_is_sensitive(key)
+                {
+                    return Err(StatusCode::BAD_REQUEST);
+                }
+                validate_chatgpt_detail_value(child, depth + 1, key_count)?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            if items.len() > 50 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            for item in items {
+                validate_chatgpt_detail_value(item, depth + 1, key_count)?;
+            }
+        }
+        serde_json::Value::String(text)
+            if text.len() > 12_000 || text.chars().any(|character| character == '\0') =>
+        {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn chatgpt_detail_key_is_sensitive(key: &str) -> bool {
+    let normalized = key.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    matches!(
+        normalized.as_str(),
+        "password"
+            | "passphrase"
+            | "secret"
+            | "token"
+            | "api_key"
+            | "access_token"
+            | "refresh_token"
+            | "bearer_token"
+            | "auth_token"
+            | "private_key"
+            | "seed"
+            | "seed_phrase"
+            | "mnemonic"
+            | "otp"
+            | "one_time_password"
+            | "mfa"
+            | "mfa_code"
+            | "cvv"
+            | "cvc"
+            | "card_number"
+            | "pan"
+            | "payment_authorization"
+            | "wallet_signature"
+            | "verifier_signature"
+    )
 }
 
 fn normalize_public_identifier(
@@ -3068,6 +3189,10 @@ async fn reconcile_chatgpt_action_intent(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    store
+        .delete_expired_chatgpt_action_intents_before(Utc::now() - ChronoDuration::hours(24))
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let mut intent = store
         .get_chatgpt_action_intent(intent_id)
         .await
@@ -3119,7 +3244,7 @@ fn canonical_event_matches_chatgpt_intent(
     let kind_matches = match intent.action.as_str() {
         "post" => event.kind == AutonomousBountyEventKind::CanonicalBountyCreated,
         "fund" => event.kind == AutonomousBountyEventKind::FundingAdded,
-        "compete" => event.kind == AutonomousBountyEventKind::BountyClaimed,
+        "solve" | "compete" => event.kind == AutonomousBountyEventKind::BountyClaimed,
         "complete" => event.kind == AutonomousBountyEventKind::SubmissionAdded,
         "verify" => matches!(
             event.kind,
@@ -3153,7 +3278,7 @@ fn canonical_event_matches_chatgpt_intent(
         let actor_field = match intent.action.as_str() {
             "post" => Some("creator"),
             "fund" => Some("contributor"),
-            "compete" | "complete" => Some("solver"),
+            "solve" | "compete" | "complete" => Some("solver"),
             "verify" => None,
             _ => return false,
         };
@@ -3182,7 +3307,7 @@ fn chatgpt_action_intent_response(
     let action = match intent.action.as_str() {
         "post" => ChatgptActionKind::Post,
         "fund" => ChatgptActionKind::Fund,
-        "compete" => ChatgptActionKind::Compete,
+        "solve" | "compete" => ChatgptActionKind::Solve,
         "complete" => ChatgptActionKind::Complete,
         "verify" => ChatgptActionKind::Verify,
         _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -13159,6 +13284,92 @@ mod tests {
                 ..valid_fund
             });
         assert_eq!(amount_on_completion.unwrap_err(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn chatgpt_action_details_are_bounded_and_reject_sensitive_fields() {
+        validate_chatgpt_action_details(
+            ChatgptActionKind::Post,
+            &serde_json::json!({
+                "draft": {
+                    "title": "Publish a public test",
+                    "goal": "Produce a bounded artifact.",
+                    "acceptance_criteria": ["The public check passes."],
+                    "solver_reward_usdc": "2.00",
+                    "verifier_reward_usdc": "0.10",
+                    "source_url": null,
+                    "crowdfund": true,
+                    "discovery_source": "ChatGPT"
+                }
+            }),
+        )
+        .unwrap();
+        validate_chatgpt_action_details(
+            ChatgptActionKind::Complete,
+            &serde_json::json!({
+                "artifact_reference": "https://github.com/example/repo/commit/abc",
+                "evidence": {
+                    "transaction_hash": format!("0x{}", "11".repeat(32)),
+                    "source_snapshot_digest": "sha256:public"
+                }
+            }),
+        )
+        .unwrap();
+
+        for sensitive in [
+            "private_key",
+            "seed-phrase",
+            "wallet signature",
+            "payment_authorization",
+            "card_number",
+            "access_token",
+        ] {
+            let details = serde_json::json!({
+                "artifact_reference": "https://example.com/artifact",
+                "evidence": {(sensitive): "must-not-be-stored"}
+            });
+            assert_eq!(
+                validate_chatgpt_action_details(ChatgptActionKind::Complete, &details).unwrap_err(),
+                StatusCode::BAD_REQUEST,
+                "{sensitive} must be rejected"
+            );
+        }
+
+        assert_eq!(
+            validate_chatgpt_action_details(
+                ChatgptActionKind::Fund,
+                &serde_json::json!({"artifact_reference": "wrong action field"})
+            )
+            .unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            validate_chatgpt_action_details(
+                ChatgptActionKind::Complete,
+                &serde_json::json!({
+                    "artifact_reference": "https://example.com/artifact",
+                    "evidence": {"items": vec!["x"; 51]}
+                })
+            )
+            .unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn chatgpt_action_details_reject_excessive_nesting() {
+        let mut nested = serde_json::json!("leaf");
+        for _ in 0..8 {
+            nested = serde_json::json!({"level": nested});
+        }
+        let details = serde_json::json!({
+            "artifact_reference": "https://example.com/artifact",
+            "evidence": nested
+        });
+        assert_eq!(
+            validate_chatgpt_action_details(ChatgptActionKind::Complete, &details).unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]

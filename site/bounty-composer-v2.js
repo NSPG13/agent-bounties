@@ -69,6 +69,8 @@
     recheck: document.querySelector("[data-recheck-balance]"),
     fundNow: document.querySelector("[data-fund-now]"),
     paymentStatus: document.querySelector("[data-payment-status]"),
+    headerTitle: document.querySelector(".chat-app-title"),
+    aiHandoff: document.querySelector("[data-ai-handoff]"),
   };
 
   if (!ui.form || !ui.input || !ui.preview || !ui.dialog || !ui.art) return;
@@ -92,6 +94,7 @@
     visualSpec: null,
     visualSource: "fallback",
     visualCache: new Map(),
+    bountyImage: null,
     imageReady: false,
     approved: false,
     protocol: null,
@@ -102,7 +105,23 @@
     bountyContract: null,
     bountyId: null,
     speech: null,
+    handoffReview: false,
   };
+
+  function enableChatgptHandoffReview() {
+    state.handoffReview = true;
+    document.body.classList.add("chatgpt-handoff-review");
+    ui.form.dataset.handoffReview = "true";
+    const inputWrap = ui.form.querySelector(".chat-composer-input-wrap");
+    if (inputWrap) inputWrap.hidden = true;
+    ui.input.disabled = true;
+    ui.submit.disabled = true;
+    ui.mic.hidden = true;
+    ui.revise.hidden = true;
+    if (ui.aiHandoff) ui.aiHandoff.hidden = true;
+    if (ui.headerTitle) ui.headerTitle.textContent = "Review bounty";
+    setProgress("review");
+  }
 
   const announcedProviders = [];
   window.addEventListener("eip6963:announceProvider", (event) => {
@@ -345,6 +364,10 @@
     const total = Number(prepared.solver_reward_usdc) + Number(prepared.verifier_reward_usdc);
     if (!Number.isInteger(days) || days < 1 || days > MAX_TASK_DAYS) throw new Error(`The task window must be from 1 to ${MAX_TASK_DAYS} days.`);
     if (!Number.isFinite(total) || total < MIN_TOTAL_USDC || total > MAX_TOTAL_USDC) throw new Error("The combined reward is invalid.");
+    const bountyImage = normalizeBountyImage(prepared.image);
+    if (prepared.image_required === true && !bountyImage) {
+      throw new Error("The prepared bounty must include the exact image generated and approved in ChatGPT.");
+    }
 
     const deadline = new Date(Date.now() + days * 86_400_000);
     state.phase = "review";
@@ -375,9 +398,12 @@
     state.selectedTaskId = null;
     state.taskWindowDays = days;
     state.fundingUsdc = total;
+    state.bountyImage = bountyImage;
     state.approved = false;
     ui.input.value = "";
-    ui.prompt.textContent = "Review the bounty card your AI prepared. You can approve it or ask your AI for a revision.";
+    ui.prompt.textContent = state.handoffReview
+      ? "Review the exact image and bounty terms you approved in ChatGPT. Agent Bounties cannot edit or replace them."
+      : "Review the bounty card your AI prepared. You can approve it or ask your AI for a revision.";
     await renderPreview();
   }
 
@@ -740,12 +766,25 @@
     ui.approve.textContent = "Preparing image…";
     ui.fund.disabled = true;
     ui.preview.hidden = false;
-    ui.preview.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!state.handoffReview) {
+      ui.preview.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
     setStatus("Rendering a bounded pre-publication illustration from the prepared draft. Nothing has been posted or funded.", "pending");
+    if (state.handoffReview) {
+      ui.approve.textContent = "Loading approved image…";
+      setStatus(
+        "Loading the exact image approved in ChatGPT. Agent Bounties will not generate or substitute an image.",
+        "pending",
+      );
+    }
     await renderAiVisualForCurrentDraft();
     ui.approve.disabled = false;
     ui.approve.textContent = "Approve bounty card";
     setStatus("Review the result, completion checks, time window, reward, and creator-verification disclosure. Nothing has been posted or funded.");
+    if (state.handoffReview) {
+      ui.approve.textContent = "Confirm bounty";
+      setStatus("Review the exact ChatGPT-approved image, terms, reward, and verification disclosure. Nothing has been posted or funded.");
+    }
   }
 
   function validHex(value) {
@@ -833,6 +872,16 @@
   }
 
   async function renderAiVisualForCurrentDraft() {
+    if (state.bountyImage) {
+      ui.imageStatus.textContent = "Loading your approved ChatGPT image…";
+      ui.imageStatus.dataset.tone = "ai";
+      await renderApprovedChatgptImage(ui.art, state.bountyImage);
+      state.visualSpec = null;
+      state.visualSource = "chatgpt_user_generated";
+      state.imageReady = true;
+      ui.imageStatus.textContent = "Approved image from your ChatGPT conversation";
+      return;
+    }
     ui.imageStatus.textContent = "Preparing visual…";
     ui.imageStatus.dataset.tone = "";
     let spec = extractVisualSpec(state.draft);
@@ -853,6 +902,66 @@
     }
     renderVisual(ui.art, state.visualSpec);
     state.imageReady = true;
+  }
+
+  function normalizeBountyImage(value) {
+    if (!value || typeof value !== "object") return null;
+    const source = String(value.source || "");
+    const prompt = String(value.prompt || "").trim();
+    const altText = String(value.alt_text || "").trim();
+    const assetUrl = String(value.asset_url || "").trim();
+    const sha256 = String(value.sha256 || "");
+    const mimeType = String(value.mime_type || "");
+    let parsed;
+    try {
+      parsed = new URL(assetUrl);
+    } catch (_error) {
+      return null;
+    }
+    if (source !== "chatgpt_user_generated"
+      || !prompt || prompt.length > 4000
+      || !altText || altText.length > 500
+      || parsed.protocol !== "https:"
+      || !/^[0-9a-f]{64}$/.test(sha256)
+      || !["image/png", "image/jpeg", "image/webp"].includes(mimeType)) return null;
+    return {
+      source,
+      prompt,
+      alt_text: altText,
+      asset_url: parsed.toString(),
+      sha256,
+      mime_type: mimeType,
+    };
+  }
+
+  async function renderApprovedChatgptImage(canvas, imageReference) {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.decoding = "async";
+    image.alt = imageReference.alt_text;
+    const loaded = new Promise((resolve, reject) => {
+      image.addEventListener("load", resolve, { once: true });
+      image.addEventListener("error", () => reject(new Error(
+        "The approved ChatGPT image could not be loaded. Nothing was replaced or published."
+      )), { once: true });
+    });
+    image.src = imageReference.asset_url;
+    await loaded;
+    canvas.width = 1200;
+    canvas.height = 675;
+    canvas.setAttribute("aria-label", imageReference.alt_text);
+    const context = canvas.getContext("2d");
+    const scale = Math.max(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
+    const width = image.naturalWidth * scale;
+    const height = image.naturalHeight * scale;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(
+      image,
+      (canvas.width - width) / 2,
+      (canvas.height - height) / 2,
+      width,
+      height,
+    );
   }
 
   function renderVisual(canvas, spec) {
@@ -1080,9 +1189,17 @@
 
   function approveCard() {
     if (!state.imageReady) return;
+    if (!state.bountyImage) {
+      requestUserOwnedAi(
+        "Generate a unique image for this bounty in my ChatGPT account, show it to me for approval, and then prepare the Agent Bounties post handoff.",
+        { title: state.draft?.title, goal: state.draft?.goal }
+      );
+      setStatus("Create and approve this bounty’s image in ChatGPT before posting. Agent Bounties will not generate a replacement image.", "error");
+      return;
+    }
     state.approved = true;
     ui.approve.dataset.approved = "true";
-    ui.approve.textContent = "Approved ✓";
+    ui.approve.textContent = state.handoffReview ? "Confirmed ✓" : "Approved ✓";
     ui.fund.disabled = false;
     setProgress("fund");
     setStatus("Card approved. Funding still requires a separate wallet review and signature.", "success");
@@ -1163,7 +1280,7 @@
 
   function contractTerms(protocol,rewards){const now=Math.floor(Date.now()/1000);return{protocol_version:protocol.protocol_version,creator_wallet:state.account,network:protocol.network,settlement_token:protocol.native_usdc,solver_reward:{amount:Number(rewards.solver),currency:"usdc"},verifier_reward:{amount:Number(rewards.verifier),currency:"usdc"},claim_bond:{amount:Number(rewards.verifier),currency:"usdc"},initial_funding:{amount:Number(rewards.total),currency:"usdc"},funding_deadline:now+30*86400,claim_window_seconds:state.taskWindowDays*86400,verification_window_seconds:48*3600,creation_nonce:randomBytes32()};}
 
-  function termsDocument(committed){return{schema_version:"agent-bounties/terms-v1",contract_terms:committed,title:state.draft.title,goal:state.draft.goal,acceptance_criteria:state.draft.acceptance_criteria,benchmark:canonicalJsonValue(missionBenchmark(state.draft.benchmark||{})),evidence_schema:canonicalJsonValue(stripVisualExtension(state.draft.evidence_schema)),verification_policy:supportedVerificationPolicy(),source_url:null,discovery_source:"web_ai_bounty_card_composer_v2"};}
+  function termsDocument(committed){if(!state.bountyImage)throw new Error("The approved ChatGPT image is missing.");return{schema_version:"agent-bounties/terms-v1",contract_terms:committed,title:state.draft.title,goal:state.draft.goal,acceptance_criteria:state.draft.acceptance_criteria,benchmark:canonicalJsonValue(missionBenchmark(state.draft.benchmark||{})),evidence_schema:canonicalJsonValue(stripVisualExtension(state.draft.evidence_schema)),verification_policy:supportedVerificationPolicy(),source_url:null,discovery_source:"chatgpt_user_generated_image_handoff",image:canonicalJsonValue(state.bountyImage)};}
 
   function createPayload(terms,committed){return{creator:state.account,solver_reward:committed.solver_reward,verifier_reward:committed.verifier_reward,terms_hash:terms.terms_hash,policy_hash:terms.policy_hash,acceptance_criteria_hash:terms.acceptance_criteria_hash,benchmark_hash:terms.benchmark_hash,evidence_schema_hash:terms.evidence_schema_hash,funding_deadline:committed.funding_deadline,claim_window_seconds:committed.claim_window_seconds,verification_window_seconds:committed.verification_window_seconds,verification_mode:"signed_quorum",verifier_module:null,verifier_reward_recipient:null,verifiers:REGRESSION_VERIFIERS,threshold:REGRESSION_VERIFIERS.length,initial_funding:committed.initial_funding,creation_nonce:committed.creation_nonce};}
 
@@ -1179,6 +1296,8 @@
 
   async function prefillFromQuery() {
     const params = new URLSearchParams(window.location.search);
+    const fromChatgpt = params.get("from") === "chatgpt-app";
+    if (fromChatgpt) enableChatgptHandoffReview();
     const title = params.get("title");
     const goal = params.get("goal");
     const criteria = params.getAll("criterion");
@@ -1197,6 +1316,15 @@
           source_url: params.get("sourceUrl"),
           crowdfund: params.get("crowdfund") === "true",
           discovery_source: params.get("discoverySource") || "AI assistant via MCP",
+          image_required: fromChatgpt,
+          image: {
+            source: "chatgpt_user_generated",
+            asset_url: params.get("imageUrl"),
+            sha256: params.get("imageSha256"),
+            mime_type: params.get("imageMimeType"),
+            prompt: params.get("imagePrompt"),
+            alt_text: params.get("imageAlt"),
+          },
         });
       } catch (error) {
         setStatus(error.message || String(error), "error");

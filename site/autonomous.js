@@ -1880,7 +1880,7 @@
       ? ["post"]
       : fundForm
         ? ["fund"]
-        : ["compete", "complete"];
+        : ["solve", "compete", "complete"];
     const intent = await loadHostedActionIntent(expected);
     if (postForm) {
       const draft = intent.details?.draft || intent.details || {};

@@ -33,10 +33,13 @@
     if (value.action === "fund" && value.amount_base_units) {
       params.set("amount", (Number(value.amount_base_units) / 1_000_000).toFixed(6));
     }
-    if (value.action === "compete") params.set("source", "chatgpt-app");
+    if (value.action === "solve" || value.action === "compete") {
+      params.set("source", "chatgpt-app");
+    }
     const page = {
       post: "post.html",
       fund: "funding.html",
+      solve: "earn.html",
       compete: "earn.html",
       complete: "earn.html",
       verify: "verify.html",
@@ -49,7 +52,8 @@
     return {
       post: "Post a bounty",
       fund: "Fund this bounty",
-      compete: "Compete for this bounty",
+      solve: "Solve this bounty",
+      compete: "Solve this bounty",
       complete: "Submit completed work",
       verify: "Verify this submission",
     }[action] || "Review this bounty action";
