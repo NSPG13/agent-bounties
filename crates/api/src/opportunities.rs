@@ -707,6 +707,20 @@ pub fn canonical_opportunity(
         })
         .into_iter()
         .collect();
+    let (external_spend, gross_cash_margin) = if let Ok(ctx) = standing_meta_v2_parent_context(item) {
+        let external_amount = ctx.child_target.amount;
+        let solver_amount = ctx.solver_reward.amount;
+        let margin = solver_amount - external_amount;
+        (
+            OpportunityAmount::usdc_base_units(external_amount.to_string()),
+            OpportunityAmount::usdc_base_units(margin.to_string()),
+        )
+    } else {
+        (
+            OpportunityAmount::usdc_base_units("0"),
+            OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
+        )
+    };
     let opportunity_id = format!("canonical:{network}:{}", item.bounty_contract);
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
@@ -741,8 +755,8 @@ pub fn canonical_opportunity(
         funding_target: OpportunityAmount::usdc_base_units(item.target_amount.clone()),
         bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
         refundable_bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
-        external_spend: OpportunityAmount::usdc_base_units("0"),
-        gross_cash_margin: OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
+        external_spend,
+        gross_cash_margin,
         deadline,
         deadline_kind,
         verification_method: item.verification_mode.clone(),
@@ -827,13 +841,15 @@ fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<U
             matches
         }
         OpportunityView::ReadyToEarn => {
+            let is_unprofitable = item.gross_cash_margin.amount.starts_with('-');
             let matches = item.work_state == "claimable"
                 && item.payment_state == "escrowed"
                 && item.payment_committed
-                && item.verification_ready;
+                && item.verification_ready
+                && !is_unprofitable;
             if matches {
                 item.discovery_factors.push(
-                    "view:ready_to_earn;factors=claimable+escrowed+verification_ready".to_string(),
+                    "view:ready_to_earn;factors=claimable+escrowed+verification_ready+profitable".to_string(),
                 );
             }
             matches
@@ -1273,8 +1289,11 @@ mod tests {
 
     #[test]
     fn direct_bounty_exposes_cash_margin_refundable_bond_and_spend() {
+        let mut base_item = canonical("claimable", "2000000", true);
+        base_item.solver_reward = "1990000".to_string();
+        base_item.claim_bond = "10000".to_string();
         let item = canonical_opportunity(
-            &canonical("claimable", "2000000", true),
+            &base_item,
             "base-mainnet",
             "https://api.example",
         ).unwrap();
@@ -1284,11 +1303,45 @@ mod tests {
         assert_eq!(item.gross_cash_margin.amount, "1990000");
     }
 
+    fn standing_meta_canonical(status: &str, funded: &str, verification_ready: bool, solver_reward: &str, exact_v3: bool) -> AutonomousBountyFeedItem {
+        let mut item = canonical(status, funded, verification_ready);
+        item.solver_reward = solver_reward.to_string();
+        item.verifier_module = Some(chain_base::BASE_MAINNET_STANDING_META_V3_ROUTER.to_string());
+        if let Some(terms) = &mut item.terms {
+            terms.acceptance_criteria_hash = chain_base::BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH.to_string();
+            terms.document.benchmark = json!({
+                "engine": "standing_meta_v3_routed_parent",
+                "required_child_engine": chain_base::STANDING_META_V2_REGRESSION_ENGINE,
+                "required_child_verifier_set_hash": chain_base::BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+                "required_child_verifier_threshold": 2,
+                "participant_registry": chain_base::BASE_MAINNET_STANDING_META_V2_PARTICIPANT_REGISTRY,
+                "terms_registry": chain_base::BASE_MAINNET_STANDING_META_V2_TERMS_REGISTRY,
+                "minimum_child_target": 1_000_000,
+                "minimum_parent_gross_margin": 1_000_000
+            });
+        }
+        item
+    }
+
     #[test]
     fn standing_meta_and_unprofitable_inventory_filtering() {
         let unfunded = unfunded_opportunity(&trial(), &[], "https://api.example");
         assert_eq!(unfunded.gross_cash_margin.amount, "0");
         assert_eq!(unfunded.refundable_bond.amount, "0");
         assert_eq!(unfunded.external_spend.amount, "0");
+
+        let unprofitable_parent = standing_meta_canonical("claimable", "2000000", true, "500000", true);
+        let item = canonical_opportunity(&unprofitable_parent, "base-mainnet", "https://api.example").unwrap();
+        assert_eq!(item.external_spend.amount, "1000000");
+        assert_eq!(item.gross_cash_margin.amount, "-500000");
+
+        let query = OpportunityQuery::default();
+        let items = apply_query(
+            vec![item.clone()],
+            &query,
+            Some(OpportunityView::ReadyToEarn),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert!(items.is_empty(), "Negative margin item should be excluded from ReadyToEarn view");
     }
 }
