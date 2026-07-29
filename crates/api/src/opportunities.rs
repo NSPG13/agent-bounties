@@ -1523,4 +1523,61 @@ mod tests {
         assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
         assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
     }
+
+    #[test]
+    fn ready_to_earn_inventory_excludes_unready_recovery_invalid_terms_and_terminal_status() {
+        let healthy = canonical("claimable", "1000000", true);
+
+        let mut unready = canonical("claimable", "1000000", true);
+        unready.verification_ready = false;
+        unready.verification_readiness_reason =
+            "deterministic verifier module is not in the live supported allowlist".to_string();
+
+        let mut invalid_terms = canonical("claimable", "1000000", true);
+        invalid_terms.terms_valid = false;
+
+        let terminal = canonical("paid", "1000000", true);
+
+        let mut recovery = canonical("claimable", "1000000", true);
+        recovery.verification_ready = false;
+        recovery.verification_readiness_reason =
+            "incident recovery reservation is active; do not claim, sign, or post a bond"
+                .to_string();
+
+        let all_items: Vec<OpportunityItem> = [&healthy, &unready, &invalid_terms, &terminal, &recovery]
+            .iter()
+            .filter_map(|item| canonical_opportunity(item, "base-mainnet", "https://api.example"))
+            .collect();
+
+        assert_eq!(all_items.len(), 5);
+
+        assert!(all_items[0].verification_ready);
+        assert_eq!(all_items[0].work_state, "claimable");
+
+        assert!(!all_items[1].verification_ready);
+        assert_eq!(all_items[1].work_state, "open");
+        assert_eq!(all_items[1].source_status, "claimable");
+
+        assert!(!all_items[2].verification_ready);
+        assert_eq!(all_items[2].work_state, "open");
+        assert_eq!(all_items[2].source_status, "claimable");
+
+        assert!(!all_items[3].verification_ready);
+        assert_eq!(all_items[3].work_state, "completed");
+        assert_eq!(all_items[3].source_status, "paid");
+
+        assert!(!all_items[4].verification_ready);
+        assert_eq!(all_items[4].work_state, "open");
+        assert_eq!(all_items[4].source_status, "claimable");
+
+        let now = DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap();
+        let ready = apply_query(
+            all_items,
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            now,
+        );
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].work_state, "claimable");
+    }
 }
