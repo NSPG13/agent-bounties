@@ -12,7 +12,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import bounded_wallet_policy as active_wallet
 import durable_verifier_router_deploy as durable
@@ -316,15 +316,17 @@ def reconcile(api: str, contract: str, bounty_id: str, timeout_seconds: int = 18
             )
             if not isinstance(feed, list):
                 raise ActivationError("feed endpoint returned a non-list")
-            item = next(
-                (
-                    candidate
-                    for candidate in feed
-                    if isinstance(candidate, dict)
-                    and str(candidate.get("bounty_contract", "")).lower() == contract.lower()
-                ),
-                None,
-            )
+            matches = [
+                candidate
+                for candidate in feed
+                if isinstance(candidate, dict)
+                and str(candidate.get("bounty_contract", "")).lower() == contract.lower()
+            ]
+            if len(matches) > 1:
+                raise ActivationError(
+                    f"canonical activation feed is ambiguous for {contract}"
+                )
+            item = matches[0] if matches else None
             active_statuses = {"claimable", "claimed", "submitted", "verifying"}
             if (
                 item
@@ -335,6 +337,24 @@ def reconcile(api: str, contract: str, bounty_id: str, timeout_seconds: int = 18
                 return {"event_kinds": sorted(kinds), "feed_item": item}
         time.sleep(3)
     raise ActivationError(f"canonical activation did not reconcile for {contract}")
+
+
+def create_if_missing(
+    cast: Cast,
+    predicted: str,
+    spend_available: int,
+    create: Callable[[], str],
+) -> tuple[str | None, int]:
+    canonical = parse_bool(
+        cast.call(FACTORY, "isCanonicalBounty(address)(bool)", predicted),
+        "canonical bounty state",
+    )
+    if canonical:
+        return "already-canonical", spend_available
+    if spend_available <= 0:
+        return None, spend_available
+    transaction_hash = bytes32(create(), "creation transaction hash")
+    return transaction_hash, spend_available - 1
 
 
 def issue_body(
@@ -457,16 +477,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         predicted = address(plan.get("predicted_bounty_contract"), f"issue #{issue} predicted bounty")
         bounty_id = bytes32(plan.get("bounty_id"), f"issue #{issue} bounty id")
-        canonical = parse_bool(
-            cast.call(FACTORY, "isCanonicalBounty(address)(bool)", predicted),
-            f"issue #{issue} canonical state",
-        )
-        if canonical:
-            tx_hash = "already-canonical"
-        else:
-            if spend_available <= 0:
-                pending.append(issue)
-                continue
+        def create_bounty() -> str:
             action_path = args.output_dir / f"routed-v3-{issue}-bounded-action.json"
             run(
                 [
@@ -498,8 +509,14 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
                 str(direct.get("data")),
                 private_key,
             )
-            tx_hash = str(sent.get("transactionHash") or sent.get("transaction_hash"))
-            spend_available -= 1
+            return str(sent.get("transactionHash") or sent.get("transaction_hash"))
+
+        tx_hash, spend_available = create_if_missing(
+            cast, predicted, spend_available, create_bounty
+        )
+        if tx_hash is None:
+            pending.append(issue)
+            continue
         reconciled = reconcile(args.api, predicted, bounty_id)
         result = {
             "issue": issue,

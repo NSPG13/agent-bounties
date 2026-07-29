@@ -197,6 +197,53 @@ body.chat-app-page {
   background: linear-gradient(180deg, rgba(6, 16, 11, 0.84), #06100b 35%);
 }
 
+body.chatgpt-handoff-review {
+  overflow: auto;
+}
+
+.chatgpt-handoff-review .chat-app {
+  height: auto;
+  min-height: calc(100dvh - 58px);
+}
+
+.chatgpt-handoff-review .conversation-panel {
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: calc(100dvh - 58px);
+  height: auto;
+}
+
+.chatgpt-handoff-review .conversation-log {
+  justify-content: center;
+  overflow: visible;
+  padding-block: clamp(24px, 6vh, 64px);
+}
+
+.chatgpt-handoff-review .chat-composer-form[data-handoff-review="true"] {
+  padding: 0 20px 24px;
+  border-top: 0;
+  background: transparent;
+}
+
+.chatgpt-handoff-review .chat-composer-form[data-handoff-review="true"] .composer-status:empty {
+  display: none;
+}
+
+.chatgpt-handoff-review [data-revise-card],
+.chatgpt-handoff-review [data-ai-handoff],
+.chatgpt-handoff-review .conversation-thinking {
+  display: none !important;
+}
+
+.chatgpt-handoff-review .image-generation-status {
+  display: none;
+}
+
+.chatgpt-handoff-review .conversation-draft {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  animation: chatgpt-review-in 220ms ease-out both;
+}
+
 .chat-composer-input-wrap {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 38px 42px;
@@ -653,6 +700,11 @@ body.chat-app-page {
   50% { opacity: 1; transform: translateY(-3px); }
 }
 
+@keyframes chatgpt-review-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @media (max-width: 620px) {
   .chat-app-header {
     height: 54px;
@@ -662,6 +714,11 @@ body.chat-app-page {
   .chat-app {
     height: calc(100dvh - 54px);
     margin-top: 54px;
+  }
+
+  .chatgpt-handoff-review .chat-app,
+  .chatgpt-handoff-review .conversation-panel {
+    min-height: calc(100dvh - 54px);
   }
 
   .chat-app-brand strong {

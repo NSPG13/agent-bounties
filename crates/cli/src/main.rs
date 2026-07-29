@@ -5049,26 +5049,28 @@ fn is_doc_contract_file(path: &Path) -> bool {
 }
 
 fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
-    let source_path = contract_root.join("crates/api/src/main.rs");
-    let source = fs::read_to_string(&source_path)
-        .with_context(|| format!("failed to read {}", source_path.display()))?;
     let mut routes = BTreeSet::new();
-    let mut expecting_route = false;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if let Some(route_start) = trimmed.find(".route(") {
-            if let Some(route) = first_string_literal(&trimmed[route_start..]) {
-                routes.insert(normalize_route(route));
-                expecting_route = false;
-            } else {
-                expecting_route = true;
+    for relative_path in ["crates/api/src/main.rs", "crates/mcp-server/src/main.rs"] {
+        let source_path = contract_root.join(relative_path);
+        let source = fs::read_to_string(&source_path)
+            .with_context(|| format!("failed to read {}", source_path.display()))?;
+        let mut expecting_route = false;
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if let Some(route_start) = trimmed.find(".route(") {
+                if let Some(route) = first_string_literal(&trimmed[route_start..]) {
+                    routes.insert(normalize_route(route));
+                    expecting_route = false;
+                } else {
+                    expecting_route = true;
+                }
+                continue;
             }
-            continue;
-        }
-        if expecting_route {
-            if let Some(route) = first_string_literal(trimmed) {
-                routes.insert(normalize_route(route));
-                expecting_route = false;
+            if expecting_route {
+                if let Some(route) = first_string_literal(trimmed) {
+                    routes.insert(normalize_route(route));
+                    expecting_route = false;
+                }
             }
         }
     }
