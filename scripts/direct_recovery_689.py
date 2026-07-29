@@ -283,6 +283,7 @@ class Cast:
     def __init__(self, executable: str, rpc_url: str) -> None:
         self.executable = executable
         self.rpc_url = rpc_url
+        self._next_nonces: dict[str, int] = {}
 
     def rpc(self, *args: str, timeout: int = 300) -> str:
         return run(
@@ -314,12 +315,33 @@ class Cast:
     def native_balance(self, account: str) -> int:
         return uint(self.rpc("balance", account), "native balance")
 
+    def next_nonce(self, key: str) -> int:
+        if key not in self._next_nonces:
+            signer = self.wallet_address(key)
+            latest = uint(
+                self.rpc("nonce", signer, "--block", "latest"),
+                "latest keeper nonce",
+            )
+            pending = uint(
+                self.rpc("nonce", signer, "--block", "pending"),
+                "pending keeper nonce",
+            )
+            if pending != latest:
+                raise RecoveryError(
+                    "keeper has another pending transaction; retry after it confirms or drops"
+                )
+            self._next_nonces[key] = latest
+        return self._next_nonces[key]
+
     def send(self, key: str, target: str, signature: str, *args: str) -> str:
+        nonce = self.next_nonce(key)
         raw = self.rpc(
             "send",
             "--json",
             "--private-key",
             key,
+            "--nonce",
+            str(nonce),
             target,
             signature,
             *args,
@@ -335,6 +357,7 @@ class Cast:
         status = str(receipt.get("status", ""))
         if not HASH.fullmatch(tx_hash) or status not in {"0x1", "0x01", "1"}:
             raise RecoveryError("transaction did not return a successful receipt")
+        self._next_nonces[key] = nonce + 1
         return tx_hash
 
     def sign_digest(self, key: str, digest: str) -> str:
