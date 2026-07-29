@@ -176,15 +176,17 @@ earning bounty needs one inspectable artifact, binary criteria, a verifier that
 is executable now, positive solver net value, full atomic funding, and one
 source URL used by no other active contract.
 
-The preferred person-led interface is the AI account that already has the
-person's context. Connect `https://mcp.agentbounties.app/mcp` to ChatGPT,
-Claude, Gemini Spark, or another remote-MCP host and call
-`prepare_bounty_post`. The result is a review-required draft: ChatGPT may render
-the bundled MCP Apps card, while every host receives a portable Markdown card
-and `post_url`. Ordinary Gemini chats that do not have Spark custom-app access
-use the copy-prompt and local JSON-import fallback on
-`https://agentbounties.app/objective.html`. No platform model credential,
-wallet signature, publication, or funding occurs in this step.
+The preferred person-led interface is the ChatGPT account that already has the
+person's context. Connect `https://mcp.agentbounties.app/mcp`, gather the terms
+conversationally, generate a unique bounty image in that same ChatGPT account,
+show the exact image and terms for approval, and then call
+`prepare_bounty_post`. The tool receives the approved image through its
+`bounty_image` file parameter, stores that exact file, and returns a
+review-required `post_url`. Agent Bounties does not use a platform API key to
+generate or replace the image. No wallet signature, publication, or funding
+occurs in this step. The hosted URL shows the completed image and terms as a
+read-only review card with wallet authorization; it does not ask the person to
+re-enter or edit the bounty in another form.
 
 The same remote MCP endpoint exposes the canonical earning sequence for a
 person using their normal AI conversation:
@@ -202,7 +204,8 @@ The comment and draft are never funding evidence. Social mention drafting is
 disabled until indexed GitHub-originated canonical conversions pass its
 documented rollout gate.
 
-1. Call `prepare_bounty_post` from the user's AI, or call
+1. Call `prepare_bounty_post` from the user's ChatGPT account with the exact
+   approved generated image, or call
    `draft_bounty_with_cloud_agent` only when intentionally using the hosted
    service-side drafting API.
 2. Bind one inspectable artifact and make every acceptance criterion binary or measurable.

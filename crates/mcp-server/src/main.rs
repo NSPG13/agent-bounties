@@ -7,9 +7,9 @@ use app::{
     RejectRiskEventRequest, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
-    extract::State,
-    http::{header, HeaderMap, HeaderValue},
-    response::IntoResponse,
+    extract::{Path, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -88,6 +88,81 @@ const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
 
 async fn health() -> impl IntoResponse {
     health_response(&deployment_revision())
+}
+
+async fn chatgpt_bounty_card_preview() -> impl IntoResponse {
+    chatgpt_bounty_card_preview_response()
+}
+
+async fn chatgpt_favicon() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("../../../site/favicon.svg"),
+    )
+}
+
+async fn public_bounty_image_asset(
+    State(state): State<SharedState>,
+    Path(sha256): Path<String>,
+) -> Response {
+    if sha256.len() != 64
+        || !sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(store) = state.store.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let asset = match store.get_bounty_image_asset(&sha256).await {
+        Ok(Some(asset)) => asset,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let content_type = match HeaderValue::from_str(&asset.mime_type) {
+        Ok(value) => value,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, content_type);
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    (headers, asset.content).into_response()
+}
+
+fn chatgpt_bounty_card_preview_response() -> (HeaderMap, String) {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(
+            "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        ),
+    );
+    headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    (headers, chatgpt_app::bounty_card_preview_html())
 }
 
 fn deployment_revision() -> String {
@@ -325,6 +400,14 @@ fn default_objective_task_limit() -> u8 {
     5
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChatgptFileInput {
+    download_url: String,
+    file_id: String,
+    mime_type: Option<String>,
+    file_name: Option<String>,
+}
+
 tool_args! {
     struct PrepareBountyPostArgs {
         title: String,
@@ -337,6 +420,9 @@ tool_args! {
         #[serde(default)]
         crowdfund: bool,
         discovery_source: Option<String>,
+        image_prompt: String,
+        image_alt_text: String,
+        bounty_image: ChatgptFileInput,
     }
     schema object_tool_schema(
         json!({
@@ -352,9 +438,32 @@ tool_args! {
             "task_window_days": {"type": ["integer", "null"], "minimum": 1, "maximum": 30, "description": "Optional bounded work window in days; defaults to 30."},
             "source_url": nullable_string_property("Optional public HTTPS source issue or task URL."),
             "crowdfund": {"type": "boolean", "default": false, "description": "Keep false to fund on creation. Set true only to deposit 0 USDC now."},
-            "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties.")
+            "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties."),
+            "image_prompt": {"type": "string", "minLength": 1, "maxLength": 4000, "description": "The exact prompt used in this ChatGPT conversation to generate the user-approved bounty image."},
+            "image_alt_text": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Concise accessible description of the approved image."},
+            "bounty_image": {
+                "type": "object",
+                "description": "The approved image generated from the poster's own ChatGPT account. Agent Bounties stores this exact file; it does not generate another image.",
+                "properties": {
+                    "download_url": {"type": "string"},
+                    "file_id": {"type": "string"},
+                    "mime_type": {"type": ["string", "null"]},
+                    "file_name": {"type": ["string", "null"]}
+                },
+                "required": ["download_url", "file_id"],
+                "additionalProperties": false
+            }
         }),
-        &["title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc"],
+        &[
+            "title",
+            "goal",
+            "acceptance_criteria",
+            "solver_reward_usdc",
+            "verifier_reward_usdc",
+            "image_prompt",
+            "image_alt_text",
+            "bounty_image"
+        ],
     );
 }
 
@@ -1323,7 +1432,20 @@ async fn main() -> anyhow::Result<()> {
     });
     let app = Router::new()
         .route("/health", get(health))
+        .route(
+            "/chatgpt/bounty-card-preview",
+            get(chatgpt_bounty_card_preview),
+        )
+        .route("/chatgpt/favicon.svg", get(chatgpt_favicon))
+        .route(
+            "/public/bounty-images/:sha256",
+            get(public_bounty_image_asset),
+        )
         .route("/llms.txt", get(llms_txt))
+        .route(
+            "/.well-known/openai-apps-challenge",
+            get(openai_apps_challenge),
+        )
         .route(
             "/schemas/discovery-manifest.v2.json",
             get(discovery_manifest_schema),
@@ -1709,6 +1831,32 @@ async fn llms_txt() -> String {
     let api_base_url = public_base_url_from_env();
     let mcp_base_url = mcp_base_url_from_env();
     web_public::render_llms_txt(&api_base_url, &mcp_base_url)
+}
+
+async fn openai_apps_challenge() -> impl IntoResponse {
+    openai_apps_challenge_response(env::var("OPENAI_APPS_CHALLENGE_TOKEN").ok())
+}
+
+fn openai_apps_challenge_response(configured: Option<String>) -> (StatusCode, HeaderMap, String) {
+    let token = configured.map(|value| value.trim().to_string());
+    let valid = token.as_deref().is_some_and(|value| {
+        (8..=512).contains(&value.len())
+            && value.chars().all(|character| character.is_ascii_graphic())
+    });
+    if !valid {
+        return (StatusCode::NOT_FOUND, HeaderMap::new(), String::new());
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    (
+        StatusCode::OK,
+        headers,
+        token.expect("validated challenge token"),
+    )
 }
 
 fn public_base_url_from_env() -> String {
@@ -3129,8 +3277,11 @@ async fn reconcile_objective(
     }
 }
 
-async fn prepare_bounty_post(Json(args): Json<PrepareBountyPostArgs>) -> Json<serde_json::Value> {
-    match chatgpt_app::build_bounty_post_handoff(&args) {
+async fn prepare_bounty_post(
+    State(state): State<SharedState>,
+    Json(args): Json<PrepareBountyPostArgs>,
+) -> Json<serde_json::Value> {
+    match chatgpt_app::prepare_bounty_post_handoff(&state, &args).await {
         Ok(handoff) => mcp_json(handoff),
         Err(error) => mcp_error(error),
     }
@@ -5496,6 +5647,45 @@ mod tests {
             response.headers()["x-agent-bounties-protocol"],
             "agent-bounties/autonomous-v1"
         );
+    }
+
+    #[test]
+    fn chatgpt_card_preview_is_a_no_store_first_party_download_page() {
+        let (headers, body) = chatgpt_bounty_card_preview_response();
+        assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        assert_eq!(headers["referrer-policy"], "no-referrer");
+        assert!(headers["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("frame-ancestors 'none'"));
+        assert!(body.contains("First-party share handoff"));
+        assert!(body.contains("Download PNG"));
+        assert!(body.contains("canvas.toBlob"));
+        assert!(body.contains("data:image/webp;base64,"));
+        assert!(!body.contains("__BOUNTY_CARD_ART_DATA_URI__"));
+    }
+
+    #[test]
+    fn openai_apps_challenge_returns_only_the_exact_configured_token() {
+        let token = "openai-apps-challenge_test-123";
+        let (status, headers, body) = openai_apps_challenge_response(Some(format!(" {token}\n")));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        assert_eq!(body, token);
+
+        for invalid in [
+            None,
+            Some(String::new()),
+            Some("too-short".chars().take(7).collect()),
+            Some("contains whitespace".to_string()),
+            Some("x".repeat(513)),
+        ] {
+            let (status, _, body) = openai_apps_challenge_response(invalid);
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert!(body.is_empty());
+        }
     }
 
     #[tokio::test]

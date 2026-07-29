@@ -1,6 +1,6 @@
 # MoonPay wallet on-ramp
 
-This integration adds a bounded MoonPay wallet-top-up step without changing the autonomous bounty protocol or the hosted ChatGPT tool surface.
+This integration adds a bounded MoonPay wallet-top-up step without changing the autonomous bounty protocol. The ChatGPT app exposes only a first-party handoff planner; provider checkout and every wallet or purchase step remain outside ChatGPT.
 
 ## Evidence boundary
 
@@ -52,13 +52,14 @@ The fallback is not equivalent to the signed integration. It cannot cryptographi
 - Signed-checkout browser controller: `site/moonpay-onramp.js`
 - Direct consumer fallback controller: `site/moonpay-direct-fallback.js`
 - Funding-form handoff: `site/moonpay-link.js`
+- ChatGPT handoff planner and in-chat funding control: `crates/mcp-server/src/chatgpt_app.rs`
 - Server route: the MoonPay checkout endpoint on the configured MCP origin; its exact registered path is asserted by `scripts/check-moonpay-onramp.py`
 - Server implementation: `crates/mcp-server/src/moonpay.rs`
 - Static and evidence-boundary gate: `scripts/check-moonpay-onramp.py`
 
 The browser never receives `MOONPAY_SECRET_KEY`. It sends the reviewed wallet, asset, fiat amount, return URL, optional hosted action intent, and bounty contract to the first-party server. The server validates the request origin and return URL, rate-limits the device, binds live URLs to a hash of the public client IP, signs the final encoded query with HMAC-SHA256, appends `signature` last, and returns a `no-store` response.
 
-MoonPay remains outside `chatgpt_app.rs`. The existing hosted plugin continues to create the same expiring funding intent and first-party authorization page. The on-ramp can therefore be removed, replaced, or supplemented later without changing the canonical contribution planner or the public ChatGPT tool registry.
+`prepare_moonpay_onramp` accepts only a canonical Base bounty contract, a bounded planned USDC amount, and an optional hosted-intent UUID. It returns `https://agentbounties.app/onramp.html` with `checkout_created: false`, `purchase_completed: false`, and `bounty_funded: false`. It never returns MoonPay's provider checkout URL or accepts a wallet address, email, card field, or identity document. The on-ramp can therefore be removed, replaced, or supplemented later without changing the canonical contribution planner.
 
 ## Required environment variables
 

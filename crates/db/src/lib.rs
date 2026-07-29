@@ -50,6 +50,10 @@ pub const OPPORTUNITY_COMMENTS_MIGRATION: &str =
     include_str!("../../../migrations/0015_opportunity_comments.sql");
 pub const CHATGPT_ACTION_INTENTS_MIGRATION: &str =
     include_str!("../../../migrations/0016_chatgpt_action_intents.sql");
+pub const BOUNTY_IMAGE_ASSETS_MIGRATION: &str =
+    include_str!("../../../migrations/0017_bounty_image_assets.sql");
+pub const SOLVE_ACTION_RENAME_MIGRATION: &str =
+    include_str!("../../../migrations/0018_rename_compete_action_to_solve.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -177,6 +181,8 @@ pub enum DbError {
     ChatgptActionIntentConflict(String),
     #[error("ChatGPT action intent is unavailable")]
     ChatgptActionIntentUnavailable,
+    #[error("bounty image asset conflict: {0}")]
+    BountyImageAssetConflict(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -299,6 +305,21 @@ pub struct ChatgptActionObservation {
     pub bounty_contract: Option<String>,
     pub bounty_id: Option<String>,
     pub actor_wallet: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewBountyImageAsset {
+    pub sha256: String,
+    pub mime_type: String,
+    pub content: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BountyImageAsset {
+    pub sha256: String,
+    pub mime_type: String,
+    pub content: Vec<u8>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -801,6 +822,8 @@ impl PostgresStore {
                 PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION,
                 OPPORTUNITY_COMMENTS_MIGRATION,
                 CHATGPT_ACTION_INTENTS_MIGRATION,
+                BOUNTY_IMAGE_ASSETS_MIGRATION,
+                SOLVE_ACTION_RENAME_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -2070,6 +2093,63 @@ impl PostgresStore {
         .await?
         .map(chatgpt_action_intent_from_row)
         .transpose()
+    }
+
+    pub async fn put_bounty_image_asset(
+        &self,
+        asset: &NewBountyImageAsset,
+    ) -> DbResult<BountyImageAsset> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO bounty_image_assets (sha256, mime_type, content)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (sha256) DO UPDATE SET
+              mime_type = bounty_image_assets.mime_type
+            RETURNING sha256, mime_type, content, created_at
+            "#,
+        )
+        .bind(&asset.sha256)
+        .bind(&asset.mime_type)
+        .bind(&asset.content)
+        .fetch_one(&self.pool)
+        .await?;
+        let stored = bounty_image_asset_from_row(&row)?;
+        if stored.mime_type != asset.mime_type || stored.content != asset.content {
+            return Err(DbError::BountyImageAssetConflict(
+                "bounty image hash already exists with different content metadata".to_string(),
+            ));
+        }
+        Ok(stored)
+    }
+
+    pub async fn get_bounty_image_asset(&self, sha256: &str) -> DbResult<Option<BountyImageAsset>> {
+        let row = sqlx::query(
+            r#"
+            SELECT sha256, mime_type, content, created_at
+            FROM bounty_image_assets
+            WHERE sha256 = $1
+            "#,
+        )
+        .bind(sha256)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| bounty_image_asset_from_row(&row)).transpose()
+    }
+
+    pub async fn delete_expired_chatgpt_action_intents_before(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> DbResult<u64> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM chatgpt_action_intents
+            WHERE expires_at < $1
+            "#,
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     pub async fn upsert_unfunded_bounty_solution(
@@ -5772,6 +5852,15 @@ fn chatgpt_action_intent_from_row(row: PgRow) -> DbResult<ChatgptActionIntent> {
     })
 }
 
+fn bounty_image_asset_from_row(row: &PgRow) -> DbResult<BountyImageAsset> {
+    Ok(BountyImageAsset {
+        sha256: row.try_get("sha256")?,
+        mime_type: row.try_get("mime_type")?,
+        content: row.try_get("content")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
 fn unfunded_bounty_solution_from_row(row: PgRow) -> DbResult<UnfundedBountySolution> {
     Ok(UnfundedBountySolution {
         id: row.try_get("id")?,
@@ -6825,6 +6914,38 @@ mod tests {
             assert!(
                 CHATGPT_ACTION_INTENTS_MIGRATION.contains(invariant),
                 "missing ChatGPT action intent invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounty_image_assets_are_content_addressed_and_bounded() {
+        for invariant in [
+            "CREATE TABLE IF NOT EXISTS bounty_image_assets",
+            "sha256 TEXT PRIMARY KEY",
+            "mime_type TEXT NOT NULL",
+            "content BYTEA NOT NULL",
+            "octet_length(content) BETWEEN 1 AND 5242880",
+            "bounty_image_assets_created_idx",
+        ] {
+            assert!(
+                BOUNTY_IMAGE_ASSETS_MIGRATION.contains(invariant),
+                "missing bounty image asset invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn chatgpt_solve_action_migration_renames_legacy_compete_intents() {
+        for invariant in [
+            "DROP CONSTRAINT IF EXISTS chatgpt_action_intents_action_check",
+            "SET action = 'solve'",
+            "WHERE action = 'compete'",
+            "action IN ('post', 'fund', 'solve', 'complete', 'verify')",
+        ] {
+            assert!(
+                SOLVE_ACTION_RENAME_MIGRATION.contains(invariant),
+                "missing ChatGPT solve-action migration invariant {invariant}"
             );
         }
     }
