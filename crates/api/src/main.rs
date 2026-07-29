@@ -3591,7 +3591,7 @@ async fn opportunity_conversion_funnel(
     let generated_at = Utc::now();
     let window_started_at = generated_at - ChronoDuration::hours(i64::from(window_hours));
     let stats = store
-        .opportunity_lifecycle_stats(window_started_at)
+        .opportunity_lifecycle_stats(window_started_at, &state.recovery_reservations.contracts())
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(Json(opportunity_conversion_response(
@@ -4118,6 +4118,22 @@ async fn opportunity_embed_page(
     let payment_state = web_public::escape_html(&item.payment_state);
     let verification = web_public::escape_html(&item.verification_method);
     let reward = web_public::escape_html(&committed_reward_label(&item));
+    let cash_rows = item
+        .cash_economics
+        .as_ref()
+        .map_or_else(String::new, |economics| {
+            format!(
+                "<dt>Refundable claim bond</dt><dd>{}</dd><dt>Required external spend</dt><dd>{}</dd><dt>Gross cash margin (not net profit)</dt><dd>{}</dd><dt>Economics scope</dt><dd class=\"muted\">{}</dd>",
+                web_public::escape_html(&opportunity_amount_label(
+                    &economics.refundable_claim_bond
+                )),
+                web_public::escape_html(&opportunity_amount_label(
+                    &economics.required_external_spend
+                )),
+                web_public::escape_html(&opportunity_amount_label(&economics.gross_cash_margin)),
+                web_public::escape_html(&economics.scope_disclaimer),
+            )
+        });
     let deadline =
         web_public::escape_html(item.deadline.as_deref().unwrap_or("No deadline published"));
     let link = web_public::escape_html(&safe_opportunity_link(&item));
@@ -4143,6 +4159,11 @@ async fn opportunity_embed_page(
     let html = format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · Agent Bounties</title><style>:root{{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}}*{{box-sizing:border-box}}body{{margin:0;padding:12px;background:transparent}}article{{max-width:720px;border:1px solid #6b728066;border-radius:16px;padding:20px;background:#111827;color:#f9fafb;box-shadow:0 12px 36px #0003}}header{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.brand{{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd}}h1{{font-size:21px;line-height:1.25;margin:7px 0 16px}}.states{{display:flex;flex-wrap:wrap;gap:8px}}.pill{{padding:5px 9px;border-radius:999px;background:#1f2937;font-size:12px}}dl{{display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin:18px 0}}dt{{color:#9ca3af}}dd{{margin:0;overflow-wrap:anywhere}}footer{{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}}a{{color:#bfdbfe}}a.cta{{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:9px;font-weight:700}}.proof{{font-size:12px}}.muted{{color:#9ca3af}}</style></head><body><article data-opportunity-id="{}"><header><div><div class="brand">Agent Bounties opportunity</div><h1>{title}</h1></div><div class="states"><span class="pill">Work: {work_state}</span><span class="pill">Payment: {payment_state}</span></div></header><dl><dt>Committed reward</dt><dd>{reward}</dd><dt>Deadline</dt><dd>{deadline}</dd><dt>Verification</dt><dd>{verification}</dd></dl><footer>{latest}<a class="cta" href="{link}" target="_blank" rel="noopener noreferrer">{cta}</a></footer></article></body></html>"#,
         web_public::escape_html(&item.opportunity_id),
+    );
+    let html = html.replacen(
+        "</dd><dt>Deadline</dt>",
+        &format!("</dd>{cash_rows}<dt>Deadline</dt>"),
+        1,
     );
     Ok((
         [
@@ -4233,12 +4254,22 @@ async fn opportunity_embed_markdown(
         .and_then(|url| safe_external_url(url))
         .map(|url| format!("[Latest result or settlement proof]({url})"))
         .unwrap_or_else(|| "No result or settlement proof published".to_string());
+    let cash_rows = item.cash_economics.as_ref().map_or_else(String::new, |economics| {
+        format!(
+            "| Refundable claim bond | {} |\n| Required external spend | {} |\n| Gross cash margin (not net profit) | {} |\n| Economics scope | {} |\n",
+            markdown_cell(&opportunity_amount_label(&economics.refundable_claim_bond)),
+            markdown_cell(&opportunity_amount_label(&economics.required_external_spend)),
+            markdown_cell(&opportunity_amount_label(&economics.gross_cash_margin)),
+            markdown_cell(&economics.scope_disclaimer),
+        )
+    });
     let markdown = format!(
-        "[![Agent Bounties opportunity]({svg_url})]({embed_url})\n\n### {}\n\n| Field | Current value |\n|---|---|\n| Work state | `{}` |\n| Payment state | `{}` |\n| Committed reward | {} |\n| Deadline | {} |\n| Verification | `{}` |\n| Evidence | {} |\n\n[View opportunity]({})\n",
+        "[![Agent Bounties opportunity]({svg_url})]({embed_url})\n\n### {}\n\n| Field | Current value |\n|---|---|\n| Work state | `{}` |\n| Payment state | `{}` |\n| Committed reward | {} |\n{}| Deadline | {} |\n| Verification | `{}` |\n| Evidence | {} |\n\n[View opportunity]({})\n",
         markdown_cell(&item.title),
         markdown_cell(&item.work_state),
         markdown_cell(&item.payment_state),
         markdown_cell(&committed_reward_label(&item)),
+        cash_rows,
         markdown_cell(item.deadline.as_deref().unwrap_or("No deadline published")),
         markdown_cell(&item.verification_method),
         proof,
@@ -4290,18 +4321,29 @@ fn committed_reward_label(item: &OpportunityItem) -> String {
 }
 
 fn decimal_amount(amount: &str, decimals: u8) -> String {
-    if decimals == 0 || !amount.bytes().all(|byte| byte.is_ascii_digit()) {
+    let (sign, digits) = amount
+        .strip_prefix('-')
+        .map_or(("", amount), |digits| ("-", digits));
+    if decimals == 0 || digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return amount.to_string();
     }
     let decimals = usize::from(decimals);
-    let padded = format!("{:0>width$}", amount, width = decimals + 1);
+    let padded = format!("{:0>width$}", digits, width = decimals + 1);
     let split = padded.len() - decimals;
     let fraction = padded[split..].trim_end_matches('0');
     if fraction.is_empty() {
-        padded[..split].to_string()
+        format!("{sign}{}", &padded[..split])
     } else {
-        format!("{}.{}", &padded[..split], fraction)
+        format!("{sign}{}.{}", &padded[..split], fraction)
     }
+}
+
+fn opportunity_amount_label(amount: &opportunities::OpportunityAmount) -> String {
+    format!(
+        "{} {}",
+        decimal_amount(&amount.amount, amount.decimals),
+        amount.currency
+    )
 }
 
 fn safe_opportunity_link(item: &OpportunityItem) -> String {
@@ -8451,7 +8493,7 @@ async fn claim_funnel(
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     store
-        .claim_funnel_stats(window_hours)
+        .claim_funnel_stats(window_hours, &state.recovery_reservations.contracts())
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -8724,6 +8766,9 @@ async fn build_agent_eligibility(
         })?;
     let settlements = events.iter().filter(|event| {
         event.kind == AutonomousBountyEventKind::BountySettled
+            && !state
+                .recovery_reservations
+                .contains(&event.contract_address)
             && event.data["solver"]
                 .as_str()
                 .is_some_and(|wallet| wallet.eq_ignore_ascii_case(solver_wallet))
@@ -10695,10 +10740,15 @@ async fn solver_leaderboard(
         .unwrap_or_else(Utc::now);
     let daily_period = leaderboard_period(LeaderboardPeriodKind::Daily, reference_at);
     let weekly_period = leaderboard_period(LeaderboardPeriodKind::Weekly, reference_at);
-    let completions = store
+    let mut completions = store
         .list_canonical_solver_completions(network, weekly_period.starts_at, weekly_period.ends_at)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    completions.retain(|completion| {
+        !state
+            .recovery_reservations
+            .contains(&completion.bounty_contract)
+    });
     let daily_ranking = rank_solver_completions(daily_period, completions.clone());
     let weekly_ranking = rank_solver_completions(weekly_period, completions);
     let reward_contract_env = match network_descriptor.chain_id {
@@ -11678,7 +11728,12 @@ async fn current_social_mention_plan(
     let operator_enabled = env_flag("AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED");
     let github_conversion = if operator_enabled {
         match load_autonomous_bounty_feed(state, "base-mainnet", false).await {
-            Ok(feed) => github_issue_conversion_evidence(&feed),
+            Ok(mut feed) => {
+                state
+                    .recovery_reservations
+                    .exclude_from_reported_outcomes(&mut feed);
+                github_issue_conversion_evidence(&feed)
+            }
             Err(_) => unavailable_github_conversion_evidence(),
         }
     } else {
@@ -13036,6 +13091,9 @@ async fn load_objective_canonical_evidence(
         let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         state.recovery_reservations.apply(&mut feed, false);
+        state
+            .recovery_reservations
+            .exclude_from_reported_outcomes(&mut feed);
         let mut network_evidence = build_objective_canonical_evidence(&network, &feed);
         evidence.funding.append(&mut network_evidence.funding);
         evidence
@@ -13787,11 +13845,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "2100000".to_string(),
             funded_amount: "2100000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "2000000".to_string(),
             terms_hash: terms_hash.clone(),
             terms: None,
             terms_valid: true,
             verification_mode: "deterministic".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("test_fixture".to_string()),
             verification_ready: true,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: Vec::new(),
@@ -15193,11 +15256,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "2010000".to_string(),
             funded_amount: "2010000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "2000000".to_string(),
             terms_hash: terms.terms_hash.clone(),
             terms: Some(terms),
             terms_valid: true,
             verification_mode: "signed_quorum".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(2),
+            runner_identifier: Some("sandboxed_regression_v1".to_string()),
             verification_ready: true,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: vec![],
@@ -17703,11 +17771,16 @@ mod tests {
                 timeout_bond_pool: "0".to_string(),
                 target_amount: "1000000".to_string(),
                 funded_amount: "1000000".to_string(),
+                required_external_spend: "0".to_string(),
+                gross_cash_margin: "900000".to_string(),
                 terms_hash: format!("0x{}", "44".repeat(32)),
                 terms: None,
                 terms_valid: true,
                 verification_mode: "deterministic_module".to_string(),
                 verifier_module: None,
+                verifier_set_hash: None,
+                verifier_threshold: Some(1),
+                runner_identifier: Some("test_fixture".to_string()),
                 verification_ready: true,
                 verification_readiness_reason: "test fixture".to_string(),
                 validation_errors: Vec::new(),

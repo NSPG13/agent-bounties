@@ -128,6 +128,10 @@
       : item.payment_state === "seeking_funding"
         ? `${formatAmount(item.reward)} proposed reward · not yet committed`
         : "No payment committed";
+    if (item.cash_economics) {
+      const cash = item.cash_economics;
+      economics.textContent += ` · ${formatAmount(cash.required_external_spend)} required external spend · ${formatAmount(cash.gross_cash_margin)} gross cash margin, not net profit`;
+    }
 
     const goal = document.createElement("p");
     goal.className = "fine";

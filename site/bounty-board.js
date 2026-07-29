@@ -118,6 +118,14 @@
       reward.textContent = `${formatUsdc(item.rewardUsdc)} USDC reward`;
       meta.append(reward);
     }
+    if (item.cash_economics) {
+      const bond = document.createElement("span");
+      bond.textContent = `${formatUsdc(amountInUsdc(item.cash_economics.refundable_claim_bond))} USDC refundable bond`;
+      meta.append(bond);
+      const margin = document.createElement("span");
+      margin.textContent = `${formatUsdc(amountInUsdc(item.cash_economics.gross_cash_margin))} USDC gross cash margin, not net profit`;
+      meta.append(margin);
+    }
     (item.categories || []).slice(0, 2).forEach((category) => {
       const tag = document.createElement("span");
       tag.textContent = category;

@@ -1552,6 +1552,7 @@ impl PostgresStore {
     pub async fn opportunity_lifecycle_stats(
         &self,
         window_started_at: DateTime<Utc>,
+        excluded_bounty_contracts: &[String],
     ) -> DbResult<OpportunityLifecycleStats> {
         let cohort = sqlx::query(
             r#"
@@ -1577,6 +1578,7 @@ impl PostgresStore {
                 ON created.network = progress.network
                AND created.kind = 'canonical_bounty_created'
                AND lower(created.data->>'terms_hash') = lower(progress.terms_hash)
+               AND NOT lower(created.contract_address) = ANY($2)
             ), root_flags AS (
               SELECT roots.unfunded_bounty_id,
                      BOOL_OR(event.kind = 'bounty_became_claimable') AS funded,
@@ -1608,6 +1610,7 @@ impl PostgresStore {
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
 
@@ -1617,31 +1620,37 @@ impl PostgresStore {
               SELECT network, bounty_id, MIN(occurred_at) AS created_at
               FROM autonomous_bounty_events
               WHERE kind = 'canonical_bounty_created' AND occurred_at >= $1
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY network, bounty_id
             ), settled AS (
               SELECT network, bounty_id, MIN(occurred_at) AS settled_at
               FROM autonomous_bounty_events
               WHERE kind = 'bounty_settled'
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY network, bounty_id
             ), posters AS (
               SELECT lower(data->>'creator') AS wallet, COUNT(DISTINCT bounty_id) AS bounties
               FROM autonomous_bounty_events
               WHERE kind = 'canonical_bounty_created' AND occurred_at >= $1
                 AND data ? 'creator'
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY lower(data->>'creator')
             ), paid_solvers AS (
               SELECT lower(data->>'solver') AS wallet, COUNT(DISTINCT bounty_id) AS bounties
               FROM autonomous_bounty_events
               WHERE kind = 'bounty_settled' AND occurred_at >= $1
                 AND data ? 'solver'
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY lower(data->>'solver')
             )
             SELECT
               (SELECT COUNT(*) FROM created) AS canonical_created_in_window,
               (SELECT COUNT(DISTINCT (network, bounty_id)) FROM autonomous_bounty_events
-                WHERE kind = 'bounty_claimed' AND occurred_at >= $1) AS canonical_claimed_in_window,
+                WHERE kind = 'bounty_claimed' AND occurred_at >= $1
+                  AND NOT lower(contract_address) = ANY($2)) AS canonical_claimed_in_window,
               (SELECT COUNT(DISTINCT (network, bounty_id)) FROM autonomous_bounty_events
-                WHERE kind = 'bounty_settled' AND occurred_at >= $1) AS canonical_settled_in_window,
+                WHERE kind = 'bounty_settled' AND occurred_at >= $1
+                  AND NOT lower(contract_address) = ANY($2)) AS canonical_settled_in_window,
               (SELECT COUNT(*) FROM posters) AS unique_canonical_poster_wallets,
               (SELECT COUNT(*) FROM posters WHERE bounties > 1) AS repeat_canonical_poster_wallets,
               (SELECT COUNT(*) FROM paid_solvers) AS unique_paid_solver_wallets,
@@ -1652,6 +1661,7 @@ impl PostgresStore {
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
 
@@ -3045,7 +3055,11 @@ impl PostgresStore {
             .transpose()
     }
 
-    pub async fn claim_funnel_stats(&self, window_hours: u32) -> DbResult<ClaimFunnelStats> {
+    pub async fn claim_funnel_stats(
+        &self,
+        window_hours: u32,
+        excluded_bounty_contracts: &[String],
+    ) -> DbResult<ClaimFunnelStats> {
         let window_hours = window_hours.clamp(1, 720);
         let generated_at = Utc::now();
         let window_started_at = generated_at - chrono::Duration::hours(i64::from(window_hours));
@@ -3066,9 +3080,11 @@ impl PostgresStore {
               COUNT(*) FILTER (WHERE status = 'failed') AS failed
             FROM claim_candidates
             WHERE created_at >= $1
+              AND NOT lower(bounty_contract) = ANY($2)
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
         let stages = ClaimFunnelStageCounts {
@@ -3100,9 +3116,11 @@ impl PostgresStore {
             FROM bond_sponsorships sponsorship
             JOIN claim_candidates candidate ON candidate.id = sponsorship.claim_candidate_id
             WHERE sponsorship.created_at >= $1
+              AND NOT lower(candidate.bounty_contract) = ANY($2)
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
         let sponsored_claims_confirmed =
@@ -3124,6 +3142,7 @@ impl PostgresStore {
               FROM autonomous_bounty_events
               WHERE occurred_at >= $1
                 AND kind IN ('bounty_claimed', 'submission_added', 'bounty_settled')
+                AND NOT lower(contract_address) = ANY($2)
             ), paid_solvers AS (
               SELECT solver_wallet, COUNT(*) AS settlement_count
               FROM window_events
@@ -3160,6 +3179,7 @@ impl PostgresStore {
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
         let canonical_outcomes = CanonicalClaimOutcomeCounts {
@@ -3187,11 +3207,13 @@ impl PostgresStore {
             SELECT failure_code, COUNT(*) AS count
             FROM claim_candidates
             WHERE created_at >= $1 AND status = 'failed' AND failure_code IS NOT NULL
+              AND NOT lower(bounty_contract) = ANY($2)
             GROUP BY failure_code
             ORDER BY failure_code
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_all(&self.pool)
         .await?;
         let mut failure_codes = BTreeMap::new();
@@ -7309,7 +7331,7 @@ mod tests {
         store.migrate().await.unwrap();
 
         let stats = store
-            .opportunity_lifecycle_stats(Utc::now() - chrono::Duration::hours(1))
+            .opportunity_lifecycle_stats(Utc::now() - chrono::Duration::hours(1), &[])
             .await
             .unwrap();
         assert!(stats.solution_received <= stats.published);
@@ -7545,7 +7567,7 @@ mod tests {
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
-        let baseline = store.claim_funnel_stats(1).await.unwrap();
+        let baseline = store.claim_funnel_stats(1, &[]).await.unwrap();
         let network = format!("funnel-test-{}", Uuid::new_v4());
         let address = |id: Uuid| {
             let value = id.simple().to_string();
@@ -7722,7 +7744,7 @@ mod tests {
                 .unwrap();
         }
 
-        let observed = store.claim_funnel_stats(1).await.unwrap();
+        let observed = store.claim_funnel_stats(1, &[]).await.unwrap();
         assert_eq!(observed.stages.observed, baseline.stages.observed + 2);
         assert_eq!(
             observed.stages.unique_solver_wallets,

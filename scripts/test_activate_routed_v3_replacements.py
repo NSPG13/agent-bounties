@@ -248,15 +248,83 @@ class ActivateRoutedV3Tests(unittest.TestCase):
             self.assertIn("--from-block 49069936", workflow, name)
             self.assertIn("--to-block 49069936", workflow, name)
 
-    def test_resume_checks_canonical_state_before_transaction_planning(self) -> None:
-        source = (SCRIPTS / "activate_routed_v3_replacements.py").read_text(encoding="utf-8")
-        canonical_check = source.index('cast.call(FACTORY, "isCanonicalBounty(address)(bool)", predicted)')
-        planner_call = source.index('"scripts/plan_bounded_agent_action.py"', canonical_check)
-        self.assertLess(canonical_check, planner_call)
+    def test_resume_skips_planning_and_send_for_an_existing_canonical_contract(self) -> None:
+        cast = mock.Mock()
+        cast.call.return_value = "true"
+        create = mock.Mock(return_value="0x" + "41" * 32)
 
-    def test_reconciliation_accepts_claimed_live_inventory(self) -> None:
-        source = (SCRIPTS / "activate_routed_v3_replacements.py").read_text(encoding="utf-8")
-        self.assertIn('{"claimable", "claimed", "submitted", "verifying"}', source)
+        transaction, remaining = MODULE.create_if_missing(
+            cast, "0x" + "31" * 20, 3, create
+        )
+
+        self.assertEqual(transaction, "already-canonical")
+        self.assertEqual(remaining, 3)
+        create.assert_not_called()
+
+    def test_reconciliation_accepts_every_active_state_and_fails_closed(self) -> None:
+        contract = "0x" + "31" * 20
+        bounty_id = "0x" + "32" * 32
+        events = [
+            {"kind": "canonical_bounty_created"},
+            {"kind": "funding_added"},
+            {"kind": "bounty_became_claimable"},
+        ]
+        for status in ("claimable", "claimed", "submitted", "verifying"):
+            with self.subTest(status=status), mock.patch.object(
+                MODULE,
+                "http_json",
+                side_effect=[
+                    events,
+                    [
+                        {
+                            "bounty_contract": contract,
+                            "status": status,
+                            "terms_valid": True,
+                            "verification_ready": True,
+                        }
+                    ],
+                ],
+            ):
+                result = MODULE.reconcile("https://api.example", contract, bounty_id, 1)
+                self.assertEqual(result["feed_item"]["status"], status)
+
+        failures = [
+            {"status": "claimable", "terms_valid": False, "verification_ready": True},
+            {"status": "claimable", "terms_valid": True, "verification_ready": False},
+            {"status": "settled", "terms_valid": True, "verification_ready": True},
+        ]
+        for item in failures:
+            item["bounty_contract"] = contract
+            with self.subTest(item=item), mock.patch.object(
+                MODULE,
+                "http_json",
+                side_effect=[events, [item]],
+            ), mock.patch.object(MODULE.time, "monotonic", side_effect=[0, 0, 2]), mock.patch.object(
+                MODULE.time, "sleep"
+            ):
+                with self.assertRaisesRegex(MODULE.ActivationError, "did not reconcile"):
+                    MODULE.reconcile("https://api.example", contract, bounty_id, 1)
+
+        with mock.patch.object(
+            MODULE,
+            "http_json",
+            side_effect=[events, [
+                {
+                    "bounty_contract": contract,
+                    "status": "claimable",
+                    "terms_valid": True,
+                    "verification_ready": True,
+                },
+                {
+                    "bounty_contract": contract,
+                    "status": "claimed",
+                    "terms_valid": True,
+                    "verification_ready": True,
+                },
+            ]],
+        ):
+            with self.assertRaisesRegex(MODULE.ActivationError, "ambiguous"):
+                MODULE.reconcile("https://api.example", contract, bounty_id, 1)
 
 
 if __name__ == "__main__":

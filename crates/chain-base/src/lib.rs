@@ -3398,11 +3398,21 @@ pub struct AutonomousBountyFeedItem {
     pub timeout_bond_pool: String,
     pub target_amount: String,
     pub funded_amount: String,
+    #[serde(default)]
+    pub required_external_spend: String,
+    #[serde(default)]
+    pub gross_cash_margin: String,
     pub terms_hash: String,
     pub terms: Option<AutonomousBountyTermsRecord>,
     pub terms_valid: bool,
     pub verification_mode: String,
     pub verifier_module: Option<String>,
+    #[serde(default)]
+    pub verifier_set_hash: Option<String>,
+    #[serde(default)]
+    pub verifier_threshold: Option<u8>,
+    #[serde(default)]
+    pub runner_identifier: Option<String>,
     pub verification_ready: bool,
     pub verification_readiness_reason: String,
     pub validation_errors: Vec<String>,
@@ -3662,6 +3672,16 @@ impl AutonomousBountyRecoveryReservations {
     pub fn exclude_from_verification_jobs(&self, feed: &mut Vec<AutonomousBountyFeedItem>) {
         feed.retain(|item| !self.contains(&item.bounty_contract));
     }
+
+    pub fn exclude_from_reported_outcomes(&self, feed: &mut Vec<AutonomousBountyFeedItem>) {
+        feed.retain(|item| !self.contains(&item.bounty_contract));
+    }
+
+    pub fn contracts(&self) -> Vec<String> {
+        let mut contracts = self.contracts.iter().cloned().collect::<Vec<_>>();
+        contracts.sort();
+        contracts
+    }
 }
 
 pub fn autonomous_bounty_is_earning_ready(item: &AutonomousBountyFeedItem) -> bool {
@@ -3849,25 +3869,66 @@ fn verifier_set_hash_from_policy(policy: &Value) -> Result<String, ChainBaseErro
     Ok(format!("0x{}", hex::encode(Keccak256::digest(encoded))))
 }
 
+#[cfg(test)]
 fn is_supported_regression_quorum(
     creation_data: &Value,
     terms: Option<&AutonomousBountyTermsRecord>,
 ) -> bool {
+    regression_quorum_readiness(creation_data, terms).0
+}
+
+fn regression_quorum_readiness(
+    creation_data: &Value,
+    terms: Option<&AutonomousBountyTermsRecord>,
+) -> (bool, &'static str) {
     let Some(terms) = terms else {
-        return false;
+        return (false, "quorum terms are unavailable");
     };
     let policy = &terms.document.verification_policy;
     let benchmark = &terms.document.benchmark;
-    creation_data["verifier_set_hash"]
+    if !creation_data["verifier_set_hash"]
         .as_str()
         .is_some_and(|hash| {
             hash.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH)
         })
-        && creation_data["threshold"].as_u64()
-            == Some(BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() as u64)
-        && policy.get("mechanism").and_then(Value::as_str) == Some("signed_quorum")
-        && policy.get("engine").and_then(Value::as_str) == Some(STANDING_META_V2_REGRESSION_ENGINE)
-        && valid_regression_benchmark(benchmark)
+    {
+        return (false, "verifier set mismatch");
+    }
+    if creation_data["threshold"].as_u64()
+        != Some(BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() as u64)
+    {
+        return (false, "verifier threshold mismatch");
+    }
+    let configured_signers = policy
+        .get("verifiers")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if configured_signers.len() < BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() {
+        return (false, "required verifier signer is missing");
+    }
+    if policy.get("mechanism").and_then(Value::as_str) != Some("signed_quorum") {
+        return (false, "signed-quorum policy is unavailable");
+    }
+    if policy.get("engine").and_then(Value::as_str) != Some(STANDING_META_V2_REGRESSION_ENGINE)
+        || benchmark.get("engine").and_then(Value::as_str)
+            != Some(STANDING_META_V2_REGRESSION_ENGINE)
+    {
+        return (
+            false,
+            "regression runner identifier is stale or unsupported",
+        );
+    }
+    if !valid_regression_benchmark(benchmark) {
+        return (
+            false,
+            "regression runner manifest is unavailable or invalid",
+        );
+    }
+    (
+        true,
+        "the exact built-in sandboxed-regression quorum is supported",
+    )
 }
 
 fn valid_regression_benchmark(benchmark: &Value) -> bool {
@@ -4924,15 +4985,55 @@ pub fn build_autonomous_bounty_feed(
             validation_errors.push(error);
         }
         let terms_valid = validation_errors.is_empty();
+        let verifier_set_hash = creation_data["verifier_set_hash"]
+            .as_str()
+            .map(str::to_string);
+        let verifier_threshold = creation_data["threshold"]
+            .as_u64()
+            .and_then(|value| u8::try_from(value).ok());
+        let runner_identifier = terms_record.as_ref().and_then(|terms| {
+            terms
+                .document
+                .benchmark
+                .get("runner_manifest")
+                .and_then(|manifest| manifest.get("runner_id"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    terms
+                        .document
+                        .benchmark
+                        .get("engine")
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    terms
+                        .document
+                        .verification_policy
+                        .get("mechanism")
+                        .and_then(Value::as_str)
+                })
+                .map(str::to_string)
+        });
+        let required_external_spend = terms_record
+            .as_ref()
+            .and_then(|terms| {
+                let benchmark = &terms.document.benchmark;
+                benchmark
+                    .get("minimum_child_target")
+                    .or_else(|| benchmark.get("required_child_target"))
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        (benchmark.get("engine").and_then(Value::as_str)
+                            == Some("standing_meta_v2_parent"))
+                        .then_some(solver_reward)
+                    })
+            })
+            .unwrap_or(0);
+        let gross_cash_margin = i128::from(solver_reward) - i128::from(required_external_spend);
         let (verification_ready, verification_readiness_reason) = if !terms_valid {
             (false, "content-addressed terms are invalid or unavailable")
-        } else if verification_mode == "signed_quorum"
-            && is_supported_regression_quorum(&creation_data, terms_record.as_ref())
-        {
-            (
-                true,
-                "the exact built-in sandboxed-regression quorum is supported",
-            )
+        } else if verification_mode == "signed_quorum" {
+            regression_quorum_readiness(&creation_data, terms_record.as_ref())
         } else if verification_mode != "deterministic_module" {
             (
                 false,
@@ -4971,11 +5072,16 @@ pub fn build_autonomous_bounty_feed(
             timeout_bond_pool: timeout_bond_pool.to_string(),
             target_amount: target_amount.to_string(),
             funded_amount: funded_amount.to_string(),
+            required_external_spend: required_external_spend.to_string(),
+            gross_cash_margin: gross_cash_margin.to_string(),
             terms_hash: terms_hash.clone(),
             terms: terms_record,
             terms_valid,
             verification_mode: verification_mode.to_string(),
             verifier_module,
+            verifier_set_hash,
+            verifier_threshold,
+            runner_identifier,
             verification_ready,
             verification_readiness_reason: verification_readiness_reason.to_string(),
             validation_errors,
@@ -7145,11 +7251,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: "1000000".to_string(),
+            required_external_spend: "900000".to_string(),
+            gross_cash_margin: "0".to_string(),
             terms_hash: terms.terms_hash.clone(),
             terms: Some(terms),
             terms_valid: true,
             verification_mode: "deterministic_module".to_string(),
             verifier_module: Some(BASE_MAINNET_STANDING_META_V2_VERIFIER.to_string()),
+            verifier_set_hash: Some(BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH.to_string()),
+            verifier_threshold: Some(1),
+            runner_identifier: Some("standing_meta_v2_parent".to_string()),
             verification_ready: true,
             verification_readiness_reason: "exact deployed verifier".to_string(),
             validation_errors: vec![],
@@ -7714,7 +7825,15 @@ mod tests {
         assert_eq!(feed.len(), 1);
         assert_eq!(feed[0].status, "paid");
         assert_eq!(feed[0].funded_amount, "1000000");
+        assert_eq!(feed[0].required_external_spend, "0");
+        assert_eq!(feed[0].gross_cash_margin, "900000");
         assert_eq!(feed[0].verification_mode, "ai_judge_quorum");
+        assert_eq!(feed[0].verifier_threshold, Some(2));
+        assert_eq!(
+            feed[0].verifier_set_hash,
+            Some(format!("0x{}", "0a".repeat(32)))
+        );
+        assert_eq!(feed[0].runner_identifier, None);
         assert!(!feed[0].verification_ready);
     }
 
@@ -7889,6 +8008,41 @@ mod tests {
         let supported_record =
             build_autonomous_bounty_terms_record(&record.creator_wallet, supported_document, now)
                 .unwrap();
+        let healthy_quorum = json!({
+            "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+            "threshold": 2
+        });
+        assert_eq!(
+            regression_quorum_readiness(&healthy_quorum, Some(&supported_record)),
+            (
+                true,
+                "the exact built-in sandboxed-regression quorum is supported"
+            )
+        );
+        let mut missing_signer = supported_record.clone();
+        missing_signer.document.verification_policy["verifiers"] =
+            json!([BASE_MAINNET_STANDING_META_V2_VERIFIERS[0]]);
+        assert_eq!(
+            regression_quorum_readiness(&healthy_quorum, Some(&missing_signer)).1,
+            "required verifier signer is missing"
+        );
+        let mut stale_runner = supported_record.clone();
+        stale_runner.document.verification_policy["engine"] = json!("sandboxed_regression_v0");
+        assert_eq!(
+            regression_quorum_readiness(&healthy_quorum, Some(&stale_runner)).1,
+            "regression runner identifier is stale or unsupported"
+        );
+        assert_eq!(
+            regression_quorum_readiness(
+                &json!({
+                    "verifier_set_hash": format!("0x{}", "00".repeat(32)),
+                    "threshold": 2
+                }),
+                Some(&supported_record),
+            )
+            .1,
+            "verifier set mismatch"
+        );
         let mut supported_create = autonomous_bounty_create_from_terms(&supported_record).unwrap();
         validate_autonomous_creation_for_public_earning(
             "base-mainnet",
@@ -8149,11 +8303,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: "1000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
             terms_hash: format!("0x{}", "aa".repeat(32)),
             terms: None,
             terms_valid: true,
             verification_mode: "deterministic_module".to_string(),
             verifier_module: Some("0x5555555555555555555555555555555555555555".to_string()),
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("fixture".to_string()),
             verification_ready: true,
             verification_readiness_reason: "deterministic verifier module is committed on-chain"
                 .to_string(),
@@ -8213,6 +8372,8 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "2000000".to_string(),
             funded_amount: "2000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "1900000".to_string(),
             terms_hash: format!("0x{}", "aa".repeat(32)),
             terms: Some(AutonomousBountyTermsRecord {
                 terms_hash: format!("0x{}", "aa".repeat(32)),
@@ -8247,6 +8408,9 @@ mod tests {
             terms_valid: true,
             verification_mode: "deterministic_module".to_string(),
             verifier_module: Some("0x5555555555555555555555555555555555555555".to_string()),
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("deterministic_module".to_string()),
             verification_ready: true,
             verification_readiness_reason: "deterministic verifier module is committed on-chain"
                 .to_string(),
@@ -8397,6 +8561,8 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: "1000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
             terms_hash: format!("0x{}", "aa".repeat(32)),
             terms: Some(AutonomousBountyTermsRecord {
                 terms_hash: format!("0x{}", "aa".repeat(32)),
@@ -8442,6 +8608,9 @@ mod tests {
             terms_valid: true,
             verification_mode: "signed_quorum".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("github_ci".to_string()),
             verification_ready: false,
             verification_readiness_reason:
                 "quorum verifier service availability is not canonically attested".to_string(),
@@ -8547,11 +8716,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: "1000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
             terms_hash: format!("0x{}", "aa".repeat(32)),
             terms: None,
             terms_valid: false,
             verification_mode: "signed_quorum".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: None,
             verification_ready: false,
             verification_readiness_reason: "content-addressed terms are invalid or unavailable"
                 .to_string(),
