@@ -1,5 +1,3 @@
-#[cfg(test)]
-use super::ChatgptFileInput;
 use super::{
     agent_native_claim, compile_objective_with_cloud_agent, fund_bounty_with_x402, get_paid_status,
     get_x402_relay_status, list_autonomous_bounties, list_autonomous_verification_jobs,
@@ -17,6 +15,8 @@ use super::{
     PublishAutonomousSubmissionEvidenceArgs, PublishUnfundedBountyArgs, SharedState,
     SubmitUnfundedBountySolutionArgs, ToolDescriptor, X402BountyFundingArgs,
 };
+#[cfg(test)]
+use super::{AppState, ChatgptFileInput};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -53,6 +53,7 @@ const CHATGPT_FULL_TOOL_NAMES: &[&str] = &[
     "add_bounty_comment",
     "create_share_bundle",
     "prepare_bounty_post",
+    "list_autonomous_bounties",
 ];
 #[derive(Debug, Clone, Deserialize)]
 struct ChatgptFeedArgs {
@@ -708,6 +709,12 @@ fn mcp_tool_descriptor_for_mode(
         value.insert(
             "outputSchema".to_string(),
             feed_output_schema(public_review),
+        );
+    }
+    if descriptor.name == "list_autonomous_bounties" {
+        value.insert(
+            "outputSchema".to_string(),
+            autonomous_bounty_feed_output_schema(),
         );
     }
     if matches!(
@@ -3026,6 +3033,43 @@ fn moonpay_onramp_output_schema() -> Value {
     })
 }
 
+fn autonomous_bounty_feed_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "bounty_id": {"type": "string"},
+                        "bounty_contract": {"type": "string"},
+                        "status": {"type": "string"},
+                        "solver_reward": {"type": "string"},
+                        "claim_bond": {"type": "string"},
+                        "required_external_spend": {"type": "string"},
+                        "gross_cash_margin": {"type": "string"},
+                        "terms_hash": {"type": "string"},
+                        "verification_ready": {"type": "boolean"},
+                        "verification_readiness_reason": {"type": "string"}
+                    },
+                    "required": [
+                        "bounty_id", "bounty_contract", "status", "solver_reward",
+                        "claim_bond", "required_external_spend", "gross_cash_margin",
+                        "terms_hash", "verification_ready",
+                        "verification_readiness_reason"
+                    ],
+                    "additionalProperties": true
+                }
+            },
+            "sandbox": {"type": "boolean"},
+            "evidence_boundary": {"type": "string"}
+        },
+        "required": ["items"],
+        "additionalProperties": true
+    })
+}
+
 fn bounty_action_output_schema() -> Value {
     json!({
         "type": "object",
@@ -3469,6 +3513,9 @@ fn json_rpc_error(id: Value, code: i64, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use app::BountyNetwork;
+    use chain_base::{AutonomousBountyRecoveryReservations, BaseRpcUrlConfig};
+    use std::sync::{Arc, Mutex};
 
     fn valid_args() -> PrepareBountyPostArgs {
         PrepareBountyPostArgs {
@@ -3669,6 +3716,16 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "get_bounty_action_status")
             .expect("canonical action status tool");
+        let autonomous_feed = tools
+            .iter()
+            .find(|tool| tool["name"] == "list_autonomous_bounties")
+            .expect("canonical autonomous feed tool");
+        assert!(
+            autonomous_feed["outputSchema"]["properties"]["items"]["items"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("gross_cash_margin"))
+        );
 
         assert_eq!(prepare["annotations"]["readOnlyHint"], false);
         assert_eq!(prepare["annotations"]["destructiveHint"], false);
@@ -3734,6 +3791,7 @@ mod tests {
             "add_bounty_comment",
             "create_share_bundle",
             "prepare_bounty_post",
+            "list_autonomous_bounties",
         ] {
             assert!(
                 tools.iter().any(|tool| tool["name"] == name),
@@ -3773,6 +3831,43 @@ mod tests {
             .unwrap()
             .iter()
             .any(|field| field == "bounty_image"));
+    }
+
+    fn public_tool_test_state() -> SharedState {
+        Arc::new(AppState {
+            network: Mutex::new(BountyNetwork::default()),
+            eval_runs: Mutex::new(Vec::new()),
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            stripe_secret_key: None,
+            stripe_live_execution_enabled: false,
+            stripe_api_base_url: "https://api.stripe.com".to_string(),
+            stripe_payment_method_configuration: None,
+            operator_api_token: None,
+            store: None,
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn mounted_public_inventory_tool_is_callable_and_fails_closed() {
+        let params = json!({
+            "name": "list_autonomous_bounties",
+            "arguments": {"network": "base-mainnet", "claimable_only": true}
+        });
+        let result = call_tool(public_tool_test_state(), &params).await.unwrap();
+        let encoded = serde_json::to_string(&result).unwrap();
+        assert!(!encoded.contains("unknown or unavailable public ChatGPT app tool"));
+        assert!(encoded.contains("DATABASE_URL"));
+        assert!(!encoded.contains("\"paid\":true"));
+
+        let error = call_tool(
+            public_tool_test_state(),
+            &json!({"name": "not_a_real_tool", "arguments": {}}),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("unknown or unavailable public ChatGPT app tool"));
     }
 
     #[test]

@@ -7021,6 +7021,9 @@ async fn load_objective_canonical_evidence(
         let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
             .map_err(|error| error.to_string())?;
         state.recovery_reservations.apply(&mut feed, false);
+        state
+            .recovery_reservations
+            .exclude_from_reported_outcomes(&mut feed);
         let mut network_evidence = build_objective_canonical_evidence(&network, &feed);
         evidence.funding.append(&mut network_evidence.funding);
         evidence
