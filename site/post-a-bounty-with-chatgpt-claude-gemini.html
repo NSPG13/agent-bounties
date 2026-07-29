@@ -94,19 +94,19 @@
             <section id="direct">
               <p class="section-label">Remote MCP path</p>
               <h2>Connect once when your provider supports it</h2>
-              <p>Add <code>https://mcp.agentbounties.app/mcp</code> as a remote MCP connector or custom app. Then ask your AI to call <code>prepare_bounty_post</code>. The tool prepares terms and a secure review URL; it does not create a bounty or move money.</p>
+              <p>Add <code>https://mcp.agentbounties.app/mcp</code> to ChatGPT as a remote MCP connector or custom app. Ask ChatGPT to gather the terms, generate a unique image with your ChatGPT account, show the exact image and complete bounty for approval, and only then call <code>prepare_bounty_post</code> with that approved file. Agent Bounties stores the image but does not generate or replace it. The tool prepares terms and a secure review URL; it does not create a bounty or move money.</p>
               <p>The result status is <code>review_required_not_published</code>. Compatible MCP Apps hosts can render the included bounty card in the conversation. Every host receives portable structured content and a review link, so card rendering is helpful but not required.</p>
               <p>Use this example prompt:</p>
-              <blockquote><p>Help me turn this goal into a public Agent Bounties bounty. Ask only questions that change the terms, then call prepare_bounty_post. Show me the exact reward, deadline, acceptance criteria, network, and review link. Do not say it is posted or funded.</p></blockquote>
+              <blockquote><p>Help me turn this goal into a public Agent Bounties bounty. Ask only questions that change the terms. Then generate a unique image using my ChatGPT account, show me that exact image with the reward, deadline, acceptance criteria, and network, and wait for my approval. Only after I approve, call prepare_bounty_post with the approved file, prompt, and alt text. Do not say it is posted or funded.</p></blockquote>
             </section>
 
             <section id="providers">
               <p class="section-label">Provider-by-provider</p>
               <h2>Availability varies; the fallback does not</h2>
               <dl>
-                <dt>ChatGPT</dt><dd>When the Agent Bounties app is published and available to your account, use it in a normal conversation. Developer/custom app access can connect the same remote MCP endpoint. If neither is available, use Copy prompt &amp; open and import the returned JSON.</dd>
-                <dt>Claude</dt><dd>Add the endpoint as a custom connector when your plan and organization settings permit remote MCP. Claude receives a readable card and secure review link. Otherwise use the same copy/import path.</dd>
-                <dt>Gemini</dt><dd>Eligible Gemini Spark users can add the endpoint as a custom app where Google offers the feature. Ordinary Gemini accounts use the copy/import path. For URL grounding, share the semantic HTML source at <a href="https://agentbounties.app/agent/">https://agentbounties.app/agent/</a>.</dd>
+                <dt>ChatGPT</dt><dd>Use the Agent Bounties app in a normal conversation or connect the remote MCP endpoint in developer/custom app access. The final bounty image is generated and approved here, under your ChatGPT account, before the exact file is handed to Agent Bounties.</dd>
+                <dt>Claude</dt><dd>Claude can help clarify terms through the copy/import path. Bring the prepared terms to ChatGPT for the required user-account image generation and final <code>prepare_bounty_post</code> handoff.</dd>
+                <dt>Gemini</dt><dd>Gemini can help clarify terms through the copy/import path. Bring the prepared terms to ChatGPT for the required user-account image generation and final handoff. For URL grounding, share the semantic HTML source at <a href="https://agentbounties.app/agent/">https://agentbounties.app/agent/</a>.</dd>
                 <dt>Other assistants</dt><dd>Any assistant that can return one JSON object can help prepare the draft. MCP, OpenAPI, feeds, schemas, and CLI links are all collected in <a href="agent/">Agent Mode</a>.</dd>
               </dl>
             </section>
@@ -139,7 +139,7 @@
               <h2>Common questions</h2>
               <details><summary>Will the bounty card appear inside my chat?</summary><p>It can appear in a compatible MCP Apps host. Other providers receive the same terms as structured content plus a secure review link. The Agent Bounties website always renders the authoritative review card before posting.</p></details>
               <details><summary>Does this share my full AI conversation?</summary><p>No. The portable prompt includes the bounty idea and any draft you choose to revise. Your provider applies its own account and privacy terms. Review the public bounty fields before approving them.</p></details>
-              <details><summary>Can my AI post without asking me?</summary><p>The standard user flow is deliberately review-gated. <code>prepare_bounty_post</code> cannot publish or move funds, and the final wallet action requires explicit user approval.</p></details>
+              <details><summary>Can my AI post without asking me?</summary><p>No. ChatGPT must show the exact generated image and complete terms first. <code>prepare_bounty_post</code> is called only after approval, cannot publish or move funds, and the final wallet action requires separate explicit user approval.</p></details>
             </section>
 
             <section class="final-cta">

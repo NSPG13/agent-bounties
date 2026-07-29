@@ -151,9 +151,35 @@ def main() -> int:
             if "MOONPAY_SECRET_KEY" in text or "sk_live_" in text or "sk_test_" in text:
                 fail(f"MoonPay secret material must not appear in browser assets: {path.relative_to(ROOT)}")
 
-    chatgpt_app = (ROOT / "crates/mcp-server/src/chatgpt_app.rs").read_text(encoding="utf-8")
-    if "moonpay" in chatgpt_app.lower():
-        fail("MoonPay must remain a first-party web handoff, not expand the public ChatGPT tool surface")
+    chatgpt_app = require(
+        ROOT / "crates/mcp-server/src/chatgpt_app.rs",
+        [
+            '"prepare_moonpay_onramp"',
+            "build_moonpay_onramp_handoff",
+            "agent-bounties/moonpay-onramp-handoff-v1",
+            "https://agentbounties.app/onramp.html",
+            '"checkout_created": false',
+            '"purchase_completed": false',
+            '"bounty_funded": false',
+            "Only a matching indexed canonical FundingAdded event",
+        ],
+    )
+    if "buy.moonpay.com" in chatgpt_app or "buy-sandbox.moonpay.com" in chatgpt_app:
+        fail("The ChatGPT app may return only the first-party handoff, never a provider checkout URL")
+    descriptor = chatgpt_app.split('name: "prepare_moonpay_onramp"', 1)[1].split(
+        "authorization: None", 1
+    )[0]
+    for forbidden in (
+        "wallet_address",
+        "email",
+        "card_number",
+        "cvv",
+        "cvc",
+        "identity_document",
+        "checkout_url",
+    ):
+        if forbidden in descriptor:
+            fail(f"MoonPay ChatGPT handoff input must not collect {forbidden}")
 
     if "localStorage" in browser or "localStorage" in fallback:
         fail("The MoonPay browser handoff must not persist checkout URLs or provider credentials")

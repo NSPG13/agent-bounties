@@ -2761,7 +2761,8 @@ fn opportunity_comments_response(
 enum ChatgptActionKind {
     Post,
     Fund,
-    Compete,
+    #[serde(alias = "compete")]
+    Solve,
     Complete,
     Verify,
 }
@@ -2771,7 +2772,7 @@ impl ChatgptActionKind {
         match self {
             Self::Post => "post",
             Self::Fund => "fund",
-            Self::Compete => "compete",
+            Self::Solve => "solve",
             Self::Complete => "complete",
             Self::Verify => "verify",
         }
@@ -2781,7 +2782,7 @@ impl ChatgptActionKind {
         match self {
             Self::Post => vec!["canonical_bounty_created".to_string()],
             Self::Fund => vec!["funding_added".to_string()],
-            Self::Compete => vec!["bounty_claimed".to_string()],
+            Self::Solve => vec!["bounty_claimed".to_string()],
             Self::Complete => vec!["submission_added".to_string()],
             Self::Verify => vec![
                 "bounty_settled".to_string(),
@@ -2862,6 +2863,10 @@ async fn create_chatgpt_action_intent(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    store
+        .delete_expired_chatgpt_action_intents_before(Utc::now() - ChronoDuration::hours(24))
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let normalized = normalize_chatgpt_action_request(request)?;
     let fingerprint_value = serde_json::json!({
         "action": normalized.action,
@@ -2993,14 +2998,7 @@ fn normalize_chatgpt_action_request(
         .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
         .transpose()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    if !request.details.is_object()
-        || serde_json::to_vec(&request.details)
-            .map_err(|_| StatusCode::BAD_REQUEST)?
-            .len()
-            > 16_000
-    {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+    validate_chatgpt_action_details(request.action, &request.details)?;
     match request.action {
         ChatgptActionKind::Post => {}
         ChatgptActionKind::Fund => {
@@ -3010,7 +3008,7 @@ fn normalize_chatgpt_action_request(
                 return Err(StatusCode::BAD_REQUEST);
             }
         }
-        ChatgptActionKind::Compete | ChatgptActionKind::Complete | ChatgptActionKind::Verify => {
+        ChatgptActionKind::Solve | ChatgptActionKind::Complete | ChatgptActionKind::Verify => {
             if request.bounty_contract.is_none() || request.amount_base_units.is_some() {
                 return Err(StatusCode::BAD_REQUEST);
             }
@@ -3020,6 +3018,129 @@ fn normalize_chatgpt_action_request(
         network: request.network,
         ..request
     })
+}
+
+fn validate_chatgpt_action_details(
+    action: ChatgptActionKind,
+    details: &serde_json::Value,
+) -> Result<(), StatusCode> {
+    let object = details.as_object().ok_or(StatusCode::BAD_REQUEST)?;
+    if serde_json::to_vec(details)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .len()
+        > 16_000
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let allowed = match action {
+        ChatgptActionKind::Post => &["draft"][..],
+        ChatgptActionKind::Fund => &["title", "public_url"][..],
+        ChatgptActionKind::Solve => &["title", "claim_bond_base_units", "verification_ready"][..],
+        ChatgptActionKind::Complete => &["artifact_reference", "evidence"][..],
+        ChatgptActionKind::Verify => &["title", "verification_method"][..],
+    };
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if action == ChatgptActionKind::Post {
+        if let Some(draft) = object.get("draft") {
+            let draft = draft.as_object().ok_or(StatusCode::BAD_REQUEST)?;
+            let allowed_draft = [
+                "title",
+                "goal",
+                "acceptance_criteria",
+                "solver_reward_usdc",
+                "verifier_reward_usdc",
+                "source_url",
+                "crowdfund",
+                "discovery_source",
+            ];
+            if draft
+                .keys()
+                .any(|key| !allowed_draft.contains(&key.as_str()))
+            {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+    let mut key_count = 0usize;
+    validate_chatgpt_detail_value(details, 0, &mut key_count)
+}
+
+fn validate_chatgpt_detail_value(
+    value: &serde_json::Value,
+    depth: usize,
+    key_count: &mut usize,
+) -> Result<(), StatusCode> {
+    if depth > 6 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    match value {
+        serde_json::Value::Object(object) => {
+            *key_count = key_count
+                .checked_add(object.len())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            if *key_count > 64 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            for (key, child) in object {
+                if key.is_empty()
+                    || key.len() > 80
+                    || key.chars().any(char::is_control)
+                    || chatgpt_detail_key_is_sensitive(key)
+                {
+                    return Err(StatusCode::BAD_REQUEST);
+                }
+                validate_chatgpt_detail_value(child, depth + 1, key_count)?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            if items.len() > 50 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            for item in items {
+                validate_chatgpt_detail_value(item, depth + 1, key_count)?;
+            }
+        }
+        serde_json::Value::String(text)
+            if text.len() > 12_000 || text.chars().any(|character| character == '\0') =>
+        {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn chatgpt_detail_key_is_sensitive(key: &str) -> bool {
+    let normalized = key.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    matches!(
+        normalized.as_str(),
+        "password"
+            | "passphrase"
+            | "secret"
+            | "token"
+            | "api_key"
+            | "access_token"
+            | "refresh_token"
+            | "bearer_token"
+            | "auth_token"
+            | "private_key"
+            | "seed"
+            | "seed_phrase"
+            | "mnemonic"
+            | "otp"
+            | "one_time_password"
+            | "mfa"
+            | "mfa_code"
+            | "cvv"
+            | "cvc"
+            | "card_number"
+            | "pan"
+            | "payment_authorization"
+            | "wallet_signature"
+            | "verifier_signature"
+    )
 }
 
 fn normalize_public_identifier(
@@ -3068,6 +3189,10 @@ async fn reconcile_chatgpt_action_intent(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    store
+        .delete_expired_chatgpt_action_intents_before(Utc::now() - ChronoDuration::hours(24))
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let mut intent = store
         .get_chatgpt_action_intent(intent_id)
         .await
@@ -3119,7 +3244,7 @@ fn canonical_event_matches_chatgpt_intent(
     let kind_matches = match intent.action.as_str() {
         "post" => event.kind == AutonomousBountyEventKind::CanonicalBountyCreated,
         "fund" => event.kind == AutonomousBountyEventKind::FundingAdded,
-        "compete" => event.kind == AutonomousBountyEventKind::BountyClaimed,
+        "solve" | "compete" => event.kind == AutonomousBountyEventKind::BountyClaimed,
         "complete" => event.kind == AutonomousBountyEventKind::SubmissionAdded,
         "verify" => matches!(
             event.kind,
@@ -3153,7 +3278,7 @@ fn canonical_event_matches_chatgpt_intent(
         let actor_field = match intent.action.as_str() {
             "post" => Some("creator"),
             "fund" => Some("contributor"),
-            "compete" | "complete" => Some("solver"),
+            "solve" | "compete" | "complete" => Some("solver"),
             "verify" => None,
             _ => return false,
         };
@@ -3182,7 +3307,7 @@ fn chatgpt_action_intent_response(
     let action = match intent.action.as_str() {
         "post" => ChatgptActionKind::Post,
         "fund" => ChatgptActionKind::Fund,
-        "compete" => ChatgptActionKind::Compete,
+        "solve" | "compete" => ChatgptActionKind::Solve,
         "complete" => ChatgptActionKind::Complete,
         "verify" => ChatgptActionKind::Verify,
         _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -3466,7 +3591,7 @@ async fn opportunity_conversion_funnel(
     let generated_at = Utc::now();
     let window_started_at = generated_at - ChronoDuration::hours(i64::from(window_hours));
     let stats = store
-        .opportunity_lifecycle_stats(window_started_at)
+        .opportunity_lifecycle_stats(window_started_at, &state.recovery_reservations.contracts())
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(Json(opportunity_conversion_response(
@@ -3993,6 +4118,22 @@ async fn opportunity_embed_page(
     let payment_state = web_public::escape_html(&item.payment_state);
     let verification = web_public::escape_html(&item.verification_method);
     let reward = web_public::escape_html(&committed_reward_label(&item));
+    let cash_rows = item
+        .cash_economics
+        .as_ref()
+        .map_or_else(String::new, |economics| {
+            format!(
+                "<dt>Refundable claim bond</dt><dd>{}</dd><dt>Required external spend</dt><dd>{}</dd><dt>Gross cash margin (not net profit)</dt><dd>{}</dd><dt>Economics scope</dt><dd class=\"muted\">{}</dd>",
+                web_public::escape_html(&opportunity_amount_label(
+                    &economics.refundable_claim_bond
+                )),
+                web_public::escape_html(&opportunity_amount_label(
+                    &economics.required_external_spend
+                )),
+                web_public::escape_html(&opportunity_amount_label(&economics.gross_cash_margin)),
+                web_public::escape_html(&economics.scope_disclaimer),
+            )
+        });
     let deadline =
         web_public::escape_html(item.deadline.as_deref().unwrap_or("No deadline published"));
     let link = web_public::escape_html(&safe_opportunity_link(&item));
@@ -4018,6 +4159,11 @@ async fn opportunity_embed_page(
     let html = format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · Agent Bounties</title><style>:root{{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}}*{{box-sizing:border-box}}body{{margin:0;padding:12px;background:transparent}}article{{max-width:720px;border:1px solid #6b728066;border-radius:16px;padding:20px;background:#111827;color:#f9fafb;box-shadow:0 12px 36px #0003}}header{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.brand{{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd}}h1{{font-size:21px;line-height:1.25;margin:7px 0 16px}}.states{{display:flex;flex-wrap:wrap;gap:8px}}.pill{{padding:5px 9px;border-radius:999px;background:#1f2937;font-size:12px}}dl{{display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin:18px 0}}dt{{color:#9ca3af}}dd{{margin:0;overflow-wrap:anywhere}}footer{{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}}a{{color:#bfdbfe}}a.cta{{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:9px;font-weight:700}}.proof{{font-size:12px}}.muted{{color:#9ca3af}}</style></head><body><article data-opportunity-id="{}"><header><div><div class="brand">Agent Bounties opportunity</div><h1>{title}</h1></div><div class="states"><span class="pill">Work: {work_state}</span><span class="pill">Payment: {payment_state}</span></div></header><dl><dt>Committed reward</dt><dd>{reward}</dd><dt>Deadline</dt><dd>{deadline}</dd><dt>Verification</dt><dd>{verification}</dd></dl><footer>{latest}<a class="cta" href="{link}" target="_blank" rel="noopener noreferrer">{cta}</a></footer></article></body></html>"#,
         web_public::escape_html(&item.opportunity_id),
+    );
+    let html = html.replacen(
+        "</dd><dt>Deadline</dt>",
+        &format!("</dd>{cash_rows}<dt>Deadline</dt>"),
+        1,
     );
     Ok((
         [
@@ -4108,12 +4254,22 @@ async fn opportunity_embed_markdown(
         .and_then(|url| safe_external_url(url))
         .map(|url| format!("[Latest result or settlement proof]({url})"))
         .unwrap_or_else(|| "No result or settlement proof published".to_string());
+    let cash_rows = item.cash_economics.as_ref().map_or_else(String::new, |economics| {
+        format!(
+            "| Refundable claim bond | {} |\n| Required external spend | {} |\n| Gross cash margin (not net profit) | {} |\n| Economics scope | {} |\n",
+            markdown_cell(&opportunity_amount_label(&economics.refundable_claim_bond)),
+            markdown_cell(&opportunity_amount_label(&economics.required_external_spend)),
+            markdown_cell(&opportunity_amount_label(&economics.gross_cash_margin)),
+            markdown_cell(&economics.scope_disclaimer),
+        )
+    });
     let markdown = format!(
-        "[![Agent Bounties opportunity]({svg_url})]({embed_url})\n\n### {}\n\n| Field | Current value |\n|---|---|\n| Work state | `{}` |\n| Payment state | `{}` |\n| Committed reward | {} |\n| Deadline | {} |\n| Verification | `{}` |\n| Evidence | {} |\n\n[View opportunity]({})\n",
+        "[![Agent Bounties opportunity]({svg_url})]({embed_url})\n\n### {}\n\n| Field | Current value |\n|---|---|\n| Work state | `{}` |\n| Payment state | `{}` |\n| Committed reward | {} |\n{}| Deadline | {} |\n| Verification | `{}` |\n| Evidence | {} |\n\n[View opportunity]({})\n",
         markdown_cell(&item.title),
         markdown_cell(&item.work_state),
         markdown_cell(&item.payment_state),
         markdown_cell(&committed_reward_label(&item)),
+        cash_rows,
         markdown_cell(item.deadline.as_deref().unwrap_or("No deadline published")),
         markdown_cell(&item.verification_method),
         proof,
@@ -4165,18 +4321,29 @@ fn committed_reward_label(item: &OpportunityItem) -> String {
 }
 
 fn decimal_amount(amount: &str, decimals: u8) -> String {
-    if decimals == 0 || !amount.bytes().all(|byte| byte.is_ascii_digit()) {
+    let (sign, digits) = amount
+        .strip_prefix('-')
+        .map_or(("", amount), |digits| ("-", digits));
+    if decimals == 0 || digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return amount.to_string();
     }
     let decimals = usize::from(decimals);
-    let padded = format!("{:0>width$}", amount, width = decimals + 1);
+    let padded = format!("{:0>width$}", digits, width = decimals + 1);
     let split = padded.len() - decimals;
     let fraction = padded[split..].trim_end_matches('0');
     if fraction.is_empty() {
-        padded[..split].to_string()
+        format!("{sign}{}", &padded[..split])
     } else {
-        format!("{}.{}", &padded[..split], fraction)
+        format!("{sign}{}.{}", &padded[..split], fraction)
     }
+}
+
+fn opportunity_amount_label(amount: &opportunities::OpportunityAmount) -> String {
+    format!(
+        "{} {}",
+        decimal_amount(&amount.amount, amount.decimals),
+        amount.currency
+    )
 }
 
 fn safe_opportunity_link(item: &OpportunityItem) -> String {
@@ -8326,7 +8493,7 @@ async fn claim_funnel(
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     store
-        .claim_funnel_stats(window_hours)
+        .claim_funnel_stats(window_hours, &state.recovery_reservations.contracts())
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -8599,6 +8766,9 @@ async fn build_agent_eligibility(
         })?;
     let settlements = events.iter().filter(|event| {
         event.kind == AutonomousBountyEventKind::BountySettled
+            && !state
+                .recovery_reservations
+                .contains(&event.contract_address)
             && event.data["solver"]
                 .as_str()
                 .is_some_and(|wallet| wallet.eq_ignore_ascii_case(solver_wallet))
@@ -10570,10 +10740,15 @@ async fn solver_leaderboard(
         .unwrap_or_else(Utc::now);
     let daily_period = leaderboard_period(LeaderboardPeriodKind::Daily, reference_at);
     let weekly_period = leaderboard_period(LeaderboardPeriodKind::Weekly, reference_at);
-    let completions = store
+    let mut completions = store
         .list_canonical_solver_completions(network, weekly_period.starts_at, weekly_period.ends_at)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    completions.retain(|completion| {
+        !state
+            .recovery_reservations
+            .contains(&completion.bounty_contract)
+    });
     let daily_ranking = rank_solver_completions(daily_period, completions.clone());
     let weekly_ranking = rank_solver_completions(weekly_period, completions);
     let reward_contract_env = match network_descriptor.chain_id {
@@ -11553,7 +11728,12 @@ async fn current_social_mention_plan(
     let operator_enabled = env_flag("AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED");
     let github_conversion = if operator_enabled {
         match load_autonomous_bounty_feed(state, "base-mainnet", false).await {
-            Ok(feed) => github_issue_conversion_evidence(&feed),
+            Ok(mut feed) => {
+                state
+                    .recovery_reservations
+                    .exclude_from_reported_outcomes(&mut feed);
+                github_issue_conversion_evidence(&feed)
+            }
             Err(_) => unavailable_github_conversion_evidence(),
         }
     } else {
@@ -12911,6 +13091,9 @@ async fn load_objective_canonical_evidence(
         let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         state.recovery_reservations.apply(&mut feed, false);
+        state
+            .recovery_reservations
+            .exclude_from_reported_outcomes(&mut feed);
         let mut network_evidence = build_objective_canonical_evidence(&network, &feed);
         evidence.funding.append(&mut network_evidence.funding);
         evidence
@@ -13159,6 +13342,92 @@ mod tests {
                 ..valid_fund
             });
         assert_eq!(amount_on_completion.unwrap_err(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn chatgpt_action_details_are_bounded_and_reject_sensitive_fields() {
+        validate_chatgpt_action_details(
+            ChatgptActionKind::Post,
+            &serde_json::json!({
+                "draft": {
+                    "title": "Publish a public test",
+                    "goal": "Produce a bounded artifact.",
+                    "acceptance_criteria": ["The public check passes."],
+                    "solver_reward_usdc": "2.00",
+                    "verifier_reward_usdc": "0.10",
+                    "source_url": null,
+                    "crowdfund": true,
+                    "discovery_source": "ChatGPT"
+                }
+            }),
+        )
+        .unwrap();
+        validate_chatgpt_action_details(
+            ChatgptActionKind::Complete,
+            &serde_json::json!({
+                "artifact_reference": "https://github.com/example/repo/commit/abc",
+                "evidence": {
+                    "transaction_hash": format!("0x{}", "11".repeat(32)),
+                    "source_snapshot_digest": "sha256:public"
+                }
+            }),
+        )
+        .unwrap();
+
+        for sensitive in [
+            "private_key",
+            "seed-phrase",
+            "wallet signature",
+            "payment_authorization",
+            "card_number",
+            "access_token",
+        ] {
+            let details = serde_json::json!({
+                "artifact_reference": "https://example.com/artifact",
+                "evidence": {(sensitive): "must-not-be-stored"}
+            });
+            assert_eq!(
+                validate_chatgpt_action_details(ChatgptActionKind::Complete, &details).unwrap_err(),
+                StatusCode::BAD_REQUEST,
+                "{sensitive} must be rejected"
+            );
+        }
+
+        assert_eq!(
+            validate_chatgpt_action_details(
+                ChatgptActionKind::Fund,
+                &serde_json::json!({"artifact_reference": "wrong action field"})
+            )
+            .unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            validate_chatgpt_action_details(
+                ChatgptActionKind::Complete,
+                &serde_json::json!({
+                    "artifact_reference": "https://example.com/artifact",
+                    "evidence": {"items": vec!["x"; 51]}
+                })
+            )
+            .unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn chatgpt_action_details_reject_excessive_nesting() {
+        let mut nested = serde_json::json!("leaf");
+        for _ in 0..8 {
+            nested = serde_json::json!({"level": nested});
+        }
+        let details = serde_json::json!({
+            "artifact_reference": "https://example.com/artifact",
+            "evidence": nested
+        });
+        assert_eq!(
+            validate_chatgpt_action_details(ChatgptActionKind::Complete, &details).unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]
@@ -13576,11 +13845,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "2100000".to_string(),
             funded_amount: "2100000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "2000000".to_string(),
             terms_hash: terms_hash.clone(),
             terms: None,
             terms_valid: true,
             verification_mode: "deterministic".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("test_fixture".to_string()),
             verification_ready: true,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: Vec::new(),
@@ -14982,11 +15256,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "2010000".to_string(),
             funded_amount: "2010000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "2000000".to_string(),
             terms_hash: terms.terms_hash.clone(),
             terms: Some(terms),
             terms_valid: true,
             verification_mode: "signed_quorum".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(2),
+            runner_identifier: Some("sandboxed_regression_v1".to_string()),
             verification_ready: true,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: vec![],
@@ -17492,11 +17771,16 @@ mod tests {
                 timeout_bond_pool: "0".to_string(),
                 target_amount: "1000000".to_string(),
                 funded_amount: "1000000".to_string(),
+                required_external_spend: "0".to_string(),
+                gross_cash_margin: "900000".to_string(),
                 terms_hash: format!("0x{}", "44".repeat(32)),
                 terms: None,
                 terms_valid: true,
                 verification_mode: "deterministic_module".to_string(),
                 verifier_module: None,
+                verifier_set_hash: None,
+                verifier_threshold: Some(1),
+                runner_identifier: Some("test_fixture".to_string()),
                 verification_ready: true,
                 verification_readiness_reason: "test fixture".to_string(),
                 validation_errors: Vec::new(),

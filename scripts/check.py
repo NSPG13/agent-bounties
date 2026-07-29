@@ -85,6 +85,10 @@ def compile_python(platform: str) -> None:
         "scripts/standing_meta_v3_deploy.py", "scripts/test_standing_meta_v3_deploy.py",
         "scripts/activate_standing_meta_v3_replacements.py",
         "scripts/test_activate_standing_meta_v3_replacements.py",
+        "scripts/activate_routed_v3_replacements.py",
+        "scripts/test_activate_routed_v3_replacements.py",
+        "scripts/direct_recovery_689.py", "scripts/test_direct_recovery_689.py",
+        "scripts/test_profitable_inventory_contract.py",
         "scripts/standing_meta_v4_deploy.py", "scripts/test_standing_meta_v4_deploy.py",
         "scripts/standing_meta_v4_release_audit.py", "scripts/test_standing_meta_v4_release_audit.py",
         "scripts/standing_meta_v4_rehearsal_audit.py", "scripts/test_standing_meta_v4_rehearsal_audit.py",
@@ -111,6 +115,9 @@ scripts/local_delegate_wallet.py scripts/test_local_delegate_wallet.py scripts/s
 scripts/leaderboard_reward_pipeline.py scripts/test_leaderboard_reward_pipeline.py
 scripts/standing_meta_v3_deploy.py scripts/test_standing_meta_v3_deploy.py
 scripts/activate_standing_meta_v3_replacements.py scripts/test_activate_standing_meta_v3_replacements.py
+scripts/activate_routed_v3_replacements.py scripts/test_activate_routed_v3_replacements.py
+scripts/direct_recovery_689.py scripts/test_direct_recovery_689.py
+scripts/test_profitable_inventory_contract.py
 scripts/standing_meta_v4_deploy.py scripts/test_standing_meta_v4_deploy.py
 scripts/standing_meta_v4_release_audit.py scripts/test_standing_meta_v4_release_audit.py
 scripts/standing_meta_v4_rehearsal_audit.py scripts/test_standing_meta_v4_rehearsal_audit.py
@@ -206,6 +213,12 @@ def main() -> int:
     for name in ("sync_hosted_bounty_inventory", "reconcile_github_bounty_labels", "diagnose_hosted_api", "github_audience_audit", "ruleset_drift_check", "code_size_report", "mcp_tool_registry", "shared_rpc", "relay_autonomous_action", "relay_bounded_wallet_action", "bounded_agent_budget"):
         py(f"scripts/test_{name}.py", "-v")
     for name in ("standing_meta_v3_deploy", "activate_standing_meta_v3_replacements"):
+        py(f"scripts/test_{name}.py", "-v")
+    for name in (
+        "activate_routed_v3_replacements",
+        "direct_recovery_689",
+        "profitable_inventory_contract",
+    ):
         py(f"scripts/test_{name}.py", "-v")
     py("-m", "pip", "install", "-r", "scripts/requirements-wallet.txt")
     for name in ("local_delegate_wallet", "self_heal", "leaderboard_reward_pipeline"):

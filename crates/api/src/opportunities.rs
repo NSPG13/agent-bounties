@@ -71,6 +71,26 @@ pub struct OpportunityEmbedLinks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityImage {
+    pub source: String,
+    pub prompt: Option<String>,
+    pub alt_text: String,
+    pub asset_url: String,
+    pub sha256: Option<String>,
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityCashEconomics {
+    pub solver_reward: OpportunityAmount,
+    pub refundable_claim_bond: OpportunityAmount,
+    pub required_external_spend: OpportunityAmount,
+    pub gross_cash_margin: OpportunityAmount,
+    pub gross_cash_margin_positive: bool,
+    pub scope_disclaimer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct OpportunityStandingMetaV4Economics {
     pub parent_solver_reward: OpportunityAmount,
     pub parent_verifier_reward: OpportunityAmount,
@@ -150,6 +170,8 @@ pub struct OpportunityItem {
     pub competition_mode: String,
     pub standing_meta_bounty: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cash_economics: Option<OpportunityCashEconomics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub standing_meta_v4: Option<OpportunityStandingMetaV4>,
     pub decision_authority: String,
     pub payment_authority: String,
@@ -170,6 +192,7 @@ pub struct OpportunityItem {
     pub proof_urls: Vec<String>,
     pub next_action: OpportunityNextAction,
     pub embeds: OpportunityEmbedLinks,
+    pub image: OpportunityImage,
     pub discovery_factors: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -266,6 +289,7 @@ pub fn render_opportunity_feeds(
             "id": item.opportunity_id,
             "url": item.public_url,
             "title": item.title,
+            "image": item.image.asset_url,
             "content_text": summary,
             "date_published": published,
             "date_modified": modified,
@@ -276,9 +300,11 @@ pub fn render_opportunity_feeds(
                 "payment_state": item.payment_state,
                 "payment_committed": item.payment_committed,
                 "reward": item.reward,
+                "cash_economics": item.cash_economics,
                 "verification_method": item.verification_method,
                 "verification_ready": item.verification_ready,
                 "terms_hash": item.terms_hash,
+                "image": item.image,
                 "next_action": item.next_action,
                 "evidence_boundary": item.evidence_boundary,
             }
@@ -335,9 +361,26 @@ fn feed_summary(item: &OpportunityItem) -> String {
         .goal
         .as_deref()
         .unwrap_or("No additional goal text was supplied.");
+    let cash_economics = item
+        .cash_economics
+        .as_ref()
+        .map_or_else(String::new, |economics| {
+            format!(
+                " Solver reward: {} {} base units. Refundable claim bond: {} {} base units. Required external spend: {} {} base units. Gross cash margin (not net profit): {} {} base units. {}",
+                economics.solver_reward.amount,
+                economics.solver_reward.currency,
+                economics.refundable_claim_bond.amount,
+                economics.refundable_claim_bond.currency,
+                economics.required_external_spend.amount,
+                economics.required_external_spend.currency,
+                economics.gross_cash_margin.amount,
+                economics.gross_cash_margin.currency,
+                economics.scope_disclaimer,
+            )
+        });
     truncate_feed_text(
         &format!(
-            "{goal}\n\nWork state: {}. Payment state: {}. {reward} Verification: {}. Next action: {}",
+            "{goal}\n\nWork state: {}. Payment state: {}. {reward}{cash_economics} Verification: {}. Next action: {}",
             item.work_state,
             item.payment_state,
             item.verification_method,
@@ -464,6 +507,8 @@ pub fn unfunded_opportunity(
         Some(&trial.goal),
         &evidence_requirements,
     );
+    let embeds = opportunity_embed_links(api, &opportunity_id, None);
+    let image = fallback_opportunity_image(&embeds, &trial.title);
     OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "unfunded_offchain".to_string(),
@@ -480,6 +525,7 @@ pub fn unfunded_opportunity(
         payment_committed: false,
         competition_mode: "open_unfunded_submission".to_string(),
         standing_meta_bounty: false,
+        cash_economics: None,
         standing_meta_v4: None,
         decision_authority: "The poster reviews this offchain submission; no canonical verifier is configured.".to_string(),
         payment_authority: "None. This opportunity is unfunded and creates no payment promise.".to_string(),
@@ -510,7 +556,8 @@ pub fn unfunded_opportunity(
             })),
             instructions: "A registered agent may submit public work. No payment claim or promise is created.".to_string(),
         },
-        embeds: opportunity_embed_links(api, &opportunity_id, None),
+        embeds,
+        image,
         discovery_factors: base_factors(
             "unfunded_offchain",
             work_state,
@@ -582,6 +629,8 @@ pub fn legacy_opportunity(
     });
     let (categories, skills, keyword_matches) =
         web_public::discovery_taxonomy_with_matches(&bounty.title, None, &evidence_requirements);
+    let embeds = opportunity_embed_links(api, &opportunity_id, None);
+    let image = fallback_opportunity_image(&embeds, &bounty.title);
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "legacy_bounty".to_string(),
@@ -598,6 +647,7 @@ pub fn legacy_opportunity(
         payment_committed,
         competition_mode: "exclusive_claim".to_string(),
         standing_meta_bounty: false,
+        cash_economics: None,
         standing_meta_v4: None,
         decision_authority: format!("Legacy configured verification path: {verification_method}."),
         payment_authority: "The configured legacy reconciled rail; this is not canonical Base BountySettled evidence.".to_string(),
@@ -632,7 +682,8 @@ pub fn legacy_opportunity(
         terms_hash: bounty.terms_hash.clone(),
         proof_urls,
         next_action,
-        embeds: opportunity_embed_links(api, &opportunity_id, None),
+        embeds,
+        image,
         discovery_factors: base_factors(
             "legacy_bounty",
             work_state,
@@ -708,6 +759,29 @@ pub fn canonical_opportunity(
         .into_iter()
         .collect();
     let opportunity_id = format!("canonical:{network}:{}", item.bounty_contract);
+    let embeds = opportunity_embed_links(api, &opportunity_id, Some(network));
+    let image = terms
+        .and_then(|record| record.document.image.as_ref())
+        .map(|image| OpportunityImage {
+            source: image.source.clone(),
+            prompt: Some(image.prompt.clone()),
+            alt_text: image.alt_text.clone(),
+            asset_url: image.asset_url.clone(),
+            sha256: Some(image.sha256.clone()),
+            mime_type: image.mime_type.clone(),
+        })
+        .unwrap_or_else(|| fallback_opportunity_image(&embeds, &title));
+    let gross_cash_margin = item.gross_cash_margin.parse::<i128>().ok()?;
+    let cash_economics = OpportunityCashEconomics {
+        solver_reward: OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
+        refundable_claim_bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
+        required_external_spend: OpportunityAmount::usdc_base_units(
+            item.required_external_spend.clone(),
+        ),
+        gross_cash_margin: OpportunityAmount::usdc_base_units(item.gross_cash_margin.clone()),
+        gross_cash_margin_positive: gross_cash_margin > 0,
+        scope_disclaimer: "Gross cash margin is solver reward minus required external spend. It excludes gas, taxes, execution costs, failure risk, and other costs; the claim bond is refundable only under the committed lifecycle rules. It is not guaranteed net profit.".to_string(),
+    };
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "canonical_base".to_string(),
@@ -724,6 +798,7 @@ pub fn canonical_opportunity(
         payment_committed,
         competition_mode: "exclusive_claim".to_string(),
         standing_meta_bounty: standing_meta_v2_parent_context(item).is_ok(),
+        cash_economics: Some(cash_economics),
         standing_meta_v4: None,
         decision_authority: format!(
             "The immutable canonical verification mode/module configured on {} decides the submission result.",
@@ -751,7 +826,8 @@ pub fn canonical_opportunity(
         terms_hash: Some(item.terms_hash.clone()),
         proof_urls,
         next_action,
-        embeds: opportunity_embed_links(api, &opportunity_id, Some(network)),
+        embeds,
+        image,
         discovery_factors: base_factors(
             "canonical_base",
             work_state,
@@ -830,10 +906,15 @@ fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<U
             let matches = item.work_state == "claimable"
                 && item.payment_state == "escrowed"
                 && item.payment_committed
-                && item.verification_ready;
+                && item.verification_ready
+                && (item.source_type != "canonical_base"
+                    || item
+                        .cash_economics
+                        .as_ref()
+                        .is_some_and(|economics| economics.gross_cash_margin_positive));
             if matches {
                 item.discovery_factors.push(
-                    "view:ready_to_earn;factors=claimable+escrowed+verification_ready".to_string(),
+                    "view:ready_to_earn;factors=claimable+escrowed+verification_ready+positive_gross_cash_margin".to_string(),
                 );
             }
             matches
@@ -911,6 +992,17 @@ fn opportunity_embed_links(
             r#"<iframe src="{html}" title="Agent Bounties opportunity" width="720" height="264" loading="lazy"></iframe>"#
         ),
         html,
+    }
+}
+
+fn fallback_opportunity_image(embeds: &OpportunityEmbedLinks, title: &str) -> OpportunityImage {
+    OpportunityImage {
+        source: "content_derived_legacy_card".to_string(),
+        prompt: None,
+        alt_text: format!("Agent Bounties card for {title}"),
+        asset_url: embeds.svg.clone(),
+        sha256: None,
+        mime_type: "image/svg+xml".to_string(),
     }
 }
 
@@ -1081,8 +1173,13 @@ fn canonical_next_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chain_base::{AutonomousBountyEvent, AutonomousBountyEventKind};
-    use domain::{AutonomousBountyTermsDocument, AutonomousBountyTermsRecord};
+    use chain_base::{
+        build_autonomous_bounty_terms_record, AutonomousBountyEvent, AutonomousBountyEventKind,
+        BASE_MAINNET_STANDING_META_V2_VERIFIER,
+    };
+    use domain::{
+        AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, BountyImageReference,
+    };
     use uuid::Uuid;
 
     fn trial() -> TrialBounty {
@@ -1135,6 +1232,17 @@ mod tests {
                 verification_policy: json!({}),
                 source_url: None,
                 discovery_source: None,
+                image: Some(BountyImageReference {
+                    source: "chatgpt_user_generated".to_string(),
+                    prompt: "Minimal editorial illustration of a reliable API test.".to_string(),
+                    alt_text: "A clean API test report with a passing status.".to_string(),
+                    asset_url: format!(
+                        "https://mcp.agentbounties.app/public/bounty-images/{}",
+                        "ab".repeat(32)
+                    ),
+                    sha256: "ab".repeat(32),
+                    mime_type: "image/webp".to_string(),
+                }),
                 agent_eligibility: None,
                 claim_coordination: None,
             },
@@ -1151,16 +1259,53 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: funded.to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
             terms_hash: terms.terms_hash.clone(),
             terms: Some(terms),
             terms_valid: true,
             verification_mode: "signed_quorum".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(2),
+            runner_identifier: Some("sandboxed_regression_v1".to_string()),
             verification_ready,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: Vec::new(),
             events: vec![event],
         }
+    }
+
+    fn standing_meta() -> AutonomousBountyFeedItem {
+        let created_at = DateTime::parse_from_rfc3339("2026-07-17T02:11:34Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let document: AutonomousBountyTermsDocument =
+            serde_json::from_str(include_str!("../../../bounties/autonomous-v1/335.json")).unwrap();
+        let terms = build_autonomous_bounty_terms_record(
+            "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+            document,
+            created_at,
+        )
+        .unwrap();
+        let mut item = canonical("claimable", "1000000", true);
+        item.bounty_id =
+            "0x12ad2fa99de272728311a3eb07c3c741048382260cb91ba1e8f001ed3b5759d0".to_string();
+        item.bounty_contract = "0x43d42cb227d76588ab16693f14efd6cff851fa7a".to_string();
+        item.creator = terms.creator_wallet.clone();
+        item.solver_reward = "900000".to_string();
+        item.verifier_reward = "100000".to_string();
+        item.claim_bond = "100000".to_string();
+        item.required_external_spend = "900000".to_string();
+        item.gross_cash_margin = "0".to_string();
+        item.terms_hash = terms.terms_hash.clone();
+        item.terms = Some(terms);
+        item.verification_mode = "deterministic_module".to_string();
+        item.verifier_module = Some(BASE_MAINNET_STANDING_META_V2_VERIFIER.to_string());
+        item.verifier_threshold = Some(1);
+        item.runner_identifier = Some("standing_meta_v2_parent".to_string());
+        item.events.clear();
+        item
     }
 
     #[test]
@@ -1171,6 +1316,8 @@ mod tests {
         assert!(!item.payment_committed);
         assert_eq!(item.reward.amount, "0");
         assert_eq!(item.next_action.action, "submit_unfunded_bounty_solution");
+        assert_eq!(item.image.source, "content_derived_legacy_card");
+        assert!(item.image.asset_url.ends_with("/embed.svg"));
         assert!(!serde_json::to_string(&item).unwrap().contains("trial"));
     }
 
@@ -1186,6 +1333,8 @@ mod tests {
         assert_eq!(ready.payment_state, "escrowed");
         assert!(ready.payment_committed);
         assert_eq!(ready.next_action.action, "prepare_agent_to_earn");
+        assert_eq!(ready.image.source, "chatgpt_user_generated");
+        assert_eq!(ready.image.sha256, Some("ab".repeat(32)));
 
         let unavailable = canonical_opportunity(
             &canonical("claimable", "1000000", false),
@@ -1198,6 +1347,92 @@ mod tests {
             unavailable.next_action.action,
             "inspect_verification_readiness"
         );
+    }
+
+    #[test]
+    fn canonical_projection_exposes_cash_economics_without_profit_claims() {
+        let item = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let economics = item.cash_economics.unwrap();
+        assert_eq!(economics.solver_reward.amount, "900000");
+        assert_eq!(economics.refundable_claim_bond.amount, "100000");
+        assert_eq!(economics.required_external_spend.amount, "0");
+        assert_eq!(economics.gross_cash_margin.amount, "900000");
+        assert!(economics.gross_cash_margin_positive);
+        assert!(economics
+            .scope_disclaimer
+            .contains("not guaranteed net profit"));
+    }
+
+    #[test]
+    fn ready_to_earn_excludes_non_positive_canonical_cash_margin() {
+        let profitable = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let mut unprofitable_source = canonical("claimable", "1000000", true);
+        unprofitable_source.required_external_spend = "1000000".to_string();
+        unprofitable_source.gross_cash_margin = "-100000".to_string();
+        let unprofitable =
+            canonical_opportunity(&unprofitable_source, "base-mainnet", "https://api.example")
+                .unwrap();
+
+        let items = apply_query(
+            vec![profitable, unprofitable],
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]
+                .cash_economics
+                .as_ref()
+                .unwrap()
+                .gross_cash_margin
+                .amount,
+            "900000"
+        );
+    }
+
+    #[test]
+    fn canonical_cash_economics_cover_direct_standing_meta_and_unprofitable() {
+        let direct = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let meta =
+            canonical_opportunity(&standing_meta(), "base-mainnet", "https://api.example").unwrap();
+        assert!(!direct.standing_meta_bounty);
+        assert!(
+            direct
+                .cash_economics
+                .as_ref()
+                .unwrap()
+                .gross_cash_margin_positive
+        );
+        assert!(meta.standing_meta_bounty);
+        let meta_economics = meta.cash_economics.as_ref().unwrap();
+        assert_eq!(meta_economics.required_external_spend.amount, "900000");
+        assert_eq!(meta_economics.gross_cash_margin.amount, "0");
+        assert!(!meta_economics.gross_cash_margin_positive);
+
+        let ready = apply_query(
+            vec![direct, meta],
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert_eq!(ready.len(), 1);
+        assert!(!ready[0].standing_meta_bounty);
     }
 
     #[test]
@@ -1272,48 +1507,34 @@ mod tests {
     }
 
     #[test]
-    fn direct_bounty_exposes_cash_margin_refundable_bond_and_spend() {
+
+    fn live_feed_reuses_canonical_cash_economics() {
         let item = canonical_opportunity(
-            &canonical("claimable", "2000000", true),
+            &canonical("claimable", "1000000", true),
             "base-mainnet",
             "https://api.example",
-        ).unwrap();
-        assert_eq!(item.reward.amount, "900000");
-        assert_eq!(item.refundable_bond.amount, "100000");
-        assert_eq!(item.external_spend.amount, "0");
-        assert_eq!(item.gross_cash_margin.amount, "900000");
-    }
+        )
+        .unwrap();
+        let projection = OpportunityProjectionResponse {
+            schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
+            generated_at: "2027-01-15T08:01:00Z".to_string(),
+            network: "base-mainnet".to_string(),
+            applied_view: None,
+            degraded: false,
+            source_statuses: Vec::new(),
+            items: vec![item],
+            evidence_boundary: "Projection only".to_string(),
+        };
 
-    #[test]
-    fn standing_meta_and_unprofitable_inventory_filtering() {
-        let unfunded = unfunded_opportunity(&trial(), &[], "https://api.example");
-        assert_eq!(unfunded.gross_cash_margin.amount, "0");
-        assert_eq!(unfunded.refundable_bond.amount, "0");
-        assert_eq!(unfunded.external_spend.amount, "0");
-    }
+        let feeds = render_opportunity_feeds(&projection, "https://api.example/");
+        let json: Value = serde_json::from_str(&feeds.json).unwrap();
+        let economics = &json["items"][0]["_bountyboard"]["cash_economics"];
+        assert_eq!(economics["solver_reward"]["amount"], "900000");
+        assert_eq!(economics["refundable_claim_bond"]["amount"], "100000");
+        assert_eq!(economics["required_external_spend"]["amount"], "0");
+        assert_eq!(economics["gross_cash_margin"]["amount"], "900000");
+        assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
+        assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
 
-    #[test]
-    fn end_to_end_profitable_inventory_contract_test_across_surfaces() {
-        let canonical_src = canonical("claimable", "2000000", true);
-        let item = canonical_opportunity(&canonical_src, "base-mainnet", "https://api.example").unwrap();
-        
-        // 1. MCP / API internal structure
-        assert_eq!(item.work_state, "claimable");
-        assert_eq!(item.payment_state, "escrowed");
-        assert!(item.payment_committed);
-        assert!(item.verification_ready);
-        assert_eq!(item.reward.amount, "900000");
-        assert_eq!(item.gross_cash_margin.amount, "900000");
-
-        // 2. API JSON projection
-        let json = serde_json::to_value(&item).unwrap();
-        assert_eq!(json["work_state"], "claimable");
-        assert_eq!(json["reward"]["amount"], "900000");
-        assert_eq!(json["gross_cash_margin"]["amount"], "900000");
-
-        // 3. Discovery Feed
-        let discovery = item.discovery_snapshot();
-        assert_eq!(discovery.reward.amount, "900000");
-        assert_eq!(discovery.work_state, "claimable");
     }
 }
