@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -148,6 +149,16 @@ class DirectRecovery689Tests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertEqual(workflow.count("toolchain: 1.88.0"), 4)
         self.assertEqual(workflow.count("components: rustfmt, clippy"), 4)
+
+    def test_acceptance_environment_excludes_recovery_runtime_values(self) -> None:
+        injected = {
+            name: f"private-{index}"
+            for index, name in enumerate(recovery.ACCEPTANCE_ENV_EXCLUSIONS)
+        }
+        injected["PATH"] = "public-tool-path"
+        with patch.dict(recovery.os.environ, injected, clear=True):
+            environment = recovery.acceptance_environment()
+        self.assertEqual(environment, {"PATH": "public-tool-path"})
 
 
 if __name__ == "__main__":
