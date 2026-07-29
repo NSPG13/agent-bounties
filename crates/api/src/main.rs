@@ -17958,4 +17958,56 @@ fix-ci-failure
 "#
         )
     }
+
+    #[test]
+    fn canonical_origins_accepted_and_stale_origins_rejected_across_analytics_and_redirects() {
+        let mut headers = HeaderMap::new();
+
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://agentbounties.app"),
+        );
+        assert!(
+            site_analytics_origin_allowed(&headers),
+            "canonical website origin must be accepted by analytics"
+        );
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://www.agentbounties.app"),
+        );
+        assert!(
+            site_analytics_origin_allowed(&headers),
+            "canonical www website origin must be accepted by analytics"
+        );
+
+        for stale in [
+            "https://agentbounties.io",
+            "https://agentbounties.dev",
+            "https://agentbounties.work",
+        ] {
+            headers.insert(header::ORIGIN, HeaderValue::from_static(stale));
+            assert!(
+                !site_analytics_origin_allowed(&headers),
+                "stale origin {stale} must be rejected by analytics"
+            );
+        }
+
+        let redirect = marketing_domain_destination("bountyboard.global", &"/".parse().unwrap());
+        assert_eq!(
+            redirect,
+            Some("https://agentbounties.app/".to_string())
+        );
+
+        assert_eq!(
+            marketing_domain_destination("mcp.agentbounties.app", &"/".parse().unwrap()),
+            None,
+            "MCP origin must not be treated as a marketing domain"
+        );
+
+        assert_eq!(
+            marketing_domain_destination("api.agentbounties.app", &"/health".parse().unwrap()),
+            None,
+            "API origin must not be treated as a marketing domain"
+        );
+    }
 }
