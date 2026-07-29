@@ -2,7 +2,7 @@
 
 Contract: `0x5dfcb9e153fb215f5f2c62269ee4888484107763`
 Solver: `0xc7e77CF4Bd5F7f1307d5846b1dbFcf0812FC0A46`
-Source commit: `5a743a4f6ce2be509acbd0df3ae48cb5b79624b7`
+Source commit: `64103ae2cc7c17862a605925d3bb7908e4ee597b`
 Source subdirectory: `benchmarks/direct-v1/agent-loop`
 source_snapshot_digest: `sha256:b9d40c4ea53c8cf4bed753f924834268305429ebd5d913773ab6c69760cf727f`
 artifact_digest: `sha256:c76a31e63f689c9609032ed1f5d6fe9452fb79c127a30b31cc5caa7f5a7d0512`
