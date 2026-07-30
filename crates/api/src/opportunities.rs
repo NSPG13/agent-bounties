@@ -1258,4 +1258,15 @@ mod tests {
         assert!(!feeds.rss.to_ascii_lowercase().contains("trial"));
         assert_eq!(feeds.updated_at, "Fri, 15 Jan 2027 08:00:00 GMT");
     }
+
+    #[test]
+    fn gemma2_text_model_bringup_7500usd_bounty_756() {
+        let mut raw = canonical("claimed", "7500000000", true);
+        raw.solver_reward = "7500000000".to_string();
+        let item = canonical_opportunity(&raw, "base-mainnet", "https://api.example").unwrap();
+        assert_eq!(item.work_state, "in_progress");
+        assert_eq!(item.reward.amount, "7500000000");
+    }
 }
+
+
