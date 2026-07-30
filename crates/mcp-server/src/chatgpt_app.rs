@@ -4430,4 +4430,26 @@ mod tests {
         assert!(bounded_opportunity_id("bad/id").is_err());
         assert!(bounded_opportunity_id(" ").is_err());
     }
+
+    #[tokio::test]
+    async fn public_chatgpt_app_list_autonomous_bounties_tool_is_callable_and_fail_closed() {
+        let tools = chatgpt_tools().await;
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "list_autonomous_bounties")
+            .expect("list_autonomous_bounties must be in mounted ChatGPT app tools catalog");
+        assert_eq!(tool["_meta"]["ui"]["visibility"], json!(["model", "app"]));
+
+        let state = Arc::new(McpState::default());
+        let (res, summary) = call_chatgpt_tool(
+            state,
+            "list_autonomous_bounties",
+            json!({"claimable_only": true, "network": "base-mainnet"}),
+        )
+        .await
+        .unwrap();
+
+        assert!(summary.contains("bounty inventory") || summary.contains("Returned canonical"));
+        assert!(res["structuredContent"]["items"].is_array());
+    }
 }

@@ -180,6 +180,9 @@ pub struct OpportunityItem {
     pub funded_amount: OpportunityAmount,
     pub funding_target: OpportunityAmount,
     pub bond: OpportunityAmount,
+    pub refundable_bond: OpportunityAmount,
+    pub external_spend: OpportunityAmount,
+    pub gross_cash_margin: OpportunityAmount,
     pub deadline: Option<String>,
     pub deadline_kind: Option<String>,
     pub verification_method: String,
@@ -531,6 +534,9 @@ pub fn unfunded_opportunity(
         funded_amount: OpportunityAmount::usdc_base_units("0"),
         funding_target: OpportunityAmount::usdc_base_units("0"),
         bond: OpportunityAmount::usdc_base_units("0"),
+        refundable_bond: OpportunityAmount::usdc_base_units("0"),
+        external_spend: OpportunityAmount::usdc_base_units("0"),
+        gross_cash_margin: OpportunityAmount::usdc_base_units("0"),
         deadline: Some(trial.expires_at.to_rfc3339()),
         deadline_kind: Some("publication_expires_at".to_string()),
         verification_method: "poster_review_or_unspecified".to_string(),
@@ -656,6 +662,9 @@ pub fn legacy_opportunity(
             &status.funding_summary.target.currency,
         ),
         bond: OpportunityAmount::minor_units(0, &bounty.amount.currency),
+        refundable_bond: OpportunityAmount::minor_units(0, &bounty.amount.currency),
+        external_spend: OpportunityAmount::minor_units(0, &bounty.amount.currency),
+        gross_cash_margin: OpportunityAmount::minor_units(bounty.amount.amount, &bounty.amount.currency),
         deadline: None,
         deadline_kind: None,
         verification_method,
@@ -806,6 +815,9 @@ pub fn canonical_opportunity(
         funded_amount: OpportunityAmount::usdc_base_units(item.funded_amount.clone()),
         funding_target: OpportunityAmount::usdc_base_units(item.target_amount.clone()),
         bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
+        refundable_bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
+        external_spend: OpportunityAmount::usdc_base_units("0"),
+        gross_cash_margin: OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
         deadline,
         deadline_kind,
         verification_method: item.verification_mode.clone(),
@@ -1495,6 +1507,7 @@ mod tests {
     }
 
     #[test]
+
     fn live_feed_reuses_canonical_cash_economics() {
         let item = canonical_opportunity(
             &canonical("claimable", "1000000", true),
@@ -1522,5 +1535,77 @@ mod tests {
         assert_eq!(economics["gross_cash_margin"]["amount"], "900000");
         assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
         assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
+
+    }
+
+    #[test]
+    fn end_to_end_profitable_inventory_contract_test_across_surfaces() {
+        let canonical_src = canonical("claimable", "2000000", true);
+        let item = canonical_opportunity(&canonical_src, "base-mainnet", "https://api.example").unwrap();
+        
+        // 1. API JSON serialization (also acts as MCP structured content)
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["work_state"], "claimable");
+        assert_eq!(json["payment_state"], "escrowed");
+        assert_eq!(json["payment_committed"], true);
+        assert_eq!(json["verification_ready"], true);
+        
+        // Assert exact reward, refundable bond, required spend, signed gross margin
+        let economics = &json["cash_economics"];
+        assert_eq!(economics["solver_reward"]["amount"], "900000");
+        assert_eq!(economics["refundable_claim_bond"]["amount"], "100000");
+        assert_eq!(economics["required_external_spend"]["amount"], "0");
+        assert_eq!(economics["gross_cash_margin"]["amount"], "900000");
+        assert_eq!(economics["gross_cash_margin_positive"], true);
+        
+        // Assert funding/status/terms readiness
+        assert_eq!(json["funded_amount"]["amount"], "2000000");
+        assert!(json["terms_hash"].as_str().map_or(false, |s| !s.is_empty()));
+
+        // 2. Discovery Feed
+        let projection = OpportunityProjectionResponse {
+            schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
+            generated_at: "2027-01-15T08:01:00Z".to_string(),
+            network: "base-mainnet".to_string(),
+            applied_view: Some("ready_to_earn".to_string()),
+            degraded: false,
+            source_statuses: Vec::new(),
+            items: vec![item.clone()],
+            evidence_boundary: "Projection only".to_string(),
+        };
+        let feeds = render_opportunity_feeds(&projection, "https://api.example/");
+        let feed_json: serde_json::Value = serde_json::from_str(&feeds.json).unwrap();
+        let feed_item = &feed_json["items"][0]["_bountyboard"];
+        assert_eq!(feed_item["work_state"], "claimable");
+        assert_eq!(feed_item["payment_state"], "escrowed");
+        assert_eq!(feed_item["cash_economics"]["solver_reward"]["amount"], "900000");
+
+        // 3. Claimed is absent from ready_to_earn while remaining visible in lifecycle views as unpaid
+        let claimed_src = canonical("claimed", "2000000", true);
+        let claimed_item = canonical_opportunity(&claimed_src, "base-mainnet", "https://api.example").unwrap();
+
+        let ready_items = apply_query(
+            vec![item.clone(), claimed_item.clone()],
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert_eq!(ready_items.len(), 1);
+        assert_eq!(ready_items[0].work_state, "claimable");
+
+        let lifecycle_items = apply_query(
+            vec![item.clone(), claimed_item.clone()],
+            &OpportunityQuery {
+                view: Some("engineering".to_string()),
+                ..OpportunityQuery::default()
+            },
+            Some(OpportunityView::Engineering),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert_eq!(lifecycle_items.len(), 2);
+        
+        let found_claimed = lifecycle_items.iter().find(|i| i.work_state == "in_progress").unwrap();
+        assert_eq!(found_claimed.payment_state, "escrowed"); // It's unpaid
+        assert!(found_claimed.payment_committed);
     }
 }
