@@ -1537,4 +1537,75 @@ mod tests {
         assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
 
     }
+
+    #[test]
+    fn end_to_end_profitable_inventory_contract_test_across_surfaces() {
+        let canonical_src = canonical("claimable", "2000000", true);
+        let item = canonical_opportunity(&canonical_src, "base-mainnet", "https://api.example").unwrap();
+        
+        // 1. API JSON serialization (also acts as MCP structured content)
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["work_state"], "claimable");
+        assert_eq!(json["payment_state"], "escrowed");
+        assert_eq!(json["payment_committed"], true);
+        assert_eq!(json["verification_ready"], true);
+        
+        // Assert exact reward, refundable bond, required spend, signed gross margin
+        let economics = &json["cash_economics"];
+        assert_eq!(economics["solver_reward"]["amount"], "900000");
+        assert_eq!(economics["refundable_claim_bond"]["amount"], "100000");
+        assert_eq!(economics["required_external_spend"]["amount"], "0");
+        assert_eq!(economics["gross_cash_margin"]["amount"], "900000");
+        assert_eq!(economics["gross_cash_margin_positive"], true);
+        
+        // Assert funding/status/terms readiness
+        assert_eq!(json["funded_amount"]["amount"], "2000000");
+        assert!(json["terms_hash"].as_str().map_or(false, |s| !s.is_empty()));
+
+        // 2. Discovery Feed
+        let projection = OpportunityProjectionResponse {
+            schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
+            generated_at: "2027-01-15T08:01:00Z".to_string(),
+            network: "base-mainnet".to_string(),
+            applied_view: Some("ready_to_earn".to_string()),
+            degraded: false,
+            source_statuses: Vec::new(),
+            items: vec![item.clone()],
+            evidence_boundary: "Projection only".to_string(),
+        };
+        let feeds = render_opportunity_feeds(&projection, "https://api.example/");
+        let feed_json: serde_json::Value = serde_json::from_str(&feeds.json).unwrap();
+        let feed_item = &feed_json["items"][0]["_bountyboard"];
+        assert_eq!(feed_item["work_state"], "claimable");
+        assert_eq!(feed_item["payment_state"], "escrowed");
+        assert_eq!(feed_item["cash_economics"]["solver_reward"]["amount"], "900000");
+
+        // 3. Claimed is absent from ready_to_earn while remaining visible in lifecycle views as unpaid
+        let claimed_src = canonical("claimed", "2000000", true);
+        let claimed_item = canonical_opportunity(&claimed_src, "base-mainnet", "https://api.example").unwrap();
+
+        let ready_items = apply_query(
+            vec![item.clone(), claimed_item.clone()],
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert_eq!(ready_items.len(), 1);
+        assert_eq!(ready_items[0].work_state, "claimable");
+
+        let lifecycle_items = apply_query(
+            vec![item.clone(), claimed_item.clone()],
+            &OpportunityQuery {
+                view: Some("engineering".to_string()),
+                ..OpportunityQuery::default()
+            },
+            Some(OpportunityView::Engineering),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert_eq!(lifecycle_items.len(), 2);
+        
+        let found_claimed = lifecycle_items.iter().find(|i| i.work_state == "in_progress").unwrap();
+        assert_eq!(found_claimed.payment_state, "escrowed"); // It's unpaid
+        assert!(found_claimed.payment_committed);
+    }
 }
