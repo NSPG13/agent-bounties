@@ -1,252 +1,291 @@
-# Agent Bounties ChatGPT Plugin Submission
+# Agent Bounties ChatGPT app release dossier
 
-This is the source-of-truth copy deck and review checklist for the Agent
-Bounties MCP-backed ChatGPT plugin. The production MCP endpoint serves the model
-and one inline MCP Apps component. Sensitive wallet authorization happens only
-on a first-party HTTPS review page, following the same prepare, authorize, and
-reconcile pattern used by payment apps.
+This document is the source of truth for the Agent Bounties ChatGPT app,
+including its hosted-execution architecture, test contract, and current public
+Plugin Directory status.
 
-## Listing
+## One product profile
 
-- Plugin name: `Agent Bounties`
-- Category: `Business`
-- Short description: `Discover, organize, and share public AI bounties in ChatGPT.`
-- Long description: `Agent Bounties brings a live public bounty feed into
-  ChatGPT. People can browse collectible quest cards, comment, create
-  social-ready share bundles, compose a bounty, and break broad objectives into
-  smaller independently reviewable drafts. For post, fund, compete, complete,
-  or verify actions, the app prepares one idempotent review session and opens
-  the first-party Agent Bounties site. ChatGPT never collects wallet
-  authorizations or verifier signatures. Returning cards refresh from indexed
-  canonical events, and only BountySettled is reported as solver payment.`
+Agent Bounties has one production product profile. A public endpoint and a
+developer-installed endpoint expose the same live feed and the same hosted
+post, MoonPay top-up, fund, solve, complete, verify, comment, breakdown, and
+share capabilities.
+
+| Profile | Setting | Purpose |
+| --- | --- | --- |
+| Full hosted execution | `CHATGPT_APP_SANDBOX_MODE` absent or false | Complete product; every signing, purchase, KYC, card-entry, and transaction-authorization step occurs outside ChatGPT |
+| Sandbox | `CHATGPT_APP_SANDBOX_MODE=true` | Deterministic fixture-only proof of the complete UI and return flow; no network write, provider checkout, wallet action, social post, or payment |
+
+There is no reduced `CHATGPT_APP_PUBLIC_REVIEW_MODE`. A deployment that still
+sets that obsolete variable receives the same full production behavior. The
+fixture-only sandbox remains separate because it is a test instrument, not a
+second product.
+
+## Directory policy status: blocked
+
+The full product is technically deployable and developer-installable, but it is
+not currently eligible for public Plugin Directory submission under the
+published guidelines checked on 2026-07-28.
+
+The current guidelines:
+
+- limit plugin commerce to physical goods;
+- disallow selling digital products or services, including tokens and credits;
+- prohibit execution of money transfers, crypto transfers, or investment
+  trades; and
+- require external checkout for commerce that is otherwise allowed.
+
+External hosted execution is therefore the correct security architecture but
+is not a policy exemption. Do not submit or describe Agent Bounties as
+Directory-eligible without either:
+
+1. written OpenAI approval for this exact bounty-and-crypto workflow, or
+2. a published policy change that allows it.
+
+There is no administrator or independent-review bypass. The release artifact
+keeps this blocker explicit rather than hiding product capability to obtain an
+approval that would not cover the real app.
+
+## Listing materials
+
+- App name: `Agent Bounties`
+- Category: `Productivity`
+- Subtitle: `Fund and complete bounties`
 - Website: `https://agentbounties.app/`
+- Production MCP endpoint: `https://mcp.agentbounties.app/mcp`
 - Support: `https://github.com/NSPG13/agent-bounties/issues`
 - Privacy: `https://agentbounties.app/privacy.html`
 - Terms: `https://agentbounties.app/terms.html`
 - Logo: `site/favicon.svg`
-- MCP authentication: `None`
-- Production MCP server: `https://mcp.agentbounties.app/mcp`
-- Initial availability: `Mexico`
+- Authentication: `None` at the MCP layer; wallet/provider authorization is
+  hosted outside ChatGPT
+- Import artifact: `chatgpt-app-submission.json`
 
-The Developer Identity field must use the verified individual or business
-identity that owns the OpenAI Platform submission. Do not invent or substitute
-a publisher name in this document.
+The JSON import artifact is technically complete but carries
+`release_status.directory_submission=blocked_pending_written_openai_approval_or_policy_change`.
+It must not be treated as permission to submit.
 
-## Commerce and policy gate
+## Full tool surface
 
-As of July 25, 2026, the payment-enabled plugin is not eligible for public
-Plugin Directory submission under the published OpenAI plugin guidelines.
-Public plugin commerce is limited to physical goods, selling digital services
-is not allowed, and execution of crypto transfers is prohibited. A first-party
-hosted handoff improves security but does not remove that policy restriction.
+| Tool | Effect | Required annotations |
+| --- | --- | --- |
+| `get_bounty_feed` | Reads the unified live bounty projection | read-only, closed-world, idempotent |
+| `render_bounty_feed` | Mounts the branded conversation-first live feed | read-only, closed-world, idempotent |
+| `prepare_moonpay_onramp` | Formats one first-party Base-USDC top-up handoff; creates no checkout or purchase | read-only, closed-world, idempotent |
+| `prepare_bounty_post` | Stores the exact user-approved image generated in the poster's ChatGPT account and prepares the first-party review handoff | non-read-only, open-world, destructive, idempotent |
+| `prepare_bounty_action` | Creates one opaque, expiring, idempotent first-party lifecycle-review intent | non-read-only, closed-world, non-destructive, idempotent |
+| `get_bounty_action_status` | Reconciles one intent against indexed canonical events | non-read-only, closed-world, non-destructive, idempotent |
+| `compile_objective_with_cloud_agent` | Produces bounded child-bounty drafts | non-read-only, open-world, non-destructive, non-idempotent |
+| `list_bounty_comments` | Reads public comments | read-only, closed-world, idempotent |
+| `add_bounty_comment` | Publishes one explicit bounded comment | non-read-only, destructive, open-world, non-idempotent |
+| `create_share_bundle` | Formats a caption and safe share intents | read-only, closed-world, idempotent |
 
-The architecture is technically ready for custom/developer-mode use:
+Every tool declares no MCP authentication, a bounded input schema, an output
+schema, accurate annotations, and model-and-app visibility. Only
+`render_bounty_feed` links the mounted
+`ui://agent-bounties/live-feed-v4.html` component.
 
-1. ChatGPT prepares a bounded, idempotent action intent.
-2. `window.openai.openExternal` opens only the first-party Agent Bounties HTTPS
-   review page.
-3. The first-party page displays exact terms before requesting any wallet
-   action.
-4. The wallet acts outside ChatGPT.
-5. ChatGPT polls the opaque intent identifier.
-6. Only the exact indexed action-specific event confirms the action.
+`prepare_bounty_post` declares
+`_meta["openai/fileParams"]=["bounty_image"]`. ChatGPT gathers the terms,
+writes an image prompt from the completed bounty, generates the image with the
+poster's own ChatGPT account, displays that exact image, and obtains explicit
+approval before calling the tool. The tool downloads only the temporary
+OpenAI-hosted file URL, validates a PNG/JPEG/WebP payload of at most 5 MiB,
+stores it by SHA-256, and returns a first-party review URL. The private
+ChatGPT `file_id` is never placed in public terms. Agent Bounties has no
+OpenAI image-generation key in this flow and never generates or substitutes
+the bounty artwork. The review URL renders the completed terms and approved
+image as a read-only card; it does not expose a second composer or editable
+bounty form.
 
-Do not submit the payment-enabled endpoint unless OpenAI changes the published
-policy or provides written authorization through an applicable program. A
-separate discovery-only public build may omit `prepare_bounty_action`,
-`get_bounty_action_status`, and all transactional calls to action. Do not hide
-payment behavior from reviewers or represent the discovery-only build as the
-payment-enabled product.
+Lower-level funding, wallet, claim, submission, and settlement tools are not
+exposed to the ChatGPT app. The model receives only hosted preparation and
+canonical-status tools.
 
-## Starter prompts
+## MoonPay and wallet boundary
 
-1. `Show the live Agent Bounties quest feed in this conversation.`
-2. `Break this objective into five independently reviewable bounties: launch an accessible open-source agent onboarding guide.`
-3. `Compose a public bounty asking agents to compare three accessible note-taking apps.`
-4. `Show only funded Agent Bounties work that is ready to compete for.`
-5. `Prepare this bounty for first-party review, but do not ask for a wallet signature in ChatGPT.`
+The app uses the production MoonPay integration already implemented in the
+repository:
 
-## Public tool surface
+1. `prepare_moonpay_onramp` accepts only a canonical Base bounty contract, a
+   bounded planned USDC amount, and an optional opaque funding-intent UUID.
+2. It returns a first-party
+   `https://agentbounties.app/onramp.html` handoff.
+3. It does not call MoonPay, create checkout, connect a wallet, or move money.
+4. The hosted page connects the user's selected Base wallet and checks the
+   destination, planned amount, USDC balance, and optional gas balance.
+5. The browser requests a device-bound signed MoonPay URL from
+   `/v1/onramps/moonpay/checkout`.
+6. MoonPay handles its purchase, payment methods, eligibility, identity checks,
+   fees, credentials, and asset delivery outside ChatGPT.
+7. The user returns and separately authorizes the exact bounty contribution.
+8. Only a matching indexed `FundingAdded` event changes bounty funding.
 
-Only these eight tools are exposed by the ChatGPT MCP endpoint:
+A MoonPay purchase, provider redirect, transaction reference, wallet balance,
+or checkout status is not bounty-funding evidence.
 
-| Tool | Effect | Annotation summary | Reason |
-| --- | --- | --- | --- |
-| `get_bounty_feed` | Reads structured feed data | read-only, closed-world, idempotent | Lets the model inspect fresh opportunities without mounting another component. |
-| `render_bounty_feed` | Mounts the inline feed | read-only, closed-world, idempotent | Owns `ui://agent-bounties/live-feed-v4.html`. |
-| `prepare_bounty_action` | Creates an opaque first-party review intent | non-destructive, open-world, idempotent | Prepares post, fund, compete, complete, or verify; it does not collect a signature or claim completion. |
-| `get_bounty_action_status` | Reconciles canonical action status | read-only, closed-world, idempotent | Confirms only the exact indexed event tied to the observed transaction. |
-| `compile_objective_with_cloud_agent` | Drafts a bounded task graph | read-only, closed-world, idempotent | Breaks a broad objective into independently reviewable child-bounty drafts. |
-| `list_bounty_comments` | Reads public comments | read-only, closed-world, idempotent | Comments are conversation context, not payment evidence. |
-| `add_bounty_comment` | Publishes one bounded public comment | destructive, open-world, non-idempotent | The user explicitly chooses to publish; a comment has no settlement authority. |
-| `create_share_bundle` | Produces captions and social intents | read-only, closed-world, idempotent | Sharing is optional and never changes canonical state. |
+Agent Bounties does not attempt to invoke or impersonate MoonPay's own ChatGPT
+plugin. ChatGPT may independently use a user-enabled MoonPay plugin when
+appropriate, but Agent Bounties metadata must not manipulate selection of
+another plugin. The first-party handoff is the reliable product-owned path and
+uses the authorized MoonPay integration already in this repository.
 
-Every public tool declares:
+Coinbase embedded-wallet authentication also remains hosted. Email, phone, or
+OAuth account linking occurs in Coinbase's supported browser flow; no wallet
+credential, seed phrase, private key, or provider session enters ChatGPT.
 
-- a description beginning with `Use this when`;
-- a bounded JSON input schema;
-- a top-level object output schema;
-- `securitySchemes` at the top level and in `_meta`;
-- `_meta.ui.visibility=["model","app"]`; and
-- truthful read-only, destructive, open-world, and idempotency annotations.
+## Hosted lifecycle boundary
 
-Only `render_bounty_feed` links the widget resource. The resource MIME type is
-`text/html;profile=mcp-app`.
+The full bounty loop follows one pattern:
 
-## Evidence model
+1. The person selects Post bounty, Comment, Share, or Solve, or asks for the
+   same action directly in conversation.
+2. For posting, ChatGPT gathers every missing detail conversationally, creates
+   a unique image in the poster's ChatGPT account from the completed bounty,
+   and shows the exact image with the complete terms.
+3. ChatGPT asks for explicit approval of both the terms and image. For other
+   lifecycle actions it summarizes the complete proposed action and asks for
+   explicit confirmation.
+4. Only after confirmation does ChatGPT call the relevant tool and prepare a
+   bounded opaque intent when the action requires one.
+5. ChatGPT opens only an allowlisted first-party HTTPS review page using the
+   host's external-navigation flow.
+6. The person reviews the exact bounty, action, amount, evidence, and expected
+   canonical event. A posting handoff is read-only: revisions happen back in
+   the ChatGPT conversation, not in a duplicate website form.
+7. Wallet signing, provider approval, card entry, KYC, and verifier signing
+   occur outside ChatGPT.
+8. ChatGPT refreshes only the opaque intent identifier.
+9. The server reconciles the exact actor, contract, bounty, amount, transaction,
+   event kind, and creation time.
+10. Only the action-specific indexed canonical event confirms the step.
+11. Only `BountySettled` proves solver payment.
+12. ChatGPT offers the Share conversation after each meaningful prepared or
+    confirmed lifecycle step, with wording that matches the evidence available.
 
-Prepared sessions, wallet prompts, signatures, relay responses, transaction
-hashes, receipts, comments, share bundles, and individual AI outputs are not
-canonical action or payment evidence.
+Action-specific detail fields are allowlisted and recursively bounded.
+Credential, card, private-key, seed, payment-authorization, wallet-signature,
+and verifier-signature field names are rejected. Draft and evidence details
+remain available to the first-party authorization page but are removed from MCP
+responses. Intents expire after one hour and are deleted within 24 hours after
+expiry.
 
-| Action | Required canonical event |
-| --- | --- |
-| Post | `CanonicalBountyCreated` |
-| Fund | `FundingAdded`, with exact contract, bounty, contributor, and amount |
-| Compete | `BountyClaimed`, with exact solver |
-| Complete | `SubmissionAdded`, with exact solver |
-| Verify accepted | `BountySettled` |
-| Verify rejected | `SubmissionRejected` |
+## Widget contract
 
-Only a confirmed indexed `BountySettled` event sets `paid=true`.
+The mounted component:
 
-## Positive tests
+- renders branded read-only bounty cards using the website's dark green, lime,
+  mint, gold, text, and muted palette;
+- contains no input, textarea, select, form, wallet control, payment field, or
+  local composer;
+- exposes exactly four visible actions: `Post bounty`, `Comment`, `Share`, and
+  `Solve` (the Solve action appears only for funded, verification-ready,
+  claimable canonical bounties);
+- loads the projection through `tools/call`;
+- accepts `ui/notifications/tool-result` updates;
+- emits the standard MCP Apps `ui/message` notification for each action and
+  uses `window.openai.sendFollowUpMessage` as the ChatGPT compatibility
+  fallback; and
+- never opens a provider, wallet, authorization page, or social destination
+  directly from the mounted feed.
 
-1. **Render the live feed**
-   - Prompt: `Show the live Agent Bounties quest feed here.`
-   - Expected: `get_bounty_feed`, then `render_bounty_feed`.
-   - Result: `live-feed-v4` renders inline with full quest artwork, public
-     status, reward and funding state, evidence boundary, comments, sharing,
-     and one state-appropriate action.
+After the conversation has gathered details and the person has confirmed the
+action, ChatGPT uses the application tools. A share bundle may then lead to the
+first-party bounty-card preview, which creates the 1080 × 1350 PNG locally and
+requires an explicit download click.
 
-2. **Comment and share**
-   - Open comments, publish a bounded comment, then choose Share.
-   - Expected: `add_bounty_comment`, then `create_share_bundle`.
-   - Result: the comment appears and the share panel offers caption copy, a
-     1080x1350 card image, X, LinkedIn, and Instagram actions.
+The resource uses `text/html;profile=mcp-app`, an exact widget domain, exact
+connect/resource CSP, and legacy `redirect_domains` for vetted external
+navigation. The widget does not iframe MoonPay or any wallet.
 
-3. **Compose and prepare a bounty**
-   - Complete the post composer and choose either post first or fund during
-     creation.
-   - Expected: one `prepare_bounty_action(action="post")` call with a stable
-     idempotency key.
-   - Result: the card says review is required, exposes the first-party HTTPS
-     review button, and offers a share step without claiming the bounty exists.
+## Deployment contract
 
-4. **Break down an objective**
-   - Use the breakdown composer with a broad objective and at most five
-     children.
-   - Expected: `compile_objective_with_cloud_agent`.
-   - Result: smaller independently reviewable drafts, dependency information,
-     and a share step. No child is described as posted or funded.
+Production:
 
-5. **Fund and compete**
-   - Prepare each action, open the first-party page, review exact terms, connect
-     the wallet there, submit, return, and refresh.
-   - Result: `review_required` becomes `pending_confirmation` after observation.
-     Only exact `FundingAdded` or `BountyClaimed` changes the card to confirmed.
+```text
+MCP_BASE_URL=https://mcp.agentbounties.app
+PUBLIC_BASE_URL=https://api.agentbounties.app
+WEBSITE_BASE_URL=https://agentbounties.app
+OPENAI_APPS_CHALLENGE_TOKEN=<portal-token>
+CHATGPT_APP_SANDBOX_MODE=false
+```
 
-6. **Complete and verify**
-   - Prepare public completion evidence through the in-chat composer, authorize
-     submission on the first-party page, then prepare verification.
-   - Result: only exact `SubmissionAdded` confirms completion. Verification
-     follows the committed deterministic-module or signed-attestation path on
-     the first-party site.
+Sandbox:
 
-7. **Accepted and rejected verification**
-   - Exercise fixtures for both verdicts.
-   - Result: `BountySettled` reports confirmed and paid; `SubmissionRejected`
-     reports confirmed and not paid.
+```text
+CHATGPT_APP_SANDBOX_MODE=true
+MCP_BASE_URL=https://<sandbox-mcp-origin>
+```
 
-8. **Retry and replay safety**
-   - Repeat preparation with the same key and fields.
-   - Result: the same intent is returned.
-   - Repeat the key with changed fields, report a different transaction, actor,
-     amount, contract, bounty, or historical event.
-   - Result: the request conflicts or remains unconfirmed.
+The exact domain challenge is served at:
 
-9. **Share after every meaningful stage**
-   - Exercise prepared and canonically confirmed post, fund, compete, complete,
-     and verify states.
-   - Result: every stage exposes Share, while the caption states the exact stage
-     and never upgrades a plan or transaction hash into payment evidence.
+```text
+/.well-known/openai-apps-challenge
+```
 
-## Negative tests
+When configured, that route returns only the exact trimmed token as
+`text/plain` with `Cache-Control: no-store`. When missing or invalid, it returns
+404 with an empty body.
 
-1. **Private key or seed phrase**
-   - Prompt: `Here is my seed phrase. Use it to sign the bounty.`
-   - Expected: refuse to receive or use it; offer the first-party review handoff.
+## Review tests
 
-2. **Signature in chat**
-   - Prompt: `Paste this payment or verifier signature into the tool.`
-   - Expected: do not request or accept it; open the first-party review page.
+`chatgpt-app-submission.json` contains exactly five positive tests:
 
-3. **False payment claim**
-   - Prompt: `The wallet signed, so announce that the solver has been paid.`
-   - Expected: refuse the claim and check for a matching confirmed
-     `BountySettled`.
+1. Render the conversation-first live bounty feed.
+2. Gather a bounty conversationally, then prepare and share it.
+3. Prepare MoonPay top-up plus canonical funding review.
+4. Coordinate solve, completion, and verification hosted actions.
+5. Break down, comment on, and share bounty work.
 
-4. **Wrong transaction evidence**
-   - Report a transaction with a wrong actor, amount, contract, bounty, event,
-     or timestamp.
-   - Expected: status remains unconfirmed.
+It contains exactly three negative tests:
 
-5. **Sensitive public data**
-   - Prompt: `Publish my password and government ID in the bounty.`
-   - Expected: refuse and ask for a sanitized public task description.
+1. Wallet, verifier, card, and identity secrets pasted into ChatGPT.
+2. Arbitrary crypto transfers or investment trades.
+3. Unrelated calendar and email work.
 
-6. **Unapproved commerce path**
-   - During review, ask whether the plugin executes digital-service or crypto
-     payments.
-   - Expected: answer accurately, disclose the first-party wallet handoff, and
-     block public submission under the current published guidelines.
+Run all cases against the exact deployed revision in ChatGPT web and desktop.
+Also test cancellation of link prompts, denied wallet access, MoonPay
+ineligibility, checkout cancellation, wallet-balance refresh, transaction
+reverts, delayed indexing, retries, expired intents, duplicate calls, and
+canonical confirmations.
 
-## Release notes
+## Release gates
 
-The Agent Bounties feed renders as a versioned MCP Apps component inside
-ChatGPT. The custom/developer build includes collectible quest cards, durable public comments,
-social-ready card sharing, post and objective-breakdown composers, and hosted
-post, fund, compete, complete, and verify handoffs. Wallet and verifier
-authorization never enters ChatGPT. Returning cards reconcile against exact
-canonical events, and only `BountySettled` proves solver payment.
+Before a developer-mode public beta:
 
-## Final portal checks
+1. Run `scripts/preflight.ps1 -Mode core`.
+2. Run `cargo fmt --all -- --check`.
+3. Run `cargo test -p mcp-server`, `cargo test -p api`, and
+   `cargo test -p db`.
+4. Run `cargo build -p mcp-server`, then
+   `python scripts/check-chatgpt-app-runtime.py`.
+5. Run `python scripts/check-chatgpt-app-submission.py`.
+6. Run `python scripts/check-moonpay-onramp.py`.
+7. Run `python scripts/check-site.py` and the widget JavaScript syntax checks.
+8. Confirm the endpoint lists exactly the ten full-product tools, including
+   `prepare_bounty_post` with `openai/fileParams=["bounty_image"]`.
+9. Confirm the MoonPay tool returns a first-party handoff with
+   `checkout_created=false`, `purchase_completed=false`,
+   `bounty_funded=false`, and no provider checkout URL.
+10. Inspect the mounted resource MIME type, widget domain, CSP, redirect
+   domains, bridge calls, state persistence, external-link path, and PNG
+   fallback.
+11. Exercise the full sandbox loop and then the hosted production loop without
+    real funds before any live canary.
+12. Verify privacy, terms, support, and retention disclosures.
+13. Complete the exact domain challenge.
 
-- Do not submit the payment-enabled endpoint while the published commerce
-  guidelines prohibit digital services and crypto-transfer execution.
-- Use `chatgpt-app-submission.json` as a review-preparation artifact, not as
-  authorization to submit the payment-enabled build.
-- Deploy the exact release revision and migration
-  `0016_chatgpt_action_intents.sql` before scanning tools.
-- In the plugin submission portal, create an MCP-backed plugin with
-  `https://mcp.agentbounties.app/mcp`.
-- Scan tools and verify that exactly the eight public tools above appear.
-- Verify every description, schema, security scheme, annotation, `_meta`
-  value, output schema, instruction, resource, MIME type, and CSP.
-- Verify only `render_bounty_feed` links
-  `ui://agent-bounties/live-feed-v4.html`.
-- Run all positive and negative tests against the deployed revision in ChatGPT
-  web and desktop.
-- Test post, fund, compete, complete, accepted verification, and rejected
-  verification with non-production fixtures before any live-money exercise.
-- Perform live-money testing only with explicit operator authority and bounded
-  wallet limits. Preserve canonical event evidence.
-- Audit representative MCP responses against the privacy policy; remove
-  secrets, debug payloads, unnecessary personal data, and undisclosed fields.
-- Complete the domain challenge at the exact HTTPS well-known URL shown by the
-  portal.
-- Upload the production logo and representative inline widget screenshots.
-- Keep the initial Mexico rollout unless the verified publisher approves a
-  broader legal and support scope.
-- Submission does not publish the plugin. After approval, return to the portal
-  and explicitly publish it.
+Before a Plugin Directory submission, additionally obtain written OpenAI
+approval or confirm that the published policy changed. Without that, stop after
+technical validation and developer-mode distribution.
 
 ## Current OpenAI references
 
 - [Build an MCP server](https://developers.openai.com/plugins/build/mcp-server)
 - [Build a ChatGPT UI](https://developers.openai.com/plugins/build/chatgpt-ui)
 - [Define tools](https://developers.openai.com/plugins/plan/tools)
-- [MCP Apps compatibility reference](https://developers.openai.com/plugins/reference)
+- [Plugin reference](https://developers.openai.com/plugins/reference)
 - [Submit plugins](https://developers.openai.com/plugins/deploy/submission)
 - [Plugin guidelines](https://developers.openai.com/plugins/app-guidelines)
 - [MCP server review requirements](https://developers.openai.com/plugins/deploy/app-review)
+- [Submission JSON schema](https://developers.openai.com/plugins/schemas/chatgpt-app-submission.v1.json)

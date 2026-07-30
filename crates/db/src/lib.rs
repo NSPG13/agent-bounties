@@ -50,6 +50,10 @@ pub const OPPORTUNITY_COMMENTS_MIGRATION: &str =
     include_str!("../../../migrations/0015_opportunity_comments.sql");
 pub const CHATGPT_ACTION_INTENTS_MIGRATION: &str =
     include_str!("../../../migrations/0016_chatgpt_action_intents.sql");
+pub const BOUNTY_IMAGE_ASSETS_MIGRATION: &str =
+    include_str!("../../../migrations/0017_bounty_image_assets.sql");
+pub const SOLVE_ACTION_RENAME_MIGRATION: &str =
+    include_str!("../../../migrations/0018_rename_compete_action_to_solve.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -177,6 +181,8 @@ pub enum DbError {
     ChatgptActionIntentConflict(String),
     #[error("ChatGPT action intent is unavailable")]
     ChatgptActionIntentUnavailable,
+    #[error("bounty image asset conflict: {0}")]
+    BountyImageAssetConflict(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -299,6 +305,21 @@ pub struct ChatgptActionObservation {
     pub bounty_contract: Option<String>,
     pub bounty_id: Option<String>,
     pub actor_wallet: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewBountyImageAsset {
+    pub sha256: String,
+    pub mime_type: String,
+    pub content: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BountyImageAsset {
+    pub sha256: String,
+    pub mime_type: String,
+    pub content: Vec<u8>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -801,6 +822,8 @@ impl PostgresStore {
                 PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION,
                 OPPORTUNITY_COMMENTS_MIGRATION,
                 CHATGPT_ACTION_INTENTS_MIGRATION,
+                BOUNTY_IMAGE_ASSETS_MIGRATION,
+                SOLVE_ACTION_RENAME_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1529,6 +1552,7 @@ impl PostgresStore {
     pub async fn opportunity_lifecycle_stats(
         &self,
         window_started_at: DateTime<Utc>,
+        excluded_bounty_contracts: &[String],
     ) -> DbResult<OpportunityLifecycleStats> {
         let cohort = sqlx::query(
             r#"
@@ -1554,6 +1578,7 @@ impl PostgresStore {
                 ON created.network = progress.network
                AND created.kind = 'canonical_bounty_created'
                AND lower(created.data->>'terms_hash') = lower(progress.terms_hash)
+               AND NOT lower(created.contract_address) = ANY($2)
             ), root_flags AS (
               SELECT roots.unfunded_bounty_id,
                      BOOL_OR(event.kind = 'bounty_became_claimable') AS funded,
@@ -1585,6 +1610,7 @@ impl PostgresStore {
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
 
@@ -1594,31 +1620,37 @@ impl PostgresStore {
               SELECT network, bounty_id, MIN(occurred_at) AS created_at
               FROM autonomous_bounty_events
               WHERE kind = 'canonical_bounty_created' AND occurred_at >= $1
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY network, bounty_id
             ), settled AS (
               SELECT network, bounty_id, MIN(occurred_at) AS settled_at
               FROM autonomous_bounty_events
               WHERE kind = 'bounty_settled'
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY network, bounty_id
             ), posters AS (
               SELECT lower(data->>'creator') AS wallet, COUNT(DISTINCT bounty_id) AS bounties
               FROM autonomous_bounty_events
               WHERE kind = 'canonical_bounty_created' AND occurred_at >= $1
                 AND data ? 'creator'
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY lower(data->>'creator')
             ), paid_solvers AS (
               SELECT lower(data->>'solver') AS wallet, COUNT(DISTINCT bounty_id) AS bounties
               FROM autonomous_bounty_events
               WHERE kind = 'bounty_settled' AND occurred_at >= $1
                 AND data ? 'solver'
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY lower(data->>'solver')
             )
             SELECT
               (SELECT COUNT(*) FROM created) AS canonical_created_in_window,
               (SELECT COUNT(DISTINCT (network, bounty_id)) FROM autonomous_bounty_events
-                WHERE kind = 'bounty_claimed' AND occurred_at >= $1) AS canonical_claimed_in_window,
+                WHERE kind = 'bounty_claimed' AND occurred_at >= $1
+                  AND NOT lower(contract_address) = ANY($2)) AS canonical_claimed_in_window,
               (SELECT COUNT(DISTINCT (network, bounty_id)) FROM autonomous_bounty_events
-                WHERE kind = 'bounty_settled' AND occurred_at >= $1) AS canonical_settled_in_window,
+                WHERE kind = 'bounty_settled' AND occurred_at >= $1
+                  AND NOT lower(contract_address) = ANY($2)) AS canonical_settled_in_window,
               (SELECT COUNT(*) FROM posters) AS unique_canonical_poster_wallets,
               (SELECT COUNT(*) FROM posters WHERE bounties > 1) AS repeat_canonical_poster_wallets,
               (SELECT COUNT(*) FROM paid_solvers) AS unique_paid_solver_wallets,
@@ -1629,6 +1661,7 @@ impl PostgresStore {
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
 
@@ -2070,6 +2103,63 @@ impl PostgresStore {
         .await?
         .map(chatgpt_action_intent_from_row)
         .transpose()
+    }
+
+    pub async fn put_bounty_image_asset(
+        &self,
+        asset: &NewBountyImageAsset,
+    ) -> DbResult<BountyImageAsset> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO bounty_image_assets (sha256, mime_type, content)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (sha256) DO UPDATE SET
+              mime_type = bounty_image_assets.mime_type
+            RETURNING sha256, mime_type, content, created_at
+            "#,
+        )
+        .bind(&asset.sha256)
+        .bind(&asset.mime_type)
+        .bind(&asset.content)
+        .fetch_one(&self.pool)
+        .await?;
+        let stored = bounty_image_asset_from_row(&row)?;
+        if stored.mime_type != asset.mime_type || stored.content != asset.content {
+            return Err(DbError::BountyImageAssetConflict(
+                "bounty image hash already exists with different content metadata".to_string(),
+            ));
+        }
+        Ok(stored)
+    }
+
+    pub async fn get_bounty_image_asset(&self, sha256: &str) -> DbResult<Option<BountyImageAsset>> {
+        let row = sqlx::query(
+            r#"
+            SELECT sha256, mime_type, content, created_at
+            FROM bounty_image_assets
+            WHERE sha256 = $1
+            "#,
+        )
+        .bind(sha256)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| bounty_image_asset_from_row(&row)).transpose()
+    }
+
+    pub async fn delete_expired_chatgpt_action_intents_before(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> DbResult<u64> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM chatgpt_action_intents
+            WHERE expires_at < $1
+            "#,
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     pub async fn upsert_unfunded_bounty_solution(
@@ -2965,7 +3055,11 @@ impl PostgresStore {
             .transpose()
     }
 
-    pub async fn claim_funnel_stats(&self, window_hours: u32) -> DbResult<ClaimFunnelStats> {
+    pub async fn claim_funnel_stats(
+        &self,
+        window_hours: u32,
+        excluded_bounty_contracts: &[String],
+    ) -> DbResult<ClaimFunnelStats> {
         let window_hours = window_hours.clamp(1, 720);
         let generated_at = Utc::now();
         let window_started_at = generated_at - chrono::Duration::hours(i64::from(window_hours));
@@ -2986,9 +3080,11 @@ impl PostgresStore {
               COUNT(*) FILTER (WHERE status = 'failed') AS failed
             FROM claim_candidates
             WHERE created_at >= $1
+              AND NOT lower(bounty_contract) = ANY($2)
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
         let stages = ClaimFunnelStageCounts {
@@ -3020,9 +3116,11 @@ impl PostgresStore {
             FROM bond_sponsorships sponsorship
             JOIN claim_candidates candidate ON candidate.id = sponsorship.claim_candidate_id
             WHERE sponsorship.created_at >= $1
+              AND NOT lower(candidate.bounty_contract) = ANY($2)
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
         let sponsored_claims_confirmed =
@@ -3044,6 +3142,7 @@ impl PostgresStore {
               FROM autonomous_bounty_events
               WHERE occurred_at >= $1
                 AND kind IN ('bounty_claimed', 'submission_added', 'bounty_settled')
+                AND NOT lower(contract_address) = ANY($2)
             ), paid_solvers AS (
               SELECT solver_wallet, COUNT(*) AS settlement_count
               FROM window_events
@@ -3080,6 +3179,7 @@ impl PostgresStore {
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
         let canonical_outcomes = CanonicalClaimOutcomeCounts {
@@ -3107,11 +3207,13 @@ impl PostgresStore {
             SELECT failure_code, COUNT(*) AS count
             FROM claim_candidates
             WHERE created_at >= $1 AND status = 'failed' AND failure_code IS NOT NULL
+              AND NOT lower(bounty_contract) = ANY($2)
             GROUP BY failure_code
             ORDER BY failure_code
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_all(&self.pool)
         .await?;
         let mut failure_codes = BTreeMap::new();
@@ -5772,6 +5874,15 @@ fn chatgpt_action_intent_from_row(row: PgRow) -> DbResult<ChatgptActionIntent> {
     })
 }
 
+fn bounty_image_asset_from_row(row: &PgRow) -> DbResult<BountyImageAsset> {
+    Ok(BountyImageAsset {
+        sha256: row.try_get("sha256")?,
+        mime_type: row.try_get("mime_type")?,
+        content: row.try_get("content")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
 fn unfunded_bounty_solution_from_row(row: PgRow) -> DbResult<UnfundedBountySolution> {
     Ok(UnfundedBountySolution {
         id: row.try_get("id")?,
@@ -6829,6 +6940,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bounty_image_assets_are_content_addressed_and_bounded() {
+        for invariant in [
+            "CREATE TABLE IF NOT EXISTS bounty_image_assets",
+            "sha256 TEXT PRIMARY KEY",
+            "mime_type TEXT NOT NULL",
+            "content BYTEA NOT NULL",
+            "octet_length(content) BETWEEN 1 AND 5242880",
+            "bounty_image_assets_created_idx",
+        ] {
+            assert!(
+                BOUNTY_IMAGE_ASSETS_MIGRATION.contains(invariant),
+                "missing bounty image asset invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn chatgpt_solve_action_migration_renames_legacy_compete_intents() {
+        for invariant in [
+            "DROP CONSTRAINT IF EXISTS chatgpt_action_intents_action_check",
+            "SET action = 'solve'",
+            "WHERE action = 'compete'",
+            "action IN ('post', 'fund', 'solve', 'complete', 'verify')",
+        ] {
+            assert!(
+                SOLVE_ACTION_RENAME_MIGRATION.contains(invariant),
+                "missing ChatGPT solve-action migration invariant {invariant}"
+            );
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn objective_aggregate_compare_and_swap_is_durable() {
@@ -7188,7 +7331,7 @@ mod tests {
         store.migrate().await.unwrap();
 
         let stats = store
-            .opportunity_lifecycle_stats(Utc::now() - chrono::Duration::hours(1))
+            .opportunity_lifecycle_stats(Utc::now() - chrono::Duration::hours(1), &[])
             .await
             .unwrap();
         assert!(stats.solution_received <= stats.published);
@@ -7424,7 +7567,7 @@ mod tests {
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
-        let baseline = store.claim_funnel_stats(1).await.unwrap();
+        let baseline = store.claim_funnel_stats(1, &[]).await.unwrap();
         let network = format!("funnel-test-{}", Uuid::new_v4());
         let address = |id: Uuid| {
             let value = id.simple().to_string();
@@ -7601,7 +7744,7 @@ mod tests {
                 .unwrap();
         }
 
-        let observed = store.claim_funnel_stats(1).await.unwrap();
+        let observed = store.claim_funnel_stats(1, &[]).await.unwrap();
         assert_eq!(observed.stages.observed, baseline.stages.observed + 2);
         assert_eq!(
             observed.stages.unique_solver_wallets,

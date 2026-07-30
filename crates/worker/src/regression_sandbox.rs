@@ -1307,6 +1307,7 @@ mod tests {
             }),
             source_url: None,
             discovery_source: None,
+            image: None,
             agent_eligibility: None,
             claim_coordination: None,
         };

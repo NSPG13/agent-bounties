@@ -17,6 +17,8 @@
     "0013_objective_coordination.sql": "3448f48fe30a24c111c0c9695b82d0633f1a705c8db27e9d14b7a7834da67f19",
     "0014_remove_public_competitor_intelligence.sql": "1dcc2d3a21644daea47f5ebca2dd34579f85233154a8b1b35c8b7890888ae925",
     "0015_opportunity_comments.sql": "d292887ac8806990e3ac7edecf8b8976cb6a3c610cdc4d4e4bfc50f0f7fbc03d",
-    "0016_chatgpt_action_intents.sql": "8d4f8ab69ac71720359624188fe3e8f3af9b4eae1c61731f709937b0fcef893f"
+    "0016_chatgpt_action_intents.sql": "8d4f8ab69ac71720359624188fe3e8f3af9b4eae1c61731f709937b0fcef893f",
+    "0017_bounty_image_assets.sql": "8a83ba6d8ac8f70b09f959791f8d6191fdcd971c582f82c4a48c82d7c8339d2c",
+    "0018_rename_compete_action_to_solve.sql": "f8a0336502da26f5db5ff4bdc33fe1dbc27f003b3330730e07e21451640d116f"
   }
 }

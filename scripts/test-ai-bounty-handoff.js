@@ -78,6 +78,23 @@ if (draft.task_window_days !== 21 || draft.acceptance_criteria.length !== 2) {
   throw new Error(`valid AI draft was not normalized: ${JSON.stringify(draft)}`);
 }
 
+const approvedImage = {
+  source: "chatgpt_user_generated",
+  asset_url: "https://agentbounties.app/public/bounty-images/approved.webp",
+  sha256: "a".repeat(64),
+  mime_type: "image/webp",
+  prompt: "A restrained editorial illustration of a reproducible API defect.",
+  alt_text: "An engineer tracing a reproducible API defect.",
+};
+const chatgptHandoff = api.parseDraft({
+  ...draft,
+  image_required: true,
+  image: approvedImage,
+});
+if (chatgptHandoff.image_required !== true || chatgptHandoff.image !== approvedImage) {
+  throw new Error("the ChatGPT-owned approved image was stripped from the hosted handoff");
+}
+
 for (const invalid of [
   { ...draft, acceptance_criteria: [] },
   { ...draft, solver_reward_usdc: "0" },
@@ -105,7 +122,7 @@ for (const invalid of [
 }
 
 const prompt = api.promptFor("Build a public climate dashboard");
-for (const marker of ["prepare_bounty_post", api.mcpUrl, "return ONLY one JSON object", "Do not claim that anything is posted"]) {
+for (const marker of ["prepare_bounty_post", api.mcpUrl, "return ONLY one JSON object", "generate one unique image using my ChatGPT account", "Do not claim that anything is posted"]) {
   if (!prompt.includes(marker)) throw new Error(`AI handoff prompt missing: ${marker}`);
 }
 
