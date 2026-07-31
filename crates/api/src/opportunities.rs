@@ -1550,5 +1550,4 @@ mod tests {
         assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
         assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
     }
-    }
 }
