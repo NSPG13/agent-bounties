@@ -758,7 +758,7 @@ pub fn canonical_opportunity(
         })
         .into_iter()
         .collect();
-    let (external_spend, gross_cash_margin) = if let Ok(ctx) = standing_meta_v2_parent_context(item) {
+    let (external_spend, _gross_cash_margin) = if let Ok(ctx) = standing_meta_v2_parent_context(item) {
         let external_amount = ctx.child_target.amount;
         let solver_amount = ctx.solver_reward.amount;
         let margin = solver_amount - external_amount;
