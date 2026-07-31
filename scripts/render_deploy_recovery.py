@@ -42,6 +42,16 @@ CUSTOM_DOMAINS = {
     "agent-bounties-api": ("api.agentbounties.app",),
     "agent-bounties-mcp": ("mcp.agentbounties.app",),
 }
+CANONICAL_ORIGINS = {
+    "agentbounties.app",
+    "api.agentbounties.app",
+    "mcp.agentbounties.app",
+}
+CANONICAL_PUBLIC_BASE_URLS = {
+    "PUBLIC_BASE_URL": "api.agentbounties.app",
+    "MCP_BASE_URL": "mcp.agentbounties.app",
+    "WEBSITE_BASE_URL": "agentbounties.app",
+}
 PUBLIC_ENV_SERVICE_NAMES = {
     "agent-bounties-api",
     "agent-bounties-mcp",
@@ -342,6 +352,9 @@ def normalize_public_base_url(name: str, value: str) -> str:
         or parsed.fragment
     ):
         raise RecoveryError(f"{name} must be an HTTPS origin without credentials or a path")
+    expected = CANONICAL_PUBLIC_BASE_URLS.get(name)
+    if expected is not None and parsed.hostname != expected:
+        raise RecoveryError(f"{name} must use canonical origin {expected}")
     return candidate
 
 
