@@ -96,6 +96,7 @@ contract BoundedAgentWallet {
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event TokenWithdrawn(address indexed token, address indexed to, uint256 amount);
     event EthWithdrawn(address indexed to, uint256 amount);
+    event UnclaimedBountyCancelledAndWithdrawn(address indexed bounty, uint256 refundedAmount);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "not owner");
@@ -154,6 +155,31 @@ contract BoundedAgentWallet {
         owner = msg.sender;
         pendingOwner = address(0);
         emit OwnershipTransferred(previousOwner, msg.sender);
+    }
+
+    /// @notice Owner-only escape hatch to cancel an unclaimed bounty created by this wallet and withdraw refunds atomically.
+    function cancelAndWithdrawUnclaimedBounty(address bountyAddress)
+        external
+        onlyOwner
+        nonReentrant
+        returns (uint256 refundedAmount)
+    {
+        AgentBounty bounty = _canonicalBounty(bountyAddress);
+        require(bounty.creator() == address(this), "wallet is not creator");
+        uint8 st = bounty.status();
+        require(
+            st == uint8(AgentBounty.BountyStatus.Open) || st == uint8(AgentBounty.BountyStatus.Claimable),
+            "not cancellable status"
+        );
+        require(bounty.solver() == address(0), "solver active");
+
+        uint256 balanceBefore = IERC20BountyToken(settlementToken).balanceOf(address(this));
+        bounty.cancel();
+        bounty.withdrawRefund();
+        uint256 balanceAfter = IERC20BountyToken(settlementToken).balanceOf(address(this));
+        refundedAmount = balanceAfter - balanceBefore;
+
+        emit UnclaimedBountyCancelledAndWithdrawn(bountyAddress, refundedAmount);
     }
 
     function createBounty(
