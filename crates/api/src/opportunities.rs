@@ -785,7 +785,7 @@ pub fn canonical_opportunity(
             mime_type: image.mime_type.clone(),
         })
         .unwrap_or_else(|| fallback_opportunity_image(&embeds, &title));
-    let gross_cash_margin = item.gross_cash_margin.parse::<i128>().ok()?;
+    let gross_cash_margin_val = item.gross_cash_margin.parse::<i128>().ok()?;
     let cash_economics = OpportunityCashEconomics {
         solver_reward: OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
         refundable_claim_bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
@@ -793,7 +793,7 @@ pub fn canonical_opportunity(
             item.required_external_spend.clone(),
         ),
         gross_cash_margin: OpportunityAmount::usdc_base_units(item.gross_cash_margin.clone()),
-        gross_cash_margin_positive: gross_cash_margin > 0,
+        gross_cash_margin_positive: gross_cash_margin_val > 0,
         scope_disclaimer: "Gross cash margin is solver reward minus required external spend. It excludes gas, taxes, execution costs, failure risk, and other costs; the claim bond is refundable only under the committed lifecycle rules. It is not guaranteed net profit.".to_string(),
     };
     Some(OpportunityItem {
@@ -831,7 +831,7 @@ pub fn canonical_opportunity(
         bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
         refundable_bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
         external_spend,
-        gross_cash_margin,
+        gross_cash_margin: OpportunityAmount::usdc_base_units(item.gross_cash_margin.clone()),
         deadline,
         deadline_kind,
         verification_method: item.verification_mode.clone(),
@@ -917,7 +917,7 @@ fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<U
             matches
         }
         OpportunityView::ReadyToEarn => {
-            let is_unprofitable = item.gross_cash_margin.amount.starts_with('-');
+            let _is_unprofitable = item.gross_cash_margin.amount.starts_with('-');
             let matches = item.work_state == "claimable"
                 && item.payment_state == "escrowed"
                 && item.payment_committed
