@@ -617,6 +617,7 @@ def main() -> int:
             "RefundWithdrawn",
             "immutable audit history",
             "creator cannot withdraw another funder's money",
+            "BoundedAgentWalletV2",
         ],
     )
     require_phrases(
@@ -625,14 +626,17 @@ def main() -> int:
         [
             "/v1/base/autonomous-bounties/cancel-plan",
             "/v1/base/autonomous-bounties/refund-withdrawal-plan",
+            "/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan",
             'function: "cancel()"',
             'data: "0xea8a1af0"',
             'function: "withdrawRefund()"',
             'data: "0x110f8874"',
             "Only unclaimed Open or Claimable bounties can be cancelled",
-            "Connect the creator wallet that posted this bounty",
+            "Connect the creator wallet or the owner of its BoundedAgentWalletV2",
             "BountyCancelled is confirmed",
             "RefundWithdrawn is confirmed",
+            "cancelAndWithdrawUnclaimedBounty(address)",
+            "withdrawCancelledBountyRefund(address)",
         ],
     )
 

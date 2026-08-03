@@ -432,6 +432,15 @@ the contract. Cancellation is a delist and custody transition, not deletion of
 chain history. Each contributor then calls `withdrawRefund()` from the wallet
 that funded the bounty.
 
+For a bounty created by `BoundedAgentWalletV2`,
+`plan_bounded_wallet_cancel_refund` and
+`/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan` produce one
+owner-signed call. In `Open` or `Claimable`, the wallet atomically cancels and
+withdraws only its contribution. In `Cancelled`, it withdraws the contribution
+left after permissionless deadline cleanup. The contract rejects a non-owner,
+non-canonical bounty, different creator, active claim, active bond, or active
+submission. Other contributors keep independent pull-refund rights.
+
 Important events include:
 
 - `FundingAdded`

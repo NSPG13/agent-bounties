@@ -1,6 +1,6 @@
 {
   "schema_version": "agent-bounties/mcp-tool-registry-v1",
-  "normalized_descriptors_sha256": "54cd25209db99014f1812934387768e604ad7e01d153711e267b6ea2c4c3d399",
+  "normalized_descriptors_sha256": "29db3cbccef5536f2b6213562f9a8ba69f6d1abc846102116056930674e37554",
   "tools": [
     "route_blocked_goal",
     "plan_objective_creation",
@@ -89,6 +89,7 @@
     "plan_autonomous_expire_submission",
     "plan_autonomous_cancel",
     "plan_autonomous_refund_withdrawal",
+    "plan_bounded_wallet_cancel_refund",
     "decode_autonomous_bounty_events",
     "list_autonomous_bounty_events",
     "publish_autonomous_bounty_terms",

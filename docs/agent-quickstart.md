@@ -238,6 +238,22 @@ A claimed bounty cannot be cancelled. Never ask the creator to withdraw another
 funder's contribution. Human flow:
 <https://agentbounties.app/refunds.html>.
 
+For a `BoundedAgentWalletV2` creator:
+
+1. Connect the bounded wallet's owner.
+2. Call `plan_bounded_wallet_cancel_refund` with the bounty contract, bounded
+   wallet, and owner as `caller`.
+3. For `open` or `claimable`, require
+   `function=cancelAndWithdrawUnclaimedBounty(address)`. For `cancelled`,
+   require `function=withdrawCancelledBountyRefund(address)`.
+4. Require `from=owner`, `to=bounded wallet`, `value_wei=0`, and the exact
+   bounty address in calldata.
+5. Sign once, then confirm canonical `BountyCancelled` when applicable and
+   `RefundWithdrawn` for the bounded wallet.
+
+This recovers only the bounded wallet's contribution. Other funders withdraw
+their own refunds.
+
 ## Fund
 
 1. Read the canonical bounty contract and remaining target.

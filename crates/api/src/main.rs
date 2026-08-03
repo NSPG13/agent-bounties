@@ -270,6 +270,7 @@ use worker::{
         relay_autonomous_timeout,
         plan_autonomous_cancel,
         plan_autonomous_refund_withdrawal,
+        plan_bounded_wallet_cancel_refund,
         decode_autonomous_bounty_events,
         list_autonomous_bounty_events,
         publish_autonomous_bounty_terms,
@@ -1385,6 +1386,14 @@ struct PlanAutonomousLifecycleRequest {
     caller: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanBoundedWalletCancelRefundRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    bounded_wallet: String,
+    caller: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 enum AutonomousTimeoutAction {
@@ -2013,6 +2022,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/refund-withdrawal-plan",
             post(plan_autonomous_refund_withdrawal),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan",
+            post(plan_bounded_wallet_cancel_refund),
         )
         .route(
             "/v1/base/autonomous-bounties/decode-events",
@@ -10495,6 +10508,33 @@ async fn plan_autonomous_refund_withdrawal(
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan", responses((status = 200, description = "Owner-only atomic bounded-wallet V2 cancellation and creator refund plan")))]
+async fn plan_bounded_wallet_cancel_refund(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanBoundedWalletCancelRefundRequest>,
+) -> Result<Json<EvmTransactionIntent>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
+    if !item.creator.eq_ignore_ascii_case(&request.bounded_wallet) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let planner = configured_autonomous_planner(network)?;
+    let plan = match item.status.as_str() {
+        "open" | "claimable" => planner.plan_bounded_wallet_cancel_refund(
+            &request.bounded_wallet,
+            &request.bounty_contract,
+            &request.caller,
+        ),
+        "cancelled" => planner.plan_bounded_wallet_refund(
+            &request.bounded_wallet,
+            &request.bounty_contract,
+            &request.caller,
+        ),
+        _ => return Err(StatusCode::CONFLICT),
+    };
+    plan.map(Json).map_err(|_| StatusCode::BAD_REQUEST)
+}
+
 fn autonomous_item_mode(item: &AutonomousBountyFeedItem) -> Result<&str, StatusCode> {
     item.terms
         .as_ref()
@@ -16079,6 +16119,9 @@ mod tests {
         assert!(paths.contains_key("/v1/base/open-competition-v1/reveal-preparation"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/status"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/bond-withdrawal-preparation"));
+        assert!(
+            paths.contains_key("/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan")
+        );
         assert!(paths.contains_key("/v1/cloud-agent/objective-plans"));
         assert!(
             value["paths"]["/v1/cloud-agent/objective-plans"]["post"]["responses"]
