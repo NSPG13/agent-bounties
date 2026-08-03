@@ -116,17 +116,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: regression-candidates-${{ needs.authorize-run.outputs.run_id }}
           path: target/regression-candidates
           github-token: ${{ github.token }}
           run-id: ${{ needs.authorize-run.outputs.run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: regression-attestations-one
           path: target/attestations-one
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: regression-attestations-two
           path: target/attestations-two
