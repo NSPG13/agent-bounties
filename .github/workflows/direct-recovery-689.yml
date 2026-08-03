@@ -288,6 +288,7 @@ jobs:
               f"- Exact revision: `{report['revision']}`",
               f"- Operator solver: `{report['operator_solver']}`",
               f"- Returned: **{report['return_amount'] / 1_000_000:.2f} USDC** to `{report['return_recipient']}`",
+              f"- Preserved operator residual: **{report['operator_residual_after'] / 1_000_000:.2f} USDC**",
               f"- Return transaction: `https://basescan.org/tx/{report['return_transfer_tx']}`",
               f"- Workflow evidence: {os.environ['RUN_URL']}",
               "",
