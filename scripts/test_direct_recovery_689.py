@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -263,6 +263,61 @@ class DirectRecovery689Tests(unittest.TestCase):
             self.assertRaisesRegex(recovery.RecoveryError, "another pending transaction"),
         ):
             cast.next_nonce("secret")
+
+    def test_expired_submission_is_reset_for_a_new_recovery_round(self) -> None:
+        bounty = self.manifest["bounties"][0]
+        issue = bounty["issue"]
+        states = {
+            issue: {
+                "status": 3,
+                "verification_expires_at": 99,
+            }
+        }
+        refreshed = {
+            "status": 1,
+            "solver": "0x" + "00" * 20,
+            "active_claim_bond": 0,
+            "submission_hash": "0x" + "00" * 32,
+            "evidence_hash": "0x" + "00" * 32,
+        }
+        cast = Mock()
+        cast.send.return_value = "0x" + "11" * 32
+        one_bounty_manifest = {**self.manifest, "bounties": [bounty]}
+        with patch.object(recovery, "audit_bounty", return_value=refreshed):
+            transactions = recovery.expire_stale_submissions(
+                cast,
+                one_bounty_manifest,
+                states,
+                "secret",
+                100,
+            )
+        cast.send.assert_called_once_with(
+            "secret",
+            bounty["contract"],
+            "expireSubmission()",
+        )
+        self.assertEqual(states[issue], refreshed)
+        self.assertEqual(transactions[issue], "0x" + "11" * 32)
+
+    def test_unexpired_submission_is_not_reset(self) -> None:
+        bounty = self.manifest["bounties"][0]
+        issue = bounty["issue"]
+        states = {
+            issue: {
+                "status": 3,
+                "verification_expires_at": 100,
+            }
+        }
+        cast = Mock()
+        transactions = recovery.expire_stale_submissions(
+            cast,
+            {**self.manifest, "bounties": [bounty]},
+            states,
+            "secret",
+            100,
+        )
+        cast.send.assert_not_called()
+        self.assertEqual(transactions, {})
 
 
 if __name__ == "__main__":
