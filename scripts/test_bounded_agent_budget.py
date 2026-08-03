@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "plan_bounded_agent_budget.py"
-MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-base-mainnet.json"
+MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-v2-base-mainnet.json"
 
 
 def load_planner():
@@ -268,20 +268,24 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
             "verifier_module": self.create_helper.ZERO_ADDRESS,
             "verifier_reward_recipient": self.create_helper.ZERO_ADDRESS,
             "verifier_reward": 100_000,
-            "threshold": 2,
+            "threshold": 1,
         }
         policy = {
             "allowed_verification_modes": 3,
             "deterministic_verifier_module": self.manifest["canonical"]["deterministic_verifier"],
             "signed_quorum_verifier_set_hash": self.manifest["canonical"]["signed_quorum_verifier_set_hash"],
         }
-        verifiers = list(self.create_helper.SIGNED_QUORUM_VERIFIERS)
+        verifiers = list(
+            self.create_helper.SUPPORTED_SIGNED_VERIFIER_SETS[
+                self.manifest["canonical"]["signed_quorum_verifier_set_hash"]
+            ]
+        )
         self.create_helper.validate_creation_verification(params, verifiers, policy, self.manifest["canonical"])
 
         with self.assertRaisesRegex(SystemExit, "exact signed regression"):
             self.create_helper.validate_creation_verification(
                 params,
-                list(reversed(verifiers)),
+                ["0x1111111111111111111111111111111111111111"],
                 policy,
                 self.manifest["canonical"],
             )

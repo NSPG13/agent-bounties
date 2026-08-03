@@ -91,7 +91,7 @@ poor choices until a cap, expiry, or owner revocation stops it.
 2. Build and review the deterministic factory manifest:
 
    ```powershell
-   python scripts/build_bounded_agent_wallet_bundle.py
+   python scripts/build_bounded_agent_wallet_bundle.py --version v2
    ```
 
 3. Build the exact owner plan:
@@ -155,9 +155,11 @@ fresh policy-period counter; the review page must disclose that before signing.
 
 ## Activation State
 
-The deterministic contract manifest is
+New activation plans use the V2 deterministic contract manifest:
+[`deployments/bounded-agent-wallet-v2-base-mainnet.json`](../deployments/bounded-agent-wallet-v2-base-mainnet.json).
+The historical V1 manifest remains at
 [`deployments/bounded-agent-wallet-base-mainnet.json`](../deployments/bounded-agent-wallet-base-mainnet.json).
-The live policy constants and owner-transaction evidence are in
+The current live V1 policy constants and owner-transaction evidence are in
 [`scripts/bounded_wallet_policy.py`](../scripts/bounded_wallet_policy.py).
 Runtime inspection remains authoritative. Do not transfer USDC to a predicted
 wallet before deployment and inspection pass.

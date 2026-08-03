@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-base-mainnet.json"
+DEFAULT_MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-v2-base-mainnet.json"
 POLICY_TYPE = (
     "(address,uint64,uint64,uint64,uint256,uint256,uint256,uint256,uint8,uint8,address,bytes32,bytes32)"
 )
@@ -31,7 +31,7 @@ EXPECTED_CANONICAL = {
 }
 EXPECTED_CREATE2_DEPLOYER = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
 EXPECTED_CREATE2_DEPLOYER_HASH = "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989"
-EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH = "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
+EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH = "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2"
 
 
 def executable(name: str) -> str:
@@ -86,7 +86,7 @@ def require_bytes32(value: str, label: str) -> str:
 
 
 def validate_manifest(manifest: dict) -> dict:
-    if manifest.get("schema") != "agent-bounties/bounded-agent-wallet-deployment-v1":
+    if manifest.get("schema") != "agent-bounties/bounded-agent-wallet-deployment-v2":
         raise SystemExit("bounded-wallet manifest schema is unsupported")
     if manifest.get("network") != EXPECTED_NETWORK or manifest.get("chain_id") != EXPECTED_CHAIN_ID:
         raise SystemExit("bounded-wallet manifest must target Base mainnet")
