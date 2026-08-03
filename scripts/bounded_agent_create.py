@@ -26,6 +26,11 @@ SIGNED_QUORUM_VERIFIERS = [
     "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
 ]
 SIGNED_QUORUM_VERIFIER_SET_HASH = "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
+SINGLE_VERIFIER_SET_HASH = "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2"
+SUPPORTED_SIGNED_VERIFIER_SETS = {
+    SINGLE_VERIFIER_SET_HASH: SIGNED_QUORUM_VERIFIERS[:1],
+    SIGNED_QUORUM_VERIFIER_SET_HASH: SIGNED_QUORUM_VERIFIERS,
+}
 HEX_DATA = re.compile(r"^0x(?:[0-9a-fA-F]{2})+$")
 
 PARAM_NAMES = (
@@ -97,15 +102,16 @@ def validate_creation_verification(
         str(canonical.get("signed_quorum_verifier_set_hash", "")),
         "canonical signed quorum verifier set hash",
     )
-    if manifest_hash != SIGNED_QUORUM_VERIFIER_SET_HASH:
+    expected_verifiers = SUPPORTED_SIGNED_VERIFIER_SETS.get(manifest_hash)
+    if expected_verifiers is None:
         fail("bounded-wallet manifest has an unexpected signed quorum")
     if (
         policy["signed_quorum_verifier_set_hash"] != manifest_hash
         or params["verifier_module"] != ZERO_ADDRESS
         or params["verifier_reward_recipient"] != ZERO_ADDRESS
-        or int(params["threshold"]) != len(SIGNED_QUORUM_VERIFIERS)
-        or verifiers != SIGNED_QUORUM_VERIFIERS
-        or int(params["verifier_reward"]) % len(SIGNED_QUORUM_VERIFIERS) != 0
+        or int(params["threshold"]) != len(expected_verifiers)
+        or verifiers != expected_verifiers
+        or int(params["verifier_reward"]) % len(expected_verifiers) != 0
     ):
         fail("bounded creation requires the exact signed regression verifier policy")
 

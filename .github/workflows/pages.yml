@@ -6,6 +6,7 @@ on:
       - ".github/workflows/pages.yml"
       - ".github/ISSUE_TEMPLATE/paid-bounty.yml"
       - "deployments/bounded-agent-wallet-base-mainnet.json"
+      - "deployments/bounded-agent-wallet-v2-base-mainnet.json"
       - "docs/posting-a-usable-bounty.md"
       - "site/**"
       - "tools/coinbase-embedded-wallet/**"
@@ -24,6 +25,7 @@ on:
       - ".github/workflows/pages.yml"
       - ".github/ISSUE_TEMPLATE/paid-bounty.yml"
       - "deployments/bounded-agent-wallet-base-mainnet.json"
+      - "deployments/bounded-agent-wallet-v2-base-mainnet.json"
       - "docs/posting-a-usable-bounty.md"
       - "site/**"
       - "tools/coinbase-embedded-wallet/**"
@@ -216,6 +218,7 @@ jobs:
       - name: Stage bounded-wallet deployment manifest
         run: |
           cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json
+          cp deployments/bounded-agent-wallet-v2-base-mainnet.json site/bounded-agent-wallet-v2-base-mainnet.json
           mkdir -p site/schemas
           cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json
       - uses: actions/upload-pages-artifact@v5

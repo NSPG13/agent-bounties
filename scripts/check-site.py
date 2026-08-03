@@ -404,8 +404,11 @@ def main() -> int:
     x402_vectors = json.loads((site_dir / "x402-test-vectors.json").read_text(encoding="utf-8"))
     protocol = json.loads((site_dir / "protocol.json").read_text(encoding="utf-8"))
     deployment = json.loads((repo_root / "deployments" / "base-mainnet.json").read_text(encoding="utf-8"))
-    bounded_deployment = json.loads(
+    legacy_bounded_deployment = json.loads(
         (repo_root / "deployments" / "bounded-agent-wallet-base-mainnet.json").read_text(encoding="utf-8")
+    )
+    bounded_deployment = json.loads(
+        (repo_root / "deployments" / "bounded-agent-wallet-v2-base-mainnet.json").read_text(encoding="utf-8")
     )
     standing_meta_deployment = json.loads(
         (repo_root / "deployments" / "standing-meta-v2-base-mainnet.json").read_text(encoding="utf-8")
@@ -1171,7 +1174,8 @@ def main() -> int:
             "Agent delegate address",
             "Initial funding, USDC",
             "Lifetime gross spend, USDC",
-            "two-wallet sandboxed-regression quorum only",
+            "one exact sandboxed-regression verifier",
+            "cancel an unclaimed bounty",
             "Owner escape hatch",
             "Review policy update",
             "Update policy",
@@ -1198,7 +1202,7 @@ def main() -> int:
             'revokePolicy: "0x9eba3667"',
             'configurePolicy: "0x27d3543c"',
             "starts a fresh policy-period spend counter",
-            "exact two-wallet sandboxed-regression quorum",
+            "exact one-verifier regression policy",
             "OBSOLETE_DETERMINISTIC_VERIFIER",
             "manifest.contract_source_dirty !== false",
             "contract_source_revision",
@@ -1218,7 +1222,7 @@ def main() -> int:
     for forbidden in ["privateKey", "mnemonic", "seedInput", "wallet_import"]:
         if forbidden in bounded_javascript:
             fail(f"agent budget activation contains forbidden secret handling: {forbidden}")
-    if bounded_deployment.get("schema") != "agent-bounties/bounded-agent-wallet-deployment-v1":
+    if bounded_deployment.get("schema") != "agent-bounties/bounded-agent-wallet-deployment-v2":
         fail("bounded-wallet deployment manifest has the wrong schema")
     if bounded_deployment.get("chain_id") != 8453 or bounded_deployment.get("network") != "base-mainnet":
         fail("bounded-wallet deployment manifest must target Base mainnet")
@@ -1270,7 +1274,10 @@ def main() -> int:
         fail("historical standing-meta-v2 deployment manifest has the wrong verifier")
     if bounded_deployment["canonical"]["deterministic_verifier"] != "0x380c1af742593dd88b6f20387e9ee693a0536731":
         fail("bounded wallet manifest does not trust the durable verifier router")
-    if standing_components.get("verifier_set_hash") != bounded_deployment["canonical"]["signed_quorum_verifier_set_hash"]:
+    if (
+        standing_components.get("verifier_set_hash")
+        != legacy_bounded_deployment["canonical"]["signed_quorum_verifier_set_hash"]
+    ):
         fail("bounded wallet and standing-meta-v2 manifests disagree on the signed quorum")
     if standing_components.get("verifier_wallets") != [
         "0xbe6292b9e465f549e2363b918d6dd9187038431e",
@@ -1292,6 +1299,8 @@ def main() -> int:
         [
             '"deployments/bounded-agent-wallet-base-mainnet.json"',
             "cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json",
+            '"deployments/bounded-agent-wallet-v2-base-mainnet.json"',
+            "cp deployments/bounded-agent-wallet-v2-base-mainnet.json site/bounded-agent-wallet-v2-base-mainnet.json",
             "cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json",
         ],
     )
