@@ -176,6 +176,15 @@ def uint(value: object, field: str) -> int:
     return int(match.group(0), 0)
 
 
+def operator_residual(keeper_balance: int, already_settled: int) -> int:
+    expected_recovery_proceeds = already_settled * 2_000_000
+    if keeper_balance < expected_recovery_proceeds:
+        raise RecoveryError(
+            "operator balance is below resumable partial-settlement accounting"
+        )
+    return keeper_balance - expected_recovery_proceeds
+
+
 def require_https(value: object, field: str) -> str:
     text = str(value or "").strip()
     if not text.startswith("https://") or len(text) > 2_000:
@@ -1097,11 +1106,7 @@ def command_relay(args: argparse.Namespace) -> None:
         raise RecoveryError("every recovery contract must be submitted or already settled")
     already_settled = sum(state["status"] == 4 for state in states.values())
     keeper_before = cast.balance(token, keeper)
-    expected_keeper_before = already_settled * 2_000_000
-    if keeper_before != expected_keeper_before:
-        raise RecoveryError(
-            "operator balance does not match resumable partial-settlement accounting"
-        )
+    residual_before = operator_residual(keeper_before, already_settled)
     verifier_before = {
         verifier: cast.balance(token, verifier) for verifier in manifest["verifiers"]
     }
@@ -1165,8 +1170,10 @@ def command_relay(args: argparse.Namespace) -> None:
     expected_solver_increase = newly_settled * 2_000_000
     if keeper_after_settlement - keeper_before != expected_solver_increase:
         raise RecoveryError("solver recovery receipts differ from exact per-bounty accounting")
-    if keeper_after_settlement != manifest["exact_return_amount"]:
-        raise RecoveryError("operator balance does not equal the exact 10 USDC return")
+    if keeper_after_settlement != manifest["exact_return_amount"] + residual_before:
+        raise RecoveryError(
+            "operator balance does not equal the exact return plus preserved residual"
+        )
     for verifier in manifest["verifiers"]:
         increase = cast.balance(token, verifier) - verifier_before[verifier]
         if increase != newly_settled * 5_000:
@@ -1184,6 +1191,9 @@ def command_relay(args: argparse.Namespace) -> None:
     recipient_after = cast.balance(token, recipient)
     if recipient_after - recipient_before != manifest["exact_return_amount"]:
         raise RecoveryError("return transfer did not increase recipient by exactly 10 USDC")
+    keeper_after_return = cast.balance(token, keeper)
+    if keeper_after_return != residual_before:
+        raise RecoveryError("operator residual changed during the exact return")
     evidence = {
         "schema": EVIDENCE_SCHEMA,
         "classification": manifest["metrics_classification"],
@@ -1193,6 +1203,8 @@ def command_relay(args: argparse.Namespace) -> None:
         "operator_solver": keeper,
         "return_recipient": recipient,
         "return_amount": manifest["exact_return_amount"],
+        "operator_residual_before": residual_before,
+        "operator_residual_after": keeper_after_return,
         "settlements": settlements,
         "return_transfer_tx": transfer_tx,
         "metrics_credit": False,

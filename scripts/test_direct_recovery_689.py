@@ -60,6 +60,14 @@ class DirectRecovery689Tests(unittest.TestCase):
             with self.assertRaisesRegex(recovery.RecoveryError, "public criteria"):
                 recovery.load_manifest(self.write_manifest(changed, directory))
 
+    def test_operator_residual_preserves_unrelated_balance(self) -> None:
+        self.assertEqual(recovery.operator_residual(2_000_000, 1), 0)
+        self.assertEqual(recovery.operator_residual(2_010_000, 1), 10_000)
+
+    def test_operator_residual_rejects_missing_recovery_proceeds(self) -> None:
+        with self.assertRaisesRegex(recovery.RecoveryError, "below"):
+            recovery.operator_residual(1_999_999, 1)
+
     def test_candidate_hashes_are_deterministic_and_disclose_no_credit(self) -> None:
         bounty = self.manifest["bounties"][0]
         check = {
