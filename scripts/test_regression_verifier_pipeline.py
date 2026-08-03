@@ -38,6 +38,17 @@ def archive(entries: list[tuple[str, bytes | None, str]]) -> bytes:
 
 
 class RegressionVerifierPipelineTests(unittest.TestCase):
+    def test_verifier_signing_uses_a_dedicated_rpc_configuration(self) -> None:
+        workflow_root = SCRIPT.parent.parent / ".github" / "workflows"
+        for name in (
+            "regression-verifier-signing-reusable.yml",
+            "regression-verifier-signer.yml",
+        ):
+            with self.subTest(workflow=name):
+                workflow = (workflow_root / name).read_text(encoding="utf-8")
+                self.assertIn("vars.REGRESSION_VERIFIER_RPC_URL", workflow)
+                self.assertNotIn("vars.BASE_MAINNET_RPC_URL", workflow)
+
     def test_stale_runner_revision_skips_every_signing_job(self) -> None:
         workflow = (
             SCRIPT.parent.parent / ".github" / "workflows" / "regression-verifier-signer.yml"

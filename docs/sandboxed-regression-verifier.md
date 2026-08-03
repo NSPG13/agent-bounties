@@ -116,6 +116,14 @@ separate no-secrets service with a runner-owned staging volume. Signing must be
 a separate capability that verifies a fresh candidate against the current
 canonical job and requires at least two distinct precommitted verifier paths.
 
+The signer and keeper workflows read their Base endpoint from the dedicated
+`REGRESSION_VERIFIER_RPC_URL` Actions variable and otherwise use
+`https://mainnet.base.org`. Keep this separate from the application's general
+`BASE_MAINNET_RPC_URL`: an unavailable shared provider must not disable the
+isolated verification path. Any configured endpoint remains subject to the
+same exact current-job revalidation and on-chain signature checks; an RPC
+response, signature, or broadcast is never settlement evidence.
+
 Only confirmed canonical `BountySettled` is payout evidence. A runner receipt,
 response hash, verifier signature, quorum plan, relay transaction hash, or
 hosted database row is not payment evidence.
