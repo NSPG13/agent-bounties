@@ -12,11 +12,10 @@ export const DEFAULT_BASE_RPC_FALLBACK_URLS = Object.freeze([
 export const CLAIM_HANDOFF_SCHEMA_VERSION = "agent-bounties/check-in-claim-handoff-v1";
 export const SUPPORTED_REGRESSION_QUORUM = Object.freeze({
   engine: "sandboxed_regression_v1",
-  verifierSetHash: "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
-  threshold: 2,
+  verifierSetHash: "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2",
+  threshold: 1,
   verifiers: Object.freeze([
     "0xbe6292b9e465f549e2363b918d6dd9187038431e",
-    "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
   ]),
 });
 

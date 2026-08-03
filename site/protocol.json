@@ -10,9 +10,11 @@
   "deployment_transaction": "0x8c172a34188cc68cf61f7293825e3c93e025a029b878436d34aafd2103c2e70e",
   "deployment_block": 48496662,
   "default_verification": {
-    "mode": "deterministic_module",
-    "module_id": "leading_zero_work_v1",
-    "verifier_reward_recipient": "creator_wallet",
+    "mode": "signed_quorum",
+    "product_label": "single_verifier",
+    "verifiers": [
+      "0xbe6292b9e465f549e2363b918d6dd9187038431e"
+    ],
     "threshold": 1
   },
   "deterministic_modules": {

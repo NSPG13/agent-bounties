@@ -790,9 +790,8 @@ def main() -> int:
             "Sign and post bounty",
             "Post with 0 USDC now and open it to funding later",
             "Fund on creation",
-            "Automatic demo proof checker",
-            "Trusted verifier wallets",
-            "Two or more AI judges",
+            "One automatic verifier",
+            "Optional independent review for higher-risk work",
             "Benchmark JSON (exact payout condition)",
             "Evidence record schema",
             "does not evaluate my task or acceptance criteria",
@@ -944,15 +943,15 @@ def main() -> int:
     if manifest_protocol.get("payout_authority") != "confirmed canonical BountySettled event":
         fail("static discovery manifest must bind payout to BountySettled")
     default_verification = protocol.get("default_verification", {})
-    if default_verification.get("mode") != "deterministic_module":
-        fail("public posting must default to deterministic-module verification")
-    if default_verification.get("module_id") not in protocol.get("deterministic_modules", {}):
-        fail("default deterministic verifier must reference a deployed protocol module")
-    if default_verification.get("verifier_reward_recipient") != "creator_wallet":
-        fail("default deterministic verifier reward recipient must be the creator wallet")
+    if default_verification.get("mode") != "signed_quorum":
+        fail("public posting must default to one signed verifier")
+    if default_verification.get("product_label") != "single_verifier":
+        fail("public protocol must describe the default as single verifier")
     if default_verification.get("threshold") != 1:
-        fail("default deterministic verifier threshold must be one")
-    default_module = protocol["deterministic_modules"][default_verification["module_id"]]
+        fail("default verifier threshold must be one")
+    if len(default_verification.get("verifiers", [])) != 1:
+        fail("public protocol must commit exactly one default verifier")
+    default_module = protocol["deterministic_modules"]["leading_zero_work_v1"]
     expected_work_benchmark = {
         "engine": "leading_zero_work_v1",
         "difficulty_bits": 16,
@@ -1057,21 +1056,29 @@ def main() -> int:
         fail("static discovery manifest advertises retired escrow tools")
     modes = {mode.get("name"): mode for mode in discovery.get("verification_modes", [])}
     deterministic_mode = modes.get("deterministic_module", {})
-    if deterministic_mode.get("default_for_new_bounties") is not True:
-        fail("discovery must default new bounties to deterministic verification")
+    if deterministic_mode.get("default_for_new_bounties") is not False:
+        fail("deterministic verification must be an explicit posting choice")
     expected_module = protocol["deterministic_modules"]["leading_zero_work_v1"]["contract"]
     if deterministic_mode.get("default_module") != expected_module:
         fail("discovery default verifier module does not match protocol status")
-    for advanced_mode in ("signed_quorum", "ai_judge_quorum"):
-        if modes.get(advanced_mode, {}).get("default_for_new_bounties") is not False:
-            fail(f"advanced verifier mode must not be a posting default: {advanced_mode}")
+    signed_mode = modes.get("signed_quorum", {})
+    if (
+        signed_mode.get("default_for_new_bounties") is not True
+        or signed_mode.get("product_label") != "single_verifier"
+        or signed_mode.get("default_threshold") != 1
+    ):
+        fail("discovery must default direct bounties to one precommitted verifier")
+    if modes.get("ai_judge_quorum", {}).get("default_for_new_bounties") is not False:
+        fail("AI-judge quorum must remain an explicit advanced choice")
     funding = discovery.get("funding", {})
     if "wallet_signature" not in funding.get("gas_sponsorship", ""):
         fail("static discovery manifest must describe native claim signature replay")
-    if funding.get("default_verification") != "deterministic_module":
+    if funding.get("default_verification") != "signed_quorum":
         fail("discovery funding policy has the wrong verification default")
-    if funding.get("default_verifier_module") != expected_module:
-        fail("discovery funding policy has the wrong default verifier module")
+    if funding.get("default_verifier_threshold") != 1:
+        fail("discovery funding policy must use one verifier by default")
+    if funding.get("default_verifier") != protocol["default_verification"]["verifiers"][0]:
+        fail("discovery funding policy has the wrong default verifier")
     if "/agent-bounty relay" not in funding.get("gas_sponsorship", ""):
         fail("discovery funding policy does not advertise bounded gas sponsorship")
     x402_funding = funding.get("x402", {})

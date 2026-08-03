@@ -17,7 +17,7 @@
       <section class="sr-only" aria-label="Compatibility information">
         <h2>Post your own bounty</h2>
         <p>Fund on creation. Post with 0 USDC now and open it to funding later.</p>
-        <p>Sign and post bounty. Automatic demo proof checker. Trusted verifier wallets. Two or more AI judges.</p>
+        <p>Sign and post bounty. One automatic verifier. Optional independent review for higher-risk work.</p>
         <p>Benchmark JSON (exact payout condition). Evidence record schema. The demo checker does not evaluate my task or acceptance criteria.</p>
         <p>How did you find Agent Bounties? Draft measurable terms. The cloud draft is advisory.</p>
         <a href="terms.html">Terms</a><a href="privacy.html">Privacy</a>
@@ -27,8 +27,8 @@
         <template id="autonomous-post-compatibility-contract">
           <select data-wallet-provider aria-label="Wallet provider"><option>Browser wallet</option></select>
           <select name="verificationMode">
-            <option value="deterministic_module" selected>Automatic demo proof checker</option>
-            <option value="signed_quorum">Trusted verifier wallets</option>
+            <option value="signed_quorum" selected>One automatic verifier</option>
+            <option value="deterministic_module">Exact on-chain verifier</option>
           </select>
           <input name="demoVerifierAccepted" type="checkbox">
           <input name="solverReward" type="number" min="0.01" step="0.01" value="2.00">

@@ -33,7 +33,7 @@ For the current coding path, use:
 - an exact public `github_commit` benchmark source
 - a complete `runner_manifest` with a digest-pinned OCI image, direct argv,
   benchmark digest, and resource limits
-- the platform's exact live threshold-two regression verifier set
+- the platform's exact live one-verifier regression policy
 - evidence fields for repository, commit, pull request, check runs, and artifact
   digest
 

@@ -773,6 +773,12 @@ pub fn canonical_opportunity(
         gross_cash_margin_positive: gross_cash_margin > 0,
         scope_disclaimer: "Gross cash margin is solver reward minus required external spend. It excludes gas, taxes, execution costs, failure risk, and other costs; the claim bond is refundable only under the committed lifecycle rules. It is not guaranteed net profit.".to_string(),
     };
+    let verification_method =
+        if item.verification_mode == "signed_quorum" && item.verifier_threshold == Some(1) {
+            "single_verifier".to_string()
+        } else {
+            item.verification_mode.clone()
+        };
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "canonical_base".to_string(),
@@ -808,7 +814,7 @@ pub fn canonical_opportunity(
         bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
         deadline,
         deadline_kind,
-        verification_method: item.verification_mode.clone(),
+        verification_method,
         verification_ready: state.verification_ready,
         evidence_requirements,
         terms_hash: Some(item.terms_hash.clone()),

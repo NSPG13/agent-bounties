@@ -38,6 +38,52 @@ def archive(entries: list[tuple[str, bytes | None, str]]) -> bytes:
 
 
 class RegressionVerifierPipelineTests(unittest.TestCase):
+    def test_runner_selects_single_verifier_and_legacy_two_verifier_jobs(self) -> None:
+        configured = ["0x" + "1" * 40, "0x" + "2" * 40]
+        jobs = [
+            {
+                "job_id": "single",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": configured[:1],
+                "threshold": 1,
+            },
+            {
+                "job_id": "legacy",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": configured,
+                "threshold": 2,
+            },
+            {
+                "job_id": "unsupported",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": [configured[1]],
+                "threshold": 1,
+            },
+        ]
+        self.assertEqual(
+            [job["job_id"] for job in pipeline.selected_jobs(jobs, configured, 5)],
+            ["single", "legacy"],
+        )
+
+    def test_regression_job_rejects_zero_or_ambiguous_verifiers(self) -> None:
+        base = {
+            "verification_mode": "signed_quorum",
+            "eligible_verifiers": ["0x" + "1" * 40],
+            "threshold": 1,
+        }
+        self.assertEqual(pipeline.required_job_signers(base), base["eligible_verifiers"])
+        for changed in (
+            {**base, "threshold": 0},
+            {**base, "threshold": 2},
+            {
+                **base,
+                "threshold": 2,
+                "eligible_verifiers": ["0x" + "1" * 40, "0x" + "1" * 40],
+            },
+        ):
+            with self.subTest(changed=changed), self.assertRaises(pipeline.PipelineError):
+                pipeline.required_job_signers(changed)
+
     def test_verifier_signing_uses_a_dedicated_rpc_configuration(self) -> None:
         workflow_root = SCRIPT.parent.parent / ".github" / "workflows"
         for name in (
