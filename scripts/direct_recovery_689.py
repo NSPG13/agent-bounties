@@ -12,6 +12,7 @@ import re
 import subprocess
 import time
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,11 @@ EXACT_CONTRACTS = {
     "0xc710d54d192ffb0b84cd6e051754ab70acf1130c",
 }
 EXACT_NOTICE_URL = "https://github.com/NSPG13/agent-bounties/issues/689"
+EXACT_ACCEPTED_REVISION = "d58fa377e9081f963f9a380b11a29f51fa57421a"
+EXACT_ACCEPTED_PULL_REQUEST_URL = "https://github.com/NSPG13/agent-bounties/pull/702"
+EXACT_CHECK_RUN_URL = (
+    "https://github.com/NSPG13/agent-bounties/actions/runs/30441776495"
+)
 EXACT_SETTLEMENT_TOKEN = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 EXACT_CREATOR = "0x1eaa1c68772cf76bc5f4e4174766076e33ace662"
 EXACT_OPERATOR_SOLVER = "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
@@ -78,10 +84,54 @@ EXACT_ISSUE_CHECKS = {
         "builds_content_addressed_autonomous_terms_commitments",
     ],
 }
+EXACT_CANDIDATE_HASHES = {
+    634: {
+        "submission_hash": "0x031a83cf6f0c310c1a2af303607e00fedf44b64bee89e595e5ba3dcdb0b0586e",
+        "evidence_hash": "0x754efb520ba132d1bf3efd4e0710ab8c7431df7e7b1061224807460bdda3a957",
+        "response_hash": "0x67d0eb91be2f50fa77046f681a84b08c639d1fe2fabbfa5d3aae64ba2e0487a3",
+    },
+    635: {
+        "submission_hash": "0x031a83cf6f0c310c1a2af303607e00fedf44b64bee89e595e5ba3dcdb0b0586e",
+        "evidence_hash": "0x20f5bfab3381ffac163b092bf667555b2d4f936f8cf85625acaae0011888ed5b",
+        "response_hash": "0xe22eb3f6af9ad94e25d02cc81ddcdf6e78f9f17b5da3e99756cbc47bed036736",
+    },
+    636: {
+        "submission_hash": "0x031a83cf6f0c310c1a2af303607e00fedf44b64bee89e595e5ba3dcdb0b0586e",
+        "evidence_hash": "0x8a8b96f0d446ee6ee1adb5a7415ac95933bb07354dc71467745e78bb79cec116",
+        "response_hash": "0x566d42356dde733852343508e600244e0b68618248e668da205ce3a5455b854c",
+    },
+    637: {
+        "submission_hash": "0x031a83cf6f0c310c1a2af303607e00fedf44b64bee89e595e5ba3dcdb0b0586e",
+        "evidence_hash": "0x1377ca2fd812ac65c62bf38f31f02e49b49cd9f5609f4181f7a0bd01113ba150",
+        "response_hash": "0xa6bc6f63d245fb3ea143ace30af396fbe560c01fc297b72d9550f35c0f720a60",
+    },
+    638: {
+        "submission_hash": "0x031a83cf6f0c310c1a2af303607e00fedf44b64bee89e595e5ba3dcdb0b0586e",
+        "evidence_hash": "0x2b297e98398e12bb41c72f07b4d83b53e735c080b1e74cafe5d9dbbd59f0ebf5",
+        "response_hash": "0x735df8048a3fc6fc6650888928208717b268dcb86bfdea73ba355640c08468d0",
+    },
+}
 ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 UINT = re.compile(r"^(?:0x[0-9a-fA-F]+|[0-9]+)")
+RPC_RETRY_MARKERS = (
+    "http error 403",
+    "http error 408",
+    "http error 429",
+    "http error 500",
+    "http error 502",
+    "http error 503",
+    "http error 504",
+    "archive requests require",
+    "connection",
+    "max retries exceeded",
+    "rate limit",
+    "temporarily unavailable",
+    "timed out",
+    "timeout",
+    "usage limit",
+)
 
 
 class RecoveryError(RuntimeError):
@@ -131,6 +181,26 @@ def require_https(value: object, field: str) -> str:
     if not text.startswith("https://") or len(text) > 2_000:
         raise RecoveryError(f"{field} must be a bounded HTTPS URL")
     return text
+
+
+def rpc_urls(value: object) -> list[str]:
+    values = [item.strip() for item in str(value or "").split(",") if item.strip()]
+    if not values or len(values) > 8:
+        raise RecoveryError("rpc-url must contain between one and eight endpoints")
+    endpoints: list[str] = []
+    for item in values:
+        parsed = urlparse(item)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+        ):
+            raise RecoveryError("every RPC endpoint must be a credential-free HTTPS URL")
+        if item not in endpoints:
+            endpoints.append(item)
+    return endpoints
 
 
 def require_pull_request_url(value: object) -> str:
@@ -282,14 +352,107 @@ def load_manifest(path: Path) -> dict[str, Any]:
 class Cast:
     def __init__(self, executable: str, rpc_url: str) -> None:
         self.executable = executable
-        self.rpc_url = rpc_url
+        self.rpc_urls = rpc_urls(rpc_url)
+        self._rpc_cursor = 0
         self._next_nonces: dict[str, int] = {}
 
     def rpc(self, *args: str, timeout: int = 300) -> str:
-        return run(
-            [self.executable, *args, "--rpc-url", self.rpc_url],
-            timeout=timeout,
+        errors: list[str] = []
+        attempts = max(2, len(self.rpc_urls) * 2)
+        for _ in range(attempts):
+            endpoint = self.rpc_urls[self._rpc_cursor % len(self.rpc_urls)]
+            self._rpc_cursor += 1
+            try:
+                return run(
+                    [self.executable, *args, "--rpc-url", endpoint],
+                    timeout=timeout,
+                )
+            except RecoveryError as error:
+                message = str(error)
+                if not self._retryable_rpc_error(message):
+                    raise
+                errors.append(message[-1_000:])
+                time.sleep(0.25)
+        raise RecoveryError(
+            "all configured RPC endpoints failed with retryable errors:\n"
+            + "\n---\n".join(errors[-len(self.rpc_urls) :])
         )
+
+    @staticmethod
+    def _retryable_rpc_error(message: str) -> bool:
+        lowered = message.lower()
+        return any(marker in lowered for marker in RPC_RETRY_MARKERS)
+
+    def _publish(self, raw_transaction: str, tx_hash: str) -> None:
+        errors: list[str] = []
+        for endpoint in self.rpc_urls:
+            try:
+                observed = run(
+                    [
+                        self.executable,
+                        "publish",
+                        "--async",
+                        raw_transaction,
+                        "--rpc-url",
+                        endpoint,
+                    ],
+                    timeout=60,
+                ).lower()
+                if observed != tx_hash:
+                    raise RecoveryError("published transaction hash differs from signed bytes")
+                return
+            except RecoveryError as error:
+                message = str(error)
+                lowered = message.lower()
+                if "already known" in lowered or "nonce too low" in lowered:
+                    return
+                if not self._retryable_rpc_error(message):
+                    raise
+                errors.append(message[-1_000:])
+        raise RecoveryError(
+            "raw transaction was not published by any configured endpoint:\n"
+            + "\n---\n".join(errors)
+        )
+
+    def _receipt(self, tx_hash: str, raw_transaction: str, timeout: int = 300) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout
+        last_republish = 0.0
+        while time.monotonic() < deadline:
+            for endpoint in self.rpc_urls:
+                try:
+                    raw = run(
+                        [
+                            self.executable,
+                            "receipt",
+                            "--json",
+                            "--async",
+                            tx_hash,
+                            "--rpc-url",
+                            endpoint,
+                        ],
+                        timeout=30,
+                    )
+                    if not raw or raw == "null":
+                        continue
+                    receipt = json.loads(raw)
+                    if isinstance(receipt, dict) and receipt.get("blockNumber"):
+                        return receipt
+                except json.JSONDecodeError:
+                    continue
+                except RecoveryError as error:
+                    message = str(error).lower()
+                    if (
+                        "not found" not in message
+                        and "null" not in message
+                        and not self._retryable_rpc_error(message)
+                    ):
+                        raise
+            now = time.monotonic()
+            if now - last_republish >= 15:
+                self._publish(raw_transaction, tx_hash)
+                last_republish = now
+            time.sleep(2)
+        raise RecoveryError(f"transaction receipt timed out: {tx_hash}")
 
     def call(self, target: str, signature: str, *args: str) -> str:
         return self.rpc("call", target, signature, *args).strip()
@@ -335,9 +498,8 @@ class Cast:
 
     def send(self, key: str, target: str, signature: str, *args: str) -> str:
         nonce = self.next_nonce(key)
-        raw = self.rpc(
-            "send",
-            "--json",
+        raw_transaction = self.rpc(
+            "mktx",
             "--private-key",
             key,
             "--nonce",
@@ -346,16 +508,16 @@ class Cast:
             signature,
             *args,
             timeout=300,
-        )
-        try:
-            receipt = json.loads(raw)
-        except json.JSONDecodeError as error:
-            raise RecoveryError("cast send did not return a JSON receipt") from error
-        tx_hash = str(
-            receipt.get("transactionHash") or receipt.get("transaction_hash") or ""
-        ).lower()
+        ).strip()
+        if not re.fullmatch(r"0x[0-9a-fA-F]+", raw_transaction):
+            raise RecoveryError("cast mktx did not return signed transaction bytes")
+        tx_hash = run([self.executable, "keccak", raw_transaction]).strip().lower()
+        if not HASH.fullmatch(tx_hash):
+            raise RecoveryError("signed transaction hash is invalid")
+        self._publish(raw_transaction, tx_hash)
+        receipt = self._receipt(tx_hash, raw_transaction)
         status = str(receipt.get("status", ""))
-        if not HASH.fullmatch(tx_hash) or status not in {"0x1", "0x01", "1"}:
+        if status not in {"0x1", "0x01", "1"}:
             raise RecoveryError("transaction did not return a successful receipt")
         self._next_nonces[key] = nonce + 1
         return tx_hash
@@ -569,6 +731,18 @@ def build_candidate(
     }
 
 
+def validate_candidate_hashes(candidate: Mapping[str, Any]) -> None:
+    issue = uint(candidate.get("issue"), "candidate issue")
+    expected = EXACT_CANDIDATE_HASHES.get(issue)
+    if expected is None:
+        raise RecoveryError("candidate issue is outside the exact recovery set")
+    for field, value in expected.items():
+        if candidate.get(field) != value:
+            raise RecoveryError(
+                f"issue #{issue} {field} differs from the already-submitted evidence"
+            )
+
+
 def load_candidates(path: Path, manifest: Mapping[str, Any]) -> dict[int, dict[str, Any]]:
     summary = read_json(path / "manifest.json")
     if (
@@ -586,13 +760,15 @@ def load_candidates(path: Path, manifest: Mapping[str, Any]) -> dict[int, dict[s
         issue = uint(candidate.get("issue"), "candidate issue")
         if candidate.get("schema") != CANDIDATE_SCHEMA or issue in candidates:
             raise RecoveryError("candidate artifact is invalid or duplicated")
+        validate_candidate_hashes(candidate)
         expected = expected_by_issue.get(issue)
         evidence = candidate.get("evidence")
         if (
             expected is None
             or candidate.get("contract") != expected["contract"]
             or candidate.get("bounty_id") != expected["bounty_id"]
-            or candidate.get("revision") != summary.get("revision")
+            or candidate.get("revision") != EXACT_ACCEPTED_REVISION
+            or summary.get("revision") != EXACT_ACCEPTED_REVISION
             or not isinstance(evidence, dict)
             or evidence.get("classification") != manifest["metrics_classification"]
             or evidence.get("notice_url") != manifest["notice_url"]
@@ -638,13 +814,13 @@ def command_audit(args: argparse.Namespace) -> None:
 
 def command_prepare(args: argparse.Namespace) -> None:
     manifest = load_manifest(args.manifest)
-    revision = current_revision(args.revision)
-    pull_request_url = require_pull_request_url(args.pull_request_url)
+    execution_revision = current_revision(args.revision)
+    execution_pull_request_url = require_pull_request_url(args.pull_request_url)
     check_run_urls = [
         require_https(value, "check_run_url") for value in args.check_run_url
     ]
-    if not check_run_urls:
-        raise RecoveryError("at least one check_run_url is required")
+    if check_run_urls != [EXACT_CHECK_RUN_URL]:
+        raise RecoveryError("check_run_url differs from the original submitted evidence")
     checks = run_acceptance_checks(manifest)
     key = key_from_env(args.keeper_key_env)
     cast = Cast(args.cast, args.rpc_url)
@@ -683,12 +859,13 @@ def command_prepare(args: argparse.Namespace) -> None:
         candidate = build_candidate(
             manifest,
             bounty,
-            revision,
-            pull_request_url,
+            EXACT_ACCEPTED_REVISION,
+            EXACT_ACCEPTED_PULL_REQUEST_URL,
             check_run_urls,
             checks[issue],
         )
-        state = audit_bounty(cast, manifest, bounty)
+        validate_candidate_hashes(candidate)
+        state = states[issue]
         transactions: dict[str, str] = {}
         if state["status"] == 1:
             transactions["approve"] = cast.send(
@@ -732,7 +909,9 @@ def command_prepare(args: argparse.Namespace) -> None:
             "schema": CANDIDATE_SCHEMA,
             "classification": manifest["metrics_classification"],
             "notice_url": manifest["notice_url"],
-            "revision": revision,
+            "revision": EXACT_ACCEPTED_REVISION,
+            "execution_revision": execution_revision,
+            "execution_pull_request_url": execution_pull_request_url,
             "candidates": entries,
         },
     )
@@ -741,7 +920,7 @@ def command_prepare(args: argparse.Namespace) -> None:
 def command_sign(args: argparse.Namespace) -> None:
     manifest = load_manifest(args.manifest)
     candidates = load_candidates(args.candidates, manifest)
-    revision = current_revision(args.revision)
+    execution_revision = current_revision(args.revision)
     checks = run_acceptance_checks(manifest)
     expected = address(args.expected_signer, "expected signer")
     if expected not in manifest["verifiers"]:
@@ -757,22 +936,25 @@ def command_sign(args: argparse.Namespace) -> None:
     for bounty in manifest["bounties"]:
         issue = int(bounty["issue"])
         candidate = candidates[issue]
-        if candidate.get("revision") != revision:
-            raise RecoveryError("candidate revision is stale")
+        if candidate.get("revision") != EXACT_ACCEPTED_REVISION:
+            raise RecoveryError("candidate accepted-work revision is stale")
         if candidate.get("evidence", {}).get("check") != checks[issue]:
             raise RecoveryError(f"issue #{issue} independent check evidence drifted")
         state = audit_bounty(cast, manifest, bounty)
-        if state["status"] != 3:
-            raise RecoveryError(f"issue #{issue} is not submitted")
+        if state["status"] not in {3, 4}:
+            raise RecoveryError(f"issue #{issue} is not submitted or settled")
         if (
             state["submission_hash"] != candidate["submission_hash"]
             or state["evidence_hash"] != candidate["evidence_hash"]
         ):
             raise RecoveryError(f"issue #{issue} on-chain evidence drifted")
         now = int(time.time())
-        deadline = min(now + 3_600, state["verification_expires_at"])
-        if deadline <= now + 120:
-            raise RecoveryError(f"issue #{issue} verification deadline is too close")
+        if state["status"] == 4:
+            deadline = now + 3_600
+        else:
+            deadline = min(now + 3_600, state["verification_expires_at"])
+            if deadline <= now + 120:
+                raise RecoveryError(f"issue #{issue} verification deadline is too close")
         digest = bytes32(
             cast.call(
                 bounty["contract"],
@@ -789,7 +971,8 @@ def command_sign(args: argparse.Namespace) -> None:
             "classification": manifest["metrics_classification"],
             "issue": issue,
             "contract": bounty["contract"],
-            "revision": revision,
+            "revision": execution_revision,
+            "accepted_work_revision": EXACT_ACCEPTED_REVISION,
             "verifier": expected,
             "passed": True,
             "response_hash": candidate["response_hash"],
@@ -804,7 +987,8 @@ def command_sign(args: argparse.Namespace) -> None:
         {
             "schema": ATTESTATION_SCHEMA,
             "classification": manifest["metrics_classification"],
-            "revision": revision,
+            "revision": execution_revision,
+            "accepted_work_revision": EXACT_ACCEPTED_REVISION,
             "signer": expected,
             "attestations": entries,
         },
@@ -824,6 +1008,7 @@ def load_attestations(
         if (
             summary.get("schema") != ATTESTATION_SCHEMA
             or summary.get("classification") != manifest["metrics_classification"]
+            or summary.get("accepted_work_revision") != EXACT_ACCEPTED_REVISION
         ):
             raise RecoveryError("attestation manifest is invalid")
         signer = address(summary.get("signer"), "attestation signer")
@@ -837,6 +1022,7 @@ def load_attestations(
                 or item.get("classification") != manifest["metrics_classification"]
                 or address(item.get("verifier"), "verifier") != signer
                 or item.get("revision") != summary.get("revision")
+                or item.get("accepted_work_revision") != EXACT_ACCEPTED_REVISION
             ):
                 raise RecoveryError("attestation artifact is invalid")
             by_issue[issue].append(item)
@@ -851,7 +1037,7 @@ def command_relay(args: argparse.Namespace) -> None:
     manifest = load_manifest(args.manifest)
     candidates = load_candidates(args.candidates, manifest)
     attestations = load_attestations(args.attestations, manifest)
-    revision = current_revision(args.revision)
+    execution_revision = current_revision(args.revision)
     checks = run_acceptance_checks(manifest)
     key = key_from_env(args.keeper_key_env)
     cast = Cast(args.cast, args.rpc_url)
@@ -881,11 +1067,11 @@ def command_relay(args: argparse.Namespace) -> None:
     for bounty in manifest["bounties"]:
         issue = int(bounty["issue"])
         candidate = candidates[issue]
-        if candidate.get("revision") != revision:
-            raise RecoveryError("candidate revision is stale")
+        if candidate.get("revision") != EXACT_ACCEPTED_REVISION:
+            raise RecoveryError("candidate accepted-work revision is stale")
         if candidate.get("evidence", {}).get("check") != checks[issue]:
             raise RecoveryError(f"issue #{issue} relay check evidence drifted")
-        state = audit_bounty(cast, manifest, bounty)
+        state = states[issue]
         if state["status"] == 4:
             settlements.append(
                 {
@@ -902,7 +1088,8 @@ def command_relay(args: argparse.Namespace) -> None:
         first = items[0]
         for item in items:
             if (
-                item["revision"] != revision
+                item["revision"] != execution_revision
+                or item.get("accepted_work_revision") != EXACT_ACCEPTED_REVISION
                 or item["contract"] != bounty["contract"]
                 or item["passed"] is not True
                 or item["response_hash"] != candidate["response_hash"]
@@ -959,7 +1146,8 @@ def command_relay(args: argparse.Namespace) -> None:
         "schema": EVIDENCE_SCHEMA,
         "classification": manifest["metrics_classification"],
         "notice_url": manifest["notice_url"],
-        "revision": revision,
+        "revision": execution_revision,
+        "accepted_work_revision": EXACT_ACCEPTED_REVISION,
         "operator_solver": keeper,
         "return_recipient": recipient,
         "return_amount": manifest["exact_return_amount"],
