@@ -10,7 +10,6 @@
   const REGRESSION_ENGINE = "sandboxed_regression_v1";
   const REGRESSION_VERIFIERS = [
     "0xbe6292b9e465f549e2363b918d6dd9187038431e",
-    "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
   ];
   const VISUAL_EXTENSION = "x-agent-bounties-draft-visual";
   const ALLOWED_SCENES = new Set([
@@ -1135,9 +1134,9 @@
       ai_model: null,
       ai_model_version: null,
       system_prompt: null,
-      rubric: "Both pinned verifier agents run the precommitted sandboxed regression and require every acceptance criterion to pass.",
+      rubric: "The pinned verifier agent runs the precommitted sandboxed regression and requires every acceptance criterion to pass.",
       decoding_parameters: {},
-      public_disclosure: "The platform's exact two-verifier sandboxed-regression policy decides pass or fail from the precommitted coding benchmark.",
+      public_disclosure: "One precommitted verifier runs the exact coding benchmark. Multi-verifier review is optional for higher-risk work.",
     };
   }
 

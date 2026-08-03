@@ -10,7 +10,7 @@
     "bounty_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     "deterministic_verifier": "0x380c1af742593dd88b6f20387e9ee693a0536731",
-    "signed_quorum_verifier_set_hash": "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
+    "signed_quorum_verifier_set_hash": "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2"
   },
   "deterministic_deployer": {
     "address": "0x4e59b44847b379578588920ca78fbf26c0b4956c",

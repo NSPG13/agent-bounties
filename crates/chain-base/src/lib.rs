@@ -423,6 +423,8 @@ pub const BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH: &str =
     "0xba3b04ab970dfd91f5ccf1b7eda6670b5a38a854bca16dc980ec8362ed2bcaf9";
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH: &str =
     "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd";
+pub const BASE_MAINNET_DEFAULT_REGRESSION_VERIFIER_SET_HASH: &str =
+    "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2";
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIERS: [&str; 2] = [
     "0xbe6292b9e465f549e2363b918d6dd9187038431e",
     "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
@@ -3922,26 +3924,41 @@ fn regression_quorum_readiness(
     };
     let policy = &terms.document.verification_policy;
     let benchmark = &terms.document.benchmark;
-    if !creation_data["verifier_set_hash"]
-        .as_str()
-        .is_some_and(|hash| {
-            hash.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH)
-        })
-    {
-        return (false, "verifier set mismatch");
-    }
-    if creation_data["threshold"].as_u64()
-        != Some(BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() as u64)
-    {
+    let Some(threshold) = creation_data["threshold"]
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| (1..=BASE_MAINNET_STANDING_META_V2_VERIFIERS.len()).contains(value))
+    else {
         return (false, "verifier threshold mismatch");
-    }
+    };
     let configured_signers = policy
         .get("verifiers")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    if configured_signers.len() < BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() {
+    if configured_signers.len() != threshold
+        || configured_signers
+            .iter()
+            .zip(BASE_MAINNET_STANDING_META_V2_VERIFIERS.iter())
+            .any(|(actual, expected)| {
+                !actual
+                    .as_str()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+            })
+    {
         return (false, "required verifier signer is missing");
+    }
+    if policy.get("threshold").and_then(Value::as_u64) != Some(threshold as u64) {
+        return (false, "verifier threshold mismatch");
+    }
+    let Ok(expected_set_hash) = verifier_set_hash_from_policy(policy) else {
+        return (false, "verifier set mismatch");
+    };
+    if !creation_data["verifier_set_hash"]
+        .as_str()
+        .is_some_and(|hash| hash.eq_ignore_ascii_case(&expected_set_hash))
+    {
+        return (false, "verifier set mismatch");
     }
     if policy.get("mechanism").and_then(Value::as_str) != Some("signed_quorum") {
         return (false, "signed-quorum policy is unavailable");
@@ -3961,10 +3978,17 @@ fn regression_quorum_readiness(
             "regression runner manifest is unavailable or invalid",
         );
     }
-    (
-        true,
-        "the exact built-in sandboxed-regression quorum is supported",
-    )
+    if threshold == 1 {
+        (
+            true,
+            "the default single sandboxed-regression verifier is supported",
+        )
+    } else {
+        (
+            true,
+            "the optional two-verifier sandboxed-regression policy is supported",
+        )
+    }
 }
 
 fn valid_regression_benchmark(benchmark: &Value) -> bool {
@@ -6234,15 +6258,23 @@ pub fn validate_autonomous_creation_for_public_earning(
             }
         }
         AutonomousVerificationMode::SignedQuorum => {
-            let exact_verifiers = create.verifiers.len()
-                == BASE_MAINNET_STANDING_META_V2_VERIFIERS.len()
+            let threshold = usize::from(create.threshold);
+            let exact_verifiers = (1..=BASE_MAINNET_STANDING_META_V2_VERIFIERS.len())
+                .contains(&threshold)
+                && create.verifiers.len() == threshold
                 && create
                     .verifiers
                     .iter()
                     .zip(BASE_MAINNET_STANDING_META_V2_VERIFIERS.iter().copied())
                     .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected));
             let exact_policy = create.threshold
-                == BASE_MAINNET_STANDING_META_V2_VERIFIERS.len() as u8
+                == u8::try_from(threshold).expect("supported threshold fits uint8")
+                && terms
+                    .document
+                    .verification_policy
+                    .get("threshold")
+                    .and_then(Value::as_u64)
+                    == Some(threshold as u64)
                 && terms
                     .document
                     .verification_policy
@@ -6252,7 +6284,7 @@ pub fn validate_autonomous_creation_for_public_earning(
                 && valid_regression_benchmark(&terms.document.benchmark);
             if !exact_verifiers || !exact_policy {
                 return Err(ChainBaseError::InvalidVerificationConfiguration(
-                    "public earning inventory permits only the live sandboxed-regression signed quorum with an exact benchmark source and valid runner manifest; unsupported verifier policies must remain unfunded drafts"
+                    "public earning inventory permits the default single sandboxed-regression verifier or the optional exact two-verifier policy with a valid committed benchmark; unsupported verifier policies must remain unfunded drafts"
                         .to_string(),
                 ));
             }
@@ -8109,7 +8141,38 @@ mod tests {
             regression_quorum_readiness(&healthy_quorum, Some(&supported_record)),
             (
                 true,
-                "the exact built-in sandboxed-regression quorum is supported"
+                "the optional two-verifier sandboxed-regression policy is supported"
+            )
+        );
+        let mut single_document = supported_record.document.clone();
+        single_document.verification_policy["threshold"] = json!(1);
+        single_document.verification_policy["verifiers"] =
+            json!([BASE_MAINNET_STANDING_META_V2_VERIFIERS[0]]);
+        let single_record =
+            build_autonomous_bounty_terms_record(&record.creator_wallet, single_document, now)
+                .unwrap();
+        let single_create = autonomous_bounty_create_from_terms(&single_record).unwrap();
+        validate_autonomous_creation_for_public_earning(
+            "base-mainnet",
+            &single_create,
+            &single_record,
+        )
+        .unwrap();
+        assert_eq!(
+            verifier_set_hash_from_policy(&single_record.document.verification_policy).unwrap(),
+            BASE_MAINNET_DEFAULT_REGRESSION_VERIFIER_SET_HASH
+        );
+        assert_eq!(
+            regression_quorum_readiness(
+                &json!({
+                    "verifier_set_hash": BASE_MAINNET_DEFAULT_REGRESSION_VERIFIER_SET_HASH,
+                    "threshold": 1
+                }),
+                Some(&single_record),
+            ),
+            (
+                true,
+                "the default single sandboxed-regression verifier is supported"
             )
         );
         let mut missing_signer = supported_record.clone();

@@ -513,20 +513,30 @@
 
   function defaultVerification(protocol) {
     const config = protocol.default_verification;
-    if (!config || config.mode !== "deterministic_module" || config.threshold !== 1) {
-      throw new Error("The active protocol does not declare a safe deterministic default.");
+    if (
+      !config
+      || config.mode !== "signed_quorum"
+      || config.threshold !== 1
+      || !Array.isArray(config.verifiers)
+      || config.verifiers.length !== 1
+    ) {
+      throw new Error("The active protocol does not declare one default verifier.");
     }
-    const module = protocol.deterministic_modules && protocol.deterministic_modules[config.module_id];
-    if (!module) throw new Error("The default deterministic verifier is unavailable.");
-    if (!module.benchmark || module.benchmark.engine !== config.module_id) {
-      throw new Error("The default deterministic verifier has no exact benchmark commitment.");
+    const moduleId = "leading_zero_work_v1";
+    const module = protocol.deterministic_modules && protocol.deterministic_modules[moduleId];
+    if (!module || !module.benchmark || module.benchmark.engine !== moduleId) {
+      throw new Error("The optional deterministic verifier is unavailable.");
     }
     return {
       ...config,
-      contract: requiredAddress(module.contract || "", "Deterministic verifier module"),
-      benchmark: module.benchmark,
-      scope_notice: module.scope_notice || "The selected module controls payout.",
-      usage: module.usage || "custom",
+      verifiers: config.verifiers.map((value) => requiredAddress(value, "Default verifier")),
+      deterministic: {
+        module_id: moduleId,
+        contract: requiredAddress(module.contract || "", "Deterministic verifier module"),
+        benchmark: module.benchmark,
+        scope_notice: module.scope_notice || "The selected module controls payout.",
+        usage: module.usage || "custom",
+      },
     };
   }
 
@@ -544,7 +554,7 @@
     const demoWarning = form.querySelector("[data-demo-verifier-warning]");
     const demoAccepted = form.elements.demoVerifierAccepted;
 
-    module.value = defaults.contract;
+    module.value = defaults.deterministic.contract;
     module.readOnly = true;
     module.disabled = !deterministic;
     recipient.disabled = !deterministic;
@@ -554,14 +564,20 @@
     if (demoWarning) demoWarning.hidden = !deterministic;
     if (demoAccepted) demoAccepted.disabled = !deterministic;
     if (deterministic) {
-      threshold.value = String(defaults.threshold);
-      benchmark.value = canonicalJsonString(defaults.benchmark);
-      if (scope) scope.textContent = defaults.scope_notice;
-      if (defaults.verifier_reward_recipient === "creator_wallet" && account && !recipient.value.trim()) {
+      threshold.value = "1";
+      benchmark.value = canonicalJsonString(defaults.deterministic.benchmark);
+      if (scope) scope.textContent = defaults.deterministic.scope_notice;
+      if (account && !recipient.value.trim()) {
         recipient.value = account;
       }
-    } else if (scope) {
-      scope.textContent = "Advanced modes pay only from the verifier wallets and threshold committed in the terms. Confirm verifier availability before funding.";
+    } else {
+      if (!verifiers.value.trim()) verifiers.value = defaults.verifiers.join("\n");
+      if (!threshold.value || mode === defaults.mode) threshold.value = String(defaults.threshold);
+      if (scope) {
+        scope.textContent = mode === "signed_quorum"
+          ? "One precommitted verifier runs the exact benchmark. Add a second only for higher-risk work."
+          : "AI judge verification requires at least two independent committed judges.";
+      }
     }
   }
 
@@ -1261,7 +1277,7 @@
       throw new Error("Confirm that the demo work-proof checker does not evaluate your task.");
     }
     if (mode !== "deterministic_module" && verifiers.length === 0) {
-      throw new Error("Quorum mode requires verifier wallet addresses.");
+      throw new Error("Signed verification requires a verifier wallet.");
     }
     if (mode === "ai_judge_quorum" && threshold < 2) {
       throw new Error("AI judge settlement requires at least two matching verifier signatures.");
@@ -1291,7 +1307,7 @@
   function termsDocument(form, committed, protocol) {
     const mode = form.elements.verificationMode.value;
     const deterministicDefaults = mode === "deterministic_module"
-      ? defaultVerification(protocol)
+      ? defaultVerification(protocol).deterministic
       : null;
     const verifiers = splitAddresses(form.elements.verifiers.value);
     const threshold = Number(form.elements.threshold.value);
@@ -1305,7 +1321,7 @@
       }
     } else {
       if (!verifiers.length || threshold < 1 || threshold > verifiers.length) {
-        throw new Error("Quorum threshold must fit the verifier wallet set.");
+        throw new Error("The signature threshold must fit the verifier wallet list.");
       }
       if (new Set(verifiers.map((address) => address.toLowerCase())).size !== verifiers.length) {
         throw new Error("Verifier wallet addresses must be unique.");

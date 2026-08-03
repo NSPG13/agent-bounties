@@ -832,7 +832,7 @@ test("exact hosted sandboxed-regression quorum is portable earning inventory", a
   item.verifier_module = null;
   item.verification_ready = true;
   item.verification_readiness_reason =
-    "the exact built-in sandboxed-regression quorum is supported";
+    "the default single sandboxed-regression verifier is supported";
   item.terms.document.benchmark = { engine: SUPPORTED_REGRESSION_QUORUM.engine };
   item.terms.document.verification_policy = {
     mechanism: "signed_quorum",
@@ -897,7 +897,7 @@ test("portable quorum validation rejects verifier, threshold, engine, and event 
   ));
   const mutations = [
     (item) => { item.terms.document.verification_policy.verifiers[0] = "0x1111111111111111111111111111111111111111"; },
-    (item) => { item.terms.document.verification_policy.threshold = 1; },
+    (item) => { item.terms.document.verification_policy.threshold = 2; },
     (item) => { item.terms.document.benchmark.engine = "different_runner"; },
     (item) => {
       item.events.find(

@@ -94,6 +94,42 @@ def verification_jobs(api_base: str, network: str, verifier: str) -> list[dict[s
     return value
 
 
+def required_job_signers(job: dict[str, Any]) -> list[str]:
+    if job.get("verification_mode") != "signed_quorum":
+        raise PipelineError("regression job must use signed verification")
+    try:
+        threshold = int(job.get("threshold"))
+    except (TypeError, ValueError) as error:
+        raise PipelineError("regression verifier threshold is invalid") from error
+    signers = [
+        normalize_address(value, "eligible verifier")
+        for value in job.get("eligible_verifiers", [])
+    ]
+    if threshold not in {1, 2} or len(signers) != threshold:
+        raise PipelineError("regression job requires exactly one or two committed verifiers")
+    if len(set(signers)) != len(signers):
+        raise PipelineError("regression job verifier addresses must be distinct")
+    return signers
+
+
+def selected_jobs(
+    jobs: list[dict[str, Any]],
+    configured_verifiers: list[str],
+    maximum: int,
+) -> list[dict[str, Any]]:
+    selected = []
+    for job in jobs:
+        try:
+            signers = required_job_signers(job)
+        except PipelineError:
+            continue
+        if signers == configured_verifiers[: len(signers)]:
+            selected.append(job)
+        if len(selected) == maximum:
+            break
+    return selected
+
+
 def parse_github_commit_url(value: object) -> tuple[str, str]:
     try:
         parsed = urllib.parse.urlparse(str(value))
@@ -352,16 +388,10 @@ def run_job(worker: Path, staging: Path, job: dict[str, Any], scratch: Path) -> 
 
 def command_run(args: argparse.Namespace) -> None:
     verifiers = [normalize_address(value, "verifier") for value in args.verifier]
-    if len(set(verifiers)) != 2:
-        raise PipelineError("runner requires exactly two distinct verifier addresses")
+    if len(verifiers) not in {1, 2} or len(set(verifiers)) != len(verifiers):
+        raise PipelineError("runner requires one or two distinct verifier addresses")
     jobs = verification_jobs(args.api_base, args.network, verifiers[0])
-    selected = [
-        job
-        for job in jobs
-        if [str(value).lower() for value in job.get("eligible_verifiers", [])] == verifiers
-        and job.get("threshold") == 2
-        and job.get("verification_mode") == "signed_quorum"
-    ][: args.max_jobs]
+    selected = selected_jobs(jobs, verifiers, args.max_jobs)
     args.output.mkdir(parents=True, exist_ok=True)
     candidates = []
     for job in selected:
@@ -428,6 +458,8 @@ def command_sign(args: argparse.Namespace) -> None:
         candidate = read_json(args.candidates / entry["file"])
         job = candidate.get("job", {})
         job_id = str(job.get("job_id", ""))
+        if signer not in required_job_signers(job):
+            continue
         current = current_job(args.api_base, args.network, signer, job_id)
         with tempfile.TemporaryDirectory(prefix="agent-bounties-sign-") as temporary:
             validate_candidate(args.worker, candidate, current, Path(temporary))
@@ -497,10 +529,9 @@ def command_relay(args: argparse.Namespace) -> None:
     keeper = os.environ.get(args.keeper_key_env, "").strip()
     if not keeper:
         raise PipelineError(f"{args.keeper_key_env} is required")
-    expected = {
-        normalize_address(args.verifier[0], "verifier"),
-        normalize_address(args.verifier[1], "verifier"),
-    }
+    configured = [normalize_address(value, "verifier") for value in args.verifier]
+    if len(configured) not in {1, 2} or len(set(configured)) != len(configured):
+        raise PipelineError("relay requires one or two distinct configured verifiers")
     candidate_manifest = read_json(args.candidates / "manifest.json")
     manifests = [read_json(path / "manifest.json") for path in args.attestations]
     by_signer: dict[str, dict[str, str]] = {}
@@ -509,16 +540,26 @@ def command_relay(args: argparse.Namespace) -> None:
         if signer in by_signer:
             raise PipelineError("duplicate attestation signer")
         by_signer[signer] = {entry["job_id"]: str(path / entry["file"]) for entry in manifest["attestations"]}
-    if set(by_signer) != expected:
-        raise PipelineError("attestation artifacts do not contain the exact verifier set")
+    if set(by_signer) != set(configured):
+        raise PipelineError("attestation artifacts do not contain every configured verifier")
 
     for entry in candidate_manifest.get("candidates", []):
         job_id = entry["job_id"]
         candidate = read_json(args.candidates / entry["file"])
-        current = current_job(args.api_base, args.network, sorted(expected)[0], job_id)
+        expected = required_job_signers(candidate.get("job", {}))
+        if expected != configured[: len(expected)]:
+            raise PipelineError("candidate verifier set is not supported by this relay")
+        current = current_job(args.api_base, args.network, expected[0], job_id)
+        if required_job_signers(current) != expected:
+            raise PipelineError("current canonical verifier set differs from the candidate")
         with tempfile.TemporaryDirectory(prefix="agent-bounties-relay-") as temporary:
             validate_candidate(args.worker, candidate, current, Path(temporary))
-        attestations = [read_json(Path(by_signer[signer][job_id])) for signer in sorted(expected)]
+        try:
+            attestations = [
+                read_json(Path(by_signer[signer][job_id])) for signer in sorted(expected)
+            ]
+        except KeyError as error:
+            raise PipelineError("required verifier attestation is missing") from error
         first = attestations[0]
         for attestation in attestations:
             if (

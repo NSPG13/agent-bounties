@@ -303,7 +303,7 @@ check passes. See
 [`standing-meta-v4-fair-earning.md`](standing-meta-v4-fair-earning.md) and the
 [`standing-meta-v4 threat model`](security/standing-meta-v4-threat-model.md).
 
-### Signed Quorum
+### Signed Verification
 
 The bounty commits one to eight verifier wallets and a threshold. Each verifier
 signs EIP-712 data bound to:
@@ -320,10 +320,16 @@ The contract rejects unauthorized, duplicate, expired, invalid, or mixed
 verdict signatures. Any caller may relay exactly one threshold through
 `settleWithAttestations`.
 
+Direct bounties default to one verifier and threshold one. The poster may be
+that verifier or delegate the role to an automated service before funding.
+Multiple verifiers are an explicit higher-risk option, not a routine
+participant requirement. The Solidity enum remains `SignedQuorum` for wire
+compatibility.
+
 #### Sandboxed Regression Candidates
 
 Coding bounties may commit `sandboxed_regression_v1` under `signed_quorum` with
-a threshold of at least two. The immutable benchmark contains a complete
+a threshold of one or two. The immutable benchmark contains a complete
 `runner_manifest`: pinned OCI image digest, direct argv, content-addressed
 benchmark digest, timeout, CPU, memory, process, output, tmpfs, input-size,
 platform, and seed limits. Submission evidence must include the exact source
@@ -337,16 +343,18 @@ round, solver, submission and evidence hashes, terms and policy hashes, and the
 verification expiry. Exit zero produces a `passed` candidate; a completed
 ordinary nonzero exit produces `failed`. Timeout, output overflow, resource
 kill, missing input, digest mismatch, malformed policy, or runtime failure
-produces no verdict. The candidate is unsigned and cannot settle funds. Each
-precommitted verifier must independently evaluate and sign the exact current
-scope before the contract can settle.
+produces no verdict. The candidate is unsigned and cannot settle funds. The
+precommitted verifier path must evaluate and sign the exact current scope
+before the contract can settle.
 
 The historical standing-meta-v2 verifier set has a no-secrets scheduled runner,
 two isolated signing jobs, and a separate keeper relay. Each stage re-fetches
 and validates the exact current job before acting. This describes deployed
 automation; it is not an assertion that the signer operators are
-organizationally independent. Arbitrary signed-quorum bounties still fail
-closed unless their own verifier services are operationally attested.
+organizationally independent. New direct coding bounties use the first
+precommitted service with threshold one by default. Arbitrary signed-verifier
+bounties still fail closed unless their own verifier services are
+operationally attested.
 See [`sandboxed-regression-verifier.md`](sandboxed-regression-verifier.md).
 
 Standing-meta-v2 also enforces strict chronology. The exact child terms and

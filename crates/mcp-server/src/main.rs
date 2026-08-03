@@ -2416,7 +2416,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                         "additionalProperties": false
                     },
                     "evidence_schema": nullable_object_property("Optional submission schema; defaults to a required sha256 source_snapshot_digest."),
-                    "verifier_reward": nullable_object_property("Optional USDC money object; defaults to 100000 base units and must divide across two verifiers."),
+                    "verifier_reward": nullable_object_property("Optional USDC money object; defaults to 100000 base units and is paid to the precommitted verifier path."),
                     "funding_deadline": nullable_integer_property("Optional child funding deadline; defaults to the immutable parent deadline."),
                     "claim_window_seconds": nullable_integer_property("Optional child claim window; defaults to 259200 seconds."),
                     "verification_window_seconds": nullable_integer_property("Optional child verification window; defaults to 259200 seconds."),
@@ -2947,11 +2947,11 @@ fn autonomous_bounty_create_property() -> Value {
             "funding_deadline": integer_property("Unix timestamp after which an incomplete crowdfund can be cancelled."),
             "claim_window_seconds": integer_property("Seconds a solver has to submit after claiming."),
             "verification_window_seconds": integer_property("Seconds committed verifiers have to settle after submission."),
-            "verification_mode": enum_property(&["deterministic_module", "signed_quorum", "ai_judge_quorum"], "Immutable on-chain verification mechanism."),
+            "verification_mode": enum_property(&["deterministic_module", "signed_quorum", "ai_judge_quorum"], "Immutable on-chain verification mechanism. Use signed_quorum with threshold 1 for one verifier; add verifiers only when higher-risk work needs independent review."),
             "verifier_module": nullable_string_property("Deterministic verifier contract; null for quorum modes."),
             "verifier_reward_recipient": nullable_string_property("Deterministic verifier reward wallet; null for quorum modes."),
             "verifiers": string_array_property("One to eight precommitted verifier wallets for quorum modes; empty for deterministic mode."),
-            "threshold": integer_property("Number of matching verifier signatures required; AI judge mode requires at least two."),
+            "threshold": integer_property("Number of matching verifier signatures required. Default to 1 for signed verification; AI judge mode requires at least 2."),
             "initial_funding": money_property("Creation-time funding. Zero creates a crowdfundable bounty; target funding makes it immediately claimable.", true),
             "creation_nonce": string_property("Unique nonzero random bytes32. It binds the CREATE2 bounty id and address.")
         },

@@ -18,7 +18,8 @@ CREATE2_DEPLOYER_CODE_HASH = "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd095
 BOUNTY_FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 VERIFIER = "0x380c1af742593dd88b6f20387e9ee693a0536731"
-SIGNED_QUORUM_VERIFIER_SET_HASH = "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
+LEGACY_SIGNED_QUORUM_VERIFIER_SET_HASH = "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
+SINGLE_VERIFIER_SET_HASH = "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2"
 SOURCE_INPUTS = ("contracts/base-escrow",)
 VERSIONS = {
     "v1": {
@@ -191,7 +192,11 @@ def build_bundle(version: str = "v1") -> dict:
             "bounty_factory": BOUNTY_FACTORY,
             "settlement_token": USDC,
             "deterministic_verifier": VERIFIER,
-            "signed_quorum_verifier_set_hash": SIGNED_QUORUM_VERIFIER_SET_HASH,
+            "signed_quorum_verifier_set_hash": (
+                SINGLE_VERIFIER_SET_HASH
+                if version == "v2"
+                else LEGACY_SIGNED_QUORUM_VERIFIER_SET_HASH
+            ),
         },
         "deterministic_deployer": {
             "address": CREATE2_DEPLOYER,

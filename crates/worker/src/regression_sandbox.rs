@@ -398,12 +398,12 @@ pub fn prepare_regression_run(
             "sandboxed regression verification requires signed_quorum without a verifier module"
         ));
     }
-    if job.threshold < 2
-        || job.eligible_verifiers.len() < usize::from(job.threshold)
+    if job.threshold == 0
+        || job.eligible_verifiers.len() != usize::from(job.threshold)
         || job.verification_expires_at <= observed_at_unix
     {
         return Err(anyhow!(
-            "sandboxed regression verification requires a live quorum threshold of at least two"
+            "sandboxed regression verification requires at least one live precommitted verifier"
         ));
     }
     let mut distinct_verifiers = HashSet::new();
@@ -456,7 +456,7 @@ pub fn prepare_regression_run(
             != Some(u64::from(job.threshold))
     {
         return Err(anyhow!(
-            "verification policy does not commit sandboxed_regression_v1 signed quorum"
+            "verification policy does not commit sandboxed_regression_v1 signed verification"
         ));
     }
     let policy_verifiers = verification_policy
@@ -1116,9 +1116,10 @@ mod tests {
     #[test]
     fn autonomous_job_adapter_rejects_weak_or_wrong_verification_policy() {
         let staging = temp_directory("policy-adapter");
-        let mut threshold_one = verification_job();
-        threshold_one.threshold = 1;
-        assert!(prepare_regression_run(threshold_one, 1_800_000_000, &staging).is_err());
+        let mut threshold_zero = verification_job();
+        threshold_zero.threshold = 0;
+        threshold_zero.terms.document.verification_policy["threshold"] = json!(0);
+        assert!(prepare_regression_run(threshold_zero, 1_800_000_000, &staging).is_err());
 
         let mut duplicate = verification_job();
         duplicate.eligible_verifiers[1] = duplicate.eligible_verifiers[0].clone();
@@ -1138,6 +1139,24 @@ mod tests {
         missing_source.submission_evidence.evidence_hash =
             sha256_canonical_json(&missing_source.submission_evidence.evidence).unwrap();
         assert!(prepare_regression_run(missing_source, 1_800_000_000, &staging).is_err());
+        remove_tree_best_effort(&staging);
+    }
+
+    #[test]
+    fn autonomous_job_adapter_accepts_one_precommitted_verifier() {
+        let staging = temp_directory("single-verifier-adapter");
+        let mut job = verification_job();
+        job.threshold = 1;
+        job.eligible_verifiers.truncate(1);
+        job.terms.document.verification_policy["threshold"] = json!(1);
+        job.terms.document.verification_policy["verifiers"] = json!([job.eligible_verifiers[0]]);
+        job.terms = build_autonomous_bounty_terms_record(
+            &job.terms.creator_wallet,
+            job.terms.document.clone(),
+            job.terms.created_at,
+        )
+        .unwrap();
+        prepare_regression_run(job, 1_800_000_000, &staging).unwrap();
         remove_tree_best_effort(&staging);
     }
 

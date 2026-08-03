@@ -868,16 +868,19 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         verification_modes: vec![
             serde_json::json!({
                 "name": "deterministic_module",
-                "default_for_new_bounties": true,
+                "default_for_new_bounties": false,
                 "default_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
-                "earning_inventory": "ready only for a recognized exact deterministic module whose committed benchmark matches that module; unknown modules fail closed",
+                "earning_inventory": "ready only when an exact recognized on-chain module evaluates the full committed acceptance rule; the built-in leading-zero module is for protocol canaries, not coding work",
                 "settlement": "Any caller supplies proof to the immutable on-chain verifier module; pass settles and fail reopens atomically. The verifier receives the same committed reward for either verdict."
             }),
             serde_json::json!({
                 "name": "signed_quorum",
-                "default_for_new_bounties": false,
-                "earning_inventory": "fails closed until verifier-service availability is canonically attestable",
-                "settlement": "Committed verifier wallets sign the exact round, solver, submission, evidence, result, response, and deadline. A valid pass or fail quorum receives the same reward."
+                "product_label": "single_verifier",
+                "default_for_new_bounties": true,
+                "default_threshold": 1,
+                "default_verifiers": ["0xbe6292b9e465f549e2363b918d6dd9187038431e"],
+                "earning_inventory": "ready when the one precommitted verifier service and exact sandbox benchmark are available",
+                "settlement": "The precommitted verifier signs the exact round, solver, submission, evidence, result, response, and deadline. Multi-verifier review is optional for higher-risk work."
             }),
             serde_json::json!({
                 "name": "ai_judge_quorum",
@@ -889,8 +892,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         ],
         funding: serde_json::json!({
             "default": "fully funded on creation",
-            "default_verification": "deterministic_module",
-            "default_verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+            "default_verification": "signed_quorum",
+            "default_verifier_threshold": 1,
+            "default_verifier": "0xbe6292b9e465f549e2363b918d6dd9187038431e",
             "crowdfunding": "zero-funded bounties may be created; any wallet may contribute until the target is reached",
             "eoa_fast_path": "Circle USDC EIP-3009 bounded authorization",
             "x402": {
@@ -3713,7 +3717,7 @@ mod tests {
             .iter()
             .find(|mode| mode["name"] == "deterministic_module")
             .unwrap();
-        assert_eq!(deterministic["default_for_new_bounties"], true);
+        assert_eq!(deterministic["default_for_new_bounties"], false);
         assert_eq!(
             deterministic["default_module"],
             "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e"
@@ -3721,11 +3725,17 @@ mod tests {
         assert!(deterministic["earning_inventory"]
             .as_str()
             .unwrap()
-            .contains("unknown modules fail closed"));
-        assert_eq!(
-            manifest.funding["default_verification"],
-            "deterministic_module"
-        );
+            .contains("protocol canaries"));
+        let single = manifest
+            .verification_modes
+            .iter()
+            .find(|mode| mode["name"] == "signed_quorum")
+            .unwrap();
+        assert_eq!(single["default_for_new_bounties"], true);
+        assert_eq!(single["default_threshold"], 1);
+        assert_eq!(single["product_label"], "single_verifier");
+        assert_eq!(manifest.funding["default_verification"], "signed_quorum");
+        assert_eq!(manifest.funding["default_verifier_threshold"], 1);
         assert!(manifest.funding["gas_sponsorship"]
             .as_str()
             .unwrap()

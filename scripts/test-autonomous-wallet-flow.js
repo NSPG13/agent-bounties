@@ -110,9 +110,9 @@ assert.strictEqual(protocol.chain_id, 8453);
 assert.strictEqual(protocol.status, "active");
 assert.strictEqual(protocol.factory, "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9");
 assert.strictEqual(protocol.implementation, "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9");
-assert.strictEqual(protocol.default_verification.mode, "deterministic_module");
-assert.strictEqual(protocol.default_verification.module_id, "leading_zero_work_v1");
-assert.strictEqual(protocol.default_verification.verifier_reward_recipient, "creator_wallet");
+assert.strictEqual(protocol.default_verification.mode, "signed_quorum");
+assert.strictEqual(protocol.default_verification.product_label, "single_verifier");
+assert.strictEqual(protocol.default_verification.verifiers.length, 1);
 assert.strictEqual(protocol.default_verification.threshold, 1);
 assert.strictEqual(protocol.deterministic_modules.leading_zero_work_v1.usage, "protocol_canary_only");
 assert.strictEqual(
@@ -127,11 +127,11 @@ assert.strictEqual(
 
 const postHtml = fs.readFileSync(path.join(repoRoot, "site", "post.html"), "utf8");
 assert(
-  postHtml.indexOf('value="deterministic_module"') < postHtml.indexOf('value="signed_quorum"'),
-  "public posting must default to deterministic verification",
+  postHtml.indexOf('value="signed_quorum" selected') >= 0,
+  "public posting must default to one signed verifier",
 );
-assert(postHtml.includes("Trusted verifier wallets"));
-assert(postHtml.includes("Automatic demo proof checker"));
+assert(postHtml.includes("One automatic verifier"));
+assert(postHtml.includes("Exact on-chain verifier"));
 assert(postHtml.includes("does not evaluate my task or acceptance criteria"));
 assert(postHtml.includes('name="demoVerifierAccepted" type="checkbox"'));
 assert(!postHtml.includes('{"engine":"github_ci"'));
