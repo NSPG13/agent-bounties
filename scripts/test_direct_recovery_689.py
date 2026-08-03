@@ -89,6 +89,26 @@ class DirectRecovery689Tests(unittest.TestCase):
         self.assertFalse(first["evidence"]["leaderboard_credit"])
         self.assertFalse(first["evidence"]["organic_completion"])
 
+    def test_original_submitted_candidate_hashes_remain_pinned(self) -> None:
+        for bounty in self.manifest["bounties"]:
+            check = {
+                "command": bounty["check"],
+                "exit_code": 0,
+                "repository_check": {
+                    "command": self.manifest["required_repository_command"],
+                    "exit_code": 0,
+                },
+            }
+            candidate = recovery.build_candidate(
+                self.manifest,
+                bounty,
+                recovery.EXACT_ACCEPTED_REVISION,
+                recovery.EXACT_ACCEPTED_PULL_REQUEST_URL,
+                [recovery.EXACT_CHECK_RUN_URL],
+                check,
+            )
+            recovery.validate_candidate_hashes(candidate)
+
     def test_stale_revision_fails_closed(self) -> None:
         with self.assertRaisesRegex(recovery.RecoveryError, "stale"):
             recovery.current_revision("0" * 40)
@@ -124,6 +144,7 @@ class DirectRecovery689Tests(unittest.TestCase):
                             "issue": issue,
                             "verifier": verifier,
                             "revision": "a" * 40,
+                            "accepted_work_revision": recovery.EXACT_ACCEPTED_REVISION,
                         },
                     )
                     entries.append({"issue": issue, "file": name})
@@ -133,6 +154,7 @@ class DirectRecovery689Tests(unittest.TestCase):
                         "schema": recovery.ATTESTATION_SCHEMA,
                         "classification": self.manifest["metrics_classification"],
                         "revision": "a" * 40,
+                        "accepted_work_revision": recovery.EXACT_ACCEPTED_REVISION,
                         "signer": verifier,
                         "attestations": entries,
                     },
@@ -164,12 +186,73 @@ class DirectRecovery689Tests(unittest.TestCase):
         cast = recovery.Cast("cast", "https://rpc.example")
         key = "secret"
         cast._next_nonces[key] = 62
-        receipt = json.dumps({"transactionHash": "0x" + "11" * 32, "status": "0x1"})
-        with patch.object(cast, "rpc", return_value=receipt) as rpc:
+        transaction_hash = "0x" + "11" * 32
+        with (
+            patch.object(cast, "rpc", side_effect=["0x1234", "0x5678"]) as rpc,
+            patch.object(cast, "_publish") as publish,
+            patch.object(
+                cast,
+                "_receipt",
+                return_value={"blockNumber": "0x1", "status": "0x1"},
+            ),
+            patch.object(
+                recovery,
+                "run",
+                side_effect=[transaction_hash, transaction_hash],
+            ),
+        ):
             cast.send(key, "0x" + "22" * 20, "claim()")
             cast.send(key, "0x" + "33" * 20, "claim()")
-        self.assertEqual(rpc.call_args_list[0].args[4:6], ("--nonce", "62"))
-        self.assertEqual(rpc.call_args_list[1].args[4:6], ("--nonce", "63"))
+        self.assertEqual(rpc.call_args_list[0].args[3:5], ("--nonce", "62"))
+        self.assertEqual(rpc.call_args_list[1].args[3:5], ("--nonce", "63"))
+        self.assertEqual(publish.call_count, 2)
+
+    def test_rpc_rotates_after_retryable_provider_failure(self) -> None:
+        cast = recovery.Cast(
+            "cast",
+            "https://first.example,https://second.example",
+        )
+        with patch.object(
+            recovery,
+            "run",
+            side_effect=[
+                recovery.RecoveryError("HTTP error 429"),
+                "8453",
+            ],
+        ) as runner:
+            self.assertEqual(cast.rpc("chain-id"), "8453")
+        self.assertIn("https://first.example", runner.call_args_list[0].args[0])
+        self.assertIn("https://second.example", runner.call_args_list[1].args[0])
+
+    def test_rpc_does_not_retry_semantic_contract_failure(self) -> None:
+        cast = recovery.Cast(
+            "cast",
+            "https://first.example,https://second.example",
+        )
+        with (
+            patch.object(
+                recovery,
+                "run",
+                side_effect=recovery.RecoveryError("execution reverted: wrong signer"),
+            ) as runner,
+            self.assertRaisesRegex(recovery.RecoveryError, "wrong signer"),
+        ):
+            cast.rpc("call", "0x" + "11" * 20, "owner()(address)")
+        self.assertEqual(runner.call_count, 1)
+
+    def test_rpc_endpoint_list_requires_credential_free_https(self) -> None:
+        self.assertEqual(
+            recovery.rpc_urls("https://one.example, https://two.example"),
+            ["https://one.example", "https://two.example"],
+        )
+        for value in (
+            "http://rpc.example",
+            "https://user:secret@rpc.example",
+            "https://rpc.example/#fragment",
+        ):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(recovery.RecoveryError, "HTTPS"):
+                    recovery.rpc_urls(value)
 
     def test_send_rejects_an_existing_pending_keeper_transaction(self) -> None:
         cast = recovery.Cast("cast", "https://rpc.example")
