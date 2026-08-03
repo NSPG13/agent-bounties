@@ -171,6 +171,7 @@ class DirectRecovery689Tests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertEqual(workflow.count("toolchain: 1.88.0"), 4)
         self.assertEqual(workflow.count("components: rustfmt, clippy"), 4)
+        self.assertIn(f"CHECK_RUN_URL: {recovery.EXACT_CHECK_RUN_URL}", workflow)
 
     def test_acceptance_environment_excludes_recovery_runtime_values(self) -> None:
         injected = {

@@ -109,7 +109,7 @@ jobs:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       REVISION: ${{ needs.authorize.outputs.revision }}
       PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
-      CHECK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      CHECK_RUN_URL: https://github.com/NSPG13/agent-bounties/actions/runs/30441776495
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
