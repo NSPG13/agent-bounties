@@ -792,6 +792,39 @@ def key_from_env(name: str) -> str:
     return key
 
 
+def expire_stale_submissions(
+    cast: Cast,
+    manifest: Mapping[str, Any],
+    states: dict[int, dict[str, Any]],
+    key: str,
+    now: int,
+) -> dict[int, str]:
+    transactions: dict[int, str] = {}
+    for bounty in manifest["bounties"]:
+        issue = int(bounty["issue"])
+        state = states[issue]
+        if (
+            state["status"] != 3
+            or state["verification_expires_at"] >= now
+        ):
+            continue
+        transaction = cast.send(key, bounty["contract"], "expireSubmission()")
+        refreshed = audit_bounty(cast, manifest, bounty)
+        if (
+            refreshed["status"] != 1
+            or refreshed["solver"] != "0x0000000000000000000000000000000000000000"
+            or refreshed["active_claim_bond"] != 0
+            or refreshed["submission_hash"] != "0x" + "00" * 32
+            or refreshed["evidence_hash"] != "0x" + "00" * 32
+        ):
+            raise RecoveryError(
+                f"issue #{issue} expired submission did not reset to a clean claimable round"
+            )
+        states[issue] = refreshed
+        transactions[issue] = transaction
+    return transactions
+
+
 def command_audit(args: argparse.Namespace) -> None:
     manifest = load_manifest(args.manifest)
     cast = Cast(args.cast, args.rpc_url)
@@ -833,6 +866,13 @@ def command_prepare(args: argparse.Namespace) -> None:
         int(bounty["issue"]): audit_bounty(cast, manifest, bounty)
         for bounty in manifest["bounties"]
     }
+    expiration_transactions = expire_stale_submissions(
+        cast,
+        manifest,
+        states,
+        key,
+        int(time.time()),
+    )
     claimable = [
         bounty
         for bounty in manifest["bounties"]
@@ -867,6 +907,8 @@ def command_prepare(args: argparse.Namespace) -> None:
         validate_candidate_hashes(candidate)
         state = states[issue]
         transactions: dict[str, str] = {}
+        if issue in expiration_transactions:
+            transactions["expire_submission"] = expiration_transactions[issue]
         if state["status"] == 1:
             transactions["approve"] = cast.send(
                 key,
