@@ -167,4 +167,39 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn parses_and_accepts_allowed_fixture() {
+        let json = include_str!("../../../fixtures/origins/allowed.json");
+        let origins: Vec<String> = serde_json::from_str(json).unwrap();
+        for origin in origins {
+            assert!(is_canonical_origin(&origin));
+        }
+    }
+
+    #[test]
+    fn parses_and_rejects_stale_fixture() {
+        let json = include_str!("../../../fixtures/origins/stale.json");
+        let origins: Vec<String> = serde_json::from_str(json).unwrap();
+        for origin in origins {
+            assert!(!is_canonical_origin(&origin));
+        }
+    }
+
+    #[test]
+    fn parses_and_rejects_malformed_fixture() {
+        let json = include_str!("../../../fixtures/origins/malformed.json");
+        let origins: Vec<String> = serde_json::from_str(json).unwrap();
+        for origin in origins {
+            assert!(!is_canonical_origin(&origin));
+        }
+    }
+
+    #[test]
+    fn parses_and_rejects_forwarded_fixture() {
+        let json = include_str!("../../../fixtures/origins/forwarded.json");
+        let origins: Vec<String> = serde_json::from_str(json).unwrap();
+        for origin in origins {
+            assert!(!is_canonical_origin(&origin));
+        }
+    }
 }
