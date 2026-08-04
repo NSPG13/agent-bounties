@@ -267,4 +267,18 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn parses_and_validates_valid_fixture() {
+        let json = include_str!("../../../fixtures/evidence/valid.json");
+        let checklist: DirectBountyEvidenceChecklist = serde_json::from_str(json).unwrap();
+        assert!(checklist.validate().is_ok());
+    }
+
+    #[test]
+    fn parses_and_rejects_invalid_fixture() {
+        let json = include_str!("../../../fixtures/evidence/invalid.json");
+        let checklist: DirectBountyEvidenceChecklist = serde_json::from_str(json).unwrap();
+        assert!(checklist.validate().is_err());
+    }
 }
