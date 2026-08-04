@@ -1,6 +1,6 @@
 [
   {
-    "scenario": "healthy_direct_bounty",
+    "scenario": "ready-to-earn",
     "reward": "2000000",
     "refundable_bond": "10000",
     "external_spend": "0",
@@ -10,33 +10,33 @@
     "blocker": null
   },
   {
-    "scenario": "recovery_reserved",
-    "reward": "2000000",
-    "refundable_bond": "10000",
-    "external_spend": "0",
-    "gross_cash_margin": "1990000",
-    "is_guaranteed_net_profit": false,
-    "next_action": "wait_for_recovery",
-    "blocker": "Bounty is reserved for automated recovery"
-  },
-  {
-    "scenario": "unprofitable_bounty",
-    "reward": "2000000",
-    "refundable_bond": "10000",
-    "external_spend": "5000000",
-    "gross_cash_margin": "-3010000",
-    "is_guaranteed_net_profit": false,
-    "next_action": "abort_claim",
-    "blocker": "Gross cash margin is negative"
-  },
-  {
-    "scenario": "non_creator_failure",
+    "scenario": "stale",
     "reward": "2000000",
     "refundable_bond": "10000",
     "external_spend": "0",
     "gross_cash_margin": "1990000",
     "is_guaranteed_net_profit": false,
     "next_action": "abort_claim",
-    "blocker": "Signer is not the authorized solver"
+    "blocker": "Claim is stale"
+  },
+  {
+    "scenario": "malformed",
+    "reward": "2000000",
+    "refundable_bond": "10000",
+    "external_spend": "0",
+    "gross_cash_margin": "1990000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Claim is malformed"
+  },
+  {
+    "scenario": "unfunded",
+    "reward": "0",
+    "refundable_bond": "10000",
+    "external_spend": "0",
+    "gross_cash_margin": "-10000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Bounty is unfunded"
   }
 ]

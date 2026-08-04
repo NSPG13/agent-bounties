@@ -53,25 +53,25 @@ mod tests {
             
         assert_eq!(diagnostics.len(), 4, "Fixture must cover 4 specific scenarios");
         
-        let healthy = diagnostics.iter().find(|d| d.scenario == "healthy_direct_bounty").unwrap();
+        let healthy = diagnostics.iter().find(|d| d.scenario == "ready-to-earn").unwrap();
         assert_eq!(healthy.next_action, "sign_claim_transaction");
         assert!(healthy.blocker.is_none());
         assert!(healthy.validate().is_ok());
 
-        let recovery = diagnostics.iter().find(|d| d.scenario == "recovery_reserved").unwrap();
-        assert_eq!(recovery.next_action, "wait_for_recovery");
-        assert!(recovery.blocker.as_ref().unwrap().contains("recovery"));
-        assert!(recovery.validate().is_ok());
+        let stale = diagnostics.iter().find(|d| d.scenario == "stale").unwrap();
+        assert_eq!(stale.next_action, "abort_claim");
+        assert!(stale.blocker.as_ref().unwrap().contains("stale"));
+        assert!(stale.validate().is_ok());
 
-        let unprofitable = diagnostics.iter().find(|d| d.scenario == "unprofitable_bounty").unwrap();
-        assert_eq!(unprofitable.next_action, "abort_claim");
-        assert!(unprofitable.blocker.as_ref().unwrap().contains("negative"));
-        assert!(unprofitable.validate().is_ok());
+        let malformed = diagnostics.iter().find(|d| d.scenario == "malformed").unwrap();
+        assert_eq!(malformed.next_action, "abort_claim");
+        assert!(malformed.blocker.as_ref().unwrap().contains("malformed"));
+        assert!(malformed.validate().is_ok());
 
-        let non_creator = diagnostics.iter().find(|d| d.scenario == "non_creator_failure").unwrap();
-        assert_eq!(non_creator.next_action, "abort_claim");
-        assert!(non_creator.blocker.as_ref().unwrap().contains("solver"));
-        assert!(non_creator.validate().is_ok());
+        let unfunded = diagnostics.iter().find(|d| d.scenario == "unfunded").unwrap();
+        assert_eq!(unfunded.next_action, "abort_claim");
+        assert!(unfunded.blocker.as_ref().unwrap().contains("unfunded"));
+        assert!(unfunded.validate().is_ok());
     }
 
     #[test]
