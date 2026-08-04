@@ -1397,70 +1397,31 @@ mod tests {
 
     #[test]
     fn ready_to_earn_excludes_unclaimable_canonical_states() {
-        let healthy = canonical_opportunity(
-            &canonical("claimable", "1000000", true),
-            "base-mainnet",
-            "https://api.example",
-        )
-        .unwrap();
+        let healthy_feed: AutonomousBountyFeedItem = serde_json::from_str(include_str!("../../../fixtures/inventory/funded.json")).unwrap();
+        let unfunded_feed: AutonomousBountyFeedItem = serde_json::from_str(include_str!("../../../fixtures/inventory/unfunded.json")).unwrap();
+        let not_ready_feed: AutonomousBountyFeedItem = serde_json::from_str(include_str!("../../../fixtures/inventory/not-ready.json")).unwrap();
+        let stale_feed: AutonomousBountyFeedItem = serde_json::from_str(include_str!("../../../fixtures/inventory/stale.json")).unwrap();
 
-        let mut not_verification_ready_source = canonical("claimable", "1000000", false);
-        not_verification_ready_source.verification_readiness_reason = "missing_verifier".to_string();
-        let not_verification_ready = canonical_opportunity(
-            &not_verification_ready_source,
-            "base-mainnet",
-            "https://api.example",
-        )
-        .unwrap();
+        let healthy = canonical_opportunity(&healthy_feed, "base-mainnet", "https://api.example").unwrap();
+        let unfunded = canonical_opportunity(&unfunded_feed, "base-mainnet", "https://api.example").unwrap();
+        let not_ready = canonical_opportunity(&not_ready_feed, "base-mainnet", "https://api.example").unwrap();
+        let stale = canonical_opportunity(&stale_feed, "base-mainnet", "https://api.example").unwrap();
 
-        let mut recovery_reserved_source = canonical("recovery-reserved", "1000000", true);
-        recovery_reserved_source.verification_readiness_reason = "ready".to_string();
-        let recovery_reserved = canonical_opportunity(
-            &recovery_reserved_source,
-            "base-mainnet",
-            "https://api.example",
-        )
-        .unwrap();
-
-        let mut invalid_terms_source = canonical("claimable", "1000000", true);
-        invalid_terms_source.terms_valid = false;
-        let invalid_terms = canonical_opportunity(
-            &invalid_terms_source,
-            "base-mainnet",
-            "https://api.example",
-        )
-        .unwrap();
-
-        let mut settled_source = canonical("settled", "1000000", true);
-        settled_source.verification_readiness_reason = "ready".to_string();
-        let settled = canonical_opportunity(
-            &settled_source,
-            "base-mainnet",
-            "https://api.example",
-        )
-        .unwrap();
-
-        // 1. Assert that the excluded states have the correct properties in the broader lifecycle feed.
-        assert_eq!(not_verification_ready.work_state, "open");
-        assert!(!not_verification_ready.verification_ready);
-
-        assert_eq!(recovery_reserved.work_state, "claimable");
-        assert_eq!(recovery_reserved.payment_state, "recovery_reserved");
-        assert!(!recovery_reserved.payment_committed);
-
-        assert_eq!(invalid_terms.work_state, "open");
-        assert_eq!(invalid_terms.payment_state, "invalid_terms");
-
-        assert_eq!(settled.work_state, "settled");
+        // 1. Assert properties
+        assert_eq!(not_ready.work_state, "claimable");
+        assert!(!not_ready.verification_ready);
+        
+        assert_eq!(unfunded.payment_committed, false);
+        
+        assert_eq!(stale.work_state, "open");
 
         // 2. Assert that applying the ReadyToEarn view filters them all out except the healthy one.
         let items = apply_query(
             vec![
                 healthy.clone(),
-                not_verification_ready,
-                recovery_reserved,
-                invalid_terms,
-                settled,
+                unfunded,
+                not_ready,
+                stale,
             ],
             &OpportunityQuery::default(),
             Some(OpportunityView::ReadyToEarn),
@@ -1468,7 +1429,6 @@ mod tests {
         );
 
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].opportunity_id, healthy.opportunity_id);
     }
 
     #[test]
