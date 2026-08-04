@@ -1214,7 +1214,8 @@ def main() -> int:
             "clone_runtime_code_hash",
             "policy-bound wallet",
             "Smart-account activation requires one exact USDC approval",
-            "Factory allowance was not fully consumed by activation",
+            "waitForFactoryAllowance",
+            "Confirmed USDC allowance is",
         ],
     )
     if "This owner is a contract account. Use the manifest's approve" in bounded_javascript:

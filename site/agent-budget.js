@@ -543,6 +543,27 @@
     return resultUint(await call(state.manifest.canonical.settlement_token, data));
   }
 
+  function formatUsdc(units) {
+    const whole = units / 1_000_000n;
+    const fraction = (units % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+    return fraction ? `${whole}.${fraction}` : String(whole);
+  }
+
+  async function waitForFactoryAllowance(expected, timeoutMs = 45_000) {
+    const started = Date.now();
+    let observed = await ownerFactoryAllowance();
+    while (observed !== expected && Date.now() - started < timeoutMs) {
+      await sleep(1_500);
+      observed = await ownerFactoryAllowance();
+    }
+    if (observed !== expected) {
+      throw new Error(
+        `Confirmed USDC allowance is ${formatUsdc(observed)} USDC; ${formatUsdc(expected)} USDC was expected.`,
+      );
+    }
+    return observed;
+  }
+
   async function activateWithAllowance(plan) {
     const factory = state.manifest.wallet_factory.address;
     const token = state.manifest.canonical.settlement_token;
@@ -558,8 +579,7 @@
       const approvalData = `${SELECTORS.approve}${addressWord(factory)}${uintWord(plan.initialFunding)}`;
       approvalHash = await sendTransaction(token, approvalData);
       await waitReceipt(approvalHash);
-      allowance = await ownerFactoryAllowance();
-      if (allowance !== plan.initialFunding) throw new Error("Confirmed USDC allowance differs from the reviewed amount.");
+      allowance = await waitForFactoryAllowance(plan.initialFunding);
     }
     const activationData = `${SELECTORS.createAndFund}`
       + `${plan.policyWords.join("")}${bytes32Word(plan.userSalt)}${uintWord(plan.initialFunding)}`;
@@ -571,8 +591,7 @@
     await ensureConnectedOwner();
     const transactionHash = await sendTransaction(factory, activationData);
     await waitReceipt(transactionHash);
-    const remainingAllowance = await ownerFactoryAllowance();
-    if (remainingAllowance !== 0n) throw new Error("Factory allowance was not fully consumed by activation.");
+    await waitForFactoryAllowance(0n);
     return { transactionHash, approvalHash };
   }
 
