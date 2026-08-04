@@ -40,7 +40,7 @@ for marker in (
     'name="source" value="home"',
     'name="autostart" value="1"',
     'name="goal"',
-    'aria-label="Start a bounty with this problem"',
+    'aria-label="Start a bounty for this digital work"',
     'type="text/markdown" title="Agent mode (Markdown)"',
     'src="bounty-entry.js?v=1"',
 ):
