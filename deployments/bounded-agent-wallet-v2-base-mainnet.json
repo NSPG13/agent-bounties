@@ -128,5 +128,18 @@
       "source_sha256": "0x841a3bd58ec3d71f8a414633bb01d489ca4ec2d18acff61dc699ef7d0fc0ab1a"
     }
   },
-  "evidence_boundary": "This manifest derives exact addresses, bytecode, and unsigned deployment calldata. It is not deployment, delegation, funding, completion, payout, or settlement evidence."
+  "deployment_evidence": {
+    "transaction_hash": "0xe9cba86c81706d8ef2554178c45a37b16fc9c19e673e883c1160f887bbc878d3",
+    "deployment_block": 49539535,
+    "deployer": "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "receipt_status": 1,
+    "value_wei": "0",
+    "exact_calldata_match": true,
+    "factory_runtime_code_hash": "0x254e247c3df7b38c257cd24b5d47c6ca1bc3ed335d6cb062498695bced540cf9",
+    "implementation_runtime_code_hash": "0xade4fb51d0c5c866bb0cc44ca17ad0b254c6bba92ac5b47ddc2ced4963b05d18",
+    "observed_implementation": "0x00c250bda8fa3c49d80a11d9b6ebd961736b7202",
+    "observed_bounty_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+    "observed_settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  },
+  "evidence_boundary": "This manifest proves the immutable V2 factory deployment and configuration. It is not policy-wallet activation, delegation, funding, completion, payout, or settlement evidence."
 }
