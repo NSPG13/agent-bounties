@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tool_registry_drift;
+
 use app::{
     build_live_money_readiness_report, build_objective_canonical_evidence,
     AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
