@@ -23,30 +23,42 @@ const REQUIRED_TOOLS: &[&str] = &[
 const TOOL_REGISTRY_JSON: &str =
     include_str!("../fixtures/tool-registry.json");
 
-/// Parse the `tools` array from the registry JSON and return the tool names.
-fn parse_tool_names(json_str: &str) -> Result<Vec<String>, String> {
+/// Parse the `schema_version` and `tools` array from the registry JSON.
+fn parse_registry(json_str: &str) -> Result<(String, Vec<String>), String> {
     let value: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("failed to parse registry JSON: {e}"))?;
+
+    let schema_version = value
+        .get("schema_version")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "missing or non-string 'schema_version' field in registry".to_string())?;
 
     let tools = value
         .get("tools")
         .and_then(|v| v.as_array())
         .ok_or_else(|| "missing or non-array 'tools' field in registry".to_string())?;
 
-    tools
+    let parsed_tools = tools
         .iter()
         .map(|v| {
             v.as_str()
                 .map(|s| s.to_string())
                 .ok_or_else(|| "tool entry is not a string".to_string())
         })
-        .collect()
+        .collect();
+
+    Ok((schema_version, parsed_tools))
 }
 
-/// Checks the registry for missing, duplicate, or renamed required tools.
+/// Checks the registry for missing, duplicate, extra, or renamed required tools, and verifies schema version.
 /// Returns Ok(()) on success or a concise failure summary.
 fn check_tool_registry_drift(json_str: &str) -> Result<(), String> {
-    let tool_names = parse_tool_names(json_str)?;
+    let (schema_version, tool_names) = parse_registry(json_str)?;
+
+    if schema_version != "agent-bounties/mcp-tool-registry-v1" {
+        return Err(format!("Schema version drift detected: {}", schema_version));
+    }
 
     // Check for duplicates.
     let mut seen = HashSet::new();
@@ -66,7 +78,14 @@ fn check_tool_registry_drift(json_str: &str) -> Result<(), String> {
         }
     }
 
-    if missing.is_empty() && duplicates.is_empty() {
+    let mut extra = Vec::new();
+    for tool in &tool_set {
+        if !REQUIRED_TOOLS.contains(tool) {
+            extra.push(*tool);
+        }
+    }
+
+    if missing.is_empty() && duplicates.is_empty() && extra.is_empty() {
         return Ok(());
     }
 
@@ -76,6 +95,9 @@ fn check_tool_registry_drift(json_str: &str) -> Result<(), String> {
     }
     if !duplicates.is_empty() {
         summary.push_str(&format!("\n  Duplicate tools: {:?}", duplicates));
+    }
+    if !extra.is_empty() {
+        summary.push_str(&format!("\n  Extra tools: {:?}", extra));
     }
     Err(summary)
 }
@@ -191,15 +213,46 @@ mod tests {
 
     #[test]
     fn existing_public_tool_names_are_unchanged() {
-        // Snapshot: the four required tools must appear in the committed fixture
-        // at exactly these names. If both the fixture and this assertion are
-        // updated together, it is an intentional rename.
-        let tool_names = parse_tool_names(TOOL_REGISTRY_JSON).unwrap();
+        let (_, tool_names) = parse_registry(TOOL_REGISTRY_JSON).unwrap();
         for required in REQUIRED_TOOLS {
             assert!(
                 tool_names.contains(&required.to_string()),
                 "required tool '{required}' not found in committed fixture"
             );
         }
+    }
+
+    #[test]
+    fn parses_and_rejects_missing_fixture() {
+        let json = include_str!("../../../fixtures/registry/missing.json");
+        let result = check_tool_registry_drift(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing tools:"));
+    }
+
+    #[test]
+    fn parses_and_rejects_renamed_fixture() {
+        let json = include_str!("../../../fixtures/registry/renamed.json");
+        let result = check_tool_registry_drift(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Missing tools:"));
+        assert!(err.contains("Extra tools:"));
+    }
+
+    #[test]
+    fn parses_and_rejects_extra_fixture() {
+        let json = include_str!("../../../fixtures/registry/extra.json");
+        let result = check_tool_registry_drift(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Extra tools:"));
+    }
+
+    #[test]
+    fn parses_and_rejects_docs_drift_fixture() {
+        let json = include_str!("../../../fixtures/registry/docs-drift.json");
+        let result = check_tool_registry_drift(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Schema version drift detected"));
     }
 }

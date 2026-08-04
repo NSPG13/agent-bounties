@@ -1,0 +1,8 @@
+{
+  "schema_version": "agent-bounties/mcp-tool-registry-v1",
+  "tools": [
+      "list_autonomous_bounties",
+      "list_opportunities",
+      "prepare_bounty_post"
+  ]
+}
