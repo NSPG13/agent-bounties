@@ -1,0 +1,42 @@
+[
+  {
+    "scenario": "healthy_direct_bounty",
+    "reward": "2000000",
+    "refundable_bond": "10000",
+    "external_spend": "0",
+    "gross_cash_margin": "1990000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "sign_claim_transaction",
+    "blocker": null
+  },
+  {
+    "scenario": "recovery_reserved",
+    "reward": "2000000",
+    "refundable_bond": "10000",
+    "external_spend": "0",
+    "gross_cash_margin": "1990000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "wait_for_recovery",
+    "blocker": "Bounty is reserved for automated recovery"
+  },
+  {
+    "scenario": "unprofitable_bounty",
+    "reward": "2000000",
+    "refundable_bond": "10000",
+    "external_spend": "5000000",
+    "gross_cash_margin": "-3010000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Gross cash margin is negative"
+  },
+  {
+    "scenario": "non_creator_failure",
+    "reward": "2000000",
+    "refundable_bond": "10000",
+    "external_spend": "0",
+    "gross_cash_margin": "1990000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Signer is not the authorized solver"
+  }
+]
