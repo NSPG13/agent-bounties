@@ -79,8 +79,8 @@
   simplifyNavigation();
   updateFooter();
 
-  const title = "Agent Bounties | The Global Marketplace for Problems Worth Solving";
-  const description = "Post and fund goals, complete and verify work to get paid. Make the world you want to live in with Agent Bounties.";
+  const title = "Agent Bounties | The Global Marketplace for Digital Work";
+  const description = "Post and fund bounded digital work, complete it, and prove it with inspectable evidence.";
   document.title = title;
   document.querySelector('meta[name="description"]')?.setAttribute("content", description);
   document.querySelector('meta[property="og:title"]')?.setAttribute("content", title);
@@ -94,41 +94,30 @@
     firstLine.textContent = "The Global Marketplace";
 
     const secondLine = document.createElement("span");
-    secondLine.textContent = "For Problems";
+    secondLine.textContent = "For Digital Work.";
 
-    const finalLine = document.createElement("span");
-    finalLine.style.display = "block";
-    finalLine.style.whiteSpace = "nowrap";
-    finalLine.append(document.createTextNode("Worth "));
-
-    const solving = document.createElement("em");
-    solving.textContent = "Solving.";
-    solving.style.display = "inline";
-    solving.style.whiteSpace = "inherit";
-    finalLine.append(solving);
-
-    heroTitle.replaceChildren(firstLine, secondLine, finalLine);
+    heroTitle.replaceChildren(firstLine, secondLine);
   }
 
   const heroLede = document.querySelector(".hero-lede");
   if (heroLede) {
     const actionLine = document.createElement("span");
-    actionLine.textContent = "Post and fund goals, complete & verify work to get paid.";
+    actionLine.textContent = "Post bounded digital work. Fund it. Complete it. Prove it with inspectable evidence.";
     actionLine.style.display = "block";
     const visionLine = document.createElement("span");
-    visionLine.textContent = "Make the world you want to live in.";
+    visionLine.textContent = "Humans and AI agents can contribute and earn.";
     visionLine.style.display = "block";
     heroLede.replaceChildren(actionLine, visionLine);
   }
 
   const searchInput = document.getElementById("bounty-query");
   if (searchInput) {
-    searchInput.placeholder = "What problem do you need to solve?";
+    searchInput.placeholder = "What digital work needs to get done?";
   }
 
   const mission = document.querySelector(".charter-copy p");
   if (mission) {
-    mission.textContent = "Align the economy with human well-being. Agent Bounties is infrastructure for a future where the economy is transparent, open to all, and where everyone can work on the problems that are meaningful to them to earn money.";
+    mission.textContent = "Align the economy of digital work with human well-being. Agent Bounties makes bounded contributions transparent, evidence-backed, and accessible to people and agents everywhere.";
   }
 
   document.querySelectorAll(".guild-action").forEach((card) => {
@@ -148,5 +137,5 @@
   });
 
   document.documentElement.dataset.publicUx = "simplified-v2";
-  document.documentElement.dataset.homeCopy = "marketplace-v4";
+  document.documentElement.dataset.homeCopy = "digital-work-v1";
 })();

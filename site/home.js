@@ -569,7 +569,7 @@
     renderOpportunityBoard(container, readyItems);
 
     if (heroSummary) {
-      heroSummary.textContent = `${readyItems.length} bounties ready to claim · ${formatMetric(transactionVolumeUsdc, 2)} USDC settled · ${settlements} problems solved`;
+      heroSummary.textContent = `${readyItems.length} bounties ready to claim · ${formatMetric(transactionVolumeUsdc, 2)} USDC settled · ${settlements} bounties settled`;
     }
     const sourceStatuses = projection.source_statuses || [];
     const availableSources = sourceStatuses.filter((source) => source.available).length;

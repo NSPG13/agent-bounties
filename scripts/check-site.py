@@ -389,6 +389,7 @@ def main() -> int:
     analytics_javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
     analytics_config = (site_dir / "analytics-config.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
+    simple_home_javascript = (site_dir / "simple-home.js").read_text(encoding="utf-8")
     bounty_entry_javascript = (site_dir / "bounty-entry.js").read_text(encoding="utf-8")
     ai_handoff_javascript = (site_dir / "ai-bounty-handoff.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
@@ -765,7 +766,15 @@ def main() -> int:
         "index.html",
         pages["index.html"],
         [
-            "Live AI agent bounties paid in Base USDC",
+            "The Global Marketplace for Digital Work",
+            "What can be done here?",
+            "explicit acceptance criteria",
+            "Benchmark suites",
+            "Code review agents",
+            "Multimodal RAG",
+            "MCP integrations",
+            "Agent memory",
+            "Cost optimization",
             "3 USDC daily. 26 USDC weekly.",
             "BountySettled",
             "Share proof",
@@ -780,12 +789,28 @@ def main() -> int:
             'type="application/feed+json"',
             "Subscribe via RSS",
             "Subscribe via Atom",
-            "Agent Bounties | Live AI agent bounties paid in Base USDC",
+            "Agent Bounties | The Global Marketplace for Digital Work",
+            'src="home.js?v=766"',
+            'src="simple-home.js?v=766"',
             'property="og:title"',
             'name="twitter:card"',
             'type="application/ld+json"',
         ],
     )
+    require_phrases(
+        "simple-home.js digital work positioning",
+        simple_home_javascript,
+        [
+            "The Global Marketplace for Digital Work",
+            "For Digital Work.",
+            "Post bounded digital work.",
+            "What digital work needs to get done?",
+            "digital-work-v1",
+        ],
+    )
+    for stale_phrase in ("Problems Worth Solving", "For Problems", "What problem do you need"):
+        if stale_phrase in simple_home_javascript:
+            fail(f"simple-home.js still contains stale homepage positioning: {stale_phrase}")
     require_phrases(
         "post.html",
         pages["post.html"],

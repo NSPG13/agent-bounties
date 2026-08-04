@@ -628,6 +628,7 @@
 
 /* Participation actions */
 .guild-actions-shell,
+.digital-work-shell,
 .bounty-board-shell,
 .community-shell,
 .newsletter-shell,
@@ -743,6 +744,97 @@
   font-size: 9px;
   font-style: normal;
   font-weight: 650;
+}
+
+/* Digital work examples */
+.digital-work-shell {
+  margin-top: 28px;
+  padding: 34px 2px 12px;
+  border-top: 1px solid var(--guild-line);
+  border-bottom: 1px solid var(--guild-line);
+}
+
+.digital-work-heading {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.8fr) minmax(360px, 1.2fr);
+  gap: 40px;
+  align-items: end;
+  padding: 0 10px 28px;
+}
+
+.digital-work-heading .section-kicker {
+  margin: 0 0 7px;
+}
+
+.digital-work-heading h2 {
+  margin: 0;
+  font-family: var(--guild-serif);
+  font-size: clamp(27px, 2.5vw, 44px);
+  font-weight: 500;
+  line-height: 1.05;
+}
+
+.digital-work-heading > p {
+  max-width: 670px;
+  margin: 0;
+  color: var(--guild-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.digital-work-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--guild-line);
+}
+
+.digital-work-list article {
+  position: relative;
+  min-width: 0;
+  min-height: 156px;
+  padding: 24px 24px 22px 10px;
+  border-bottom: 1px solid var(--guild-line);
+}
+
+.digital-work-list article:not(:nth-child(3n + 1)) {
+  padding-left: 24px;
+  border-left: 1px solid var(--guild-line);
+}
+
+.digital-work-list article:nth-last-child(-n + 3) {
+  border-bottom: 0;
+}
+
+.digital-work-list article > span {
+  color: var(--guild-lime);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+}
+
+.digital-work-list h3 {
+  margin: 9px 0 7px;
+  font-family: var(--guild-serif);
+  font-size: 19px;
+  font-weight: 500;
+}
+
+.digital-work-list p,
+.digital-work-list small {
+  display: block;
+  max-width: 360px;
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.digital-work-list p {
+  color: #d7ddd5;
+}
+
+.digital-work-list small {
+  margin-top: 8px;
+  color: var(--guild-muted);
 }
 
 /* Live bounty board */
@@ -1344,6 +1436,7 @@
   }
 
   .guild-actions-shell,
+  .digital-work-shell,
   .bounty-board-shell,
   .community-shell,
   .newsletter-shell,
@@ -1517,6 +1610,33 @@
     min-height: 43px;
     padding-inline: 18px;
     font-size: 11px;
+  }
+
+  .digital-work-shell {
+    margin-top: 36px;
+    padding-top: 46px;
+  }
+
+  .digital-work-heading {
+    padding-bottom: 38px;
+  }
+
+  .digital-work-heading > p {
+    font-size: 14px;
+  }
+
+  .digital-work-list article {
+    min-height: 190px;
+    padding-block: 32px 28px;
+  }
+
+  .digital-work-list h3 {
+    font-size: 24px;
+  }
+
+  .digital-work-list p,
+  .digital-work-list small {
+    font-size: 12px;
   }
 
   .bounty-board-shell {
@@ -1821,6 +1941,30 @@
     min-height: 150px;
   }
 
+  .digital-work-heading {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .digital-work-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .digital-work-list article,
+  .digital-work-list article:not(:nth-child(3n + 1)) {
+    padding-left: 18px;
+    border-bottom: 1px solid var(--guild-line);
+    border-left: 0;
+  }
+
+  .digital-work-list article:nth-child(even) {
+    border-left: 1px solid var(--guild-line);
+  }
+
+  .digital-work-list article:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
   .bounty-board-shell {
     height: auto;
   }
@@ -1872,6 +2016,7 @@
 
 @media (max-width: 560px) {
   .guild-actions-shell,
+  .digital-work-shell,
   .bounty-board-shell,
   .community-shell,
   .newsletter-shell,
@@ -1926,6 +2071,31 @@
   .community-grid,
   .newsletter-shell {
     grid-template-columns: 1fr;
+  }
+
+  .digital-work-shell {
+    padding-top: 30px;
+  }
+
+  .digital-work-heading {
+    padding-inline: 4px;
+  }
+
+  .digital-work-list {
+    grid-template-columns: 1fr;
+  }
+
+  .digital-work-list article,
+  .digital-work-list article:not(:nth-child(3n + 1)),
+  .digital-work-list article:nth-child(even) {
+    min-height: 0;
+    padding: 24px 4px;
+    border-bottom: 1px solid var(--guild-line);
+    border-left: 0;
+  }
+
+  .digital-work-list article:last-child {
+    border-bottom: 0;
   }
 
   .market-bounty-card {
