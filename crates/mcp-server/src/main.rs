@@ -1155,6 +1155,21 @@ tool_args! {
 }
 
 tool_args! {
+    struct PlanBoundedWalletCancelRefundArgs {
+        network: Option<String>, bounty_contract: String, bounded_wallet: String, caller: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Open or claimable canonical bounty created by the bounded wallet."),
+            "bounded_wallet": string_property("BoundedAgentWalletV2 contract that created and funded the bounty."),
+            "caller": string_property("Bounded wallet owner that will sign the transaction.")
+        }),
+        &["bounty_contract", "bounded_wallet", "caller"],
+    );
+}
+
+tool_args! {
     struct DecodeAutonomousBountyEventsArgs { logs: Vec<EvmLog> }
     schema object_tool_schema(
         json!({
@@ -1730,6 +1745,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_autonomous_refund_withdrawal",
             post(plan_autonomous_refund_withdrawal),
+        )
+        .route(
+            "/tools/plan_bounded_wallet_cancel_refund",
+            post(plan_bounded_wallet_cancel_refund),
         )
         .route(
             "/tools/decode_autonomous_bounty_events",
@@ -2397,7 +2416,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                         "additionalProperties": false
                     },
                     "evidence_schema": nullable_object_property("Optional submission schema; defaults to a required sha256 source_snapshot_digest."),
-                    "verifier_reward": nullable_object_property("Optional USDC money object; defaults to 100000 base units and must divide across two verifiers."),
+                    "verifier_reward": nullable_object_property("Optional USDC money object; defaults to 100000 base units and is paid to the precommitted verifier path."),
                     "funding_deadline": nullable_integer_property("Optional child funding deadline; defaults to the immutable parent deadline."),
                     "claim_window_seconds": nullable_integer_property("Optional child claim window; defaults to 259200 seconds."),
                     "verification_window_seconds": nullable_integer_property("Optional child verification window; defaults to 259200 seconds."),
@@ -2611,6 +2630,11 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "plan_autonomous_refund_withdrawal",
             "Build a contributor's pull-refund transaction after cancellation.",
             PlanAutonomousLifecycleArgs::input_schema("Cancelled canonical bounty contract."),
+        ),
+        tool(
+            "plan_bounded_wallet_cancel_refund",
+            "Build one owner-signed BoundedAgentWalletV2 transaction that cancels an unclaimed canonical bounty and withdraws only that wallet's refund. Other contributors keep their independent refunds.",
+            PlanBoundedWalletCancelRefundArgs::input_schema(),
         ),
         tool(
             "decode_autonomous_bounty_events",
@@ -2923,11 +2947,11 @@ fn autonomous_bounty_create_property() -> Value {
             "funding_deadline": integer_property("Unix timestamp after which an incomplete crowdfund can be cancelled."),
             "claim_window_seconds": integer_property("Seconds a solver has to submit after claiming."),
             "verification_window_seconds": integer_property("Seconds committed verifiers have to settle after submission."),
-            "verification_mode": enum_property(&["deterministic_module", "signed_quorum", "ai_judge_quorum"], "Immutable on-chain verification mechanism."),
+            "verification_mode": enum_property(&["deterministic_module", "signed_quorum", "ai_judge_quorum"], "Immutable on-chain verification mechanism. Use signed_quorum with threshold 1 for one verifier; add verifiers only when higher-risk work needs independent review."),
             "verifier_module": nullable_string_property("Deterministic verifier contract; null for quorum modes."),
             "verifier_reward_recipient": nullable_string_property("Deterministic verifier reward wallet; null for quorum modes."),
             "verifiers": string_array_property("One to eight precommitted verifier wallets for quorum modes; empty for deterministic mode."),
-            "threshold": integer_property("Number of matching verifier signatures required; AI judge mode requires at least two."),
+            "threshold": integer_property("Number of matching verifier signatures required. Default to 1 for signed verification; AI judge mode requires at least 2."),
             "initial_funding": money_property("Creation-time funding. Zero creates a crowdfundable bounty; target funding makes it immediately claimable.", true),
             "creation_nonce": string_property("Unique nonzero random bytes32. It binds the CREATE2 bounty id and address.")
         },
@@ -5166,6 +5190,43 @@ async fn plan_autonomous_refund_withdrawal(
     }
 }
 
+async fn plan_bounded_wallet_cancel_refund(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanBoundedWalletCancelRefundArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if !item.creator.eq_ignore_ascii_case(&args.bounded_wallet) {
+        return mcp_error("bounded wallet is not the indexed bounty creator");
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        match item.status.as_str() {
+            "open" | "claimable" => planner.plan_bounded_wallet_cancel_refund(
+                &args.bounded_wallet,
+                &args.bounty_contract,
+                &args.caller,
+            ),
+            "cancelled" => planner.plan_bounded_wallet_refund(
+                &args.bounded_wallet,
+                &args.bounty_contract,
+                &args.caller,
+            ),
+            _ => Err(
+                chain_base::ChainBaseError::InvalidVerificationConfiguration(
+                    "bounty is not cancellable or refundable".to_string(),
+                ),
+            ),
+        }
+        .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
 async fn plan_autonomous_lifecycle(
     state: SharedState,
     args: PlanAutonomousLifecycleArgs,
@@ -5705,7 +5766,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 113);
+        assert_eq!(descriptors.len(), 114);
         assert_eq!(
             descriptors
                 .iter()
@@ -6292,6 +6353,32 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "note"));
+    }
+
+    #[tokio::test]
+    async fn discovery_and_readiness_tools_have_proper_input_schemas() {
+        let descriptors = tools().await.0;
+        let discovery_tools = [
+            "list_autonomous_bounties",
+            "list_opportunities",
+            "prepare_agent_to_earn",
+            "prepare_bounty_post",
+        ];
+        for tool_name in discovery_tools {
+            let descriptor = descriptors
+                .iter()
+                .find(|descriptor| descriptor.name == tool_name)
+                .unwrap_or_else(|| panic!("{tool_name} descriptor exists"));
+            assert!(!descriptor.description.trim().is_empty(), "{tool_name}");
+            assert_eq!(
+                descriptor.input_schema["type"], "object",
+                "{tool_name}",
+            );
+            assert!(
+                descriptor.input_schema["required"].is_array(),
+                "{tool_name} missing required array",
+            );
+        }
     }
 
     #[tokio::test]
@@ -7021,6 +7108,9 @@ async fn load_objective_canonical_evidence(
         let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
             .map_err(|error| error.to_string())?;
         state.recovery_reservations.apply(&mut feed, false);
+        state
+            .recovery_reservations
+            .exclude_from_reported_outcomes(&mut feed);
         let mut network_evidence = build_objective_canonical_evidence(&network, &feed);
         evidence.funding.append(&mut network_evidence.funding);
         evidence
