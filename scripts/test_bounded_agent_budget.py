@@ -80,6 +80,28 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
         self.assertIn("await waitForFactoryAllowance(0n)", activation)
         self.assertNotIn("Confirmed USDC allowance differs", activation)
 
+    def test_browser_persists_only_non_secret_budget_draft_fields(self) -> None:
+        source = (ROOT / "site" / "agent-budget.js").read_text(encoding="utf-8")
+        persistence = source.split("function persistDraft", 1)[1].split(
+            "function snapshot", 1
+        )[0]
+
+        for field in (
+            "delegate",
+            "initialFunding",
+            "maxPerAction",
+            "maxPerPeriod",
+            "maxLifetime",
+            "maxBountyTarget",
+            "expiryDays",
+        ):
+            draft_fields = source.split("const DRAFT_FIELDS", 1)[1].split("];", 1)[0]
+            self.assertIn(f'"{field}"', draft_fields)
+        self.assertIn("new URLSearchParams(window.location.search)", persistence)
+        self.assertIn("validDraftValue", persistence)
+        for secret in ("signature", "privateKey", "mnemonic", "approvalHash", "transactionHash"):
+            self.assertNotIn(secret, persistence)
+
     def test_policy_changes_authorization_destination(self) -> None:
         base = {
             "delegate": "0x1111111111111111111111111111111111111111",

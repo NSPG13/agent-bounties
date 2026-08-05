@@ -15,6 +15,16 @@
   };
   const announcedProviders = [];
   const CHAIN_ID = "0x2105";
+  const DRAFT_STORAGE_KEY = "agent-bounties:bounded-budget-draft:v1";
+  const DRAFT_FIELDS = Object.freeze([
+    "delegate",
+    "initialFunding",
+    "maxPerAction",
+    "maxPerPeriod",
+    "maxLifetime",
+    "maxBountyTarget",
+    "expiryDays",
+  ]);
   const ZERO_HASH = `0x${"00".repeat(32)}`;
   const EXPECTED = Object.freeze({
     sourceRevision: "7fbfd7e106e387e12ad5c9b29cbef4344dfead69",
@@ -261,6 +271,45 @@
     return units;
   }
 
+  function validDraftValue(name, value) {
+    const normalized = String(value || "").trim();
+    if (name === "delegate") {
+      return /^0x[0-9a-fA-F]{40}$/.test(normalized) && normalized.toLowerCase() !== `0x${"00".repeat(20)}`;
+    }
+    if (name === "expiryDays") return /^\d+$/.test(normalized) && Number(normalized) >= 1 && Number(normalized) <= 30;
+    return /^\d+(?:\.\d{1,6})?$/.test(normalized) && Number(normalized) > 0 && Number(normalized) <= 89;
+  }
+
+  function persistDraft() {
+    try {
+      const draft = Object.fromEntries(DRAFT_FIELDS.map((name) => [name, form().elements[name].value.trim()]));
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } catch (_error) {
+      // Storage can be unavailable in private browsing; the form still works for the current page load.
+    }
+  }
+
+  function restoreDraft() {
+    let stored = {};
+    try {
+      stored = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || "{}") || {};
+    } catch (_error) {
+      stored = {};
+    }
+    const parameters = new URLSearchParams(window.location.search);
+    for (const name of DRAFT_FIELDS) {
+      const fromUrl = parameters.has(name);
+      const value = fromUrl ? parameters.get(name) : stored[name];
+      if (value === undefined || value === null || value === "") continue;
+      if (!validDraftValue(name, value)) {
+        if (fromUrl) throw new Error(`Recovery link contains an invalid ${name} value.`);
+        continue;
+      }
+      form().elements[name].value = String(value).trim();
+    }
+    persistDraft();
+  }
+
   function snapshot() {
     const data = new FormData(form());
     return JSON.stringify({
@@ -428,6 +477,10 @@
 
   function buildPolicy(chainTimestamp) {
     const values = new FormData(form());
+    if (!String(values.get("delegate") || "").trim()) {
+      form().elements.delegate.focus();
+      throw new Error("Enter the public Base address of the agent signer. Never enter its private key or recovery phrase.");
+    }
     const delegate = requiredAddress(values.get("delegate"), "Agent delegate");
     if (delegate === state.account) throw new Error("Use a dedicated delegate address, not the owner wallet.");
     const initialFunding = usdcUnits(values.get("initialFunding"), "Initial funding");
@@ -943,6 +996,7 @@
   }
 
   function invalidatePlan(event) {
+    if (DRAFT_FIELDS.includes(event.target.name)) persistDraft();
     if (event.target.name === "reviewed" || event.target.name === "rotationReviewed") {
       updateButtons();
       return;
@@ -988,6 +1042,7 @@
       updateButtons();
     });
     try {
+      restoreDraft();
       await loadManifest();
       await discoverProviders();
       status("Ready for owner connection", "pending");
