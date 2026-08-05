@@ -12,12 +12,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 SCHEMA = "agent-bounties/participant-registration-v1"
 COMMAND = re.compile(r"^/agent-bounty register (0x[0-9a-fA-F]{40})\s*$")
 ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
+BASE_CHAIN_ID = "8453"
 
 
 class RegistrationError(RuntimeError):
@@ -80,6 +82,52 @@ def run(command: list[str]) -> str:
     return completed.stdout.strip()
 
 
+def parse_rpc_urls(value: str) -> list[str]:
+    """Return ordered, credential-free HTTPS RPC endpoints from configuration."""
+
+    endpoints: list[str] = []
+    seen: set[str] = set()
+    for candidate in value.split(","):
+        candidate = candidate.strip()
+        if not candidate or candidate in seen:
+            continue
+        try:
+            parsed = urlsplit(candidate)
+            hostname = parsed.hostname
+        except ValueError:
+            continue
+        if (
+            parsed.scheme.lower() != "https"
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or any(char.isspace() for char in candidate)
+        ):
+            continue
+        seen.add(candidate)
+        endpoints.append(candidate)
+    if not endpoints:
+        raise RegistrationError(
+            "participant RPC configuration must contain at least one credential-free HTTPS endpoint"
+        )
+    return endpoints
+
+
+def select_base_rpc(cast: str, configured: str) -> str:
+    """Probe ordered RPC fallbacks and commit to one Base-mainnet endpoint."""
+
+    endpoints = parse_rpc_urls(configured)
+    for endpoint in endpoints:
+        try:
+            if run([cast, "chain-id", "--rpc-url", endpoint]) == BASE_CHAIN_ID:
+                return endpoint
+        except RegistrationError:
+            continue
+    raise RegistrationError(
+        f"none of the {len(endpoints)} configured RPC endpoints responded as Base mainnet"
+    )
+
+
 def registration_cutoff(
     record: object,
     participant_id: str,
@@ -121,10 +169,9 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
     if not attester_key or not keeper_key:
         raise RegistrationError("participant attester and keeper capabilities are required")
     cast = str(args.cast)
-    if run([cast, "chain-id", "--rpc-url", args.rpc_url]) != "8453":
-        raise RegistrationError("participant registration is pinned to Base mainnet")
+    rpc_url = select_base_rpc(cast, str(args.rpc_url))
     attester = run([cast, "wallet", "address", "--private-key", attester_key]).lower()
-    configured = run([cast, "call", "--rpc-url", args.rpc_url, registry, "attester()(address)"]).lower()
+    configured = run([cast, "call", "--rpc-url", rpc_url, registry, "attester()(address)"]).lower()
     if attester != configured:
         raise RegistrationError("attester key does not match the immutable registry")
     participant_id = run(
@@ -132,7 +179,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
     ).lower()
     source_hash = run([cast, "keccak", "agent-bounties/github-user-id"]).lower()
     nonce = run(
-        [cast, "call", "--rpc-url", args.rpc_url, registry, "nonces(address)(uint256)", request.wallet]
+        [cast, "call", "--rpc-url", rpc_url, registry, "nonces(address)(uint256)", request.wallet]
     )
     valid_until = int(time.time()) + 30 * 24 * 60 * 60
     digest = run(
@@ -140,7 +187,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
             cast,
             "call",
             "--rpc-url",
-            args.rpc_url,
+            rpc_url,
             registry,
             "attestationDigest(address,bytes32,bytes32,uint64,uint256)(bytes32)",
             request.wallet,
@@ -160,7 +207,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
                 "send",
                 "--json",
                 "--rpc-url",
-                args.rpc_url,
+                rpc_url,
                 "--private-key",
                 keeper_key,
                 registry,
@@ -198,7 +245,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
                         "call",
                         "--json",
                         "--rpc-url",
-                        args.rpc_url,
+                        rpc_url,
                         registry,
                         "participants(address)(bytes32,bytes32,uint64,uint64)",
                         request.wallet,
