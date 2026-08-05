@@ -1241,6 +1241,9 @@ def main() -> int:
             "Smart-account activation requires one exact USDC approval",
             "waitForFactoryAllowance",
             "Confirmed USDC allowance is",
+            "DRAFT_STORAGE_KEY",
+            "new URLSearchParams(window.location.search)",
+            "Never enter its private key or recovery phrase",
         ],
     )
     if "This owner is a contract account. Use the manifest's approve" in bounded_javascript:
