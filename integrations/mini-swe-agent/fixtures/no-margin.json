@@ -1,0 +1,18 @@
+{
+  "snapshot_status": "fresh",
+  "opportunities": [
+    {
+      "bounty_contract": "0x00000000000000000000000000000000000000ee",
+      "status": "claimable",
+      "verification_ready": true,
+      "solver_reward": "10000",
+      "required_external_spend": "10000",
+      "terms": {
+        "document": {
+          "source_url": "https://github.com/example/project/issues/5",
+          "benchmark": {"engine": "sandboxed_regression_v1"}
+        }
+      }
+    }
+  ]
+}
